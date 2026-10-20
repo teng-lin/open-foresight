@@ -67,6 +67,8 @@ def validate_observations(value):
                 or set(fields) - permitted
             ):
                 raise ValueError("Invalid CI diagnostic annotation")
+            if "qualification" in fields and type(fields["qualification"]) is not bool:
+                raise ValueError("Qualification annotation must be a boolean")
             if section == "runs" and fields.get("cache_observations"):
                 for observation in fields["cache_observations"]:
                     if (
@@ -82,6 +84,13 @@ def validate_observations(value):
                         raise ValueError(
                             "Cache observations require actual stage/input evidence"
                         )
+
+
+def validate_qualification(run):
+    if "qualification" in run and type(run["qualification"]) is not bool:
+        raise ValueError("Qualification annotation must be a boolean")
+    if run.get("qualification") is True and run.get("event") in ("pull_request", "push"):
+        raise ValueError("Ordinary PR and push runs cannot be qualification-only observations")
 
 
 def verify(directory):
@@ -165,10 +174,14 @@ def collect(repository, since, directory, request=api, observations=None, until=
             (directory / "observations.json").write_text(
                 json.dumps(observations, indent=2) + "\n"
             )
+        # GitHub date search accepts whole seconds. Keep the exact requested
+        # boundaries above and in cohort membership, widening only this query.
+        query_since = beginning.isoformat(timespec="seconds").replace("+00:00", "Z")
+        query_until = end.isoformat(timespec="seconds").replace("+00:00", "Z") if end else None
         query = urlencode(
             {
                 "per_page": 100,
-                "created": since + ".." + until if until else ">=" + since,
+                "created": query_since + ".." + query_until if query_until else ">=" + query_since,
             }
         )
         runs = pages(
@@ -182,6 +195,9 @@ def collect(repository, since, directory, request=api, observations=None, until=
             "".join(json.dumps(run) + "\n" for run in runs)
         )
         for run in runs:
+            validate_qualification(
+                run | (observations or {}).get("runs", {}).get(str(run["id"]), {})
+            )
             jobs = []
             attempts = list(range(1, run.get("run_attempt", 1) + 1))
             for attempt in attempts:

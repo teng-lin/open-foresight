@@ -25,7 +25,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: dmg-contract-evidence
-          overwrite: true
+          name: dmg-contract-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: test-results/dmg/
           if-no-files-found: error

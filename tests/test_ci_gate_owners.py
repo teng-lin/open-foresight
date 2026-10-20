@@ -94,6 +94,9 @@ def test_dmg_runner_retains_junit_and_rejects_skipped_missing_or_failed_contract
     suite = unittest.TestSuite(
         Fixture("test_contract") for _ in range(1 if outcome == "missing" else 2)
     )
+    if outcome == "missing":
+        # Simulate a loader/executor mismatch, independently of suite size.
+        suite.countTestCases = lambda: 2
     report = tmp_path / "evidence/contracts.xml"
     assert (dmg.run(suite, report) == 0) == (outcome == "success")
     root = ET.parse(report).getroot()  # noqa: S314 - Locally generated runner fixture.
@@ -162,4 +165,36 @@ def test_dmg_class_setup_errors_and_skips_still_produce_diagnostic_junit(
     root = ET.parse(report).getroot()  # noqa: S314 - Locally generated error fixture.
     assert root.find("testcase/skipped" if skip else "testcase/error") is not None
     diagnostic = capsys.readouterr().err
-    assert "ran=0" in diagnostic and "expected=2" in diagnostic
+    assert "ran=0" in diagnostic and "expected=1" in diagnostic
+
+
+def test_dmg_suite_inventory_can_grow_but_cannot_be_empty(tmp_path):
+    class Fixture(unittest.TestCase):
+        def test_contract(self):
+            pass
+
+    for count in (1, 3):
+        suite = unittest.TestSuite(Fixture("test_contract") for _ in range(count))
+        assert dmg.run(suite, tmp_path / f"contracts-{count}.xml") == 0
+    assert dmg.run(unittest.TestSuite(), tmp_path / "empty.xml") == 1
+
+
+def test_dmg_evidence_preserves_each_failed_attempt():
+    config = yaml.safe_load((ROOT / ".github/workflows/dmg-contracts.yml").read_text())
+    upload = next(
+        step for step in config["jobs"]["dmg"]["steps"]
+        if step.get("uses", "").startswith("actions/upload-artifact@")
+    )
+    assert upload["if"] == "always()"
+    assert upload["with"]["name"] == "dmg-contract-evidence-${{ github.run_id }}-${{ github.run_attempt }}"
+    assert "overwrite" not in upload["with"]
+
+
+@pytest.mark.parametrize("path", [
+    "tests/contracts/test_descriptor.py",
+    "tests/contracts/test_owned_descriptors.py",
+    "tests/inference/test_legacy_query_executor.py",
+    "tests/inference/test_litert_identity.py",
+])
+def test_nested_inventory_keeps_full_validation_until_selector_qualification(path):
+    assert all(changes.select_gates([path]).values())

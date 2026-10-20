@@ -1,0 +1,1580 @@
+[
+  {
+    "number": 162,
+    "state": "MERGED",
+    "headRefName": "svc/fix-161",
+    "headRefOid": "186f7be4ac66db5e10f4ef0df1e5c209f7e3873f",
+    "createdAt": "2026-10-20T21:18:44Z",
+    "closedAt": "2026-10-20T22:13:30Z",
+    "mergeCommit": {
+      "oid": "02d572fbd66022bb125d188dfa296ba7f2bf85bc"
+    },
+    "mergedAt": "2026-10-20T22:13:29Z",
+    "measurement_window": true
+  },
+  {
+    "number": 160,
+    "state": "MERGED",
+    "headRefName": "svc/followup-159",
+    "headRefOid": "9637901661e6bb6bc0cebd162a7ca581c8dd19a2",
+    "createdAt": "2026-10-20T20:13:17Z",
+    "closedAt": "2026-10-20T20:46:11Z",
+    "mergeCommit": {
+      "oid": "896596f8515166296c93938142a340088a0ff95f"
+    },
+    "mergedAt": "2026-10-20T20:46:11Z",
+    "measurement_window": false
+  },
+  {
+    "number": 159,
+    "state": "MERGED",
+    "headRefName": "open-foresight-services",
+    "headRefOid": "a72439159a820d1ef394e81ad206bd3046a1bb8e",
+    "createdAt": "2026-10-20T17:03:40Z",
+    "closedAt": "2026-10-20T20:05:21Z",
+    "mergeCommit": {
+      "oid": "6a5216f2908d020a5b8dac052edeabf5a2695198"
+    },
+    "mergedAt": "2026-10-20T20:05:21Z",
+    "measurement_window": false
+  },
+  {
+    "number": 158,
+    "state": "MERGED",
+    "headRefName": "codex/ci-candidates-stacked-157",
+    "headRefOid": "765375707b354ebcf6b87c719117136612177c7a",
+    "createdAt": "2026-10-20T14:27:34Z",
+    "closedAt": "2026-10-20T19:33:27Z",
+    "mergeCommit": {
+      "oid": "493721cda7bb4606730bab899e82e05396be09e6"
+    },
+    "mergedAt": "2026-10-20T19:33:27Z",
+    "measurement_window": false
+  },
+  {
+    "number": 157,
+    "state": "MERGED",
+    "headRefName": "codex/ci-release-publish-stacked-221",
+    "headRefOid": "3178c695587f6b44408f0e14c72cdb10c2329145",
+    "createdAt": "2026-10-20T13:47:39Z",
+    "closedAt": "2026-10-20T14:35:04Z",
+    "mergeCommit": {
+      "oid": "760fa1d7a849229f2d2b7a7ba5ae18f03a950c8a"
+    },
+    "mergedAt": "2026-10-20T14:35:04Z",
+    "measurement_window": false
+  },
+  {
+    "number": 155,
+    "state": "MERGED",
+    "headRefName": "codex/ci-next-stacked-154",
+    "headRefOid": "1a1fb1efc970d783d5ff79c49f0302a2b0184d14",
+    "createdAt": "2026-10-20T11:59:35Z",
+    "closedAt": "2026-10-20T13:42:29Z",
+    "mergeCommit": {
+      "oid": "16fc5b602b4a24b10180b0a3c793b21a06806609"
+    },
+    "mergedAt": "2026-10-20T13:42:29Z",
+    "measurement_window": false
+  },
+  {
+    "number": 154,
+    "state": "MERGED",
+    "headRefName": "codex/ci-main-cache-prerequisite",
+    "headRefOid": "39c7e0ad7e518e513867335f73979917ef09123f",
+    "createdAt": "2026-10-20T10:31:59Z",
+    "closedAt": "2026-10-20T11:01:11Z",
+    "mergeCommit": {
+      "oid": "ddab41169af9727e8cadce5d97183e36035aabd6"
+    },
+    "mergedAt": "2026-10-20T11:01:10Z",
+    "measurement_window": false
+  },
+  {
+    "number": 153,
+    "state": "MERGED",
+    "headRefName": "codex/ci-shadow-review-fixes",
+    "headRefOid": "4ac0f997a61104d0d6392f965ce3ccd4cca44538",
+    "createdAt": "2026-10-20T02:08:15Z",
+    "closedAt": "2026-10-20T09:28:22Z",
+    "mergeCommit": {
+      "oid": "20063921a562538c6fe5760469acb82b784b44f1"
+    },
+    "mergedAt": "2026-10-20T09:28:22Z",
+    "measurement_window": false
+  },
+  {
+    "number": 152,
+    "state": "MERGED",
+    "headRefName": "codex/ci-linux-shadow-postmerge",
+    "headRefOid": "3f126ce730f9f359b3c33ca96a4228b69db170e4",
+    "createdAt": "2026-10-20T01:30:36Z",
+    "closedAt": "2026-10-20T01:58:41Z",
+    "mergeCommit": {
+      "oid": "db2752582daceba5798d79a1ac3945c85d446607"
+    },
+    "mergedAt": "2026-10-20T01:58:41Z",
+    "measurement_window": false
+  },
+  {
+    "number": 151,
+    "state": "MERGED",
+    "headRefName": "research/granola-google-calendar",
+    "headRefOid": "e42e237038dc8292cdbe8c8a5396c92f3eebb5ba",
+    "createdAt": "2026-10-19T22:45:43Z",
+    "closedAt": "2026-10-19T23:17:56Z",
+    "mergeCommit": {
+      "oid": "18b67da92c66b708aa317a0eb8e39c2e686ad260"
+    },
+    "mergedAt": "2026-10-19T23:17:56Z",
+    "measurement_window": false
+  },
+  {
+    "number": 150,
+    "state": "MERGED",
+    "headRefName": "codex/ci-restructure",
+    "headRefOid": "c79364629cdb3a26d855824611a4466360c70f85",
+    "createdAt": "2026-10-19T21:50:20Z",
+    "closedAt": "2026-10-20T00:56:58Z",
+    "mergeCommit": {
+      "oid": "1d28c0fa30d934dcdcdd39d7869d8ff7b423424c"
+    },
+    "mergedAt": "2026-10-20T00:56:58Z",
+    "measurement_window": false
+  },
+  {
+    "number": 149,
+    "state": "MERGED",
+    "headRefName": "codex/ci-policy",
+    "headRefOid": "395169a476184df331e07f77be5aab5479dd6475",
+    "createdAt": "2026-10-19T21:02:01Z",
+    "closedAt": "2026-10-19T21:13:23Z",
+    "mergeCommit": {
+      "oid": "b633b1b3c8604d55fd24963a7ea75bbe7145efba"
+    },
+    "mergedAt": "2026-10-19T21:13:23Z",
+    "measurement_window": false
+  },
+  {
+    "number": 148,
+    "state": "MERGED",
+    "headRefName": "codex/ci-validation-efficiency",
+    "headRefOid": "c7f5ae396657b97664b27cec2ba461b573ca214c",
+    "createdAt": "2026-10-19T15:33:12Z",
+    "closedAt": "2026-10-19T18:47:44Z",
+    "mergeCommit": {
+      "oid": "b62e5e020825f18ef596e40524ef5333866f94ea"
+    },
+    "mergedAt": "2026-10-19T18:47:44Z",
+    "measurement_window": false
+  },
+  {
+    "number": 147,
+    "state": "MERGED",
+    "headRefName": "test/core-coverage-93",
+    "headRefOid": "edb791ca8a2c430e60aa96cd2b368abfbc395d42",
+    "createdAt": "2026-10-19T14:21:08Z",
+    "closedAt": "2026-10-19T16:26:49Z",
+    "mergeCommit": {
+      "oid": "33c08a1857b7770a9972793a6c144ea0262a216c"
+    },
+    "mergedAt": "2026-10-19T16:26:49Z",
+    "measurement_window": false
+  },
+  {
+    "number": 146,
+    "state": "MERGED",
+    "headRefName": "fix/142-functional-parity",
+    "headRefOid": "4649d8461b42ce44c1c276ddab2f00d31e951829",
+    "createdAt": "2026-10-19T14:19:33Z",
+    "closedAt": "2026-10-19T17:34:53Z",
+    "mergeCommit": {
+      "oid": "88cf883ea1a3b652708cd367dd4671c680d53daa"
+    },
+    "mergedAt": "2026-10-19T17:34:52Z",
+    "measurement_window": false
+  },
+  {
+    "number": 145,
+    "state": "MERGED",
+    "headRefName": "test/ci-e2e-gaps",
+    "headRefOid": "a8c4cb6b5e36ad0b8f2ec90e97724dc2c04fc4a9",
+    "createdAt": "2026-10-19T14:18:35Z",
+    "closedAt": "2026-10-19T16:29:12Z",
+    "mergeCommit": {
+      "oid": "e6febb63ca7c6bbc150648fe73ed38e34078151e"
+    },
+    "mergedAt": "2026-10-19T16:29:11Z",
+    "measurement_window": false
+  },
+  {
+    "number": 144,
+    "state": "MERGED",
+    "headRefName": "test/coverage-gaps",
+    "headRefOid": "e2d31461a6869a4f8fbef64d2f83398deef3ac48",
+    "createdAt": "2026-10-19T13:34:41Z",
+    "closedAt": "2026-10-19T14:59:37Z",
+    "mergeCommit": {
+      "oid": "482e7c57f07ffc31b554e0013b670b60a30a1429"
+    },
+    "mergedAt": "2026-10-19T14:59:37Z",
+    "measurement_window": false
+  },
+  {
+    "number": 143,
+    "state": "MERGED",
+    "headRefName": "codex/ubuntu-ci-reuse",
+    "headRefOid": "85569eba882f0e1c1d509f431b129dc9a6bc0068",
+    "createdAt": "2026-10-19T13:31:48Z",
+    "closedAt": "2026-10-19T13:57:42Z",
+    "mergeCommit": {
+      "oid": "fdac22932267aba7062e435ecf8a16fdad031363"
+    },
+    "mergedAt": "2026-10-19T13:57:42Z",
+    "measurement_window": false
+  },
+  {
+    "number": 141,
+    "state": "MERGED",
+    "headRefName": "fix/google-account-menu",
+    "headRefOid": "297b50fdc3fc6e63f23e868611eb6e49cc96ee12",
+    "createdAt": "2026-10-19T13:20:10Z",
+    "closedAt": "2026-10-19T17:31:59Z",
+    "mergeCommit": {
+      "oid": "1bb51db5961dc76fe5567107d16c8befe60864a1"
+    },
+    "mergedAt": "2026-10-19T17:31:59Z",
+    "measurement_window": false
+  },
+  {
+    "number": 140,
+    "state": "MERGED",
+    "headRefName": "codex/python-coverage-90",
+    "headRefOid": "2e188568f43a60e10b997a5372d1bc4885f6fc22",
+    "createdAt": "2026-10-19T11:40:44Z",
+    "closedAt": "2026-10-19T13:26:20Z",
+    "mergeCommit": {
+      "oid": "a739c640df122de1dc04c670fffc56838f8f8607"
+    },
+    "mergedAt": "2026-10-19T13:26:20Z",
+    "measurement_window": false
+  },
+  {
+    "number": 139,
+    "state": "MERGED",
+    "headRefName": "fix/ci-alias-descriptors",
+    "headRefOid": "87c9d7ff3aabe777413f7322fbca698aeeeff6fc",
+    "createdAt": "2026-10-19T10:50:13Z",
+    "closedAt": "2026-10-19T10:54:11Z",
+    "mergeCommit": {
+      "oid": "f5e13626b238ee681d16c4c17430db13d2d8f976"
+    },
+    "mergedAt": "2026-10-19T10:54:11Z",
+    "measurement_window": false
+  },
+  {
+    "number": 138,
+    "state": "MERGED",
+    "headRefName": "fix/release-acceptance-restart",
+    "headRefOid": "6a0f67b67d521eca184f5c13a9da5aa67ac381e5",
+    "createdAt": "2026-10-19T06:41:11Z",
+    "closedAt": "2026-10-19T09:50:07Z",
+    "mergeCommit": {
+      "oid": "011928a3281aa46e5c67a4cf071d2a04bb4403ea"
+    },
+    "mergedAt": "2026-10-19T09:50:07Z",
+    "measurement_window": false
+  },
+  {
+    "number": 137,
+    "state": "MERGED",
+    "headRefName": "feat/first-run-onboarding",
+    "headRefOid": "cc7b8c88c6c0646627d69975eba258ecb010e65f",
+    "createdAt": "2026-10-19T05:26:13Z",
+    "closedAt": "2026-10-19T12:14:14Z",
+    "mergeCommit": {
+      "oid": "da39f98d5822ad41e1a9a306dd1788a298f4ef63"
+    },
+    "mergedAt": "2026-10-19T12:14:14Z",
+    "measurement_window": false
+  },
+  {
+    "number": 136,
+    "state": "MERGED",
+    "headRefName": "fix/ci-artifact-promotion",
+    "headRefOid": "e5efc0275da36bdc480caa0c58417df2268924bf",
+    "createdAt": "2026-10-19T04:53:00Z",
+    "closedAt": "2026-10-19T06:02:20Z",
+    "mergeCommit": {
+      "oid": "6a5412e51f12a35f8f2401de1cdc4e590b0056bf"
+    },
+    "mergedAt": "2026-10-19T06:02:20Z",
+    "measurement_window": false
+  },
+  {
+    "number": 135,
+    "state": "MERGED",
+    "headRefName": "fix/fedora-package-runuser",
+    "headRefOid": "24ecc1c7f28147e3ca99b4d3e67ad48c403fb6a6",
+    "createdAt": "2026-10-19T03:52:09Z",
+    "closedAt": "2026-10-19T03:54:09Z",
+    "mergeCommit": {
+      "oid": "ecaa85fdfb4b69c7122e58ae863948b1d1b31d30"
+    },
+    "mergedAt": "2026-10-19T03:54:09Z",
+    "measurement_window": false
+  },
+  {
+    "number": 134,
+    "state": "MERGED",
+    "headRefName": "fix/release-candidate-recovery",
+    "headRefOid": "a0e008833a63bb48aa7bf9d84069fe923b4a0264",
+    "createdAt": "2026-10-19T03:10:10Z",
+    "closedAt": "2026-10-19T03:41:28Z",
+    "mergeCommit": {
+      "oid": "8e321c1278f18387c43437add00b1bd4de0ec372"
+    },
+    "mergedAt": "2026-10-19T03:41:28Z",
+    "measurement_window": false
+  },
+  {
+    "number": 132,
+    "state": "MERGED",
+    "headRefName": "docs/consolidate-release-guidance",
+    "headRefOid": "374782e30af68586de8ea95a56b89d12ee237dcb",
+    "createdAt": "2026-10-19T02:19:59Z",
+    "closedAt": "2026-10-19T08:56:19Z",
+    "mergeCommit": {
+      "oid": "e9ff6b1f26da94005dda927c67311714f84a02be"
+    },
+    "mergedAt": "2026-10-19T08:56:19Z",
+    "measurement_window": false
+  },
+  {
+    "number": 131,
+    "state": "MERGED",
+    "headRefName": "fix/review-application",
+    "headRefOid": "b45c98f490d058f9aee3e7efb04bccb833163439",
+    "createdAt": "2026-10-19T02:01:17Z",
+    "closedAt": "2026-10-19T08:15:21Z",
+    "mergeCommit": {
+      "oid": "d3fb587587f77bfadf63811ad02be742001a0c0f"
+    },
+    "mergedAt": "2026-10-19T08:15:21Z",
+    "measurement_window": false
+  },
+  {
+    "number": 130,
+    "state": "MERGED",
+    "headRefName": "refactor/review-qualification",
+    "headRefOid": "b5dbea6eaf7283a63d26afe3b7e268e252eb6361",
+    "createdAt": "2026-10-19T02:01:08Z",
+    "closedAt": "2026-10-19T08:46:28Z",
+    "mergeCommit": {
+      "oid": "d9297617e34e0018f524e90f436eb2f9d0071a28"
+    },
+    "mergedAt": "2026-10-19T08:46:28Z",
+    "measurement_window": false
+  },
+  {
+    "number": 129,
+    "state": "MERGED",
+    "headRefName": "release/0.1.2",
+    "headRefOid": "baa68092292520e271b6003d0b2a6a0d0e86bde1",
+    "createdAt": "2026-10-19T01:51:03Z",
+    "closedAt": "2026-10-19T02:15:29Z",
+    "mergeCommit": {
+      "oid": "b342da282a96da629d257b09ce1ad5b4f03d63e1"
+    },
+    "mergedAt": "2026-10-19T02:15:29Z",
+    "measurement_window": false
+  },
+  {
+    "number": 128,
+    "state": "MERGED",
+    "headRefName": "fix/review-acceptance",
+    "headRefOid": "4d6e32515ce88860d33cfde4761fb3485dd7942e",
+    "createdAt": "2026-10-19T01:34:51Z",
+    "closedAt": "2026-10-19T06:38:12Z",
+    "mergeCommit": {
+      "oid": "760efeca964c23474bdde7f31aac6f6bd133ee41"
+    },
+    "mergedAt": "2026-10-19T06:38:12Z",
+    "measurement_window": false
+  },
+  {
+    "number": 119,
+    "state": "MERGED",
+    "headRefName": "perf/ci-ubuntu-dependency-cache",
+    "headRefOid": "31e9cd9dad6d601291b1260be4a78e84f5f932df",
+    "createdAt": "2026-10-18T21:25:23Z",
+    "closedAt": "2026-10-18T23:19:21Z",
+    "mergeCommit": {
+      "oid": "38fb6d0b60024ccb11de4ab1a25704973f78c7de"
+    },
+    "mergedAt": "2026-10-18T23:19:21Z",
+    "measurement_window": false
+  },
+  {
+    "number": 116,
+    "state": "CLOSED",
+    "headRefName": "dependabot/pub/tools/protoc_plugin/dart-f16f591269",
+    "headRefOid": "e6ac98de71eb0bd44868399ca2c41a6e056682e3",
+    "createdAt": "2026-10-18T18:52:53Z",
+    "closedAt": "2026-10-18T19:22:31Z",
+    "mergeCommit": null,
+    "mergedAt": null,
+    "measurement_window": false
+  },
+  {
+    "number": 115,
+    "state": "CLOSED",
+    "headRefName": "dependabot/github_actions/actions-54a0187a98",
+    "headRefOid": "7520adaf5a78f59d99fd7afd9b72a51a92b8f314",
+    "createdAt": "2026-10-18T18:50:56Z",
+    "closedAt": "2026-10-18T19:23:10Z",
+    "mergeCommit": null,
+    "mergedAt": null,
+    "measurement_window": false
+  },
+  {
+    "number": 114,
+    "state": "CLOSED",
+    "headRefName": "dependabot/pip/python-d0745ee68b",
+    "headRefOid": "fe97dc48c8a338f71bdf807ec96ed0a086cf20a4",
+    "createdAt": "2026-10-18T18:49:27Z",
+    "closedAt": "2026-10-18T19:22:46Z",
+    "mergeCommit": null,
+    "mergedAt": null,
+    "measurement_window": false
+  },
+  {
+    "number": 113,
+    "state": "CLOSED",
+    "headRefName": "dependabot/docker/packaging/build-images-4fa91d99b2",
+    "headRefOid": "6c8c866b7fe116bd39de815a3ef9b20959364e64",
+    "createdAt": "2026-10-18T18:48:34Z",
+    "closedAt": "2026-10-18T19:22:21Z",
+    "mergeCommit": null,
+    "mergedAt": null,
+    "measurement_window": false
+  },
+  {
+    "number": 112,
+    "state": "MERGED",
+    "headRefName": "perf/ci-stage-reuse",
+    "headRefOid": "cc977b73a24a9134adf3a5a17b9241975dd3248f",
+    "createdAt": "2026-10-18T17:18:24Z",
+    "closedAt": "2026-10-18T21:03:04Z",
+    "mergeCommit": {
+      "oid": "7640d038011c1b1173a00994ab8f19d4a0d9a9a3"
+    },
+    "mergedAt": "2026-10-18T21:03:04Z",
+    "measurement_window": false
+  },
+  {
+    "number": 111,
+    "state": "MERGED",
+    "headRefName": "fix/ci-tests-docs",
+    "headRefOid": "bca2795b6e62342eb15e2d13d0dc5a449f2b7088",
+    "createdAt": "2026-10-18T16:48:59Z",
+    "closedAt": "2026-10-18T18:48:01Z",
+    "mergeCommit": {
+      "oid": "2294af01c4bba9cf938c1f5f81dc347daa127447"
+    },
+    "mergedAt": "2026-10-18T18:48:01Z",
+    "measurement_window": false
+  },
+  {
+    "number": 110,
+    "state": "MERGED",
+    "headRefName": "fix/hardening",
+    "headRefOid": "c8e031f02d154a676961f2d3a3712f5316940c29",
+    "createdAt": "2026-10-18T16:38:03Z",
+    "closedAt": "2026-10-19T01:31:12Z",
+    "mergeCommit": {
+      "oid": "4729efda6aefaf8a13e1e005f075adf65c27e57c"
+    },
+    "mergedAt": "2026-10-19T01:31:12Z",
+    "measurement_window": false
+  },
+  {
+    "number": 109,
+    "state": "MERGED",
+    "headRefName": "fix/data-correctness",
+    "headRefOid": "1e2d30986812c9b1cfbdfd81bf93e988d237dddd",
+    "createdAt": "2026-10-18T15:32:05Z",
+    "closedAt": "2026-10-18T16:39:45Z",
+    "mergeCommit": {
+      "oid": "886b64e8ba7230e8e91b062da88f836da4b3e6fd"
+    },
+    "mergedAt": "2026-10-18T16:39:45Z",
+    "measurement_window": false
+  },
+  {
+    "number": 108,
+    "state": "MERGED",
+    "headRefName": "fix/release-gates",
+    "headRefOid": "7fae95f5cbd5a0ef5d32ce61b95253ce820844e9",
+    "createdAt": "2026-10-18T15:26:40Z",
+    "closedAt": "2026-10-18T15:59:13Z",
+    "mergeCommit": {
+      "oid": "403ae3fcd1c813d6bb08bbc32ae5a145acf7b940"
+    },
+    "mergedAt": "2026-10-18T15:59:13Z",
+    "measurement_window": false
+  },
+  {
+    "number": 107,
+    "state": "MERGED",
+    "headRefName": "feat/preview-packages",
+    "headRefOid": "3f0f770b1f8f2c162be045f6e802df709ecb4194",
+    "createdAt": "2026-10-18T15:06:19Z",
+    "closedAt": "2026-10-18T15:34:25Z",
+    "mergeCommit": {
+      "oid": "c5ccb6ceeefdeaf361b6bcd6faeff78f9ad2cb93"
+    },
+    "mergedAt": "2026-10-18T15:34:25Z",
+    "measurement_window": false
+  },
+  {
+    "number": 106,
+    "state": "MERGED",
+    "headRefName": "chore/linux-package-maintenance",
+    "headRefOid": "c4ccc44fbca12c18a61a69331d6e386ba15c60ff",
+    "createdAt": "2026-10-18T13:16:45Z",
+    "closedAt": "2026-10-18T14:15:59Z",
+    "mergeCommit": {
+      "oid": "7f2cade5bb6a89b206cbb184038ceb4a98c0db88"
+    },
+    "mergedAt": "2026-10-18T14:15:59Z",
+    "measurement_window": false
+  },
+  {
+    "number": 105,
+    "state": "MERGED",
+    "headRefName": "fix/issue71-review-completion",
+    "headRefOid": "65410846ad8f2566182e325607bb8eaf3ef36294",
+    "createdAt": "2026-10-18T06:54:50Z",
+    "closedAt": "2026-10-18T08:42:00Z",
+    "mergeCommit": {
+      "oid": "1cfd2031756f743ab4cdb4c3bc559c63a3b94e2f"
+    },
+    "mergedAt": "2026-10-18T08:42:00Z",
+    "measurement_window": false
+  },
+  {
+    "number": 104,
+    "state": "MERGED",
+    "headRefName": "fix/split-vendor-worker-cache",
+    "headRefOid": "d94ac090d63fb7ebbf5eb2231a230b9712004ff4",
+    "createdAt": "2026-10-18T06:09:13Z",
+    "closedAt": "2026-10-18T08:10:39Z",
+    "mergeCommit": {
+      "oid": "3d09c5285c0a4cca5135418d1de45f9970e4fc7c"
+    },
+    "mergedAt": "2026-10-18T08:10:39Z",
+    "measurement_window": false
+  },
+  {
+    "number": 103,
+    "state": "MERGED",
+    "headRefName": "fix/preserve-linux-sdk-artifacts-main",
+    "headRefOid": "c18260b40f92a83d2c4154f6afb4c974df6c6f75",
+    "createdAt": "2026-10-18T04:33:46Z",
+    "closedAt": "2026-10-18T05:49:06Z",
+    "mergeCommit": {
+      "oid": "2e206e84fef7c9dc96ec2804eb38c8f1b702411e"
+    },
+    "mergedAt": "2026-10-18T05:49:06Z",
+    "measurement_window": false
+  },
+  {
+    "number": 102,
+    "state": "MERGED",
+    "headRefName": "fix/meeting-assistant-ui",
+    "headRefOid": "9ce86f039661ee1c15dce312cca44662549d62a8",
+    "createdAt": "2026-10-18T03:09:39Z",
+    "closedAt": "2026-10-18T07:37:57Z",
+    "mergeCommit": {
+      "oid": "e37a34680b55772636c127b8dc2a3abd0aa9fa53"
+    },
+    "mergedAt": "2026-10-18T07:37:57Z",
+    "measurement_window": false
+  },
+  {
+    "number": 101,
+    "state": "MERGED",
+    "headRefName": "fix/issue-78-sandbox-gate-docs",
+    "headRefOid": "86a4474fd2b8a13c063947ac14b45c56da0677c8",
+    "createdAt": "2026-10-18T00:51:40Z",
+    "closedAt": "2026-10-18T01:06:32Z",
+    "mergeCommit": {
+      "oid": "482553026d5fefe659c5bf6b445f0b3614a4c2a6"
+    },
+    "mergedAt": "2026-10-18T01:06:32Z",
+    "measurement_window": false
+  },
+  {
+    "number": 100,
+    "state": "MERGED",
+    "headRefName": "fix/issue-74-sandbox-ci",
+    "headRefOid": "e4531ec9ba98370ecae9129895b7290141e72f47",
+    "createdAt": "2026-10-18T00:46:57Z",
+    "closedAt": "2026-10-18T02:49:41Z",
+    "mergeCommit": {
+      "oid": "0e211751e61d55d20148a34bffc71ce4e77d9b78"
+    },
+    "mergedAt": "2026-10-18T02:49:41Z",
+    "measurement_window": false
+  },
+  {
+    "number": 99,
+    "state": "MERGED",
+    "headRefName": "fix/issue-78-integration-docs",
+    "headRefOid": "d89decebeafc9f67419da71e3ac20307112483a5",
+    "createdAt": "2026-10-18T00:30:23Z",
+    "closedAt": "2026-10-18T00:46:00Z",
+    "mergeCommit": {
+      "oid": "aa611a7883ca5bab3729880e7f78116fc88dc703"
+    },
+    "mergedAt": "2026-10-18T00:46:00Z",
+    "measurement_window": false
+  },
+  {
+    "number": 98,
+    "state": "MERGED",
+    "headRefName": "fix/issue-76-future-wal",
+    "headRefOid": "58ac8d43388df3fa730e2555a5d997d1ef9834fc",
+    "createdAt": "2026-10-18T00:23:58Z",
+    "closedAt": "2026-10-18T01:37:28Z",
+    "mergeCommit": {
+      "oid": "717d70e74a1934a1bad6fda124437f39d1b0be51"
+    },
+    "mergedAt": "2026-10-18T01:37:28Z",
+    "measurement_window": false
+  },
+  {
+    "number": 97,
+    "state": "MERGED",
+    "headRefName": "fix/issue-83",
+    "headRefOid": "3ebc1f58320cb0234d44b684240ebc2164fca4d8",
+    "createdAt": "2026-10-17T22:53:30Z",
+    "closedAt": "2026-10-18T02:40:33Z",
+    "mergeCommit": {
+      "oid": "e80c601f22ae68b265ee16f008cf42d5b4954395"
+    },
+    "mergedAt": "2026-10-18T02:40:33Z",
+    "measurement_window": false
+  },
+  {
+    "number": 96,
+    "state": "MERGED",
+    "headRefName": "fix/issue-74",
+    "headRefOid": "25bcb6c8dc67476fd9b196fa37bc3fcdc820b370",
+    "createdAt": "2026-10-17T22:51:15Z",
+    "closedAt": "2026-10-18T00:44:29Z",
+    "mergeCommit": {
+      "oid": "24b2e2fdf18ffc40caf9a40bb5aa0bc0655c2ba9"
+    },
+    "mergedAt": "2026-10-18T00:44:29Z",
+    "measurement_window": false
+  },
+  {
+    "number": 95,
+    "state": "MERGED",
+    "headRefName": "fix/issue-71",
+    "headRefOid": "5ca892853ab5085b14cb87433e01b9bebc5309d5",
+    "createdAt": "2026-10-17T22:49:18Z",
+    "closedAt": "2026-10-18T06:28:25Z",
+    "mergeCommit": {
+      "oid": "932e7ef4684b0ea5e313b2eaf75f274b9e21d184"
+    },
+    "mergedAt": "2026-10-18T06:28:25Z",
+    "measurement_window": false
+  },
+  {
+    "number": 94,
+    "state": "MERGED",
+    "headRefName": "fix/issue-77",
+    "headRefOid": "8e8d69bfc792af0d8d78a5a39e7a61caeb0c20ea",
+    "createdAt": "2026-10-17T22:47:46Z",
+    "closedAt": "2026-10-18T07:16:01Z",
+    "mergeCommit": {
+      "oid": "a08565eb60409e180acb0bf7ffd27f492577d540"
+    },
+    "mergedAt": "2026-10-18T07:16:01Z",
+    "measurement_window": false
+  },
+  {
+    "number": 93,
+    "state": "MERGED",
+    "headRefName": "fix/issue-78",
+    "headRefOid": "2e83b98802c7cfc39eb7746de135e8fbb8179598",
+    "createdAt": "2026-10-17T22:46:35Z",
+    "closedAt": "2026-10-17T23:02:05Z",
+    "mergeCommit": {
+      "oid": "ce7e0206c7880af4f2926fbab8560d9bcd509d5a"
+    },
+    "mergedAt": "2026-10-17T23:02:04Z",
+    "measurement_window": false
+  },
+  {
+    "number": 92,
+    "state": "MERGED",
+    "headRefName": "fix/issue-73",
+    "headRefOid": "c73d1679dd3f1acf41f5872443f226bc71f717b5",
+    "createdAt": "2026-10-17T22:45:18Z",
+    "closedAt": "2026-10-18T00:10:13Z",
+    "mergeCommit": {
+      "oid": "f4648daa4e390f431cd66cd2d546f3d1b3c47af2"
+    },
+    "mergedAt": "2026-10-18T00:10:13Z",
+    "measurement_window": false
+  },
+  {
+    "number": 91,
+    "state": "MERGED",
+    "headRefName": "fix/issue-82",
+    "headRefOid": "9b3398ec45eee5c1069f377bf225a501da526d27",
+    "createdAt": "2026-10-17T22:44:48Z",
+    "closedAt": "2026-10-18T02:35:24Z",
+    "mergeCommit": {
+      "oid": "87c94183cda4d601a227af3aa05c411116bb2f98"
+    },
+    "mergedAt": "2026-10-18T02:35:24Z",
+    "measurement_window": false
+  },
+  {
+    "number": 90,
+    "state": "MERGED",
+    "headRefName": "fix/issue-80",
+    "headRefOid": "63c7b39a684ac0f6e465a8cee87b00561274129f",
+    "createdAt": "2026-10-17T22:44:31Z",
+    "closedAt": "2026-10-18T02:33:42Z",
+    "mergeCommit": {
+      "oid": "40adbff931799a0aeb8740a97503cd29724d093e"
+    },
+    "mergedAt": "2026-10-18T02:33:42Z",
+    "measurement_window": false
+  },
+  {
+    "number": 89,
+    "state": "MERGED",
+    "headRefName": "fix/issue-72",
+    "headRefOid": "f0211cd12e9ac3e5882738161c48ec5ad5392aea",
+    "createdAt": "2026-10-17T22:41:37Z",
+    "closedAt": "2026-10-17T23:13:25Z",
+    "mergeCommit": {
+      "oid": "9f12d20a6e6f89d64222d685fd28508c2d724685"
+    },
+    "mergedAt": "2026-10-17T23:13:25Z",
+    "measurement_window": false
+  },
+  {
+    "number": 88,
+    "state": "MERGED",
+    "headRefName": "fix/issue-79",
+    "headRefOid": "ee11af25e9f631dd5f9f32aae8c7fbc2d05ad923",
+    "createdAt": "2026-10-17T22:40:25Z",
+    "closedAt": "2026-10-18T02:34:28Z",
+    "mergeCommit": {
+      "oid": "168a131da4efdb75e772fc4926d2c5a610767997"
+    },
+    "mergedAt": "2026-10-18T02:34:28Z",
+    "measurement_window": false
+  },
+  {
+    "number": 87,
+    "state": "MERGED",
+    "headRefName": "fix/issue-75",
+    "headRefOid": "d6b3f5236c667a88f91b7aa79204659870176019",
+    "createdAt": "2026-10-17T22:40:00Z",
+    "closedAt": "2026-10-18T04:30:23Z",
+    "mergeCommit": {
+      "oid": "1db9d768eaaaf0ce5e4e759f0d7f64e3948f8bfd"
+    },
+    "mergedAt": "2026-10-18T04:30:23Z",
+    "measurement_window": false
+  },
+  {
+    "number": 86,
+    "state": "MERGED",
+    "headRefName": "fix/issue-81",
+    "headRefOid": "9ada3494bcda7780fe80e311cd7e6095aa1f4dc4",
+    "createdAt": "2026-10-17T22:37:55Z",
+    "closedAt": "2026-10-18T02:13:31Z",
+    "mergeCommit": {
+      "oid": "4be108d4f337c870857723cf8bd64b03ecdbdbbf"
+    },
+    "mergedAt": "2026-10-18T02:13:31Z",
+    "measurement_window": false
+  },
+  {
+    "number": 85,
+    "state": "MERGED",
+    "headRefName": "fix/issue-70",
+    "headRefOid": "744ba8db67a2c34ca416f999ed336b2ad24cad77",
+    "createdAt": "2026-10-17T22:34:15Z",
+    "closedAt": "2026-10-18T04:07:44Z",
+    "mergeCommit": {
+      "oid": "c295bb6ee6391c808048a0166f82fd8456962403"
+    },
+    "mergedAt": "2026-10-18T04:07:44Z",
+    "measurement_window": false
+  },
+  {
+    "number": 84,
+    "state": "MERGED",
+    "headRefName": "fix/issue-76",
+    "headRefOid": "438ae5c0bdaf9007de3f1feb310ac109a6521971",
+    "createdAt": "2026-10-17T22:33:06Z",
+    "closedAt": "2026-10-18T00:14:00Z",
+    "mergeCommit": {
+      "oid": "bb22048182ed0ae7892fc59ce1ae9403963c4c53"
+    },
+    "mergedAt": "2026-10-18T00:14:00Z",
+    "measurement_window": false
+  },
+  {
+    "number": 69,
+    "state": "MERGED",
+    "headRefName": "fix/issue-68",
+    "headRefOid": "7aeb0b58256a476b56b346e01b050313f6c7ff36",
+    "createdAt": "2026-10-17T22:20:57Z",
+    "closedAt": "2026-10-18T00:12:04Z",
+    "mergeCommit": {
+      "oid": "a87c3fbe7fbe72e270e092cc9958261b581c8aea"
+    },
+    "mergedAt": "2026-10-18T00:12:04Z",
+    "measurement_window": false
+  },
+  {
+    "number": 67,
+    "state": "MERGED",
+    "headRefName": "fix/issue-46-draft-binding",
+    "headRefOid": "9e5687dc041c48c5a296ab849be753db9451600a",
+    "createdAt": "2026-10-17T21:52:45Z",
+    "closedAt": "2026-10-17T22:06:30Z",
+    "mergeCommit": {
+      "oid": "97abaabf0807fcac85c2032fb86b52b36ee79185"
+    },
+    "mergedAt": "2026-10-17T22:06:30Z",
+    "measurement_window": false
+  },
+  {
+    "number": 66,
+    "state": "MERGED",
+    "headRefName": "fix/issue-46-control-retry",
+    "headRefOid": "d58af20fcef03e470dc3b83e7f900823d9859098",
+    "createdAt": "2026-10-17T21:34:43Z",
+    "closedAt": "2026-10-17T21:49:47Z",
+    "mergeCommit": {
+      "oid": "a495652ef0a264cb977cfb497f884854f243d4c1"
+    },
+    "mergedAt": "2026-10-17T21:49:47Z",
+    "measurement_window": false
+  },
+  {
+    "number": 65,
+    "state": "MERGED",
+    "headRefName": "fix/issue-53",
+    "headRefOid": "94b35f381f7324393bc4239e8609e410363c396f",
+    "createdAt": "2026-10-17T21:02:09Z",
+    "closedAt": "2026-10-18T00:44:14Z",
+    "mergeCommit": {
+      "oid": "0e761f660e6d935068f0b7075cf602abbe4fa81a"
+    },
+    "mergedAt": "2026-10-18T00:44:14Z",
+    "measurement_window": false
+  },
+  {
+    "number": 64,
+    "state": "MERGED",
+    "headRefName": "fix/issue-54",
+    "headRefOid": "30e4717074e8d958262a3aa5728512cd28678104",
+    "createdAt": "2026-10-17T21:02:07Z",
+    "closedAt": "2026-10-17T21:27:19Z",
+    "mergeCommit": {
+      "oid": "21b72e3bb3a0f167440e069aeb15d5eb9ecb044d"
+    },
+    "mergedAt": "2026-10-17T21:27:19Z",
+    "measurement_window": false
+  },
+  {
+    "number": 63,
+    "state": "MERGED",
+    "headRefName": "fix/issue-52",
+    "headRefOid": "4793cc0a182d830947d46e6c85767031f7ea7d5e",
+    "createdAt": "2026-10-17T21:02:06Z",
+    "closedAt": "2026-10-17T21:57:30Z",
+    "mergeCommit": {
+      "oid": "5769ecc2342653c44ca33d7e27ad4ff096d5414c"
+    },
+    "mergedAt": "2026-10-17T21:57:30Z",
+    "measurement_window": false
+  },
+  {
+    "number": 62,
+    "state": "MERGED",
+    "headRefName": "docs/release-0.1.1",
+    "headRefOid": "6be4d65830f322721b282a5ea38212d40276fb8c",
+    "createdAt": "2026-10-17T20:17:28Z",
+    "closedAt": "2026-10-17T21:15:32Z",
+    "mergeCommit": {
+      "oid": "4881702f5bc728ff9e5ea4a7ceb6045e4b81c792"
+    },
+    "mergedAt": "2026-10-17T21:15:32Z",
+    "measurement_window": false
+  },
+  {
+    "number": 61,
+    "state": "MERGED",
+    "headRefName": "fix/issue-50",
+    "headRefOid": "4d72c8cbbfa7bf939d29b2fa191bb29ed5e6d7a2",
+    "createdAt": "2026-10-17T20:08:40Z",
+    "closedAt": "2026-10-17T20:27:04Z",
+    "mergeCommit": {
+      "oid": "5bbb725c80be3e7ec6388557db5cc0d673b1c52f"
+    },
+    "mergedAt": "2026-10-17T20:27:04Z",
+    "measurement_window": false
+  },
+  {
+    "number": 60,
+    "state": "MERGED",
+    "headRefName": "fix/issue-49",
+    "headRefOid": "f05abdda98550e86f6f8f33e6187d9408e553ab0",
+    "createdAt": "2026-10-17T20:05:33Z",
+    "closedAt": "2026-10-17T20:58:24Z",
+    "mergeCommit": {
+      "oid": "95f42565a190016c3f4a59aaac90723919017b9a"
+    },
+    "mergedAt": "2026-10-17T20:58:24Z",
+    "measurement_window": false
+  },
+  {
+    "number": 59,
+    "state": "MERGED",
+    "headRefName": "fix/issue-51",
+    "headRefOid": "1e7eb63aea28b6d29b538b0a61ee1452bbb33bcb",
+    "createdAt": "2026-10-17T20:04:06Z",
+    "closedAt": "2026-10-17T21:15:16Z",
+    "mergeCommit": {
+      "oid": "c14af16be8f8292b8cec442b15467a9cfc450b08"
+    },
+    "mergedAt": "2026-10-17T21:15:16Z",
+    "measurement_window": false
+  },
+  {
+    "number": 58,
+    "state": "MERGED",
+    "headRefName": "fix/issue-48",
+    "headRefOid": "b97cea48100049d414faaf9ae523fca023559e51",
+    "createdAt": "2026-10-17T20:00:52Z",
+    "closedAt": "2026-10-17T20:42:55Z",
+    "mergeCommit": {
+      "oid": "289211b09016556dd92479734ef72681503bfcee"
+    },
+    "mergedAt": "2026-10-17T20:42:55Z",
+    "measurement_window": false
+  },
+  {
+    "number": 57,
+    "state": "MERGED",
+    "headRefName": "fix/issue-45",
+    "headRefOid": "f1f3eb557460894bdcabaa61286062657622e922",
+    "createdAt": "2026-10-17T19:57:52Z",
+    "closedAt": "2026-10-17T20:14:49Z",
+    "mergeCommit": {
+      "oid": "46c704bf2984a3436c75aa050a709974fb7c79d9"
+    },
+    "mergedAt": "2026-10-17T20:14:49Z",
+    "measurement_window": false
+  },
+  {
+    "number": 56,
+    "state": "MERGED",
+    "headRefName": "fix/issue-47",
+    "headRefOid": "861253aa61261bd5286d9d93ff43fd18346c05b6",
+    "createdAt": "2026-10-17T19:57:16Z",
+    "closedAt": "2026-10-17T20:22:53Z",
+    "mergeCommit": {
+      "oid": "79edb7c413903e2befc68b3eab7db72b9bebeb21"
+    },
+    "mergedAt": "2026-10-17T20:22:53Z",
+    "measurement_window": false
+  },
+  {
+    "number": 55,
+    "state": "MERGED",
+    "headRefName": "fix/issue-46",
+    "headRefOid": "b76d50358ad90269b9ac68babd1e41b7d502a7a9",
+    "createdAt": "2026-10-17T19:55:45Z",
+    "closedAt": "2026-10-17T20:16:44Z",
+    "mergeCommit": {
+      "oid": "ee21b1aa0b71f5811cf13280a914f567413e8389"
+    },
+    "mergedAt": "2026-10-17T20:16:44Z",
+    "measurement_window": false
+  },
+  {
+    "number": 44,
+    "state": "MERGED",
+    "headRefName": "fix/linux-gpu-litert-abi",
+    "headRefOid": "9253ba0806376faaa9883e9ae4ecf3033fb68963",
+    "createdAt": "2026-10-17T17:33:42Z",
+    "closedAt": "2026-10-17T21:28:11Z",
+    "mergeCommit": {
+      "oid": "a0299f91a1de3fd4e2833b83e87c8259992d10c6"
+    },
+    "mergedAt": "2026-10-17T21:28:11Z",
+    "measurement_window": false
+  },
+  {
+    "number": 43,
+    "state": "MERGED",
+    "headRefName": "fix/cpu-model-modalities",
+    "headRefOid": "912a166bec3c12e38bfe2e5b150e98420418417a",
+    "createdAt": "2026-10-17T17:19:17Z",
+    "closedAt": "2026-10-17T17:19:27Z",
+    "mergeCommit": {
+      "oid": "eae8b481ec29e1c454065a1c9ea3d82090ee535a"
+    },
+    "mergedAt": "2026-10-17T17:19:27Z",
+    "measurement_window": false
+  },
+  {
+    "number": 42,
+    "state": "MERGED",
+    "headRefName": "fix/private-temp-dir-atomic",
+    "headRefOid": "b5568226c079f48a69e4a216fe0b1a3d4c71e604",
+    "createdAt": "2026-10-17T16:57:01Z",
+    "closedAt": "2026-10-17T17:08:45Z",
+    "mergeCommit": {
+      "oid": "a08f26d8a6de70bf9e769044add562cad5edbecd"
+    },
+    "mergedAt": "2026-10-17T17:08:45Z",
+    "measurement_window": false
+  },
+  {
+    "number": 41,
+    "state": "MERGED",
+    "headRefName": "test/explicit-integration-gates",
+    "headRefOid": "519fa27e5536d24df4922e7be770d93ed02c4161",
+    "createdAt": "2026-10-17T16:51:35Z",
+    "closedAt": "2026-10-17T17:57:54Z",
+    "mergeCommit": {
+      "oid": "414b7d94bced992bc44d8fe478e51baa5c3f6dcc"
+    },
+    "mergedAt": "2026-10-17T17:57:54Z",
+    "measurement_window": false
+  },
+  {
+    "number": 40,
+    "state": "MERGED",
+    "headRefName": "fix/portable-worker-status",
+    "headRefOid": "7e68b97ef22001c5fac283ac24243be0d9417bfb",
+    "createdAt": "2026-10-17T16:47:58Z",
+    "closedAt": "2026-10-17T16:48:06Z",
+    "mergeCommit": {
+      "oid": "650d1e5a10ddf58f96f806fb982bfd8d15e2b40f"
+    },
+    "mergedAt": "2026-10-17T16:48:06Z",
+    "measurement_window": false
+  },
+  {
+    "number": 38,
+    "state": "MERGED",
+    "headRefName": "fix/linux-child-exit-status",
+    "headRefOid": "b30a17b5ae63f32241b764bc5a3e76b7d117d559",
+    "createdAt": "2026-10-17T16:36:11Z",
+    "closedAt": "2026-10-17T16:36:25Z",
+    "mergeCommit": {
+      "oid": "46a134d060d2c3acffee4dbbe434438cc1f35cad"
+    },
+    "mergedAt": "2026-10-17T16:36:25Z",
+    "measurement_window": false
+  },
+  {
+    "number": 37,
+    "state": "MERGED",
+    "headRefName": "fix/preserve-main-release-candidates",
+    "headRefOid": "e4268863e1bdd81c4a2c93356173a67a49257db7",
+    "createdAt": "2026-10-17T16:29:01Z",
+    "closedAt": "2026-10-17T16:29:15Z",
+    "mergeCommit": {
+      "oid": "c94d21e222142d78dda2c78a59befc33e1b2074c"
+    },
+    "mergedAt": "2026-10-17T16:29:15Z",
+    "measurement_window": false
+  },
+  {
+    "number": 36,
+    "state": "MERGED",
+    "headRefName": "fix/desktop-ux-recovery",
+    "headRefOid": "dcf54babfc4c6f74ea4bb21809bd874c0dda65d3",
+    "createdAt": "2026-10-17T16:22:41Z",
+    "closedAt": "2026-10-17T16:34:19Z",
+    "mergeCommit": {
+      "oid": "de8e75e68f721b1467c074bb197fb1d8fbd35a3f"
+    },
+    "mergedAt": "2026-10-17T16:34:19Z",
+    "measurement_window": false
+  },
+  {
+    "number": 35,
+    "state": "MERGED",
+    "headRefName": "fix/probe-regression-discovery",
+    "headRefOid": "c175715c8ff1560a0e95795c1d6fc06c1b9a3b77",
+    "createdAt": "2026-10-17T16:18:08Z",
+    "closedAt": "2026-10-17T16:18:47Z",
+    "mergeCommit": {
+      "oid": "5733dfc27d2008ae51e20df5dbfdd87d94dd91ce"
+    },
+    "mergedAt": "2026-10-17T16:18:47Z",
+    "measurement_window": false
+  },
+  {
+    "number": 34,
+    "state": "MERGED",
+    "headRefName": "fix/acceptance-generation-probe",
+    "headRefOid": "376597fd272a307005ca97dc139d635d3c088ff0",
+    "createdAt": "2026-10-17T16:11:48Z",
+    "closedAt": "2026-10-17T16:12:55Z",
+    "mergeCommit": {
+      "oid": "5bf90e8aec60ace33d49f6b0f9a4d900448291d3"
+    },
+    "mergedAt": "2026-10-17T16:12:55Z",
+    "measurement_window": false
+  },
+  {
+    "number": 33,
+    "state": "MERGED",
+    "headRefName": "fix/recovery-installer-acceptance",
+    "headRefOid": "2244e0b9d0a42c0b5bd2f74756a4ed4008e71ff3",
+    "createdAt": "2026-10-17T16:00:10Z",
+    "closedAt": "2026-10-17T16:00:22Z",
+    "mergeCommit": {
+      "oid": "0f623486cfd5bc4e7bae091c68519ca01b28671f"
+    },
+    "mergedAt": "2026-10-17T16:00:22Z",
+    "measurement_window": false
+  },
+  {
+    "number": 32,
+    "state": "MERGED",
+    "headRefName": "fix/desktop-ux-parity",
+    "headRefOid": "967a35d93868e46995310ed93ec9cdf88b0862e9",
+    "createdAt": "2026-10-17T15:53:34Z",
+    "closedAt": "2026-10-17T16:24:18Z",
+    "mergeCommit": {
+      "oid": "33b53c0918482db5b1e99a5060e33741d187dded"
+    },
+    "mergedAt": "2026-10-17T16:24:18Z",
+    "measurement_window": false
+  },
+  {
+    "number": 31,
+    "state": "MERGED",
+    "headRefName": "perf/linux-bundle-rebuilds",
+    "headRefOid": "26250a3f2ae9f03b3410fcd13fb4182a79a0fc2d",
+    "createdAt": "2026-10-17T15:51:56Z",
+    "closedAt": "2026-10-17T16:09:39Z",
+    "mergeCommit": {
+      "oid": "7a1fad763fe1c3baffbbd099f2d35a8285b0e9d0"
+    },
+    "mergedAt": "2026-10-17T16:09:39Z",
+    "measurement_window": false
+  },
+  {
+    "number": 30,
+    "state": "MERGED",
+    "headRefName": "fix/desktop-ui-audit",
+    "headRefOid": "ae3cdde4bc7ee0a6a92695601f950cb776db27b5",
+    "createdAt": "2026-10-17T15:42:12Z",
+    "closedAt": "2026-10-17T15:54:27Z",
+    "mergeCommit": {
+      "oid": "30cd01596bfb8f714f2cd92ef5293fb521cff78a"
+    },
+    "mergedAt": "2026-10-17T15:54:27Z",
+    "measurement_window": false
+  },
+  {
+    "number": 29,
+    "state": "MERGED",
+    "headRefName": "fix/linux-installed-package-smoke",
+    "headRefOid": "c0339964337de1cb071b2c13e3fe73f382ffb49f",
+    "createdAt": "2026-10-17T15:39:45Z",
+    "closedAt": "2026-10-17T15:39:59Z",
+    "mergeCommit": {
+      "oid": "9609af7e82cab2e499102cd889a3523b7f917935"
+    },
+    "mergedAt": "2026-10-17T15:39:58Z",
+    "measurement_window": false
+  },
+  {
+    "number": 28,
+    "state": "MERGED",
+    "headRefName": "fix/linux-package-library-resolution",
+    "headRefOid": "0822fed50a239a53c5e1d9543cbb0c62b510c2b7",
+    "createdAt": "2026-10-17T15:21:01Z",
+    "closedAt": "2026-10-17T15:21:12Z",
+    "mergeCommit": {
+      "oid": "68324007cd047914999d6ec257d505d6d63e8a84"
+    },
+    "mergedAt": "2026-10-17T15:21:12Z",
+    "measurement_window": false
+  },
+  {
+    "number": 26,
+    "state": "MERGED",
+    "headRefName": "fix/ask-web-search-icon-parity",
+    "headRefOid": "2b5278adf558a696955436bb6de1e152b137dfed",
+    "createdAt": "2026-10-17T15:16:56Z",
+    "closedAt": "2026-10-17T15:54:15Z",
+    "mergeCommit": {
+      "oid": "0d1309100dbfacfc89c9f0d0aa30de923aea94ed"
+    },
+    "mergedAt": "2026-10-17T15:54:15Z",
+    "measurement_window": false
+  },
+  {
+    "number": 27,
+    "state": "MERGED",
+    "headRefName": "fix/meetings-ui-consistency",
+    "headRefOid": "e5d3e1a0d5df71de4f5a32a9fecb920d2a46a728",
+    "createdAt": "2026-10-17T15:16:56Z",
+    "closedAt": "2026-10-17T15:54:06Z",
+    "mergeCommit": {
+      "oid": "5e852e896b68b45b6ac815e48f14a5ca628b1379"
+    },
+    "mergedAt": "2026-10-17T15:54:06Z",
+    "measurement_window": false
+  },
+  {
+    "number": 25,
+    "state": "MERGED",
+    "headRefName": "fix/manual-linux-release",
+    "headRefOid": "dcaba0563c779702ae1732ee314ac9d4927f7d21",
+    "createdAt": "2026-10-17T15:07:34Z",
+    "closedAt": "2026-10-17T15:07:52Z",
+    "mergeCommit": {
+      "oid": "d5d244de32bd3de1f3d643a093f00191558544b7"
+    },
+    "mergedAt": "2026-10-17T15:07:52Z",
+    "measurement_window": false
+  },
+  {
+    "number": 24,
+    "state": "MERGED",
+    "headRefName": "fix/pr-review-comments",
+    "headRefOid": "b43f917ccc49c37ea45d37fcb7500ec763b1fea0",
+    "createdAt": "2026-10-17T15:05:09Z",
+    "closedAt": "2026-10-17T15:14:04Z",
+    "mergeCommit": {
+      "oid": "467c28f7c0110891c54d31e7b9d21d5d611b472a"
+    },
+    "mergedAt": "2026-10-17T15:14:04Z",
+    "measurement_window": false
+  },
+  {
+    "number": 23,
+    "state": "MERGED",
+    "headRefName": "fix/linux-private-temp-directories",
+    "headRefOid": "83c91216c3571e3880c96243c94d738815ed2434",
+    "createdAt": "2026-10-17T14:47:15Z",
+    "closedAt": "2026-10-17T15:04:48Z",
+    "mergeCommit": {
+      "oid": "5c536e093e28f2a36654b8b0e811320b2a54da56"
+    },
+    "mergedAt": "2026-10-17T15:04:48Z",
+    "measurement_window": false
+  },
+  {
+    "number": 22,
+    "state": "MERGED",
+    "headRefName": "perf/reusable-ci-dependencies",
+    "headRefOid": "4d68522197f8b08e0a1683d32e018a95e67c4b8d",
+    "createdAt": "2026-10-17T14:35:12Z",
+    "closedAt": "2026-10-17T15:42:33Z",
+    "mergeCommit": {
+      "oid": "30ad88bec9f5e52fb71743d5878ed93986821406"
+    },
+    "mergedAt": "2026-10-17T15:42:33Z",
+    "measurement_window": false
+  },
+  {
+    "number": 21,
+    "state": "MERGED",
+    "headRefName": "fix/google-import-parity",
+    "headRefOid": "7bfbba1620a4302fffa47769d1a6f937b07a1806",
+    "createdAt": "2026-10-17T14:33:33Z",
+    "closedAt": "2026-10-17T14:44:41Z",
+    "mergeCommit": {
+      "oid": "c9ff6e9bda7a9fd7d265dd7c4f4d5db31c49e707"
+    },
+    "mergedAt": "2026-10-17T14:44:41Z",
+    "measurement_window": false
+  },
+  {
+    "number": 20,
+    "state": "MERGED",
+    "headRefName": "docs/organize-topic-subdirectories",
+    "headRefOid": "7cfae5f824e8a12922247b2ec0db40937417937c",
+    "createdAt": "2026-10-17T13:42:00Z",
+    "closedAt": "2026-10-17T13:43:36Z",
+    "mergeCommit": {
+      "oid": "f293570b2b121b9d4db648e41a8799399c1d53b7"
+    },
+    "mergedAt": "2026-10-17T13:43:36Z",
+    "measurement_window": false
+  },
+  {
+    "number": 19,
+    "state": "MERGED",
+    "headRefName": "test/release-asset-acceptance",
+    "headRefOid": "62a484afaa56b3f25339ada87ec3c7c2e493a6de",
+    "createdAt": "2026-10-17T13:41:07Z",
+    "closedAt": "2026-10-17T14:35:34Z",
+    "mergeCommit": {
+      "oid": "4e6edcd28e4ccddee64dbef99bc23f8bd6eb5480"
+    },
+    "mergedAt": "2026-10-17T14:35:34Z",
+    "measurement_window": false
+  },
+  {
+    "number": 18,
+    "state": "MERGED",
+    "headRefName": "perf/parallel-macos-gates",
+    "headRefOid": "2f4d1743f52d2dd80e6fbde517cb98c53260d548",
+    "createdAt": "2026-10-17T06:44:11Z",
+    "closedAt": "2026-10-17T06:44:51Z",
+    "mergeCommit": {
+      "oid": "199e3696938d03988122bf14c901f86cc4303c06"
+    },
+    "mergedAt": "2026-10-17T06:44:51Z",
+    "measurement_window": false
+  },
+  {
+    "number": 17,
+    "state": "MERGED",
+    "headRefName": "feature/parsing-lifecycle-edges",
+    "headRefOid": "0923e9549311a700f0ccae776bd9a5b1faa3ad15",
+    "createdAt": "2026-10-17T06:33:14Z",
+    "closedAt": "2026-10-17T13:11:26Z",
+    "mergeCommit": {
+      "oid": "714e6d00f661b1fe1be03e921fa5e8f0774322c7"
+    },
+    "mergedAt": "2026-10-17T13:11:26Z",
+    "measurement_window": false
+  },
+  {
+    "number": 16,
+    "state": "MERGED",
+    "headRefName": "fix/macos-runtime-source-snapshot",
+    "headRefOid": "f2875e90cabf3a76ac84615e96c77ad3ca113ff6",
+    "createdAt": "2026-10-17T06:22:02Z",
+    "closedAt": "2026-10-17T13:11:22Z",
+    "mergeCommit": {
+      "oid": "0aa767b491893bd309e47bac210fc2c03a703080"
+    },
+    "mergedAt": "2026-10-17T13:11:22Z",
+    "measurement_window": false
+  },
+  {
+    "number": 15,
+    "state": "MERGED",
+    "headRefName": "feature/original-distribution-config",
+    "headRefOid": "109e6f20a1b1c44c329589321c74d0fc4d499fdf",
+    "createdAt": "2026-10-17T06:18:10Z",
+    "closedAt": "2026-10-17T06:46:05Z",
+    "mergeCommit": {
+      "oid": "b59fec301fda4d78210227086e245682b678fd04"
+    },
+    "mergedAt": "2026-10-17T06:46:05Z",
+    "measurement_window": false
+  },
+  {
+    "number": 14,
+    "state": "MERGED",
+    "headRefName": "feature/exact-ui-behavior-parity",
+    "headRefOid": "4d88837715c5ad678e23149d0d6be8b96aaf2723",
+    "createdAt": "2026-10-17T06:01:22Z",
+    "closedAt": "2026-10-17T06:20:48Z",
+    "mergeCommit": {
+      "oid": "dc4df688aaca5a29313c6fbcb14824e606469e5b"
+    },
+    "mergedAt": "2026-10-17T06:20:48Z",
+    "measurement_window": false
+  },
+  {
+    "number": 13,
+    "state": "MERGED",
+    "headRefName": "feature/vision-model-lifecycle-parity",
+    "headRefOid": "5ea85b0024024ca75bab9fb42862ccc4c93fab66",
+    "createdAt": "2026-10-17T06:01:20Z",
+    "closedAt": "2026-10-17T06:27:12Z",
+    "mergeCommit": {
+      "oid": "22356743ee0e44b7fc978ce69d49938263d4a7cb"
+    },
+    "mergedAt": "2026-10-17T06:27:12Z",
+    "measurement_window": false
+  },
+  {
+    "number": 12,
+    "state": "MERGED",
+    "headRefName": "fix/macos-release-runtimes",
+    "headRefOid": "4b196749087ebefef98e6a162219e21b32f45a0b",
+    "createdAt": "2026-10-17T05:57:43Z",
+    "closedAt": "2026-10-17T06:09:01Z",
+    "mergeCommit": {
+      "oid": "03539ea526086886862619a8e22cd8a73a4c9e29"
+    },
+    "mergedAt": "2026-10-17T06:09:01Z",
+    "measurement_window": false
+  },
+  {
+    "number": 11,
+    "state": "MERGED",
+    "headRefName": "feature/recording-device-parity",
+    "headRefOid": "2d5a58103ecc2f874b002b963d84bd0207fb45d6",
+    "createdAt": "2026-10-17T05:41:38Z",
+    "closedAt": "2026-10-17T05:50:22Z",
+    "mergeCommit": {
+      "oid": "82bfa53afe1407cd3c3fea2c998e2b27b8ff9c43"
+    },
+    "mergedAt": "2026-10-17T05:50:22Z",
+    "measurement_window": false
+  },
+  {
+    "number": 10,
+    "state": "MERGED",
+    "headRefName": "feature/live-cloud-service-parity",
+    "headRefOid": "52edb47c68fafd54764a85f7446193764f2a1c79",
+    "createdAt": "2026-10-17T05:36:24Z",
+    "closedAt": "2026-10-17T06:06:47Z",
+    "mergeCommit": {
+      "oid": "b021fc4677e67b21e056562650914fc5482c9d22"
+    },
+    "mergedAt": "2026-10-17T06:06:47Z",
+    "measurement_window": false
+  },
+  {
+    "number": 9,
+    "state": "MERGED",
+    "headRefName": "feature/note-lifecycle-runtime-parity",
+    "headRefOid": "eb957ccf21dba61efb3708a8b9a7555b997cd6bf",
+    "createdAt": "2026-10-17T05:23:07Z",
+    "closedAt": "2026-10-17T05:48:54Z",
+    "mergeCommit": {
+      "oid": "a3ba775eec46d3ff80d991ffb0cf1569339adb9d"
+    },
+    "mergedAt": "2026-10-17T05:48:54Z",
+    "measurement_window": false
+  },
+  {
+    "number": 8,
+    "state": "MERGED",
+    "headRefName": "test/coverage-foundation",
+    "headRefOid": "10beabdacad95fa55ac327f4e3729275a5c94c35",
+    "createdAt": "2026-10-17T05:03:56Z",
+    "closedAt": "2026-10-17T05:32:22Z",
+    "mergeCommit": {
+      "oid": "a0ea706d5b66dfad1fa74feed7c3a85debc66d15"
+    },
+    "mergedAt": "2026-10-17T05:32:22Z",
+    "measurement_window": false
+  },
+  {
+    "number": 7,
+    "state": "MERGED",
+    "headRefName": "chore/single-source-version",
+    "headRefOid": "007ec2124eef09f94f32bd174a55b6e15fc1347e",
+    "createdAt": "2026-10-16T15:04:55Z",
+    "closedAt": "2026-10-16T15:19:32Z",
+    "mergeCommit": {
+      "oid": "5e2e5ccd9097e3cad75a4456d7ac8a18dfbfc23a"
+    },
+    "mergedAt": "2026-10-16T15:19:32Z",
+    "measurement_window": false
+  },
+  {
+    "number": 6,
+    "state": "MERGED",
+    "headRefName": "fix/transcript-model-ui-parity",
+    "headRefOid": "9a52a74be97603b1c377798d33aea4d4e52f18a1",
+    "createdAt": "2026-10-16T14:04:16Z",
+    "closedAt": "2026-10-16T14:20:58Z",
+    "mergeCommit": {
+      "oid": "9e71ecc4ea247ac81180d854ebf1dfabfdbba83e"
+    },
+    "mergedAt": "2026-10-16T14:20:57Z",
+    "measurement_window": false
+  },
+  {
+    "number": 5,
+    "state": "MERGED",
+    "headRefName": "ci/release-packages",
+    "headRefOid": "46d7726e01ec5c01c7a0fd3f99022690ecf31f97",
+    "createdAt": "2026-10-16T11:18:46Z",
+    "closedAt": "2026-10-16T11:57:39Z",
+    "mergeCommit": {
+      "oid": "46a212fbb51eb5027a11cadeec95598abb5cfa9b"
+    },
+    "mergedAt": "2026-10-16T11:57:39Z",
+    "measurement_window": false
+  },
+  {
+    "number": 4,
+    "state": "MERGED",
+    "headRefName": "fix/blue-window-logo",
+    "headRefOid": "7b022a2c3a9fe63cdbcbea4c0ad0693ba8495dd8",
+    "createdAt": "2026-10-16T11:10:53Z",
+    "closedAt": "2026-10-16T11:44:20Z",
+    "mergeCommit": {
+      "oid": "b6af17fe06e14fdc4084351ff351947f070b1305"
+    },
+    "mergedAt": "2026-10-16T11:44:20Z",
+    "measurement_window": false
+  },
+  {
+    "number": 3,
+    "state": "MERGED",
+    "headRefName": "feature/linux-packaging",
+    "headRefOid": "aab850fb820fa347aeae367ac16ad4be4304a191",
+    "createdAt": "2026-10-16T05:02:28Z",
+    "closedAt": "2026-10-16T05:20:50Z",
+    "mergeCommit": {
+      "oid": "c4157de196476a29035762d5d3c6dba180dfe6ca"
+    },
+    "mergedAt": "2026-10-16T05:20:50Z",
+    "measurement_window": false
+  },
+  {
+    "number": 2,
+    "state": "MERGED",
+    "headRefName": "feature/macos-integration",
+    "headRefOid": "b9ba178523db185c070affb1df1cc404757e1e13",
+    "createdAt": "2026-10-16T04:37:33Z",
+    "closedAt": "2026-10-16T11:06:05Z",
+    "mergeCommit": {
+      "oid": "730ea81bd68443d90375fc8babaa7a8b5522fd86"
+    },
+    "mergedAt": "2026-10-16T11:06:05Z",
+    "measurement_window": false
+  },
+  {
+    "number": 1,
+    "state": "MERGED",
+    "headRefName": "feature/native-inference",
+    "headRefOid": "3ad238ad627b81308a1d009e7a7ff2e09cd6590e",
+    "createdAt": "2026-10-16T04:11:52Z",
+    "closedAt": "2026-10-16T04:51:56Z",
+    "mergeCommit": {
+      "oid": "465914912bb971fde1ce0f198ba0777eafb4f469"
+    },
+    "mergedAt": "2026-10-16T04:51:56Z",
+    "measurement_window": false
+  }
+]

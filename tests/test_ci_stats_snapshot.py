@@ -84,6 +84,59 @@ def test_measurement_window_uses_actual_timestamps_and_excludes_historical_merge
         snapshot.timestamp("2026-10-19T00:00:00")
 
 
+def test_github_collection_query_uses_whole_seconds_without_changing_cohort_boundary(tmp_path):
+    calls = []
+
+    def recorded(path):
+        calls.append(path)
+        return request(path)
+
+    destination = tmp_path / "whole-second-query"
+    snapshot.collect(
+        "owner/repository", "2026-10-19T00:05:00.500Z", destination, recorded,
+        until="2026-10-19T01:00:00.750Z",
+    )
+    from urllib.parse import parse_qs, urlparse
+
+    query = parse_qs(urlparse(next(path for path in calls if "/actions/runs?" in path)).query)
+    assert query["created"] == ["2026-10-19T00:05:00Z..2026-10-19T01:00:00Z"]
+    assert not json.loads((destination / "prs.json").read_text())[0]["measurement_window"]
+
+
+@pytest.mark.parametrize("event", ["pull_request", "push"])
+def test_qualification_annotation_cannot_remove_ordinary_runs_from_denominators(tmp_path, event):
+    observations = {"runs": {"1": {"qualification": True}}}
+
+    def actual_request(path):
+        values = request(path)
+        if "/actions/runs?" in path:
+            values[0]["workflow_runs"][0]["event"] = event
+        return values
+
+    with pytest.raises(ValueError, match="Ordinary PR and push"):
+        snapshot.collect(
+            "owner/repository", "2026-10-19T00:00:00Z", tmp_path / "snapshot",
+            actual_request, observations=observations,
+        )
+    # Legacy unstamped metadata is held to the same rule at load time.
+    root = tmp_path / "legacy"
+    (root / "jobs").mkdir(parents=True)
+    (root / "runs.jsonl").write_text(json.dumps(run(event=event)) + "\n")
+    (root / "observations.json").write_text(json.dumps(observations))
+    with pytest.raises(ValueError, match="Ordinary PR and push"):
+        stats.load(root)
+    with pytest.raises(ValueError, match="Ordinary PR and push"):
+        stats.operational_report([run(event=event) | {"qualification": True}])
+
+
+def test_qualification_annotation_requires_boolean():
+    for marker in (1, "true", None):
+        with pytest.raises(ValueError, match="boolean"):
+            snapshot.validate_observations({"runs": {"1": {"qualification": marker}}})
+        with pytest.raises(ValueError, match="boolean"):
+            snapshot.validate_qualification(run() | {"qualification": marker})
+
+
 @pytest.mark.parametrize(
     "invalid",
     [
@@ -364,14 +417,15 @@ def test_same_head_retrigger_cannot_be_called_first_attempt_green():
 
 def test_green_qualification_repeats_cannot_improve_ordinary_error_rate():
     ordinary = run(jobs=[job(status="failure")])
-    repeats = [run(index) | {"qualification": True} for index in range(2, 8)]
+    repeats = [run(index, event="workflow_dispatch") | {"qualification": True} for index in range(2, 8)]
     data = stats.operational_report([ordinary, *repeats])
     assert data["first_attempt_workflows"]["rate"] == 1.0
     assert data["first_attempt_workflows"]["eligible"] == 1
     assert data["first_attempt_jobs"]["eligible"] == 1
     assert data["first_attempt_pr_commits"]["failed"] == 1
     assert data["qualification_first_attempts"]["outcomes"] == {"success": 6}
-    assert data["runner_minutes_by_category"]["pr"] == 14
+    assert data["runner_minutes_by_category"]["pr"] == 2
+    assert data["runner_minutes_by_category"]["dispatch-or-other"] == 12
     assert data["manual_qualification_runs"] == list(range(2, 8))
 
 
