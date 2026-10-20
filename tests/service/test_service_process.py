@@ -888,11 +888,7 @@ def test_two_headless_mcp_launchers_share_one_automatically_started_owner(runnin
         # earlier must not take the profile once this owner exits.
         os.kill(owner, signal.SIGTERM)
         deadline = time.monotonic() + 30
-        while True:
-            try:
-                os.kill(owner, 0)
-            except ProcessLookupError:
-                break
+        while not process_gone(owner):
             poll_delay(deadline)
         owner = None
         assert_no_late_owner(profile / "data", profile / "run")
@@ -1550,6 +1546,30 @@ def test_attached_mcp_follows_a_closing_owner_to_one_replacement(tmp_path):
                 if str(SERVICE) in command:
                     os.kill(int(line), signal.SIGTERM)
             helper.kill()
+
+
+def process_gone(pid):
+    """Whether `pid` has exited, counting a zombie as exited.
+
+    A detached service is reparented to PID 1. In a CI container that may
+    never reap it, so a signal-0 probe keeps succeeding after it exited.
+    """
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    if sys.platform.startswith("linux"):
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text()
+        except FileNotFoundError:
+            return True
+        # The state follows the parenthesized command name, which may itself
+        # contain spaces or parentheses.
+        return stat[stat.rindex(")") + 2] == "Z"
+    state = subprocess.run(
+        ["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True
+    ).stdout.strip()
+    return not state or state.startswith("Z")
 
 
 def poll_delay(deadline):
