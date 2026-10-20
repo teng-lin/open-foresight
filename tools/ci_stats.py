@@ -471,25 +471,42 @@ def report(runs, prs, trees, current_since):
         start = min(stamp(run["created_at"]) for run in group)
         readiness = {}
         readiness_attempts = {}
+        readiness_runs = {}
+        earliest_runs: dict[str, int] = {}
+        for run in sorted(group, key=lambda row: (row["created_at"], row["id"])):
+            earliest_runs.setdefault(run["path"], run["id"])
         first_green = None
         first_green_attempt = None
+        first_green_runs = {}
+        first_attempt_green = False
         events = sorted(
             (
-                job
+                (run, job)
                 for run in group
                 for job in run["jobs"]
                 if job["name"] in REQUIRED and job.get("completed_at")
             ),
-            key=lambda job: (job["completed_at"], job["id"]),
+            key=lambda pair: (pair[1]["completed_at"], pair[0]["id"], pair[1]["id"]),
         )
-        for job in events:
+        for run, job in events:
             readiness[job["name"]] = job.get("conclusion")
             readiness_attempts[job["name"]] = job["run_attempt"]
+            readiness_runs[job["name"]] = {
+                "run": run["id"],
+                "workflow": run["path"],
+                "qualification": run.get("qualification") is True,
+            }
             if set(readiness) == REQUIRED and all(
                 value == "success" for value in readiness.values()
             ):
                 first_green = (stamp(job["completed_at"]) - start).total_seconds() / 60
                 first_green_attempt = max(readiness_attempts.values())
+                first_green_runs = dict(readiness_runs)
+                first_attempt_green = first_green_attempt == 1 and all(
+                    value["run"] == earliest_runs[value["workflow"]]
+                    and not value["qualification"]
+                    for value in readiness_runs.values()
+                )
                 break
         per_push.append(
             {
@@ -500,6 +517,8 @@ def report(runs, prs, trees, current_since):
                 "green_minutes": (end - start).total_seconds() / 60 if green else None,
                 "first_green_minutes": first_green,
                 "first_green_attempt": first_green_attempt,
+                "first_green_runs": first_green_runs,
+                "first_attempt_green": first_attempt_green,
                 "runner_minutes": sum(run["minutes"] for run in group),
                 "missing_or_red": sorted(
                     REQUIRED
@@ -553,7 +572,7 @@ def report(runs, prs, trees, current_since):
             [
                 push["first_green_minutes"]
                 for push in per_push
-                if push["first_green_attempt"] == 1
+                if push["first_attempt_green"]
             ]
         ),
         "push_to_green": summary(
