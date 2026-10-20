@@ -947,7 +947,8 @@ void main() {
       );
       // A process that is gone has released its profile, whoever holds
       // the lock now.
-      final gone = await Process.start('/bin/true', []);
+      // From PATH: macOS has no /bin/true.
+      final gone = await Process.start('true', []);
       await gone.exitCode.timeout(startupBound);
       expect(await awaitProfileRelease(profile, gone.pid), isTrue);
       await holder.stdin.close();
