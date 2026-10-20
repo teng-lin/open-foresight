@@ -472,6 +472,8 @@ class Application implements ModelGate {
     'accounts': googleAuth.accounts,
     'account': googleAuth.account,
     'configured': googleAuth.client != null,
+    'provider': googleAuth.viaGranola ? 'granola' : 'google',
+    'driveAvailable': !googleAuth.viaGranola,
     'signingIn': googleAuth.signingIn,
     'loadError': googleAuth.loadError,
     'lastRefresh': google.lastCompletedRefreshMs,
@@ -509,12 +511,17 @@ class Application implements ModelGate {
       await google.reminders(domain.clock.now(), (message) async {
         await platformNotification('Open Foresight', message);
       });
-      final hours =
-          int.tryParse(store.preference('googleRefreshHours', '4')) ?? 4;
+      final minutes = googleAuth.viaGranola
+          ? int.tryParse(
+                  store.preference('granolaCalendarRefreshMinutes', '10'),
+                ) ??
+                10
+          : (int.tryParse(store.preference('googleRefreshHours', '4')) ?? 4) *
+                60;
       if (!domain.sourcesPaused &&
           domain.clock.now().millisecondsSinceEpoch -
                   google.lastCompletedRefreshMs >=
-              hours * 3600000) {
+              minutes * 60000) {
         await google.refresh();
       }
       changed();
@@ -740,7 +747,16 @@ class Application implements ModelGate {
         case Operation.googleStatus:
           return googleState;
         case Operation.googleConfigure:
-          await googleAuth.configure(File(a['path'] as String));
+          if (a['provider'] == 'granola') {
+            await googleAuth.configureGranola();
+          } else {
+            await googleAuth.configure(File(a['path'] as String));
+          }
+          return googleState;
+        case Operation.googleCompleteSignIn:
+          final uri = Uri.tryParse(a['url'] as String);
+          if (uri == null) throw StateError('Invalid calendar sign-in return.');
+          googleAuth.completeGranolaSignIn(uri, manual: a['manual'] == true);
           return googleState;
         case Operation.googleCancelSignIn:
           googleAuth.cancelSignIn();

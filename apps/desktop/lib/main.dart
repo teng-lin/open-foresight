@@ -42,6 +42,7 @@ import 'meeting_visuals.dart';
 import 'desktop_settings.dart';
 import 'desktop_visuals.dart';
 import 'commands.dart';
+import 'calendar_auth_links.dart';
 import 'global_shortcuts.dart';
 import 'desktop_menu.dart';
 import 'hypr_shortcuts.dart';
@@ -131,7 +132,15 @@ class _DesktopStartupState extends State<DesktopStartup> {
       ensurePrivateDirectory(profile.runtime);
       widget.configureRuntime(profile.data);
       final commandPath = '${profile.runtime}/commands.sock';
-      final launchCommand = widget.arguments.contains('--stop-meeting')
+      final authUrl = widget.arguments
+          .where(
+            (argument) =>
+                argument.startsWith('open-foresight://login-in-progress?'),
+          )
+          .firstOrNull;
+      final launchCommand = authUrl != null
+          ? 'calendar-auth'
+          : widget.arguments.contains('--stop-meeting')
           ? 'stop-meeting'
           : widget.arguments.contains('--quick-meeting')
           ? 'quick-meeting'
@@ -139,12 +148,15 @@ class _DesktopStartupState extends State<DesktopStartup> {
       if (await AppCommands.forward(
         commandPath,
         command: launchCommand,
+        authUrl: authUrl,
         activationToken: Platform.environment['XDG_ACTIVATION_TOKEN'],
       )) {
         widget.quit();
         return;
       }
-      if (launchCommand == 'stop-meeting') {
+      // Sign-in attempts are memory-bound to the running desktop/service.
+      // Do not launch a fresh workspace with an unsolicited or stale callback.
+      if (launchCommand == 'stop-meeting' || launchCommand == 'calendar-auth') {
         widget.quit();
         return;
       }
@@ -295,6 +307,7 @@ class Workspace extends StatefulWidget {
 
 class _WorkspaceState extends State<Workspace>
     with TickerProviderStateMixin, WidgetsBindingObserver {
+  final calendarAuthLinks = CalendarAuthLinks();
   late final onboardingFeature = _OnboardingController(this);
   late final sourceFeature = _SourcesController(this);
   late final chatFeature = _ChatController(this);
@@ -359,7 +372,9 @@ class _WorkspaceState extends State<Workspace>
     integrationFeature.commands?.onError =
         integrationFeature.reportShortcutFailure;
     integrationFeature.commands?.setHandler(
-      (command, token) => command == 'quick-meeting'
+      (command, token) => command == 'calendar-auth'
+          ? integrationFeature.completeCalendarSignIn(token!)
+          : command == 'quick-meeting'
           ? integrationFeature.activateQuickMeeting(token)
           : command == 'stop-meeting'
           ? (meetingFeature.recording != null &&
@@ -367,6 +382,11 @@ class _WorkspaceState extends State<Workspace>
                 ? run(meetingFeature.stopRecording)
                 : Future<void>.value())
           : integrationFeature.activateWindow(token),
+    );
+    unawaited(
+      calendarAuthLinks.start(
+        (url) => run(() => integrationFeature.completeCalendarSignIn(url)),
+      ),
     );
     if (widget.quickOnLaunch)
       WidgetsBinding.instance.addPostFrameCallback(
@@ -462,6 +482,7 @@ class _WorkspaceState extends State<Workspace>
   void dispose() {
     desktopMenu.close();
     WidgetsBinding.instance.removeObserver(this);
+    calendarAuthLinks.close();
     serviceUiTimer?.cancel();
     serviceUiRevision.dispose();
     unawaited(captureLevels?.cancel());

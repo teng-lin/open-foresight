@@ -5,6 +5,47 @@ import 'package:open_foresight/commands.dart';
 
 void main() {
   test(
+    'calendar return forwards to the owner and foreign schemes are rejected',
+    () async {
+      final directory = createTestTempDirectorySync('calendar-command-');
+      final received = Completer<String>();
+      final commands = await AppCommands.bind(
+        '${directory.path}/commands.sock',
+        (command, url) async {
+          expect(command, 'calendar-auth');
+          received.complete(url!);
+        },
+      );
+      try {
+        expect(
+          await AppCommands.forward(
+            commands.path,
+            command: 'calendar-auth',
+            authUrl: 'granola://login-complete?code=foreign',
+          ),
+          false,
+        );
+        const callback =
+            'open-foresight://login-in-progress?foresight_state=fixture&open-url=fixture';
+        expect(
+          await AppCommands.forward(
+            commands.path,
+            command: 'calendar-auth',
+            authUrl: callback,
+          ),
+          true,
+        );
+        expect(
+          await received.future.timeout(const Duration(seconds: 2)),
+          callback,
+        );
+      } finally {
+        await commands.close();
+      }
+    },
+  );
+
+  test(
     'shortcut failures reach the owning UI error handler after queued acknowledgement',
     () async {
       final directory = createTestTempDirectorySync('foresight-command-error-');

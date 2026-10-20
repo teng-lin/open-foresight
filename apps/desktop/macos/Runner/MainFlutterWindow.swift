@@ -30,6 +30,7 @@ class MainFlutterWindow: NSWindow {
     center()
 
     RegisterGeneratedPlugins(registry: flutterViewController)
+    CalendarAuthBridge.install(flutterViewController.engine.binaryMessenger)
 
     isReleasedWhenClosed = false
     integration = DesktopIntegration(window: self, messenger: flutterViewController.engine.binaryMessenger)

@@ -46,6 +46,24 @@ class _IntegrationsController extends _FeatureController {
       }[captureCapabilities['microphone']] ??
       'Checking';
 
+  bool get granolaCalendar => d.googleStatus['provider'] == 'granola';
+  bool get driveAvailable => d.googleStatus['driveAvailable'] != false;
+
+  Future<void> connectGranolaCalendar() async {
+    final state =
+        await d.command(Operation.googleConfigure, {'provider': 'granola'})
+            as Map;
+    d.googleStatus
+      ..clear()
+      ..addAll(Map<String, dynamic>.from(state));
+    await connectGoogle();
+  }
+
+  Future<void> completeCalendarSignIn(String url) async {
+    await d.command(Operation.googleCompleteSignIn, {'url': url});
+    await activateWindow(null);
+  }
+
   bool get googleSyncing => d.googleStatus['syncing'] == true;
 
   bool get systemAudioSetupComplete =>
@@ -352,6 +370,15 @@ class _IntegrationsController extends _FeatureController {
         openBrowser: openPlatformUri,
         returnToApp: () => activateWindow(null),
         addAccount: addAccount,
+        calendarThroughGranola: granolaCalendar,
+        completeSignIn: granolaCalendar
+            ? (url) async {
+                await d.command(Operation.googleCompleteSignIn, {
+                  'url': url,
+                  'manual': true,
+                });
+              }
+            : null,
       ),
     );
     if (!mounted) return;
@@ -461,6 +488,10 @@ class _IntegrationsController extends _FeatureController {
   }
 
   Future<void> chooseDrive({bool folder = false}) async {
+    if (!driveAvailable)
+      throw StateError(
+        'Drive is unavailable through the Granola calendar connection.',
+      );
     if (!googleAuth.connected) await connectGoogle();
     if (!mounted || !context.mounted || !googleAuth.connected) return;
     final selection = await showDialog<List<String>>(

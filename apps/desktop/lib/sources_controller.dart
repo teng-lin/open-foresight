@@ -916,7 +916,8 @@ class _SourcesController extends _FeatureController {
                         ),
                         PopupMenuItem(
                           value: 'drive-file',
-                          enabled: !shell.busy,
+                          enabled:
+                              !shell.busy && integrationFeature.driveAvailable,
                           child: DesktopImportMenuTile(
                             icon: Icons.cloud_outlined,
                             label: 'Add files from Drive',
@@ -924,7 +925,8 @@ class _SourcesController extends _FeatureController {
                         ),
                         PopupMenuItem(
                           value: 'drive-folder',
-                          enabled: !shell.busy,
+                          enabled:
+                              !shell.busy && integrationFeature.driveAvailable,
                           child: DesktopImportMenuTile(
                             icon: Icons.folder_shared_outlined,
                             label: 'Add an entire Drive folder',
@@ -932,7 +934,8 @@ class _SourcesController extends _FeatureController {
                         ),
                         PopupMenuItem(
                           value: 'drive-year',
-                          enabled: !shell.busy,
+                          enabled:
+                              !shell.busy && integrationFeature.driveAvailable,
                           child: DesktopImportMenuTile(
                             icon: Icons.history,
                             label: 'Import last 1 year from Drive',
