@@ -1,6 +1,7 @@
 """Main cache discovery schedules warmers only for missing exact outputs."""
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -20,7 +21,7 @@ def environment():
         "GITHUB_REPOSITORY": "owner/repo",
         "GITHUB_SHA": SOURCE,
         "GITHUB_REF": "refs/heads/main",
-        "GITHUB_EVENT_NAME": "schedule",
+        "GITHUB_EVENT_NAME": "workflow_dispatch",
         "GITHUB_JOB": "reconcile",
         "GITHUB_WORKFLOW_REF": "owner/repo/.github/workflows/linux-cache-publish.yml@refs/heads/main",
         "CORE_LOCK_HASH": HASHES[0],
@@ -41,6 +42,8 @@ def fetch_for(rows, *, mains=None, calls=None):
             calls.append((repository, route))
         if route == "commits/main":
             return {"sha": next(mains)}
+        if route.startswith("actions/workflows/linux-cache-publish.yml/runs?"):
+            return {"workflow_runs": []}
         assert route.startswith(
             "actions/caches?ref=refs%2Fheads%2Fmain&per_page=100&page="
         )
@@ -179,6 +182,7 @@ def test_cli_uses_reviewed_checkout_and_emits_exact_role_matrix(tmp_path, monkey
         reconcile.main()
     assert json.loads(output.read_text())["arch_stages"] == ["core", "desktop"]
     assert "arch_needed=true" in github_output.read_text()
+    assert "registry_needed=true" in github_output.read_text()
     assert 'arch_stages=["core", "desktop"]' in github_output.read_text()
     with patch("subprocess.check_output", return_value=SOURCE + "\n"):
         assert reconcile.reconcile(environment(), fetch=fetch_for([]))["current"]
@@ -201,6 +205,8 @@ def test_model_save_guard_accepts_only_dedicated_main_model_owners(workflow):
     for key, value in (
         ("GITHUB_JOB", "macos"),
         ("GITHUB_EVENT_NAME", "pull_request"),
+        ("GITHUB_EVENT_NAME", "push"),
+        ("GITHUB_EVENT_NAME", "schedule"),
         ("GITHUB_REF", "refs/pull/1/merge"),
     ):
         with pytest.raises(ValueError, match="dedicated main-only"):
@@ -293,7 +299,8 @@ def test_manual_consumer_qualification_executes_real_sdk_container_and_evidence_
     )
     publisher = workflow("linux-cache-publish.yml")["jobs"]["publish-linux-caches"]
     upload = next(
-        step for step in publisher["steps"]
+        step
+        for step in publisher["steps"]
         if step.get("with", {}).get("name", "").startswith("ci-tooling-")
     )
     assert upload["with"]["overwrite"] is True
@@ -331,3 +338,188 @@ def test_macos_models_have_one_independent_guarded_writer_and_no_toolchain_warmi
         if step.get("id") == "model-save-current"
     )
     assert verify < guard_step < steps.index(saves[0])
+
+
+NOW = datetime(2026, 10, 20, 12, tzinfo=timezone.utc)
+
+
+def publisher(run_id=10, *, hours=1, state="success", attempt=1):
+    started = NOW - timedelta(hours=hours)
+    run = {
+        "id": run_id,
+        "path": reconcile.WORKFLOW,
+        "event": "workflow_dispatch",
+        "head_branch": "main",
+        "head_sha": SOURCE,
+        "repository": {"full_name": "owner/repo"},
+        "head_repository": {"full_name": "owner/repo"},
+        "created_at": started.isoformat(),
+    }
+    active = state in {"queued", "in_progress"}
+    job = {
+        "id": run_id * 100 + attempt,
+        "run_id": run_id,
+        "run_attempt": attempt,
+        "name": "publish-linux-caches",
+        "status": state if active else "completed",
+        "conclusion": None if active else state,
+        "started_at": None if state == "queued" else started.isoformat(),
+        "completed_at": None
+        if active
+        else (started + timedelta(minutes=1)).isoformat(),
+    }
+    return run, job
+
+
+def registry_fetch(publishers, calls=None):
+    runs = {run["id"]: run for run, _ in publishers}
+    jobs = {
+        run_id: [job for run, job in publishers if run["id"] == run_id]
+        for run_id in runs
+    }
+
+    def fetch(repository, route):
+        assert repository == "owner/repo"
+        if calls is not None:
+            calls.append(route)
+        page = int(route.rsplit("page=", 1)[-1])
+        if route.startswith("actions/workflows/linux-cache-publish.yml/runs?"):
+            assert "event=workflow_dispatch&branch=main&head_sha=" + SOURCE in route
+            values, key = list(runs.values()), "workflow_runs"
+        else:
+            assert "/jobs?filter=all&" in route
+            values, key = jobs[int(route.split("/")[2])], "jobs"
+        return {key: values[(page - 1) * 100 : page * 100]}
+
+    return fetch
+
+
+@pytest.mark.parametrize(
+    "hours,state,needed",
+    [
+        (1, "success", False),
+        (25, "success", True),
+        (1, "failure", True),
+        (1, "cancelled", True),
+        (0.25, "in_progress", False),
+        (0.25, "queued", False),
+        (0.6, "in_progress", True),
+        (0.6, "queued", True),
+    ],
+)
+def test_registry_scheduling_uses_bounded_actual_publisher_readiness(
+    hours, state, needed
+):
+    result = reconcile.registry_schedule(
+        "owner/repo",
+        SOURCE,
+        fetch=registry_fetch([publisher(hours=hours, state=state)]),
+        now=NOW,
+    )
+    assert result["needed"] is needed
+    assert result["reason"]
+
+
+def test_latest_executed_failure_and_rerun_override_older_green_without_skipped_jobs_hiding_readiness():
+    old = publisher(10, hours=3)
+    failed = publisher(20, hours=2, state="failure")
+    skipped = publisher(30, hours=1, state="skipped")
+    assert reconcile.registry_schedule(
+        "owner/repo", SOURCE, fetch=registry_fetch([old, failed, skipped]), now=NOW
+    )["needed"]
+    rerun = publisher(10, hours=0.5, attempt=2)
+    assert not reconcile.registry_schedule(
+        "owner/repo",
+        SOURCE,
+        fetch=registry_fetch([old, failed, skipped, rerun]),
+        now=NOW,
+    )["needed"]
+    cancelled = publisher(40, hours=0.25, state="cancelled")
+    cancelled[1]["started_at"] = None
+    assert not reconcile.registry_schedule(
+        "owner/repo", SOURCE, fetch=registry_fetch([old, cancelled]), now=NOW
+    )["needed"]
+
+
+@pytest.mark.parametrize(
+    "part,key,value",
+    [
+        (0, "path", ".github/workflows/quality.yml"),
+        (0, "event", "push"),
+        (0, "event", "pull_request"),
+        (0, "head_branch", "feature"),
+        (0, "head_sha", "f" * 40),
+        (0, "repository", {"full_name": "foreign/repo"}),
+        (0, "head_repository", {"full_name": "foreign/repo"}),
+        (1, "name", "qualification-consumers"),
+        (1, "run_id", 99),
+        (1, "run_attempt", 0),
+    ],
+)
+def test_wrong_source_event_workflow_repository_or_job_never_suppresses_registry_work(
+    part, key, value
+):
+    row = publisher()
+    row[part][key] = value
+    assert reconcile.registry_schedule(
+        "owner/repo", SOURCE, fetch=registry_fetch([row]), now=NOW
+    )["needed"]
+
+
+def test_registry_discovery_paginates_runs_and_all_original_attempt_jobs_and_ignores_own_future_job():
+    rows = [publisher(run_id, state="skipped") for run_id in range(1, 102)]
+    rows.append(publisher(102))
+    rows.extend(
+        publisher(102, state="skipped", attempt=attempt) for attempt in range(2, 103)
+    )
+    calls = []
+    assert not reconcile.registry_schedule(
+        "owner/repo", SOURCE, fetch=registry_fetch(rows, calls), now=NOW
+    )["needed"]
+    assert any("/runs?" in route and route.endswith("page=2") for route in calls)
+    assert any("/jobs?" in route and route.endswith("page=2") for route in calls)
+    own = publisher(999, hours=0.1, state="queued")
+    assert reconcile.registry_schedule(
+        "owner/repo", SOURCE, fetch=registry_fetch([own]), now=NOW, current_run=999
+    )["needed"]
+
+
+def test_registry_errors_propagate_and_timestamps_do_not_create_false_freshness():
+    def unavailable(*args):
+        raise RuntimeError("Registry scheduling API unavailable")
+
+    with pytest.raises(RuntimeError, match="API unavailable"):
+        reconcile.registry_schedule("owner/repo", SOURCE, fetch=unavailable, now=NOW)
+    row = publisher()
+    row[1]["completed_at"] = (NOW + timedelta(hours=1)).isoformat()
+    with pytest.raises(ValueError, match="inconsistent"):
+        reconcile.registry_schedule(
+            "owner/repo", SOURCE, fetch=registry_fetch([row]), now=NOW
+        )
+    for value in (None, "bad", "2026-10-20T00:00:00"):
+        with pytest.raises(ValueError, match="timestamp"):
+            reconcile.timestamp(value)
+
+
+@pytest.mark.parametrize(
+    "inherited_ref", ["refs/pull/999/merge", "refs/heads/main", None]
+)
+def test_explicit_reconciliation_metadata_ignores_inherited_ci_ref_and_qualification_forces_real_registry_work(
+    monkeypatch, inherited_ref
+):
+    if inherited_ref is None:
+        monkeypatch.delenv("GITHUB_REF", raising=False)
+    else:
+        monkeypatch.setenv("GITHUB_REF", inherited_ref)
+    metadata = environment() | {"QUALIFY_CONSUMERS": "true", "GITHUB_RUN_ID": "300"}
+    assert reconcile.reconcile(
+        metadata,
+        fetch=fetch_for([cache(key) for key in all_keys()]),
+        head=SOURCE,
+        now=NOW,
+    )["registry_needed"]
+    for key, value in (("QUALIFY_CONSUMERS", "1"), ("GITHUB_RUN_ID", "0")):
+        with pytest.raises(ValueError):
+            reconcile.reconcile(
+                metadata | {key: value}, fetch=fetch_for([]), head=SOURCE, now=NOW
+            )

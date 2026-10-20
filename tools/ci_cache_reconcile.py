@@ -6,6 +6,7 @@ and model bytes; this reconciler never reports a verified consumer cache hit.
 """
 
 import argparse
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,115 @@ from urllib.parse import urlencode
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.ci_artifacts import api  # noqa: E402
+
+WORKFLOW = ".github/workflows/linux-cache-publish.yml"
+
+
+def timestamp(value):
+    if not isinstance(value, str):
+        raise ValueError("Registry publisher lacks an authoritative timestamp")
+    try:
+        result = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError("Invalid registry publisher timestamp") from error
+    if result.tzinfo is None:
+        raise ValueError("Registry publisher timestamp needs a timezone")
+    return result
+
+
+def paginated(repository, route, key, fetch):
+    page = 1
+    while True:
+        batch = fetch(repository, f"{route}&per_page=100&page={page}")[key]
+        if not isinstance(batch, list):
+            raise ValueError("Invalid registry publisher discovery response")
+        yield from batch
+        if len(batch) < 100:
+            return
+        page += 1
+
+
+def registry_schedule(repository, source, *, fetch=api, now=None, current_run=None):
+    """Schedule bounded maintenance from actual publisher jobs, never bytes."""
+    records = []
+    query = urlencode(
+        {"event": "workflow_dispatch", "branch": "main", "head_sha": source}
+    )
+    route = f"actions/workflows/linux-cache-publish.yml/runs?{query}"
+    for run in paginated(repository, route, "workflow_runs", fetch):
+        if (
+            type(run.get("id")) is not int
+            or run["id"] < 1
+            or run["id"] == current_run
+            or run.get("path") != WORKFLOW
+            or run.get("event") != "workflow_dispatch"
+            or run.get("head_branch") != "main"
+            or run.get("head_sha") != source
+            or (run.get("repository") or {}).get("full_name") != repository
+            or (run.get("head_repository") or {}).get("full_name") != repository
+        ):
+            continue
+        jobs = paginated(
+            repository, f"actions/runs/{run['id']}/jobs?filter=all", "jobs", fetch
+        )
+        for job in jobs:
+            if (
+                job.get("name") != "publish-linux-caches"
+                or job.get("run_id") != run["id"]
+                or type(job.get("run_attempt")) is not int
+                or job["run_attempt"] < 1
+                or type(job.get("id")) is not int
+                or job["id"] < 1
+                or job.get("conclusion") == "skipped"
+            ):
+                continue
+            active = job.get("status") in (
+                "queued",
+                "waiting",
+                "pending",
+                "in_progress",
+            )
+            if not active and (
+                job.get("status") != "completed" or not job.get("started_at")
+            ):
+                continue
+            started = timestamp(job.get("started_at") or run.get("created_at"))
+            finished = started if active else timestamp(job.get("completed_at"))
+            if finished < started:
+                raise ValueError("Registry publisher timestamps are inconsistent")
+            records.append((started, job["id"], active, finished, job))
+    if not records:
+        return {
+            "needed": True,
+            "reason": "No executed publisher for the current main source",
+        }
+    _, _, active, finished, job = max(records, key=lambda item: item[:2])
+    now = now or datetime.now(timezone.utc)
+    if finished > now:
+        raise ValueError("Registry publisher timestamps are inconsistent")
+    if active:
+        age = now - finished
+        return {
+            "needed": age > timedelta(minutes=30),
+            "reason": "Publisher active beyond 30 minutes; reconcile without waiting"
+            if age > timedelta(minutes=30)
+            else "Current-source publisher is already active",
+            "job": job["id"],
+        }
+    if job.get("conclusion") != "success":
+        return {
+            "needed": True,
+            "reason": "Latest executed publisher did not succeed; reconcile current source",
+            "job": job["id"],
+        }
+    stale = now - finished >= timedelta(hours=24)
+    return {
+        "needed": stale,
+        "reason": "Successful registry maintenance is at least 24 hours old"
+        if stale
+        else "Current-source registry publisher succeeded within 24 hours",
+        "job": job["id"],
+    }
 
 
 def cache_keys(core, ui, models):
@@ -56,7 +166,7 @@ def main_cache_keys(repository, *, fetch=api):
         page += 1
 
 
-def reconcile(environment=None, *, fetch=api, head=None):
+def reconcile(environment=None, *, fetch=api, head=None, now=None):
     env = os.environ if environment is None else environment
     repository, source = env.get("GITHUB_REPOSITORY", ""), env.get("GITHUB_SHA", "")
     if (
@@ -82,6 +192,28 @@ def reconcile(environment=None, *, fetch=api, head=None):
     )
     current = fetch(repository, "commits/main").get("sha") == source
     present = main_cache_keys(repository, fetch=fetch) if current else set()
+    qualify = env.get("QUALIFY_CONSUMERS", "false")
+    if qualify not in ("", "true", "false"):
+        raise ValueError("Malformed consumer qualification request")
+    current_run = env.get("GITHUB_RUN_ID")
+    if current_run is not None and not re.fullmatch(r"[1-9][0-9]*", current_run):
+        raise ValueError("Invalid current reconciliation run ID")
+    registry = {
+        "needed": False,
+        "reason": "Main advanced; independent reconciliation owns current source",
+    }
+    if current:
+        registry = (
+            {"needed": True, "reason": "Explicit current-source consumer qualification"}
+            if qualify == "true"
+            else registry_schedule(
+                repository,
+                source,
+                fetch=fetch,
+                now=now,
+                current_run=int(current_run) if current_run else None,
+            )
+        )
     # A main advance during pagination must not launch stale expensive jobs.
     current = current and fetch(repository, "commits/main").get("sha") == source
     missing = {
@@ -94,6 +226,8 @@ def reconcile(environment=None, *, fetch=api, head=None):
             "schema": 1,
             "source": source,
             "current": current,
+            "registry_needed": current and registry["needed"],
+            "registry": registry,
             "missing": missing,
             "common": any(
                 result[role] for role in ("formatter", "document", "models_linux")
@@ -121,6 +255,7 @@ def main():
         with open(output, "a") as stream:
             for key in (
                 "current",
+                "registry_needed",
                 "common",
                 "formatter",
                 "document",
