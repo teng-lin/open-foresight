@@ -626,33 +626,71 @@ void main() {
   test(
     'desktop final handoff launches at most one replacement within its deadline',
     () async {
-      final f = HandoffFixture();
-      await f.start(errorMessage: 'healthy-then-closing');
-      Store('${f.profile.data}/application.db').close();
-      runtimeConfiguration.environment['REPLACEMENT_CLOSING'] = '1';
-      try {
-        final failure = expectLater(
-          RemoteDomain.connect(
-            f.profile,
-            startupTimeout: const Duration(seconds: 3),
-          ),
-          throwsA(isA<TimeoutException>()),
-        );
-        await f.next('healthy-observed');
-        await f.next('closing-observed');
-        await f.release();
-        await eventually(
-          () => File('${f.profile.data}/closing-replied').existsSync(),
-          timeout: const Duration(seconds: 2),
-        );
-        await failure.timeout(const Duration(seconds: 4));
-        expect(File('${f.profile.data}/launches').readAsLinesSync(), [
-          'launch',
-        ]);
-      } finally {
-        await f.close();
-      }
+      // The deadline also covers launching the replacement.
+      await expireDeadlineDuring("the replacement's closing reply", (
+        deadline,
+      ) async {
+        final f = HandoffFixture();
+        await f.start(errorMessage: 'healthy-then-closing');
+        Store('${f.profile.data}/application.db').close();
+        runtimeConfiguration.environment['REPLACEMENT_CLOSING'] = '1';
+        try {
+          final oldClosing = f.proxy.seen(
+            ProxyDirection.toClient,
+            method: 'status',
+            where: (frame) => frame.error?['message'] == closingMessage,
+          );
+          ServiceFrame? replacementClosing;
+          unawaited(
+            f.proxy
+                .seen(
+                  ProxyDirection.toClient,
+                  method: 'status',
+                  // The old owner answers on the first connection.
+                  where: (frame) =>
+                      frame.connection.index > 0 &&
+                      frame.error?['message'] == closingMessage,
+                )
+                .then((frame) => replacementClosing = frame),
+          );
+          final failure = startupFailure(
+            f.proxy.run(
+              () => RemoteDomain.connect(f.profile, startupTimeout: deadline),
+            ),
+          );
+          // Release the old owner only once it refused the final snapshot.
+          if (!await Future.any([
+            oldClosing.then((_) => true),
+            failure.then((_) => false),
+          ])) {
+            return false;
+          }
+          await f.release();
+          final error = await failure;
+          expect(error, isA<TimeoutException>());
+          final message = (error as TimeoutException).message;
+          // The deadline must expire after startup took the replacement's
+          // closing reply, not while it launched or the reply was in flight.
+          if (replacementClosing == null || message == probeTimeoutMessage) {
+            return false;
+          }
+          expect(
+            message,
+            allOf(contains('${f.root.path}/launch'), contains('startup error')),
+          );
+          await eventually(
+            () => File('${f.profile.data}/closing-replied').existsSync(),
+          );
+          expect(File('${f.profile.data}/launches').readAsLinesSync(), [
+            'launch',
+          ]);
+          return true;
+        } finally {
+          await f.close();
+        }
+      }, deadlines: launchDeadlines);
     },
+    timeout: ladderTimeout(launchDeadlines),
   );
 
   test(
