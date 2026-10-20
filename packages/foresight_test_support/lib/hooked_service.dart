@@ -14,6 +14,14 @@ import 'package:test_api/scaffolding.dart' show addTearDown;
 import 'poll.dart';
 import 'test_paths.dart';
 
+/// A disposable directory for a [HookedServiceProcess] profile, by its
+/// canonical path. The child resolves FORESIGHT_DATA and records that path,
+/// and a record must name the reader's own `profile.data`. On macOS the test
+/// roots (/tmp, /var/tmp) are symbolic links, so a profile built from the
+/// uncanonical path would reject the child's record as another profile's.
+Directory createServiceTestDirectorySync(String prefix) =>
+    Directory(createTestTempDirectorySync(prefix).resolveSymbolicLinksSync());
+
 /// Test-side control of `serviceGate` points in one gate directory.
 ///
 /// A service reaching a point publishes `<point>.reached` (its pid). It waits

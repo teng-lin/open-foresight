@@ -8,7 +8,6 @@ import 'package:foresight_core/src/service.dart';
 import 'package:foresight_test_support/hooked_service.dart';
 import 'package:foresight_test_support/poll.dart';
 import 'package:foresight_test_support/service_fault_proxy.dart';
-import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
 
 // Characterization tests: the real bin/service.dart (IsolatedApplicationService)
@@ -82,7 +81,7 @@ void main() {
   test(
     'a killed owner is replaced once and its recorded runtime is adopted',
     () async {
-      final directory = createTestTempDirectorySync('of-kill-');
+      final directory = createServiceTestDirectorySync('of-kill-');
       final data = '${directory.path}/data';
       final ownerProfile = ProfilePaths(data, '${directory.path}/own');
       // The client's own runtime differs; only the record names the owner's.
@@ -142,7 +141,7 @@ void main() {
   test(
     'two launchers converge on one owner when none is running',
     () async {
-      final directory = createTestTempDirectorySync('of-race-');
+      final directory = createServiceTestDirectorySync('of-race-');
       final profile = ProfilePaths(
         '${directory.path}/data',
         '${directory.path}/run',
@@ -188,7 +187,7 @@ void main() {
     'PINNED (SL-3, reordered by PR 3): at close.before_record_delete the '
     'record and public socket remain, new clients get EOF and no launch',
     () async {
-      final directory = createTestTempDirectorySync('of-record-');
+      final directory = createServiceTestDirectorySync('of-record-');
       final profile = ProfilePaths(
         '${directory.path}/data',
         '${directory.path}/run',
@@ -272,7 +271,7 @@ void main() {
 
   test('PINNED (D3, changed by PR 3): during a SIGTERM close a new client gets '
       'EOF or a broken pipe, never the closing reply', () async {
-    final directory = createTestTempDirectorySync('of-sigterm-');
+    final directory = createServiceTestDirectorySync('of-sigterm-');
     final profile = ProfilePaths(
       '${directory.path}/data',
       '${directory.path}/run',

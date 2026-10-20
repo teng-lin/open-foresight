@@ -110,7 +110,7 @@ void main() {
     test(
       'the isolated worker stops at every close gate in order',
       () async {
-        final directory = createTestTempDirectorySync('of-gates-');
+        final directory = createServiceTestDirectorySync('of-gates-');
         final profile = ProfilePaths(
           '${directory.path}/data',
           '${directory.path}/run',
@@ -171,7 +171,7 @@ void main() {
 
     test('PINNED (SL-3, reordered by PR 3): the isolated close deletes the '
         'record while its public socket still exists', () async {
-      final directory = createTestTempDirectorySync('of-order-');
+      final directory = createServiceTestDirectorySync('of-order-');
       final profile = ProfilePaths(
         '${directory.path}/data',
         '${directory.path}/run',
@@ -204,7 +204,7 @@ void main() {
     test(
       'a committed request waits at its gate before the reply is sent',
       () async {
-        final directory = createTestTempDirectorySync('of-commit-');
+        final directory = createServiceTestDirectorySync('of-commit-');
         final profile = ProfilePaths(
           '${directory.path}/data',
           '${directory.path}/run',
@@ -250,7 +250,7 @@ void main() {
     'a service compiled without test hooks ignores FORESIGHT_SERVICE_GATES',
     () async {
       final build = await HookedServiceBuild.compile(testHooks: false);
-      final directory = createTestTempDirectorySync('of-release-');
+      final directory = createServiceTestDirectorySync('of-release-');
       final profile = ProfilePaths(
         '${directory.path}/data',
         '${directory.path}/run',
