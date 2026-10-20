@@ -68,11 +68,24 @@ Future<void> main(List<String> args) async {
         if (args.single == '--status') {
           stdout.writeln(jsonEncode(state));
         } else {
+          final owner = state['pid'] as int;
           final stopped = client.events.stream.drain<void>();
-          if (!Process.killPid(state['pid'] as int, ProcessSignal.sigterm)) {
+          if (!Process.killPid(owner, ProcessSignal.sigterm)) {
             throw StateError('Could not stop application service');
           }
           await stopped.timeout(const Duration(minutes: 30));
+          // The connection closes before the helper stops and the profile
+          // lock is released; report success only after that (L6).
+          stderr.writeln(
+            'Waiting for the application service (pid $owner) to release '
+            'its profile.',
+          );
+          if (!await awaitProfileRelease(profile, owner)) {
+            throw StateError(
+              'The application service (pid $owner) closed its connections '
+              'but did not release its profile within 30 s.',
+            );
+          }
         }
       } finally {
         await client.close();

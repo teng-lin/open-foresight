@@ -747,4 +747,106 @@ void main() {
     });
     expect(FileStat.statSync(inside).mode & 0x1ff, 0x180);
   });
+
+  test(
+    '--stop returns only after the owner releases its profile lock (L6)',
+    () async {
+      final profile = newProfile('of-stop-');
+      final owner = await HookedServiceProcess.start(
+        build,
+        profile,
+        hold: ['close.before_lock_release'],
+      );
+      Process? stop;
+      try {
+        await owner.ready();
+        stop = await Process.start(
+          Platform.resolvedExecutable,
+          [build.kernel, '--stop'],
+          environment: {
+            for (final entry in Platform.environment.entries)
+              if (!entry.key.startsWith('FORESIGHT_')) entry.key: entry.value,
+            'FORESIGHT_DATA': profile.data,
+            'FORESIGHT_RUNTIME': profile.runtime,
+          },
+          includeParentEnvironment: false,
+        );
+        final output = utf8.decoder.bind(stop.stdout).join();
+        final errors = StreamIterator(
+          utf8.decoder.bind(stop.stderr).transform(const LineSplitter()),
+        );
+        await owner.reached('close.before_lock_release');
+        // The owner closed every connection and still holds its lock. --stop
+        // says it is waiting instead of reporting success at that EOF.
+        final waiting = await Future.any([
+          errors.moveNext().then(
+            (more) => more ? errors.current : 'stderr closed',
+          ),
+          stop.exitCode.then((code) => 'exited $code'),
+        ]).timeout(const Duration(seconds: 120));
+        expect(
+          waiting,
+          'Waiting for the application service (pid ${owner.pid}) to '
+          'release its profile.',
+        );
+        owner.release('close.before_lock_release');
+        expect(await stop.exitCode, 0);
+        expect(await output, isEmpty);
+        expect(await owner.exitCode, 0, reason: owner.output);
+        await errors.cancel();
+      } finally {
+        stop?.kill(ProcessSignal.sigkill);
+        await owner.stop();
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test('the release wait ends when the lock is free or the owner is gone, and '
+      'gives up after its bound', () async {
+    final profile = newProfile('of-release-');
+    Directory(profile.data).createSync(recursive: true);
+    final lock = '${profile.data}/.application.lock';
+    File(lock).writeAsStringSync('');
+    // Another process holds the profile lock until its stdin closes.
+    final holder = await Process.start('python3', [
+      '-c',
+      'import fcntl,sys\nf=open(sys.argv[1],"a")\n'
+          'fcntl.lockf(f,fcntl.LOCK_EX)\nprint("locked",flush=True)\n'
+          'sys.stdin.read()',
+      lock,
+    ]);
+    try {
+      expect(
+        await utf8.decoder
+            .bind(holder.stdout)
+            .transform(const LineSplitter())
+            .first,
+        'locked',
+      );
+      expect(
+        await awaitProfileRelease(
+          profile,
+          holder.pid,
+          timeout: const Duration(milliseconds: 200),
+        ),
+        isFalse,
+      );
+      // A process that is gone has released its profile, whoever holds
+      // the lock now.
+      final gone = await Process.start('/bin/true', []);
+      await gone.exitCode;
+      expect(await awaitProfileRelease(profile, gone.pid), isTrue);
+      await holder.stdin.close();
+      await holder.exitCode;
+      final waited = await awaitProfileRelease(
+        profile,
+        pid,
+        timeout: const Duration(seconds: 30),
+      );
+      expect(waited, isTrue);
+    } finally {
+      holder.kill(ProcessSignal.sigkill);
+    }
+  });
 }

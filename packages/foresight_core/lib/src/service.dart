@@ -2117,37 +2117,71 @@ bool _profileOwnerAvailable(
       'Application service ownership lock is missing or unsafe: $path',
     );
   }
-  // POSIX record locks belong to the process. Keep this probe synchronous:
-  // opening and closing another FD must not interleave with a local owner.
+  if (!_profileLockFree(path)) return false;
+  // A record without a lock owner means the previous owner exited
+  // uncleanly. The replacement adopts that record's runtime in _start, or
+  // sets the record aside if it is invalid.
+  if (FileSystemEntity.typeSync(
+        '${profile.data}/.application-endpoint.json',
+        followLinks: false,
+      ) !=
+      FileSystemEntityType.notFound) {
+    _traceServiceTransport(
+      'previous owner left its endpoint record; the replacement adopts its runtime',
+    );
+  }
+  return true;
+}
+
+/// Whether no other process holds the profile lock at [path]. Only call this
+/// from a process that hosts no owner of the profile: POSIX record locks
+/// belong to the process, and closing this probe's descriptor drops them all.
+bool _profileLockFree(String path) {
+  // Keep this probe synchronous: opening and closing another descriptor must
+  // not interleave with a local owner.
   final ownership = File(path).openSync(mode: FileMode.append);
   try {
-    try {
-      ownership.lockSync(FileLock.exclusive);
-    } on FileSystemException catch (error) {
-      // F_SETLK may report contention as EACCES or EAGAIN/EWOULDBLOCK.
-      // This catch only covers lockSync; opening an inaccessible file still fails.
-      if (error.osError?.errorCode == 11 ||
-          error.osError?.errorCode == 13 ||
-          error.osError?.errorCode == 35) {
-        return false;
-      }
-      rethrow;
-    }
-    // A record without a lock owner means the previous owner exited
-    // uncleanly. The replacement adopts that record's runtime in _start, or
-    // sets the record aside if it is invalid.
-    if (FileSystemEntity.typeSync(
-          '${profile.data}/.application-endpoint.json',
-          followLinks: false,
-        ) !=
-        FileSystemEntityType.notFound) {
-      _traceServiceTransport(
-        'previous owner left its endpoint record; the replacement adopts its runtime',
-      );
-    }
+    ownership.lockSync(FileLock.exclusive);
     return true;
+  } on FileSystemException catch (error) {
+    // F_SETLK may report contention as EACCES or EAGAIN/EWOULDBLOCK (35 on
+    // macOS). This catch only covers lockSync; opening an inaccessible file
+    // still fails.
+    if (error.osError?.errorCode == 11 ||
+        error.osError?.errorCode == 13 ||
+        error.osError?.errorCode == 35) {
+      return false;
+    }
+    rethrow;
   } finally {
     ownership.closeSync();
+  }
+}
+
+Future<bool> _processRunning(int pid) async =>
+    (await Process.run('/bin/kill', ['-0', '$pid'])).exitCode == 0;
+
+/// After `--stop` signalled the owner [ownerPid] and saw its connection close,
+/// wait until the owner released the profile: its lock is free, or the
+/// process is gone. EOF alone comes before the helper stops and the lock is
+/// released (L6). Returns false if neither happens within [timeout]. Never
+/// call this from a process that hosts an owner of the profile.
+Future<bool> awaitProfileRelease(
+  ProfilePaths profile,
+  int ownerPid, {
+  Duration timeout = const Duration(seconds: 30),
+}) async {
+  final lock = '${profile.data}/.application.lock';
+  final waited = Stopwatch()..start();
+  while (true) {
+    if (!await _processRunning(ownerPid) ||
+        FileSystemEntity.typeSync(lock, followLinks: false) ==
+            FileSystemEntityType.notFound ||
+        _profileLockFree(lock)) {
+      return true;
+    }
+    if (waited.elapsed >= timeout) return false;
+    await Future<void>.delayed(const Duration(milliseconds: 50));
   }
 }
 
