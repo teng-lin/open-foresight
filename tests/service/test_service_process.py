@@ -1338,7 +1338,13 @@ def profile_failure_diagnostics(process, log):
         path = profile / "run" / name
         print(f"Endpoint {path}: exists={path.exists()}")
     record = profile / "data/.application-endpoint.json"
-    print(f"Endpoint record: {record.read_text() if record.exists() else 'missing'}")
+    # A closing owner may delete its record between any check and this read;
+    # that must not replace the failure these diagnostics explain.
+    try:
+        recorded = record.read_text()
+    except FileNotFoundError:
+        recorded = "missing"
+    print(f"Endpoint record: {recorded}")
     log.seek(0)
     print(log.read())
     try:
