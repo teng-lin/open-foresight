@@ -10,6 +10,7 @@ import 'package:foresight_core/src/service.dart';
 import 'package:test/test.dart';
 
 import 'package:foresight_test_support/remote_service.dart';
+import 'package:foresight_test_support/test_paths.dart';
 
 /// An RpcError with [code], [message] and the wire reason [reason]. Reading
 /// the reason through toJson keeps this file runnable against older clients.
@@ -36,6 +37,50 @@ Matcher invalidReply(String? reason) => rpcError(
 );
 
 void main() {
+  test(
+    'a connect whose listener closes while it waits fails as a '
+    'SocketException',
+    () async {
+      final directory = createTestTempDirectorySync('of-connect-');
+      final path = '${directory.path}/application.sock';
+      final listener = await ServerSocket.bind(
+        InternetAddress(path, type: InternetAddressType.unix),
+        0,
+      );
+      try {
+        listener.listen((socket) => socket.destroy());
+        final connecting = ServiceClient.connect(path);
+        // Let the connect reach the backlog; nothing has accepted it yet,
+        // since this isolate has not returned to its event loop.
+        for (var hop = 0; hop < 20; hop++) {
+          await Future<void>.microtask(() {});
+        }
+        final closed = listener.close();
+        // Hold this isolate while the closed listener resets that connect.
+        sleep(const Duration(milliseconds: 50));
+        // Only the reset path; a plain refused or missing socket would be a
+        // SocketException too.
+        await expectLater(
+          connecting,
+          throwsA(
+            isA<SocketException>().having(
+              (error) => error.osError?.errorCode,
+              'errno',
+              104,
+            ),
+          ),
+        );
+        await closed;
+      } finally {
+        await listener.close();
+        directory.deleteSync(recursive: true);
+      }
+    },
+    // Linux resets a connect waiting in a closed AF_UNIX backlog with
+    // ECONNRESET; the order this test forces relies on that.
+    testOn: 'linux',
+  );
+
   test(
     'partial fixture startup removes its private directory and can close twice',
     () async {

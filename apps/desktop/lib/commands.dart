@@ -58,6 +58,10 @@ class AppCommands {
       return response == 'queued' || response == 'accepted';
     } on SocketException {
       return false;
+    } on OSError {
+      // A connect that waited while the running desktop closed its listener
+      // fails with the socket's pending error as a bare OSError.
+      return false;
     } finally {
       socket?.destroy();
     }

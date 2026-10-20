@@ -232,6 +232,11 @@ bool nobodyListening(SocketException error) =>
       error.osError?.errorCode,
     );
 
+/// Whether [error] is ECONNRESET (54 on macOS, 104 on Linux): the listener a
+/// connect reached closed while the connect waited in its backlog.
+bool _listenerReset(SocketException error) =>
+    error.osError?.errorCode == (Platform.isMacOS ? 54 : 104);
+
 /// A socket path that a new listener must not take: something accepts
 /// connections there, or a connect could not tell (for example it timed out,
 /// or failed with EAGAIN or EACCES).
@@ -266,32 +271,59 @@ Future<SocketPathInUse?> probeSocketPath(String path) async {
   }
   const bound = Duration(milliseconds: 200);
   final elapsed = Stopwatch()..start();
-  for (var attempt = 1; ; attempt++) {
+  var resets = 0, refusals = 0;
+  while (true) {
     final left = bound - elapsed.elapsed;
+    // A retry after a reset may come past the bound, and isolate scheduling
+    // alone can outlast a 1 ms timer; a timeout would then read as "cannot
+    // tell" and refuse a socket that is provably gone.
+    final floor = resets > 0
+        ? const Duration(milliseconds: 50)
+        : const Duration(milliseconds: 1);
+    final SocketException error;
     try {
       final live = await Socket.connect(
         InternetAddress(path, type: InternetAddressType.unix),
         0,
-        timeout: left > Duration.zero ? left : const Duration(milliseconds: 1),
+        timeout: left > floor ? left : floor,
       );
       live.destroy();
       return SocketPathInUse(path);
-    } on SocketException catch (error) {
-      if (!nobodyListening(error)) return SocketPathInUse(path, cause: error);
-      // On macOS a live listener whose backlog is full refuses like a dead
-      // socket (M1). A live owner drains its backlog, so ask up to three
-      // times within the bound. A connect cannot tell a backlog that never
-      // drains from a dead socket, so such a listener is replaced; it can
-      // only be another profile's owner sharing an explicitly set runtime,
-      // since macOS runtimes are per profile by default.
-      if (!Platform.isMacOS ||
-          error.osError?.errorCode != 61 ||
-          attempt >= 3 ||
-          elapsed.elapsed >= bound) {
-        return null;
-      }
-      await Future<void>.delayed(const Duration(milliseconds: 60));
+    } on SocketException catch (failure) {
+      error = failure;
+    } on OSError catch (failure) {
+      // A connect that waited and then failed reports the socket's pending
+      // error as a bare OSError, not a SocketException.
+      error = SocketException(
+        'Connection failed',
+        osError: failure,
+        address: InternetAddress(path, type: InternetAddressType.unix),
+      );
     }
+    // The listener this connect reached closed while it waited: its owner
+    // stopped, or the last copy went, such as one a child process inherited
+    // until it called exec. Ask again what is at the path now.
+    // The first reset is asked again even past the bound: the load that
+    // delays reading it does not delay the next connect, which a local
+    // socket answers at once.
+    if (_listenerReset(error) &&
+        (++resets == 1 || (resets <= 3 && elapsed.elapsed < bound))) {
+      continue;
+    }
+    if (!nobodyListening(error)) return SocketPathInUse(path, cause: error);
+    // On macOS a live listener whose backlog is full refuses like a dead
+    // socket (M1). A live owner drains its backlog, so ask up to three
+    // times within the bound. A connect cannot tell a backlog that never
+    // drains from a dead socket, so such a listener is replaced; it can
+    // only be another profile's owner sharing an explicitly set runtime,
+    // since macOS runtimes are per profile by default.
+    if (!Platform.isMacOS ||
+        error.osError?.errorCode != 61 ||
+        ++refusals >= 3 ||
+        elapsed.elapsed >= bound) {
+      return null;
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 60));
   }
 }
 

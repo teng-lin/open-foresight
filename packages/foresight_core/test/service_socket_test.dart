@@ -32,6 +32,21 @@ Future<String> answerAt(String path) async {
   }
 }
 
+/// Wait until nothing accepts at [path] any more. Closing a listener ends it
+/// in this process, but the test runner runs other suites as isolates of the
+/// same process: a child one of them forked while the listener was open holds
+/// a copy of it until the child calls exec. A connect meanwhile is accepted,
+/// so an owner rightly takes the path for live and refuses it.
+Future<void> untilNobodyListens(String path) async {
+  final waited = Stopwatch()..start();
+  while (await probeSocketPath(path) != null) {
+    if (waited.elapsed > const Duration(seconds: 10)) {
+      fail('Something still listens at $path');
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+  }
+}
+
 void main() {
   test('publishing never replaces a live socket, but takes over one nobody '
       'listens on (S2)', () async {
@@ -53,6 +68,7 @@ void main() {
       expect(await answerAt(path), 'first');
       // Once nobody listens there, a new listener takes the path over.
       await first.close();
+      await untilNobodyListens(path);
       final third = await ServiceSocketBinding.bind(path);
       try {
         await publish(third, answer('third'));
@@ -67,6 +83,37 @@ void main() {
       directory.deleteSync(recursive: true);
     }
   });
+
+  test(
+    'a probe whose connect waits in the backlog of a listener that then '
+    'closes reports nobody listening instead of failing',
+    () async {
+      final directory = createTestTempDirectorySync('of-socket-');
+      final path = '${directory.path}/application.sock';
+      final owner = await ServiceSocketBinding.bind(path);
+      try {
+        await publish(owner, answer('owner'));
+        final probe = probeSocketPath(path);
+        // Let the probe's connect reach the backlog; nothing has accepted it
+        // yet, since this isolate has not returned to its event loop.
+        for (var hop = 0; hop < 20; hop++) {
+          await Future<void>.microtask(() {});
+        }
+        final closed = owner.close();
+        // Hold this isolate while the closed listener resets that connect,
+        // before the probe learns its outcome.
+        sleep(const Duration(milliseconds: 50));
+        expect(await probe, isNull);
+        await closed;
+      } finally {
+        await owner.close();
+        directory.deleteSync(recursive: true);
+      }
+    },
+    // Linux resets a connect waiting in a closed AF_UNIX backlog with
+    // ECONNRESET; the order this test forces relies on that.
+    testOn: 'linux',
+  );
 
   test('where a socket cannot be linked, publishing moves it into place but '
       'never over a socket published there meanwhile (S2)', () async {
