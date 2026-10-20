@@ -82,6 +82,7 @@ jobs:
       contents: write
       actions: read
       packages: write
+      pull-requests: read
     uses: ./.github/workflows/macos.yml
     secrets: inherit
     with:

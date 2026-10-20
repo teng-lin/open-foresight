@@ -975,5 +975,75 @@ class CoordinatorTests(unittest.TestCase):
             sweep.sweep_title(SOURCE, "preview")
 
 
+class SweepRecoveryTests(unittest.TestCase):
+    def test_title_collision_from_push_never_blocks_guard_or_dispatch(self):
+        reader = FixtureReader()
+        current = run(40, source=SOURCE, event="workflow_dispatch")
+        spoof = run(30, source=SOURCE, event="push")
+        spoof.update(
+            display_title=sweep.sweep_title(SOURCE, "exercise"), status="queued"
+        )
+        reader.origins.extend([spoof, current])
+        self.assertEqual(sweep.guard(reader, SOURCE, 40), "")
+        with patch.object(reader, "api") as api:
+            self.assertEqual(
+                sweep.dispatch(reader, source=SOURCE, exercise=True)["status"],
+                "exercise-dispatched",
+            )
+            self.assertEqual(api.call_count, 1)
+
+    def test_cancelled_newest_sweep_cannot_promote_old_success_or_old_active_run(self):
+        for old_status in ("completed", "in_progress"):
+            with self.subTest(old_status=old_status):
+                reader = FixtureReader()
+                reader.mode = "production"
+                old = run(30, source=SOURCE, event="workflow_dispatch")
+                old.update(
+                    display_title=sweep.sweep_title(SOURCE, "production"),
+                    status=old_status,
+                )
+                cancelled = run(40, source=SOURCE, event="workflow_dispatch")
+                cancelled.update(
+                    display_title=sweep.sweep_title(SOURCE, "production"),
+                    conclusion="cancelled",
+                )
+                reader.origins.extend([old, cancelled])
+                reader.job_rows[30] = reader.job_rows[10]
+                reader.selection_record["sweep"] = True
+                with (
+                    patch.object(coordinator, "authorize"),
+                    patch.object(coordinator, "selected_on_push", return_value={}),
+                    patch.object(
+                        reader, "proposal", return_value={"decision": "sweep"}
+                    ),
+                    patch.object(reader, "api") as api,
+                ):
+                    result = coordinator.reconcile(reader, SOURCE, BEFORE)
+                self.assertEqual(result["decision"], "sweep-requested")
+                self.assertEqual(
+                    api.call_args.args[1], "actions/workflows/macos.yml/dispatches"
+                )
+                self.assertEqual(
+                    api.call_args.args[3]["inputs"]["sweep_namespace"], "production"
+                )
+
+    def test_later_cancellation_prevents_an_older_active_run_superseding_fresh_work(
+        self,
+    ):
+        reader = FixtureReader()
+        reader.selection_record.update(sweep=True, sweep_namespace="exercise")
+        earlier = run(30, source=SOURCE, event="workflow_dispatch")
+        earlier.update(
+            display_title=sweep.sweep_title(SOURCE, "exercise"), status="in_progress"
+        )
+        cancelled = run(35, source=SOURCE, event="workflow_dispatch")
+        cancelled.update(
+            display_title=sweep.sweep_title(SOURCE, "exercise"), conclusion="cancelled"
+        )
+        current = run(40, source=SOURCE, event="workflow_dispatch")
+        reader.origins.extend([earlier, cancelled, current])
+        self.assertEqual(sweep.guard(reader, SOURCE, 40), "")
+
+
 if __name__ == "__main__":
     unittest.main()

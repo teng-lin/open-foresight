@@ -6,7 +6,7 @@ permissions:
 env:
   RELEASE_SOURCE_FLOOR: ${{ vars.RELEASE_SOURCE_FLOOR }}
 concurrency:
-  group: ${{ inputs.sweep && 'main-sweep' || format('platform-checks-{0}-{1}', github.workflow, inputs.request_id || (inputs.preview && format('preview-{0}', github.run_id) || (github.event_name == 'pull_request' && github.ref || inputs.source || github.sha))) }}
+  group: ${{ inputs.sweep && format('main-sweep-{0}', inputs.sweep_namespace) || format('platform-checks-{0}-{1}', github.workflow, inputs.request_id || (inputs.preview && format('preview-{0}', github.run_id) || (github.event_name == 'pull_request' && github.ref || inputs.source || github.sha))) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   macos:

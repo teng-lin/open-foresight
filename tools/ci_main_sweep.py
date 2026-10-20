@@ -29,6 +29,28 @@ def sweep_title(source, namespace):
     return f"Main sweep {source} [{namespace}]"
 
 
+def matches_sweep(reader, run, source, namespace):
+    """A display title alone cannot turn another event/ref into a sweep."""
+    if run.get("display_title") != sweep_title(source, namespace):
+        return False
+    try:
+        scoped_run(run, reader.repository, PLATFORM, source, ("workflow_dispatch",))
+    except ValueError:
+        return False
+    return True
+
+
+def latest_invalidated(runs):
+    return max(
+        (
+            run["id"]
+            for run in runs
+            if run.get("status") == "completed" and run.get("conclusion") != "success"
+        ),
+        default=0,
+    )
+
+
 def guard(reader, source, current_run, *, namespace="exercise"):
     """Only already executing earlier sweeps can supersede this execution.
 
@@ -37,15 +59,19 @@ def guard(reader, source, current_run, *, namespace="exercise"):
     qualify before it can eliminate fresh work.
     """
     require_source(source)
-    title = sweep_title(source, namespace)
     if reader.get("commits/main")["sha"] != source:
         return "Source is no longer main HEAD"
     current = reader.run(current_run)
     scoped_run(current, reader.repository, PLATFORM, source, ("workflow_dispatch",))
-    for run in reader.runs(PLATFORM, source):
-        if run["id"] >= current_run or run.get("display_title") != title:
+    previous = [
+        run
+        for run in reader.runs(PLATFORM, source)
+        if run["id"] < current_run and matches_sweep(reader, run, source, namespace)
+    ]
+    invalidated = latest_invalidated(previous)
+    for run in previous:
+        if run["id"] <= invalidated:
             continue
-        scoped_run(run, reader.repository, PLATFORM, source, ("workflow_dispatch",))
         if run.get("status") == "in_progress":
             try:
                 selection, _ = reader.selection(run)
@@ -98,19 +124,23 @@ def dispatch(reader, *, source, exercise=False, index=None, root=None):
 
         authorize(reader, source, index=index, root=root)
     namespace = "exercise" if exercise else "production"
-    title = sweep_title(source, namespace)
     if reader.get("commits/main")["sha"] != source:
         return {"source": source, "status": "superseded"}
     # This entrypoint is also used by scheduled reconciliation. The workflow's
     # repository-wide coordinator group serializes decisions, not SDK producers.
-    for run in reader.runs(PLATFORM, source):
-        if run.get("display_title") == title and run.get("status") in (
+    previous = [
+        run
+        for run in reader.runs(PLATFORM, source)
+        if matches_sweep(reader, run, source, namespace)
+    ]
+    invalidated = latest_invalidated(previous)
+    for run in previous:
+        if run["id"] > invalidated and run.get("status") in (
             "queued",
             "in_progress",
             "waiting",
             "pending",
         ):
-            scoped_run(run, reader.repository, PLATFORM, source, ("workflow_dispatch",))
             return {"source": source, "status": "already-active", "run": run["id"]}
     reader.api(
         reader.repository,
