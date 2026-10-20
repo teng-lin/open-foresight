@@ -1064,6 +1064,33 @@ void main() {
     },
   );
 
+  test('a late event with a replaced epoch does not reset again', () async {
+    f.handler = (socket, request) => f.reply(socket, request, null);
+    final replaced = f.owner.workspaceEpoch;
+    f.status['workspace_epoch'] = replaced;
+    f.owner.renewWorkspaceEpoch();
+    final current = f.owner.workspaceEpoch;
+    // A reconnect reads the clear from the profile; the views reset.
+    f.sockets.last.destroy();
+    await eventually(() => f.remote.workspaceReplaced);
+    f.remote.adoptWorkspace();
+    var resets = 0;
+    f.remote.helper.changed = () {
+      if (f.remote.workspaceReplaced) resets++;
+    };
+    // The old connection's event for the epoch it replaced arrives late.
+    f.sockets.last.writeln(
+      jsonEncode({'event': 'changed', 'workspace_epoch': replaced}),
+    );
+    f.sockets.last.writeln(
+      jsonEncode({'event': 'changed', 'sources_paused': true}),
+    );
+    await eventually(() => f.remote.sourcesPaused);
+    expect(resets, 0);
+    expect(f.remote.workspaceReplaced, isFalse);
+    expect(f.remote.workspaceEpoch, current);
+  });
+
   test(
     'approval events preserve the current service helper snapshot',
     () async {

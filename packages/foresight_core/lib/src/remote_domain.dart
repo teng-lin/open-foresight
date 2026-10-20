@@ -89,6 +89,16 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
   bool get webSearchAvailable => _webSearchAvailable;
   StreamSubscription<Map<String, dynamic>>? _events;
   String? _workspaceEpoch, _serviceEpoch;
+  // Epochs are random and a clear never brings one back, so an event that
+  // carries a replaced epoch is late and must not reset the views again.
+  final _replacedEpochs = <String>{};
+  void _observeEpoch(String epoch) {
+    if (epoch == _serviceEpoch || _replacedEpochs.contains(epoch)) return;
+    final previous = _serviceEpoch;
+    if (previous != null) _replacedEpochs.add(previous);
+    _serviceEpoch = epoch;
+  }
+
   @override
   String? get workspaceEpoch => _workspaceEpoch;
   @override
@@ -139,10 +149,10 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
     _eventSignature = signature;
     final epoch = event['workspace_epoch'];
     if (epoch is String) {
-      _serviceEpoch = epoch;
+      _observeEpoch(epoch);
       // The first epoch names the workspace the desktop starts in. A later one
       // waits for the desktop to drop views that hold older IDs.
-      _workspaceEpoch ??= epoch;
+      _workspaceEpoch ??= _serviceEpoch;
     }
     _webSearchAvailable = event['web_search_available'] == true;
     googleStatus = Map<String, dynamic>.from(event['google'] as Map? ?? {});
@@ -168,7 +178,7 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
   void _recheckWorkspace() {
     final stored = store.workspaceEpoch;
     if (stored.isEmpty || stored == _serviceEpoch) return;
-    _serviceEpoch = stored;
+    _observeEpoch(stored);
     _workspaceEpoch ??= stored;
     helper.changed?.call();
   }
