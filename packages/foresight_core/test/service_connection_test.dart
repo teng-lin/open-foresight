@@ -107,9 +107,8 @@ void main() {
         }
         expect(queued, 1);
         expect(pollfd[3] & 1, 1);
-        // Synchronously reset the queued connection before its write-ready
-        // callback runs. shutdown also covers a descriptor briefly inherited
-        // by another suite's fork before exec closes its CLOEXEC copy.
+        // Shut down and close the listener before its write-ready callback runs.
+        // A forked child can retain a CLOEXEC copy until it execs.
         expect(shutdown(descriptor, 2), 0); // SHUT_RDWR.
         final closed = close(descriptor);
         listenerClosed = true;
