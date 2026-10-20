@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/service.dart';
+import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:test/test.dart';
 
@@ -92,6 +93,94 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 1200));
     expect((await desktop.call('status') as Map)['pid'], pid);
   });
+  test(
+    'startup snapshot reserves desktop lifetime before visible approvals attach',
+    () async {
+      await attach();
+      await desktop.close();
+      final disconnect = Stopwatch()..start();
+      while (service.access.hasHost &&
+          disconnect.elapsed < const Duration(milliseconds: 750)) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      expect(service.access.hasHost, isFalse);
+      final startup = await ensureServiceSnapshot(
+        ProfilePaths('${temp.path}/profile', '${temp.path}/run'),
+      );
+      desktop = startup.client;
+      expect(
+        service.access.hasHost,
+        isFalse,
+        reason: 'Startup liveness is not an approval-host grant',
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 1200));
+      expect((await desktop.call('status') as Map)['pid'], pid);
+      await expectLater(
+        desktop.call('meetings.start', {'id': 1}),
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.denied,
+          ),
+        ),
+      );
+      await attach();
+      expect(service.access.hasHost, isTrue);
+      await desktop.close();
+      await service.closed.timeout(const Duration(seconds: 10));
+    },
+  );
+
+  test('closing one desktop leaves another reserved desktop alive', () async {
+    await attach();
+    final startup = await ensureServiceSnapshot(
+      ProfilePaths('${temp.path}/profile', '${temp.path}/run'),
+    );
+    final next = startup.client;
+    try {
+      await desktop.close();
+      await Future<void>.delayed(const Duration(milliseconds: 1200));
+      expect(service.access.hasHost, isFalse);
+      expect((await next.call('status') as Map)['pid'], pid);
+    } finally {
+      await next.close();
+    }
+    await service.closed.timeout(const Duration(seconds: 10));
+  });
+
+  test('ordinary startup status does not reserve desktop lifetime', () async {
+    await attach();
+    await desktop.close();
+    await agent.close();
+    agent = await ensureService(
+      ProfilePaths('${temp.path}/profile', '${temp.path}/run'),
+    );
+    await service.closed.timeout(const Duration(seconds: 10));
+    expect(agent.isClosed, isTrue);
+  });
+
+  test(
+    'invalid desktop startup capability cannot reserve lifetime or approval rights',
+    () async {
+      await expectLater(
+        agent.call('status', {'desktop': true, 'token': 'invalid'}),
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.denied,
+          ),
+        ),
+      );
+      expect(service.access.hasHost, isFalse);
+      await attach();
+      await desktop.close();
+      await service.closed.timeout(const Duration(seconds: 10));
+      expect(agent.isClosed, isTrue);
+    },
+  );
+
   test(
     'explicit detach followed by desktop closure still shuts down',
     () async {
