@@ -74,6 +74,70 @@ void main() {
       '${temp.path}/profile/.desktop-capability',
     ).readAsStringSync(),
   });
+  // Store one note so that the notes.list reply to request [id], with its
+  // newline, is exactly [bytes] long.
+  void sizeNotesReply(int bytes, {int id = 1}) {
+    final store = service.domain.store;
+    store.saveNote(null, 'Sized', '');
+    final note = store.db.lastInsertRowId;
+    int frame() =>
+        utf8
+            .encode(
+              jsonEncode({
+                'id': id,
+                'result': store.rows('SELECT * FROM notes ORDER BY id'),
+                'done': false,
+              }),
+            )
+            .length +
+        1;
+    var body = 0;
+    for (var i = 0; i < 3 && frame() != bytes; i++) {
+      body += bytes - frame();
+      store.saveNote(note, 'Sized', 'x' * body);
+    }
+    expect(frame(), bytes);
+  }
+
+  test(
+    'a reply of exactly the client limit fails its request, not the connection',
+    () async {
+      // Its completion frame follows in the same socket read. Clients count
+      // bytes per read, so delivering this reply would exceed their limit.
+      sizeNotesReply(maxServiceMessage);
+      final client = await ServiceClient.connect(service.path);
+      try {
+        await expectLater(
+          client.call('notes.list'),
+          throwsA(
+            isA<RpcError>()
+                .having((error) => error.code, 'code', RpcErrorCode.internal)
+                .having(
+                  (error) => error.message,
+                  'message',
+                  'Reply exceeds 15 MiB; request fewer items.',
+                ),
+          ),
+        );
+        expect(client.isClosed, isFalse);
+        expect((await client.call('status') as Map)['pid'], pid);
+      } finally {
+        await client.close();
+      }
+    },
+  );
+  test('a reply at the frame cap reaches the client intact', () async {
+    sizeNotesReply(maxServiceMessage - 1024 * 1024);
+    final client = await ServiceClient.connect(service.path);
+    try {
+      final notes = await client.call('notes.list') as List;
+      expect(notes.single['title'], 'Sized');
+      expect(client.isClosed, isFalse);
+      expect((await client.call('status') as Map)['pid'], pid);
+    } finally {
+      await client.close();
+    }
+  });
   test(
     'desktop socket closure shuts down service and persists committed data',
     () async {
@@ -150,7 +214,7 @@ void main() {
       final recording = CountingRecording();
       app.recording = recording;
       app.recordingMeeting = service.domain.store.meeting('Recording');
-      // Together these notes exceed one 16 MiB reply frame.
+      // Together these notes exceed one reply frame.
       final body = 'x' * (6 * 1024 * 1024);
       for (var i = 0; i < 3; i++) {
         service.domain.store.saveNote(null, 'Large $i', body);
@@ -164,7 +228,7 @@ void main() {
                 .having(
                   (error) => error.message,
                   'message',
-                  'Reply exceeds 16 MiB; request fewer items.',
+                  'Reply exceeds 15 MiB; request fewer items.',
                 ),
           ),
         );
@@ -206,7 +270,7 @@ void main() {
         'id': 1,
         'error': {
           'code': 'internal',
-          'message': 'Reply exceeds 16 MiB; request fewer items.',
+          'message': 'Reply exceeds 15 MiB; request fewer items.',
         },
         'done': true,
       });

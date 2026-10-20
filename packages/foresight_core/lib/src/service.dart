@@ -17,6 +17,10 @@ import 'store.dart';
 import 'service_socket.dart';
 
 const maxServiceMessage = 16 * 1024 * 1024;
+// Clients count bytes per socket read, not per frame, so a frame at their
+// limit followed by more bytes in the same read still fails. Keep frames 1 MiB
+// under it; clients already released need this headroom too.
+const _maxServiceFrame = maxServiceMessage - 1024 * 1024;
 const _serviceClosingMessage =
     'Application service is shutting down; retry after it exits.';
 
@@ -704,7 +708,7 @@ class ApplicationService {
       // A client drops its whole connection on a frame over the limit, and
       // losing the desktop's connection stops its recording. Fail only the
       // request instead.
-      if (frame.length + 1 > maxServiceMessage) {
+      if (frame.length + 1 > _maxServiceFrame) {
         final id = message['id'];
         _traceServiceTransport(
           'worker oversized peer=${identityHashCode(client)} id=$id '
@@ -719,7 +723,8 @@ class ApplicationService {
             'id': id,
             'error': RpcError(
               RpcErrorCode.internal,
-              'Reply exceeds 16 MiB; request fewer items.',
+              'Reply exceeds ${_maxServiceFrame ~/ (1024 * 1024)} MiB; '
+              'request fewer items.',
             ).toJson(),
             'done': true,
           }),
