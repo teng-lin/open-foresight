@@ -16,6 +16,7 @@ WORKFLOWS = {
         ("native-sanitizers", "thread-policy", "native-thread-sanitizer"),
     ),
     "arch-drift.yml": ("ci-arch-drift", ("arch",)),
+    "preview-packages.yml": ("ci-preview-external-drift", ("weekly-external-audit",)),
 }
 
 
@@ -26,6 +27,7 @@ def result(
     *,
     allow_missing=False,
     cancelled=False,
+    ignore_skipped=False,
     request=request,
 ):
     """Read actual job conclusions, including failures hidden by probation."""
@@ -39,7 +41,9 @@ def result(
         for job in selected
     ):
         return None
-    if cancelled and all(job.get("conclusion") == "skipped" for job in selected):
+    if (cancelled or ignore_skipped) and all(
+        job.get("conclusion") == "skipped" for job in selected
+    ):
         return None
     found = {job["name"] for job in selected}
     if not allow_missing and set(expected).difference(found):
@@ -93,6 +97,7 @@ def reconcile(repository, workflow, run_id, source, *, request=request):
             expected,
             allow_missing=candidate.get("status") == "completed",
             cancelled=candidate.get("conclusion") == "cancelled",
+            ignore_skipped=workflow == "preview-packages.yml",
             request=request,
         )
         if failures is not None:
@@ -140,19 +145,27 @@ def reconcile(repository, workflow, run_id, source, *, request=request):
             repository,
             "issues",
             "POST",
-            {"title": f"{label}: daily checks failed", "labels": [label], "body": body},
+            {
+                "title": f"{label}: {'weekly external audit' if workflow == 'preview-packages.yml' else 'daily checks'} failed",
+                "labels": [label],
+                "body": body,
+            },
         )
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("workflow", choices=WORKFLOWS)
+    parser.add_argument("--run-id", type=int)
+    parser.add_argument("--source")
     args = parser.parse_args()
+    if (args.run_id is None) != (args.source is None):
+        parser.error("--run-id and --source must identify the same original run")
     reconcile(
         os.environ["GITHUB_REPOSITORY"],
         args.workflow,
-        int(os.environ["GITHUB_RUN_ID"]),
-        os.environ["GITHUB_SHA"],
+        args.run_id if args.run_id is not None else int(os.environ["GITHUB_RUN_ID"]),
+        args.source if args.source is not None else os.environ["GITHUB_SHA"],
     )
 
 

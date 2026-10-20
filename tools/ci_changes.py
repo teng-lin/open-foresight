@@ -8,7 +8,14 @@ from pathlib import Path, PurePosixPath
 import subprocess
 
 
-GATES = ("macos", "linux-native", "linux-document-imports", "linux-bundle", "packaging")
+GATES = (
+    "macos",
+    "linux-build",
+    "linux-test",
+    "linux-document-imports",
+    "linux-bundle",
+    "packaging",
+)
 
 # Standalone quality/maintenance controls do not change installed application bytes.
 MAINTENANCE = {
@@ -31,8 +38,6 @@ MAINTENANCE = {
 # These controls and tests cannot change compiled application/SDK bytes. They
 # still require workflow lint, Python quality and real distro package contracts.
 PACKAGING_FILES = {
-    "tools/package_contract_candidate.py",
-    "tests/test_package_contract_candidate.py",
     "tools/github_release.py",
     "tools/release_asset_acceptance.py",
     "tools/release_acceptance_report.py",
@@ -137,6 +142,12 @@ def select_gates(paths, force=False):
                 selected[gate] = True
         else:
             selected = dict.fromkeys(GATES, True)
+    # Every installer contract consumes this run's bundle. Its build also
+    # selects the test consumer and the transitional main acceptance candidate.
+    if selected["packaging"]:
+        selected["linux-build"] = True
+    if selected["linux-build"]:
+        selected["linux-test"] = selected["linux-bundle"] = True
     return selected
 
 
@@ -159,7 +170,6 @@ def check_gates(jobs, selected, main):
             for name, required in selected.items()
         }
     )
-    expected["macos-stages"] = expected["macos"]
     for name, result in expected.items():
         if jobs.get(name, {}).get("result") != result:
             raise ValueError(
@@ -172,7 +182,12 @@ def selection_report(paths, *, force=False, platforms="all", revision_range=""):
     if platforms == "linux":
         selected["macos"] = False
     elif platforms == "macos":
-        for gate in ("linux-native", "linux-document-imports", "linux-bundle"):
+        for gate in (
+            "linux-build",
+            "linux-test",
+            "linux-document-imports",
+            "linux-bundle",
+        ):
             selected[gate] = False
     return {
         "range": revision_range,

@@ -460,5 +460,5 @@ def test_change_cli_preserves_nul_paths_and_platform_selection(
     )
     assert selected["packaging"] is True
     assert selected["macos"] == (platform != "linux")
-    assert selected["linux-native"] == (platform != "macos")
+    assert selected["linux-build"] == (platform != "macos")
     assert calls[1][-3:] == ["a" * 40, "HEAD", "--"]

@@ -1,4 +1,6 @@
 name: macOS release DMG
+env:
+  RELEASE_SOURCE_FLOOR: ${{ vars.RELEASE_SOURCE_FLOOR }}
 permissions:
   contents: read
   actions: read
@@ -49,7 +51,7 @@ jobs:
         RELEASE_TAG: ${{ inputs.tag }}
       run: |-
         source=$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)
-        python tools/ci_artifacts.py pull --component macos-app --identity "$source" --prefix artifacts --wait 0 --run-id "$CANDIDATE_RUN"
+        python tools/ci_artifacts.py pull --consumer release-preparation --component macos-app --identity "$source" --prefix artifacts --wait 0 --run-id "$CANDIDATE_RUN"
         mkdir -p staging test-results
         ditto -x -k artifacts/Open-Foresight-macos-arm64.zip staging
         codesign --verify --deep --strict 'staging/Open Foresight.app'

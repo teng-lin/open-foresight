@@ -1,0 +1,124 @@
+name: Restore this run's verified Linux consumer inputs
+description: Verify original bundle/SDK producer attempts and bytes without compiling them
+inputs:
+  source:
+    required: true
+    description: Exact application source
+  head-repository:
+    required: true
+    description: Original producer source repository
+  artifact-id:
+    required: true
+    description: Exact bundle artifact ID
+  artifact-digest:
+    required: true
+    description: Uploaded bundle ZIP digest
+  attempt:
+    required: true
+    description: Original successful bundle producer attempt
+  sdk-id:
+    default: ''
+    description: Optional source-scoped in-run fork SDK artifact ID
+  sdk-digest:
+    default: ''
+    description: Source-scoped SDK ZIP digest
+  sdk-attempt:
+    default: ''
+    description: Original successful SDK producer attempt
+  producer-sdk-run:
+    default: ''
+    description: Exact original SDK producer run
+  producer-sdk-id:
+    default: ''
+    description: Exact original SDK artifact ID
+  producer-sdk-digest:
+    default: ''
+    description: Exact original SDK ZIP digest
+  own-pr:
+    default: '0'
+    description: Consumer PR number
+  label:
+    default: ''
+    description: Exact preview label, empty in PR/sweep tiers
+  legacy-main:
+    default: 'false'
+    description: Transitional stamped main candidate from this same run
+  purpose:
+    default: acceptance
+    description: Consumer trust purpose, acceptance or package-contract
+  restore-sdk:
+    default: 'true'
+    description: Installer contracts consume only the bundle
+outputs:
+  image:
+    value: ${{ steps.sdk.outputs.image }}
+    description: Verified SDK address in the shared Docker daemon
+  version:
+    value: ${{ steps.package.outputs.version }}
+    description: Original bundle distribution version
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+    - uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
+      if: inputs.restore-sdk == 'true'
+      with:
+        daemon-config: '{"features":{"containerd-snapshotter":true}}'
+    - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      if: inputs.restore-sdk == 'true'
+      with:
+        driver: docker
+    - name: Authenticate read-only SDK and tool caches
+      if: inputs.restore-sdk == 'true'
+      shell: bash
+      env:
+        REGISTRY_TOKEN: ${{ github.token }}
+      run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+    - name: Restore the exact original SDK or a compatible verified producer
+      if: inputs.restore-sdk == 'true'
+      id: sdk
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        OWN_HEAD: ${{ inputs.source }}
+        OWN_PR: ${{ inputs.own-pr }}
+        HEAD_REPOSITORY: ${{ inputs.head-repository }}
+        ARTIFACT_ID: ${{ inputs.sdk-id }}
+        ARTIFACT_DIGEST: ${{ inputs.sdk-digest }}
+        PRODUCER_ATTEMPT: ${{ inputs.sdk-attempt }}
+        SDK_RUN: ${{ inputs.producer-sdk-run }}
+        SDK_ID: ${{ inputs.producer-sdk-id }}
+        SDK_DIGEST: ${{ inputs.producer-sdk-digest }}
+      run: |
+        if [[ -n "$ARTIFACT_ID" ]]; then
+          python -m tools.integration_application --shadow --component linux-sdk --source "$OWN_HEAD" --head-repository "$HEAD_REPOSITORY" --artifact-id "$ARTIFACT_ID" --artifact-digest "$ARTIFACT_DIGEST" --attempt "$PRODUCER_ATTEMPT" --directory build/consumer-sdk
+        else
+          [[ -n "$SDK_RUN" && -n "$SDK_ID" && -n "$SDK_DIGEST" ]] || { echo "Build SDK reference is missing" >&2; exit 1; }
+          python tools/ci_artifacts.py pull --component linux-sdk --prefix build/consumer-sdk --run-id "$SDK_RUN" --artifact-id "$SDK_ID" --artifact-digest "$SDK_DIGEST" --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
+        fi
+        python tools/linux_sdk_artifacts.py resolve --prefix build/consumer-sdk --load --discard-archive
+    - name: Verify this run's original successful bundle producer and ZIP bytes
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SOURCE: ${{ inputs.source }}
+        HEAD_REPOSITORY: ${{ inputs.head-repository }}
+        ARTIFACT_ID: ${{ inputs.artifact-id }}
+        ARTIFACT_DIGEST: ${{ inputs.artifact-digest }}
+        PRODUCER_ATTEMPT: ${{ inputs.attempt }}
+        LEGACY_MAIN: ${{ inputs.legacy-main }}
+        BUILD_LABEL: ${{ inputs.label }}
+        PURPOSE: ${{ inputs.purpose }}
+      run: |
+        task_args=()
+        if [[ "$LEGACY_MAIN" == true ]]; then task_args+=(--main-candidate); fi
+        python -m tools.integration_application --source "$SOURCE" --head-repository "$HEAD_REPOSITORY" --artifact-id "$ARTIFACT_ID" --artifact-digest "$ARTIFACT_DIGEST" --attempt "$PRODUCER_ATTEMPT" --purpose "$PURPOSE" --label "$BUILD_LABEL" --directory artifacts ${task_args[@]+"${task_args[@]}"}
+    - name: Verify the original portable checksum and prepare its exact bytes
+      id: package
+      shell: bash
+      env:
+        SOURCE: ${{ inputs.source }}
+        BUILD_LABEL: ${{ inputs.label }}
+      run: python tools/ci_linux_acceptance.py --source "$SOURCE" --label "$BUILD_LABEL"

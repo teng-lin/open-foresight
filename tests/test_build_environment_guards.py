@@ -139,7 +139,7 @@ def test_initial_commit_classification_uses_empty_tree_and_limits_platform(
     selected = json.loads(fields["selection"])
     assert selected["packaging"]
     assert selected["macos"] == (platform == "macos")
-    assert selected["linux-native"] == (platform == "linux")
+    assert selected["linux-build"] == (platform == "linux")
     assert fields["linux_bundle"] == str(platform == "linux").lower()
 
 
@@ -153,22 +153,20 @@ def test_classifier_requires_base_before_running_git(monkeypatch):
     run.assert_not_called()
 
 
-def test_cli_checks_selected_gates_including_macos_stage_summary(monkeypatch, capsys):
+def test_cli_checks_selected_gates_including_consolidated_macos(monkeypatch, capsys):
     selected = changes.select_gates(["tools/smoke_macos_bundle.py"])
     jobs = {
         gate: {"result": "success" if needed else "skipped"}
         for gate, needed in selected.items()
     }
-    jobs.update(
-        {"changes": {"result": "success"}, "macos-stages": {"result": "success"}}
-    )
+    jobs["changes"] = {"result": "success"}
     monkeypatch.setenv("NEEDS", json.dumps(jobs))
     monkeypatch.setenv("SELECTION", json.dumps(selected))
     monkeypatch.setenv("MAIN", "false")
     monkeypatch.setattr(sys, "argv", ["ci_changes", "--check-gates"])
     changes.main()
     assert "All selected platform gates passed" in capsys.readouterr().out
-    jobs["macos-stages"]["result"] = "skipped"
+    jobs["macos"]["result"] = "skipped"
     monkeypatch.setenv("NEEDS", json.dumps(jobs))
-    with pytest.raises(ValueError, match="macos-stages: expected success"):
+    with pytest.raises(ValueError, match="macos: expected success"):
         changes.main()

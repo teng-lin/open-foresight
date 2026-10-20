@@ -26,8 +26,11 @@ SHARED = (
     "tests/test_linux_packages.py",
     "tests/test_linux_ci_handoff.py",
     "tests/test_litert_build_snapshot.py",
+    "tests/test_macos_cmake_cache.py",
+    "tests/test_macos_one_job.py",
     "tests/test_native_incremental_work.py",
     "tests/test_parallel_build_gates.py",
+    "tests/test_linux_test_schedule.py",
     "tests/test_profile_migration.py",
     "tests/test_release_hook_configurations.py",
     "tests/test_test_hygiene.py",
@@ -175,10 +178,19 @@ def verify_execution(platform, report):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--platform", required=True, choices=tuple(PLATFORM))
+    parser.add_argument("--basetemp", type=Path)
+    parser.add_argument("--cache-dir", type=Path)
     args = parser.parse_args()
+    extra = []
+    if args.basetemp is not None:
+        extra += ["--basetemp", str(args.basetemp)]
+    if args.cache_dir is not None:
+        extra += ["-o", "cache_dir=" + str(args.cache_dir)]
     report = ROOT / f"coverage/python/{args.platform}-contracts.xml"
     report.unlink(missing_ok=True)
-    status = subprocess.run(command(args.platform), cwd=ROOT, timeout=1800).returncode
+    status = subprocess.run(
+        [*command(args.platform), *extra], cwd=ROOT, timeout=1800
+    ).returncode
     if status == 0:
         verify_execution(args.platform, report)
     raise SystemExit(status)

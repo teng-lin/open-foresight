@@ -1,0 +1,1017 @@
+{
+  "schema": 1,
+  "observations": [
+    {
+      "run": {
+        "id": 39375443052,
+        "head_sha": "ea0a33c086a48b2417f1ea647690860a183b9ade"
+      },
+      "jobs": [
+        {
+          "id": 118474156057,
+          "name": "linux-test",
+          "run_id": 39375443052,
+          "head_sha": "ea0a33c086a48b2417f1ea647690860a183b9ade",
+          "status": "completed",
+          "conclusion": "success",
+          "run_attempt": 1,
+          "started_at": "2026-10-20T05:38:46Z",
+          "completed_at": "2026-10-20T05:49:40Z",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1,
+              "started_at": "2026-10-20T05:38:47Z",
+              "completed_at": "2026-10-20T05:38:50Z"
+            },
+            {
+              "name": "Record initial shadow test storage",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2,
+              "started_at": "2026-10-20T05:38:50Z",
+              "completed_at": "2026-10-20T05:38:50Z"
+            },
+            {
+              "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3,
+              "started_at": "2026-10-20T05:38:50Z",
+              "completed_at": "2026-10-20T05:38:52Z"
+            },
+            {
+              "name": "Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4,
+              "started_at": "2026-10-20T05:38:52Z",
+              "completed_at": "2026-10-20T05:38:53Z"
+            },
+            {
+              "name": "Install the pinned host Docker fixture tools",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5,
+              "started_at": "2026-10-20T05:38:53Z",
+              "completed_at": "2026-10-20T05:39:09Z"
+            },
+            {
+              "name": "Allow isolated document namespaces in shadow test containers",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6,
+              "started_at": "2026-10-20T05:39:09Z",
+              "completed_at": "2026-10-20T05:39:09Z"
+            },
+            {
+              "name": "Run docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7,
+              "started_at": "2026-10-20T05:39:09Z",
+              "completed_at": "2026-10-20T05:39:22Z"
+            },
+            {
+              "name": "Run docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8,
+              "started_at": "2026-10-20T05:39:22Z",
+              "completed_at": "2026-10-20T05:39:22Z"
+            },
+            {
+              "name": "Authenticate read-only application cache access",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 9,
+              "started_at": "2026-10-20T05:39:22Z",
+              "completed_at": "2026-10-20T05:39:23Z"
+            },
+            {
+              "name": "Validate application cache transport",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 10,
+              "started_at": "2026-10-20T05:39:23Z",
+              "completed_at": "2026-10-20T05:39:24Z"
+            },
+            {
+              "name": "Qualify and retrieve the exact original source/build artifact",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 11,
+              "started_at": "2026-10-20T05:39:24Z",
+              "completed_at": "2026-10-20T05:39:30Z"
+            },
+            {
+              "name": "Resolve the original verified shadow SDK",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 12,
+              "started_at": "2026-10-20T05:39:30Z",
+              "completed_at": "2026-10-20T05:40:21Z"
+            },
+            {
+              "name": "Test the restored bytes without rebuilding the application",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 13,
+              "started_at": "2026-10-20T05:40:21Z",
+              "completed_at": "2026-10-20T05:49:22Z"
+            },
+            {
+              "name": "Run the real Docker cache fixture on the host",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 14,
+              "started_at": "2026-10-20T05:49:22Z",
+              "completed_at": "2026-10-20T05:49:30Z"
+            },
+            {
+              "name": "Retain independent shadow test results and coverage",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 15,
+              "started_at": "2026-10-20T05:49:30Z",
+              "completed_at": "2026-10-20T05:49:31Z"
+            },
+            {
+              "name": "Record final shadow test storage",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 16,
+              "started_at": "2026-10-20T05:49:31Z",
+              "completed_at": "2026-10-20T05:49:31Z"
+            },
+            {
+              "name": "Mark successful shadow test completion",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 17,
+              "started_at": "2026-10-20T05:49:31Z",
+              "completed_at": "2026-10-20T05:49:31Z"
+            },
+            {
+              "name": "Post Run docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 31,
+              "started_at": "2026-10-20T05:49:31Z",
+              "completed_at": "2026-10-20T05:49:31Z"
+            },
+            {
+              "name": "Post Run docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 32,
+              "started_at": "2026-10-20T05:49:31Z",
+              "completed_at": "2026-10-20T05:49:37Z"
+            },
+            {
+              "name": "Post Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 33,
+              "started_at": "2026-10-20T05:49:37Z",
+              "completed_at": "2026-10-20T05:49:37Z"
+            },
+            {
+              "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 34,
+              "started_at": "2026-10-20T05:49:37Z",
+              "completed_at": "2026-10-20T05:49:37Z"
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 35,
+              "started_at": "2026-10-20T05:49:37Z",
+              "completed_at": "2026-10-20T05:49:37Z"
+            }
+          ]
+        },
+        {
+          "id": 118472477663,
+          "name": "macos-stages / native-macos",
+          "run_id": 39375443052,
+          "head_sha": "ea0a33c086a48b2417f1ea647690860a183b9ade",
+          "status": "completed",
+          "conclusion": "success",
+          "run_attempt": 1,
+          "started_at": "2026-10-20T05:32:50Z",
+          "completed_at": "2026-10-20T05:36:56Z",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1,
+              "started_at": "2026-10-20T05:32:51Z",
+              "completed_at": "2026-10-20T05:32:52Z"
+            },
+            {
+              "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2,
+              "started_at": "2026-10-20T05:32:52Z",
+              "completed_at": "2026-10-20T05:32:55Z"
+            },
+            {
+              "name": "Run ./.github/actions/setup-macos-stage",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3,
+              "started_at": "2026-10-20T05:32:55Z",
+              "completed_at": "2026-10-20T05:33:32Z"
+            },
+            {
+              "name": "macOS Python host contracts including SDK source guards",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4,
+              "started_at": "2026-10-20T05:33:32Z",
+              "completed_at": "2026-10-20T05:35:32Z"
+            },
+            {
+              "name": "Validate or restore the native stage",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5,
+              "started_at": "2026-10-20T05:35:32Z",
+              "completed_at": "2026-10-20T05:36:43Z"
+            },
+            {
+              "name": "Retain the independently qualified native stage",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6,
+              "started_at": "2026-10-20T05:36:43Z",
+              "completed_at": "2026-10-20T05:36:47Z"
+            },
+            {
+              "name": "Retain the small native compilation receipt",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7,
+              "started_at": "2026-10-20T05:36:47Z",
+              "completed_at": "2026-10-20T05:36:49Z"
+            },
+            {
+              "name": "Retain the slim native runtime prerequisite",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8,
+              "started_at": "2026-10-20T05:36:49Z",
+              "completed_at": "2026-10-20T05:36:51Z"
+            },
+            {
+              "name": "Retain native diagnostics",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 9,
+              "started_at": "2026-10-20T05:36:51Z",
+              "completed_at": "2026-10-20T05:36:52Z"
+            },
+            {
+              "name": "Post Run ./.github/actions/setup-macos-stage",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 17,
+              "started_at": "2026-10-20T05:36:52Z",
+              "completed_at": "2026-10-20T05:36:52Z"
+            },
+            {
+              "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 18,
+              "started_at": "2026-10-20T05:36:52Z",
+              "completed_at": "2026-10-20T05:36:53Z"
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 19,
+              "started_at": "2026-10-20T05:36:53Z",
+              "completed_at": "2026-10-20T05:36:54Z"
+            }
+          ]
+        },
+        {
+          "id": 118480292571,
+          "name": "linux-test",
+          "run_id": 39375443052,
+          "head_sha": "ea0a33c086a48b2417f1ea647690860a183b9ade",
+          "status": "completed",
+          "conclusion": "failure",
+          "run_attempt": 2,
+          "started_at": "2026-10-20T06:00:54Z",
+          "completed_at": "2026-10-20T06:12:17Z",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1,
+              "started_at": "2026-10-20T06:00:55Z",
+              "completed_at": "2026-10-20T06:00:57Z"
+            },
+            {
+              "name": "Record initial shadow test storage",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2,
+              "started_at": "2026-10-20T06:00:57Z",
+              "completed_at": "2026-10-20T06:00:57Z"
+            },
+            {
+              "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3,
+              "started_at": "2026-10-20T06:00:57Z",
+              "completed_at": "2026-10-20T06:00:59Z"
+            },
+            {
+              "name": "Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4,
+              "started_at": "2026-10-20T06:00:59Z",
+              "completed_at": "2026-10-20T06:00:59Z"
+            },
+            {
+              "name": "Install the pinned host Docker fixture tools",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5,
+              "started_at": "2026-10-20T06:00:59Z",
+              "completed_at": "2026-10-20T06:01:12Z"
+            },
+            {
+              "name": "Allow isolated document namespaces in shadow test containers",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6,
+              "started_at": "2026-10-20T06:01:12Z",
+              "completed_at": "2026-10-20T06:01:12Z"
+            },
+            {
+              "name": "Run docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7,
+              "started_at": "2026-10-20T06:01:12Z",
+              "completed_at": "2026-10-20T06:01:23Z"
+            },
+            {
+              "name": "Run docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8,
+              "started_at": "2026-10-20T06:01:23Z",
+              "completed_at": "2026-10-20T06:01:23Z"
+            },
+            {
+              "name": "Authenticate read-only application cache access",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 9,
+              "started_at": "2026-10-20T06:01:23Z",
+              "completed_at": "2026-10-20T06:01:24Z"
+            },
+            {
+              "name": "Validate application cache transport",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 10,
+              "started_at": "2026-10-20T06:01:24Z",
+              "completed_at": "2026-10-20T06:01:25Z"
+            },
+            {
+              "name": "Qualify and retrieve the exact original source/build artifact",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 11,
+              "started_at": "2026-10-20T06:01:25Z",
+              "completed_at": "2026-10-20T06:01:32Z"
+            },
+            {
+              "name": "Resolve the original verified shadow SDK",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 12,
+              "started_at": "2026-10-20T06:01:32Z",
+              "completed_at": "2026-10-20T06:02:16Z"
+            },
+            {
+              "name": "Test the restored bytes without rebuilding the application",
+              "status": "completed",
+              "conclusion": "failure",
+              "number": 13,
+              "started_at": "2026-10-20T06:02:16Z",
+              "completed_at": "2026-10-20T06:12:07Z"
+            },
+            {
+              "name": "Run the real Docker cache fixture on the host",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 14,
+              "started_at": "2026-10-20T06:12:07Z",
+              "completed_at": "2026-10-20T06:12:07Z"
+            },
+            {
+              "name": "Retain independent shadow test results and coverage",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 15,
+              "started_at": "2026-10-20T06:12:07Z",
+              "completed_at": "2026-10-20T06:12:09Z"
+            },
+            {
+              "name": "Record final shadow test storage",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 16,
+              "started_at": "2026-10-20T06:12:09Z",
+              "completed_at": "2026-10-20T06:12:10Z"
+            },
+            {
+              "name": "Mark successful shadow test completion",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 17,
+              "started_at": "2026-10-20T06:12:10Z",
+              "completed_at": "2026-10-20T06:12:10Z"
+            },
+            {
+              "name": "Post Run docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 31,
+              "started_at": "2026-10-20T06:12:10Z",
+              "completed_at": "2026-10-20T06:12:10Z"
+            },
+            {
+              "name": "Post Run docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 32,
+              "started_at": "2026-10-20T06:12:10Z",
+              "completed_at": "2026-10-20T06:12:15Z"
+            },
+            {
+              "name": "Post Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 33,
+              "started_at": "2026-10-20T06:12:15Z",
+              "completed_at": "2026-10-20T06:12:15Z"
+            },
+            {
+              "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 34,
+              "started_at": "2026-10-20T06:12:15Z",
+              "completed_at": "2026-10-20T06:12:15Z"
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 35,
+              "started_at": "2026-10-20T06:12:15Z",
+              "completed_at": "2026-10-20T06:12:15Z"
+            }
+          ]
+        },
+        {
+          "id": 118478787273,
+          "name": "macos-stages / native-macos",
+          "run_id": 39375443052,
+          "head_sha": "ea0a33c086a48b2417f1ea647690860a183b9ade",
+          "status": "completed",
+          "conclusion": "success",
+          "run_attempt": 2,
+          "started_at": "2026-10-20T05:32:50Z",
+          "completed_at": "2026-10-20T05:36:56Z",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1,
+              "started_at": "2026-10-20T05:32:51Z",
+              "completed_at": "2026-10-20T05:32:52Z"
+            },
+            {
+              "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2,
+              "started_at": "2026-10-20T05:32:52Z",
+              "completed_at": "2026-10-20T05:32:55Z"
+            },
+            {
+              "name": "Run ./.github/actions/setup-macos-stage",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3,
+              "started_at": "2026-10-20T05:32:55Z",
+              "completed_at": "2026-10-20T05:33:32Z"
+            },
+            {
+              "name": "macOS Python host contracts including SDK source guards",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4,
+              "started_at": "2026-10-20T05:33:32Z",
+              "completed_at": "2026-10-20T05:35:32Z"
+            },
+            {
+              "name": "Validate or restore the native stage",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5,
+              "started_at": "2026-10-20T05:35:32Z",
+              "completed_at": "2026-10-20T05:36:43Z"
+            },
+            {
+              "name": "Retain the independently qualified native stage",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6,
+              "started_at": "2026-10-20T05:36:43Z",
+              "completed_at": "2026-10-20T05:36:47Z"
+            },
+            {
+              "name": "Retain the small native compilation receipt",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7,
+              "started_at": "2026-10-20T05:36:47Z",
+              "completed_at": "2026-10-20T05:36:49Z"
+            },
+            {
+              "name": "Retain the slim native runtime prerequisite",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8,
+              "started_at": "2026-10-20T05:36:49Z",
+              "completed_at": "2026-10-20T05:36:51Z"
+            },
+            {
+              "name": "Retain native diagnostics",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 9,
+              "started_at": "2026-10-20T05:36:51Z",
+              "completed_at": "2026-10-20T05:36:52Z"
+            },
+            {
+              "name": "Post Run ./.github/actions/setup-macos-stage",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 17,
+              "started_at": "2026-10-20T05:36:52Z",
+              "completed_at": "2026-10-20T05:36:52Z"
+            },
+            {
+              "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 18,
+              "started_at": "2026-10-20T05:36:52Z",
+              "completed_at": "2026-10-20T05:36:53Z"
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 19,
+              "started_at": "2026-10-20T05:36:53Z",
+              "completed_at": "2026-10-20T05:36:54Z"
+            }
+          ]
+        }
+      ],
+      "attempts": [
+        {
+          "id": 39375443052,
+          "head_sha": "ea0a33c086a48b2417f1ea647690860a183b9ade",
+          "run_attempt": 1,
+          "run_started_at": "2026-10-20T05:32:30Z"
+        },
+        {
+          "id": 39375443052,
+          "head_sha": "ea0a33c086a48b2417f1ea647690860a183b9ade",
+          "run_attempt": 2,
+          "run_started_at": "2026-10-20T05:55:25Z"
+        }
+      ],
+      "expected_original_job_ids": [
+        118474156057,
+        118472477663,
+        118480292571
+      ],
+      "origin_api_urls": [
+        "https://api.github.com/repos/teng-lin/open-foresight/actions/runs/39375443052/jobs?filter=all&per_page=100",
+        "https://api.github.com/repos/teng-lin/open-foresight/actions/runs/39375443052/attempts/1",
+        "https://api.github.com/repos/teng-lin/open-foresight/actions/runs/39375443052/attempts/2"
+      ],
+      "full_raw_jobs_sha256": "f9db1f653c0092d055f777b0cb38704604078f2a59856f5bd525a8e16c33bd09"
+    },
+    {
+      "run": {
+        "id": 39072570156,
+        "head_sha": "a495652ef0a264cb977cfb497f884854f243d4c1"
+      },
+      "jobs": [
+        {
+          "id": 117513084534,
+          "name": "linux / bundle",
+          "run_id": 39072570156,
+          "head_sha": "a495652ef0a264cb977cfb497f884854f243d4c1",
+          "status": "completed",
+          "conclusion": "failure",
+          "run_attempt": 1,
+          "started_at": "2026-10-17T21:50:07Z",
+          "completed_at": "2026-10-17T21:50:14Z",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1,
+              "started_at": "2026-10-17T21:50:08Z",
+              "completed_at": "2026-10-17T21:50:09Z"
+            },
+            {
+              "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2,
+              "started_at": "2026-10-17T21:50:09Z",
+              "completed_at": "2026-10-17T21:50:11Z"
+            },
+            {
+              "name": "Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3,
+              "started_at": "2026-10-17T21:50:11Z",
+              "completed_at": "2026-10-17T21:50:11Z"
+            },
+            {
+              "name": "Require an unpublished draft release",
+              "status": "completed",
+              "conclusion": "failure",
+              "number": 4,
+              "started_at": "2026-10-17T21:50:11Z",
+              "completed_at": "2026-10-17T21:50:12Z"
+            },
+            {
+              "name": "Require the tag version and fetch the tested commit candidate",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 5,
+              "started_at": "2026-10-17T21:50:12Z",
+              "completed_at": "2026-10-17T21:50:12Z"
+            },
+            {
+              "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 6,
+              "started_at": "2026-10-17T21:50:12Z",
+              "completed_at": "2026-10-17T21:50:12Z"
+            },
+            {
+              "name": "Post Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 11,
+              "started_at": "2026-10-17T21:50:12Z",
+              "completed_at": "2026-10-17T21:50:12Z"
+            },
+            {
+              "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 12,
+              "started_at": "2026-10-17T21:50:12Z",
+              "completed_at": "2026-10-17T21:50:12Z"
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 13,
+              "started_at": "2026-10-17T21:50:12Z",
+              "completed_at": "2026-10-17T21:50:12Z"
+            }
+          ]
+        },
+        {
+          "id": 117513467815,
+          "name": "macos / dmg",
+          "run_id": 39072570156,
+          "head_sha": "a495652ef0a264cb977cfb497f884854f243d4c1",
+          "status": "completed",
+          "conclusion": "success",
+          "run_attempt": 1,
+          "started_at": "2026-10-17T21:52:06Z",
+          "completed_at": "2026-10-17T21:52:56Z",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1,
+              "started_at": "2026-10-17T21:52:06Z",
+              "completed_at": "2026-10-17T21:52:08Z"
+            },
+            {
+              "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2,
+              "started_at": "2026-10-17T21:52:08Z",
+              "completed_at": "2026-10-17T21:52:10Z"
+            },
+            {
+              "name": "Run actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3,
+              "started_at": "2026-10-17T21:52:10Z",
+              "completed_at": "2026-10-17T21:52:18Z"
+            },
+            {
+              "name": "Restore tested application and create disk image",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4,
+              "started_at": "2026-10-17T21:52:18Z",
+              "completed_at": "2026-10-17T21:52:40Z"
+            },
+            {
+              "name": "Retain disk image and provenance",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5,
+              "started_at": "2026-10-17T21:52:40Z",
+              "completed_at": "2026-10-17T21:52:46Z"
+            },
+            {
+              "name": "Attach disk image to release",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6,
+              "started_at": "2026-10-17T21:52:46Z",
+              "completed_at": "2026-10-17T21:52:52Z"
+            },
+            {
+              "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 12,
+              "started_at": "2026-10-17T21:52:52Z",
+              "completed_at": "2026-10-17T21:52:53Z"
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 13,
+              "started_at": "2026-10-17T21:52:53Z",
+              "completed_at": "2026-10-17T21:52:53Z"
+            }
+          ]
+        },
+        {
+          "id": 117513772871,
+          "name": "linux / bundle",
+          "run_id": 39072570156,
+          "head_sha": "a495652ef0a264cb977cfb497f884854f243d4c1",
+          "status": "completed",
+          "conclusion": "success",
+          "run_attempt": 2,
+          "started_at": "2026-10-17T21:53:34Z",
+          "completed_at": "2026-10-17T21:53:46Z",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1,
+              "started_at": "2026-10-17T21:53:35Z",
+              "completed_at": "2026-10-17T21:53:35Z"
+            },
+            {
+              "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2,
+              "started_at": "2026-10-17T21:53:35Z",
+              "completed_at": "2026-10-17T21:53:36Z"
+            },
+            {
+              "name": "Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3,
+              "started_at": "2026-10-17T21:53:36Z",
+              "completed_at": "2026-10-17T21:53:36Z"
+            },
+            {
+              "name": "Require an unpublished draft release",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4,
+              "started_at": "2026-10-17T21:53:36Z",
+              "completed_at": "2026-10-17T21:53:37Z"
+            },
+            {
+              "name": "Require the tag version and fetch the tested commit candidate",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5,
+              "started_at": "2026-10-17T21:53:37Z",
+              "completed_at": "2026-10-17T21:53:40Z"
+            },
+            {
+              "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6,
+              "started_at": "2026-10-17T21:53:40Z",
+              "completed_at": "2026-10-17T21:53:44Z"
+            },
+            {
+              "name": "Post Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 11,
+              "started_at": "2026-10-17T21:53:44Z",
+              "completed_at": "2026-10-17T21:53:45Z"
+            },
+            {
+              "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 12,
+              "started_at": "2026-10-17T21:53:45Z",
+              "completed_at": "2026-10-17T21:53:45Z"
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 13,
+              "started_at": "2026-10-17T21:53:45Z",
+              "completed_at": "2026-10-17T21:53:45Z"
+            }
+          ]
+        },
+        {
+          "id": 117513792672,
+          "name": "macos / dmg",
+          "run_id": 39072570156,
+          "head_sha": "a495652ef0a264cb977cfb497f884854f243d4c1",
+          "status": "completed",
+          "conclusion": "success",
+          "run_attempt": 2,
+          "started_at": "2026-10-17T21:52:06Z",
+          "completed_at": "2026-10-17T21:52:56Z",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1,
+              "started_at": "2026-10-17T21:52:06Z",
+              "completed_at": "2026-10-17T21:52:08Z"
+            },
+            {
+              "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2,
+              "started_at": "2026-10-17T21:52:08Z",
+              "completed_at": "2026-10-17T21:52:10Z"
+            },
+            {
+              "name": "Run actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3,
+              "started_at": "2026-10-17T21:52:10Z",
+              "completed_at": "2026-10-17T21:52:18Z"
+            },
+            {
+              "name": "Restore tested application and create disk image",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4,
+              "started_at": "2026-10-17T21:52:18Z",
+              "completed_at": "2026-10-17T21:52:40Z"
+            },
+            {
+              "name": "Retain disk image and provenance",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5,
+              "started_at": "2026-10-17T21:52:40Z",
+              "completed_at": "2026-10-17T21:52:46Z"
+            },
+            {
+              "name": "Attach disk image to release",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6,
+              "started_at": "2026-10-17T21:52:46Z",
+              "completed_at": "2026-10-17T21:52:52Z"
+            },
+            {
+              "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 12,
+              "started_at": "2026-10-17T21:52:52Z",
+              "completed_at": "2026-10-17T21:52:53Z"
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 13,
+              "started_at": "2026-10-17T21:52:53Z",
+              "completed_at": "2026-10-17T21:52:53Z"
+            }
+          ]
+        }
+      ],
+      "attempts": [
+        {
+          "id": 39072570156,
+          "head_sha": "a495652ef0a264cb977cfb497f884854f243d4c1",
+          "run_attempt": 1,
+          "run_started_at": "2026-10-17T21:49:50Z"
+        },
+        {
+          "id": 39072570156,
+          "head_sha": "a495652ef0a264cb977cfb497f884854f243d4c1",
+          "run_attempt": 2,
+          "run_started_at": "2026-10-17T21:53:30Z"
+        }
+      ],
+      "expected_original_job_ids": [
+        117513084534,
+        117513467815,
+        117513772871
+      ],
+      "origin_api_urls": [
+        "https://api.github.com/repos/teng-lin/open-foresight/actions/runs/39072570156/jobs?filter=all&per_page=100",
+        "https://api.github.com/repos/teng-lin/open-foresight/actions/runs/39072570156/attempts/1",
+        "https://api.github.com/repos/teng-lin/open-foresight/actions/runs/39072570156/attempts/2"
+      ],
+      "full_raw_jobs_sha256": "46b3b857e42d0a062cd45b6958ea0283a50208a03a8c7d44e02c9d13f3ade42a"
+    }
+  ],
+  "inverse_skipped_rows": [
+    {
+      "id": 118478786509,
+      "name": "linux-bundle",
+      "run_id": 39375443052,
+      "head_sha": "ea0a33c086a48b2417f1ea647690860a183b9ade",
+      "status": "completed",
+      "conclusion": "skipped",
+      "run_attempt": 2,
+      "started_at": "2026-10-20T05:55:27Z",
+      "completed_at": "2026-10-20T05:32:42Z",
+      "steps": []
+    },
+    {
+      "id": 118478786695,
+      "name": "distribution-number",
+      "run_id": 39375443052,
+      "head_sha": "ea0a33c086a48b2417f1ea647690860a183b9ade",
+      "status": "completed",
+      "conclusion": "skipped",
+      "run_attempt": 2,
+      "started_at": "2026-10-20T05:55:27Z",
+      "completed_at": "2026-10-20T05:32:41Z",
+      "steps": []
+    }
+  ]
+}

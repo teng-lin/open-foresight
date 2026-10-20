@@ -28,6 +28,10 @@ if [[ -f /run/secrets/foresight_web_content_api_key ]]; then FORESIGHT_WEB_CONTE
 "$FORESIGHT_PYTHON" packaging/check_abi.py dist/open-foresight --max-glibc 2.39 --report dist/abi.json
 "$FORESIGHT_PYTHON" packaging/package_linux.py --bundle dist/open-foresight --format tar \
   --version "${VERSION:?Package version required}" --release "${RELEASE:-1}"
+if [[ "${CI_TIER:-pr}" == preview ]]; then
+  test -f .distribution-build.json
+  cp .distribution-build.json dist/packages/distribution-stamp.json
+fi
 "$FORESIGHT_PYTHON" tools/ci_linux_handoff.py pack --root /src --directory /out/handoff \
   --revision "$SOURCE_REVISION" --inputs /ci-inputs.json --tier "${CI_TIER:-pr}" --label "${BUILD_LABEL:-}"
 rm -rf -- /out/packages

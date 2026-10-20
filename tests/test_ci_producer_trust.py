@@ -19,15 +19,30 @@ from test_ci_promotion import candidate, SOURCE, REPO
 # Freeze the migration boundary: future jobs/tiers must be enabled deliberately
 # with their new source and receipt proof, rather than by a broad name allowlist.
 EXPECTED = {
-    "pr-application": (
-        ("integration-acceptance.yml",),
-        ("pull_request",),
-        {"": ("ubuntu-application",)},
+    "weekly-audit-completion": (
+        ("preview-packages.yml",),
+        ("schedule", "workflow_dispatch"),
+        {"": ("weekly-external-audit",)},
     ),
-    "fork-sdk": (
-        ("integration-acceptance.yml",),
-        ("pull_request",),
-        {"": ("ubuntu-application",)},
+    "inrun-application": (
+        ("macos.yml", "preview-packages.yml"),
+        ("pull_request", "push", "workflow_dispatch", "schedule"),
+        {"": ("linux-build", "build / linux-build")},
+    ),
+    "inrun-package-contract": (
+        ("macos.yml", "preview-packages.yml"),
+        ("pull_request", "push", "workflow_dispatch", "schedule"),
+        {"": ("linux-build", "build / linux-build")},
+    ),
+    "main-acceptance": (
+        ("macos.yml",),
+        ("push", "workflow_dispatch"),
+        {"": ("linux-bundle",)},
+    ),
+    "dependency-seed-current": (
+        ("macos.yml", "preview-packages.yml"),
+        ("push", "workflow_dispatch", "schedule"),
+        {"": ("publish-caches", "build / publish-caches")},
     ),
     "artifact-pull": (
         ("macos.yml",),
@@ -64,17 +79,7 @@ EXPECTED = {
     ),
 }
 
-EXPECTED.update(
-    {
-        name: EXPECTED["artifact-pull"]
-        for name in ("release-preparation", "pr-package-contract")
-    }
-)
-EXPECTED["pr-package-contract"] = (
-    EXPECTED["artifact-pull"][0],
-    EXPECTED["artifact-pull"][1],
-    {"linux-app": EXPECTED["artifact-pull"][2]["linux-app"]},
-)
+EXPECTED["release-preparation"] = EXPECTED["artifact-pull"]
 EXPECTED["package-alias"] = (
     EXPECTED["dependency-sdk"][0],
     EXPECTED["dependency-sdk"][1],
@@ -90,9 +95,37 @@ EXPECTED["sdk-promoted-source"] = (
     EXPECTED["dependency-sdk"][2],
 )
 
+EXPECTED["release-candidate"] = (
+    ("release.yml",),
+    ("workflow_dispatch",),
+    {"linux-app": ("candidates / linux-build",), "macos-app": ("candidates / macos",)},
+)
+EXPECTED["release-candidate-receipt"] = (
+    ("release.yml",),
+    ("workflow_dispatch",),
+    {"": ("candidate-receipt",)},
+)
+EXPECTED["release-preparation"] = EXPECTED["release-candidate"]
+EXPECTED["legacy-release-candidate"] = (
+    ("macos.yml",),
+    ("push",),
+    EXPECTED["artifact-pull"][2],
+)
+
+EXPECTED["release-inrun-application"] = (
+    ("release.yml",),
+    ("workflow_dispatch",),
+    {"": ("candidates / linux-build",)},
+)
+EXPECTED["release-handoff"] = EXPECTED["release-inrun-application"]
+
 
 def test_exact_legacy_rows_have_no_tier_requirement_yet():
-    assert set(PRODUCERS) == set(EXPECTED) | {"shadow-fork-sdk", "shadow-handoff"}
+    assert set(PRODUCERS) == set(EXPECTED) | {
+        "shadow-fork-sdk",
+        "shadow-handoff",
+        "weekly-preview-audit",
+    }
     for consumer, (paths, events, jobs) in EXPECTED.items():
         producer = PRODUCERS[consumer]
         assert producer.workflows == tuple(
@@ -100,11 +133,22 @@ def test_exact_legacy_rows_have_no_tier_requirement_yet():
         )
         assert producer.events == events
         assert producer.jobs == jobs
-        assert producer.receipt_tier is None
+        assert producer.receipt_tier == (
+            "release"
+            if consumer
+            in (
+                "release-preparation",
+                "release-candidate",
+                "release-candidate-receipt",
+                "release-inrun-application",
+                "release-handoff",
+            )
+            else None
+        )
         for component, names in jobs.items():
             for name in names:
                 assert producer.matches_job({"name": name}, component)
-            assert not producer.matches_job({"name": "linux-build"}, component)
+            assert not producer.matches_job({"name": "unrelated-job"}, component)
             assert not producer.matches_job({}, component)
 
 
@@ -160,13 +204,14 @@ def test_sdk_job_names_share_the_single_table_without_changing_recipe_inputs():
 
 
 def test_receipt_tier_is_optional_but_enforced_when_a_consumer_specifies_it():
-    legacy = PRODUCERS["release-preparation"]
+    legacy = PRODUCERS["artifact-pull"]
     assert legacy.matches_receipt({})
     strict = replace(legacy, receipt_tier="release")
     assert strict.matches_receipt({"tier": "release"})
     for receipt in (None, {}, {"tier": "pr"}, {"tier": "preview"}):
         assert not strict.matches_receipt(receipt)
-    assert not PRODUCERS["pr-package-contract"].matches_job(
+    assert "pr-package-contract" not in PRODUCERS
+    assert not PRODUCERS["inrun-package-contract"].matches_job(
         {"name": "macos"}, "macos-app"
     )
     assert not PRODUCERS["package-alias"].matches_job(
@@ -181,9 +226,24 @@ def test_release_tier_restriction_does_not_change_other_consumers(
     artifact, _, _ = candidate(tmp_path, monkeypatch)
     monkeypatch.setitem(
         PRODUCERS,
-        "release-preparation",
-        replace(PRODUCERS["release-preparation"], receipt_tier="release"),
+        "tier-fixture",
+        replace(PRODUCERS["artifact-pull"], receipt_tier="release"),
     )
+    from tools import ci_release_candidates
+
+    authorizations = []
+
+    def authorize(repository, source, run_id, component):
+        assert (repository, source, run_id, component) == (
+            REPO,
+            SOURCE,
+            42,
+            "linux-app",
+        )
+        authorizations.append(component)
+        return "tier-fixture"
+
+    monkeypatch.setattr(ci_release_candidates, "authorize", authorize)
     # Real ZIP/receipt/payload hashes remain authoritative when adding a tier.
     archive = tmp_path / "artifact.zip"
     with zipfile.ZipFile(archive) as stream:
@@ -196,10 +256,9 @@ def test_release_tier_restriction_does_not_change_other_consumers(
         for name, data in files.items():
             stream.writestr(name, data)
     artifact["digest"] = "sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest()
-    for consumer in ("artifact-pull", "pr-package-contract"):
-        assert ci_artifacts.pull(
-            REPO, "linux-app", SOURCE, tmp_path / consumer, consumer=consumer
-        )
+    assert ci_artifacts.pull(
+        REPO, "linux-app", SOURCE, tmp_path / "artifact-pull", consumer="artifact-pull"
+    )
     if tier == "release":
         assert ci_artifacts.application_descriptor(
             REPO, "linux-app", SOURCE, 42, consumer="release-preparation"
@@ -209,6 +268,8 @@ def test_release_tier_restriction_does_not_change_other_consumers(
             ci_artifacts.application_descriptor(
                 REPO, "linux-app", SOURCE, 42, consumer="release-preparation"
             )
+
+    assert authorizations
 
 
 def test_producer_workflow_allowlists_are_only_declared_in_the_table():
@@ -220,7 +281,6 @@ def test_producer_workflow_allowlists_are_only_declared_in_the_table():
         "sdk_final_approval.py",
         "create_sdk_approval.py",
         "prepare_release.py",
-        "package_contract_candidate.py",
         "publish_linux_package_aliases.py",
     ):
         tree = ast.parse((root / "tools" / name).read_text())
@@ -230,3 +290,13 @@ def test_producer_workflow_allowlists_are_only_declared_in_the_table():
             and node.value.startswith(".github/workflows/")
             for node in ast.walk(tree)
         ), name
+
+
+def test_weekly_audit_is_preview_only_and_does_not_authorize_release_lookup():
+    row = PRODUCERS["weekly-preview-audit"]
+    assert row.workflows == (".github/workflows/preview-packages.yml",)
+    assert row.events == ("schedule", "workflow_dispatch")
+    assert row.jobs == {"": ("build / linux-build",)}
+    assert row.receipt_tier == "preview"
+    assert row.matches_receipt({"tier": "preview"})
+    assert not row.matches_receipt({"tier": "release"})

@@ -63,7 +63,7 @@ def test_mixed_changes_preserve_packaging_and_apple_runtime_gates():
             ]
         ).items()
         if needed
-    } == {"macos", "packaging"}
+    } == {"macos", "packaging", "linux-build", "linux-test", "linux-bundle"}
 
 
 def test_main_sdk_is_loaded_before_dependency_inspection():
@@ -80,44 +80,51 @@ def test_main_sdk_is_loaded_before_dependency_inspection():
 
 
 def test_acceptance_dependency_cache_is_read_only_for_prs_and_main_published():
-    consumer = workflow("integration-acceptance.yml")["jobs"]["ubuntu-package"]
-    publisher = workflow("macos.yml")["jobs"]["linux-bundle"]
-    build = next(
-        step["with"]
-        for step in consumer["steps"]
-        if step.get("id") == "acceptance-image"
-    )
-    assert "steps.acceptance-cache.outputs.cache" in build["cache-from"]
-    assert "steps.acceptance-cache.outputs.legacy_cache" in build["cache-from"]
-    assert "cache-to" not in build
-    assert (
-        consumer.get(
-            "permissions", workflow("integration-acceptance.yml")["permissions"]
-        )["packages"]
-        == "read"
-    )
-    exports = [
-        step["with"]
-        for step in publisher["steps"]
-        if step.get("with", {}).get("file") == "packaging/acceptance.Dockerfile"
-    ]
-    assert len(exports) == 1
-    assert exports[0]["target"] == "acceptance-dependencies"
-    assert "steps.acceptance-cache.outputs.cache" in exports[0]["cache-to"]
-    assert "legacy_cache" not in exports[0]["cache-to"]
-    assert "github.ref == 'refs/heads/main'" in publisher["if"]
+    jobs = workflow("macos.yml")["jobs"]
+    consumer_script = (ROOT / "tools/linux_acceptance.sh").read_text()
+    assert "--acceptance" in consumer_script
+    assert "--cache-from" in consumer_script
+    assert "acceptance-tools-buildcache-v1" in consumer_script
+    assert "app-buildcache-x86-64" in consumer_script
+    assert "--cache-to" not in consumer_script
+    assert "packaging/build.Dockerfile" not in consumer_script
+    for suite in ("cpu", "audio", "deb"):
+        consumer = jobs["acceptance-" + suite]
+        assert consumer["permissions"]["packages"] == "read"
+        restore = next(
+            step
+            for step in consumer["steps"]
+            if step.get("uses") == "./.github/actions/setup-linux-consumer"
+        )
+        assert "needs.linux-build.outputs.bundle_id" in restore["with"]["artifact-id"]
+        assert (
+            "needs.linux-build.outputs.bundle_digest"
+            in restore["with"]["artifact-digest"]
+        )
+        assert "needs.linux-build.outputs.attempt" in restore["with"]["attempt"]
+        assert any(
+            step.get("run") == "bash tools/linux_acceptance.sh " + suite
+            for step in consumer["steps"]
+        )
+    publisher = jobs["publish-caches"]
     assert publisher["permissions"]["packages"] == "write"
-    cache_steps = [
-        step
+    assert "github.ref == 'refs/heads/main'" in publisher["if"]
+    assert "github.event_name" in publisher["if"]
+    assert "inputs.source == github.sha" in publisher["if"]
+    assert any(
+        step.get("run") == "bash tools/publish_linux_ci_caches.sh"
         for step in publisher["steps"]
-        if step.get("id") == "acceptance-cache"
-        or step.get("with", {}).get("file") == "packaging/acceptance.Dockerfile"
-        or "cache-to" in step.get("with", {})
-    ]
-    assert all(
-        step["if"] == "github.ref == 'refs/heads/main' && inputs.source == ''"
-        for step in cache_steps
     )
+    publication = (ROOT / "tools/publish_linux_ci_caches.sh").read_text()
+    assert "refs/heads/main" in publication
+    assert "push|workflow_dispatch|schedule" in publication
+    assert "application-dependencies ci acceptance-dependencies" in publication
+    assert "acceptance-tools-buildcache-v1" in publication
+    assert (
+        '--cache-to "type=registry,ref=ghcr.io/$task_repository/linux-sdk:$task_cache'
+        in publication
+    )
+    assert "legacy_cache" not in publication
 
 
 def test_acceptance_dependencies_bind_sdk_and_all_path_dependency_manifests():

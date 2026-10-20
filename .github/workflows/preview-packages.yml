@@ -33,6 +33,10 @@ concurrency:
   group: ${{ inputs.exercise_failure_path && 'preview-packages-exercise' || 'preview-packages' }}
   cancel-in-progress: false
 jobs:
+  publish-macos-caches:
+    needs: plan
+    if: github.ref == 'refs/heads/main' && contains(fromJSON('["schedule","workflow_dispatch"]'), github.event_name) && !inputs.exercise_failure_path && needs.plan.result == 'success' && needs.plan.outputs.build == 'true'
+    uses: ./.github/workflows/macos-cache-publish.yml
   plan:
     timeout-minutes: 10
     if: github.ref == 'refs/heads/main'
@@ -82,11 +86,14 @@ jobs:
     secrets: inherit
     with:
       preview: true
+      macos_coverage: true
+      acceptance: ${{ needs.plan.outputs.validation }}
       source: ${{ needs.plan.outputs.source }}
       version: ${{ needs.plan.outputs.version }}
       build_number: ${{ needs.plan.outputs.build_number }}
       label: ${{ needs.plan.outputs.label }}
   linux:
+    name: linux (${{ matrix.format }})
     needs: [plan, build]
     if: "!cancelled() && needs.plan.result == 'success' && needs.build.result == 'success'"
     env:
@@ -326,6 +333,158 @@ jobs:
         env:
           RECOVERY: ${{ inputs.exercise_recovery }}
         run: test "$RECOVERY" = true
+  weekly-audit-plan:
+    needs: [plan, nightly-checks]
+    if: "!cancelled() && github.ref == 'refs/heads/main' && needs.plan.result == 'success' && !inputs.exercise_failure_path"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      selected: ${{ steps.audit.outputs.selected }}
+      source: ${{ steps.audit.outputs.source }}
+      producer_run: ${{ steps.audit.outputs.producer_run }}
+      attempt: ${{ steps.audit.outputs.attempt }}
+      artifact_id: ${{ steps.audit.outputs.artifact_id }}
+      artifact_digest: ${{ steps.audit.outputs.artifact_digest }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Select only a green same-source preview for weekly or explicit full audit
+        id: audit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE: ${{ github.sha }}
+          VALIDATION: ${{ inputs.validation || 'standard' }}
+        run: |
+          task_args=()
+          if [[ "$VALIDATION" == full ]]; then task_args+=(--full); fi
+          python3 tools/ci_preview_audit.py plan --source "$SOURCE" ${task_args[@]+"${task_args[@]}"}
+  weekly-external-audit:
+    needs: weekly-audit-plan
+    if: "!cancelled() && needs.weekly-audit-plan.outputs.selected == 'true'"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+    steps:
+      - name: Require successful exact-source preview qualification
+        env:
+          PLAN_RESULT: ${{ needs.weekly-audit-plan.result }}
+        run: test "$PLAN_RESULT" = success
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ needs.weekly-audit-plan.outputs.source }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - name: Restore only original green preview bytes and their recorded stamp
+        id: bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE: ${{ needs.weekly-audit-plan.outputs.source }}
+          PRODUCER_RUN: ${{ needs.weekly-audit-plan.outputs.producer_run }}
+          PRODUCER_ATTEMPT: ${{ needs.weekly-audit-plan.outputs.attempt }}
+          ARTIFACT_ID: ${{ needs.weekly-audit-plan.outputs.artifact_id }}
+          ARTIFACT_DIGEST: ${{ needs.weekly-audit-plan.outputs.artifact_digest }}
+        run: python tools/ci_preview_audit.py restore --source "$SOURCE" --producer-run "$PRODUCER_RUN" --attempt "$PRODUCER_ATTEMPT" --artifact-id "$ARTIFACT_ID" --artifact-digest "$ARTIFACT_DIGEST"
+      - uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
+        with:
+          daemon-config: '{"features":{"containerd-snapshotter":true}}'
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+        with:
+          driver: docker
+      - name: Authenticate read-only audit tool caches
+        env:
+          REGISTRY_TOKEN: ${{ github.token }}
+        run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Restore the preview build's exact verified SDK without compilation
+        id: sdk
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE: ${{ needs.weekly-audit-plan.outputs.source }}
+        run: |
+          python tools/ci_linux_sdk_reference.py restore --source "$SOURCE" --directory build/audit-sdk
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: build/acceptance-models
+          key: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
+      - name: Audit external CPU models using the original preview
+        id: cpu-audit
+        if: "!cancelled() && steps.bundle.outcome == 'success' && steps.sdk.outcome == 'success'"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SDK_IMAGE: ${{ steps.sdk.outputs.image }}
+          VERSION: ${{ steps.bundle.outputs.version }}
+        run: bash tools/linux_acceptance.sh cpu
+      - name: Audit virtual audio, meeting UI and software Vulkan independently
+        id: audio-audit
+        if: "!cancelled() && steps.bundle.outcome == 'success' && steps.sdk.outcome == 'success'"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SDK_IMAGE: ${{ steps.sdk.outputs.image }}
+          VERSION: ${{ steps.bundle.outputs.version }}
+        run: bash tools/linux_acceptance.sh audio
+      - name: Audit Ubuntu and Debian 13 lifecycle against those same bytes
+        id: deb-audit
+        if: "!cancelled() && steps.bundle.outcome == 'success' && steps.sdk.outcome == 'success'"
+        env:
+          VERSION: ${{ steps.bundle.outputs.version }}
+          ACCEPTANCE_FULL: 'true'
+        run: bash tools/linux_acceptance.sh deb
+      - name: Record completed weekly external audit
+        id: completed-audit
+        if: "!cancelled() && steps.cpu-audit.outcome == 'success' && steps.audio-audit.outcome == 'success' && steps.deb-audit.outcome == 'success'"
+        env:
+          SOURCE: ${{ needs.weekly-audit-plan.outputs.source }}
+          AUDIT_CPU: ${{ steps.cpu-audit.outcome }}
+          AUDIT_AUDIO: ${{ steps.audio-audit.outcome }}
+          AUDIT_DEB: ${{ steps.deb-audit.outcome }}
+        run: python tools/ci_preview_audit.py record --source "$SOURCE"
+      - name: Upload completed weekly external audit receipt
+        if: steps.completed-audit.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: weekly-external-audit-completion-${{ github.run_id }}-${{ github.run_attempt }}
+          overwrite: true
+          path: test-results/weekly-audit/completion.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Retain weekly external drift evidence separately from publication
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: weekly-external-audit-evidence
+          overwrite: true
+          path: |
+            test-results/
+            artifacts/source-qualification.json
+            artifacts/distribution-stamp.json
+          if-no-files-found: warn
+          retention-days: 30
+  weekly-audit-issue:
+    needs: weekly-external-audit
+    if: always() && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && needs.weekly-external-audit.result != 'skipped'
+    concurrency:
+      group: ci-preview-external-drift-issue
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Track the newest actual weekly audit independently of nightly success
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/ci_drift_issue.py preview-packages.yml
   nightly-checks:
     needs: [plan, build, linux, macos, publish, exercise]
     if: always() && (needs.plan.outputs.build == 'true' || needs.plan.result != 'success' || inputs.exercise_failure_path)

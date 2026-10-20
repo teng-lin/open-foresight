@@ -333,79 +333,94 @@ class BuildPolicyTests(unittest.TestCase):
             self.assertIn("refresh-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT", tag)
 
     def test_pr_consumers_can_use_unpublished_dependency_changes(self):
-        for name, job in (
-            ("integration-acceptance.yml", "ubuntu-package"),
-            ("integration-acceptance.yml", "ubuntu-application"),
-        ):
-            with self.subTest(workflow=name):
-                workflow = yaml.safe_load(
-                    (ROOT / ".github/workflows" / name).read_text()
-                )
-                steps = workflow["jobs"][job]["steps"]
-                resolve = next(step for step in steps if step.get("id") == "sdk")["run"]
-                self.assertIn('if [[ "$FORK_PR" == true ]]; then', resolve)
-                if job == "ubuntu-application":
-                    self.assertIn("tools/build_linux_sdk_local.sh", resolve)
-                else:
-                    self.assertNotIn("tools/build_linux_sdk_local.sh", resolve)
-                    self.assertIn(
-                        "tools.integration_application --component linux-sdk", resolve
-                    )
-                self.assertNotIn("--optional", resolve)
-                self.assertIn("--wait 1800", resolve)
-                self.assertIn("tools/linux_sdk_artifacts.py resolve", resolve)
-                sdk_step = next(step for step in steps if step.get("id") == "sdk")
-                self.assertIn(
-                    "head.repo.full_name != github.repository",
-                    sdk_step["env"]["FORK_PR"],
-                )
-                checkout = next(
-                    step
-                    for step in steps
-                    if "actions/checkout@" in step.get("uses", "")
+        workflow = yaml.safe_load((ROOT / ".github/workflows/macos.yml").read_text())
+        build = workflow["jobs"]["linux-build"]
+        steps = build["steps"]
+        sdk_step = next(step for step in steps if step.get("id") == "sdk")
+        self.assertIn('if [[ "$FORK_PR" == true ]]; then', sdk_step["run"])
+        self.assertIn("task_args+=(--fork)", sdk_step["run"])
+        self.assertIn("tools/ci_linux_shadow_sdk.py", sdk_step["run"])
+        self.assertIn('--source "$OWN_HEAD" --own-pr "$OWN_PR"', sdk_step["run"])
+        self.assertIn(
+            "head.repo.full_name != github.repository", sdk_step["env"]["FORK_PR"]
+        )
+        self.assertIn("github.event.pull_request.number", sdk_step["env"]["OWN_PR"])
+        checkout = next(
+            step for step in steps if "actions/checkout@" in step.get("uses", "")
+        )
+        self.assertEqual(
+            checkout["with"]["ref"],
+            "${{ inputs.source || github.event.pull_request.head.sha || github.sha }}",
+        )
+        daemon = next(
+            step
+            for step in steps
+            if "docker/setup-docker-action@" in step.get("uses", "")
+        )
+        self.assertTrue(
+            json.loads(daemon["with"]["daemon-config"])["features"][
+                "containerd-snapshotter"
+            ]
+        )
+        self.assertLess(steps.index(daemon), steps.index(sdk_step))
+        driver = next(
+            step
+            for step in steps
+            if "docker/setup-buildx-action@" in step.get("uses", "")
+        )
+        self.assertEqual(driver["with"]["driver"], "docker")
+        action = yaml.safe_load(
+            (ROOT / ".github/actions/setup-linux-consumer/action.yml").read_text()
+        )
+        restore = next(
+            step for step in action["runs"]["steps"] if step.get("id") == "sdk"
+        )
+        self.assertIn('--artifact-id "$ARTIFACT_ID"', restore["run"])
+        self.assertIn('--artifact-digest "$ARTIFACT_DIGEST"', restore["run"])
+        self.assertIn('--attempt "$PRODUCER_ATTEMPT"', restore["run"])
+        self.assertIn(
+            "tools/ci_artifacts.py pull --component linux-sdk", restore["run"]
+        )
+        self.assertIn(
+            '--run-id "$SDK_RUN" --artifact-id "$SDK_ID" --artifact-digest "$SDK_DIGEST"',
+            restore["run"],
+        )
+        self.assertIn("tools/linux_sdk_artifacts.py resolve", restore["run"])
+        self.assertIn("Build SDK reference is missing", restore["run"])
+        self.assertNotIn("ci_dependency_wait.py", restore["run"])
+        self.assertNotIn("--optional", restore["run"])
+        self.assertNotIn("build_linux_sdk_local.sh", json.dumps(action))
+        self.assertNotIn("--fork", json.dumps(action))
+        self.assertEqual(restore["env"]["ARTIFACT_ID"], "${{ inputs.sdk-id }}")
+        for suite in ("cpu", "audio", "deb"):
+            with self.subTest(suite=suite):
+                consumer = workflow["jobs"]["acceptance-" + suite]
+                inputs = next(
+                    step["with"]
+                    for step in consumer["steps"]
+                    if step.get("uses") == "./.github/actions/setup-linux-consumer"
                 )
                 self.assertEqual(
-                    checkout["with"]["ref"],
-                    "${{ github.event.pull_request.head.sha || github.sha }}",
+                    inputs["sdk-id"], "${{ needs.linux-build.outputs.sdk_id }}"
                 )
-                driver = next(
-                    step
-                    for step in steps
-                    if "docker/setup-buildx-action@" in step.get("uses", "")
+                self.assertEqual(
+                    inputs["sdk-digest"], "${{ needs.linux-build.outputs.sdk_digest }}"
                 )
-                self.assertEqual(driver["with"]["driver"], "docker")
-                daemon = next(
-                    step
-                    for step in steps
-                    if "docker/setup-docker-action@" in step.get("uses", "")
+                self.assertEqual(
+                    inputs["sdk-attempt"], "${{ needs.linux-build.outputs.attempt }}"
                 )
-                self.assertTrue(
-                    json.loads(daemon["with"]["daemon-config"])["features"][
-                        "containerd-snapshotter"
-                    ]
-                )
-                self.assertLess(steps.index(daemon), steps.index(sdk_step))
-                build = next(
-                    step
-                    for step in steps
-                    if "docker/build-push-action@" in step.get("uses", "")
-                )
-                if job == "ubuntu-application":
-                    self.assertIn(
-                        "steps.app-cache.outputs.cache", build["with"]["cache-from"]
-                    )
-                    self.assertIn(
-                        "steps.app-cache.outputs.legacy_cache",
-                        build["with"]["cache-from"],
-                    )
-                    self.assertNotIn(
-                        "steps.sdk.outputs.cache", build["with"]["cache-from"]
-                    )
-                else:
+                for field in ("run", "id", "digest"):
                     self.assertEqual(
-                        build["with"]["file"], "packaging/acceptance.Dockerfile"
+                        inputs["producer-sdk-" + field],
+                        "${{ needs.linux-build.outputs.producer_sdk_" + field + " }}",
                     )
-                    self.assertNotIn("packaging/build.Dockerfile", json.dumps(steps))
+                self.assertEqual(
+                    inputs["own-pr"], "${{ github.event.pull_request.number || 0 }}"
+                )
+                self.assertIn(
+                    "github.event.pull_request.head.repo.full_name",
+                    inputs["head-repository"],
+                )
 
     def test_dart_auth_and_model_revisions_are_pinned(self):
         auth = [

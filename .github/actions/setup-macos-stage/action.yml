@@ -1,9 +1,6 @@
-name: Set up the macOS application stage
-description: Resolve the pinned compiler SDK and language prerequisites independently
+name: Set up the macOS application
+description: Reuse the verified compiler SDK and pinned Flutter prerequisites
 inputs:
-  stage:
-    required: true
-    description: Native, core, desktop, service or packaging role
   own-pr:
     default: '0'
     description: Same-repository pull request allowed to supply dependency artifacts
@@ -22,12 +19,6 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Validate setup role
-      shell: bash
-      env:
-        STAGE: ${{ inputs.stage }}
-      run: |
-        case "$STAGE" in native|core|desktop|service|packaging) ;; *) exit 2 ;; esac
     - name: Verify Apple Silicon host
       shell: bash
       run: |
@@ -48,43 +39,25 @@ runs:
     - name: Install build tools
       shell: bash
       env:
-        STAGE: ${{ inputs.stage }}
         HOMEBREW_NO_AUTO_UPDATE: '1'
       run: |
-        case "$STAGE" in
-          native) brew install cmake ninja icu4c ;;
-          desktop|service) brew install cocoapods git-lfs icu4c ;;
-          core|packaging) brew install icu4c ;;
-        esac
+        brew install cmake ninja cocoapods git-lfs icu4c
     - name: Install locked Python development dependencies
       shell: bash
       run: |
         python -m venv .venv
         .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
-    - name: Select the language cache role
-      if: inputs.stage != 'native'
-      id: language-cache
-      shell: bash
-      env:
-        STAGE: ${{ inputs.stage }}
-      run: |
-        case "$STAGE" in desktop|service) kind=ui ;; *) kind=dart ;; esac
-        echo "kind=$kind" >> "$GITHUB_OUTPUT"
     - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
-      if: inputs.stage != 'native'
       id: flutter
       with:
         path: ${{ runner.temp }}/flutter
-        key: flutter-macos-arm64-3.35.7-${{ steps.language-cache.outputs.kind }}-v2
+        key: flutter-macos-arm64-3.35.7-ui-v2
         restore-keys: |
-          flutter-macos-arm64-3.35.7-${{ steps.language-cache.outputs.kind }}-
+          flutter-macos-arm64-3.35.7-ui-
           flutter-macos-arm64-3.35.7-v1
           flutter-macos-arm64-3.35.7-
     - name: Verify the pinned macOS Flutter SDK
-      if: inputs.stage != 'native'
       shell: bash
-      env:
-        STAGE: ${{ inputs.stage }}
       run: |
         if [[ ! -x "$RUNNER_TEMP/flutter/bin/flutter" ]]; then
           git clone --depth 1 --branch 3.35.7 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
@@ -92,46 +65,26 @@ runs:
         test "$(git -C "$RUNNER_TEMP/flutter" rev-parse HEAD)" = adc901062556672b4138e18a4dc62a4be8f4b3c2
         echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
         echo "FORESIGHT_FLUTTER_EXECUTABLE=$RUNNER_TEMP/flutter/bin/flutter" >> "$GITHUB_ENV"
-        if [[ "$STAGE" == desktop || "$STAGE" == service ]]; then
-          "$RUNNER_TEMP/flutter/bin/flutter" config --enable-macos-desktop --enable-swift-package-manager --no-analytics
-        fi
+        "$RUNNER_TEMP/flutter/bin/flutter" config --enable-macos-desktop --enable-swift-package-manager --no-analytics
         "$RUNNER_TEMP/flutter/bin/dart" --version
     - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
-      if: inputs.stage != 'native'
       id: pub
       with:
         path: ~/.pub-cache
-        key: pub-macos-${{ steps.language-cache.outputs.kind }}-v2-${{ (inputs.stage == 'desktop' || inputs.stage == 'service') && hashFiles('packages/foresight_core/pubspec.lock', 'apps/desktop/pubspec.lock') || hashFiles('packages/foresight_core/pubspec.lock') }}
+        key: pub-macos-ui-v2-${{ hashFiles('packages/foresight_core/pubspec.lock', 'apps/desktop/pubspec.lock') }}
         restore-keys: |
-          pub-macos-${{ steps.language-cache.outputs.kind }}-v2-
+          pub-macos-ui-v2-
           pub-macos-${{ hashFiles('**/pubspec.lock') }}
           pub-macos-
     - name: Warm the pinned desktop engine cache
-      if: inputs.stage == 'desktop' || inputs.stage == 'service'
       shell: bash
       run: flutter precache --macos
     - name: Resolve locked language prerequisites
-      if: inputs.stage != 'native'
       shell: bash
-      env:
-        STAGE: ${{ inputs.stage }}
       run: |
         (cd packages/foresight_core && dart pub get --enforce-lockfile)
-        if [[ "$STAGE" == desktop || "$STAGE" == service ]]; then
-          (cd apps/desktop && flutter pub get --enforce-lockfile)
-        fi
-    - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
-      if: inputs.stage != 'native' && steps.flutter.outputs.cache-hit != 'true'
-      with:
-        path: ${{ runner.temp }}/flutter
-        key: flutter-macos-arm64-3.35.7-${{ steps.language-cache.outputs.kind }}-v2
-    - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
-      if: inputs.stage != 'native' && steps.pub.outputs.cache-hit != 'true'
-      with:
-        path: ~/.pub-cache
-        key: pub-macos-${{ steps.language-cache.outputs.kind }}-v2-${{ (inputs.stage == 'desktop' || inputs.stage == 'service') && hashFiles('packages/foresight_core/pubspec.lock', 'apps/desktop/pubspec.lock') || hashFiles('packages/foresight_core/pubspec.lock') }}
+        (cd apps/desktop && flutter pub get --enforce-lockfile)
     - name: Fetch the qualified compiler SDK with explicit fork validation
-      if: inputs.stage == 'native'
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
@@ -144,12 +97,3 @@ runs:
         python tools/ci_macos_dependencies.py --component macos-sdk --prefix build/sdk --own-head "$OWN_HEAD" --own-pr "$OWN_PR" "${args[@]}"
         python tools/ci_verify_dependency.py --component macos-sdk --prefix build/sdk
         echo "$GITHUB_WORKSPACE/build/sdk/bin" >> "$GITHUB_PATH"
-    - name: Record the compiler, runtime, package and SDK identity
-      if: inputs.stage != 'packaging'
-      shell: bash
-      env:
-        STAGE: ${{ inputs.stage }}
-      run: |
-        args=()
-        if [[ "$STAGE" == native ]]; then args+=(--sdk-prefix build/sdk); fi
-        .venv/bin/python tools/ci_stage_environment.py --platform macos --stage "$STAGE" "${args[@]}" --output build/stage-environment.json

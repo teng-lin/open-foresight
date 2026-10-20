@@ -100,7 +100,7 @@ def test_linux_setup_records_packages_and_keeps_flutter_pin():
     assert "github-cli" in commands
 
 
-@pytest.mark.parametrize("platform", ["linux", "macos"])
+@pytest.mark.parametrize("platform", ["linux"])
 def test_native_work_receipt_is_uploaded_separately_from_full_payload(platform):
     job = workflow(f"{platform}-platform-stages.yml")["jobs"][f"native-{platform}"]
     uploads = [
@@ -125,59 +125,77 @@ def test_native_work_receipt_is_uploaded_separately_from_full_payload(platform):
     assert receipt["with"]["overwrite"] is True
 
 
-def test_ubuntu_package_and_acceptance_use_one_exact_application_build():
-    jobs = workflow("integration-acceptance.yml")["jobs"]
-    assert jobs["acceptance-checks"]["if"] == "always()"
-    assert jobs["acceptance-checks"]["needs"] == ["changes", "ubuntu-package"]
-    aggregate = jobs["acceptance-checks"]["steps"][0]
-    assert aggregate["env"]["LINUX_RESULT"] == "${{ needs.ubuntu-package.result }}"
-    assert 'test "$LINUX_RESULT" = success' in aggregate["run"]
-    assert 'test "$LINUX_RESULT" = skipped' in aggregate["run"]
-    job = jobs["ubuntu-package"]
-    producer = jobs["ubuntu-application"]
-    assert job["needs"] == ["changes", "ubuntu-application"]
-    assert "!cancelled()" in job["if"]
-    assert "needs.ubuntu-application.result == 'success'" in job["if"]
-    assert "github.event_name == 'pull_request'" in producer["if"]
-    assert not any(
-        step.get("with", {}).get("file") == "packaging/build.Dockerfile"
-        for step in job["steps"]
-    )
-    assert any(
-        "tools.integration_application" in step.get("run", "") for step in job["steps"]
-    )
+def test_ubuntu_package_and_acceptance_share_the_original_verified_application():
+    jobs = workflow("macos.yml")["jobs"]
+    producer = jobs["linux-build"]
     builds = [
-        step
+        step["run"]
         for step in producer["steps"]
-        if step.get("with", {}).get("file") == "packaging/build.Dockerfile"
+        if "tools/build_linux_container.sh" in step.get("run", "")
     ]
     assert len(builds) == 1
-    assert builds[0]["with"]["target"] == "builder"
-    assert builds[0]["if"] == "github.event_name == 'pull_request'"
-    assert builds[0]["with"]["load"] is True
+    assert "--build-only" in builds[0]
+    assert "--test-only" not in builds[0]
+    assert producer["outputs"]["bundle_id"] == "${{ steps.bundle.outputs.artifact-id }}"
+    test = jobs["linux-test"]
+    assert test["needs"] == "linux-build"
+    test_commands = "\n".join(step.get("run", "") for step in test["steps"])
+    assert "tools/ci_linux_handoff.py qualify" in test_commands
+    assert "tools/build_linux_container.sh --test-only" in test_commands
+    assert "--build-only" not in test_commands
+    consumer_action = yaml.safe_load(
+        (ROOT / ".github/actions/setup-linux-consumer/action.yml").read_text()
+    )
+    consumer_commands = "\n".join(
+        step.get("run", "") for step in consumer_action["runs"]["steps"]
+    )
+    assert "tools.integration_application" in consumer_commands
     assert (
-        "SOURCE_REVISION=${{ github.event.pull_request.head.sha || github.sha }}"
-        in builds[0]["with"]["build-args"]
+        '--artifact-id "$ARTIFACT_ID" --artifact-digest "$ARTIFACT_DIGEST"'
+        in consumer_commands
     )
-    commands = "\n".join(
-        step.get("run", "") for step in producer["steps"] + job["steps"]
-    )
-    assert "docker create foresight-built-application:local /bin/true" in commands
-    assert (
-        'docker cp "$task_container:/src/dist/open-foresight" build/portable/dist/'
-        in commands
-    )
-    package_step = next(
-        step
-        for step in job["steps"]
-        if "package-and-test.sh deb" in step.get("run", "")
-    )
-    assert "--security-opt seccomp=unconfined" in package_step["run"]
-    assert "--security-opt systempaths=unconfined" in package_step["run"]
-    assert (
-        "--security-opt apparmor=foresight-ci-document-sandbox" in package_step["run"]
-    )
-    assert "--suite models" in commands and "--suite virtual-audio" in commands
+    assert '--attempt "$PRODUCER_ATTEMPT"' in consumer_commands
+    assert "ci_linux_acceptance.py" in consumer_commands
+    for phase in ("cpu", "audio", "deb"):
+        job = jobs["acceptance-" + phase]
+        assert job["needs"] == ["changes", "linux-build", "linux-bundle"]
+        assert "!cancelled()" in job["if"]
+        assert "needs.linux-build.result == 'success'" in job["if"]
+        assert '"success","skipped"' in job["if"]
+        setup = next(
+            step
+            for step in job["steps"]
+            if step.get("uses") == "./.github/actions/setup-linux-consumer"
+        )
+        for key, output in (
+            ("artifact-id", "candidate_id"),
+            ("artifact-digest", "candidate_digest"),
+            ("attempt", "attempt"),
+        ):
+            expression = setup["with"][key]
+            assert "github.ref == 'refs/heads/main' && !inputs.preview" in expression
+            assert "needs.linux-bundle.outputs." + output in expression
+            assert "needs.linux-build.outputs." in expression
+        assert (
+            setup["with"]["legacy-main"]
+            == "${{ github.ref == 'refs/heads/main' && !inputs.preview && inputs.tier != 'release' }}"
+        )
+        commands = "\n".join(step.get("run", "") for step in job["steps"])
+        assert "bash tools/linux_acceptance.sh " + phase in commands
+        assert "build_linux_container.sh" not in commands
+        assert not any(
+            step.get("with", {}).get("file") == "packaging/build.Dockerfile"
+            for step in job["steps"]
+        )
+    assert jobs["acceptance-checks"]["if"] == "always()"
+    assert set(jobs["acceptance-checks"]["needs"]) == {
+        "changes",
+        "linux-build",
+        "linux-bundle",
+        "acceptance-cpu",
+        "acceptance-audio",
+        "acceptance-deb",
+    }
     assert "--max-glibc 2.39" in (ROOT / "packaging/build.Dockerfile").read_text()
     assert "pull_request" not in workflow("linux-packages.yml")["on"]
     assert "workflow_call" in workflow("linux-packages.yml")["on"]
@@ -199,19 +217,65 @@ def test_ubuntu_package_and_acceptance_use_one_exact_application_build():
 def test_acceptance_aggregate_rejects_every_incomplete_selected_job(
     changes, selected, package, success
 ):
-    job = workflow("integration-acceptance.yml")["jobs"]["acceptance-checks"]
+    job = workflow("macos.yml")["jobs"]["acceptance-checks"]
+    step = next(step for step in job["steps"] if "--check-gates" in step.get("run", ""))
+    assert step["env"]["NEEDS"] == "${{ toJSON(needs) }}"
+    assert step["env"]["SELECTED"] == "${{ needs.changes.outputs.linux_build }}"
+    needs = {"changes": {"result": changes}, "linux-bundle": {"result": "skipped"}}
+    needs.update(
+        {
+            name: {"result": package}
+            for name in (
+                "linux-build",
+                "acceptance-cpu",
+                "acceptance-audio",
+                "acceptance-deb",
+            )
+        }
+    )
     result = subprocess.run(
-        ["bash", "-e", "-c", job["steps"][0]["run"]],
-        env={
-            **os.environ,
-            "CHANGES_RESULT": changes,
-            "SELECTED": selected,
-            "LINUX_RESULT": package,
-        },
+        ["bash", "-e", "-c", step["run"]],
+        cwd=ROOT,
+        env={**os.environ, "SELECTED": selected, "NEEDS": json.dumps(needs)},
+        capture_output=True,
+        text=True,
         check=False,
         timeout=30,
     )
-    assert (result.returncode == 0) == success
+    assert (result.returncode == 0) == success, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    "gate",
+    [
+        "linux-build",
+        "acceptance-cpu",
+        "acceptance-audio",
+        "acceptance-deb",
+        "linux-bundle",
+    ],
+)
+@pytest.mark.parametrize("result", ["failure", "cancelled", "skipped"])
+def test_actual_acceptance_aggregate_requires_each_selected_consumer(gate, result):
+    job = workflow("macos.yml")["jobs"]["acceptance-checks"]
+    command = next(
+        step["run"] for step in job["steps"] if "--check-gates" in step.get("run", "")
+    )
+    needs = {name: {"result": "success"} for name in job["needs"]}
+    needs[gate]["result"] = result
+    process = subprocess.run(
+        ["bash", "-e", "-c", command],
+        cwd=ROOT,
+        env={**os.environ, "SELECTED": "true", "NEEDS": json.dumps(needs)},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    # PR/preview consumers have no transitional main bundle. Every selected
+    # independent consumer must succeed; only that alternative may be skipped.
+    assert (process.returncode == 0) == (
+        gate == "linux-bundle" and result == "skipped"
+    ), process.stdout + process.stderr
 
 
 @pytest.mark.parametrize(
@@ -255,31 +319,7 @@ def test_complete_stage_inputs_and_parent_identities_invalidate_expected_stages(
     assert {stage for stage in STAGES if before[stage] != after[stage]} == expected
 
 
-@pytest.mark.parametrize("failed", ["native", "core", "desktop", "service"])
-def test_failed_macos_stage_cannot_be_hidden_by_successful_packaging(failed):
-    from tools.ci_changes import check_gates, select_gates
-
-    jobs = workflow("macos.yml")["jobs"]
-    assert "needs.macos-stages.result == 'success'" in jobs["macos"]["if"]
-    assert "macos-stages" in jobs["platform-checks"]["needs"]
-    reusable = workflow("macos-platform-stages.yml")["jobs"]
-    assert f"{failed}-macos" in reusable
-    selected = select_gates(["apps/desktop/macos/source.swift"])
-    # A failed reusable child makes its caller fail even when installer artifacts
-    # from other children exist and packaging could otherwise finish successfully.
-    results = {
-        "changes": {"result": "success"},
-        **{
-            name: {"result": "success" if value else "skipped"}
-            for name, value in selected.items()
-        },
-        "macos-stages": {"result": "failure"},
-    }
-    with pytest.raises(ValueError, match="macos-stages"):
-        check_gates(results, selected, False)
-
-
-@pytest.mark.parametrize("platform", ["linux", "macos"])
+@pytest.mark.parametrize("platform", ["linux"])
 def test_stage_artifact_uploads_allow_reruns_and_do_not_recompress_gzip(platform):
     jobs = workflow(f"{platform}-platform-stages.yml")["jobs"]
     for job in jobs.values():
@@ -335,7 +375,7 @@ def test_container_git_access_is_configured_for_foreign_owned_checkout(tmp_path)
     assert "*" not in (tmp_path / "gitconfig").read_text()
 
 
-@pytest.mark.parametrize("platform", ["linux", "macos"])
+@pytest.mark.parametrize("platform", ["linux"])
 def test_language_jobs_download_only_slim_native_runtime_and_service_omits_unused_release_bundle(
     platform,
 ):
@@ -371,7 +411,7 @@ def test_language_jobs_download_only_slim_native_runtime_and_service_omits_unuse
 @pytest.mark.parametrize(
     "name",
     [
-        "integration-acceptance.yml",
+        "macos.yml",
         "linux-packages.yml",
         "preview-packages.yml",
         "release-acceptance.yml",
@@ -386,6 +426,19 @@ def test_disposable_installed_document_containers_can_initialize_isolated_loopba
         for step in job.get("steps", [])
         if "--security-opt seccomp=unconfined" in step.get("run", "")
     ]
+    if name == "macos.yml":
+        # The workflow invokes the shared consumer command rather than embedding
+        # another installer implementation. Inspect the actual helper it runs.
+        for phase in ("cpu", "audio", "deb"):
+            assert any(
+                "bash tools/linux_acceptance.sh " + phase in step.get("run", "")
+                for step in workflow(name)["jobs"]["acceptance-" + phase]["steps"]
+            )
+        commands.extend(
+            line
+            for line in (ROOT / "tools/linux_acceptance.sh").read_text().splitlines()
+            if "--security-opt seccomp=unconfined" in line
+        )
     assert commands
     for command in commands:
         assert "--cap-add NET_ADMIN" in command
@@ -414,14 +467,17 @@ def test_hosted_relocated_macos_smoke_checks_the_actual_checkout_revision():
 
 
 def test_optional_litert_gpu_policy_is_confined_to_ci_emulator_acceptance():
-    jobs = workflow("integration-acceptance.yml")["jobs"]
-    step = next(
-        step
-        for step in jobs["ubuntu-package"]["steps"]
-        if step.get("name") == "Shipped GPU runtimes on software Vulkan"
+    job = workflow("macos.yml")["jobs"]["acceptance-audio"]
+    assert any(
+        step.get("run") == "bash tools/linux_acceptance.sh audio"
+        for step in job["steps"]
     )
-    assert "--allow-litert-unavailable" in step["run"]
-    assert "--allow-unavailable" not in step["run"]
+    command = (ROOT / "tools/linux_acceptance.sh").read_text()
+    assert "tools/accept_software_gpu.py" in command
+    assert "--allow-litert-unavailable" in command
+    assert "--allow-unavailable" not in command
+    assert "--suite virtual-audio" in command
+    assert "|| task_status=$?" in command
     for name in ("release.yml", "release-acceptance.yml"):
         assert (
             "--allow-litert-unavailable"
@@ -440,6 +496,8 @@ def test_optional_litert_gpu_policy_is_confined_to_ci_emulator_acceptance():
         ("push", "1" * 40, "docs/unshipped.md", True),
         ("push", "HEAD~1", "docs/unshipped.md", True),
         ("push", "unrelated", "docs/unshipped.md", True),
+        ("push", "tree", "docs/unshipped.md", True),
+        ("pull_request", "advanced-main", "docs/unshipped.md", False),
         ("workflow_dispatch", "valid", "docs/unshipped.md", True),
         ("schedule", "valid", "docs/unshipped.md", True),
         ("pull_request", "valid", "docs/unshipped.md", False),
@@ -468,6 +526,14 @@ def test_actual_acceptance_selection_uses_main_push_range_and_fails_safe(
     if before == "unrelated":
         tree = git("rev-parse", "HEAD^{tree}")
         before = git("commit-tree", tree, "-m", "unrelated history")
+    elif before == "tree":
+        before = git("rev-parse", "HEAD^{tree}")
+    elif before == "advanced-main":
+        (repository / "main-only-native.cpp").write_text("unrelated main source")
+        git("add", ".")
+        git("commit", "-qm", "main advances independently")
+        before = git("rev-parse", "HEAD")
+        git("checkout", "-qb", "fixture-pr", base)
     elif before == "valid":
         before = base
     path = repository / changed
@@ -477,45 +543,94 @@ def test_actual_acceptance_selection_uses_main_push_range_and_fails_safe(
     git("commit", "-qm", "current")
     command = next(
         step["run"]
-        for step in workflow("integration-acceptance.yml")["jobs"]["changes"]["steps"]
-        if step.get("id") == "select"
+        for step in workflow("macos.yml")["jobs"]["changes"]["steps"]
+        if step.get("id") == "changes"
     )
     output = tmp_path / "output"
-    subprocess.run(
+    result = subprocess.run(
         ["bash", "-e", "-c", command],
         cwd=repository,
         env={
             **os.environ,
             "BASE": before,
+            "PUSH_BASE": before if event == "push" else "",
             "EVENT": event,
+            "PLATFORMS": "all",
+            "FORCE": "--force" if event in ("schedule", "workflow_dispatch") else "",
             "GITHUB_OUTPUT": str(output),
         },
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
         timeout=30,
     )
+    assert result.returncode == 0, result.stdout + result.stderr
     values = dict(line.split("=", 1) for line in output.read_text().splitlines())
     assert values["linux_bundle"] == str(selected).lower()
 
 
+def test_package_and_acceptance_share_the_exact_inrun_build_without_compiling_again():
+    jobs = workflow("macos.yml")["jobs"]
+    for name in ("acceptance-cpu", "acceptance-audio", "acceptance-deb"):
+        job = jobs[name]
+        assert job["needs"] == ["changes", "linux-build", "linux-bundle"]
+        assert "!cancelled()" in job["if"]
+        assert "needs.linux-build.result == 'success'" in job["if"]
+        setup = next(
+            step
+            for step in job["steps"]
+            if step.get("uses") == "./.github/actions/setup-linux-consumer"
+        )
+        assert "needs.linux-build.outputs.bundle_id" in setup["with"]["artifact-id"]
+        assert "needs.linux-bundle.outputs.candidate_id" in setup["with"]["artifact-id"]
+        assert not any(
+            step.get("with", {}).get("file") == "packaging/build.Dockerfile"
+            for step in job["steps"]
+        )
+    assert (
+        jobs["packaging"]["with"]["bundle_id"]
+        == "${{ needs.linux-build.outputs.bundle_id }}"
+    )
+    assert "--max-glibc 2.39" in (ROOT / "packaging/build.Dockerfile").read_text()
+    assert "pull_request" not in workflow("linux-packages.yml")["on"]
+
+
+@pytest.mark.parametrize("result", ["failure", "cancelled", "skipped"])
+def test_failed_consolidated_macos_cannot_be_hidden_by_successful_packaging(result):
+    from tools.ci_changes import check_gates, select_gates
+
+    jobs = workflow("macos.yml")["jobs"]
+    assert "macos" in jobs["platform-checks"]["needs"]
+    selected = select_gates(["apps/desktop/macos/source.swift"])
+    results = {
+        "changes": {"result": "success"},
+        **{
+            name: {"result": "success" if needed else "skipped"}
+            for name, needed in selected.items()
+        },
+    }
+    results["macos"] = {"result": result}
+    with pytest.raises(ValueError, match="macos: expected success"):
+        check_gates(results, selected, False)
+
+
 def test_debian_compatibility_remains_independent_of_buildkit_fixture_failure():
-    steps = workflow("integration-acceptance.yml")["jobs"]["ubuntu-package"]["steps"]
-    fixture = next(
-        step
-        for step in steps
-        if "pytest tests/test_acceptance_image_cache.py" in step.get("run", "")
+    jobs = workflow("macos.yml")["jobs"]
+    assert any(
+        "pytest tests/test_acceptance_image_cache.py" in step.get("run", "")
+        for step in jobs["linux-test"]["steps"]
     )
-    debian = next(
-        step
-        for step in steps
-        if step.get("name") == "Test Debian 13 with the same Ubuntu-built DEB"
+    debian = jobs["acceptance-deb"]
+    assert "linux-test" not in debian["needs"]
+    assert "needs.linux-build.result == 'success'" in debian["if"]
+    assert any(
+        step.get("run") == "bash tools/linux_acceptance.sh deb"
+        for step in debian["steps"]
     )
-    assert steps.index(fixture) < steps.index(debian)
-    assert debian["if"] == "${{ !cancelled() }}"
-    assert fixture.get("continue-on-error", False) is False
-    assert "--security-opt apparmor=foresight-ci-document-sandbox" in debian["run"]
-    assert "dist/packages:/packages:ro" in debian["run"]
+    shared = (ROOT / "tools/linux_acceptance.sh").read_text()
+    assert "--security-opt apparmor=foresight-ci-document-sandbox" in shared
+    assert "dist/packages:/packages:ro" in shared
+    assert "debian:13@sha256:" in shared
 
 
 @pytest.mark.parametrize(

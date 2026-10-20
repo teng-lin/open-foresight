@@ -152,13 +152,22 @@ def require_publication(report, tag):
         )
 
 
-def require_coordinator(results, ref, publish_only):
+def require_coordinator(results, ref, publish_only, *, reuse=False):
     if ref != "refs/heads/main":
         raise ValueError("Publication requires reviewed main")
     expected = "skipped" if publish_only else "success"
-    if results.get("acceptance", {}).get("result") != "success" or any(
-        results.get(job, {}).get("result") != expected
-        for job in ("prepare", "linux", "macos")
+    candidate = "skipped" if (publish_only or reuse) else "success"
+    receipt = "skipped" if publish_only else "success"
+    if (
+        results.get("preflight", {}).get("result") != "success"
+        or results.get("candidates", {}).get("result") != candidate
+        or results.get("candidate-receipt", {}).get("result") != receipt
+        or (publish_only and not reuse)
+        or results.get("acceptance", {}).get("result") != "success"
+        or any(
+            results.get(job, {}).get("result") != expected
+            for job in ("prepare", "linux", "macos")
+        )
     ):
         raise ValueError("Release remains unpublished: " + str(results))
 

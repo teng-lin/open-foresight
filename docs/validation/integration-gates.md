@@ -37,16 +37,19 @@ or physical microphone.
 
 ## Model and virtual-audio acceptance
 
-`integration-acceptance.yml` runs on relevant main changes, on pull requests
-that change `apps/desktop/**`, `packages/foresight_core/**` (including
-`answer_contract.dart`, `store.dart`, and `application.dart`), `packaging/**`,
-or the existing model/runtime paths, on manual dispatch, and on a weekly
-schedule. It reuses the verified,
-immutable Linux SDK descriptor and application build cache. It builds the same
-application bundle with an extra disposable runner stage; it receives no Google
-account or distribution secrets. Public model fixtures reuse the checksum-pinned
-Gemma E2B, EmbeddingGemma and Whisper definitions already used by installer
-acceptance, with a model cache saved independently of test success.
+In the held consolidated successor, relevant PR, main and nightly selections run
+`acceptance-cpu`, `acceptance-audio` and `acceptance-deb` in `macos.yml` after the
+successful in-run application producer. They consume its exact qualified bytes
+without rebuilding an application. Main uses the per-merge candidate until WS5b;
+nightly uses its labelled preview. Weekly drift consumes a green same-source
+preview, without a new application build. The former
+`integration-acceptance.yml` workflow is removed. This graph remains local until
+the plan's hosted shadow gates pass. Acceptance receives no distribution secrets.
+Public model fixtures retain the checksum-pinned Gemma E2B, EmbeddingGemma and
+Whisper definitions already used by installer acceptance. The dedicated main
+`publish-caches` job owns the Linux acceptance-tools registry cache and
+`integration-models-v1`; the existing preview and release acceptance model-cache
+writers retain their separately guarded contracts.
 
 Runtime containers have no network, additional capabilities, host session
 sockets or sound-device mounts. Virtual audio refuses to run if `/dev/snd` is

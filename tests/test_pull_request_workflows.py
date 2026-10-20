@@ -358,86 +358,94 @@ jobs:
         self.assertEqual(recovery["permissions"]["actions"], "read")
 
     def test_main_acceptance_uses_the_selected_product_source(self):
-        steps = self.workflow("integration-acceptance.yml")["jobs"]["ubuntu-package"][
+        jobs = self.workflow("macos.yml")["jobs"]
+        for name in ("acceptance-cpu", "acceptance-audio", "acceptance-deb"):
+            job = jobs[name]
+            checkout = next(
+                step
+                for step in job["steps"]
+                if step.get("uses", "").startswith("actions/checkout@")
+            )
+            consumer = next(
+                step for step in job["steps"] if step.get("id") == "consumer"
+            )
+            self.assertEqual(checkout["with"]["ref"], consumer["with"]["source"])
+            self.assertIn(
+                "needs.linux-build.outputs.bundle_id", consumer["with"]["artifact-id"]
+            )
+            self.assertIn(
+                "needs.linux-bundle.outputs.candidate_id",
+                consumer["with"]["artifact-id"],
+            )
+            self.assertIn("!inputs.preview", consumer["with"]["legacy-main"])
+            for key in ("producer-sdk-run", "producer-sdk-id", "producer-sdk-digest"):
+                self.assertIn("needs.linux-build.outputs", consumer["with"][key])
+        action = self.workflow("../actions/setup-linux-consumer/action.yml")["runs"][
             "steps"
         ]
-        candidate = next(step for step in steps if step.get("id") == "candidate")
-        self.assertIn('--run-id "$PRODUCER_RUN"', candidate["run"])
-        checkout = next(
-            step for step in steps if step.get("with", {}).get("path") == "product"
-        )
-        self.assertEqual(
-            checkout["with"]["ref"], "${{ steps.candidate.outputs.source }}"
-        )
-        tools = next(step for step in steps if step.get("id") == "acceptance-image")
-        self.assertIn("'product'", tools["with"]["context"])
-        producer = self.workflow("integration-acceptance.yml")["jobs"][
-            "ubuntu-application"
-        ]
-        seed = next(
-            step
-            for step in producer["steps"]
-            if "tools/ci_app_dependency_seed.py" in step.get("run", "")
-        )
-        self.assertEqual(seed["if"], "github.event_name == 'pull_request'")
-        sdk = next(step for step in producer["steps"] if step.get("id") == "sdk")
-        # Dependency inspection needs the image in this fresh job's daemon;
-        # resolving a registry descriptor alone does not pull its layers.
-        self.assertIn(
-            "linux_sdk_artifacts.py resolve --prefix build/sdk-descriptor --load --discard-archive",
-            sdk["run"],
-        )
-        self.assertLess(producer["steps"].index(sdk), producer["steps"].index(seed))
+        sdk = next(step for step in action if step.get("id") == "sdk")
+        self.assertIn('--run-id "$SDK_RUN"', sdk["run"])
+        self.assertIn('--artifact-id "$SDK_ID"', sdk["run"])
+        self.assertIn('--artifact-digest "$SDK_DIGEST"', sdk["run"])
+        self.assertIn("--load --discard-archive", sdk["run"])
 
     def test_candidate_receipts_replace_their_matching_payload_on_rerun(self):
         jobs = self.workflow("macos.yml")["jobs"]
-        for component, job in (("macos", "macos"), ("linux", "linux-bundle")):
-            uploads = [
-                step["with"]
-                for step in jobs[job]["steps"]
-                if "actions/upload-artifact@" in step.get("uses", "")
-            ]
-            for prefix in ("ci-", "receipt-ci-"):
-                upload = next(
-                    item
-                    for item in uploads
-                    if item["name"].startswith(prefix + component + "-app-")
-                )
-                self.assertIs(upload["overwrite"], True)
+        for name, component in (("macos", "macos"), ("linux-build", "linux")):
+            steps = jobs[name]["steps"]
+            payload = next(
+                step
+                for step in steps
+                if step.get("id")
+                == ("macos-candidate" if name == "macos" else "bundle")
+            )
+            sidecar = next(
+                step
+                for step in steps
+                if step.get("with", {})
+                .get("name", "")
+                .startswith("receipt-ci-" + component + "-app-")
+            )
+            self.assertIn("ci-" + component + "-app", payload["with"]["name"])
+            self.assertIs(payload["with"]["overwrite"], True)
+            self.assertIs(sidecar["with"]["overwrite"], True)
+            self.assertIn("inputs.tier == 'release'", sidecar["if"])
 
     def test_ubuntu_package_job_shares_the_acceptance_build(self):
-        workflow = self.workflow("integration-acceptance.yml")
-        self.assertIn("pull_request", workflow["on"])
-        self.assertNotIn("pull_request", self.workflow("linux-packages.yml")["on"])
-        job = workflow["jobs"]["ubuntu-package"]
-        self.assertEqual(job["runs-on"], "ubuntu-24.04")
-        self.assertEqual(job["needs"], ["changes", "ubuntu-application"])
-        producer = workflow["jobs"]["ubuntu-application"]
+        jobs = self.workflow("macos.yml")["jobs"]
+        producer = jobs["linux-build"]
         builds = [
             step
             for step in producer["steps"]
-            if "packaging/build.Dockerfile" in json.dumps(step)
+            if "build_linux_container.sh --build-only" in step.get("run", "")
         ]
         self.assertEqual(len(builds), 1)
-        self.assertEqual(builds[0]["with"]["target"], "builder")
-        self.assertEqual(builds[0]["if"], "github.event_name == 'pull_request'")
-        blob = json.dumps(producer) + json.dumps(job)
-        self.assertIn("docker cp", blob)
-        self.assertIn("/src/dist/open-foresight", blob)
-        self.assertIn("packaging/ci/package-and-test.sh deb", blob)
-        self.assertIn("ubuntu:24.04@sha256:", blob)
-        for step in job["steps"]:
-            self.assertIsNot(step.get("continue-on-error"), True)
+        self.assertNotIn("pull_request", self.workflow("linux-packages.yml")["on"])
+        for phase in ("cpu", "audio", "deb"):
+            consumer = jobs["acceptance-" + phase]
+            self.assertIn("linux-build", consumer["needs"])
+            self.assertIn("needs.linux-build.result == 'success'", consumer["if"])
+            self.assertTrue(
+                any(
+                    step.get("run") == "bash tools/linux_acceptance.sh " + phase
+                    for step in consumer["steps"]
+                )
+            )
+            self.assertFalse(
+                any(
+                    step.get("with", {}).get("file") == "packaging/build.Dockerfile"
+                    for step in consumer["steps"]
+                )
+            )
+            self.assertFalse(
+                any(step.get("continue-on-error") is True for step in consumer["steps"])
+            )
 
     def test_acceptance_paths_include_product_sources_and_meeting_workflow(self):
-        workflow = self.workflow("integration-acceptance.yml")
+        workflow = self.workflow("macos.yml")
         self.assertNotIn("paths", workflow["on"].get("pull_request") or {})
         from tools.ci_changes import select_gates
 
-        self.assertEqual(
-            workflow["jobs"]["ubuntu-package"]["needs"],
-            ["changes", "ubuntu-application"],
-        )
         self.assertEqual(workflow["jobs"]["acceptance-checks"]["if"], "always()")
         for path in (
             "apps/desktop/lib/main.dart",
@@ -445,14 +453,10 @@ jobs:
             "packaging/build.Dockerfile",
             "native/foresight_native.cpp",
         ):
-            self.assertTrue(select_gates([path])["linux-bundle"])
-        self.assertFalse(select_gates(["docs/README.md"])["linux-bundle"])
-        runs = [
-            step.get("run")
-            for step in workflow["jobs"]["ubuntu-package"]["steps"]
-            if isinstance(step.get("run"), str)
-        ]
-        combined = "\n".join(runs)
+            self.assertTrue(select_gates([path])["linux-build"])
+            self.assertTrue(select_gates([path])["linux-test"])
+        self.assertFalse(select_gates(["docs/README.md"])["linux-build"])
+        combined = (ROOT / "tools/linux_acceptance.sh").read_text()
         self.assertNotIn("tools/test_meeting_workflow.py", combined)
         self.assertIn("--suite virtual-audio", combined)
         self.assertIn("--suite models", combined)
@@ -481,7 +485,7 @@ jobs:
     def test_platform_selection_is_wired_per_job_and_enforced_by_aggregate(self):
         workflow = self.workflow("macos.yml")
         jobs = workflow["jobs"]
-        for name in ("macos", "linux-native", "linux-document-imports", "linux-bundle"):
+        for name in ("macos", "linux-build", "linux-document-imports", "linux-bundle"):
             output = name.replace("-", "_")
             self.assertEqual(
                 jobs["changes"]["outputs"][output],
@@ -567,7 +571,6 @@ jobs:
     def test_linux_sdk_consumers_forward_their_own_pull_request_context(self):
         consumers = set()
         for filename in (
-            "integration-acceptance.yml",
             "linux-packages.yml",
             "macos.yml",
         ):
@@ -582,6 +585,16 @@ jobs:
                                 "ci_dependency_wait.py --component linux-sdk",
                             )
                         ):
+                            continue
+                        if name == "publish-caches":
+                            self.assertIn("github.ref == 'refs/heads/main'", job["if"])
+                            self.assertNotIn("pull_request", job["if"])
+                            self.assertIn('--own-head "$OWN_HEAD"', line)
+                            self.assertNotIn("--own-pr", line)
+                            self.assertEqual(
+                                step["env"]["OWN_HEAD"],
+                                "${{ inputs.source || github.sha }}",
+                            )
                             continue
                         with self.subTest(workflow=filename, job=name):
                             lexer = shlex.shlex(line, posix=True, punctuation_chars=";")
@@ -613,8 +626,6 @@ jobs:
         self.assertEqual(
             consumers,
             {
-                ("integration-acceptance.yml", "ubuntu-package"),
-                ("integration-acceptance.yml", "ubuntu-application"),
                 ("macos.yml", "linux-bundle"),
                 ("macos.yml", "linux-build"),
                 ("macos.yml", "linux-test"),
@@ -631,7 +642,7 @@ def test_release_latest_and_push_concurrency_are_explicit():
     assert 'tools/release_latest.py --tag "$TAG"' in release
     assert '--latest="$latest"' in release
     assert not re.search(r"--latest(?:\s|$)", release)
-    for name in ("quality.yml", "integration-acceptance.yml"):
+    for name in ("quality.yml", "macos.yml"):
         assert (
             "github.event_name == 'pull_request' && github.ref ||"
             in (WORKFLOWS / name).read_text()
@@ -693,14 +704,13 @@ def test_macos_consumer_uses_same_pr_head_as_dependency_producer():
     assert source.count("tools/ci_macos_dependencies.py") == 1
     assert setup.count("tools/ci_macos_dependencies.py") == 1
     assert "--wait 5400" not in source
-    stages = parse_workflow((WORKFLOWS / "macos-platform-stages.yml").read_text())
-    for stage in stages["jobs"].values():
-        checkout = next(
-            step
-            for step in stage["steps"]
-            if step.get("uses", "").startswith("actions/checkout@")
-        )
-        assert checkout["with"]["ref"] == "${{ inputs.source }}"
+    runtime = next(
+        step
+        for step in job["steps"]
+        if "--component macos-runtime" in step.get("run", "")
+    )
+    assert runtime["env"]["OWN_HEAD"] == checkout["with"]["ref"]
+    assert "macos-stages" not in workflow["jobs"]
 
 
 def test_every_non_reusable_job_has_a_finite_timeout():
