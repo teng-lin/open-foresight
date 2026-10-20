@@ -37,10 +37,32 @@ class CountingRecording extends Recording {
 }
 
 void main() {
+  // The production grace, for tests that need the shutdown to happen.
+  const shortGrace = Duration(seconds: 1);
+  // Long enough that no reconnect or reservation has to race the shutdown.
+  const longGrace = Duration(seconds: 5);
   late Directory temp;
   late ApplicationService service;
   late ServiceClient agent, desktop;
   late Map<String, String> original;
+  Future<void> startService(Duration grace) async {
+    service = await ApplicationService.start(
+      ProfilePaths('${temp.path}/profile', '${temp.path}/run'),
+      desktopDetachGrace: grace,
+    );
+    agent = await ServiceClient.connect(service.path);
+    desktop = await ServiceClient.connect(service.path);
+  }
+
+  /// Restart the service with [grace], for a test whose reconnect or
+  /// reservation must land while a shutdown is pending.
+  Future<void> restartService(Duration grace) async {
+    await agent.close();
+    await desktop.close();
+    await service.close();
+    await startService(grace);
+  }
+
   setUp(() async {
     original = Map.of(runtimeConfiguration.environment);
     for (final key in [
@@ -52,11 +74,7 @@ void main() {
       runtimeConfiguration.environment.remove(key);
     }
     temp = createTestTempDirectorySync('of-access-');
-    service = await ApplicationService.start(
-      ProfilePaths('${temp.path}/profile', '${temp.path}/run'),
-    );
-    agent = await ServiceClient.connect(service.path);
-    desktop = await ServiceClient.connect(service.path);
+    await startService(shortGrace);
   });
   setUp(() {
     addTearDown(() async {
@@ -69,6 +87,12 @@ void main() {
         ..addAll(original);
     });
   });
+
+  /// Wait until the service has seen the desktop's connection end.
+  Future<void> hostGone() => eventually(
+    () => !service.access.hasHost,
+    timeout: const Duration(seconds: 30),
+  );
   Future<void> attach() async => desktop.call('security.attach_desktop', {
     'token': File(
       '${temp.path}/profile/.desktop-capability',
@@ -205,32 +229,26 @@ void main() {
     },
   );
   test('desktop reconnect during grace period keeps service alive', () async {
+    await restartService(longGrace);
     await attach();
     await desktop.close();
     // Client.close destroys the local socket; the service observes EOF later.
-    // Reconnect after that transition, while its one-second grace is active.
-    final disconnect = Stopwatch()..start();
-    while (service.access.hasHost &&
-        disconnect.elapsed < const Duration(milliseconds: 750)) {
-      await Future<void>.delayed(const Duration(milliseconds: 5));
-    }
-    expect(service.access.hasHost, isFalse);
+    // Reconnect after that transition, while its grace is active.
+    await hostGone();
+    expect(service.desktopShutdownScheduled, isTrue);
     desktop = await ServiceClient.connect(service.path);
     await attach();
-    await Future<void>.delayed(const Duration(milliseconds: 1200));
+    expect(service.desktopShutdownScheduled, isFalse);
     expect((await desktop.call('status') as Map)['pid'], pid);
   });
   test(
     'startup snapshot reserves desktop lifetime before visible approvals attach',
     () async {
+      await restartService(longGrace);
       await attach();
       await desktop.close();
-      final disconnect = Stopwatch()..start();
-      while (service.access.hasHost &&
-          disconnect.elapsed < const Duration(milliseconds: 750)) {
-        await Future<void>.delayed(const Duration(milliseconds: 5));
-      }
-      expect(service.access.hasHost, isFalse);
+      await hostGone();
+      expect(service.desktopShutdownScheduled, isTrue);
       final startup = await ensureServiceSnapshot(
         ProfilePaths('${temp.path}/profile', '${temp.path}/run'),
       );
@@ -240,7 +258,8 @@ void main() {
         isFalse,
         reason: 'Startup liveness is not an approval-host grant',
       );
-      await Future<void>.delayed(const Duration(milliseconds: 1200));
+      // The reservation cancelled the pending shutdown.
+      expect(service.desktopShutdownScheduled, isFalse);
       expect((await desktop.call('status') as Map)['pid'], pid);
       await expectLater(
         desktop.call('meetings.start', {'id': 1}),
@@ -255,7 +274,7 @@ void main() {
       await attach();
       expect(service.access.hasHost, isTrue);
       await desktop.close();
-      await service.closed.timeout(const Duration(seconds: 10));
+      await service.closed.timeout(longGrace + const Duration(seconds: 10));
     },
   );
 
@@ -267,8 +286,9 @@ void main() {
     final next = startup.client;
     try {
       await desktop.close();
-      await Future<void>.delayed(const Duration(milliseconds: 1200));
-      expect(service.access.hasHost, isFalse);
+      await hostGone();
+      // The other reservation keeps the service from scheduling shutdown.
+      expect(service.desktopShutdownScheduled, isFalse);
       expect((await next.call('status') as Map)['pid'], pid);
     } finally {
       await next.close();
@@ -278,11 +298,15 @@ void main() {
 
   test('ordinary startup status does not reserve desktop lifetime', () async {
     await attach();
-    await desktop.close();
     await agent.close();
+    // Probe before the desktop leaves, so nothing has to beat the grace.
     agent = await ensureService(
       ProfilePaths('${temp.path}/profile', '${temp.path}/run'),
     );
+    await desktop.close();
+    await hostGone();
+    // The open probe connection did not keep the shutdown from scheduling.
+    expect(service.desktopShutdownScheduled, isTrue);
     await service.closed.timeout(const Duration(seconds: 10));
     // Server cleanup can finish before this client's EOF callback runs.
     await agent.socket.done.timeout(const Duration(seconds: 3));
@@ -325,7 +349,11 @@ void main() {
     'headless agent connections do not acquire the desktop lifetime',
     () async {
       await desktop.close();
-      await Future<void>.delayed(const Duration(milliseconds: 1200));
+      // Past a grace that would have ended, had a desktop been attached.
+      await Future<void>.delayed(
+        shortGrace + const Duration(milliseconds: 200),
+      );
+      expect(service.desktopShutdownScheduled, isFalse);
       expect((await agent.call('status') as Map)['pid'], pid);
     },
   );

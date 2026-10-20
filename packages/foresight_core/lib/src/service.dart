@@ -677,6 +677,10 @@ class ApplicationService {
   Timer? _heartbeat;
   Timer? _desktopShutdown;
   Duration _desktopDetachGrace = const Duration(seconds: 1);
+
+  /// Whether the shutdown after the last desktop left is pending. Tests
+  /// observe it instead of sleeping past the grace.
+  bool get desktopShutdownScheduled => _desktopShutdown?.isActive ?? false;
   final _desktopClients = <Socket>{};
   bool _closing = false;
   Future<void>? _shutdown;
