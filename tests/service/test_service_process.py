@@ -1208,11 +1208,118 @@ class GatedHelper:
     def release(self):
         (self.control / "release").write_text("")
 
+    def kill(self):
+        """Stop the helper if its service died without closing it."""
+        started = self.control / "started"
+        if not started.exists():
+            return
+        pid = started.read_text()
+        command = subprocess.run(
+            ["/bin/ps", "-p", pid, "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout
+        # Never signal a reused pid: match this helper's own control path.
+        if str(self.control) in command:
+            try:
+                os.kill(int(pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
 
 def test_gated_helper_twin_matches_the_dart_fixture():
     """Dart lifecycle tests and this suite must hold helper shutdown alike."""
     shared = ROOT / "packages/foresight_test_support/lib/gated_helper.py"
     assert GATED_HELPER.read_bytes() == shared.read_bytes()
+
+
+# Every gate point in service.dart. A hook-enabled build holds armed points.
+LIFECYCLE_GATES = (
+    "close.begin",
+    "close.helper_closed",
+    "close.listener_closed",
+    "close.before_record_delete",
+    "close.before_frontend_release",
+    "close.before_lock_release",
+    "request.committed.status",
+)
+
+
+def test_release_service_ignores_lifecycle_gates(tmp_path):
+    """A release build strips FORESIGHT_SERVICE_GATES, so no gate can hold it.
+
+    Lifecycle tests compile bin/service.dart with FORESIGHT_ENABLE_TEST_HOOKS.
+    This production executable is built without it: every gate is armed, yet
+    status answers, SIGTERM reaches the helper, and no gate reports reaching.
+    """
+    assert SERVICE.is_file(), "Build the service executable first"
+    data, runtime, gates = tmp_path / "data", tmp_path / "run", tmp_path / "gates"
+    gates.mkdir(mode=0o700)
+    for point in LIFECYCLE_GATES:
+        (gates / f"{point}.hold").write_text("")
+    helper = GatedHelper(tmp_path)
+    env = os.environ.copy()
+    for key in (
+        "FORESIGHT_MODEL_MANIFEST",
+        "FORESIGHT_RESOURCES",
+        "FORESIGHT_RUNTIME_REVISION",
+        "FORESIGHT_INSTALL_ROOT",
+    ):
+        env.pop(key, None)
+    env.update(
+        FORESIGHT_DATA=str(data),
+        FORESIGHT_RUNTIME=str(runtime),
+        FORESIGHT_HELPER=str(helper.executable),
+        FORESIGHT_NATIVE=str(NATIVE),
+        FORESIGHT_SERVICE_GATES=str(gates),
+        FORESIGHT_SERVICE_TRACE="1",
+    )
+    with (tmp_path / "service.log").open("w+") as log:
+        process = subprocess.Popen([str(SERVICE)], env=env, stdout=log, stderr=log)
+        peer = None
+        try:
+            deadline = time.monotonic() + 30
+            helper.published("started", deadline)
+            while peer is None:
+                assert process.poll() is None
+                try:
+                    peer = Peer(runtime / "application.sock")
+                except (FileNotFoundError, ConnectionRefusedError):
+                    poll_delay(deadline)
+            # A hook-enabled build would hold this reply at its commit gate.
+            # Heartbeat events keep arriving, so bound the wait here.
+            identifier = peer.send("status")
+            while True:
+                reply = json.loads(peer.reader.readline())
+                if reply.get("id") == identifier:
+                    break
+                assert time.monotonic() < deadline, "status reply was held"
+            assert reply["result"]["pid"] == process.pid
+            peer.close()
+            peer = None
+            process.send_signal(signal.SIGTERM)
+            # A hook-enabled build would hold close.begin before this.
+            helper.published("stopping", deadline)
+            assert sorted(path.name for path in gates.iterdir()) == sorted(
+                f"{point}.hold" for point in LIFECYCLE_GATES
+            )
+            helper.release()
+            assert process.wait(timeout=30) == 0
+            assert not list(gates.glob("*.reached"))
+            assert not (data / ".application-endpoint.json").exists()
+            assert not (runtime / "application.sock").exists()
+        except Exception:
+            profile_failure_diagnostics(process, log)
+            raise
+        finally:
+            helper.release()
+            if peer is not None:
+                peer.close()
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=10)
+            helper.kill()
 
 
 def poll_delay(deadline):

@@ -51,6 +51,23 @@ class GatedHelper {
   /// Let a held (or later) SIGTERM finish. Safe to call more than once.
   void release() => File('${control.path}/release').writeAsStringSync('');
 
+  /// SIGKILL the helper if its service died without closing it (cleanup).
+  void kill() {
+    final started = File('${control.path}/started');
+    if (!started.existsSync()) return;
+    final pid = int.parse(started.readAsStringSync());
+    final command = Process.runSync('/bin/ps', [
+      '-p',
+      '$pid',
+      '-o',
+      'command=',
+    ]).stdout.toString();
+    // Never signal a reused pid: match this helper's own control path.
+    if (command.contains(control.path)) {
+      Process.killPid(pid, ProcessSignal.sigkill);
+    }
+  }
+
   Future<int> _published(String name, Duration timeout) async {
     final file = File('${control.path}/$name');
     await eventually(file.existsSync, timeout: timeout);
