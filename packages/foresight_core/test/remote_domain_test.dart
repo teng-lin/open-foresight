@@ -718,6 +718,136 @@ void main() {
     });
   }
 
+  void refuseAsClosing(Socket socket, Map<String, dynamic> request) =>
+      socket.writeln(
+        jsonEncode({
+          'id': request['id'],
+          'error': {
+            'code': 'unavailable',
+            'message':
+                'Application service is shutting down; retry after it exits.',
+            'reason': 'closing',
+          },
+          'done': true,
+        }),
+      );
+
+  for (final streamed in ['answer', 'commandCurrent']) {
+    test('a streamed request refused by a closing owner before any value is '
+        'sent once more to the next owner, whose values arrive, and one '
+        'whose outcome is unknown never is (SL-9, $streamed)', () async {
+      final closing = f.sockets.last;
+      final method = streamed == 'answer'
+          ? 'answer.stream'
+          : 'meetings.enhance';
+      f.handler = (socket, request) {
+        if (request['method'] != method) return;
+        if ((request['args'] as Map)['requestId'] == 'lost') {
+          socket.writeln(
+            jsonEncode({
+              'id': request['id'],
+              'error': {
+                'code': 'unavailable',
+                'message': 'stopped',
+                'reason': 'outcomeUnknown',
+              },
+              'done': true,
+            }),
+          );
+        } else if (identical(socket, closing)) {
+          refuseAsClosing(socket, request);
+        } else {
+          f.reply(socket, request, 'Hel', done: false);
+          f.reply(socket, request, 'lo');
+        }
+      };
+      Future<List<Object?>> run(String requestId) async => streamed == 'answer'
+          ? await f.remote
+                .askInConversation('Q', 'desktop', requestId: requestId)
+                .toList()
+          : [
+              await f.remote.commandCurrent(Operation.meetingsEnhance, {
+                'id': 3,
+                'requestId': requestId,
+              }, () => true),
+            ];
+      List<Map<String, dynamic>> sent(String requestId) => f.requests
+          .where(
+            (r) =>
+                r['method'] == method &&
+                (r['args'] as Map)['requestId'] == requestId,
+          )
+          .toList();
+      await expectLater(
+        run('lost'),
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.toJson()['reason'],
+            'reason',
+            'outcomeUnknown',
+          ),
+        ),
+      );
+      expect(
+        await run('refused'),
+        streamed == 'answer' ? ['Hel', 'lo'] : ['lo'],
+      );
+      expect(f.remote.client, isNot(same(closing)));
+      expect(sent('refused'), hasLength(2));
+      expect(sent('refused').last['args'], sent('refused').first['args']);
+      expect(sent('lost'), hasLength(1));
+    });
+  }
+
+  // The desktop cancels with no request ID (generator.cancel()).
+  for (final cancelled in <String?>['ans-1', null, 'another-answer']) {
+    test('a cancel during the handoff stops only that streamed answer\'s '
+        'resend (cancel $cancelled)', () async {
+      final proxy = ServiceFaultProxy();
+      try {
+        var refusals = 1;
+        f.handler = (socket, request) {
+          if (request['method'] != 'answer.stream') return;
+          if (refusals-- > 0) {
+            refuseAsClosing(socket, request);
+          } else {
+            f.reply(socket, request, 'answered');
+          }
+        };
+        // Hold the handoff's startup probe for the next owner.
+        final probe = proxy.hold(ProxyDirection.toService, method: 'status');
+        final pending = proxy.run(
+          () => f.remote
+              .askInConversation('Q', 'desktop', requestId: 'ans-1')
+              .toList(),
+        );
+        await probe.reached;
+        // The refused request is on no connection, so nothing is sent.
+        expect(f.remote.runtime.cancel(requestId: cancelled), isFalse);
+        probe.release();
+        final answers = f.requests.where((r) => r['method'] == 'answer.stream');
+        if (cancelled != 'another-answer') {
+          await expectLater(
+            pending,
+            throwsA(
+              isA<RpcError>().having(
+                (error) => error.code,
+                'code',
+                RpcErrorCode.cancelled,
+              ),
+            ),
+          );
+          expect(answers, hasLength(1));
+        } else {
+          expect(await pending, ['answered']);
+          expect(answers, hasLength(2));
+        }
+      } finally {
+        await proxy.close();
+      }
+    });
+  }
+
   test(
     'a failed connect closes its connection and leaves nothing running',
     () async {
