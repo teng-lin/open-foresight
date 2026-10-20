@@ -417,3 +417,19 @@ def test_published_retirement_keeps_its_verified_interval_after_later_product_fa
     renewed = index.collect(REPOSITORY, SOURCE, root=proof.root, api=proof.api, download=proof.download)
     assert "arch_retirement" in renewed["capabilities"]
     assert rollout.authorize(renewed, root=proof.root, source=SOURCE, capabilities=["arch_retirement"], repository=REPOSITORY, api=proof.api, download=proof.download, ongoing=True)["capabilities"] == ["arch_retirement"]
+
+
+def test_successful_controller_without_eligible_descriptor_is_a_recoverable_barrier(proof):
+    for kind in ("arch", "archive-sdk", "fork-sdk", "recipe-change"):
+        proof.add(kind)
+    proof.add("nightly", 0)
+    proof.add("nightly", 1)
+    unqualified = dict(proof.history[-1], id=555, created_at="2026-10-03T00:00:00Z")
+    proof.history.append(unqualified)
+    blocked = index.collect(REPOSITORY, SOURCE, root=proof.root, api=proof.api, download=proof.download)
+    assert "arch_retirement" not in blocked["capabilities"]
+    proof.add("nightly", 3)
+    proof.add("nightly", 4)
+    recovered = index.collect(REPOSITORY, SOURCE, root=proof.root, api=proof.api, download=proof.download)
+    assert "arch_retirement" in recovered["capabilities"]
+    assert {entry["run_id"] for entry in recovered["evidence"] if entry["kind"] == "nightly"} == {7, 8}

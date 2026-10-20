@@ -204,8 +204,8 @@ def check_gates(jobs, selected, tier="", *, arch_retired=False):
 
 def selection_report(paths, *, force=False, revision_range=""):
     selected = select_gates(paths, force=force)
-    candidate = importlib.import_module("tools.ci_selection" if __package__ else "ci_selection")
     try:
+        candidate = importlib.import_module("tools.ci_selection" if __package__ else "ci_selection")
         proposed = candidate.select(paths, force=force)
     except Exception as error:
         proposed = {"error": str(error)}
@@ -343,9 +343,6 @@ def main():
         force=args.force,
         revision_range=args.explain or f"{revisions[0]}..HEAD",
     )
-    if args.activate and not args.candidate:
-        source = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, timeout=300).strip()
-        activate_report(report, source=source, repository=args.repository)
     if args.candidate:
         if os.environ.get("GITHUB_REF") != "refs/heads/main" or os.environ.get("GITHUB_EVENT_NAME") not in ("schedule", "workflow_dispatch") or not args.force:
             raise ValueError("Candidate qualification requires reviewed-main full validation")
@@ -353,6 +350,9 @@ def main():
             raise ValueError(report["candidate"]["error"])
         report["selection"] = report["candidate"]["selection"]
         report["qualification_mode"] = True
+    if args.activate:
+        source = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, timeout=300).strip()
+        activate_report(report, source=source, repository=args.repository)
     write_report(report, args.json_output)
 
 

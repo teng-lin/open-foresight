@@ -120,7 +120,8 @@ def collect(repository, source, *, root=ROOT, api=cached_api, download=cached_do
         index["evidence"].append(entry)
     retained_nights = [entry for entry in index["evidence"] if entry["kind"] == "nightly"]
     history = list(rows(repository, "actions/workflows/preview-packages.yml/runs?event=schedule&branch=main", "workflow_runs", api))
-    barriers = [row["created_at"] for row in history if row.get("status") != "completed" or row.get("conclusion") != "success"]
+    eligible_nights = {entry["run_id"] for entry in retained_nights}
+    barriers = [row["created_at"] for row in history if row.get("status") != "completed" or row.get("conclusion") != "success" or row["id"] not in eligible_nights]
     if barriers:
         boundary = max(barriers)
         allowed = {row["id"] for row in history if row["created_at"] > boundary}

@@ -194,3 +194,24 @@ def test_candidate_cli_is_main_only_full_qualification(tmp_path, monkeypatch, re
     else:
         with pytest.raises(ValueError, match="reviewed-main full"):
             ci_changes.main()
+
+
+def test_full_candidate_uses_qualified_retirement_without_narrowing_selected_suites(tmp_path, monkeypatch):
+    def output(command, **kwargs):
+        return "a" * 40 + "\n" if command[1] == "rev-parse" else b"docs/guide.md\0"
+    monkeypatch.setattr(ci_changes.subprocess, "check_output", output)
+    monkeypatch.setattr(ci_changes.subprocess, "run", lambda *args, **kwargs: None)
+    monkeypatch.setenv("GITHUB_REF", "refs/heads/main")
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "outputs"))
+    def activated(report, **kwargs):
+        assert report["qualification_mode"] and report["force"]
+        assert all(report["selection"].values())
+        report["arch_retired"] = True
+        return report
+    monkeypatch.setattr(ci_changes, "activate_report", activated)
+    monkeypatch.setattr(sys, "argv", ["changes", "--base", "HEAD", "--force", "--candidate", "--activate", "--json-output", str(tmp_path / "selection.json")])
+    ci_changes.main()
+    report = json.loads((tmp_path / "selection.json").read_text())
+    assert report["arch_retired"] and all(report["selection"].values())
+    assert "arch_retired=true" in (tmp_path / "outputs").read_text()
