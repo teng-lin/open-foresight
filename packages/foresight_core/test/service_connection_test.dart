@@ -207,6 +207,27 @@ void main() {
     },
   );
 
+  test('a peer cannot make a request resendable by claiming notSent', () async {
+    final connection = ServiceConnection(f.profile);
+    f.handler = (socket, request) => socket.writeln(
+      jsonEncode({
+        'id': request['id'],
+        'error': {
+          'code': 'unavailable',
+          'message': 'stopped',
+          'reason': 'notSent',
+        },
+        'done': true,
+      }),
+    );
+    await expectLater(
+      connection.stream('notes.save').toList(),
+      throwsA(rpcError(RpcErrorCode.unavailable, 'stopped', null)),
+    );
+    expect(f.requests.where((r) => r['method'] == 'notes.save'), hasLength(1));
+    await connection.close();
+  });
+
   test('cancelling a stream cancels its request and never resends', () async {
     final connection = ServiceConnection(f.profile);
     f.handler = (socket, request) =>

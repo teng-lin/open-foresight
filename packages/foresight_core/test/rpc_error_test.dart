@@ -77,7 +77,11 @@ void main() {
         'message': 'Readable failure',
         'reason': reason.name,
       });
-      expect(RpcError.from(wire).reason, reason);
+      // notSent is client-local; a peer cannot claim it.
+      expect(
+        RpcError.from(wire).reason,
+        reason == RpcErrorReason.notSent ? isNull : reason,
+      );
     }
     // Errors without a reason serialize exactly as before the field existed.
     expect(RpcError(RpcErrorCode.notFound, 'Missing').toJson(), {
@@ -93,6 +97,45 @@ void main() {
     expect(unknown.code, RpcErrorCode.internal);
     expect(unknown.reason, isNull);
     expect(unknown.message, 'From a newer peer');
+  });
+
+  test('a peer can neither claim notSent nor fall back to legacy text', () {
+    const closing =
+        'Application service is shutting down; retry after it exits.';
+    // notSent is the client's own judgement that nothing left this process.
+    final claimed = RpcError.from({
+      'code': 'unavailable',
+      'message': 'stopped',
+      'reason': 'notSent',
+    });
+    expect(claimed.reason, isNull);
+    expect(isClosingRefusal(claimed), isFalse);
+    // A frame that names a reason is not a legacy owner's, even when this
+    // client does not know the reason; only an absent reason uses the text.
+    for (final reason in ['notSent', 'futureReason', null]) {
+      final error = RpcError.from({
+        'code': 'unavailable',
+        'message': closing,
+        'reason': reason,
+      });
+      expect(isClosingRefusal(error), isFalse, reason: '$reason');
+    }
+    expect(
+      isClosingRefusal(
+        RpcError.from({'code': 'unavailable', 'message': closing}),
+      ),
+      isTrue,
+    );
+    expect(
+      isClosingRefusal(
+        RpcError.from({
+          'code': 'unavailable',
+          'message': 'Any text',
+          'reason': 'closing',
+        }),
+      ),
+      isTrue,
+    );
   });
 
   test('closing refusals are recognized with or without a reason (L2)', () {

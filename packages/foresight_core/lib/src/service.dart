@@ -23,13 +23,6 @@ const maxServiceMessage = 16 * 1024 * 1024;
 // clients count each frame exactly; keep frames 1 MiB under the limit for the
 // released ones.
 const _maxServiceFrame = maxServiceMessage - 1024 * 1024;
-// Clients released before the reason field (v0.1.0-v0.1.2) match this text,
-// so it must stay byte-identical.
-const _serviceClosingMessage =
-    'Application service is shutting down; retry after it exits.';
-// Those owners also refused from _execute with this shorter text.
-const _legacyExecuteClosingMessage = 'Application service is shutting down';
-
 const _outcomeUnknownMessage =
     'Application service stopped before this request finished; it may or may '
     'not have completed.';
@@ -47,22 +40,9 @@ Future<void> _flushQuietly(Socket socket) async {
 /// The refusal a closing owner sends for a request it did not dispatch.
 RpcError _closingRefusal() => RpcError(
   RpcErrorCode.unavailable,
-  _serviceClosingMessage,
+  serviceClosingMessage,
   reason: RpcErrorReason.closing,
 );
-
-/// Whether [error] is a closing owner's refusal: the request was never
-/// dispatched, so it is safe to send again once ownership is handed off.
-/// Owners that predate [RpcErrorReason] are recognized by their message.
-bool isClosingRefusal(RpcError error) =>
-    error.code == RpcErrorCode.unavailable &&
-    switch (error.reason) {
-      RpcErrorReason.closing => true,
-      null =>
-        error.message == _serviceClosingMessage ||
-            error.message == _legacyExecuteClosingMessage,
-      _ => false,
-    };
 
 // POSIX locks belong to the OS process, not a Dart isolate or file handle.
 // Local hosts must finish before a launcher probes its own process's lock.
