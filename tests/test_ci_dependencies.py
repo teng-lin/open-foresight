@@ -541,12 +541,7 @@ class SelectionTests(unittest.TestCase):
             *changes.LINUX_FILES,
         ):
             with self.subTest(path=path):
-                expected = (
-                    ["linux-build", "linux-test"]
-                    if path == "tests/test_acceptance_image_cache.py"
-                    else changes.GATES[1:]
-                )
-                self.assert_selection([path], expected)
+                self.assert_selection([path], changes.GATES[1:])
 
     def test_packaging_controls_require_contracts_and_their_exact_own_run_bundle(self):
         for path in (*changes.PACKAGING_FILES, "packaging/ci/test-debian.sh"):

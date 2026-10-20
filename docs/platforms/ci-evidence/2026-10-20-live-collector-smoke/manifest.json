@@ -1,0 +1,40 @@
+{
+  "attempts": {
+    "39506520328": [
+      1
+    ],
+    "39506520356": [
+      1
+    ]
+  },
+  "checksums": {
+    "jobs/39506520328.jsonl": "fb0e6319c8bd8eeb02c29ecfaca735a8c1ac4015880071c3529fca4b4eb1ff74",
+    "jobs/39506520356.jsonl": "8d71bef10c059ea1be39e669317cf3b15a699322fe78d63cc06eca9179554224",
+    "prs.json": "6cd7b9c744fef4c813deb9b691f5a4b54cf9e3d3150306bef4573f1157957b2e",
+    "runs.jsonl": "52f812bc805cecc2b78d4ec3f3e12e22074af12c8f0d3bb3925dcd82ca0d8984",
+    "trees.txt": "cf97c57eb9420a5e3b9e49f5c74c67d60e888e2a25fbf9044c145c64d535ac5d"
+  },
+  "complete": true,
+  "completed_at": "2026-10-20T23:42:49.488685+00:00",
+  "exclusions": [],
+  "log_references": [
+    {
+      "attempt": 1,
+      "failed_jobs": [],
+      "run": 39506520356,
+      "url": "https://github.com/teng-lin/open-foresight/actions/runs/39506520356/attempts/1"
+    },
+    {
+      "attempt": 1,
+      "failed_jobs": [],
+      "run": 39506520328,
+      "url": "https://github.com/teng-lin/open-foresight/actions/runs/39506520328/attempts/1"
+    }
+  ],
+  "pagination": "all pages",
+  "repository": "teng-lin/open-foresight",
+  "retrieved_at": "2026-10-20T23:42:44.487484+00:00",
+  "schema": 1,
+  "since": "2026-10-20T22:13:00.123000Z",
+  "until": "2026-10-20T22:14:00.750000Z"
+}

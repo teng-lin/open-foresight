@@ -43,7 +43,7 @@ NIGHTLY_REQUIRED = (
     "build / packaging / linux-deb",
     "build / packaging / linux-rpm",
     "build / packaging / linux-arch",
-    "build / packaging / dmg",
+    "build / dmg / dmg",
 )
 
 

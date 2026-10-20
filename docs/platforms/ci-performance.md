@@ -1438,6 +1438,15 @@ GitHub's filtered 1,000-run limit causes an actionable failure; use narrower
 `--since`/`--until` windows and deduplicate run IDs when combining them. Existing
 legacy reporting directories remain readable but are explicitly marked unverified.
 
+The [live collector smoke snapshot](ci-evidence/2026-10-20-live-collector-smoke/manifest.json)
+freezes the October 20, 22:13–22:14 UTC window: two actual main workflows,
+25 jobs, both original attempts, and 122 pull requests collected across API pages.
+Its checksum manifest passed verification and the reporting loader. This verifies
+the read-only collector against GitHub; the narrow window does not measure a CI
+performance improvement. Queries use whole seconds while returned runs and PR
+merge membership are filtered against the exact requested boundaries recorded
+in the manifest.
+
 Report schema 2 retains previous fields and adds first-attempt workflow, job and
 PR-commit denominators, cancellations, incomplete/unknown outcomes, actual job
 queue measurements when supplied by GitHub, workflow start latency, first green
@@ -1468,6 +1477,7 @@ runs have separate outcomes and never enter ordinary failure-rate denominators;
 all their runner spend and diagnostic failures remain visible. These tools
 measure observations and never authorize reuse, dispatch
 CI, establish producer trust or certify runtime improvements.
+Ordinary pull-request and push runs cannot be annotated as qualification-only.
 
 The split DMG owner retains the existing broad packaging selection during
 qualification, including Linux-only packaging changes. Narrowing that breadth

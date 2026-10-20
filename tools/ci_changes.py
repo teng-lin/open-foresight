@@ -115,7 +115,14 @@ def select_gates(paths, force=False):
         if owners:
             for gate in owners:
                 selected[gate] = True
-            if path not in PACKAGING_FILES:
+            if (
+                PurePosixPath(path).parent == PurePosixPath("tests")
+                and PurePosixPath(path).name.startswith("test_")
+                and PurePosixPath(path).suffix == ".py"
+                and path not in PACKAGING_FILES
+                and path not in LINUX_FILES
+                and path not in MACOS_FILES
+            ):
                 continue
         # These Markdown notices are installed payloads, so editorial suffix
         # rules must not hide changes to the package's legal contents.
@@ -129,7 +136,8 @@ def select_gates(paths, force=False):
             continue
         # Root Python tests run in the unconditional quality job. Keep explicit
         # packaging and real Apple-runtime tests above/in MACOS_FILES; nested
-        # native, inference and subprocess suites still select their platforms.
+        # native, inference and subprocess suites keep full selection until P9
+        # qualification authorizes the candidate selector.
         if (
             PurePosixPath(path).parent == PurePosixPath("tests")
             and PurePosixPath(path).name.startswith("test_")

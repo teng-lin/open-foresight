@@ -9,6 +9,10 @@ import unittest
 import xml.etree.ElementTree as ET
 from typing import cast
 
+# Keep both existing signing/mount and upgrade/database contracts mandatory,
+# while deriving the expected execution count from the suite as it grows.
+MINIMUM_CONTRACTS = 2
+
 
 class ContractResult(unittest.TextTestResult):
     def __init__(self, *args, **kwargs):
@@ -65,6 +69,7 @@ def diagnostics():
 
 
 def run(suite, output):
+    expected = suite.countTestCases()
     result = cast(
         ContractResult,
         unittest.TextTestRunner(verbosity=2, resultclass=ContractResult).run(suite),
@@ -79,10 +84,15 @@ def run(suite, output):
     report.extend(result.cases.values())
     output.parent.mkdir(parents=True, exist_ok=True)
     ET.ElementTree(report).write(output, encoding="utf-8", xml_declaration=True)
-    successful = result.wasSuccessful() and result.testsRun == 2 and not result.skipped
+    successful = (
+        expected >= MINIMUM_CONTRACTS
+        and result.wasSuccessful()
+        and result.testsRun == expected
+        and not result.skipped
+    )
     if not successful:
         print(
-            f"DMG contracts failed: ran={result.testsRun}, expected=2, skipped={len(result.skipped)}, failures={len(result.failures)}, errors={len(result.errors)}",
+            f"DMG contracts failed: ran={result.testsRun}, expected={expected}, minimum={MINIMUM_CONTRACTS}, skipped={len(result.skipped)}, failures={len(result.failures)}, errors={len(result.errors)}",
             file=sys.stderr,
         )
     return 0 if successful else 1

@@ -111,6 +111,9 @@ def run_category(run):
 
 def operational_report(runs):
     """Report comparable raw cohorts without discarding failures or cold runs."""
+    snapshot = importlib.import_module(
+        "tools.ci_stats_snapshot" if __package__ else "ci_stats_snapshot"
+    )
     categories: dict[str, float] = defaultdict(float)
     workflows, jobs, commits, failures, cohorts = (
         [],
@@ -121,6 +124,7 @@ def operational_report(runs):
     )
     queue, start_latency = [], []
     for run in runs:
+        snapshot.validate_qualification(run)
         category = run_category(run)
         categories[category] += run["minutes"]
         state = first_attempt_state(run)
@@ -316,6 +320,7 @@ def load(directory):
     seen = set()
     for run in runs.values():
         run.update(observations.get("runs", {}).get(str(run["id"]), {}))
+        snapshot.validate_qualification(run)
         path = directory / "jobs" / f"{run['id']}.jsonl"
         run["jobs"] = []
         for job in sorted(
