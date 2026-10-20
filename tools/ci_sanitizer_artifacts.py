@@ -23,7 +23,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools import ci_artifacts as artifacts  # noqa: E402
-from tools.ci_stage_cache import ensure_commit  # noqa: E402
+from tools.ci_git import ensure_commit  # noqa: E402
 from tools.sanitizer_runtime import address_runtime  # noqa: E402
 from tools.ci_producer_trust import PRODUCERS  # noqa: E402
 

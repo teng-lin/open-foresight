@@ -21,7 +21,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
 import stat
 import subprocess
 import sys
@@ -33,6 +32,11 @@ artifacts = importlib.import_module(
 )
 
 timing = importlib.import_module("tools.ci_timing" if __package__ else "ci_timing")
+
+ci_git = importlib.import_module("tools.ci_git" if __package__ else "ci_git")
+git = ci_git.git
+ensure_commit = ci_git.ensure_commit
+read_zip = ci_git.read_zip
 
 ROOT = Path(__file__).resolve().parents[1]
 PLATFORMS = ("linux", "macos")
@@ -62,10 +66,6 @@ def lookup_download(repository, artifact, destination):
 def lookup_jobs(repository, run_id):
     with timing.phase("stage producer jobs request"):
         return artifacts.dependency_jobs(repository, run_id)
-
-
-def git(root, *args):
-    return subprocess.check_output(["git", *args], cwd=root, timeout=120)
 
 
 def selected_v1(path, stage):
@@ -274,21 +274,6 @@ def trusted_native_work_run(run, repository, own_pr, root=ROOT):
     return False
 
 
-def ensure_commit(root, commit):
-    if not re.fullmatch(COMMIT, commit):
-        raise ValueError("Invalid producer source commit")
-    try:
-        git(root, "cat-file", "-e", commit + "^{commit}")
-    except subprocess.CalledProcessError:
-        subprocess.run(
-            ["git", "fetch", "--no-tags", "origin", commit],
-            cwd=root,
-            check=True,
-            timeout=300,
-        )
-        git(root, "cat-file", "-e", commit + "^{commit}")
-
-
 @timing.phase("stage receipt validation")
 def validate_receipt(
     receipt, platform, stage, identity, run, environment, parents, root
@@ -334,46 +319,6 @@ def validate_receipt(
         != identity
     ):
         raise ValueError("Producer source fingerprint differs from current recipe")
-
-
-@timing.phase("stage archive verification and extraction")
-def read_zip(path, destination=None):
-    """Read exactly the expected two flat regular files, with bounded receipt."""
-    with zipfile.ZipFile(path) as stream:
-        if sorted(stream.namelist()) != ["identity.json", "payload.tar.gz"]:
-            raise ValueError("Unexpected stage artifact members")
-        receipt_info = stream.getinfo("identity.json")
-        if receipt_info.file_size > MAX_STAGE_RECEIPT_BYTES:
-            raise ValueError("Stage receipt too large")
-        for entry in stream.infolist():
-            kind = stat.S_IFMT(entry.external_attr >> 16)
-            if kind not in (0, stat.S_IFREG) or entry.is_dir():
-                raise ValueError("Stage artifact members must be regular files")
-        try:
-            receipt = json.loads(stream.read(receipt_info))
-        except json.JSONDecodeError as error:
-            raise ValueError("Invalid cached stage receipt JSON") from error
-        # Do not trust a receipt's checksum without reading the actual payload.
-        with (
-            timing.phase("stage payload checksum verification"),
-            stream.open("payload.tar.gz") as payload,
-        ):
-            digest = hashlib.sha256()
-            while block := payload.read(1024 * 1024):
-                digest.update(block)
-            checksum = digest.hexdigest()
-            if not isinstance(receipt, dict) or receipt.get("sha256") != checksum:
-                raise ValueError("Stage payload checksum mismatch")
-        if destination:
-            with timing.phase("stage ZIP payload extraction"):
-                destination.mkdir(parents=True, exist_ok=False)
-                for member in ("identity.json", "payload.tar.gz"):
-                    with (
-                        stream.open(member) as source,
-                        (destination / member).open("wb") as target,
-                    ):
-                        shutil.copyfileobj(source, target)
-        return receipt
 
 
 @timing.phase("stage result lookup")
