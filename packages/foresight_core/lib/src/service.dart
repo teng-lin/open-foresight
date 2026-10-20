@@ -651,6 +651,10 @@ class _RequestLease {
   final String id;
   final String method;
   bool cancelled = false;
+  // Set only while the request waits for desktop approval or helper
+  // readiness, and cleared just before dispatch. A close refuses a waiting
+  // request like a new one; any other is outcomeUnknown.
+  bool waiting = false;
   _RequestLease(this.id, this.method);
 }
 
@@ -1165,6 +1169,7 @@ class ApplicationService {
               );
               _leases[client]![id] = lease;
               args['requestId'] = lease.id;
+              lease.waiting = true;
               final results = Stream.fromFuture(
                 access.authorize(
                   client,
@@ -1251,21 +1256,22 @@ class ApplicationService {
       );
     }
     if (lease.method == Operation.answerStream.wire) {
-      return Stream.fromFuture(_ready).asyncExpand(
-        (_) =>
-            (args['web_search'] == true
+      return Stream.fromFuture(_ready).asyncExpand((_) {
+        lease.waiting = false;
+        return (args['web_search'] == true
             ? application.askWithWebInConversation
             : application.askInConversation)(
-              args['question'] as String,
-              args['conversation'] as String,
-              requestId: lease.id,
-              meetingId: args['meeting_id'] as int?,
-              current: () => !lease.cancelled,
-            ),
-      );
+          args['question'] as String,
+          args['conversation'] as String,
+          requestId: lease.id,
+          meetingId: args['meeting_id'] as int?,
+          current: () => !lease.cancelled,
+        );
+      });
     }
     if (lease.method == Operation.googleSignIn.wire ||
         lease.method == Operation.googleAddAccount.wire) {
+      lease.waiting = false;
       return application.signIn(
         lease.id,
         addAccount: lease.method == Operation.googleAddAccount.wire,
@@ -1353,6 +1359,7 @@ class ApplicationService {
         'Recording requires an open desktop indicator',
       );
     }
+    lease.waiting = false;
     final result = await application.call(
       method,
       args,
@@ -1402,15 +1409,24 @@ class ApplicationService {
     _onDraining?.call();
     // Every request in flight gets a terminal frame before its lease is
     // cancelled. Nothing awaits before this loop, so no request can complete
-    // in between: a client sees either its result or this error (SL-4).
+    // in between: a client sees either its result or this error (SL-4). One
+    // still waiting for approval or the helper was never dispatched, so it is
+    // refused like a new request and may be sent to the next owner; any
+    // other may have taken effect.
     final unknown = RpcError(
       RpcErrorCode.unavailable,
       _outcomeUnknownMessage,
       reason: RpcErrorReason.outcomeUnknown,
     ).toJson();
+    final refused = _closingRefusal().toJson();
     for (final client in _leases.keys.toList()) {
-      for (final id in _leases[client]!.keys.toList()) {
-        _send(client, {'id': id, 'error': unknown, 'done': true});
+      final leases = _leases[client]!;
+      for (final id in leases.keys.toList()) {
+        _send(client, {
+          'id': id,
+          'error': leases[id]!.waiting ? refused : unknown,
+          'done': true,
+        });
         _cancel(client, id);
       }
     }

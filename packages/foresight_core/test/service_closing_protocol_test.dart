@@ -896,4 +896,119 @@ void main() {
       await proxy.close();
     }
   }, timeout: const Timeout(Duration(minutes: 3)));
+
+  test(
+    'at SIGTERM a request waiting for approval is refused and resent once to '
+    'the replacement, while a dispatched one is outcomeUnknown',
+    () async {
+      final profile = newProfile('of-waiting-');
+      final owner = await HookedServiceProcess.start(
+        build,
+        profile,
+        hold: ['close.helper_closed', 'request.committed.notes.save'],
+      );
+      final launcher = await launcherFor(profile);
+      final proxy = ServiceFaultProxy();
+      final connection = ServiceConnection(profile);
+      ServiceClient? desktop, writer, replacementDesktop;
+      Future<ServiceClient> attachDesktop() async {
+        final host = await ServiceClient.connect(serviceEndpoint(profile));
+        await host.call('security.attach_desktop', {
+          'token': File(
+            '${profile.data}/.desktop-capability',
+          ).readAsStringSync(),
+        });
+        return host;
+      }
+
+      Future<Map<String, dynamic>> approval(ServiceClient host) => host
+          .events
+          .stream
+          .firstWhere((event) => event['event'] == 'approval')
+          .timeout(const Duration(seconds: 120));
+      try {
+        await owner.ready();
+        desktop = await attachDesktop();
+        final shown = approval(desktop);
+        writer = await ServiceClient.connect(serviceEndpoint(profile));
+        final save = failureOf(
+          writer.call('notes.save', {'title': 'Dispatched', 'body': 'b'}),
+        );
+        await owner.reached('request.committed.notes.save');
+        // An agent's deletion waits for the desktop's decision.
+        var deletions = 0;
+        final resent = proxy.hold(
+          ProxyDirection.toService,
+          where: (frame) =>
+              frame.method == 'sources.delete' && ++deletions == 2,
+        );
+        final refused = proxy
+            .seen(
+              ProxyDirection.toClient,
+              method: 'sources.delete',
+              where: isClosingFrame,
+            )
+            .timeout(const Duration(seconds: 120));
+        final deletion = failureOf(
+          proxy.run(
+            () => connection.stream('sources.delete', {
+              'id': 'fixture-source',
+            }).toList(),
+          ),
+        );
+        expect((await shown)['method'], 'sources.delete');
+        owner.signal(ProcessSignal.sigterm);
+        await owner.reached('close.helper_closed');
+        expect(
+          await save,
+          rpcError(
+            RpcErrorCode.unavailable,
+            outcomeUnknownMessage,
+            'outcomeUnknown',
+          ),
+        );
+        await refused;
+        owner.release('close.helper_closed');
+        owner.release('request.committed.notes.save');
+        expect(await owner.exited(), 0, reason: owner.output);
+        // The connection handed off; its one resend waits at the proxy until
+        // a desktop is attached to the replacement.
+        await resent.reached.timeout(startupBound);
+        replacementDesktop = await attachDesktop();
+        final shownAgain = approval(replacementDesktop);
+        resent.release();
+        final request = await shownAgain;
+        expect(request['method'], 'sources.delete');
+        await replacementDesktop.call('security.decide', {
+          'approval_id': request['approval_id'],
+          'allow': false,
+        });
+        expect(
+          await deletion,
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.denied,
+          ),
+        );
+        // Refused by the closing owner, then sent once to the replacement.
+        expect(
+          proxy.frames.where(
+            (frame) =>
+                frame.direction == ProxyDirection.toService &&
+                frame.method == 'sources.delete',
+          ),
+          hasLength(2),
+        );
+        expect(launcher.launched, hasLength(1));
+      } finally {
+        await desktop?.close();
+        await writer?.close();
+        await replacementDesktop?.close();
+        await connection.close();
+        await proxy.close();
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
 }
