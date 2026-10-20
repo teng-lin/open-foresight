@@ -311,12 +311,15 @@ class Reader:
         if key not in contexts:
             checks = None if sweep else self.required_checks(head)
             if sweep:
-                from tools.ci_main_sweep import qualify
+                from tools.ci_main_sweep import qualify, validation_runs
 
                 run = self.run(origin["run"])
-                qualify(self, run)
                 if run.get("head_sha") != head:
                     raise ValueError("Sweep origin source differs from its receipt")
+                current = validation_runs(self, head)
+                if not current or current[0]["id"] != run["id"]:
+                    raise ValueError("Sweep origin is no longer the latest production validation")
+                qualify(self, run)
             else:
                 run = self.latest_run(PLATFORM, head, ("pull_request",))
             selection, upload = self.selection(run)

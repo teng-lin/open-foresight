@@ -842,6 +842,107 @@ class CoordinatorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "source differs"):
             self.reader.verify_origin(result["jobs"]["macos"])
 
+    def test_chained_sweep_cannot_hide_newer_production_readiness(self):
+        for status, conclusion in (
+            ("completed", "failure"),
+            ("completed", "cancelled"),
+            ("in_progress", None),
+            ("queued", None),
+            ("completed", "success"),
+        ):
+            with self.subTest(status=status, conclusion=conclusion):
+                reader = FixtureReader()
+                original = run(40, source=SOURCE, event="workflow_dispatch")
+                original["display_title"] = sweep.sweep_title(SOURCE, "production")
+                reader.origins.append(original)
+                reader.job_rows[40] = reader.job_rows[10]
+                reader.selection_record["sweep"] = True
+                receipt = coordinator.sweep_receipt(reader, original, BEFORE)
+                newer = run(50, source=SOURCE, event="workflow_dispatch")
+                newer.update(
+                    display_title=sweep.sweep_title(SOURCE, "production"),
+                    status=status,
+                    conclusion=conclusion,
+                )
+                reader.origins.append(newer)
+                with self.assertRaisesRegex(ValueError, "latest production validation"):
+                    reader.verify_origin(receipt["jobs"]["macos"])
+
+    def test_chained_sweep_ignores_newer_exercise_and_unrelated_runs(self):
+        original = run(40, source=SOURCE, event="workflow_dispatch")
+        original["display_title"] = sweep.sweep_title(SOURCE, "production")
+        self.reader.origins.append(original)
+        self.reader.job_rows[40] = self.reader.job_rows[10]
+        self.reader.selection_record["sweep"] = True
+        receipt = coordinator.sweep_receipt(self.reader, original, BEFORE)
+        for namespace, event in (("exercise", "workflow_dispatch"), ("production", "push")):
+            newer = run(50, source=SOURCE, event=event)
+            newer.update(
+                display_title=sweep.sweep_title(SOURCE, namespace),
+                status="completed",
+                conclusion="failure",
+            )
+            self.reader.origins.append(newer)
+        self.reader.verify_origin(receipt["jobs"]["macos"])
+
+    def test_verified_superseded_duplicate_does_not_strand_sweep_or_chain(self):
+        original = run(30, source=SOURCE, event="workflow_dispatch")
+        original["display_title"] = sweep.sweep_title(SOURCE, "production")
+        duplicate = run(40, source=SOURCE, event="workflow_dispatch")
+        duplicate["display_title"] = original["display_title"]
+        self.reader.origins.extend((original, duplicate))
+        self.reader.job_rows[30] = self.reader.job_rows[10]
+        self.reader.job_rows[40] = [job(99, "changes")]
+        self.reader.selection_record["sweep"] = True
+        active = self.reader.selection_record
+        superseded = {
+            **active,
+            "superseded": True,
+            "selection": dict.fromkeys(sweep.application_selection(), False),
+        }
+
+        def artifact(record, *args):
+            return (superseded if record["id"] == 40 else active), self.reader.proof
+
+        with (
+            patch.object(self.reader, "artifact", side_effect=artifact),
+            patch.object(coordinator, "authorize"),
+            patch.object(coordinator, "selected_on_push", return_value={}),
+            patch.object(self.reader, "proposal", return_value={"decision": "sweep"}),
+        ):
+            receipt = coordinator.reconcile(self.reader, SOURCE, BEFORE)
+            self.assertEqual(receipt["decision"], "validated")
+            self.assertEqual(receipt["jobs"]["macos"]["run"], 30)
+            self.reader.verify_origin(receipt["jobs"]["macos"])
+            # Invalid, partial or unsuccessful no-ops are never ignored.
+            for change in (
+                {"superseded": False},
+                {"sweep": False},
+                {"sweep_namespace": "exercise"},
+                {"selection": {**superseded["selection"], "macos": True}},
+                {"selection": dict.fromkeys(superseded["selection"], 0)},
+            ):
+                with self.subTest(change=change), patch.dict(superseded, change):
+                    with self.assertRaisesRegex(ValueError, "latest production validation"):
+                        self.reader.verify_origin(receipt["jobs"]["macos"])
+            duplicate["conclusion"] = "failure"
+            with self.assertRaisesRegex(ValueError, "latest production validation"):
+                self.reader.verify_origin(receipt["jobs"]["macos"])
+
+    def test_unverifiable_newer_duplicate_never_uncovers_old_green_sweep(self):
+        original = run(30, source=SOURCE, event="workflow_dispatch")
+        original["display_title"] = sweep.sweep_title(SOURCE, "production")
+        self.reader.origins.append(original)
+        self.reader.job_rows[30] = self.reader.job_rows[10]
+        self.reader.selection_record["sweep"] = True
+        receipt = coordinator.sweep_receipt(self.reader, original, BEFORE)
+        duplicate = run(40, source=SOURCE, event="workflow_dispatch")
+        duplicate["display_title"] = original["display_title"]
+        self.reader.origins.append(duplicate)
+        with patch.object(self.reader, "artifact", side_effect=ValueError("bad checksum")):
+            with self.assertRaisesRegex(ValueError, "latest production validation"):
+                self.reader.verify_origin(receipt["jobs"]["macos"])
+
     def test_issue_tracking_is_current_head_only_and_ignores_pending(self):
         result = {"source": SOURCE, "decision": "failed", "run": 40}
         with (

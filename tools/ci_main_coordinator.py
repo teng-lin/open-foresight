@@ -18,7 +18,7 @@ from tools.ci_main_evidence import (  # noqa: E402
     scoped_run,
     selected_on_push,
 )
-from tools.ci_main_sweep import dispatch, matches_sweep, qualify  # noqa: E402
+from tools.ci_main_sweep import dispatch, qualify, validation_runs  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 INDEX = ROOT / "docs/platforms/ci-rollout-index.json"
@@ -98,15 +98,7 @@ def reconcile(reader, source, before, *, root=ROOT, index=None):
     proposal = reader.proposal(source, before, selected_on_push(root, before, source))
     if proposal["decision"] == "validated":
         return proposal
-    sweeps = sorted(
-        (
-            run
-            for run in reader.runs(PLATFORM, source)
-            if matches_sweep(reader, run, source, "production")
-        ),
-        key=lambda run: run["id"],
-        reverse=True,
-    )
+    sweeps = validation_runs(reader, source)
     if (
         sweeps
         and sweeps[0].get("status") == "completed"
