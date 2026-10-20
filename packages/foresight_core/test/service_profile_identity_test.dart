@@ -915,6 +915,53 @@ void main() {
     await held.reached.timeout(const Duration(seconds: 30));
   }, timeout: const Timeout(Duration(minutes: 3)));
 
+  test('a probe of this profile\'s own slowly starting service that the '
+      'deadline cuts short keeps its own message', () async {
+    final directory = createServiceTestDirectorySync('of-slow-');
+    final shared = '${directory.path}/run';
+    final other = await HookedServiceProcess.start(
+      build,
+      ProfilePaths('${directory.path}/a', shared),
+    );
+    await other.ready();
+    // A stale record makes this startup launch this profile's own service.
+    final profile = ProfilePaths(
+      '${directory.path}/b',
+      '${directory.path}/own',
+    );
+    writeCrashRecord(profile, shared);
+    final launcher = await build.launcher(directory);
+    runtimeConfiguration.environment['FORESIGHT_SERVICE'] = launcher.executable;
+    final proxy = ServiceFaultProxy();
+    addTearDown(proxy.close);
+    // Its first status result is held until the deadline ends that probe.
+    final own = '${profile.runtime}/application.sock';
+    final held = proxy.hold(
+      ProxyDirection.toClient,
+      where: (frame) =>
+          frame.connection.endpoint == own &&
+          frame.method == 'status' &&
+          frame.json?.containsKey('result') == true,
+    );
+    addTearDown(held.release);
+    await expectLater(
+      proxy.run(
+        () =>
+            ensureService(profile, startupTimeout: const Duration(seconds: 20)),
+      ),
+      throwsA(
+        isA<TimeoutException>().having(
+          (error) => error.message,
+          'message',
+          'Application service did not answer its startup status probe',
+        ),
+      ),
+    );
+    // A bound only.
+    await held.reached.timeout(const Duration(seconds: 30));
+    expect(launcher.launched, hasLength(1));
+  }, timeout: const Timeout(Duration(minutes: 3)));
+
   test('an owner removes a link or a regular file at its socket path as '
       'stale, never what a link points to', () async {
     final directory = createServiceTestDirectorySync('of-notsock-');

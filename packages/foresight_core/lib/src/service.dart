@@ -93,24 +93,35 @@ bool servesAnotherProfile(
   }
   final lock = '${profile.data}/.application.lock';
   if (FileSystemEntity.typeSync(lock, followLinks: false) !=
-          FileSystemEntityType.file ||
-      serviceEndpoint(profile) != endpoint) {
+      FileSystemEntityType.file) {
     return true;
   }
   if (Platform.isLinux) {
     final holders = _posixLockHolders(lock);
     final pid = status['pid'];
-    return holders == null || pid is! int || !holders.contains(pid);
+    if (holders == null || pid is! int || !holders.contains(pid)) return true;
+  } else if (_profileLockFree(lock)) {
+    return true;
   }
-  return _profileLockFree(lock);
+  // The lock was held when checked; a new owner that holds it claims the
+  // record at once, so a record that still leads here is its holder's.
+  return serviceEndpoint(profile) != endpoint;
 }
 
 /// The pids holding a POSIX write lock on [lock], from /proc/locks, or null
-/// if that cannot be read. Only the inode is compared: btrfs reports a
-/// subvolume's device to stat but the file system's in /proc/locks, and a
-/// lock on another file with the same inode would also need this pid.
+/// if that cannot be read; callers then refuse. Only the inode is compared,
+/// because btrfs reports a subvolume's device to stat (0:31, 0:58) but the
+/// file system's (00:1d) in /proc/locks. That fails open only if the same
+/// pid also locks a file with this inode in another subvolume, which is very
+/// unlikely. In another pid namespace, such as a flatpak sandbox, pids differ
+/// and the check fails closed.
 Set<int>? _posixLockHolders(String lock) {
-  final stat = Process.runSync('/usr/bin/stat', ['-c', '%i', lock]);
+  final ProcessResult stat;
+  try {
+    stat = Process.runSync('/usr/bin/stat', ['-c', '%i', lock]);
+  } on ProcessException {
+    return null;
+  }
   final inode = int.tryParse(stat.stdout.toString().trim());
   if (stat.exitCode != 0 || inode == null) return null;
   final String table;
@@ -2272,10 +2283,11 @@ class _ClosingService implements Exception {
 
 typedef ServiceStartup = ({ServiceClient client, Map<String, dynamic> status});
 
-/// The startup deadline ended a status probe before its reply.
+/// The startup deadline ended a status probe of [endpoint] before its reply.
 class _ProbeCutShort extends TimeoutException {
-  _ProbeCutShort()
+  _ProbeCutShort(this.endpoint)
     : super('Application service did not answer its startup status probe');
+  final String endpoint;
 }
 
 /// The service of another profile answered at [endpoint] (SL-7), which a
@@ -2331,7 +2343,7 @@ Future<ServiceStartup> _connectCompatibleService(
                   '${_describeDuration(statusProbeLimit)}; it may be busy '
                   'or hung.',
                 )
-              : _ProbeCutShort(),
+              : _ProbeCutShort(path),
         );
     final value = Map<String, dynamic>.from(reply as Map);
     // Another profile's owner is never ours, whatever its version. The first
@@ -2868,11 +2880,13 @@ Future<ServiceStartup> _ensureService(
         // another profile's service now uses. Never attach there; once this
         // profile's lock is free, the launch below replaces the record (S1).
         staleRecord = message;
-      } on _ProbeCutShort {
-        // A probe the deadline cut short says nothing new about the stale
-        // record this startup already found.
-        if (staleRecord == null) rethrow;
-        throw deadlineFailure();
+      } on _ProbeCutShort catch (cut) {
+        // A probe of the stale record's endpoint that the deadline cut short
+        // says nothing new about it. Any other probe, such as one of this
+        // profile's slowly starting owner, keeps its own message.
+        final stale = staleRecord;
+        if (stale == null || !refused.contains(cut.endpoint)) rethrow;
+        throw TimeoutException(stale);
       } on _ClosingService catch (closing) {
         closingOwner = true;
         try {
