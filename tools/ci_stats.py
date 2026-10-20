@@ -493,7 +493,11 @@ def report(runs, prs, trees, current_since):
         )
     per_merge = []
     for pull in prs:
-        if not pull.get("mergedAt") or not pull.get("mergeCommit"):
+        if (
+            not pull.get("mergedAt")
+            or not pull.get("mergeCommit")
+            or not pull.get("measurement_window", True)
+        ):
             continue
         sha, head = pull["mergeCommit"]["oid"], pull["headRefOid"]
         identity = (
