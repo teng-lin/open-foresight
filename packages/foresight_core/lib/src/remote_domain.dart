@@ -290,7 +290,7 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
           // An owner that answers status but never the attach must not hold
           // the reconnect, and with it every request waiting for it. A
           // timeout fails this attempt like any other: the connection is
-          // closed and the next attempt follows the backoff.
+          // retired and the next attempt follows the backoff.
           await _attachDesktop(next).timeout(
             attachLimit,
             onTimeout: () => throw TimeoutException(
@@ -302,7 +302,9 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
         attempt.complete();
         return;
       } catch (error, stack) {
-        await next?.close();
+        // Requests may already have gone to [next], for example while its
+        // attach timed out; the owner may still answer them.
+        next?.retire();
         helper.state = 'application service reconnect failed: $error';
         helper.changed?.call();
         attempt.completeError(error, stack);

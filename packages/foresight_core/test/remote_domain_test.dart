@@ -1022,6 +1022,48 @@ void main() {
     await eventually(() => approvals.isNotEmpty);
   });
 
+  test('a request sent on a reconnect whose attach then timed out still '
+      'gets its owner\'s answer', () async {
+    var answerAttach = true;
+    Map<String, dynamic>? held;
+    Socket? heldOn;
+    f.handler = (socket, request) {
+      if (!answerAttach) {
+        if (request['method'] == Operation.securityAttachDesktop.wire) return;
+        if (request['method'] == 'notes.list') {
+          held = request;
+          heldOn = socket;
+          return;
+        }
+      }
+      f.reply(socket, request, null);
+    };
+    await f.remote.enableDesktopApprovals((_) {});
+    f.remote.attachLimit = const Duration(milliseconds: 500);
+    var paused = false;
+    f.remote.reconnectPause = (_) {
+      paused = true;
+      return Completer<void>().future;
+    };
+    answerAttach = false;
+    f.sockets.last.destroy();
+    // The reconnect waits for its attach; a request goes to that connection.
+    await eventually(
+      () =>
+          f.requests
+              .where((r) => r['method'] == Operation.securityAttachDesktop.wire)
+              .length ==
+          2,
+      timeout: const Duration(seconds: 30),
+    );
+    final listed = f.remote.command(Operation.notesList);
+    await eventually(() => held != null);
+    // The attach timed out and the attempt failed.
+    await eventually(() => paused, timeout: const Duration(seconds: 30));
+    f.reply(heldOn!, held!, ['answered after the timeout']);
+    expect(await listed, ['answered after the timeout']);
+  });
+
   test('a request waiting for the reconnect ends a pause after the floor, '
       'and the backoff goes on', () async {
     f.handler = (socket, request) => f.reply(socket, request, ['listed']);
