@@ -28,6 +28,10 @@ const _outcomeUnknownMessage =
     'not have completed.';
 // The whole flush of closing connections, not each one.
 const _closingFlushBound = Duration(seconds: 2);
+// How long a retired connection waits for its owner's remaining answers. A
+// closing owner sends them all before its first await, then flushes them
+// within its flush bound; the margin covers scheduling under load.
+const _retiredConnectionGrace = Duration(seconds: 5);
 
 Future<void> _flushQuietly(Socket socket) async {
   try {
@@ -524,8 +528,13 @@ class ServiceClient {
   final events = StreamController<Map<String, dynamic>>.broadcast();
   int _next = 0;
   bool _closed = false;
+  bool _retired = false;
+  Timer? _retirement;
   RpcError? _failure;
-  bool get isClosed => _closed;
+
+  /// Whether no request is sent on this connection any more: it is closed,
+  /// or [retire]d and waiting for its last answers.
+  bool get isClosed => _closed || _retired;
   ServiceClient._(this.socket, this._maxMessageBytes, this.endpoint) {
     unawaited(socket.done.catchError((Object _) {}));
     final frames = _FrameSplitter(_maxMessageBytes);
@@ -576,7 +585,28 @@ class ServiceClient {
       _methods.remove(value['id']);
       _requestIds.remove(value['id']);
       unawaited(controller.close());
+      _closeIfSettled();
     }
+  }
+
+  /// Stop sending on this connection, but let the requests already written
+  /// settle. A closing owner that refused one of them answers every other
+  /// itself, with a refusal or its own outcomeUnknown, before it ends the
+  /// connection. Closing at once would fail them all locally as
+  /// outcomeUnknown, so a refused one would never be sent to the next owner
+  /// and its caller would be told it may have completed. Later requests fail
+  /// at once as notSent. The connection closes when its last pending request
+  /// settles, or after [grace].
+  void retire({Duration grace = _retiredConnectionGrace}) {
+    if (_closed || _retired) return;
+    _retired = true;
+    _traceServiceTransport('client retired with ${_pending.length} pending');
+    _retirement = Timer(grace, () => unawaited(close()));
+    _closeIfSettled();
+  }
+
+  void _closeIfSettled() {
+    if (_retired && _pending.isEmpty) unawaited(close());
   }
 
   /// Bound each reply frame; the default matches the service's 16 MiB limit.
@@ -612,6 +642,7 @@ class ServiceClient {
   void _fail(RpcError inFlight, RpcError later) {
     if (_closed) return;
     _closed = true;
+    _retirement?.cancel();
     _failure ??= later;
     for (final c in _pending.values) {
       c.addError(inFlight);
@@ -636,10 +667,11 @@ class ServiceClient {
         _requestIds.remove(id);
         if (_pending.remove(id) != null && !_closed) {
           socket.writeln(jsonEncode({'cancel': id}));
+          _closeIfSettled();
         }
       },
     );
-    final frame = _closed
+    final frame = isClosed
         ? null
         : utf8.encode(jsonEncode({'id': id, 'method': method, 'args': args}));
     if (frame == null) {
@@ -704,6 +736,7 @@ class ServiceClient {
       pending?.addError(RpcError(RpcErrorCode.cancelled, 'Answer cancelled'));
       if (pending != null) unawaited(pending.close());
     }
+    if (ids.isNotEmpty) _closeIfSettled();
     return ids.isNotEmpty;
   }
 
@@ -793,12 +826,13 @@ class ServiceConnection {
                   _resendable(error)) {
                 handedOff = true;
                 _traceServiceTransport('connection resends $method: $error');
-                unawaited(() async {
-                  // A closing owner keeps the refused connection open.
-                  if (identical(_client, client)) _client = null;
-                  await client.close();
-                  await send(resent: true);
-                }());
+                // New requests go to the next owner. The closing owner
+                // answers this connection's other requests itself, so it is
+                // retired rather than closed: closing it would report them
+                // as possibly completed, and never resend a refused one.
+                if (identical(_client, client)) _client = null;
+                client.retire();
+                unawaited(send(resent: true));
                 return;
               }
               output.addError(error, stack);

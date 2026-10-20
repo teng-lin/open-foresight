@@ -296,9 +296,12 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
     if (!identical(client, failed)) return;
     unawaited(_reconnect());
     final attempt = _attempt!.future;
-    // A closing owner keeps a refused connection open until it releases the
-    // profile; the handoff in ensureService waits for that itself.
-    await failed.close();
+    // The closing owner answers the other requests on [failed] itself, with
+    // a refusal (they are sent once more) or its own outcomeUnknown. Closing
+    // the connection now would fail them all locally as outcomeUnknown, so
+    // it is retired: nothing new is sent on it, and it closes once they
+    // settle. The handoff in ensureService waits for the owner itself.
+    failed.retire();
     try {
       await attempt;
     } catch (_) {

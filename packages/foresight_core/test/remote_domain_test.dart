@@ -526,6 +526,99 @@ void main() {
     ]);
   });
 
+  test('a closing refusal leaves the other requests on its connection to '
+      'the owner\'s own answers: a refused one is sent once more, a '
+      'dispatched one is outcomeUnknown (SL-9)', () async {
+    const closingText =
+        'Application service is shutting down; retry after it exits.';
+    const ownerUnknown =
+        'Application service stopped before this request finished; it may '
+        'or may not have completed.';
+    final closing = f.sockets.last;
+    final previous = f.remote.client;
+    final held = <Map<String, dynamic>>[];
+    void answer(Map<String, dynamic> request, Map<String, Object?> error) =>
+        closing.writeln(
+          jsonEncode({'id': request['id'], 'error': error, 'done': true}),
+        );
+    f.handler = (socket, request) {
+      final method = request['method'] as String;
+      if (!identical(socket, closing)) {
+        // The next owner answers everything.
+        f.reply(socket, request, 'next owner: $method');
+        // The closing owner's other answers arrive only after the first
+        // refused request reached the next owner.
+        if (method == 'notes.list') {
+          for (final request in held) {
+            answer(
+              request,
+              request['method'] == 'meetings.list'
+                  ? {
+                      'code': 'unavailable',
+                      'message': closingText,
+                      'reason': 'closing',
+                    }
+                  : {
+                      'code': 'unavailable',
+                      'message': ownerUnknown,
+                      'reason': 'outcomeUnknown',
+                    },
+            );
+          }
+        }
+        return;
+      }
+      if (method == 'notes.list') {
+        answer(request, {
+          'code': 'unavailable',
+          'message': closingText,
+          'reason': 'closing',
+        });
+      } else {
+        held.add(request);
+      }
+    };
+    final first = f.remote.command(Operation.notesList);
+    final second = f.remote.command(Operation.meetingsList);
+    final dispatched = f.remote
+        .command(Operation.notesSave, {'title': 'T', 'body': 'B'})
+        .then<Object?>(
+          (value) => fail('Expected a failure, got $value'),
+          onError: (Object error) => error,
+        );
+    expect(await first, 'next owner: notes.list');
+    expect(await second, 'next owner: meetings.list');
+    expect(
+      await dispatched,
+      isA<RpcError>()
+          .having((error) => error.message, 'message', ownerUnknown)
+          .having(
+            (error) => error.toJson()['reason'],
+            'reason',
+            'outcomeUnknown',
+          ),
+    );
+    for (final (method, count) in [
+      ('notes.list', 2),
+      ('meetings.list', 2),
+      ('notes.save', 1),
+    ]) {
+      expect(f.requests.where((r) => r['method'] == method), hasLength(count));
+    }
+    // With nothing left pending, the retired connection closed.
+    expect(previous.isClosed, isTrue);
+    await expectLater(
+      previous.call('after.handoff'),
+      throwsA(
+        isA<RpcError>().having(
+          (error) => error.toJson()['reason'],
+          'reason',
+          'notSent',
+        ),
+      ),
+    );
+  });
+
   // The desktop cancels with no request ID (generator.cancel()).
   for (final cancelled in <String?>['gen-3', null, 'another-answer']) {
     test('a cancel during the handoff stops only that answer\'s resend '

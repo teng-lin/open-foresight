@@ -138,6 +138,114 @@ void main() {
     });
   }
 
+  test('a closing refusal leaves the other requests on its connection to '
+      'the owner\'s own answers: a refused one is sent once more, a '
+      'dispatched one is outcomeUnknown (SL-9)', () async {
+    const ownerUnknown =
+        'Application service stopped before this request finished; it may '
+        'or may not have completed.';
+    final connection = ServiceConnection(f.profile);
+    final previous = await connection.connect();
+    final closing = f.sockets.last;
+    final held = <Map<String, dynamic>>[];
+    void answer(Map<String, dynamic> request, Map<String, Object?> error) =>
+        closing.writeln(
+          jsonEncode({'id': request['id'], 'error': error, 'done': true}),
+        );
+    const refusal = {
+      'code': 'unavailable',
+      'message': closingText,
+      'reason': 'closing',
+    };
+    f.handler = (socket, request) {
+      final method = request['method'] as String;
+      if (!identical(socket, closing)) {
+        f.reply(socket, request, 'next owner: $method');
+        // The closing owner's other answers arrive only after the first
+        // refused request reached the next owner.
+        if (method == 'notes.list') {
+          for (final request in held) {
+            answer(
+              request,
+              request['method'] == 'meetings.list'
+                  ? refusal
+                  : {
+                      'code': 'unavailable',
+                      'message': ownerUnknown,
+                      'reason': 'outcomeUnknown',
+                    },
+            );
+          }
+        }
+        return;
+      }
+      if (method == 'notes.list') {
+        answer(request, refusal);
+      } else {
+        held.add(request);
+      }
+    };
+    final first = connection.stream('notes.list').toList();
+    final second = connection.stream('meetings.list').toList();
+    final dispatched = connection
+        .stream('notes.save')
+        .toList()
+        .then<Object?>(
+          (value) => fail('Expected a failure, got $value'),
+          onError: (Object error) => error,
+        );
+    expect(await first, ['next owner: notes.list']);
+    expect(await second, ['next owner: meetings.list']);
+    expect(
+      await dispatched,
+      rpcError(RpcErrorCode.unavailable, ownerUnknown, 'outcomeUnknown'),
+    );
+    for (final (method, count) in [
+      ('notes.list', 2),
+      ('meetings.list', 2),
+      ('notes.save', 1),
+    ]) {
+      expect(f.requests.where((r) => r['method'] == method), hasLength(count));
+    }
+    // With nothing left pending, the retired connection closed, and new
+    // requests use the next owner's.
+    expect(previous.isClosed, isTrue);
+    expect(await connection.connect(), isNot(same(previous)));
+    await connection.close();
+  });
+
+  test('a retired client sends nothing new and closes once its pending '
+      'requests settle, or after its grace', () async {
+    final client = await ServiceClient.connect(
+      '${f.profile.runtime}/application.sock',
+    );
+    final answered = client.call('fixture.answered');
+    final unanswered = client.call('fixture.unanswered');
+    final failure = expectLater(
+      unanswered,
+      throwsA(disconnected('outcomeUnknown')),
+    );
+    await eventually(
+      () => f.requests.any((r) => r['method'] == 'fixture.unanswered'),
+    );
+    client.retire(grace: const Duration(milliseconds: 300));
+    expect(client.isClosed, isTrue);
+    await expectLater(
+      client.call('after.retire'),
+      throwsA(disconnected('notSent')),
+    );
+    // The owner still answers a request written before the retirement.
+    f.reply(
+      f.sockets.last,
+      f.requests.singleWhere((r) => r['method'] == 'fixture.answered'),
+      'answered',
+    );
+    expect(await answered, 'answered');
+    // One that is never answered fails at the grace.
+    await failure;
+    expect(f.requests.where((r) => r['method'] == 'after.retire'), isEmpty);
+  });
+
   test('a request is resent at most once', () async {
     final connection = ServiceConnection(f.profile);
     f.handler = (socket, request) => socket.writeln(
