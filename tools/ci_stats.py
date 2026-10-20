@@ -62,13 +62,12 @@ def failure_rate(values):
 def first_attempt_state(run):
     if run.get("run_attempt", 1) == 1 and run.get("status") not in (None, "completed"):
         return "incomplete"
+    if run.get("run_attempt", 1) == 1:
+        if run.get("conclusion") == "cancelled":
+            return "cancelled"
+        if run.get("conclusion") in FAILURES:
+            return "failure"
     first = [job for job in run["jobs"] if job.get("run_attempt", 1) == 1]
-    if (
-        not first
-        and run.get("run_attempt", 1) == 1
-        and run.get("conclusion") in FAILURES
-    ):
-        return "failure"
     return outcome(first)
 
 
@@ -125,11 +124,13 @@ def operational_report(runs):
         category = run_category(run)
         categories[category] += run["minutes"]
         state = first_attempt_state(run)
-        workflows.append(state)
-        if run["event"] == "pull_request":
+        ordinary = run.get("qualification") is not True
+        if ordinary:
+            workflows.append(state)
+        if ordinary and run["event"] == "pull_request":
             commits[run["source"]].append(state)
         for job in run["jobs"]:
-            if job.get("run_attempt", 1) == 1:
+            if ordinary and job.get("run_attempt", 1) == 1:
                 jobs.append(outcome([job]))
             if job.get("created_at") and job.get("started_at"):
                 queue.append(
@@ -149,6 +150,7 @@ def operational_report(runs):
                         "attempt": job["run_attempt"],
                         "conclusion": job["conclusion"],
                         "class": failure_class(job),
+                        "qualification": not ordinary,
                         "evidence": job.get("failure_evidence"),
                     }
                 )
@@ -170,6 +172,7 @@ def operational_report(runs):
                 "category": category,
                 "cache_state": run.get("cache_state", "unknown"),
                 "selection": run.get("selection", "unknown"),
+                "qualification": not ordinary,
             },
             sort_keys=True,
         )
@@ -209,7 +212,19 @@ def operational_report(runs):
         "first_attempt_jobs": failure_rate(jobs),
         "first_attempt_pr_commits": failure_rate(commit_states),
         "first_attempt_pr_workflows": failure_rate(
-            [first_attempt_state(run) for run in runs if run["event"] == "pull_request"]
+            [
+                first_attempt_state(run)
+                for run in runs
+                if run["event"] == "pull_request"
+                and run.get("qualification") is not True
+            ]
+        ),
+        "qualification_first_attempts": failure_rate(
+            [
+                first_attempt_state(run)
+                for run in runs
+                if run.get("qualification") is True
+            ]
         ),
         "first_attempt_job_conclusions": dict(
             Counter(
@@ -455,7 +470,9 @@ def report(runs, prs, trees, current_since):
         )
         start = min(stamp(run["created_at"]) for run in group)
         readiness = {}
+        readiness_attempts = {}
         first_green = None
+        first_green_attempt = None
         events = sorted(
             (
                 job
@@ -467,10 +484,12 @@ def report(runs, prs, trees, current_since):
         )
         for job in events:
             readiness[job["name"]] = job.get("conclusion")
+            readiness_attempts[job["name"]] = job["run_attempt"]
             if set(readiness) == REQUIRED and all(
                 value == "success" for value in readiness.values()
             ):
                 first_green = (stamp(job["completed_at"]) - start).total_seconds() / 60
+                first_green_attempt = max(readiness_attempts.values())
                 break
         per_push.append(
             {
@@ -480,6 +499,7 @@ def report(runs, prs, trees, current_since):
                 "final": sha == pull.get("headRefOid"),
                 "green_minutes": (end - start).total_seconds() / 60 if green else None,
                 "first_green_minutes": first_green,
+                "first_green_attempt": first_green_attempt,
                 "runner_minutes": sum(run["minutes"] for run in group),
                 "missing_or_red": sorted(
                     REQUIRED
@@ -527,6 +547,13 @@ def report(runs, prs, trees, current_since):
                 push["first_green_minutes"]
                 for push in per_push
                 if push["first_green_minutes"] is not None
+            ]
+        ),
+        "push_to_first_attempt_green": summary(
+            [
+                push["first_green_minutes"]
+                for push in per_push
+                if push["first_green_attempt"] == 1
             ]
         ),
         "push_to_green": summary(

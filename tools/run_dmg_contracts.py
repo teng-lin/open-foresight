@@ -17,19 +17,23 @@ class ContractResult(unittest.TextTestResult):
 
     def startTest(self, test):
         super().startTest(test)
-        self.cases[test.id()] = ET.Element("testcase", name=test.id())
+        self.case(test)
+
+    def case(self, test):
+        # unittest reports class/module setup failures without startTest.
+        return self.cases.setdefault(test.id(), ET.Element("testcase", name=test.id()))
 
     def addFailure(self, test, err):
         super().addFailure(test, err)
-        ET.SubElement(self.cases[test.id()], "failure").text = self.failures[-1][1]
+        ET.SubElement(self.case(test), "failure").text = self.failures[-1][1]
 
     def addError(self, test, err):
         super().addError(test, err)
-        ET.SubElement(self.cases[test.id()], "error").text = self.errors[-1][1]
+        ET.SubElement(self.case(test), "error").text = self.errors[-1][1]
 
     def addSkip(self, test, reason):
         super().addSkip(test, reason)
-        ET.SubElement(self.cases[test.id()], "skipped").text = reason
+        ET.SubElement(self.case(test), "skipped").text = reason
 
 
 def diagnostics():
@@ -75,11 +79,13 @@ def run(suite, output):
     report.extend(result.cases.values())
     output.parent.mkdir(parents=True, exist_ok=True)
     ET.ElementTree(report).write(output, encoding="utf-8", xml_declaration=True)
-    return (
-        0
-        if result.wasSuccessful() and result.testsRun == 2 and not result.skipped
-        else 1
-    )
+    successful = result.wasSuccessful() and result.testsRun == 2 and not result.skipped
+    if not successful:
+        print(
+            f"DMG contracts failed: ran={result.testsRun}, expected=2, skipped={len(result.skipped)}, failures={len(result.failures)}, errors={len(result.errors)}",
+            file=sys.stderr,
+        )
+    return 0 if successful else 1
 
 
 def main():

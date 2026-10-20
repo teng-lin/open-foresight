@@ -554,11 +554,7 @@ class SelectionTests(unittest.TestCase):
                 from tools import platform_python_tests as contracts
 
                 owners = contracts.owner_gates(path)
-                expected = (
-                    set(owners)
-                    if owners
-                    else {"packaging", "linux-build", "linux-test"}
-                )
+                expected = {"packaging", "linux-build", "linux-test"} | set(owners)
                 if "packaging" in expected:
                     expected.update(("linux-build", "linux-test"))
                 if "linux-build" in expected:

@@ -103,6 +103,9 @@ def verify(directory):
         directory / "observations.json"
     ).exists() and "observations.json" not in manifest["checksums"]:
         raise ValueError("CI annotations are not frozen")
+    for log in (directory / "logs").rglob("*.txt"):
+        if log.relative_to(directory).as_posix() not in manifest["checksums"]:
+            raise ValueError("Consumed CI source logs are not frozen")
     for name, digest in manifest["checksums"].items():
         member = Path(name)
         if member.is_absolute() or ".." in member.parts or member.as_posix() != name:
