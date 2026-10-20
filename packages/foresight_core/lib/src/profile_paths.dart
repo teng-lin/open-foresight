@@ -38,9 +38,28 @@ String? _macHomeDirectory() {
   return value.startsWith(prefix) ? value.substring(prefix.length) : null;
 }
 
+/// The 24-hex identity of the profile whose canonical data path is [data].
+String _profileIdentity(String data) =>
+    sha256.convert(utf8.encode(data)).toString().substring(0, 24);
+
 class ProfilePaths {
   final String data, runtime;
-  const ProfilePaths(this.data, this.runtime);
+
+  /// The directory a default Linux runtime under XDG_RUNTIME_DIR lives in,
+  /// which must be private too: under a shared XDG_RUNTIME_DIR another user
+  /// could otherwise create it first, and clients released before per-profile
+  /// runtimes use it as their runtime (S5). Null otherwise: the private
+  /// profile directory already protects the `$data/runtime` fallback, which
+  /// earlier versions created with the umask's mode.
+  final String? runtimeParent;
+  const ProfilePaths(this.data, this.runtime, {this.runtimeParent});
+
+  /// Which profile this is: 24 hex digits of the SHA-256 of its canonical
+  /// data path. An owner reports it in status, so a client never attaches to,
+  /// stops or replaces another profile's owner (SL-7). Aliases of one data
+  /// directory share an identity.
+  String get identity => _profileIdentity(canonicalProfilePath(data));
+
   factory ProfilePaths.resolve(Map<String, String> environment, {bool? macOS}) {
     final mac = macOS ?? Platform.isMacOS;
     final home =
@@ -71,21 +90,40 @@ class ProfilePaths {
         throw StateError('macOS TMPDIR must be a private user-owned directory');
       }
     }
-    final identity = sha256
-        .convert(utf8.encode(data))
-        .toString()
-        .substring(0, 24);
+    final profile = _profileIdentity(data).substring(0, 12);
+    // Each profile has its own default runtime, so two profiles share
+    // sockets only when FORESIGHT_RUNTIME says so (D5). An owner started with
+    // the earlier shared Linux default stays reachable through its endpoint
+    // record.
+    // An empty or relative XDG_RUNTIME_DIR is invalid, so it is unset (N3).
+    final xdg = environment['XDG_RUNTIME_DIR'];
+    final xdgRuntime = xdg != null && xdg.startsWith('/') ? xdg : null;
     final runtime = canonicalProfilePath(
       environment['FORESIGHT_RUNTIME'] ??
           (mac
-              ? '$temporary/of-${identity.substring(0, 12)}'
-              : '${environment['XDG_RUNTIME_DIR'] ?? '$data/runtime'}/open-foresight'),
+              ? '$temporary/of-$profile'
+              : xdgRuntime != null
+              ? '$xdgRuntime/open-foresight/$profile'
+              : '$data/runtime/$profile'),
     );
     if (mac && utf8.encode('$runtime/application.sock').length >= 104) {
       throw StateError(
         'FORESIGHT_RUNTIME is too long for macOS Unix sockets; choose a short private directory (under 80 bytes).',
       );
     }
-    return ProfilePaths(data, runtime);
+    if (!mac && utf8.encode('$runtime/application.sock').length >= 108) {
+      throw StateError(
+        'The runtime directory $runtime is too long for Unix sockets; set '
+        'FORESIGHT_RUNTIME to a short private directory (at most 90 bytes).',
+      );
+    }
+    return ProfilePaths(
+      data,
+      runtime,
+      runtimeParent:
+          mac || environment['FORESIGHT_RUNTIME'] != null || xdgRuntime == null
+          ? null
+          : File(runtime).parent.path,
+    );
   }
 }

@@ -42,8 +42,15 @@ Future<void> main(List<String> args) async {
         client = await ServiceClient.connect(serviceEndpoint(profile, record));
       } on SocketException {
         // An owner that died without a clean shutdown leaves its record but
-        // nothing listening; it already stopped, so --stop succeeds.
-        if (mode != '--stop' || !_leftUnclean(profile)) rethrow;
+        // nothing listening; it already stopped, so --stop succeeds. Only
+        // this profile's valid record says so: an invalid one, such as one
+        // naming another profile, says nothing about this profile's owner,
+        // and its next start sets it aside (M2).
+        if (mode != '--stop' ||
+            record is! EndpointValid ||
+            !_leftUnclean(profile)) {
+          rethrow;
+        }
         stderr.writeln(
           'The application service is not running; it stopped without a '
           'clean shutdown, its endpoint record remains, and the next start '
@@ -52,6 +59,19 @@ Future<void> main(List<String> args) async {
         return;
       }
       try {
+        final state = await client.call('status') as Map;
+        // Never report on, stop or signal another profile's owner (SL-7).
+        if (servesAnotherProfile(state, profile, client.endpoint)) {
+          final owner = state['pid'];
+          throw AnotherProfileServing(
+            anotherProfileMessage(
+              profile,
+              client.endpoint,
+              fromRecord: record is EndpointValid,
+              pid: owner is int ? owner : null,
+            ),
+          );
+        }
         if (mode == '--stop-if-idle') {
           final result =
               await client
@@ -75,7 +95,6 @@ Future<void> main(List<String> args) async {
           stdout.writeln(jsonEncode(result));
           return;
         }
-        final state = await client.call('status') as Map;
         if (args.single == '--status') {
           stdout.writeln(jsonEncode(state));
         } else {

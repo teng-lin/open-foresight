@@ -71,6 +71,23 @@ class HelperRestartBudget {
   }
 }
 
+/// A gRPC channel to the helper listening at [socket].
+HelperChannel helperChannel(String socket) => HelperChannel(
+  InternetAddress(socket, type: InternetAddressType.unix),
+  port: 0,
+  options: const ChannelOptions(
+    credentials: ChannelCredentials.insecure(),
+    connectTimeout: Duration(seconds: 3),
+  ),
+);
+
+/// The helper's RAG client over [channel], with its request timeout.
+RagServiceClient helperClient(grpc_api.ClientChannel channel) =>
+    RagServiceClient(
+      channel,
+      options: CallOptions(timeout: const Duration(seconds: 45)),
+    );
+
 class Helper {
   final String socket, storage;
   late final grpc_api.ClientChannel channel;
@@ -96,18 +113,8 @@ class Helper {
   Future<void> Function()? onReady;
   final bool manageProcess;
   Helper(this.socket, this.storage, {this.manageProcess = true}) {
-    channel = HelperChannel(
-      InternetAddress(socket, type: InternetAddressType.unix),
-      port: 0,
-      options: const ChannelOptions(
-        credentials: ChannelCredentials.insecure(),
-        connectTimeout: Duration(seconds: 3),
-      ),
-    );
-    client = RagServiceClient(
-      channel,
-      options: CallOptions(timeout: const Duration(seconds: 45)),
-    );
+    channel = helperChannel(socket);
+    client = helperClient(channel);
   }
   Future<bool> hasActiveModel(String path, String digest, bool useGpu) async {
     if (!path.endsWith('.litertlm')) return false;

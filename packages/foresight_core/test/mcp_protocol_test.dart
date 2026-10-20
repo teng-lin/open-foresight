@@ -6,6 +6,7 @@ import 'dart:io';
 import 'package:test/test.dart';
 import 'package:foresight_core/src/operations.dart';
 import 'package:foresight_core/src/platform_services.dart';
+import 'package:foresight_core/src/profile_paths.dart';
 
 late String mcpKernel;
 
@@ -48,7 +49,11 @@ class McpFixture {
               socket.writeln(
                 jsonEncode({
                   'id': request['id'],
-                  'result': {'ready': true},
+                  // A current service names its profile.
+                  'result': {
+                    'ready': true,
+                    'profile_id': ProfilePaths(root.path, root.path).identity,
+                  },
                   'done': true,
                 }),
               );

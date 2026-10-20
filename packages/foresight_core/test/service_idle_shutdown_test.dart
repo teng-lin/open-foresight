@@ -143,11 +143,19 @@ void main() {
   test(
     'shutdown errors are explicit failure responses rather than successful EOF',
     () async {
-      File('${profile.runtime}/application.sock').deleteSync();
-      Directory('${profile.runtime}/application.sock').createSync();
-      File(
-        '${profile.runtime}/application.sock/blocked',
-      ).writeAsStringSync('cleanup fault');
+      if (Process.runSync('/usr/bin/id', ['-u']).stdout.toString().trim() ==
+          '0') {
+        markTestSkipped('root may remove the socket anyway');
+        return;
+      }
+      // A cleanup fault: the owner can no longer remove its own socket.
+      expect(
+        Process.runSync('/bin/chmod', ['500', profile.runtime]).exitCode,
+        0,
+      );
+      addTearDown(
+        () => Process.runSync('/bin/chmod', ['700', profile.runtime]),
+      );
       await expectLater(
         client.call('service.stop_if_idle'),
         throwsA(

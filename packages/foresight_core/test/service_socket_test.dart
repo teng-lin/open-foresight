@@ -6,7 +6,68 @@ import 'package:foresight_core/src/service_socket.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
 
+/// Publish [binding]; written so it also runs against a synchronous publish.
+Future<void> publish(
+  ServiceSocketBinding binding,
+  void Function(Socket) onClient,
+) async => binding.publish(onClient);
+
+/// A listener that answers every connection with [name].
+void Function(Socket) answer(String name) => (socket) async {
+  socket.write(name);
+  await socket.flush();
+  socket.destroy();
+};
+
+/// What the listener at [path] answers.
+Future<String> answerAt(String path) async {
+  final client = await Socket.connect(
+    InternetAddress(path, type: InternetAddressType.unix),
+    0,
+  );
+  try {
+    return await client.cast<List<int>>().transform(utf8.decoder).join();
+  } finally {
+    client.destroy();
+  }
+}
+
 void main() {
+  test('publishing never replaces a live socket, but takes over one nobody '
+      'listens on (S2)', () async {
+    final directory = createTestTempDirectorySync('of-socket-');
+    final path = '${directory.path}/application.sock';
+    final first = await ServiceSocketBinding.bind(path);
+    final second = await ServiceSocketBinding.bind(path);
+    try {
+      await publish(first, answer('first'));
+      expect(first.linkedForTesting, isTrue);
+      // Two owners sharing a runtime start together: the later one must not
+      // take the earlier one's live socket.
+      await expectLater(
+        publish(second, answer('second')),
+        throwsA(
+          isA<SocketPathInUse>().having((error) => error.live, 'live', isTrue),
+        ),
+      );
+      expect(await answerAt(path), 'first');
+      // Once nobody listens there, a new listener takes the path over.
+      await first.close();
+      final third = await ServiceSocketBinding.bind(path);
+      try {
+        await publish(third, answer('third'));
+        expect(third.linkedForTesting, isTrue);
+        expect(await answerAt(path), 'third');
+      } finally {
+        await third.close();
+      }
+    } finally {
+      await first.close();
+      await second.close();
+      directory.deleteSync(recursive: true);
+    }
+  });
+
   test(
     'closing a retired listener preserves its replacement endpoint',
     () async {
@@ -18,12 +79,12 @@ void main() {
       try {
         old = await ServiceSocketBinding.bind(path);
         expect(File(path).existsSync(), isFalse);
-        old.publish((socket) => socket.destroy());
+        await publish(old, (socket) => socket.destroy());
         expect(FileStat.statSync(path).mode & 0x1ff, 0x180);
         // A new owner has removed the predecessor's stale published endpoint.
         File(path).deleteSync();
         replacement = await ServiceSocketBinding.bind(path);
-        replacement.publish((socket) async {
+        await publish(replacement, (socket) async {
           socket.write('replacement');
           await socket.flush();
           socket.destroy();
@@ -67,7 +128,7 @@ void main() {
         final rejected = expectLater(publication, throwsStateError);
         await old.close();
         replacement = await ServiceSocketBinding.bind(path);
-        replacement.publish((socket) => socket.destroy());
+        await publish(replacement, (socket) => socket.destroy());
         pause.complete();
         await rejected;
         expect(File(path).existsSync(), isTrue);
@@ -92,7 +153,7 @@ void main() {
     ServiceSocketBinding? candidate;
     try {
       owner = await ServiceSocketBinding.bind(path);
-      owner.publish((socket) => socket.destroy());
+      await publish(owner, (socket) => socket.destroy());
       candidate = await ServiceSocketBinding.bind(path);
       await candidate.close();
       expect(File(path).existsSync(), isTrue);

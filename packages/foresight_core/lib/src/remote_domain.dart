@@ -10,6 +10,8 @@ import 'profile_paths.dart';
 import 'service.dart';
 import 'store.dart';
 import 'generated/helper_control.pb.dart' as control;
+import 'generated/rag_service.pbgrpc.dart' show RagServiceClient;
+import 'package:grpc/service_api.dart' as grpc_api;
 
 /// Whether a failed request never took effect, so it may be sent once more
 /// after a handoff: a closing owner refused it, or it was never sent.
@@ -22,7 +24,7 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
   @override
   final Store store;
   @override
-  final Helper helper;
+  final RemoteHelper helper;
   @override
   GenerationStatus? generator;
   @override
@@ -177,6 +179,8 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
         }
         client = next;
         runtime.client = next;
+        // The next owner may serve from another runtime.
+        helper.retarget(_helperSocket(next));
         _listen();
         _apply(startup.status);
         if (_approvalEvents != null) await _attachDesktop(next);
@@ -249,9 +253,17 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
     }
   }
 
+  /// The helper beside the endpoint [client] reached. Reading the endpoint
+  /// record again could name another runtime by now (L9).
+  static String _helperSocket(ServiceClient client) =>
+      '${File(client.endpoint).parent.path}/helper.sock';
+
+  /// [createdForTesting] sees the domain once it is built, including one
+  /// a failed connect disposes of.
   static Future<RemoteDomain> connect(
     ProfilePaths profile, {
     Duration startupTimeout = const Duration(minutes: 3),
+    void Function(RemoteDomain domain)? createdForTesting,
   }) async {
     final startup = await ensureServiceSnapshot(
       profile,
@@ -263,18 +275,19 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
       store = Store.readOnly('${profile.data}/application.db');
       domain = RemoteDomain._(
         store,
-        RemoteHelper(
-          '${File(serviceEndpoint(profile)).parent.path}/helper.sock',
-          '${profile.data}/helper',
-        ),
+        RemoteHelper(_helperSocket(startup.client), '${profile.data}/helper'),
         startup.client,
         RemoteRuntime(startup.client),
         profile,
       );
+      createdForTesting?.call(domain);
       domain._apply(startup.status);
       return domain;
     } catch (_) {
+      // No caller holds this domain: end its connection, any reconnect,
+      // its helper and its read-only store, whichever exist.
       domain?.close();
+      await domain?.helper.close();
       store?.close();
       await startup.client.close();
       rethrow;
@@ -507,10 +520,38 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
   }
 }
 
-/// Service events are authoritative; the desktop never starts a second watcher
-/// against the runtime directory from its own launch environment.
+/// The desktop's view of the helper its service owns. Service events are
+/// authoritative; the desktop never starts a second watcher against the
+/// runtime directory from its own launch environment. Nothing connects
+/// through this helper, but its socket names the connected owner's helper
+/// and moves with that owner to another runtime after a reconnect (L9).
 class RemoteHelper extends Helper {
-  RemoteHelper(super.socket, super.storage) : super(manageProcess: false);
+  RemoteHelper(super.socket, super.storage)
+    : _socket = socket,
+      super(manageProcess: false);
+  String _socket;
+  // Until a retarget, the channel and client the Helper built for the first
+  // socket. Lazy, because the Helper constructor reads them through these
+  // overrides.
+  late grpc_api.ClientChannel _channel = super.channel;
+  late RagServiceClient _client = super.client;
+  @override
+  String get socket => _socket;
+  @override
+  grpc_api.ClientChannel get channel => _channel;
+  @override
+  RagServiceClient get client => _client;
+
+  /// Name the helper at [socket], beside the endpoint a reconnect reached.
+  void retarget(String socket) {
+    if (socket == _socket || stopping) return;
+    final previous = _channel;
+    _socket = socket;
+    _channel = helperChannel(socket);
+    _client = helperClient(_channel);
+    unawaited(previous.terminate());
+  }
+
   @override
   Future<void> start() async {
     changed?.call();

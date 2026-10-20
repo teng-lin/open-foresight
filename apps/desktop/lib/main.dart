@@ -10,6 +10,7 @@ import 'package:foresight_core/foresight_core.dart'
     show
         runtimeConfiguration,
         privateDirectory,
+        privateRuntime,
         writePrivateTextFile,
         configureProfileRuntime,
         openPlatformUri,
@@ -129,7 +130,7 @@ class _DesktopStartupState extends State<DesktopStartup> {
       final profile =
           widget.profile ?? ProfilePaths.resolve(Platform.environment);
       privateDirectory(profile.data, repairOwnedPermissions: true);
-      ensurePrivateDirectory(profile.runtime);
+      privateRuntime(profile);
       widget.configureRuntime(profile.data);
       final commandPath = '${profile.runtime}/commands.sock';
       final authUrl = widget.arguments
@@ -256,7 +257,6 @@ class _DesktopStartupState extends State<DesktopStartup> {
 }
 
 Future<void> openSourceLink(Uri uri) => openPlatformUri(uri);
-void ensurePrivateDirectory(String path) => privateDirectory(path);
 
 class Foresight extends StatelessWidget {
   final DesktopConnection domain;

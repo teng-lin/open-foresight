@@ -488,19 +488,25 @@ void main() {
     ServiceClient? client;
     try {
       crashed = await IsolatedApplicationService.start(profile);
-      gates.hold('frontend.draining');
+      // Hold the frontend once its listener is closed, just before it would
+      // unlink the public socket path.
+      gates.hold('frontend.listener_closed');
       File(
         '${gates.directory.path}/request.committed.notes.list.crash',
       ).writeAsStringSync('');
       client = await ServiceClient.connect(serviceEndpoint(profile));
       await expectLater(client.call('notes.list'), throwsA(isA<RpcError>()));
-      await gates.reached('frontend.draining');
+      await gates.reached('frontend.listener_closed');
       // A dead worker leaves this process holding the profile lock, so the
       // only replacement that can start now is another owner in this
-      // process. It takes over the public socket path.
+      // process. It takes over the public socket path. A new owner never
+      // deletes a socket that still accepts (SL-7), and the dead worker's
+      // listener stays open until this process exits; in another process
+      // it would be gone. Remove only its path, which nothing reaches now.
+      File('${profile.runtime}/worker.sock').deleteSync();
       runtimeConfiguration.environment.remove('FORESIGHT_SERVICE_GATES');
       replacement = await IsolatedApplicationService.start(profile);
-      gates.release('frontend.draining');
+      gates.release('frontend.listener_closed');
       await expectLater(crashed.close(), throwsStateError);
       final probe = await ServiceClient.connect(serviceEndpoint(profile));
       try {

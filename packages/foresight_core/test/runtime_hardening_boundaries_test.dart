@@ -1,3 +1,4 @@
+import 'package:crypto/crypto.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:foresight_core/src/dedicated_query_acquisition.dart';
@@ -13,7 +14,7 @@ import 'package:test/test.dart';
 void main() {
   late Directory root;
   setUp(() {
-    root = createTestTempDirectorySync('hardening-boundaries-');
+    root = createTestTempDirectorySync('of-hb-');
     final previous = Map<String, String>.from(runtimeConfiguration.environment);
     addTearDown(() {
       runtimeConfiguration.environment
@@ -165,7 +166,11 @@ void main() {
         profile.data,
         '${root.resolveSymbolicLinksSync()}/.local/share/open-foresight',
       );
-      expect(profile.runtime, '${profile.data}/runtime/open-foresight');
+      final hash = sha256
+          .convert(utf8.encode(profile.data))
+          .toString()
+          .substring(0, 12);
+      expect(profile.runtime, '${profile.data}/runtime/$hash');
       expect(
         () => ProfilePaths.resolve({
           'HOME': root.path,

@@ -626,6 +626,26 @@ void main() {
     },
   );
 
+  test('a connect that fails after building its domain closes its '
+      'connection, read-only store and helper (T2)', () async {
+    // The snapshot reaches the domain, which rejects it.
+    f.status = {...f.status, 'capture': 'not a map'};
+    final connections = f.sockets.length;
+    RemoteDomain? created;
+    await expectLater(
+      RemoteDomain.connect(
+        f.profile,
+        createdForTesting: (domain) => created = domain,
+      ),
+      throwsA(isA<TypeError>()),
+    );
+    expect(created, isNotNull);
+    expect(() => created!.store.rows('SELECT 1'), throwsA(anything));
+    expect(created!.helper.stopping, isTrue);
+    expect(created!.client.isClosed, isTrue);
+    expect(f.sockets.length, greaterThan(connections));
+  });
+
   test('a command whose outcome is unknown is never resent', () async {
     f.handler = (socket, request) => socket.writeln(
       jsonEncode({
