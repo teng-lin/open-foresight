@@ -8,9 +8,23 @@ class TestDesktopConnection implements DesktopConnection {
   final Domain domain;
   late final Application application = domain.application;
   StreamSubscription<void>? _changes;
+  String? _workspaceEpoch;
   TestDesktopConnection(this.domain) {
+    _workspaceEpoch = _serviceEpoch;
     _changes = application.changes.stream.listen((_) => helper.changed?.call());
   }
+  String? get _serviceEpoch {
+    final epoch = store.workspaceEpoch;
+    return epoch.isEmpty ? null : epoch;
+  }
+
+  @override
+  String? get workspaceEpoch => _workspaceEpoch;
+  @override
+  bool get workspaceReplaced =>
+      _serviceEpoch != null && _serviceEpoch != _workspaceEpoch;
+  @override
+  void adoptWorkspace() => _workspaceEpoch = _serviceEpoch;
   @override
   Store get store => domain.store;
   @override
@@ -37,15 +51,24 @@ class TestDesktopConnection implements DesktopConnection {
   Future<Object?> command(
     Operation operation, [
     Map<String, dynamic> args = const {},
-  ]) => domain is CommandFixtureDomain
-      ? (domain as CommandFixtureDomain).command(operation, args)
-      : application.call(operation.wire, args);
+  ]) {
+    // Like RemoteDomain, by-ID edits name the workspace the views belong to.
+    args = operation.scopedToWorkspace(args, _workspaceEpoch);
+    return domain is CommandFixtureDomain
+        ? (domain as CommandFixtureDomain).command(operation, args)
+        : application.call(operation.wire, args);
+  }
+
   @override
   Future<Object?> commandCurrent(
     Operation operation,
     Map<String, dynamic> args,
     bool Function() current,
-  ) => application.call(operation.wire, args, current: current);
+  ) => application.call(
+    operation.wire,
+    operation.scopedToWorkspace(args, _workspaceEpoch),
+    current: current,
+  );
   @override
   Future<void> index(String id) => domain.index(id);
   @override

@@ -88,6 +88,24 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
   @override
   bool get webSearchAvailable => _webSearchAvailable;
   StreamSubscription<Map<String, dynamic>>? _events;
+  String? _workspaceEpoch, _serviceEpoch;
+  // Epochs are random and a clear never brings one back, so an event that
+  // carries a replaced epoch is late and must not reset the views again.
+  final _replacedEpochs = <String>{};
+  void _observeEpoch(String epoch) {
+    if (epoch == _serviceEpoch || _replacedEpochs.contains(epoch)) return;
+    final previous = _serviceEpoch;
+    if (previous != null) _replacedEpochs.add(previous);
+    _serviceEpoch = epoch;
+  }
+
+  @override
+  String? get workspaceEpoch => _workspaceEpoch;
+  @override
+  bool get workspaceReplaced =>
+      _serviceEpoch != null && _serviceEpoch != _workspaceEpoch;
+  @override
+  void adoptWorkspace() => _workspaceEpoch = _serviceEpoch;
   RemoteDomain._(
     this.store,
     this.helper,
@@ -117,12 +135,25 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
       return;
     }
     if (event['event'] == 'approval' || event['event'] == 'approval_closed') {
+      final id = event['approval_id'];
+      if (id is String && event['event'] == 'approval') {
+        _openApprovals.add(id);
+      } else {
+        _openApprovals.remove(id);
+      }
       _approvalEvents?.call(event);
       return;
     }
     final signature = jsonEncode(event);
     if (_eventSignature == signature) return;
     _eventSignature = signature;
+    final epoch = event['workspace_epoch'];
+    if (epoch is String) {
+      _observeEpoch(epoch);
+      // The first epoch names the workspace the desktop starts in. A later one
+      // waits for the desktop to drop views that hold older IDs.
+      _workspaceEpoch ??= _serviceEpoch;
+    }
     _webSearchAvailable = event['web_search_available'] == true;
     googleStatus = Map<String, dynamic>.from(event['google'] as Map? ?? {});
     capture = Map<String, dynamic>.from(event['capture'] as Map? ?? {});
@@ -141,11 +172,34 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
     helper.changed?.call();
   }
 
+  /// Events a connection sends before it is listened to are lost, and its
+  /// startup status can predate a clear among them. The profile already
+  /// holds that clear's epoch, so read it once the connection is listened to.
+  void _recheckWorkspace() {
+    final stored = store.workspaceEpoch;
+    if (stored.isEmpty || stored == _serviceEpoch) return;
+    _observeEpoch(stored);
+    _workspaceEpoch ??= stored;
+    helper.changed?.call();
+  }
+
+  // Approvals shown for the current connection that have not closed yet.
+  final _openApprovals = <String>{};
+
+  /// The service denies a lost connection's approvals, but their
+  /// approval_closed can no longer arrive. Close their dialogs here.
+  void _closeOpenApprovals() {
+    for (final id in _openApprovals.toList()) {
+      _apply({'event': 'approval_closed', 'approval_id': id});
+    }
+  }
+
   void _listen() {
     final connection = client;
     _events = connection.events.stream.listen(
       _apply,
       onDone: () {
+        _closeOpenApprovals();
         // A connection already replaced needs no second reconnect.
         if (!_disposed && identical(client, connection)) {
           unawaited(_reconnect());
@@ -173,6 +227,8 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
           break;
         }
         await _events?.cancel();
+        // A cancelled subscription reports no end; its approvals are lost too.
+        _closeOpenApprovals();
         if (_disposed) {
           await next.close();
           break;
@@ -183,6 +239,7 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
         helper.retarget(_helperSocket(next));
         _listen();
         _apply(startup.status);
+        _recheckWorkspace();
         if (_approvalEvents != null) await _attachDesktop(next);
         attempt.complete();
         return;
@@ -282,6 +339,7 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
       );
       createdForTesting?.call(domain);
       domain._apply(startup.status);
+      domain._recheckWorkspace();
       return domain;
     } catch (_) {
       // No caller holds this domain: end its connection, any reconnect,
@@ -309,7 +367,20 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
             : File(path).parent.path,
       });
     }
-    final result = await _call(operation.wire, args);
+    final epochBefore = _serviceEpoch;
+    final Object? result;
+    try {
+      result = await _call(
+        operation.wire,
+        operation.scopedToWorkspace(args, _workspaceEpoch),
+      );
+    } on RpcError catch (error) {
+      if (operation != Operation.workspaceClear ||
+          error.reason != RpcErrorReason.outcomeUnknown) {
+        rethrow;
+      }
+      return _settleLostClear(error, epochBefore);
+    }
     if (operation == Operation.workspaceClear) {
       try {
         _apply(
@@ -323,6 +394,25 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
       }
     }
     return result;
+  }
+
+  /// A clear whose reply was lost renews the epoch in its own transaction, so
+  /// the next owner's status shows whether it committed.
+  Future<Object?> _settleLostClear(RpcError lost, String? before) async {
+    if (before == null) throw lost;
+    try {
+      _apply(
+        Map<String, dynamic>.from(await _call(Operation.status.wire) as Map),
+      );
+    } catch (_) {
+      throw lost;
+    }
+    if (_serviceEpoch != before) return null;
+    throw RpcError(
+      RpcErrorCode.unavailable,
+      'The service stopped before clearing the workspace; nothing was '
+      'cleared. Try again.',
+    );
   }
 
   Stream<Object?> _streamCurrent(
@@ -350,7 +440,10 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
           return;
         }
         subscription = client
-            .stream(operation.wire, args)
+            .stream(
+              operation.wire,
+              operation.scopedToWorkspace(args, _workspaceEpoch),
+            )
             .listen(
               (value) {
                 if (controller.isClosed) return;

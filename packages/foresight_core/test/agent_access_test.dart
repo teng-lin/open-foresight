@@ -114,6 +114,28 @@ void main() {
     },
   );
 
+  test(
+    'approval IDs are random, so a replacement owner never repeats one',
+    () async {
+      final ids = <Object?>[];
+      for (var owner = 0; owner < 2; owner++) {
+        final host = Object(), client = Object();
+        final gate = AgentAccessGate('token', (_, event) {
+          if (event['event'] == 'approval') ids.add(event['approval_id']);
+          return true;
+        });
+        gate.attach(host, 'token');
+        final work = gate.authorize(client, 'sources.delete', {
+          'id': 'source',
+        }, current: () => true);
+        gate.decide(host, ids.last as String, false);
+        await expectLater(work, throwsStateError);
+      }
+      expect(ids, everyElement(matches(RegExp(r'^approval-[0-9a-f]{16}$'))));
+      expect(ids.toSet(), hasLength(2));
+    },
+  );
+
   group('connection scoped visible approvals', () {
     late AgentAccessGate gate;
     late Object desktop, agent, stranger;

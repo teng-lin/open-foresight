@@ -192,6 +192,9 @@ class _SourcesController extends _FeatureController {
   }
 
   Future<void> editSource(Map<String, Object?> s) async {
+    // The source ID belongs to the workspace of the rows on screen.
+    if (!shell.rowsAreCurrent()) return;
+    final epoch = d.workspaceEpoch;
     final text = TextEditingController(text: s['content'] as String);
     final saved = await shell.showInputDialog<bool>(
       builder: (context) => ServiceEditDialog(
@@ -208,6 +211,7 @@ class _SourcesController extends _FeatureController {
             'id': s['id'],
             'locallyEdited': true,
             'index': false,
+            if (epoch != null) 'workspace_epoch': epoch,
           });
           await d.index(s['id'] as String);
         },
@@ -227,6 +231,8 @@ class _SourcesController extends _FeatureController {
               onPressed: () {
                 setState(() {
                   meetingFeature.noteId = null;
+                  meetingFeature.noteBaseline = ('', '');
+                  meetingFeature.newNoteKey.reset();
                   meetingFeature.noteTitle.clear();
                   meetingFeature.noteBody.clear();
                 });
@@ -242,10 +248,16 @@ class _SourcesController extends _FeatureController {
                         title: Text(n['title'] as String),
                         subtitle: Text('Revision ${n['revision']}'),
                         onTap: () => setState(() {
+                          // Opening a note abandons an unconfirmed new one.
+                          meetingFeature.newNoteKey.reset();
                           meetingFeature.noteId = n['id'] as int;
                           meetingFeature.noteTitle.text = n['title'] as String;
                           meetingFeature.noteBody.text = d.store.noteBody(
                             n['id'] as int,
+                          );
+                          meetingFeature.noteBaseline = (
+                            meetingFeature.noteTitle.text,
+                            meetingFeature.noteBody.text,
                           );
                         }),
                       ),
@@ -277,15 +289,52 @@ class _SourcesController extends _FeatureController {
             ),
             FilledButton(
               onPressed: () => shell.run(() async {
-                final saved =
-                    await d.command(Operation.notesSave, {
-                          'id': meetingFeature.noteId,
-                          'title': meetingFeature.noteTitle.text,
-                          'body': meetingFeature.noteBody.text,
-                        })
+                // Every send names the workspace this save began in, and a
+                // reply that arrives after a reset is not shown: it names an
+                // ID the views have dropped.
+                final epoch = d.workspaceEpoch;
+                bool current() => mounted && d.workspaceEpoch == epoch;
+                Map<String, dynamic> scoped(Map<String, dynamic> args) => {
+                  ...args,
+                  if (epoch != null) 'workspace_epoch': epoch,
+                };
+                final note = {
+                  'title': meetingFeature.noteTitle.text,
+                  'body': meetingFeature.noteBody.text,
+                };
+                void saved(int id) => setState(() {
+                  meetingFeature.noteId = id;
+                  meetingFeature.noteBaseline = (note['title']!, note['body']!);
+                });
+                final id = meetingFeature.noteId;
+                if (id != null) {
+                  await d.command(
+                    Operation.notesSave,
+                    scoped({...note, 'id': id}),
+                  );
+                  if (current()) saved(id);
+                  return;
+                }
+                final created =
+                    await meetingFeature.newNoteKey.run(
+                          note,
+                          (keyed) =>
+                              d.command(Operation.notesSave, scoped(keyed)),
+                          // Edited after an unconfirmed save: the first save
+                          // is now known, so the edit updates that note.
+                          amend: (first, edited) async {
+                            final id = (first as Map)['id'] as int;
+                            if (current()) {
+                              setState(() => meetingFeature.noteId = id);
+                            }
+                            return d.command(
+                              Operation.notesSave,
+                              scoped({...edited, 'id': id}),
+                            );
+                          },
+                        )
                         as Map;
-                if (mounted)
-                  setState(() => meetingFeature.noteId = saved['id'] as int);
+                if (current()) saved(created['id'] as int);
               }),
               child: const Text('Save note'),
             ),
@@ -589,6 +638,9 @@ class _SourcesController extends _FeatureController {
   }
 
   Future<void> editLabels(Map<String, Object?>? s) async {
+    // The sources belong to the workspace of the rows on screen.
+    if (!shell.rowsAreCurrent()) return;
+    final epoch = d.workspaceEpoch;
     final input = TextEditingController(
       text: s == null ? '' : sourceLabels(s).join(', '),
     );
@@ -627,6 +679,7 @@ class _SourcesController extends _FeatureController {
         'labels': s == null
             ? {...sourceLabels(row), ...values}.toList()
             : values,
+        if (epoch != null) 'workspace_epoch': epoch,
       });
     }
     if (mounted) shell.update(() {});

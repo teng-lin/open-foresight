@@ -705,23 +705,13 @@ class _SettingsController extends _FeatureController {
     );
     if (ok != true || !mounted) return;
     await shell.run(() async {
-      meetingFeature.meetingNoteSaves.discardAll();
-      await d.command(Operation.workspaceClear);
-      shell.update(() {
-        meetingFeature.meetingId = null;
-        meetingFeature.loadedMeetingNotes = null;
-        meetingFeature.meetingNotesController.clear();
-        meetingFeature.meetingEnhanceStatus = '';
-        sourceFeature.sourceQuery = '';
-        sourceFeature.sourceSearchController.clear();
-        meetingFeature.meetingQuery = '';
-        sourceFeature.labelFilter = '';
-        meetingFeature.noteId = null;
-        meetingFeature.noteTitle.clear();
-        meetingFeature.noteBody.clear();
-        chatFeature.hiddenAnswers.clear();
-        chatFeature.answer = '';
-      });
+      shell.clearingWorkspace = true;
+      try {
+        await d.command(Operation.workspaceClear);
+      } finally {
+        shell.clearingWorkspace = false;
+      }
+      shell.update(shell.resetWorkspaceViews);
     });
   }
 

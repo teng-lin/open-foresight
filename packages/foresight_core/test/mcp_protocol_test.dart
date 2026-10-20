@@ -415,6 +415,63 @@ void main() {
     );
   });
 
+  test('a lost save reply tells the agent to retry with its key, which the '
+      'server sends unchanged and only when asked (LR-M1)', () async {
+    final arguments = {
+      'title': 'Apollo',
+      'body': 'b',
+      'idempotency_key': 'agent-key',
+    };
+    final first = fixture.request('tools/call', {
+      'name': 'save_note',
+      'arguments': arguments,
+    });
+    final committed = await fixture.serviceRequest();
+    // The service committed; the reply is lost with the connection.
+    fixture.sockets.last.destroy();
+    final lost = (await fixture.response(first))['result'] as Map;
+    expect(lost['isError'], isTrue);
+    expect(lost['structuredContent']['error']['reason'], 'outcomeUnknown');
+    expect(
+      lost['content'][0]['text'],
+      'Application service disconnected. The change may have been applied. '
+      'Retry with the same idempotency_key to apply it at most once.',
+    );
+    // The agent's retry is the next request the service sees.
+    final retry = fixture.request('tools/call', {
+      'name': 'save_note',
+      'arguments': arguments,
+    });
+    final again = await fixture.serviceRequest();
+    expect(again['method'], 'notes.save');
+    expect(again['args'], committed['args']);
+    fixture.reply(again, {'id': 1});
+    expect(
+      (await fixture.response(retry))['result']['structuredContent']['result'],
+      {'id': 1},
+    );
+  });
+
+  test(
+    'a lost reply without a key never tells the agent to reuse one',
+    () async {
+      final id = fixture.request('tools/call', {
+        'name': 'create_meeting',
+        'arguments': {'title': 'Standup'},
+      });
+      await fixture.serviceRequest();
+      fixture.sockets.last.destroy();
+      final lost = (await fixture.response(id))['result'] as Map;
+      expect(lost['structuredContent']['error']['reason'], 'outcomeUnknown');
+      expect(
+        lost['content'][0]['text'],
+        'Application service disconnected. It may have completed; check before '
+        'retrying. Pass an idempotency_key next time, so a retry applies the '
+        'change at most once.',
+      );
+    },
+  );
+
   test('cancellation reaches the service and leaves MCP responsive', () async {
     final id = fixture.request('tools/call', {
       'name': 'ask',

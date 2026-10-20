@@ -1,4 +1,6 @@
 import 'rpc_error.dart';
+import 'request_errors.dart';
+import 'operations.dart' show Operation;
 import 'model_integrity.dart';
 import 'model_asset_lifecycle.dart';
 import 'platform_services.dart';
@@ -9,6 +11,8 @@ import 'dart:io';
 import 'graph_labels.dart';
 import 'label_propagation.dart';
 import 'graph_layout.dart';
+import 'dart:math' show Random;
+import 'package:clock/clock.dart';
 import 'package:crypto/crypto.dart';
 import 'package:sqlite3/sqlite3.dart';
 
@@ -35,7 +39,15 @@ void requireEmbeddingBundle(String path) {
 class Store {
   final Database db;
   final String path;
-  static const schemaVersion = 12;
+  static const schemaVersion = 13;
+
+  /// Names one workspace between clears. SQLite reuses INTEGER PRIMARY KEY
+  /// values after a clear, so a caller holding an ID sends this back with it.
+  static const workspaceEpochKey = 'workspaceEpoch';
+
+  /// How long a request key keeps a retry after a lost reply from writing
+  /// twice. Keys hold digests of content, so they are kept only this long.
+  static const requestKeyLifetime = Duration(hours: 24);
   static const _privacyMaintenanceKey = 'internal.privacyMaintenancePending';
   Timer? _privacyMaintenanceRetry;
   var _privacyRetrySeconds = 1;
@@ -76,6 +88,12 @@ class Store {
           _migrateTo(++version);
           db.execute('PRAGMA user_version=$version');
         }
+        // The first start creates the epoch; later starts keep it.
+        db.execute('INSERT OR IGNORE INTO preferences(key,value) VALUES(?,?)', [
+          workspaceEpochKey,
+          _newWorkspaceEpoch(),
+        ]);
+        _pruneRequestKeys();
         db.execute('COMMIT');
       } catch (_) {
         // SQLITE_FULL/IOERR can already roll back the transaction.
@@ -253,6 +271,10 @@ class Store {
           // without inventing a week from the meeting's creation date.
           db.execute('ALTER TABLE artifacts ADD COLUMN created INTEGER');
         }
+      case 13:
+        db.execute(
+          'CREATE TABLE IF NOT EXISTS request_keys(key TEXT PRIMARY KEY,operation TEXT NOT NULL,arguments TEXT NOT NULL,result TEXT NOT NULL,created INTEGER NOT NULL)',
+        );
       default:
         throw StateError('Missing application database migration $version');
     }
@@ -569,10 +591,19 @@ class Store {
     'UPDATE sources SET state=?,error=? WHERE id=?',
     [state, error, id],
   );
-  void tombstone(String id) => db.execute(
-    'UPDATE sources SET deleted=1,state=\'deleting\',revision=revision+1 WHERE id=?',
-    [id],
-  );
+  void tombstone(String id) {
+    db.execute(
+      'UPDATE sources SET deleted=1,state=\'deleting\',revision=revision+1 WHERE id=?',
+      [id],
+    );
+    // No idempotency digest of the deleted text outlives the delete. (The
+    // tombstoned row itself keeps its content, as it always has.)
+    db.execute('DELETE FROM request_keys WHERE operation=? AND result=?', [
+      Operation.sourcesImport.wire,
+      jsonEncode({'id': id}),
+    ]);
+  }
+
   void answer(
     String question,
     String body,
@@ -596,7 +627,10 @@ class Store {
       modelResponse == null ? null : jsonEncode(modelResponse),
     ],
   );
-  void saveNote(int? id, String title, String body) {
+
+  /// Returns the note's ID. An update that finds no note fails rather than
+  /// reporting a save that wrote nothing.
+  int saveNote(int? id, String title, String body) {
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     if (id == null) {
       db.execute('INSERT INTO notes(title,body,timestamp) VALUES(?,?,?)', [
@@ -604,13 +638,95 @@ class Store {
         body,
         timestamp,
       ]);
-    } else {
-      db.execute(
-        'UPDATE notes SET title=?,body=?,revision=revision+1,timestamp=? WHERE id=?',
-        [title, body, timestamp, id],
-      );
+      return db.lastInsertRowId;
+    }
+    db.execute(
+      'UPDATE notes SET title=?,body=?,revision=revision+1,timestamp=? WHERE id=?',
+      [title, body, timestamp, id],
+    );
+    if (db.updatedRows != 1) {
+      throw RpcError(RpcErrorCode.notFound, 'This note no longer exists.');
+    }
+    return id;
+  }
+
+  String get workspaceEpoch => preference(workspaceEpochKey);
+
+  /// Called inside the clear transaction, so IDs from before it never match.
+  void renewWorkspaceEpoch() =>
+      setPreference(workspaceEpochKey, _newWorkspaceEpoch());
+
+  static String _newWorkspaceEpoch() {
+    final random = Random.secure();
+    return [
+      for (var i = 0; i < 16; i++)
+        random.nextInt(256).toRadixString(16).padLeft(2, '0'),
+    ].join();
+  }
+
+  /// Runs [write] as one transaction. With a [key], its JSON result commits in
+  /// the same transaction, and a repeated key returns that result without
+  /// writing again, so a retry after a lost reply applies the change once.
+  /// A key is bound to its operation and to the digest of its [arguments].
+  ({Object? result, bool replayed}) writeOnce(
+    String? key,
+    String operation,
+    Object? Function() write, {
+    String arguments = '',
+  }) {
+    db.execute('SAVEPOINT write_once');
+    try {
+      if (key != null) _pruneRequestKeys();
+      final stored = key == null
+          ? null
+          : rows(
+              'SELECT operation,arguments,result FROM request_keys WHERE key=?',
+              [key],
+            ).firstOrNull;
+      if (stored != null && stored['operation'] != operation) {
+        throw RpcError(
+          RpcErrorCode.invalidArgument,
+          keyReusedForMessage(stored['operation'] as String),
+        );
+      }
+      if (stored != null && stored['arguments'] != arguments) {
+        throw RpcError(
+          RpcErrorCode.invalidArgument,
+          keyReusedWithOtherArgumentsMessage,
+        );
+      }
+      final result = stored == null
+          ? write()
+          : jsonDecode(stored['result'] as String);
+      if (stored == null && key != null) {
+        db.execute(
+          'INSERT INTO request_keys(key,operation,arguments,result,created) VALUES(?,?,?,?,?)',
+          [
+            key,
+            operation,
+            arguments,
+            jsonEncode(result),
+            clock.now().millisecondsSinceEpoch,
+          ],
+        );
+      }
+      db.execute('RELEASE write_once');
+      return (result: result, replayed: stored != null);
+    } catch (_) {
+      // SQLITE_FULL/IOERR can already roll back the whole transaction; then
+      // there is no savepoint left, and the original error must surface.
+      if (!db.autocommit) {
+        db.execute('ROLLBACK TO write_once');
+        db.execute('RELEASE write_once');
+      }
+      rethrow;
     }
   }
+
+  void _pruneRequestKeys() => db.execute(
+    'DELETE FROM request_keys WHERE created<?',
+    [clock.now().subtract(requestKeyLifetime).millisecondsSinceEpoch],
+  );
 
   static const _runtimeResources = {
     'generation': 'FORESIGHT_LITERT_RUNNER',
@@ -952,6 +1068,12 @@ class Store {
         db.execute('UPDATE artifacts SET edited=? WHERE id=?', [text, id]);
     if (enhanced == null) {
       update();
+      if (db.updatedRows != 1) {
+        throw RpcError(
+          RpcErrorCode.notFound,
+          'This artifact no longer exists.',
+        );
+      }
     } else {
       _writeEnhancedNote(
         enhanced['meeting_id'] as int,
@@ -1032,6 +1154,7 @@ class Store {
     [key, value],
   );
   void putDocumentLabel(DocumentLabel label) {
+    requireSource(label.documentId);
     db.execute('SAVEPOINT put_document_label');
     try {
       db.execute(
@@ -1163,10 +1286,17 @@ class Store {
     }
   }
 
-  void labels(String id, List<String> labels) {
-    if (rows('SELECT 1 FROM source_details WHERE source_id=?', [id]).isEmpty) {
-      return;
+  void requireSource(String id) {
+    if (rows(
+      'SELECT 1 FROM sources JOIN source_details ON source_id=id WHERE id=? AND deleted=0',
+      [id],
+    ).isEmpty) {
+      throw RpcError(RpcErrorCode.notFound, 'This source no longer exists.');
     }
+  }
+
+  void labels(String id, List<String> labels) {
+    requireSource(id);
     db.execute('BEGIN IMMEDIATE');
     try {
       _writeLabelRecords(id, labels);

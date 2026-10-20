@@ -1,6 +1,7 @@
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/operations.dart';
 import 'package:foresight_core/src/agent_access.dart';
+import 'package:foresight_core/src/rpc_error.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:async';
 import 'dart:io';
@@ -14,6 +15,8 @@ import 'meeting_setup_test.dart' show OfflineHelper;
 class QuickStartDomain extends CommandFixtureDomain {
   final operations = <String>[];
   bool denyMicrophone = false, failCreate = false, needsSystemSetup = false;
+  bool loseCreateReply = false;
+  final createKeys = <Object?>[];
   Completer<Map<String, dynamic>>? systemGate;
   Completer<void>? createGate;
   QuickStartDomain(super.store, super.helper);
@@ -45,9 +48,19 @@ class QuickStartDomain extends CommandFixtureDomain {
     if (operation == Operation.notificationsCapabilities)
       return {'available': false};
     if (operation == Operation.meetingsCreate) {
+      createKeys.add(args['idempotency_key']);
       await createGate?.future;
       if (failCreate)
         throw StateError('Meeting creation failed. Please retry.');
+      if (loseCreateReply) {
+        // The meeting commits, then the connection drops before the reply.
+        loseCreateReply = false;
+        await super.command(operation, args);
+        throw RpcError(
+          RpcErrorCode.unavailable,
+          'Application service disconnected',
+        );
+      }
     }
     if (operation == Operation.meetingsStart) return {};
     return super.command(operation, args);
@@ -228,6 +241,32 @@ void main() {
       expect(store.rows('SELECT id FROM meetings').single['id'], meeting);
       expect(state.meetingFeature.meetingId, meeting);
       expect(tester.takeException(), isNull);
+      await dispose(tester);
+    },
+  );
+
+  testWidgets(
+    'Start transcribing again after a lost create reply records one meeting',
+    (tester) async {
+      await tester.runAsync(registerSpeech);
+      domain.loseCreateReply = true;
+      await show(tester);
+      await tester.tap(find.text('Start transcribing'));
+      await tester.pumpAndSettle();
+      final dynamic state = tester.state(find.byType(Workspace));
+      expect(state.error, contains('disconnected'));
+      expect(domain.operations, isNot(contains('meetings.start')));
+      await tester.tap(find.text('Start transcribing'));
+      await tester.pumpAndSettle();
+      final meeting = store.rows('SELECT id FROM meetings').single['id'];
+      expect(state.meetingFeature.meetingId, meeting);
+      expect(
+        domain.operations.where((method) => method == 'meetings.start'),
+        hasLength(1),
+      );
+      expect(domain.createKeys, hasLength(2));
+      expect(domain.createKeys.toSet(), hasLength(1));
+      expect(domain.createKeys.first, isA<String>());
       await dispose(tester);
     },
   );

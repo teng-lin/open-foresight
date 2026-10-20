@@ -244,6 +244,8 @@ void main() {
         'id': id,
         'text': transcript.readAsStringSync(),
         'source': 'imported transcript',
+        // The meeting ID belongs to the workspace the picker opened in.
+        'workspace_epoch': f.store.workspaceEpoch,
       });
     },
   );
