@@ -119,6 +119,15 @@ enum Operation {
     }.contains(this);
   }
 
+  /// Creates and appends that a retry after a lost reply would repeat. Their
+  /// optional `idempotency_key` makes the retry return the first result.
+  bool get acceptsIdempotencyKey => {
+    Operation.notesSave,
+    Operation.meetingsCreate,
+    Operation.sourcesImport,
+    Operation.meetingsTranscript,
+  }.contains(this);
+
   bool get notifiesChanges => !{
     Operation.status,
     Operation.audioCapabilities,
@@ -202,6 +211,14 @@ List<RpcTool> get rpcTools {
     description:
         'Optional workspace_epoch from get_status. If the workspace was cleared since, the call fails with notFound instead of acting on an ID that may now name a different item.',
   );
+  final idempotencyKey = JsonSchema.string(
+    minLength: 1,
+    maxLength: 256,
+    description:
+        'Optional unique key for this change. If a call fails with reason outcomeUnknown, retry with the same idempotency_key: the change is applied at most once and the retry returns its result. Use a new key for a different change.',
+  );
+  const retry =
+      ' If a call fails with reason outcomeUnknown, retry with the same idempotency_key.';
   return [
     RpcTool(
       'audio_capabilities',
@@ -260,8 +277,14 @@ List<RpcTool> get rpcTools {
     RpcTool(
       'import_text',
       Operation.sourcesImport,
-      'Create or update a text source and index it. Supplying an existing ID replaces its content and increments its revision.',
-      {'title': text, 'text': text, 'id': text, 'workspace_epoch': epoch},
+      'Create or update a text source and index it. Supplying an existing ID replaces its content and increments its revision.$retry',
+      {
+        'title': text,
+        'text': text,
+        'id': text,
+        'workspace_epoch': epoch,
+        'idempotency_key': idempotencyKey,
+      },
       ['title', 'text'],
     ),
     RpcTool(
@@ -324,8 +347,14 @@ List<RpcTool> get rpcTools {
     RpcTool(
       'save_note',
       Operation.notesSave,
-      'Create a personal note or update an existing note by ID.',
-      {'id': integer, 'title': text, 'body': text, 'workspace_epoch': epoch},
+      'Create a personal note or update an existing note by ID.$retry',
+      {
+        'id': integer,
+        'title': text,
+        'body': text,
+        'workspace_epoch': epoch,
+        'idempotency_key': idempotencyKey,
+      },
       ['title', 'body'],
     ),
     RpcTool(
@@ -339,8 +368,8 @@ List<RpcTool> get rpcTools {
     RpcTool(
       'create_meeting',
       Operation.meetingsCreate,
-      'Create a meeting without starting audio capture.',
-      {'title': text},
+      'Create a meeting without starting audio capture.$retry',
+      {'title': text, 'idempotency_key': idempotencyKey},
       ['title'],
     ),
     RpcTool(
@@ -361,7 +390,7 @@ List<RpcTool> get rpcTools {
     RpcTool(
       'import_transcript',
       Operation.meetingsTranscript,
-      'Append a final transcript segment and index the meeting.',
+      'Append a final transcript segment and index the meeting.$retry',
       {
         'id': integer,
         'text': text,
@@ -369,6 +398,7 @@ List<RpcTool> get rpcTools {
         'end': integer,
         'source': text,
         'workspace_epoch': epoch,
+        'idempotency_key': idempotencyKey,
       },
       ['id', 'text'],
     ),

@@ -41,7 +41,32 @@ import 'native_note_enhancement.dart';
 import 'google_auth.dart';
 import 'google_connections.dart';
 import 'generated/rag_service.pb.dart';
+import 'package:crypto/crypto.dart';
 import 'package:grpc/grpc.dart';
+
+/// Identifies the arguments an idempotency key was first used with. Fields the
+/// transport adds, the key, the epoch and null values are left out, and map keys
+/// are sorted, so a faithful retry matches whatever order its fields arrive in.
+String requestArgumentsDigest(Map<String, dynamic> args) {
+  Object? canonical(Object? value) => switch (value) {
+    Map() => {
+      for (final key in value.keys.cast<String>().toList()..sort())
+        if (value[key] != null) key: canonical(value[key]),
+    },
+    List() => [for (final item in value) canonical(item)],
+    _ => value,
+  };
+  final fields = Map<String, dynamic>.of(args)
+    ..removeWhere(
+      (key, _) => const {
+        'requestId',
+        'conversation',
+        'idempotency_key',
+        'workspace_epoch',
+      }.contains(key),
+    );
+  return sha256.convert(utf8.encode(jsonEncode(canonical(fields)))).toString();
+}
 
 typedef _MeetingIndexKey = ({
   int meeting,
@@ -77,6 +102,7 @@ class Application implements ModelGate {
     'graph_force_state',
     'graph_layouts',
     'sources',
+    'request_keys',
   ];
 
   final Domain domain;
@@ -609,6 +635,26 @@ class Application implements ModelGate {
         'This item was removed when the workspace was cleared.',
       );
     }
+    final key = a['idempotency_key'];
+    if (key != null && !Operation.parse(method).acceptsIdempotencyKey) {
+      throw RpcError(
+        RpcErrorCode.invalidArgument,
+        '$method does not accept an idempotency_key',
+      );
+    }
+    if (key != null && (key is! String || key.isEmpty || key.length > 256)) {
+      throw RpcError(
+        RpcErrorCode.invalidArgument,
+        'idempotency_key must be a string of 1 to 256 characters',
+      );
+    }
+    ({Object? result, bool replayed}) once(Object? Function() write) =>
+        store.writeOnce(
+          key as String?,
+          method,
+          write,
+          arguments: key == null ? '' : requestArgumentsDigest(a),
+        );
     if (method.startsWith('models.') &&
         method != Operation.modelsCancelQueryAcquisition.wire &&
         (modelBusy ||
@@ -666,18 +712,25 @@ class Application implements ModelGate {
         case Operation.sourcesGet:
           return _source(a['id'] as String);
         case Operation.sourcesImport:
-          final id = store.importText(
-            a['title'] as String,
-            a['text'] as String,
-            a['mime'] as String? ?? 'text/plain',
-            a['provenance'] as String? ?? 'mcp',
-            id: a['id'] as String?,
-            modifiedAtMs: a['modifiedAtMs'] as int?,
-            sourceUri: a['sourceUri'] as String?,
-            locallyEdited: a['locallyEdited'] == true,
+          final imported = once(
+            () => {
+              'id': store.importText(
+                a['title'] as String,
+                a['text'] as String,
+                a['mime'] as String? ?? 'text/plain',
+                a['provenance'] as String? ?? 'mcp',
+                id: a['id'] as String?,
+                modifiedAtMs: a['modifiedAtMs'] as int?,
+                sourceUri: a['sourceUri'] as String?,
+                locallyEdited: a['locallyEdited'] == true,
+              ),
+            },
           );
-          if (a['index'] != false) await domain.index(id);
-          return {'id': id};
+          // A replay does not index again; startup resumes pending sources.
+          if (!imported.replayed && a['index'] != false) {
+            await domain.index((imported.result as Map)['id'] as String);
+          }
+          return imported.result;
         case Operation.sourcesImportUrl:
           return {
             'id': await importUrl(
@@ -822,13 +875,15 @@ class Application implements ModelGate {
         case Operation.notesList:
           return store.rows('SELECT * FROM notes ORDER BY id');
         case Operation.notesSave:
-          return {
-            'id': store.saveNote(
-              a['id'] as int?,
-              a['title'] as String,
-              a['body'] as String,
-            ),
-          };
+          return once(
+            () => {
+              'id': store.saveNote(
+                a['id'] as int?,
+                a['title'] as String,
+                a['body'] as String,
+              ),
+            },
+          ).result;
         case Operation.preferencesSet:
           if (a['key'] == 'echoCancellation') {
             final enabled = a['value'] == 'true';
@@ -847,7 +902,7 @@ class Application implements ModelGate {
             'SELECT m.*,d.created,d.reminder FROM meetings m LEFT JOIN meeting_details d ON d.meeting_id=m.id ORDER BY m.id',
           );
         case Operation.meetingsCreate:
-          return {'id': store.meeting(a['title'] as String)};
+          return once(() => {'id': store.meeting(a['title'] as String)}).result;
         case Operation.meetingsGet:
           final id = a['id'] as int;
           return {
@@ -1005,14 +1060,20 @@ class Application implements ModelGate {
         case Operation.meetingsTranscript:
           final id = a['id'] as int;
           _meeting(id);
-          store.transcript(
-            id,
-            a['text'] as String,
-            true,
-            a['start'] as int? ?? 0,
-            a['end'] as int? ?? 0,
-            a['source'] as String? ?? 'imported',
-          );
+          final appended = once(() {
+            store.transcript(
+              id,
+              a['text'] as String,
+              true,
+              a['start'] as int? ?? 0,
+              a['end'] as int? ?? 0,
+              a['source'] as String? ?? 'imported',
+            );
+            return null;
+          });
+          // The first call marked the meeting source pending before its first
+          // await, and startup resumes pending sources.
+          if (appended.replayed) return null;
           if (recordingMeeting == id && recording != null) {
             _scheduleLiveNoteTranscriptEmbedding(id);
           } else {

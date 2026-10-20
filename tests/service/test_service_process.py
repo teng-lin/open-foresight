@@ -608,6 +608,65 @@ def test_restart_preserves_data_and_does_not_reuse_stale_socket(running):
 
 
 @pytest.mark.parametrize("running", ["without_embedding"], indirect=True)
+def test_keyed_retry_commits_once_and_stale_ids_fail_after_restart(running):
+    a = running["peer"]
+    mcp = McpPeer(running["env"])
+    try:
+        mcp.initialize()
+        keyed = {"title": "Before", "body": "old", "idempotency_key": "retry-1"}
+        first = mcp.tool("save_note", keyed)["structuredContent"]["result"]
+        assert mcp.tool("save_note", keyed)["structuredContent"]["result"] == first
+        assert [note["body"] for note in a.call("notes.list")] == ["old"]
+        reused = mcp.tool(
+            "create_meeting", {"title": "x", "idempotency_key": "retry-1"}
+        )
+        assert reused["structuredContent"]["error"]["code"] == "invalidArgument"
+        assert a.call("meetings.list") == []
+        stale = mcp.tool("get_status")["structuredContent"]["result"]["workspace_epoch"]
+    finally:
+        mcp.close()
+    a.call("workspace.clear")  # Approved by the fixture's synthetic desktop.
+    assert a.call("notes.save", {"title": "After", "body": "new"}) == first
+    running["process"].terminate()
+    running["process"].wait(timeout=15)
+    a.close()
+    running["peers"].remove(a)
+    log = (running["root"] / "restart.log").open("w")
+    process = subprocess.Popen(
+        [str(SERVICE)], env=running["env"], stdout=log, stderr=log
+    )
+    running["process"] = process
+    try:
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                b = Peer(running["path"])
+                running["peers"].append(b)
+                break
+            except (FileNotFoundError, ConnectionRefusedError):
+                assert process.poll() is None and time.monotonic() < deadline
+                poll_delay(deadline)
+        assert b.call("status")["workspace_epoch"] != stale
+        with pytest.raises(
+            RuntimeError, match="removed when the workspace was cleared"
+        ):
+            b.call(
+                "notes.save",
+                {
+                    "id": first["id"],
+                    "title": "Before",
+                    "body": "stale edit",
+                    "workspace_epoch": stale,
+                },
+            )
+        assert [note["body"] for note in b.call("notes.list")] == ["new"]
+    finally:
+        process.terminate()
+        process.wait(timeout=15)
+        log.close()
+
+
+@pytest.mark.parametrize("running", ["without_embedding"], indirect=True)
 def test_granola_manual_return_requires_active_matching_attempt_without_network(running):
     from urllib.parse import parse_qs, urlparse
 

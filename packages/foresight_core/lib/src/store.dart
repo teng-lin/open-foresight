@@ -10,6 +10,7 @@ import 'graph_labels.dart';
 import 'label_propagation.dart';
 import 'graph_layout.dart';
 import 'dart:math' show Random;
+import 'package:clock/clock.dart';
 import 'package:crypto/crypto.dart';
 import 'package:sqlite3/sqlite3.dart';
 
@@ -36,11 +37,14 @@ void requireEmbeddingBundle(String path) {
 class Store {
   final Database db;
   final String path;
-  static const schemaVersion = 12;
+  static const schemaVersion = 13;
 
   /// Names one workspace between clears. SQLite reuses INTEGER PRIMARY KEY
   /// values after a clear, so a caller holding an ID sends this back with it.
   static const workspaceEpochKey = 'workspaceEpoch';
+
+  /// How long a request key keeps a retry after a lost reply from writing twice.
+  static const requestKeyLifetime = Duration(days: 7);
   static const _privacyMaintenanceKey = 'internal.privacyMaintenancePending';
   Timer? _privacyMaintenanceRetry;
   var _privacyRetrySeconds = 1;
@@ -85,6 +89,9 @@ class Store {
         db.execute('INSERT OR IGNORE INTO preferences(key,value) VALUES(?,?)', [
           workspaceEpochKey,
           _newWorkspaceEpoch(),
+        ]);
+        db.execute('DELETE FROM request_keys WHERE created<?', [
+          clock.now().subtract(requestKeyLifetime).millisecondsSinceEpoch,
         ]);
         db.execute('COMMIT');
       } catch (_) {
@@ -263,6 +270,10 @@ class Store {
           // without inventing a week from the meeting's creation date.
           db.execute('ALTER TABLE artifacts ADD COLUMN created INTEGER');
         }
+      case 13:
+        db.execute(
+          'CREATE TABLE IF NOT EXISTS request_keys(key TEXT PRIMARY KEY,operation TEXT NOT NULL,arguments TEXT NOT NULL,result TEXT NOT NULL,created INTEGER NOT NULL)',
+        );
       default:
         throw StateError('Missing application database migration $version');
     }
@@ -641,6 +652,60 @@ class Store {
       for (var i = 0; i < 16; i++)
         random.nextInt(256).toRadixString(16).padLeft(2, '0'),
     ].join();
+  }
+
+  /// Runs [write] as one transaction. With a [key], its JSON result commits in
+  /// the same transaction, and a repeated key returns that result without
+  /// writing again, so a retry after a lost reply applies the change once.
+  /// A key is bound to its operation and to the digest of its [arguments].
+  ({Object? result, bool replayed}) writeOnce(
+    String? key,
+    String operation,
+    Object? Function() write, {
+    String arguments = '',
+  }) {
+    db.execute('SAVEPOINT write_once');
+    try {
+      final stored = key == null
+          ? null
+          : rows(
+              'SELECT operation,arguments,result FROM request_keys WHERE key=?',
+              [key],
+            ).firstOrNull;
+      if (stored != null && stored['operation'] != operation) {
+        throw RpcError(
+          RpcErrorCode.invalidArgument,
+          'This idempotency_key was already used for ${stored['operation']}.',
+        );
+      }
+      if (stored != null && stored['arguments'] != arguments) {
+        throw RpcError(
+          RpcErrorCode.invalidArgument,
+          'This idempotency_key was already used with different arguments.',
+        );
+      }
+      final result = stored == null
+          ? write()
+          : jsonDecode(stored['result'] as String);
+      if (stored == null && key != null) {
+        db.execute(
+          'INSERT INTO request_keys(key,operation,arguments,result,created) VALUES(?,?,?,?,?)',
+          [
+            key,
+            operation,
+            arguments,
+            jsonEncode(result),
+            clock.now().millisecondsSinceEpoch,
+          ],
+        );
+      }
+      db.execute('RELEASE write_once');
+      return (result: result, replayed: stored != null);
+    } catch (_) {
+      db.execute('ROLLBACK TO write_once');
+      db.execute('RELEASE write_once');
+      rethrow;
+    }
   }
 
   static const _runtimeResources = {

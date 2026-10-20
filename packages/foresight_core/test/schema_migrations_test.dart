@@ -18,6 +18,55 @@ void main() {
     addTearDown(() => directory.deleteSync(recursive: true));
   });
 
+  test('v13 adds request keys and keeps one workspace epoch', () {
+    var store = Store(path);
+    store.saveNote(null, 'Kept', 'Body');
+    store.db.execute('DROP TABLE IF EXISTS request_keys');
+    store.db.execute("DELETE FROM preferences WHERE key='workspaceEpoch'");
+    store.db.execute('PRAGMA user_version=12');
+    store.close();
+    store = Store(path);
+    String? epoch() =>
+        store
+                .rows(
+                  "SELECT value FROM preferences WHERE key='workspaceEpoch'",
+                )
+                .singleOrNull?['value']
+            as String?;
+    try {
+      expect(
+        store.rows('PRAGMA user_version').single.values.single,
+        Store.schemaVersion,
+      );
+      expect(
+        store
+            .rows('PRAGMA table_info(request_keys)')
+            .map(
+              (row) => [row['name'], row['type'], row['notnull'], row['pk']],
+            ),
+        [
+          ['key', 'TEXT', 0, 1],
+          ['operation', 'TEXT', 1, 0],
+          ['arguments', 'TEXT', 1, 0],
+          ['result', 'TEXT', 1, 0],
+          ['created', 'INTEGER', 1, 0],
+        ],
+      );
+      expect(store.rows('SELECT title,body FROM notes').single, {
+        'title': 'Kept',
+        'body': 'Body',
+      });
+      final first = epoch();
+      expect(first, matches(RegExp(r'^[0-9a-f]{32}$')));
+      store.close();
+      store = Store(path);
+      expect(epoch(), first);
+      expect(store.rows('SELECT total_changes() AS n').single['n'], 0);
+    } finally {
+      store.close();
+    }
+  });
+
   test('v12 dates new output without inventing dates for legacy artifacts', () {
     var store = Store(path);
     final meeting = store.meeting('An older meeting');

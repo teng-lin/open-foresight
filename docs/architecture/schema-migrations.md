@@ -17,8 +17,8 @@ all pending steps. Each step advances `PRAGMA user_version` inside the same
 transaction. A failure or process exit before commit rolls back schema, backfills,
 and version together; reopening retries the pending steps. No per-open table or
 column repair occurs after the current version has been committed. The same
-transaction creates the `workspaceEpoch` preference when it is missing, which
-does not change the schema.
+transaction creates the `workspaceEpoch` preference when it is missing and prunes
+request keys older than seven days; neither changes the schema.
 
 | Version | Change |
 | --- | --- |
@@ -33,6 +33,8 @@ does not change the schema.
 | 9 | One-time normalized label conversion and malformed JSON repair |
 | 10 | Durable helper deletion retry queue |
 | 11 | Structured local-edit flag with legacy provenance backfill |
+| 12 | Generation dates on meeting artifacts |
+| 13 | `request_keys` for idempotent creates and appends |
 
 Historical builds used version 1 for multiple additive schemas. Versions 2–6
 therefore probe for columns only while adopting those profiles. New stored-data

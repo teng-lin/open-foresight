@@ -3,6 +3,7 @@ import 'package:foresight_test_support/google_connections.dart'
     show AdapterDomain;
 import 'dart:io';
 
+import 'package:clock/clock.dart';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:foresight_core/src/rpc_error.dart';
@@ -224,6 +225,185 @@ void main() {
         }
       },
     );
+
+    test(
+      'a repeated idempotency key commits once and returns the same result',
+      () async {
+        final meeting = (await call('meetings.create', {
+          'title': 'Target',
+        }))['id'];
+        for (final (method, args, table)
+            in <(String, Map<String, dynamic>, String)>[
+              ('notes.save', {'title': 'Once', 'body': 'Body'}, 'notes'),
+              ('meetings.create', {'title': 'Once'}, 'meetings'),
+              ('sources.import', {'title': 'Once', 'text': 'Body'}, 'sources'),
+              (
+                'meetings.transcript',
+                {'id': meeting, 'text': 'Once'},
+                'transcript',
+              ),
+            ]) {
+          int rows() =>
+              store.rows('SELECT COUNT(*) AS n FROM $table').single['n'] as int;
+          final before = rows();
+          final keyed = {...args, 'idempotency_key': 'key-$method'};
+          final first = await app.call(method, keyed);
+          final indexed = List.of(domain.indexed);
+          final writes = changes();
+          expect(await app.call(method, keyed), first, reason: method);
+          expect(changes(), writes, reason: '$method replay writes nothing');
+          expect(domain.indexed, indexed, reason: '$method replay reindexes');
+          expect(rows(), before + 1, reason: method);
+        }
+        expect(
+          store.rows('SELECT revision FROM meetings WHERE id=?', [
+            meeting,
+          ]).single['revision'],
+          1,
+        );
+      },
+    );
+
+    test(
+      'a key reused for another operation is rejected without writing',
+      () async {
+        final note = await call('notes.save', {
+          'title': 'First',
+          'body': '',
+          'idempotency_key': 'shared',
+        });
+        final before = changes();
+        await expectLater(
+          app.call('meetings.create', {
+            'title': 'Second',
+            'idempotency_key': 'shared',
+          }),
+          throwsRpc(RpcErrorCode.invalidArgument),
+        );
+        expect(changes(), before);
+        expect(store.rows('SELECT * FROM meetings'), isEmpty);
+        expect(
+          await app.call('notes.save', {
+            'title': 'First',
+            'body': '',
+            'idempotency_key': 'shared',
+          }),
+          note,
+        );
+      },
+    );
+
+    test('a key reused with different arguments is rejected', () async {
+      final first = await app.call('notes.save', {
+        'title': 'Draft',
+        'body': 'v1',
+        'idempotency_key': 'edited',
+      });
+      final before = changes();
+      await expectLater(
+        app.call('notes.save', {
+          'title': 'Draft',
+          'body': 'v2',
+          'idempotency_key': 'edited',
+        }),
+        throwsRpc(
+          RpcErrorCode.invalidArgument,
+          'This idempotency_key was already used with different arguments.',
+        ),
+      );
+      expect(changes(), before);
+      // Field order, explicit nulls and the epoch do not change the arguments.
+      expect(
+        await app.call('notes.save', {
+          'workspace_epoch': await epoch(),
+          'body': 'v1',
+          'id': null,
+          'idempotency_key': 'edited',
+          'title': 'Draft',
+        }),
+        first,
+      );
+      expect(store.rows('SELECT body FROM notes').map((row) => row['body']), [
+        'v1',
+      ]);
+    });
+
+    test(
+      'keys are validated, recorded only on success and cleared with the workspace',
+      () async {
+        for (final (method, key) in <(String, Object)>[
+          ('notes.list', 'unsupported'),
+          ('notes.save', ''),
+          ('notes.save', 'x' * 257),
+          ('notes.save', 42),
+        ]) {
+          await expectLater(
+            app.call(method, {
+              'title': 'T',
+              'body': '',
+              'idempotency_key': key,
+            }),
+            throwsRpc(RpcErrorCode.invalidArgument),
+            reason: '$method $key',
+          );
+        }
+        await expectLater(
+          app.call('meetings.transcript', {
+            'id': 99,
+            'text': 'Lost',
+            'idempotency_key': 'failed',
+          }),
+          throwsRpc(RpcErrorCode.notFound),
+        );
+        expect(store.rows('SELECT * FROM request_keys'), isEmpty);
+        await app.call('notes.save', {
+          'title': 'Before',
+          'body': '',
+          'idempotency_key': 'kept',
+        });
+        expect(
+          store.rows('SELECT key FROM request_keys').single['key'],
+          'kept',
+        );
+        await app.call('workspace.clear', {});
+        expect(store.rows('SELECT * FROM request_keys'), isEmpty);
+      },
+    );
+
+    test('startup prunes request keys older than seven days', () async {
+      final start = DateTime.utc(2026, 10, 1);
+      for (final (key, age) in [
+        ('expired', 8),
+        ('boundary', 7),
+        ('recent', 6),
+      ]) {
+        await withClock(
+          Clock.fixed(start.subtract(Duration(days: age))),
+          () => app.call('meetings.create', {
+            'title': key,
+            'idempotency_key': key,
+          }),
+        );
+      }
+      withClock(Clock.fixed(start), () => Store(store.path)).close();
+      expect(
+        store
+            .rows('SELECT key FROM request_keys ORDER BY key')
+            .map((row) => row['key']),
+        ['boundary', 'recent'],
+      );
+      await app.call('meetings.create', {
+        'title': 'expired',
+        'idempotency_key': 'expired',
+      });
+      expect(
+        store
+            .rows("SELECT COUNT(*) AS n FROM meetings WHERE title='expired'")
+            .single['n'],
+        2,
+        reason: 'A pruned key no longer protects a retry',
+      );
+    });
   });
 
   group('service', () {
@@ -280,7 +460,11 @@ void main() {
       });
       await serve((client) async {
         final fresh =
-            (await client.call('notes.save', {'title': 'After', 'body': 'new'})
+            (await client.call('notes.save', {
+                  'title': 'After',
+                  'body': 'new',
+                  'idempotency_key': 'after-restart',
+                })
                 as Map)['id'];
         expect(fresh, note);
         await expectLater(
@@ -291,6 +475,14 @@ void main() {
             'workspace_epoch': stale,
           }),
           throwsRpc(RpcErrorCode.notFound, clearedMessage),
+        );
+        expect(
+          await client.call('notes.save', {
+            'title': 'After',
+            'body': 'new',
+            'idempotency_key': 'after-restart',
+          }),
+          {'id': fresh},
         );
         expect(
           (await client.call('notes.list') as List).map((n) => n['body']),
