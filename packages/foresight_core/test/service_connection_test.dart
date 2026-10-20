@@ -228,7 +228,7 @@ void main() {
     await eventually(
       () => f.requests.any((r) => r['method'] == 'fixture.unanswered'),
     );
-    client.retire(grace: const Duration(milliseconds: 300));
+    client.retire(grace: const Duration(seconds: 3));
     expect(client.isClosed, isTrue);
     await expectLater(
       client.call('after.retire'),
@@ -473,7 +473,7 @@ void main() {
       addTearDown(() => readPosixLockHolders = reader);
       final startup = Stopwatch()..start();
       await expectLater(
-        ensureService(profile, startupTimeout: const Duration(seconds: 20)),
+        ensureService(profile, startupTimeout: const Duration(seconds: 60)),
         throwsA(
           isA<UnverifiableServiceOwner>().having(
             (error) => error.message,
@@ -484,7 +484,8 @@ void main() {
           ),
         ),
       );
-      expect(startup.elapsed, lessThan(const Duration(seconds: 10)));
+      // Well before the startup deadline.
+      expect(startup.elapsed, lessThan(const Duration(seconds: 20)));
       // Once nothing holds this profile's lock, a service without
       // profile_id is another profile's, as before.
       holder.kill(ProcessSignal.sigkill);

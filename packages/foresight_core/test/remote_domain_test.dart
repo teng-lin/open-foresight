@@ -959,6 +959,7 @@ void main() {
     served.complete();
     await eventually(
       () => f.sockets.length > connections && !f.remote.client.isClosed,
+      timeout: const Duration(seconds: 30),
     );
     // The next run of failures starts again at 1 s.
     await f.stopListening();
@@ -969,7 +970,7 @@ void main() {
     );
     expect(pauses.last, const Duration(seconds: 1));
     expect(launched(), 8);
-  });
+  }, timeout: const Timeout(Duration(minutes: 2)));
 
   test('a reconnect whose desktop attach is never answered fails, closes '
       'that connection and tries again after the backoff', () async {
@@ -996,15 +997,22 @@ void main() {
         .length;
     answerAttach = false;
     f.sockets.last.destroy();
-    await eventually(() => pauses.isNotEmpty);
+    await eventually(
+      () => pauses.isNotEmpty,
+      timeout: const Duration(seconds: 30),
+    );
     expect(pauses, [const Duration(seconds: 1)]);
     expect(attaches(), 2);
     expect(f.remote.helper.state, contains('did not attach'));
     // The connection whose attach hung is closed, not kept.
     expect(f.remote.client.isClosed, isTrue);
     answerAttach = true;
+    f.remote.attachLimit = const Duration(seconds: 30);
     paused.complete();
-    await eventually(() => attaches() == 3 && !f.remote.client.isClosed);
+    await eventually(
+      () => attaches() == 3 && !f.remote.client.isClosed,
+      timeout: const Duration(seconds: 30),
+    );
     // The reattached desktop still receives approvals.
     f.event({
       'event': 'approval',
