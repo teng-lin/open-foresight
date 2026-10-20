@@ -2593,14 +2593,11 @@ Future<bool> awaitProfileRelease(
   int? ownerPid, {
   Duration timeout = const Duration(seconds: 30),
 }) async {
-  final lock = '${profile.data}/.application.lock';
   final waited = Stopwatch()..start();
   var held = false;
   while (true) {
     if ((ownerPid != null && !await _processRunning(ownerPid)) ||
-        FileSystemEntity.typeSync(lock, followLinks: false) ==
-            FileSystemEntityType.notFound ||
-        _profileLockFree(lock)) {
+        profileReleased(profile)) {
       return true;
     }
     if (!held) {
@@ -2630,22 +2627,29 @@ Future<void> requireProfileRelease(
   }
 }
 
+/// Whether no process holds [profile]'s lock: the lock file is missing or
+/// free. Never call this from a process that hosts an owner of the profile,
+/// in any isolate: it probes the lock, POSIX record locks belong to the
+/// process, and closing the probe's descriptor drops the owner's lock.
+bool profileReleased(ProfilePaths profile) {
+  final lock = '${profile.data}/.application.lock';
+  return FileSystemEntity.typeSync(lock, followLinks: false) ==
+          FileSystemEntityType.notFound ||
+      _profileLockFree(lock);
+}
+
 /// Whether the profile has no owner but still has an endpoint record: the
 /// last owner did not shut down cleanly, and the next one recovers its
 /// runtime. Never call this from a process that hosts an owner of the
 /// profile, in any isolate: it probes the lock, POSIX record locks belong to
 /// the process, and closing the probe's descriptor drops the owner's lock.
-bool profileLeftUnclean(ProfilePaths profile) {
-  final lock = '${profile.data}/.application.lock';
-  return FileSystemEntity.typeSync(
-            '${profile.data}/$_endpointRecordName',
-            followLinks: false,
-          ) !=
-          FileSystemEntityType.notFound &&
-      (FileSystemEntity.typeSync(lock, followLinks: false) ==
-              FileSystemEntityType.notFound ||
-          _profileLockFree(lock));
-}
+bool profileLeftUnclean(ProfilePaths profile) =>
+    FileSystemEntity.typeSync(
+          '${profile.data}/$_endpointRecordName',
+          followLinks: false,
+        ) !=
+        FileSystemEntityType.notFound &&
+    profileReleased(profile);
 
 /// Start packaged services as applications through LaunchServices so macOS can
 /// attribute protected operations to the service bundle. Installed TCC attribution

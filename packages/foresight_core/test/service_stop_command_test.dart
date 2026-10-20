@@ -245,6 +245,39 @@ void main() {
     timeout: const Timeout(Duration(minutes: 3)),
   );
 
+  test(
+    '--stop against an owner that removed its socket but still holds its '
+    'profile waits for it to release the profile instead of failing',
+    () async {
+      final profile = newProfile('of-unlisted-');
+      final owner = await HookedServiceProcess.start(
+        build,
+        profile,
+        hold: ['close.before_record_delete'],
+      );
+      await owner.ready();
+      owner.signal(ProcessSignal.sigterm);
+      // Its sockets are gone; its endpoint record and lock remain.
+      await owner.reached('close.before_record_delete');
+      expect(File('${profile.runtime}/application.sock').existsSync(), isFalse);
+      expect(lockHeld(profile), isTrue);
+      final stop = await startStop(profile);
+      var exited = false;
+      unawaited(stop.process.exitCode.then((_) => exited = true));
+      await stop.line('The application service is already stopping.');
+      await stop.line(
+        'Waiting for the application service to release its profile.',
+      );
+      expect(exited, isFalse);
+      owner.release('close.before_record_delete');
+      expect(await stop.exited(), 0, reason: stop.lines.join('\n'));
+      expect(await owner.exited(), 0, reason: owner.output);
+      expect(lockHeld(profile), isFalse);
+      expect(stop.lines.join('\n'), isNot(contains('clean shutdown')));
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
   test('--stop against an owner that is already stopping waits for it to '
       'release its profile instead of failing', () async {
     final profile = newProfile('of-draining-');
