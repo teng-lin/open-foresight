@@ -1,5 +1,8 @@
 part of 'main.dart';
 
+// Each graph.embeddings reply must fit the service's 16 MiB frame limit.
+const _graphEmbeddingBatch = 128;
+
 class _SourcesController extends _FeatureController {
   _SourcesController(super.shell);
 
@@ -1602,17 +1605,28 @@ class _SourcesController extends _FeatureController {
                   ),
             )
             .toList();
-        final fresh = await d.graphEmbeddings(missing);
-        if (!mounted || graphLayoutKey != key) return;
-        for (final source in missing) {
-          final vector = fresh[source['id']];
-          if (vector != null)
-            graphVectorCache[jsonEncode([
-                  identity,
-                  source['id'],
-                  source['revision'],
-                ])] =
-                vector;
+        // Cache each batch as it arrives, so a later failure keeps progress.
+        for (
+          var start = 0;
+          start < missing.length;
+          start += _graphEmbeddingBatch
+        ) {
+          final batch = missing.sublist(
+            start,
+            math.min(start + _graphEmbeddingBatch, missing.length),
+          );
+          final fresh = await d.graphEmbeddings(batch);
+          if (!mounted || graphLayoutKey != key) return;
+          for (final source in batch) {
+            final vector = fresh[source['id']];
+            if (vector != null)
+              graphVectorCache[jsonEncode([
+                    identity,
+                    source['id'],
+                    source['revision'],
+                  ])] =
+                  vector;
+          }
         }
         final vectors = <String, List<double>>{};
         final retained = <String>{};
