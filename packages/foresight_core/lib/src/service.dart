@@ -1547,6 +1547,8 @@ class IsolatedApplicationService {
   Future<void>? _finishing;
   final _workerExited = Completer<void>();
   bool _publicRemoved = false;
+  // Set once the public socket is released; later refusals end at once.
+  bool _refusalsEnded = false;
   Future<void> get closed => _closed.future;
   IsolatedApplicationService._(
     this._dataPath,
@@ -1759,7 +1761,7 @@ class IsolatedApplicationService {
   /// bridging it, until the public socket is removed. A launcher waits for
   /// this connection's EOF before it probes the profile lock.
   void _refuse(Socket client) {
-    if (_publicRemoved) {
+    if (_refusalsEnded) {
       client.destroy();
       return;
     }
@@ -1885,6 +1887,8 @@ class IsolatedApplicationService {
       }
     } finally {
       // Refused clients wait for this EOF before probing the profile lock.
+      // A bridge that fails later must not leave a new refusal open.
+      _refusalsEnded = true;
       for (final client in _refused.toList()) {
         client.destroy();
       }
