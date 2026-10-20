@@ -47,6 +47,19 @@ Future<int> statusPid(String endpoint) async {
   }
 }
 
+/// What the listener at [path] answers.
+Future<String> answerAt(String path) async {
+  final client = await Socket.connect(
+    InternetAddress(path, type: InternetAddressType.unix),
+    0,
+  );
+  try {
+    return await client.cast<List<int>>().transform(utf8.decoder).join();
+  } finally {
+    client.destroy();
+  }
+}
+
 /// An owner released before profile identity: its status has no profile_id.
 Future<ServerSocket> legacyOwner(String endpoint, int ownerPid) async {
   final server = await ServerSocket.bind(
@@ -371,6 +384,80 @@ void main() {
     );
     expect(await owner.stop(), 0, reason: owner.output);
   }, timeout: const Timeout(Duration(minutes: 3)));
+
+  test('an owner never deletes a socket whose state a connect cannot tell '
+      '(N1)', () async {
+    final root = Process.runSync('/usr/bin/id', ['-u']).stdout.toString();
+    if (root.trim() == '0') {
+      markTestSkipped('root may connect to any socket');
+      return;
+    }
+    final directory = createServiceTestDirectorySync('of-unknown-');
+    final profile = ProfilePaths(
+      '${directory.path}/data',
+      '${directory.path}/run',
+    );
+    privateDirectory(profile.runtime);
+    final path = '${profile.runtime}/application.sock';
+    // Connecting fails with EACCES, which says nothing about whether a
+    // service listens there.
+    final server = await ServerSocket.bind(
+      InternetAddress(path, type: InternetAddressType.unix),
+      0,
+    );
+    addTearDown(server.close);
+    expect(Process.runSync('/bin/chmod', ['000', path]).exitCode, 0);
+    runtimeConfiguration.environment.remove('FORESIGHT_HELPER');
+    await expectLater(
+      ApplicationService.start(profile),
+      throwsA(
+        isStateError.having(
+          (error) => error.message,
+          'message',
+          contains('it was not removed'),
+        ),
+      ),
+    );
+    expect(
+      FileSystemEntity.typeSync(path, followLinks: false),
+      FileSystemEntityType.unixDomainSock,
+    );
+  });
+
+  test('a closing owner never removes a socket published at its path after '
+      'its listener closed (S3)', () async {
+    final directory = createServiceTestDirectorySync('of-teardown-');
+    final profile = ProfilePaths(
+      '${directory.path}/data',
+      '${directory.path}/run',
+    );
+    final gates = await ServiceGates.create(directory);
+    runtimeConfiguration.environment.remove('FORESIGHT_HELPER');
+    runtimeConfiguration.environment['FORESIGHT_SERVICE_GATES'] =
+        gates.directory.path;
+    gates.hold('close.listener_closed');
+    final owner = await ApplicationService.start(profile);
+    final path = '${profile.runtime}/application.sock';
+    final closing = owner.close();
+    await gates.reached('close.listener_closed');
+    // Another profile's owner sharing the runtime publishes where the closed
+    // listener's socket was.
+    final bound = '${profile.runtime}/.other';
+    final other = await ServerSocket.bind(
+      InternetAddress(bound, type: InternetAddressType.unix),
+      0,
+    );
+    addTearDown(other.close);
+    other.listen((socket) async {
+      socket.write('other');
+      await socket.flush();
+      socket.destroy();
+    });
+    File(bound).renameSync(path);
+    gates.release('close.listener_closed');
+    await closing.timeout(const Duration(seconds: 60));
+    expect(await answerAt(path), 'other');
+  });
 
   test('an isolated frontend never deletes another profile\'s live public '
       'socket (SL-7)', () async {

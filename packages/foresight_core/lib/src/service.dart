@@ -136,29 +136,35 @@ Future<void> serviceGate(String point) async {
   }
 }
 
+/// Why an owner must not take [inUse]'s path: another profile's service
+/// listens there, or a connect could not tell (SL-7).
+StateError _socketPathRefusal(SocketPathInUse inUse) => inUse.live
+    ? StateError(foreignOwnerMessage(inUse.path))
+    : StateError('$inUse; it was not removed.');
+
 /// Clear [path] before an owner binds there. The caller holds its profile
 /// lock, so the owner that left a socket there is gone, unless it is the
-/// owner of another profile sharing this runtime directory. Never delete a
-/// socket that still accepts a connection; report that owner instead
-/// (SL-7).
+/// owner of another profile sharing this runtime directory. Only a socket
+/// nobody listens on is deleted; report anything else instead (SL-7).
 Future<void> _clearStaleSocket(String path) async {
-  if (FileSystemEntity.typeSync(path) == FileSystemEntityType.notFound) {
-    return;
-  }
-  final Socket live;
   try {
-    live = await Socket.connect(
-      InternetAddress(path, type: InternetAddressType.unix),
-      0,
-      timeout: const Duration(milliseconds: 200),
-    );
-  } on SocketException {
-    // Nothing accepts there, or not within the bound: the socket is stale.
-    File(path).deleteSync();
-    return;
+    await clearStaleSocket(path);
+  } on SocketPathInUse catch (inUse) {
+    throw _socketPathRefusal(inUse);
   }
-  live.destroy();
-  throw StateError(foreignOwnerMessage(path));
+}
+
+/// Publish [binding] without replacing a socket another owner published at
+/// its path meanwhile (S2).
+Future<void> _publish(
+  ServiceSocketBinding binding,
+  void Function(Socket) onClient,
+) async {
+  try {
+    await binding.publish(onClient);
+  } on SocketPathInUse catch (inUse) {
+    throw _socketPathRefusal(inUse);
+  }
 }
 
 /// What a profile's endpoint record says. Reading never fails on its content:
@@ -711,6 +717,7 @@ class ApplicationService {
   final Application application;
   late final AgentAccessGate access;
   final ServerSocket listener;
+  final ServiceSocketBinding _binding;
   final String path;
   final RandomAccessFile lock;
   final RandomAccessFile? installationLock;
@@ -737,12 +744,12 @@ class ApplicationService {
   Future<void> _ready = Future<void>.value();
   ApplicationService._(
     this.domain,
-    ServiceSocketBinding binding,
+    this._binding,
     this.path,
     this.lock,
     this.installationLock,
     this.application,
-  ) : listener = binding.listener {
+  ) : listener = _binding.listener {
     final token = base64Url.encode(
       List<int>.generate(32, (_) => Random.secure().nextInt(256)),
     );
@@ -761,7 +768,6 @@ class ApplicationService {
       token,
       (host, event) => _send(host as Socket, event),
     );
-    binding.publish(_accept);
     _changes = application.changes.stream.listen((_) => _broadcast());
     _captureLevels = application.captureLevelChanges.stream.listen((_) {
       if (_closing) return;
@@ -776,6 +782,13 @@ class ApplicationService {
       const Duration(seconds: 1),
       (_) => _broadcast(),
     );
+  }
+
+  /// Stop the timers and subscriptions of a service whose startup failed.
+  void _discard() {
+    _heartbeat?.cancel();
+    unawaited(_changes?.cancel());
+    unawaited(_captureLevels?.cancel());
   }
 
   /// [desktopDetachGrace] is how long the service waits for a desktop to
@@ -937,6 +950,12 @@ class ApplicationService {
         installationLock,
         application,
       );
+      try {
+        await _publish(binding, service._accept);
+      } catch (_) {
+        service._discard();
+        rethrow;
+      }
       final manifest = runtimeConfiguration['FORESIGHT_MODEL_MANIFEST'];
       if (manifest != null && File(manifest).existsSync()) {
         domain.initialize(
@@ -976,14 +995,9 @@ class ApplicationService {
         await cleanup(() => startedApplication?.close());
         await cleanup(() => binding?.listener.close());
         // Only a socket this attempt published is its own to remove; one
-        // that refused to clear the path belongs to another owner.
-        await cleanup(() {
-          if ((binding?.published ?? false) &&
-              FileSystemEntity.typeSync(path) !=
-                  FileSystemEntityType.notFound) {
-            File(path).deleteSync();
-          }
-        });
+        // that refused to clear the path, or replaced this one, belongs to
+        // another owner.
+        await cleanup(() => binding?.unpublish());
         await cleanup(() => helper?.close());
         await cleanup(() => store?.close());
         // Remove the record while the lock is still held, so no launcher sees
@@ -1543,11 +1557,9 @@ class ApplicationService {
     }
     if (serviceGatesEnabled) await serviceGate('close.listener_closed');
     await attempt(domain.store.close);
-    await attempt(() {
-      if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound) {
-        File(path).deleteSync();
-      }
-    });
+    // The listener is closed, so another profile's owner sharing this runtime
+    // may have published at this path since; remove only this socket (S3).
+    await attempt(_binding.unpublish);
     if (serviceGatesEnabled) await serviceGate('close.before_frontend_release');
     await attempt(() async {
       await _beforeReleaseOwnership?.call();
@@ -1603,8 +1615,6 @@ class IsolatedApplicationService {
   Future<void>? _listening;
   bool _publicClosing = false;
   String? _publicPath;
-  // The device and inode of the public socket this frontend published.
-  String? _publicIdentity;
   String? _workerPath;
   Object? _failure;
   // This frontend asked the worker to close.
@@ -1742,9 +1752,8 @@ class IsolatedApplicationService {
       await binding.close();
       throw StateError('Service closed before socket publication');
     }
-    binding.publish(_accept);
-    _publicIdentity = await _fileIdentity(path);
-    _traceServiceTransport('frontend listening $_publicIdentity');
+    await _publish(binding, _accept);
+    _traceServiceTransport('frontend listening ${binding.identity}');
   }
 
   void _accept(Socket client) {
@@ -1940,22 +1949,15 @@ class IsolatedApplicationService {
         }
       }
       try {
-        final path = _publicPath!;
         // Unlink only the socket this frontend published. A replacement, or
         // an owner in this process or of another profile sharing the runtime
         // directory, may own the path now.
-        final identity = await _fileIdentity(path);
-        if (!(_binding?.published ?? false)) {
-          _traceServiceTransport('frontend never published $path');
-        } else if (identity != null &&
-            _publicIdentity != null &&
-            identity != _publicIdentity) {
-          _traceServiceTransport('frontend leaves a replaced socket $path');
-        } else if (FileSystemEntity.typeSync(path, followLinks: false) !=
-            FileSystemEntityType.notFound) {
-          File(path).deleteSync();
-          _traceServiceTransport('frontend socket removed $path');
-        }
+        final removed = await _binding?.unpublish() ?? false;
+        _traceServiceTransport(
+          removed
+              ? 'frontend socket removed $_publicPath'
+              : 'frontend leaves $_publicPath to its owner',
+        );
         _publicRemoved = true;
       } finally {
         await ownership?.close();
@@ -1999,20 +2001,6 @@ class IsolatedApplicationService {
       if (!_closed.isCompleted) _closed.complete();
     }
   }
-}
-
-/// The device and inode of [path] itself, without following a link, or null
-/// when it is missing or cannot be inspected.
-Future<String?> _fileIdentity(String path) async {
-  if (FileSystemEntity.typeSync(path, followLinks: false) ==
-      FileSystemEntityType.notFound) {
-    return null;
-  }
-  final result = await Process.run(
-    '/usr/bin/stat',
-    Platform.isMacOS ? ['-f', '%d:%i', path] : ['-c', '%d:%i', path],
-  );
-  return result.exitCode == 0 ? result.stdout.toString().trim() : null;
 }
 
 void _applicationServiceWorker(List<Object?> configuration) {
