@@ -377,7 +377,18 @@ Path('builder-invoked').write_text('actual caller reached builder')
     for command in ["gh", "python3"]:
         (binary / command).chmod(0o755)
     for command in ["ditto", "codesign"]:
-        (binary / command).symlink_to("/bin/true")
+        executable = binary / command
+        executable.write_text(
+            (
+                r"""#!/fixture-python
+import json, sys
+from pathlib import Path
+with Path('platform-calls.jsonl').open('a') as output:
+    output.write(json.dumps([Path(sys.argv[0]).name, *sys.argv[1:]]) + '\n')
+"""
+            ).replace("/fixture-python", sys.executable, 1)
+        )
+        executable.chmod(0o755)
     env = {
         key: value
         for key, value in os.environ.items()
@@ -417,7 +428,15 @@ Path('builder-invoked').write_text('actual caller reached builder')
     if attached == "clean":
         assert result.returncode == 0, result.stdout + result.stderr
         assert (tmp_path / "builder-invoked").is_file()
+        assert [
+            json.loads(line)
+            for line in (tmp_path / "platform-calls.jsonl").read_text().splitlines()
+        ] == [
+            ["ditto", "-x", "-k", "artifacts/Open-Foresight-macos-arm64.zip", "staging"],
+            ["codesign", "--verify", "--deep", "--strict", "--verbose=2", "staging/Open Foresight.app"],
+        ]
     else:
+        assert not (tmp_path / "platform-calls.jsonl").exists()
         assert result.returncode != 0, result.stdout + result.stderr
         assert not (tmp_path / "builder-invoked").exists()
         if attached == "api-error":
