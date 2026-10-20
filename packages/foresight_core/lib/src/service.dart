@@ -379,6 +379,12 @@ final cancellableAnswers = {
 /// [RpcErrorReason.outcomeUnknown] for requests already written.
 class ServiceClient {
   final Socket socket;
+
+  /// The socket path this client connected to. A profile's endpoint record
+  /// can name another runtime by the time a caller looks again, so callers
+  /// derive the connected owner's runtime from this, never from a second
+  /// read (L9).
+  final String endpoint;
   final int _maxMessageBytes;
   final _methods = <int, String>{};
   final _requestIds = <int, String>{};
@@ -388,7 +394,7 @@ class ServiceClient {
   bool _closed = false;
   RpcError? _failure;
   bool get isClosed => _closed;
-  ServiceClient._(this.socket, this._maxMessageBytes) {
+  ServiceClient._(this.socket, this._maxMessageBytes, this.endpoint) {
     unawaited(socket.done.catchError((Object _) {}));
     final frames = _FrameSplitter(_maxMessageBytes);
     socket.listen(
@@ -457,6 +463,7 @@ class ServiceClient {
         timeout: connectTimeout,
       ),
       maxMessageBytes,
+      path,
     );
   }
 
