@@ -21,6 +21,9 @@ const closingMessage =
 /// A bound only: startup of a compiled service child under parallel load.
 const startupBound = Duration(seconds: 90);
 
+/// A bound only: a dropped connection reaching its client.
+const connectionBound = Duration(seconds: 30);
+
 String? recordedRuntime(ProfilePaths profile) {
   final record = File('${profile.data}/.application-endpoint.json');
   if (!record.existsSync()) return null;
@@ -97,7 +100,7 @@ void main() {
           'body': 'committed',
         });
         owner.signal(ProcessSignal.sigkill);
-        await owner.exitCode;
+        await owner.exited();
         // A crash leaves the record and the stale public socket behind.
         expect(recordedRuntime(clientProfile), ownerProfile.runtime);
         expect(
@@ -218,7 +221,7 @@ void main() {
         );
         expect(lockHeld(profile), isTrue);
         // SIGTERM already dropped the attached client.
-        await attached.events.stream.drain<void>();
+        await attached.events.stream.drain<void>().timeout(connectionBound);
         expect(attached.isClosed, isTrue);
         // The frontend still accepts, then closes without any reply.
         latecomer = await ServiceClient.connect(serviceEndpoint(profile));
@@ -253,7 +256,7 @@ void main() {
         );
         expect(launcher.launched, isEmpty);
         owner.release('close.before_record_delete');
-        expect(await owner.exitCode, 0, reason: owner.output);
+        expect(await owner.exited(), 0, reason: owner.output);
         replacement = await pending;
         expect(launcher.launched, [
           (await replacement.call('status') as Map)['pid'],
@@ -290,7 +293,7 @@ void main() {
       owner.signal(ProcessSignal.sigterm);
       await owner.reached('close.helper_closed');
       // The frontend destroys attached peers as soon as SIGTERM arrives.
-      await attached.events.stream.drain<void>();
+      await attached.events.stream.drain<void>().timeout(connectionBound);
       expect(attached.isClosed, isTrue);
       await expectLater(attached.call('status'), throwsA(isTransportLoss));
       latecomer = await ServiceClient.connect(serviceEndpoint(profile));
@@ -313,7 +316,7 @@ void main() {
         ),
       );
       owner.release('close.helper_closed');
-      expect(await owner.exitCode, 0, reason: owner.output);
+      expect(await owner.exited(), 0, reason: owner.output);
       expect(recordedRuntime(profile), isNull);
     } finally {
       await attached?.close();

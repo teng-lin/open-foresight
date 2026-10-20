@@ -84,6 +84,22 @@ void main() {
       ]);
       expect(() => serviceGate('../escape'), throwsArgumentError);
     });
+
+    test('arming again forgets an earlier arrival and release', () async {
+      runtimeConfiguration.environment['FORESIGHT_SERVICE_GATES'] = gates.path;
+      final control = ServiceGates(gates);
+      await serviceGate('close.begin');
+      control.release('close.begin');
+      control.hold('close.begin');
+      expect(control.isReached('close.begin'), isFalse);
+      var passed = false;
+      final held = serviceGate('close.begin').whenComplete(() => passed = true);
+      expect(await control.reached('close.begin', pid: pid), pid);
+      // The earlier release no longer applies.
+      expect(passed, isFalse);
+      control.release('close.begin');
+      await held;
+    });
   });
 
   group('hook-enabled service child', () {
@@ -145,7 +161,7 @@ void main() {
               owner.release(point);
             }
           }
-          expect(await owner.exitCode, 0, reason: owner.output);
+          expect(await owner.exited(), 0, reason: owner.output);
           expect(lockHeld(profile), isFalse);
         } finally {
           helper.release();
@@ -226,7 +242,7 @@ void main() {
         // With hooks, close.begin would hold before the helper is stopped.
         await helper.stopping();
         helper.release();
-        expect(await owner.exitCode, 0, reason: owner.output);
+        expect(await owner.exited(), 0, reason: owner.output);
         expect(helper.released, isTrue);
         expect(gates.reachedPoints, isEmpty);
         expect(

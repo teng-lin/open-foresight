@@ -9,6 +9,7 @@ import 'package:foresight_core/foresight_core.dart'
 // ignore: implementation_imports
 import 'package:foresight_core/src/service.dart'
     show ServiceClient, serviceEndpoint;
+import 'package:test_api/scaffolding.dart' show addTearDown;
 
 import 'poll.dart';
 import 'test_paths.dart';
@@ -17,7 +18,12 @@ import 'test_paths.dart';
 ///
 /// A service reaching a point publishes `<point>.reached` (its pid). It waits
 /// there only if the point was armed with [hold], until [release] or
-/// [releaseAll]. Releases are sticky: later arrivals pass straight through.
+/// [releaseAll]. Releases are sticky: later arrivals pass straight through
+/// until the point is armed again.
+///
+/// `<point>.reached` names only the latest arrival. When an owner and the
+/// services a launcher starts share one directory, pass `pid` to [reached],
+/// or give the launcher its own [ServiceGates].
 class ServiceGates {
   ServiceGates(this.directory);
   final Directory directory;
@@ -28,8 +34,15 @@ class ServiceGates {
     return ServiceGates(directory);
   }
 
-  /// Arm [point]; set this before the service can reach it.
-  void hold(String point) => _touch('$point.hold');
+  /// Arm [point]; set this before the service can reach it. Arming clears an
+  /// earlier arrival and release, so [reached] cannot report a stale one.
+  void hold(String point) {
+    for (final stale in ['$point.reached', '$point.release']) {
+      final file = File('${directory.path}/$stale');
+      if (file.existsSync()) file.deleteSync();
+    }
+    _touch('$point.hold');
+  }
 
   void release(String point) => _touch('$point.release');
 
@@ -39,15 +52,22 @@ class ServiceGates {
   bool isReached(String point) =>
       File('${directory.path}/$point.reached').existsSync();
 
-  /// The pid of the latest process to reach [point]. The timeout only bounds
-  /// the wait; it is not part of what a test asserts.
+  /// The pid of the latest process to reach [point], or, with [pid], wait
+  /// for that process to reach it. The timeout only bounds the wait; it is
+  /// not part of what a test asserts.
   Future<int> reached(
     String point, {
+    int? pid,
     Duration timeout = const Duration(seconds: 60),
   }) async {
     final file = File('${directory.path}/$point.reached');
-    await eventually(file.existsSync, timeout: timeout);
-    return int.parse(file.readAsStringSync());
+    int? arrival() =>
+        file.existsSync() ? int.tryParse(file.readAsStringSync()) : null;
+    await eventually(() {
+      final found = arrival();
+      return found != null && (pid == null || found == pid);
+    }, timeout: timeout);
+    return arrival()!;
   }
 
   /// Every point reached so far, for diagnostics and hook-free checks.
@@ -108,7 +128,8 @@ class HookedServiceBuild {
   }
 
   /// A FORESIGHT_SERVICE executable for `ensureService`. Each launch records
-  /// its pid, appends its output to a log, and uses [gates] when given.
+  /// its pid, appends its output to a log, and uses [gates] when given. The
+  /// current test's teardown stops every launched service.
   Future<ServiceLauncher> launcher(
     Directory directory, {
     ServiceGates? gates,
@@ -128,7 +149,15 @@ class HookedServiceBuild {
     if (protect.exitCode != 0) {
       throw StateError('Cannot make ${script.path} executable');
     }
-    return ServiceLauncher._(script.path, launches, log, gates);
+    final launcher = ServiceLauncher._(
+      script.path,
+      launches,
+      log,
+      gates,
+      kernel,
+    );
+    addTearDown(launcher.stopAll);
+    return launcher;
   }
 
   Future<void> dispose() => directory.delete(recursive: true);
@@ -136,7 +165,13 @@ class HookedServiceBuild {
 
 /// Services started by `ensureService` through a [HookedServiceBuild.launcher].
 class ServiceLauncher {
-  ServiceLauncher._(this.executable, this._launches, this.log, this.gates);
+  ServiceLauncher._(
+    this.executable,
+    this._launches,
+    this.log,
+    this.gates,
+    this._kernel,
+  );
 
   /// Set `FORESIGHT_SERVICE` to this.
   final String executable;
@@ -145,6 +180,7 @@ class ServiceLauncher {
 
   /// The gates every launched service uses, if any.
   final ServiceGates? gates;
+  final String _kernel;
 
   /// Pids of every launched service, in launch order.
   List<int> get launched => _launches.existsSync()
@@ -156,14 +192,17 @@ class ServiceLauncher {
   /// are not our children, so this polls their process state.
   Future<void> stopAll({Duration timeout = const Duration(seconds: 30)}) async {
     if (gates?.directory.existsSync() ?? false) gates!.releaseAll();
+    // Never signal a reused pid: it must still run this build's service.
+    Future<bool> ours(int pid) async =>
+        (await _command(pid))?.contains(_kernel) ?? false;
     for (final pid in launched) {
-      if (!await isRunning(pid)) continue;
+      if (!await ours(pid)) continue;
       Process.killPid(pid, ProcessSignal.sigterm);
       try {
-        await eventually(() async => !await isRunning(pid), timeout: timeout);
+        await eventually(() async => !await ours(pid), timeout: timeout);
       } catch (_) {
-        Process.killPid(pid, ProcessSignal.sigkill);
-        await eventually(() async => !await isRunning(pid), timeout: timeout);
+        if (await ours(pid)) Process.killPid(pid, ProcessSignal.sigkill);
+        await eventually(() async => !await ours(pid), timeout: timeout);
       }
     }
   }
@@ -174,6 +213,14 @@ Future<bool> isRunning(int pid) async {
   final result = await Process.run('/bin/ps', ['-p', '$pid', '-o', 'stat=']);
   final state = result.stdout.toString().trim();
   return result.exitCode == 0 && state.isNotEmpty && !state.startsWith('Z');
+}
+
+/// The command line of a live (non-zombie) [pid], or null.
+Future<String?> _command(int pid) async {
+  if (!await isRunning(pid)) return null;
+  final result = await Process.run('/bin/ps', ['-p', '$pid', '-o', 'command=']);
+  final command = result.stdout.toString().trim();
+  return result.exitCode == 0 && command.isNotEmpty ? command : null;
 }
 
 /// A real application service process: `bin/service.dart`, hence
@@ -206,7 +253,8 @@ class HookedServiceProcess {
 
   /// Start the service for [profile]. Only non-`FORESIGHT_` variables are
   /// inherited; [environment] adds or overrides service configuration. The
-  /// helper is disabled unless [environment] sets `FORESIGHT_HELPER`.
+  /// helper is disabled unless [environment] sets `FORESIGHT_HELPER`. The
+  /// current test's teardown calls [stop].
   static Future<HookedServiceProcess> start(
     HookedServiceBuild build,
     ProfilePaths profile, {
@@ -237,6 +285,7 @@ class HookedServiceProcess {
     for (final stream in [process.stdout, process.stderr]) {
       stream.transform(utf8.decoder).listen(service._output.write);
     }
+    addTearDown(service.stop);
     return service;
   }
 
@@ -267,7 +316,18 @@ class HookedServiceProcess {
 
   void hold(String point) => gates.hold(point);
   void release(String point) => gates.release(point);
-  Future<int> reached(String point) => gates.reached(point);
+
+  /// Wait for this process to reach [point]; returns its pid.
+  Future<int> reached(String point) => gates.reached(point, pid: pid);
+
+  /// The exit code, waiting at most [timeout] (a bound, not an assertion).
+  Future<int> exited({Duration timeout = const Duration(seconds: 60)}) =>
+      exitCode.timeout(
+        timeout,
+        onTimeout: () => throw TimeoutException(
+          'Service $pid did not exit within $timeout:\n$output',
+        ),
+      );
 
   void signal(ProcessSignal signal) => process.kill(signal);
 
@@ -280,7 +340,7 @@ class HookedServiceProcess {
       return await exitCode.timeout(timeout);
     } on TimeoutException {
       process.kill(ProcessSignal.sigkill);
-      return await exitCode;
+      return await exitCode.timeout(timeout);
     } finally {
       if (_owned != null && _owned.existsSync()) {
         _owned.deleteSync(recursive: true);
