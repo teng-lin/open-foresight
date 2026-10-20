@@ -14,11 +14,14 @@ class ReferenceNoteTranscriptCache {
     required this.computeEmbedding,
     required this.currentIsLive,
     required this.loadSavedTranscript,
+    this.onSettled,
   });
 
   final Future<List<double>> Function(String text) computeEmbedding;
   final bool Function(int meetingId) currentIsLive;
   final Future<String> Function(int meetingId) loadSavedTranscript;
+  int computing = 0;
+  final void Function()? onSettled;
   final _entries = <int, _TranscriptEntry>{};
 
   /// Discard ephemeral entries when the workspace or embedding model changes.
@@ -52,6 +55,7 @@ class ReferenceNoteTranscriptCache {
     if (running != null) return running;
     final completion = Completer<void>();
     entry.running = completion.future;
+    computing++;
     _drain(
       meetingId,
       entry,
@@ -78,6 +82,8 @@ class ReferenceNoteTranscriptCache {
       }
     } finally {
       entry.running = null;
+      computing--;
+      onSettled?.call();
     }
   }
 

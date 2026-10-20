@@ -13,17 +13,8 @@ import 'package:grpc/grpc.dart';
 import 'package:test/test.dart';
 import 'package:crypto/crypto.dart';
 
-import 'helper_adoption_test.dart' show AdoptionRag, AdoptionControl;
+import 'package:foresight_test_support/helper_adoption.dart';
 import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
-
-class _HeldPing extends AdoptionRag {
-  final release = Completer<void>();
-  @override
-  Future<PingResponse> ping(ServiceCall call, PingRequest request) async {
-    await release.future;
-    return super.ping(call, request);
-  }
-}
 
 class _FailedIndex extends AdoptionRag {
   @override
@@ -225,7 +216,7 @@ void main() {
     'request saturation and cancellation leave another client responsive',
     () async {
       privateDirectory(profile.runtime);
-      final ping = _HeldPing();
+      final ping = HeldPing();
       final server = Server.create(
         services: [ping, AdoptionControl(control.State())],
       );

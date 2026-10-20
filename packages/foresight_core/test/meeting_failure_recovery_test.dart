@@ -20,7 +20,7 @@ class IndexingDomain extends Domain {
   final indexed = <String>[];
   IndexingDomain(super.store, super.helper);
   @override
-  Future<void> index(String id) async {
+  Future<void> index(String id, {bool Function()? current}) async {
     indexed.add(id);
     store.state(id, 'indexed');
   }

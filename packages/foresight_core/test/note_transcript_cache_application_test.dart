@@ -89,7 +89,7 @@ class TranscriptDomain extends Domain {
   TranscriptDomain(super.store, super.helper);
 
   @override
-  Future<void> index(String id) async {}
+  Future<void> index(String id, {bool Function()? current}) async {}
 }
 
 Future<void> withTranscriptFixture(

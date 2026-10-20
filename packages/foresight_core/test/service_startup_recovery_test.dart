@@ -9,7 +9,7 @@ import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_test_support/poll.dart';
 import 'package:grpc/grpc.dart';
 import 'package:test/test.dart';
-import 'helper_adoption_test.dart' show AdoptionRag, AdoptionControl;
+import 'package:foresight_test_support/helper_adoption.dart';
 
 class RecoveryRag extends AdoptionRag {
   final indexed = Completer<IndexRequest>();

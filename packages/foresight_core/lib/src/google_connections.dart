@@ -78,9 +78,9 @@ class GoogleConnections implements ConnectedSources {
     }
   }
 
-  Future<void> _checkpoint(String account) async {
+  Future<void> _checkpoint(String account, {bool Function()? current}) async {
     _check(account);
-    await domain.waitForSourceWork();
+    await domain.waitForSourceWork(current: current);
     _check(account);
   }
 
@@ -157,9 +157,10 @@ class GoogleConnections implements ConnectedSources {
     String provenance, {
     int modifiedAtMs = 0,
     bool preserveDeleted = false,
+    bool Function()? current,
     String? sourceUri,
   }) async {
-    await _checkpoint(auth.account);
+    await _checkpoint(auth.account, current: current);
     if (text.trim().isEmpty) throw StateError('No readable text in $title.');
     final old = store.rows('SELECT * FROM sources WHERE id=?', [
       id,
@@ -198,7 +199,8 @@ class GoogleConnections implements ConnectedSources {
         [modifiedAtMs, id],
       );
     }
-    if (contentChanged || old['state'] != 'indexed') await domain.index(id);
+    if (contentChanged || old['state'] != 'indexed')
+      await domain.index(id, current: current);
   }
 
   @override
@@ -206,9 +208,10 @@ class GoogleConnections implements ConnectedSources {
     String fileId, {
     Map<String, dynamic>? metadata,
     bool preserveDeleted = false,
+    bool Function()? current,
   }) async {
     final account = auth.account;
-    await _checkpoint(account);
+    await _checkpoint(account, current: current);
     final file =
         metadata ??
         await auth.apiJson(
@@ -279,6 +282,7 @@ class GoogleConnections implements ConnectedSources {
       'google-drive:$account:$fileId',
       modifiedAtMs: _modifiedTime(file['modifiedTime']),
       preserveDeleted: preserveDeleted,
+      current: current,
       sourceUri: file['webViewLink'] as String?,
     );
     _check(account);
@@ -301,6 +305,7 @@ class GoogleConnections implements ConnectedSources {
   Future<void> importDriveFolder(
     String folderId, {
     bool refreshing = false,
+    bool Function()? current,
   }) async {
     final account = auth.account;
     _check(account);
@@ -308,7 +313,7 @@ class GoogleConnections implements ConnectedSources {
     final examined = <String>{};
     var count = 0;
     while (queue.isNotEmpty) {
-      await _checkpoint(account);
+      await _checkpoint(account, current: current);
       final folder = queue.removeLast();
       if (!seen.add(folder)) continue;
       final files = await driveFiles(parent: folder);
@@ -348,6 +353,7 @@ class GoogleConnections implements ConnectedSources {
               file['id'] as String,
               metadata: file,
               preserveDeleted: refreshing,
+              current: current,
             );
             count++;
           } catch (error) {
@@ -365,7 +371,7 @@ class GoogleConnections implements ConnectedSources {
   }
 
   @override
-  Future<void> importLastYear() async {
+  Future<void> importLastYear({bool Function()? current}) async {
     final files = await driveFiles(
       modifiedAfter: DateTime.now().subtract(const Duration(days: 365)),
     );
@@ -374,7 +380,11 @@ class GoogleConnections implements ConnectedSources {
       (row) => supported(row['mimeType'] as String),
     )) {
       try {
-        await importDriveFile(file['id'] as String, metadata: file);
+        await importDriveFile(
+          file['id'] as String,
+          metadata: file,
+          current: current,
+        );
       } catch (error) {
         failures.add(_importFailure('${file['name']}', error));
       }
@@ -553,8 +563,13 @@ class GoogleConnections implements ConnectedSources {
   }
 
   @override
-  Future<void> refresh() =>
-      _refreshing ??= _refresh().whenComplete(() => _refreshing = null);
+  Future<void> refresh({bool Function()? current}) {
+    final shared = _refreshing ??= _refresh().whenComplete(
+      () => _refreshing = null,
+    );
+    return domain.awaitCurrent(shared, current);
+  }
+
   Future<void> _refresh() async {
     final account = auth.account;
     _check(account);
@@ -648,7 +663,10 @@ class GoogleConnections implements ConnectedSources {
   }
 
   @override
-  Future<void> importAttachments(int meeting) async {
+  Future<void> importAttachments(
+    int meeting, {
+    bool Function()? current,
+  }) async {
     final failures = <String>[];
     for (final attachment in attachments(meeting)) {
       final id = attachment['fileId'] as String?;
@@ -657,7 +675,7 @@ class GoogleConnections implements ConnectedSources {
         continue;
       }
       try {
-        await importDriveFile(id);
+        await importDriveFile(id, current: current);
       } catch (error) {
         failures.add(_importFailure('${attachment['title']}', error));
       }

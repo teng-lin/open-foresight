@@ -24,7 +24,7 @@ class _Domain extends Domain {
   );
   Completer<void>? indexGate;
   @override
-  Future<void> index(String id) async {
+  Future<void> index(String id, {bool Function()? current}) async {
     await indexGate?.future;
     store.state(id, 'indexed');
   }
