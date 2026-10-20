@@ -125,7 +125,8 @@ void main() {
                 // The helper is closed only after this point.
                 expect(helper.isStopping, isFalse);
               case 'close.helper_closed':
-                expect(helper.isStopping, isTrue);
+                // The helper exited through its release, not a SIGKILL.
+                expect(helper.released, isTrue);
               case 'close.before_record_delete':
                 expect(record.existsSync(), isTrue);
                 expect(socket.existsSync(), isTrue);
@@ -226,6 +227,7 @@ void main() {
         await helper.stopping();
         helper.release();
         expect(await owner.exitCode, 0, reason: owner.output);
+        expect(helper.released, isTrue);
         expect(gates.reachedPoints, isEmpty);
         expect(
           File('${profile.data}/.application-endpoint.json').existsSync(),

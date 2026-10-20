@@ -1186,7 +1186,9 @@ class GatedHelper:
     """Python side of package:foresight_test_support/gated_helper.dart.
 
     Set FORESIGHT_HELPER to `executable`. The helper holds SIGTERM until
-    `release()`, so a closing service stays inside its helper shutdown.
+    `release()`, so a closing service stays inside its helper shutdown. The
+    service SIGKILLs it 5 s after SIGTERM; `released()` shows the hold ended
+    through `release()` instead.
     """
 
     def __init__(self, directory):
@@ -1199,11 +1201,17 @@ class GatedHelper:
         )
         self.executable.chmod(0o700)
 
-    def published(self, name, deadline):
+    def published(self, name, deadline, service=None):
+        """Wait for a marker; fail at once if the [service] process exits."""
         path = self.control / name
         while not path.exists():
+            if service is not None:
+                assert service.poll() is None, f"service exited before {name}"
             poll_delay(deadline)
         return int(path.read_text())
+
+    def released(self):
+        return (self.control / "released").exists()
 
     def release(self):
         (self.control / "release").write_text("")
@@ -1252,6 +1260,9 @@ def test_release_service_ignores_lifecycle_gates(tmp_path):
     Lifecycle tests compile bin/service.dart with FORESIGHT_ENABLE_TEST_HOOKS.
     This production executable is built without it: every gate is armed, yet
     status answers, SIGTERM reaches the helper, and no gate reports reaching.
+    The paired positive control is service_gate_test.dart, "the isolated
+    worker stops at every close gate in order", where the same gates hold a
+    hook-enabled build of bin/service.dart.
     """
     assert SERVICE.is_file(), "Build the service executable first"
     data, runtime, gates = tmp_path / "data", tmp_path / "run", tmp_path / "gates"
@@ -1280,7 +1291,7 @@ def test_release_service_ignores_lifecycle_gates(tmp_path):
         peer = None
         try:
             deadline = time.monotonic() + 30
-            helper.published("started", deadline)
+            helper.published("started", deadline, process)
             while peer is None:
                 assert process.poll() is None
                 try:
@@ -1300,12 +1311,14 @@ def test_release_service_ignores_lifecycle_gates(tmp_path):
             peer = None
             process.send_signal(signal.SIGTERM)
             # A hook-enabled build would hold close.begin before this.
-            helper.published("stopping", deadline)
+            helper.published("stopping", deadline, process)
             assert sorted(path.name for path in gates.iterdir()) == sorted(
                 f"{point}.hold" for point in LIFECYCLE_GATES
             )
             helper.release()
             assert process.wait(timeout=30) == 0
+            # The hold ended through release, not the service's 5 s SIGKILL.
+            assert helper.released()
             assert not list(gates.glob("*.reached"))
             assert not (data / ".application-endpoint.json").exists()
             assert not (runtime / "application.sock").exists()

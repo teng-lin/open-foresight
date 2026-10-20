@@ -396,6 +396,8 @@ void main() {
         }
         helper.release();
         await shutdown.timeout(const Duration(seconds: 10));
+        // The hold ended through release, not the service's 5 s SIGKILL.
+        expect(helper.released, isTrue);
       } finally {
         helper.release();
         await client?.close();

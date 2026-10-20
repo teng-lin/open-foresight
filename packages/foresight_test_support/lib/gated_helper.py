@@ -6,8 +6,13 @@ Usage: gated_helper.py CONTROL_DIRECTORY [helper arguments...]
 The service starts its helper with the socket and storage paths; this fixture
 ignores them. It writes CONTROL_DIRECTORY/started (its pid) once its SIGTERM
 handler is installed. On SIGTERM it writes CONTROL_DIRECTORY/stopping, then
-exits 0 only after CONTROL_DIRECTORY/release exists. A service closing this
-helper is therefore held inside its helper shutdown, with its profile lock.
+exits 0 only after CONTROL_DIRECTORY/release exists, writing
+CONTROL_DIRECTORY/released just before. A service closing this helper is
+therefore held inside its helper shutdown, with its profile lock.
+
+The service SIGKILLs a helper that has not exited 5 s after SIGTERM, which
+ends the hold without `released`. Tests release well within that limit and
+can check `released` to show the hold was not cut short.
 
 The Dart fixture (package:foresight_test_support/gated_helper.dart) and the
 built-service suite (tests/service/gated_helper.py) run byte-identical copies.
@@ -34,6 +39,7 @@ def shutdown(signum, frame):
     # Polling only delays the release; the test decides when it happens.
     while not (control / "release").exists():
         time.sleep(0.005)
+    publish("released")
     raise SystemExit(0)
 
 

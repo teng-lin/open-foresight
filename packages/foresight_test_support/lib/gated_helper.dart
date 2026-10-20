@@ -1,23 +1,31 @@
 import 'dart:io';
 import 'dart:isolate';
 
+import 'package:test_api/scaffolding.dart' show addTearDown;
+
 import 'poll.dart';
 
 /// A helper executable that holds SIGTERM until [release], so a test can keep
 /// a closing service inside its helper shutdown while it still owns the
 /// profile lock. Point `FORESIGHT_HELPER` at [executable].
 ///
+/// The service SIGKILLs a helper that has not exited 5 s after SIGTERM
+/// (`Helper.close`), which ends the hold early. Release within that limit,
+/// and check [released] to show the hold ended through [release].
+///
 /// The behavior lives in `gated_helper.py`, which the built-service suite runs
 /// as `tests/service/gated_helper.py`; both copies must stay identical.
 class GatedHelper {
   GatedHelper._(this.control, this.executable);
 
-  /// Holds the `started`, `stopping` and `release` files.
+  /// Holds the `started`, `stopping`, `release` and `released` files.
   final Directory control;
 
   /// A wrapper that runs the shared script with this helper's [control].
   final String executable;
 
+  /// Create the wrapper in [directory]. The current test's teardown releases
+  /// and, if it is still running, kills the helper.
   static Future<GatedHelper> create(Directory directory) async {
     final script = await Isolate.resolvePackageUri(
       Uri.parse('package:foresight_test_support/gated_helper.py'),
@@ -35,7 +43,13 @@ class GatedHelper {
     if (protect.exitCode != 0) {
       throw StateError('Cannot make ${wrapper.path} executable');
     }
-    return GatedHelper._(control, wrapper.path);
+    final helper = GatedHelper._(control, wrapper.path);
+    addTearDown(() {
+      if (!control.existsSync()) return;
+      helper.release();
+      helper.kill();
+    });
+    return helper;
   }
 
   /// The helper's pid once its SIGTERM handler is installed.
@@ -48,13 +62,16 @@ class GatedHelper {
 
   bool get isStopping => File('${control.path}/stopping').existsSync();
 
+  /// Whether the hold ended through [release], not the service's SIGKILL.
+  bool get released => File('${control.path}/released').existsSync();
+
   /// Let a held (or later) SIGTERM finish. Safe to call more than once.
   void release() => File('${control.path}/release').writeAsStringSync('');
 
   /// SIGKILL the helper if its service died without closing it (cleanup).
   void kill() {
     final started = File('${control.path}/started');
-    if (!started.existsSync()) return;
+    if (!started.existsSync() || released) return;
     final pid = int.parse(started.readAsStringSync());
     final command = Process.runSync('/bin/ps', [
       '-p',
