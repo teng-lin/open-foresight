@@ -88,7 +88,6 @@ def test_registry_failure_is_not_permission_to_compile_uncached():
 @pytest.mark.parametrize(
     "name,job",
     [
-        ("integration-acceptance.yml", "ubuntu-application"),
         ("macos.yml", "linux-bundle"),
     ],
 )
@@ -130,18 +129,9 @@ def test_shared_daemon_is_provisioned_before_sdk_load_and_seed_is_always_consume
         assert "steps.sdk.outputs.cache" not in build["cache-from"]
         assert "REQUIRE_DEPENDENCY_REUSE=1" in build["build-args"]
     exporters = [build for build in builds if "cache-to" in build]
-    if job == "ubuntu-application":
-        assert not exporters
-        assert (
-            selected.get("permissions", workflow["permissions"])["packages"] == "read"
-        )
-    else:
-        assert "github.ref == 'refs/heads/main'" in selected["if"]
-        assert (
-            len(exporters) == 1 and exporters[0]["target"] == "application-dependencies"
-        )
-        assert "legacy_cache" not in exporters[0]["cache-to"]
-        assert selected["permissions"]["packages"] == "write"
+    assert not exporters
+    assert selected["permissions"]["packages"] == "read"
+    assert "github.ref == 'refs/heads/main'" in selected["if"]
 
 
 def test_new_cache_absence_retains_original_seed_and_does_not_republish_it(capsys):
@@ -181,6 +171,137 @@ def test_registry_namespace_normalizes_github_repository_case():
     assert transport.reference("Teng-Lin/Open-Foresight") == transport.reference(
         "teng-lin/open-foresight"
     )
+
+
+@pytest.mark.parametrize("existing_seed", [False, True])
+@pytest.mark.parametrize("mode", ["--build-only", "--test-only"])
+@pytest.mark.parametrize("schedule_value", [None, "0", "1", "bad"])
+def test_own_run_driver_uses_the_shared_daemon_and_required_seed_without_cache_writes(
+    tmp_path, existing_seed, mode, schedule_value
+):
+    """Exercise the workflow's real driver, leaving Docker and SDK bytes untouched."""
+    import os
+    import sys
+
+    workflow = yaml.safe_load((ROOT / ".github/workflows/macos.yml").read_text())
+    job = workflow["jobs"]["linux-build"]
+    steps = job["steps"]
+    assert job["permissions"]["packages"] == "read"
+    assert any(
+        "bash tools/build_linux_container.sh --build-only" in step.get("run", "")
+        for step in steps
+    )
+    sdk_index = next(i for i, step in enumerate(steps) if step.get("id") == "sdk")
+    daemon_index = next(
+        i
+        for i, step in enumerate(steps)
+        if step.get("uses", "").startswith("docker/setup-docker-action@")
+    )
+    assert daemon_index < sdk_index
+    driver = next(
+        step
+        for step in steps
+        if step.get("uses", "").startswith("docker/setup-buildx-action@")
+    )
+    assert driver["with"]["driver"] == "docker"
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    log = tmp_path / "commands.jsonl"
+    seed = tmp_path / "qualified-seed"
+    if existing_seed:
+        seed.mkdir()
+        (seed / "sentinel").write_bytes(b"existing verified objects")
+    script = f"""#!{sys.executable}
+import json, os, sys
+from pathlib import Path
+name = Path(sys.argv[0]).name
+with open(os.environ['TRANSPORT_LOG'], 'a') as stream:
+    stream.write(json.dumps([name, *sys.argv[1:]]) + '\\n')
+if name == 'docker' and sys.argv[1:] == ['context', 'show']:
+    print('shared-daemon')
+if name == 'docker' and sys.argv[1] == 'run':
+    forwarded = dict()
+    for index, value in enumerate(sys.argv):
+        if value == '-e':
+            key, separator, literal = sys.argv[index + 1].partition('=')
+            if separator or key in os.environ:
+                forwarded[key] = literal if separator else os.environ[key]
+    with open(os.environ['TRANSPORT_LOG'], 'a') as stream:
+        stream.write(json.dumps(['container-env', forwarded]) + '\\n')
+if name == 'host-python':
+    if 'tools/ci_app_dependency_seed.py' in sys.argv:
+        Path(sys.argv[sys.argv.index('--output') + 1]).mkdir(exist_ok=True)
+    elif 'tools/ci_linux_handoff.py' in sys.argv:
+        Path(sys.argv[sys.argv.index('--output') + 1]).write_text('{{}}')
+    elif '-c' in sys.argv:
+        print('frozen-snapshot')
+"""
+    for name in ("docker", "host-python"):
+        path = binary / name
+        path.write_text(script)
+        path.chmod(0o755)
+    environment = {
+        **os.environ,
+        "PATH": str(binary) + os.pathsep + os.environ["PATH"],
+        "FORESIGHT_HOST_PYTHON": str(binary / "host-python"),
+        "TRANSPORT_LOG": str(log),
+        "GITHUB_REPOSITORY": "Owner/Repo",
+        "SOURCE_REVISION": "a" * 40,
+        "SOURCE_DATE_EPOCH": "123",
+        "VERSION": "0.1.2",
+        "FORESIGHT_GOOGLE_CLIENT_FILE": "",
+        "FORESIGHT_GOOGLE_CLIENT_JSON": "",
+        "FORESIGHT_SEARCH_API_KEY": "",
+        "FORESIGHT_WEB_CONTENT_API_KEY": "",
+    }
+    environment.pop("FORESIGHT_LINUX_TEST_SCHEDULE", None)
+    if schedule_value is not None:
+        environment["FORESIGHT_LINUX_TEST_SCHEDULE"] = schedule_value
+    result = subprocess.run(
+        [
+            "bash",
+            str(ROOT / "tools/build_linux_container.sh"),
+            mode,
+            "--sdk-image",
+            "verified-sdk:original",
+            "--seed",
+            str(seed),
+            "--output",
+            str(tmp_path / "output"),
+        ],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    rows = [json.loads(line) for line in log.read_text().splitlines()]
+    seed_command = next(row for row in rows if "tools/ci_app_dependency_seed.py" in row)
+    assert ("--verify-existing" in seed_command) == existing_seed
+    build = next(row for row in rows if row[:3] == ["docker", "buildx", "build"])
+    assert build[build.index("--builder") + 1] == "shared-daemon"
+    assert build[build.index("--build-context") + 1] == "appdeps_seed=" + str(seed)
+    assert "REQUIRE_DEPENDENCY_REUSE=1" in build
+    for tag in (
+        "ci-tools-buildcache-v1",
+        "app-deps-buildcache-v1",
+        "app-buildcache-x86-64",
+    ):
+        assert "type=registry,ref=ghcr.io/owner/repo/linux-sdk:" + tag in build
+    assert "--cache-to" not in build
+    runs = [row for row in rows if row[:2] == ["docker", "run"]]
+    assert len(runs) == 1
+    target = "test" if mode == "--test-only" else "build"
+    assert runs[0][-1] == f"/workspace/tools/linux_container_{target}.sh"
+    assert runs[0][runs[0].index("FORESIGHT_LINUX_TEST_SCHEDULE") - 1] == "-e"
+    container_env = next(row[1] for row in rows if row[0] == "container-env")
+    assert container_env.get("FORESIGHT_LINUX_TEST_SCHEDULE") == schedule_value
+    assert ("FORESIGHT_LINUX_TEST_SCHEDULE" in container_env) == (
+        schedule_value is not None
+    )
+    assert "sdk.Dockerfile" not in json.dumps(rows)
+    if existing_seed:
+        assert (seed / "sentinel").read_bytes() == b"existing verified objects"
 
 
 @pytest.mark.parametrize("flags", [[], ["--ci"], ["--acceptance"]])

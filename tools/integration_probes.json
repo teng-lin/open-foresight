@@ -6,7 +6,7 @@
       "mode": "automated",
       "reason": "Shipped GPU defaults on the explicitly selected Mesa software Vulkan ICD; physical GPU remains a release-day check.",
       "wiring": [
-        ".github/workflows/integration-acceptance.yml"
+        "tools/linux_acceptance.sh"
       ]
     },
     {
@@ -64,7 +64,7 @@
       "mode": "automated",
       "reason": "Functional acceptance through an installed app's own launchers and models.",
       "wiring": [
-        ".github/workflows/integration-acceptance.yml",
+        "tools/linux_acceptance.sh",
         ".github/workflows/preview-packages.yml",
         ".github/workflows/release-acceptance.yml",
         "packaging/ci/test-release-package.sh"
@@ -97,7 +97,7 @@
       "reason": "Release-only real-model CPU acceptance; weights stay outside the shipped app.",
       "wiring": [
         ".github/workflows/ci-dependencies.yml",
-        ".github/workflows/integration-acceptance.yml",
+        "tools/linux_acceptance.sh",
         ".github/workflows/macos-release.yml",
         ".github/workflows/preview-packages.yml",
         ".github/workflows/release-acceptance.yml"

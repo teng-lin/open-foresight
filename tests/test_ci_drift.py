@@ -195,6 +195,83 @@ def test_cli_uses_current_run_metadata(monkeypatch):
     assert recorded == [(REPOSITORY, "arch-drift.yml", 100, SOURCE)]
 
 
+def test_workflow_run_cli_checks_original_run_instead_of_coordinator(monkeypatch):
+    recorded = []
+    monkeypatch.setattr(
+        drift.sys,
+        "argv",
+        [
+            "ci_drift_issue.py",
+            "native-sanitizers.yml",
+            "--run-id",
+            "100",
+            "--source",
+            SOURCE,
+        ],
+    )
+    monkeypatch.setenv("GITHUB_REPOSITORY", REPOSITORY)
+    monkeypatch.setenv("GITHUB_RUN_ID", "200")
+    monkeypatch.setenv("GITHUB_SHA", "b" * 40)
+    monkeypatch.setattr(drift, "reconcile", lambda *args: recorded.append(args))
+    drift.main()
+    assert recorded == [(REPOSITORY, "native-sanitizers.yml", 100, SOURCE)]
+
+
+@pytest.mark.parametrize("arguments", [["--run-id", "100"], ["--source", SOURCE]])
+def test_workflow_run_identity_requires_both_original_fields(monkeypatch, arguments):
+    monkeypatch.setattr(
+        drift.sys, "argv", ["ci_drift_issue.py", "native-sanitizers.yml", *arguments]
+    )
+    monkeypatch.setattr(
+        drift, "reconcile", lambda *args: pytest.fail("Mixed run identity")
+    )
+    with pytest.raises(SystemExit) as error:
+        drift.main()
+    assert error.value.code == 2
+
+
+def test_sanitizer_issue_writer_is_outside_read_only_reusable_test_closure():
+    tests = workflow("native-sanitizers.yml")
+    assert "workflow_run" not in tests["on"]
+    assert "drift-issue" not in tests["jobs"]
+    assert tests["permissions"] == {"contents": "read", "actions": "read"}
+    assert all(
+        "write" not in job.get("permissions", {}).values()
+        for job in tests["jobs"].values()
+    )
+    coordinator = workflow("native-sanitizer-drift.yml")
+    assert coordinator["on"] == {
+        "workflow_run": {
+            "workflows": [tests["name"]],
+            "types": ["completed"],
+            "branches": ["main"],
+        }
+    }
+    assert coordinator["concurrency"] == {
+        "group": "ci-sanitizers-issue",
+        "cancel-in-progress": False,
+    }
+    issue = coordinator["jobs"]["drift-issue"]
+    assert issue["permissions"]["issues"] == "write"
+    assert "head_repository.full_name == github.repository" in issue["if"]
+    assert "head_branch == 'main'" in issue["if"]
+    for event in ("schedule", "push", "workflow_dispatch"):
+        assert f"github.event.workflow_run.event == '{event}'" in issue["if"]
+    assert "pull_request" not in issue["if"]
+    checkout = issue["steps"][0]
+    assert checkout["with"] == {
+        "ref": "${{ github.sha }}",
+        "persist-credentials": False,
+    }
+    reconcile = issue["steps"][1]
+    assert reconcile["env"]["ORIGINAL_RUN"] == "${{ github.event.workflow_run.id }}"
+    assert (
+        reconcile["env"]["ORIGINAL_SOURCE"]
+        == "${{ github.event.workflow_run.head_sha }}"
+    )
+    assert '--run-id "$ORIGINAL_RUN" --source "$ORIGINAL_SOURCE"' in reconcile["run"]
+
+
 def workflow(name):
     return parse_workflow((ROOT / ".github/workflows" / name).read_text())
 
@@ -204,7 +281,7 @@ def test_scheduled_sanitizers_never_build_save_or_upload_an_sdk():
     assert config["on"]["schedule"]
     assert (
         config["concurrency"]["group"]
-        == "native-sanitizers-${{ github.event_name }}-${{ github.ref }}"
+        == "native-sanitizers-${{ inputs.consume_only && github.run_id || github.event_name }}-${{ github.ref }}"
     )
     assert config["concurrency"]["cancel-in-progress"] is False
     for kind, name in sanitizers.JOBS.items():
@@ -287,7 +364,7 @@ def test_arch_daily_probe_inlines_toolchain_and_runs_existing_full_gates():
         "uses" in step and step["uses"].startswith("./.github/actions/")
         for step in job["steps"]
     )
-    for filename in ("arch-drift.yml", "native-sanitizers.yml"):
+    for filename in ("arch-drift.yml",):
         issue = workflow(filename)["jobs"]["drift-issue"]
         assert (
             "always()" in issue["if"]
@@ -379,29 +456,25 @@ def test_every_upload_in_the_nightly_called_workflow_closure_is_retry_safe():
             if job.get("uses", "").startswith("./.github/workflows/"):
                 visit(Path(job["uses"]).name)
             for step in job.get("steps", []):
-                if step.get("uses", "").startswith(
-                    "actions/upload-artifact@"
-                ):
+                if step.get("uses", "").startswith("actions/upload-artifact@"):
                     assert step["with"].get("overwrite") is True, (filename, name, step)
                     evidence.add(filename)
 
     visit("preview-packages.yml")
     assert {
         "macos.yml",
-        "macos-platform-stages.yml",
         "linux-platform-stages.yml",
         "package-contracts.yml",
     } <= visited
     assert {
         "macos.yml",
-        "macos-platform-stages.yml",
         "linux-platform-stages.yml",
         "package-contracts.yml",
     } <= evidence
 
 
 def test_main_drift_issue_permissions_have_explicit_event_and_ref_guards():
-    for filename in ("arch-drift.yml", "native-sanitizers.yml"):
+    for filename in ("arch-drift.yml",):
         issue = workflow(filename)["jobs"]["drift-issue"]
         assert "github.ref == 'refs/heads/main'" in issue["if"]
         assert "github.event_name == 'schedule'" in issue["if"]
@@ -414,15 +487,15 @@ def test_buildkit_fixture_own_path_selects_its_actual_docker_consumer():
     from tools.ci_changes import select_gates
 
     selected = select_gates(["tests/test_acceptance_image_cache.py"])
-    assert selected["linux-bundle"] and selected["linux-native"]
-    acceptance = workflow("integration-acceptance.yml")["jobs"]
+    assert selected["linux-build"] and selected["linux-test"]
+    platform = workflow("macos.yml")["jobs"]
     assert (
-        "needs.changes.outputs.linux_bundle == 'true'"
-        in acceptance["ubuntu-package"]["if"]
+        "needs.changes.outputs.linux_build == 'true'" in platform["linux-build"]["if"]
     )
+    assert platform["linux-test"]["needs"] == "linux-build"
     fixture = next(
         step
-        for step in acceptance["ubuntu-package"]["steps"]
+        for step in platform["linux-test"]["steps"]
         if "pytest tests/test_acceptance_image_cache.py" in step.get("run", "")
     )
     assert fixture["env"]["FORESIGHT_DOCKER_CACHE_TEST"] == "1"

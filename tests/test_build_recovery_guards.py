@@ -62,7 +62,7 @@ def test_candidate_recovery_never_relabels_surviving_platforms(monkeypatch, fail
     monkeypatch.setattr(
         candidates,
         "application_descriptor",
-        lambda repo, component, *a: {
+        lambda repo, component, *a, **kw: {
             "version": "9.9.9" if failure == "version" else "1.2.3",
             "build_number": True
             if failure == "number"
@@ -82,7 +82,7 @@ def test_candidate_recovery_never_relabels_surviving_platforms(monkeypatch, fail
     allocate.assert_not_called()
     if failure != "unstable-source":
         candidate_runs.assert_called_once_with(
-            "owner/repo", SOURCE, consumer="artifact-pull"
+            "owner/repo", SOURCE, consumer="release-candidate"
         )
 
 
@@ -103,7 +103,7 @@ def test_explicit_candidate_replacement_records_reason_before_allocating(
     assert "Changed embedded OAuth registration" in capsys.readouterr().out
     allocate.assert_called_once_with("owner/repo", 4)
     candidate_runs.assert_called_once_with(
-        "owner/repo", SOURCE, consumer="artifact-pull"
+        "owner/repo", SOURCE, consumer="release-candidate"
     )
 
 

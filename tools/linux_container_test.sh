@@ -26,10 +26,16 @@ task_finish() {
   chown -R "$OUT_UID:$OUT_GID" /out
 }
 trap task_finish EXIT
-xvfb-run -a dbus-run-session -- bash tools/build.sh --test-only
-xvfb-run -a dbus-run-session -- "$task_python" tools/integration_gates.py \
-  --suite fast --native build/native/libforesight_native.so --output test-results/fast-integration
-xvfb-run -a dbus-run-session -- "$task_python" tools/platform_python_tests.py --platform linux
+case "${FORESIGHT_LINUX_TEST_SCHEDULE:-1}" in
+  1) "$task_python" tools/linux_test_schedule.py --python "$task_python" ;;
+  0)
+    xvfb-run -a dbus-run-session -- bash tools/build.sh --test-only
+    xvfb-run -a dbus-run-session -- "$task_python" tools/integration_gates.py \
+      --suite fast --native build/native/libforesight_native.so --output test-results/fast-integration
+    xvfb-run -a dbus-run-session -- "$task_python" tools/platform_python_tests.py --platform linux
+    ;;
+  *) echo 'FORESIGHT_LINUX_TEST_SCHEDULE must be 0 or 1' >&2; exit 2 ;;
+esac
 "$task_python" - <<'PY'
 import xml.etree.ElementTree as ET
 root = ET.parse('test-results/service/results.xml').getroot()

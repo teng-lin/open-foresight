@@ -45,27 +45,34 @@ def run_gates(tasks, log_directory):
         )
         return 1 if failed else 0
     finally:
-        if not completed:
-            # Each gate owns a new session: stop its compilers/test descendants
-            # without signalling the caller or unrelated runner processes.
-            for _, process, _ in running:
-                try:
-                    os.killpg(process.pid, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-            deadline = time.monotonic() + 5
-            while time.monotonic() < deadline and any(
-                p.poll() is None for _, p, _ in running
-            ):
-                time.sleep(0.05)
-            for _, process, _ in running:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                process.wait(timeout=3600)
-        for stream in streams:
-            stream.close()
+        try:
+            if not completed:
+                # Each gate owns a new session: stop its compilers/test descendants
+                # without signalling the caller or unrelated runner processes.
+                for _, process, _ in running:
+                    # Darwin can reject signals to a zombie-only group with EPERM.
+                    # Reap finished leaders first, but still signal their group:
+                    # a descendant may remain after its leader has exited.
+                    process.poll()
+                    try:
+                        os.killpg(process.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline and any(
+                    p.poll() is None for _, p, _ in running
+                ):
+                    time.sleep(0.05)
+                for _, process, _ in running:
+                    process.poll()
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    process.wait(timeout=3600)
+        finally:
+            for stream in streams:
+                stream.close()
 
 
 def main():

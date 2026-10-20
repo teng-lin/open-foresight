@@ -11,7 +11,6 @@ from tools import (
     app_version,
     build_sequence,
     candidate_identity,
-    package_contract_candidate,
 )
 from tools import preview_packages as preview
 from tools import (
@@ -147,7 +146,7 @@ def test_preview_commands_keep_original_distribution_identity(
 
 
 @pytest.mark.parametrize(
-    "command", ["candidate", "contract", "inputs", "latest", "upload", "reuse"]
+    "command", ["candidate", "inputs", "latest", "upload", "reuse"]
 )
 def test_release_commands_preserve_immutable_source_and_existing_evidence(
     tmp_path, monkeypatch, capsys, command
@@ -168,25 +167,6 @@ def test_release_commands_preserve_immutable_source_and_existing_evidence(
         )
         candidate_identity.main()
         assert output.read_text() == "version=1.2.3\nbuild_number=42\n"
-    elif command == "contract":
-        retrieve = Mock(return_value={"source": source, "producer_run": "99"})
-        monkeypatch.setattr(package_contract_candidate, "retrieve", retrieve)
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            [
-                "contract",
-                "--base",
-                source,
-                "--directory",
-                str(tmp_path),
-                "--run-id",
-                "99",
-            ],
-        )
-        package_contract_candidate.main()
-        retrieve.assert_called_once_with("owner/repo", source, tmp_path, 99)
-        assert "producer_run=99" in output.read_text()
     elif command == "inputs":
         monkeypatch.setattr(
             release_inputs.subprocess, "check_output", lambda *a, **kw: source

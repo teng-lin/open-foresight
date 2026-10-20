@@ -333,7 +333,6 @@ def line_inventory(root):
     helpers = {
         "platform_python_tests",
         "integration_application",
-        "package_contract_candidate",
         "preview_reuse",
         "preview_packages",
         "sdk_approval_bridge",

@@ -42,15 +42,37 @@ PRODUCERS = {
         ("pull_request", "push", "workflow_dispatch", "schedule"),
         {"": ("linux-build", "build / linux-build")},
     ),
-    "pr-application": Producer(
-        (".github/workflows/integration-acceptance.yml",),
-        ("pull_request",),
-        {"": ("ubuntu-application",)},
+    "weekly-audit-completion": Producer(
+        (".github/workflows/preview-packages.yml",),
+        ("schedule", "workflow_dispatch"),
+        {"": ("weekly-external-audit",)},
     ),
-    "fork-sdk": Producer(
-        (".github/workflows/integration-acceptance.yml",),
-        ("pull_request",),
-        {"": ("ubuntu-application",)},
+    "weekly-preview-audit": Producer(
+        (".github/workflows/preview-packages.yml",),
+        ("schedule", "workflow_dispatch"),
+        {"": ("build / linux-build",)},
+        receipt_tier="preview",
+    ),
+    "inrun-application": Producer(
+        (".github/workflows/macos.yml", ".github/workflows/preview-packages.yml"),
+        ("pull_request", "push", "workflow_dispatch", "schedule"),
+        {"": ("linux-build", "build / linux-build")},
+    ),
+    "inrun-package-contract": Producer(
+        (".github/workflows/macos.yml", ".github/workflows/preview-packages.yml"),
+        ("pull_request", "push", "workflow_dispatch", "schedule"),
+        {"": ("linux-build", "build / linux-build")},
+    ),
+    # Transitional per-merge candidate; removed with WS5b-3, never a PR lookup.
+    "main-acceptance": Producer(
+        (".github/workflows/macos.yml",),
+        ("push", "workflow_dispatch"),
+        {"": ("linux-bundle",)},
+    ),
+    "dependency-seed-current": Producer(
+        (".github/workflows/macos.yml", ".github/workflows/preview-packages.yml"),
+        ("push", "workflow_dispatch", "schedule"),
+        {"": ("publish-caches", "build / publish-caches")},
     ),
     "artifact-pull": Producer(
         (".github/workflows/macos.yml",),
@@ -95,16 +117,6 @@ PRODUCERS = {
 
 # Separate consumer rows permit release-only tier tightening without changing
 # the legacy fixtures used by PR packages or generic artifact restoration.
-PRODUCERS["release-preparation"] = Producer(
-    PRODUCERS["artifact-pull"].workflows,
-    PRODUCERS["artifact-pull"].events,
-    dict(PRODUCERS["artifact-pull"].jobs),
-)
-PRODUCERS["pr-package-contract"] = Producer(
-    PRODUCERS["artifact-pull"].workflows,
-    PRODUCERS["artifact-pull"].events,
-    {"linux-app": PRODUCERS["artifact-pull"].jobs["linux-app"]},
-)
 PRODUCERS["package-alias"] = Producer(
     PRODUCERS["dependency-sdk"].workflows,
     PRODUCERS["dependency-sdk"].events,
@@ -119,3 +131,32 @@ PRODUCERS["sdk-promoted-source"] = Producer(
     ("pull_request", "workflow_dispatch"),
     dict(PRODUCERS["dependency-sdk"].jobs),
 )
+
+# WS5b-1: the index verifier separately proves every required release gate.
+PRODUCERS["release-candidate"] = Producer(
+    (".github/workflows/release.yml",),
+    ("workflow_dispatch",),
+    {"linux-app": ("candidates / linux-build",), "macos-app": ("candidates / macos",)},
+    receipt_tier="release",
+)
+PRODUCERS["release-candidate-receipt"] = Producer(
+    PRODUCERS["release-candidate"].workflows,
+    PRODUCERS["release-candidate"].events,
+    {"": ("candidate-receipt",)},
+    receipt_tier="release",
+)
+PRODUCERS["legacy-release-candidate"] = Producer(
+    PRODUCERS["artifact-pull"].workflows,
+    ("push",),
+    dict(PRODUCERS["artifact-pull"].jobs),
+)
+PRODUCERS["release-preparation"] = PRODUCERS["release-candidate"]
+
+# Release in-run consumers have distinct caller and job identities.
+PRODUCERS["release-inrun-application"] = Producer(
+    (".github/workflows/release.yml",),
+    ("workflow_dispatch",),
+    {"": ("candidates / linux-build",)},
+    receipt_tier="release",
+)
+PRODUCERS["release-handoff"] = PRODUCERS["release-inrun-application"]

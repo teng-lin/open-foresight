@@ -225,7 +225,7 @@ def test_explain_cli_and_ci_outputs_agree_without_relying_on_github_ref(
     assert all(report["selection"].values())
     assert report["range"] == f"{base}...HEAD"
     assert "native/source.cpp" in result.stdout
-    assert "| linux-native | true |" in summary.read_text()
+    assert "| linux-build | true |" in summary.read_text()
     values = dict(line.split("=", 1) for line in output.read_text().splitlines())
     assert json.loads(values["selection"]) == report["selection"]
 
@@ -242,7 +242,7 @@ def test_workflow_cleanup_and_deduplication_keep_the_required_gates():
     assert "dart analyze" not in contracts
     assert "operation_registry_test.dart" not in contracts
     assert not (ROOT / ".github/workflows/rpc-contracts.yml").exists()
-    for name in ("macos.yml", "integration-acceptance.yml"):
+    for name in ("macos.yml",):
         assert (
             workflow(name)["concurrency"]["cancel-in-progress"]
             == "${{ github.event_name == 'pull_request' }}"
@@ -260,11 +260,11 @@ def test_workflow_cleanup_and_deduplication_keep_the_required_gates():
         shared = next(step for step in steps if step.get("id") == "shared")
         assert steps.index(shared) < steps.index(lookup) < steps.index(cleanup)
         assert "steps.lookup.outputs.build == 'true'" in cleanup["if"]
-    application = workflow("integration-acceptance.yml")["jobs"]["ubuntu-application"]
+    application = workflow("macos.yml")["jobs"]["linux-build"]
     assert not any(
         "sudo rm -rf" in step.get("run", "") for step in application["steps"]
     )
-    for name in ("linux-platform-stages.yml", "macos-platform-stages.yml"):
+    for name in ("linux-platform-stages.yml",):
         assert "test_native_process.py" not in json.dumps(workflow(name))
     macos_steps = json.dumps(workflow("macos.yml")["jobs"]["macos"]["steps"])
     assert "tests.test_macos_tools.CompiledMacComponentTests" in macos_steps

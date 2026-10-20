@@ -36,6 +36,48 @@ def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
 
 
+def portable_input(directory, revision, *, required=False):
+    """Bind separately transported package bytes without copying them into /src."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from tools.release_asset_acceptance import verify_checksum
+
+    if directory.is_symlink() or directory.parent.is_symlink():
+        raise ValueError("Handoff package directory must be regular")
+    packages = list(directory.glob("*.tar.gz"))
+    if not packages and not required:
+        return None
+    if len(packages) != 1:
+        raise ValueError("Handoff requires one unambiguous portable package")
+    package = packages[0]
+    checksum = package.with_name(package.name + ".sha256")
+    metadata = package.with_name(package.name + ".build.json")
+    if list(directory.glob("*.build.json")) != [metadata]:
+        raise ValueError("Handoff requires unambiguous package metadata")
+    if any(
+        path.is_symlink() or not path.is_file()
+        for path in (package, checksum, metadata)
+    ):
+        raise ValueError("Handoff package and sidecars must be regular files")
+    actual = verify_checksum(package, checksum)
+    record = json.loads(metadata.read_text())
+    if (
+        not isinstance(record, dict)
+        or record.get("revision") != revision
+        or record.get("sha256") != actual
+        or record.get("format") != "tar"
+    ):
+        raise ValueError(
+            "Handoff package metadata differs from its actual source/bytes"
+        )
+    return {
+        "name": package.name,
+        "size": package.stat().st_size,
+        "sha256": actual,
+        "checksum_sha256": digest(checksum),
+        "metadata_sha256": digest(metadata),
+    }
+
+
 def excluded(name):
     return any(name == item or name.startswith(item + "/") for item in EXCLUDED)
 
@@ -133,6 +175,7 @@ def pack(root, output, revision, inputs, tier="pr", label=""):
     if output.is_relative_to(root):
         raise ValueError("Handoff output must be outside the compiled source tree")
     output.mkdir(parents=True, exist_ok=True)
+    portable = portable_input(root / "dist/packages", revision)
     files = inventory(root)
     archive = output / "source-build.tar.gz"
     with tarfile.open(archive, "w:gz", compresslevel=1) as stream:
@@ -170,6 +213,7 @@ def pack(root, output, revision, inputs, tier="pr", label=""):
             )
         },
         "files": files,
+        **({"portable_package": portable} if portable is not None else {}),
     }
     (output / "source-build.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n"
@@ -279,7 +323,12 @@ def qualify(directory, revision, run_id, attempt, artifact_id, checksum, reposit
     ):
         raise ValueError("Invalid handoff producer identity")
     run = artifacts.api(repository, f"actions/runs/{run_id}")
-    producer = PRODUCERS["shadow-handoff"]
+    consumer = (
+        "release-handoff"
+        if run.get("path") == ".github/workflows/release.yml"
+        else "shadow-handoff"
+    )
+    producer = PRODUCERS[consumer]
     if (
         run.get("id") != run_id
         or not producer.matches_run(run)
@@ -287,6 +336,18 @@ def qualify(directory, revision, run_id, attempt, artifact_id, checksum, reposit
         or (run.get("event") == "pull_request" and run.get("head_sha") != revision)
     ):
         raise ValueError("Handoff producer repository/workflow/source mismatch")
+    if consumer == "release-handoff" and (
+        run.get("head_branch") != "main"
+        or (run.get("head_repository") or {}).get("full_name") != repository
+        or (
+            revision != run.get("head_sha")
+            and artifacts.api(
+                repository, f"compare/{revision}...{run.get('head_sha', '')}"
+            ).get("status")
+            not in ("ahead", "identical")
+        )
+    ):
+        raise ValueError("Release handoff source must be reviewed main ancestry")
     artifact = artifacts.api(repository, f"actions/artifacts/{artifact_id}")
     if (
         artifact.get("id") != artifact_id
@@ -296,13 +357,13 @@ def qualify(directory, revision, run_id, attempt, artifact_id, checksum, reposit
         or artifact.get("workflow_run", {}).get("id") != run_id
     ):
         raise ValueError("Handoff differs from the original artifact upload")
-    original_producer(
+    job = original_producer(
         repository,
         run["head_sha"],
         run_id,
         attempt,
         artifact,
-        consumer="shadow-handoff",
+        consumer=consumer,
     )
     if directory.exists() or directory.is_symlink():
         raise ValueError("Choose an absent handoff output directory")
@@ -319,7 +380,9 @@ def qualify(directory, revision, run_id, attempt, artifact_id, checksum, reposit
             stream.extractall(directory)  # noqa: S202 - Exact flat members and ZIP digest verified.
     manifest = json.loads((directory / "source-build.json").read_text())
     expected_tier = (
-        "pr"
+        "release"
+        if consumer == "release-handoff"
+        else "pr"
         if run["event"] == "pull_request"
         else "preview"
         if run["path"] == ".github/workflows/preview-packages.yml"
@@ -339,9 +402,19 @@ def qualify(directory, revision, run_id, attempt, artifact_id, checksum, reposit
         or recorded.get("GITHUB_RUN_ATTEMPT") != str(attempt)
     ):
         raise ValueError("Handoff receipt differs from its original producer")
+    if manifest.get("archive_sha256") != digest(directory / "source-build.tar.gz"):
+        raise ValueError("Qualified handoff archive checksum mismatch")
+    proof = {
+        "manifest_sha256": digest(directory / "source-build.json"),
+        "producer_job": job["id"],
+    }
+    if output := os.environ.get("GITHUB_OUTPUT"):
+        with open(output, "a") as stream:
+            stream.write("".join(f"{key}={value}\n" for key, value in proof.items()))
     print(
         "Verified in-run handoff repository, workflow, original attempt and upload window"
     )
+    return proof
 
 
 def main():

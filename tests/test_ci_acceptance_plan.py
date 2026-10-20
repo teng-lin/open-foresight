@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
         "apps/desktop/pubspec.lock",
         "tools/integration_gates.py",
         "tools/ci_acceptance_plan.py",
-        ".github/workflows/integration-acceptance.yml",
+        ".github/workflows/macos.yml",
         "packaging/notices/runtime.md",
         "unknown/new-runtime",
         "../docs/deceptive.md",
@@ -182,10 +182,7 @@ def test_missing_or_unavailable_history_cannot_propose_skips(tmp_path, base):
 
 
 def test_observer_is_uploaded_and_never_controls_phase_execution():
-    workflow = parse_workflow(
-        (ROOT / ".github/workflows/integration-acceptance.yml").read_text()
-    )
-    assert workflow["on"]["schedule"] == [{"cron": "43 5 * * 1"}]
+    workflow = parse_workflow((ROOT / ".github/workflows/macos.yml").read_text())
     steps = workflow["jobs"]["changes"]["steps"]
     observer = next(
         step for step in steps if "ci_acceptance_plan.py" in step.get("run", "")
@@ -193,23 +190,38 @@ def test_observer_is_uploaded_and_never_controls_phase_execution():
     assert observer["env"]["EVENT"] == "${{ github.event_name }}"
     assert observer["continue-on-error"] is True
     upload = next(
-        step for step in steps if "actions/upload-artifact@" in step.get("uses", "")
+        step
+        for step in steps
+        if step.get("with", {}).get("path") == "test-results/acceptance-selection.json"
     )
     assert upload["if"] == "always()"
     assert upload["continue-on-error"] is True
-    assert upload["with"]["path"] == "test-results/acceptance-selection.json"
-    outputs = workflow["jobs"]["changes"]["outputs"]
-    assert set(outputs) == {"linux_bundle"}
-    phases = workflow["jobs"]["ubuntu-package"]["steps"]
+    assert upload["with"]["overwrite"] is True
+    assert upload["with"]["if-no-files-found"] == "error"
+    assert all(
+        "proposed" not in value and "acceptance-selection" not in value
+        for value in workflow["jobs"]["changes"]["outputs"].values()
+    )
+    for phase in ("cpu", "audio", "deb"):
+        job = workflow["jobs"]["acceptance-" + phase]
+        assert "needs.linux-build.result == 'success'" in job["if"]
+        assert "proposed" not in job["if"] and "acceptance-selection" not in job["if"]
+        run = next(
+            step
+            for step in job["steps"]
+            if step.get("run") == "bash tools/linux_acceptance.sh " + phase
+        )
+        assert "if" not in run
+    commands = (ROOT / "tools/linux_acceptance.sh").read_text()
     for command in (
         "--suite models",
         "tools/accept_software_gpu.py",
         "--suite virtual-audio",
     ):
-        matching = [step for step in phases if command in step.get("run", "")]
-        assert len(matching) == 1, f"Expected one acceptance command: {command}"
-        step = matching[0]
-        assert (
-            step["if"]
-            == "${{ !cancelled() && steps.acceptance-image.outcome == 'success' && steps.fixtures.outcome == 'success' }}"
+        assert commands.count(command) == 1, (
+            f"Expected one acceptance command: {command}"
         )
+    assert "acceptance-selection" not in commands and "proposed" not in commands
+    assert "test-debian.sh" in commands
+    assert '"${ACCEPTANCE_FULL:-false}" == true' in commands
+    assert '"${PACKAGING_SELECTED:-false}" == true' in commands

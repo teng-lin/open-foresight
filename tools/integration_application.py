@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Restore this run's successful PR application without recompiling it.
+"""Restore this run's successful application or fork SDK without recompiling it.
 
 Acceptance retries retain the original successful job, attempt and byte receipts.
 These PR artifacts are not promoted into the trusted main/release candidate pool.
@@ -22,7 +22,14 @@ from tools.ci_producer_trust import PRODUCERS
 
 
 def original_producer(
-    repository, source, run_id, attempt, artifact, *, wait=60, consumer="pr-application"
+    repository,
+    source,
+    run_id,
+    attempt,
+    artifact,
+    *,
+    wait=60,
+    consumer="inrun-application",
 ):
     """Refresh a uniquely identified pending producer without relaxing its proof."""
     deadline = time.monotonic() + wait
@@ -107,7 +114,7 @@ def original_producer(
 
 
 def save_sdk(
-    source, image, output, *, shadow=False, source_prefix=None, reuse_archive=False
+    source, image, output, *, shadow=True, source_prefix=None, reuse_archive=False
 ):
     """Retain a fork's already-built SDK for this workflow, never compile it twice."""
     actual = subprocess.check_output(
@@ -195,9 +202,13 @@ def retrieve(
     component="linux-app",
     producer_wait=60,
     shadow=False,
+    main_candidate=False,
+    label="",
+    purpose="acceptance",
 ):
     if (
-        component not in ("linux-app", "linux-sdk")
+        purpose not in ("acceptance", "package-contract", "weekly-audit")
+        or component not in ("linux-app", "linux-sdk")
         or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository)
         or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", head_repository)
         or not re.fullmatch(r"[a-f0-9]{40}", source)
@@ -209,29 +220,77 @@ def retrieve(
     ):
         raise ValueError("Invalid application producer identity")
     identity = source if component == "linux-app" else artifacts.fingerprint(component)
-    name = (
-        artifacts.name(component, identity)
-        if component == "linux-app"
-        else f"{'shadow' if shadow else 'integration'}-sdk-{source}-{attempt}"
-    )
-    run = artifacts.api(repository, f"actions/runs/{run_id}")
+    if purpose == "weekly-audit" and component != "linux-app":
+        raise ValueError("Weekly audit consumes only the preview application")
+    if main_candidate and (
+        component != "linux-app" or label or purpose != "acceptance"
+    ):
+        raise ValueError("Legacy main candidates require an unlabelled application")
     if shadow and component != "linux-sdk":
-        raise ValueError("Shadow handoff only restores its source-scoped fork SDK")
+        raise ValueError("Fork handoff restores only its source-scoped SDK")
     consumer = (
-        "pr-application"
+        "weekly-preview-audit"
+        if purpose == "weekly-audit" and component == "linux-app"
+        else "main-acceptance"
+        if main_candidate
+        else "inrun-package-contract"
+        if component == "linux-app" and purpose == "package-contract"
+        else "inrun-application"
         if component == "linux-app"
         else "shadow-fork-sdk"
-        if shadow
-        else "fork-sdk"
     )
+    run = artifacts.api(repository, f"actions/runs/{run_id}")
+    release = run.get("path") == ".github/workflows/release.yml"
+    if release and (
+        component != "linux-app" or main_candidate or purpose == "weekly-audit"
+    ):
+        raise ValueError("Release consumers require their exact in-run application")
+    if release:
+        consumer = "release-inrun-application"
+    name = (
+        artifacts.name(component, identity)
+        if release
+        else f"main-linux-bundle-{source}"
+        if main_candidate
+        else f"linux-bundle-{run_id}-{attempt}"
+        if component == "linux-app"
+        else f"shadow-sdk-{source}-{attempt}"
+    )
+    run_head = run.get("head_sha", "")
     if (
         run.get("id") != run_id
         or not PRODUCERS[consumer].matches_run(run)
-        or run.get("head_sha") != source
+        or not re.fullmatch(r"[a-f0-9]{40}", run_head)
         or (run.get("repository") or {}).get("full_name") != repository
         or (run.get("head_repository") or {}).get("full_name") != head_repository
+        or (
+            (run.get("event") == "pull_request" or purpose == "weekly-audit")
+            and run_head != source
+        )
+        or (main_candidate and run.get("head_branch") != "main")
     ):
         raise ValueError("Application producer repository, workflow or source mismatch")
+    if (
+        run.get("event") == "workflow_dispatch"
+        and run.get("path") == ".github/workflows/macos.yml"
+        and isinstance(run.get("head_branch"), str)
+        and run["head_branch"]
+        and run["head_branch"] != "main"
+    ):
+        if head_repository != repository or run_head != source:
+            raise ValueError("Application source is not this run's exact source")
+    elif run.get("event") != "pull_request" and (
+        head_repository != repository
+        or run.get("head_branch") != "main"
+        or (
+            source != run_head
+            and artifacts.api(repository, f"compare/{source}...{run_head}").get(
+                "status"
+            )
+            not in ("ahead", "identical")
+        )
+    ):
+        raise ValueError("Application source is not reviewed main ancestry")
     artifact = artifacts.api(repository, f"actions/artifacts/{artifact_id}")
     if (
         artifact.get("id") != artifact_id
@@ -239,12 +298,12 @@ def retrieve(
         or artifact.get("name") != name
         or artifact.get("digest") != "sha256:" + checksum
         or (artifact.get("workflow_run") or {}).get("id") != run_id
-        or (artifact.get("workflow_run") or {}).get("head_sha") != source
+        or (artifact.get("workflow_run") or {}).get("head_sha") != run_head
     ):
         raise ValueError("Application artifact differs from its producer output")
     job = original_producer(
         repository,
-        source,
+        run_head,
         run_id,
         attempt,
         artifact,
@@ -258,18 +317,35 @@ def retrieve(
         archive = root / "application.zip"
         artifacts.download_zip(repository, artifact, archive)
         receipt = read_zip(archive, root / "receipt")
+        if purpose == "weekly-audit":
+            label = receipt.get("label")
+            if not isinstance(label, str) or not re.fullmatch(
+                r"nightly\.\d{8}\.[1-9]\d*", label
+            ):
+                raise ValueError(
+                    "Weekly audit requires the actual stamped preview label"
+                )
+        expected_tier = (
+            "release"
+            if release
+            else "pr"
+            if run["event"] == "pull_request"
+            else "preview"
+            if run["path"] == ".github/workflows/preview-packages.yml"
+            else "sweep"
+        )
         if (
             not artifacts.valid_receipt(receipt, component, identity)
             or not PRODUCERS[consumer].matches_receipt(receipt)
             or receipt["source_commit"] != source
             or receipt["source_run_attempt"] != attempt
-            or (shadow and receipt.get("label") != "")
-            or (
-                PRODUCERS[consumer].receipt_tier is not None
-                and receipt.get("tier") != PRODUCERS[consumer].receipt_tier
-            )
+            or receipt.get("tier") != expected_tier
+            or receipt.get("label") != label
+            or (expected_tier != "preview" and label)
         ):
-            raise ValueError("Application receipt source or original attempt mismatch")
+            raise ValueError(
+                "Application receipt source, tier, label or original attempt mismatch"
+            )
         artifacts.unpack(component, identity, root / "receipt", destination)
     if component == "linux-app":
         distribution = artifacts.application_distribution(
@@ -279,18 +355,22 @@ def retrieve(
             raise ValueError(
                 "Application distribution differs from the original receipt"
             )
+        if expected_tier == "preview":
+            stamp = destination / "distribution-stamp.json"
+            if (
+                stamp.is_symlink()
+                or not stamp.is_file()
+                or json.loads(stamp.read_text())
+                != {**distribution, "label": label, "source_commit": source}
+            ):
+                raise ValueError(
+                    "Preview stamp does not bind the actual package identity"
+                )
     else:
         descriptor = sdk.record(destination, component)
         if descriptor.get("source_scope") != source or descriptor.get(
             "local_recipe_sha256"
-        ) != artifacts.digest(
-            artifacts.ROOT
-            / (
-                "tools/linux_sdk_artifacts.py"
-                if shadow
-                else "tools/build_linux_sdk_local.sh"
-            )
-        ):
+        ) != artifacts.digest(artifacts.ROOT / "tools/linux_sdk_artifacts.py"):
             raise ValueError("Fork SDK transport differs from its source-scoped recipe")
     qualification = {
         "schema": 1,
@@ -322,6 +402,11 @@ def main():
     )
     parser.add_argument("--save-sdk", action="store_true")
     parser.add_argument("--shadow", action="store_true")
+    parser.add_argument("--main-candidate", action="store_true")
+    parser.add_argument("--label", default="")
+    parser.add_argument(
+        "--purpose", choices=("acceptance", "package-contract"), default="acceptance"
+    )
     parser.add_argument("--image", default="foresight-sdk:pr")
     parser.add_argument("--directory", type=Path, required=True)
     args = parser.parse_args()
@@ -356,6 +441,9 @@ def main():
                 args.directory,
                 component=args.component,
                 **({"shadow": True} if args.shadow else {}),
+                **({"main_candidate": True} if args.main_candidate else {}),
+                **({"label": args.label} if args.label else {}),
+                **({"purpose": args.purpose} if args.purpose != "acceptance" else {}),
             ),
             indent=2,
         )

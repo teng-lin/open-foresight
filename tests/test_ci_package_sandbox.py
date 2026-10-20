@@ -197,7 +197,7 @@ def test_minimal_prerequisites_then_exact_ordinary_user_sandbox_preflight(
 
 def test_all_package_container_callers_select_the_loaded_named_policy():
     for workflow in (
-        "integration-acceptance",
+        "package-contracts",
         "preview-packages",
         "linux-packages",
         "release-acceptance",
@@ -224,6 +224,30 @@ def test_all_package_container_callers_select_the_loaded_named_policy():
                     for previous in steps[:index]
                 )
         assert found
+
+
+def test_acceptance_shell_containers_keep_the_same_loaded_named_policy():
+    workflow = yaml.safe_load((ROOT / ".github/workflows/macos.yml").read_text())
+    assert any(
+        step.get("run") == "bash tools/linux_acceptance.sh deb"
+        for step in workflow["jobs"]["acceptance-deb"]["steps"]
+    )
+    script = (ROOT / "tools/linux_acceptance.sh").read_text()
+    deb = script.split('if [[ "$task_suite" == deb ]]; then', 1)[1].split(
+        "  exit 0", 1
+    )[0]
+    assert deb.index("bash tools/ci_package_sandbox.sh") < deb.index("docker run")
+    commands = [command for command in deb.split("docker run")[1:]]
+    assert len(commands) == 2
+    for command in commands:
+        assert "apparmor=foresight-ci-document-sandbox" in command
+        assert "--security-opt systempaths=unconfined" in command
+        assert "apparmor=unconfined" not in command
+        assert "--cap-add SYS_ADMIN" not in command
+        assert "--privileged" not in command
+        assert "sysctl" not in command
+    assert "packaging/ci/package-and-test.sh" in commands[0]
+    assert "packaging/ci/test-debian.sh" in commands[1]
 
 
 def test_each_installer_checks_its_smoke_user_before_expensive_dependencies():

@@ -41,7 +41,7 @@ jobs:
         python -m tools.release_inputs --tag "$RELEASE_TAG" --generation "$PACKAGE_RELEASE" --formats "$FORMATS"
         if grep -Fq 'formats=[]' "$GITHUB_OUTPUT"; then exit 0; fi
         source=$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)
-        python tools/ci_artifacts.py pull --component linux-app --identity "$source" --prefix dist/packages --wait 0 --run-id "$CANDIDATE_RUN"
+        python tools/ci_artifacts.py pull --consumer release-preparation --component linux-app --identity "$source" --prefix dist/packages --wait 0 --run-id "$CANDIDATE_RUN"
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       if: steps.version.outputs.formats != '[]'
       with:
@@ -78,7 +78,8 @@ jobs:
         GH_REPO: ${{ github.repository }}
       run: |
         test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
-        mapfile -d '' files < <(find artifacts -maxdepth 2 -type f ! -name abi.json -print0)
+        files=()
+        while IFS= read -r -d '' file; do files+=("$file"); done < <(find artifacts -maxdepth 2 -type f ! -name abi.json ! -name sdk-reference.json ! -name source-qualification.json -print0)
         if [[ -f artifacts/portable-bundle/abi.json ]]; then files+=(artifacts/portable-bundle/abi.json); fi
         python -m tools.release_upload --tag "$RELEASE_TAG" "${files[@]}"
 
@@ -234,5 +235,6 @@ on:
         type: string
 
 env:
+  RELEASE_SOURCE_FLOOR: ${{ vars.RELEASE_SOURCE_FLOOR }}
   RELEASE_TAG: ${{ inputs.tag }}
   PACKAGE_RELEASE: ${{ inputs.package_release }}

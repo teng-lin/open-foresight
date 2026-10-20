@@ -3,9 +3,8 @@
 
 The Docker driver and containerd image store support both registry cache import
 and SDK archives loaded into the same daemon. PR consumers never export caches;
-the dedicated main-only publisher and retained guarded legacy job publish
-dependency and acceptance-tool layers. Application sources and test results
-never enter these new cache tags.
+only dedicated main-only publish jobs publish dependency and acceptance-tool
+layers. Application sources and test results never enter these new cache tags.
 """
 
 import argparse

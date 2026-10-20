@@ -275,6 +275,10 @@ def test_workflow_shell_passes_validation_flag_only_when_enabled(tmp_path, enabl
     assert step["env"]["VALIDATE_SDK_TRANSPORT"] == (
         "${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:validate-sdk-transport') }}"
     )
+    assert step["env"]["CI_TIER"] == (
+        "${{ inputs.tier || (inputs.preview && 'preview' || (github.event_name == 'pull_request' && 'pr' || 'sweep')) }}"
+    )
+    assert step["env"]["SHADOW_PREVIEW"] == "${{ inputs.preview && 'true' || 'false' }}"
     tools = tmp_path / "tools"
     tools.mkdir()
     (tools / "ci_linux_shadow_sdk.py").write_text(
@@ -315,9 +319,11 @@ def test_benchmark_label_is_explicit_and_only_changes_shadow_test():
         jobs["linux-native"]["with"]["core_coverage_benchmark"]
         == "${{ inputs.core_coverage_benchmark || false }}"
     )
+    assert "macos-stages" not in jobs
+    assert "FORESIGHT_CORE_COVERAGE_BENCHMARK" not in str(jobs["macos"])
     assert (
-        jobs["macos-stages"]["with"]["core_coverage_benchmark"]
-        == "${{ inputs.core_coverage_benchmark || false }}"
+        jobs["macos"]["env"]["FORESIGHT_COVERAGE"]
+        == "${{ (inputs.tier == 'release' || inputs.macos_coverage) && github.event_name != 'pull_request' && '1' || '0' }}"
     )
     sdk_restore = next(s for s in jobs["linux-test"]["steps"] if s.get("id") == "sdk")
     assert (
