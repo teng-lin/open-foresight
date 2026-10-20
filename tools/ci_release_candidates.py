@@ -37,7 +37,7 @@ GATES = (
     "packaging / linux-deb",
     "packaging / linux-rpm",
     "packaging / linux-arch",
-    "packaging / dmg",
+    "dmg / dmg",
     "sanitizers / native-sanitizers",
     "sanitizers / thread-policy",
     "sanitizers / native-thread-sanitizer",

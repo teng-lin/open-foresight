@@ -1393,3 +1393,58 @@ Canonical original-job qualification and 30-row all-attempt pagination remain;
 API failures do not authorize partial evidence, alternate provenance or SDK
 compilation. Upgrade acceptance, preview lifecycle separation, and the immutable
 draft DMG preflight remain enforced.
+
+### Frozen reliability and runtime observations
+
+Collect read-only GitHub metadata into a new, immutable snapshot directory:
+
+```sh
+python tools/ci_stats_snapshot.py --repository teng-lin/open-foresight \
+  --since 2026-10-20T00:00:00Z --until 2026-10-20T23:59:59Z \
+  --output docs/platforms/ci-evidence/2026-10-20
+python tools/ci_stats.py docs/platforms/ci-evidence/2026-10-20 \
+  --report-output docs/platforms/ci-evidence/2026-10-20
+```
+
+The collector requests every API page and every job attempt. It writes normalized
+inputs, a checksum manifest, retrieval times and original attempt log links.
+Interrupted collection remains incomplete and cannot produce a verified report.
+GitHub's filtered 1,000-run limit causes an actionable failure; use narrower
+`--since`/`--until` windows and deduplicate run IDs when combining them. Existing
+legacy reporting directories remain readable but are explicitly marked unverified.
+
+Report schema 2 retains previous fields and adds first-attempt workflow, job and
+PR-commit denominators, cancellations, incomplete/unknown outcomes, actual job
+queue measurements when supplied by GitHub, workflow start latency, first green
+versus latest readiness, and independent SDK/release/nightly/maintenance spend.
+Each first-green observation records contributing workflow runs and attempts;
+the separate `push_to_first_attempt_green` distribution requires the earliest
+observed run of each required workflow and excludes reruns and replacement
+runs of the same head.
+Missing queue or cache metadata remains unknown. A failed first attempt stays
+failed after a successful rerun; copied successful jobs retain their original
+attempt and are counted once. Timeout and startup conclusions remain explicit.
+
+Use `--observations reviewed-observations.json` on collection for diagnostic and
+cache annotations indexed by decimal run/job IDs. The annotation file is frozen
+with the API inputs. Run annotations may supply configuration, scope, selection,
+qualification status, checked-out/bundle/workflow source and `cache_observations`.
+Each cache observation names its stage, status (`hit`, `miss`, `restore-failure`)
+and retained source; hits also require the resolved `input_identity`. Job failure
+evidence names its class (`package-network`, `test-assertion`, `provenance-abi`,
+`maintenance-publication`), actual command, diagnostic and retained source.
+Annotations cannot override job outcomes or API identities. A tag's existence or
+a generic Docker warning does not establish a hit or failure cause. Keep full
+logs in run artifacts and link them from the observations.
+
+Compare at least five ordinary observations with matching configuration, scope
+and cache state; retain cold misses and failures. Explicitly marked qualification
+runs have separate outcomes and never enter ordinary failure-rate denominators;
+all their runner spend and diagnostic failures remain visible. These tools
+measure observations and never authorize reuse, dispatch
+CI, establish producer trust or certify runtime improvements.
+
+The split DMG owner retains the existing broad packaging selection during
+qualification, including Linux-only packaging changes. Narrowing that breadth
+belongs to the separately qualified P9 selector; this batch does not claim the
+associated macOS scheduling savings.
