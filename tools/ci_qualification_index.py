@@ -119,7 +119,7 @@ def collect(repository, source, *, root=ROOT, api=artifacts.api, download=artifa
     for capability in sorted(rollout.CAPABILITIES):
         trial = dict(index, capabilities=[capability])
         try:
-            rollout.authorize(trial, root=root, source=index["source"], capabilities=[capability], repository=repository, api=api, download=download)
+            rollout.authorize(trial, root=root, source=index["source"], capabilities=[capability], repository=repository, api=api, download=download, ongoing=True)
         except (ValueError, KeyError, TypeError):
             continue
         index["capabilities"].append(capability)

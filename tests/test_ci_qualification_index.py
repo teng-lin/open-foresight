@@ -9,6 +9,7 @@ import zipfile
 import pytest
 
 from tools import ci_qualification_index as index, ci_changes
+from tools import ci_rollout as rollout
 from tests.test_ci_rollout import Evidence, REPOSITORY, SOURCE
 
 
@@ -365,3 +366,22 @@ def test_arch_retirement_continues_across_application_only_changes(proof):
     (proof.root / "tools/ci_changes.py").write_text("changed routing contract")
     with pytest.raises(ValueError, match="Retained candidate closure"):
         rollout.authorize(evidence.index, root=proof.root, source="b" * 40, capabilities=["arch_retirement"], repository=REPOSITORY, api=evidence.api, download=evidence.download, ongoing=True)
+
+
+def test_publisher_keeps_actual_retirement_proof_after_product_change(proof):
+    for kind in ("arch", "archive-sdk", "fork-sdk", "recipe-change"):
+        proof.add(kind)
+    proof.add("nightly", 0)
+    proof.add("nightly", 1)
+    proof.verify("arch_retirement")
+    proof.index["capabilities"] = ["arch_retirement"]
+    proof.publish()
+    (proof.root / "native").mkdir()
+    (proof.root / "native/app.cpp").write_text("new product bytes")
+    renewed = index.collect(REPOSITORY, "b" * 40, root=proof.root, api=proof.api, download=proof.download)
+    assert renewed["source"] == SOURCE
+    assert "arch_retirement" in renewed["capabilities"]
+    (proof.root / "tools/ci_selection.py").write_text("new CI control bytes")
+    changed = index.collect(REPOSITORY, "b" * 40, root=proof.root, api=proof.api, download=proof.download)
+    assert changed["source"] == "b" * 40
+    assert "arch_retirement" not in changed["capabilities"]
