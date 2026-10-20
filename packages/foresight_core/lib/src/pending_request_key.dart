@@ -2,6 +2,7 @@ import 'dart:math';
 
 import 'package:clock/clock.dart';
 
+import 'request_errors.dart';
 import 'rpc_error.dart';
 
 /// The idempotency key of one user action, such as creating a note. A retry
@@ -17,6 +18,8 @@ class PendingRequestKey {
   String? _key;
   Map<String, dynamic>? _arguments;
   DateTime? _started;
+  // Whether an attempt under the key ended without a definite outcome.
+  bool _uncertain = false;
 
   /// The key an unconfirmed attempt left for its retry, if any.
   String? get pending {
@@ -38,8 +41,15 @@ class PendingRequestKey {
     _lapse();
     final original = _arguments;
     if (_key != null && original != null && !_same(original, arguments)) {
+      // A new key for the new arguments could create a second item.
+      if (amend == null) {
+        throw ArgumentError(
+          'A retry with changed arguments needs amend: the first attempt may '
+          'already have created its item.',
+        );
+      }
       final first = await _send(original, send);
-      if (amend != null) return amend(first, arguments);
+      return amend(first, arguments);
     }
     if (_key == null) {
       _key = [
@@ -57,6 +67,7 @@ class PendingRequestKey {
     _key = null;
     _arguments = null;
     _started = null;
+    _uncertain = false;
   }
 
   Future<Object?> _send(
@@ -69,7 +80,18 @@ class PendingRequestKey {
       if (_key == key) reset();
       return result;
     } catch (error) {
-      if (_key == key && definiteFailure(error)) reset();
+      if (_key == key) {
+        if (!definiteFailure(error)) {
+          _uncertain = true;
+        } else if (!_uncertain ||
+            isWorkspaceCleared(error) ||
+            isKeyConflict(error)) {
+          // Once an attempt may have committed, only an answer about the
+          // key itself settles it: a transport failure or a busy or failing
+          // service says nothing about that earlier attempt.
+          reset();
+        }
+      }
       rethrow;
     }
   }

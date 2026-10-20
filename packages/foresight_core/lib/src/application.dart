@@ -4,6 +4,7 @@ import 'gemma_download.dart' show ModelDownloadCancelled;
 import 'conversation_answer.dart';
 import 'operations.dart';
 import 'rpc_error.dart';
+import 'request_errors.dart';
 import 'audio_devices.dart';
 import 'agent_access.dart';
 import 'web_import.dart';
@@ -369,8 +370,8 @@ class Application implements ModelGate {
     throw RpcError(
       RpcErrorCode.notFound,
       a['id'] == null
-          ? 'The workspace was cleared after this change was prepared; nothing was saved.'
-          : 'This item was removed when the workspace was cleared.',
+          ? workspaceClearedChangeMessage
+          : workspaceClearedItemMessage,
     );
   }
 

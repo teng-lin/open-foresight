@@ -1,4 +1,5 @@
 import 'rpc_error.dart';
+import 'request_errors.dart';
 import 'operations.dart' show Operation;
 import 'model_integrity.dart';
 import 'model_asset_lifecycle.dart';
@@ -684,13 +685,13 @@ class Store {
       if (stored != null && stored['operation'] != operation) {
         throw RpcError(
           RpcErrorCode.invalidArgument,
-          'This idempotency_key was already used for ${stored['operation']}.',
+          keyReusedForMessage(stored['operation'] as String),
         );
       }
       if (stored != null && stored['arguments'] != arguments) {
         throw RpcError(
           RpcErrorCode.invalidArgument,
-          'This idempotency_key was already used with different arguments.',
+          keyReusedWithOtherArgumentsMessage,
         );
       }
       final result = stored == null

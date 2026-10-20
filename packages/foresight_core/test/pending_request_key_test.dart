@@ -2,6 +2,7 @@ import 'dart:math';
 
 import 'package:clock/clock.dart';
 import 'package:foresight_core/remote.dart';
+import 'package:foresight_core/src/request_errors.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:test/test.dart';
 
@@ -133,5 +134,64 @@ void main() {
       () => attempt({'title': 'T'}),
     );
     expect(key(2), isNot(key(0)));
+  });
+
+  test(
+    'after a lost reply only success or an answer about the key releases it',
+    () async {
+      final lost = RpcError(
+        RpcErrorCode.unavailable,
+        'Application service disconnected',
+        reason: RpcErrorReason.outcomeUnknown,
+      );
+      await expectLater(attempt({'title': 'T'}, lost), throwsA(lost));
+      // Each of these says nothing about the attempt that may have committed.
+      for (final failure in [
+        RpcError(
+          RpcErrorCode.unavailable,
+          'Application service disconnected',
+          reason: RpcErrorReason.notSent,
+        ),
+        RpcError(
+          RpcErrorCode.unavailable,
+          serviceClosingMessage,
+          reason: RpcErrorReason.closing,
+        ),
+        RpcError(RpcErrorCode.busy, 'Workspace is being cleared'),
+        RpcError(RpcErrorCode.internal, 'database or disk is full'),
+      ]) {
+        await expectLater(attempt({'title': 'T'}, failure), throwsA(failure));
+        expect(pending.pending, key(0), reason: '$failure');
+      }
+      await attempt({'title': 'T'});
+      expect(sent.map((args) => args['idempotency_key']).toSet(), hasLength(1));
+      // An answer about the key itself settles an uncertain key too.
+      for (final answer in [
+        RpcError(RpcErrorCode.notFound, workspaceClearedChangeMessage),
+        RpcError(
+          RpcErrorCode.invalidArgument,
+          keyReusedWithOtherArgumentsMessage,
+        ),
+        RpcError(
+          RpcErrorCode.invalidArgument,
+          keyReusedForMessage('notes.save'),
+        ),
+      ]) {
+        await expectLater(attempt({'title': 'T'}, lost), throwsA(lost));
+        await expectLater(attempt({'title': 'T'}, answer), throwsA(answer));
+        expect(pending.pending, isNull, reason: '$answer');
+      }
+      expect(sent.map((args) => args['idempotency_key']).toSet(), hasLength(4));
+    },
+  );
+
+  test('changed arguments without amend are refused, not sent anew', () async {
+    await expectLater(
+      attempt({'title': 'Draft'}, RpcError(RpcErrorCode.unavailable, 'lost')),
+      throwsA(isA<RpcError>()),
+    );
+    await expectLater(attempt({'title': 'Edited'}), throwsArgumentError);
+    expect(sent, hasLength(1));
+    expect(pending.pending, key(0));
   });
 }
