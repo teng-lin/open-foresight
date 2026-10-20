@@ -34,13 +34,13 @@ class Evidence:
         self.payloads = {}
         self.history = []
         self.proof = {"status": "identical"}
-        self.index = {"schema": 1, "repository": REPOSITORY, "source": SOURCE, "closure": rollout.closure(root), "capabilities": sorted(rollout.CAPABILITIES), "evidence": []}
+        self.index = {"schema": 1, "repository": REPOSITORY, "source": SOURCE, "closure": rollout.closure(root), "control_closure": rollout.control_closure(root), "capabilities": sorted(rollout.CAPABILITIES), "evidence": []}
 
     def add(self, kind, day=0):
         run_id = len(self.runs) + 1
         created = (datetime(2026, 10, 1, tzinfo=timezone.utc) + timedelta(days=day)).isoformat().replace("+00:00", "Z")
         workflow, gate = rollout.KINDS[kind]
-        run = {"id": run_id, "head_sha": SOURCE, "path": workflow, "head_branch": "main", "head_repository": {"full_name": REPOSITORY}, "status": "completed", "conclusion": "success", "event": "schedule", "created_at": created}
+        run = {"id": run_id, "head_sha": SOURCE, "path": workflow, "head_branch": "main", "head_repository": {"full_name": REPOSITORY}, "repository": {"full_name": REPOSITORY}, "status": "completed", "conclusion": "success", "event": "schedule", "created_at": created}
         self.runs[run_id] = run
         names = [gate]
         if kind == "nightly":
@@ -49,6 +49,16 @@ class Evidence:
         self.jobs[run_id] = [{"id": run_id * 100 + i, "name": name, "conclusion": "success", "run_attempt": 1, "started_at": "2026-10-01T00:00:00Z", "completed_at": "2026-10-01T00:10:00Z"} for i, name in enumerate(names)]
         self.artifacts[run_id] = {"id": run_id, "name": "ci-rollout-qualification", "expired": False, "workflow_run": {"id": run_id}, "created_at": "2026-10-01T00:05:00Z"}
         self.payloads[run_id] = rollout.descriptor(SOURCE, root=self.root, run_id=run_id, attempt=1, producer_job=gate)
+        if kind in {"archive-sdk", "fork-sdk", "recipe-change", "publisher"}:
+            self.payloads[run_id]["exercise"] = {"kind": kind}
+        if kind == "selector-replay":
+            self.payloads[run_id]["selector_replay"] = {"count": 50, "known_escapes": [102, 110, 112, 119, 137, 144]}
+        if kind == "acceptance-replay":
+            self.payloads[run_id]["acceptance_replay"] = {"count": 50, "known_escapes": [102, 110, 112, 119, 137, 144]}
+        if kind == "nightly":
+            self.payloads[run_id]["qualification_selection"] = {"qualification_mode": True, "superseded": False, "selection": dict.fromkeys(rollout.GATES, True)}
+        if kind == "observer":
+            self.payloads[run_id]["observer_case"] = "identical"
         entry = {"kind": kind, "run_id": run_id, "attempt": 1, "artifact_id": run_id, "producer_job_id": run_id * 100}
         self.index["evidence"].append(entry)
         return entry
@@ -121,6 +131,11 @@ def test_path_selection_and_main_receipts_have_separate_qualification_from_phase
         evidence.verify("main_receipts")
     evidence.add("observer")
     evidence.add("publisher")
+    with pytest.raises(ValueError, match="observer parity cases"):
+        evidence.verify("main_receipts")
+    for case in ("divergent", "partially-selected", "failed-rerun"):
+        entry = evidence.add("observer")
+        evidence.payloads[entry["run_id"]]["observer_case"] = case
     assert evidence.verify("main_receipts")["source"] == SOURCE
     with pytest.raises(ValueError, match="actual hosted"):
         evidence.verify("acceptance_narrowing")
@@ -158,7 +173,7 @@ def test_invalid_original_producer_never_authorizes_a_cutover(root, fault):
     elif fault == "producer":
         receipt["producer"]["job"] = "other"
     elif fault == "closure":
-        receipt["closure"]["sha256"] = "b" * 64
+        receipt["control_closure"]["sha256"] = "b" * 64
     elif fault == "id":
         entry["producer_job_id"] = 0
     else:
@@ -225,7 +240,7 @@ def test_source_capabilities_and_descriptor_cli_are_explicit(root, monkeypatch):
     evidence = Evidence(root)
     evidence.index["source"] = "b" * 40
     with pytest.raises(ValueError, match="source does not match"):
-        evidence.verify("path_selection")
+        evidence.verify("arch_retirement")
     with pytest.raises(ValueError, match="immutable commit"):
         rollout.descriptor("main", root=root, run_id=1, attempt=1, producer_job="changes")
     with pytest.raises(ValueError, match="original producer"):
@@ -264,4 +279,94 @@ def test_duplicate_evidence_cannot_multiply_green_observations(root):
     evidence = retirement_evidence(root)
     evidence.index["evidence"].append(copy.deepcopy(evidence.index["evidence"][-1]))
     with pytest.raises(ValueError, match="Duplicate qualification"):
+        evidence.verify("arch_retirement")
+
+
+def test_ordinary_product_source_does_not_revoke_qualified_coordinator_controls(root):
+    evidence = Evidence(root)
+    evidence.add("selector-replay")
+    original = rollout.control_closure(root)
+    path = root / "apps/desktop/lib/new_product.dart"
+    path.parent.mkdir(parents=True)
+    path.write_text("changed product behavior")
+    test = root / "packages/foresight_core/test/new_product_test.dart"
+    test.parent.mkdir(parents=True)
+    test.write_text("fresh product regression")
+    assert rollout.control_closure(root) == original
+    # A fresh product SHA is still bound by the main evidence reader; the
+    # rollout baseline qualifies the unchanged coordinator implementation.
+    evidence.verify("path_selection")
+    result = rollout.authorize(evidence.index, root=root, source="b" * 40, capabilities=["path_selection"], api=evidence.api, download=evidence.download)
+    assert result["qualified_source"] == SOURCE
+    (root / "tools/unknown_control.py").write_text("new control")
+    with pytest.raises(ValueError, match="closure differs"):
+        evidence.verify("path_selection")
+
+
+def test_toolchain_lock_and_selector_changes_revoke_controls(root):
+    original = rollout.control_closure(root)
+    path = root / "packages/foresight_core/pubspec.lock"
+    path.parent.mkdir(parents=True)
+    path.write_text("new compiler/dependency input")
+    with pytest.raises(ValueError, match="closure differs"):
+        rollout.compare(original, rollout.control_closure(root))
+    assert original["schema"] != rollout.closure(root)["schema"]
+
+
+@pytest.mark.parametrize("kind,key", [("archive-sdk", "exercise"), ("selector-replay", "selector_replay"), ("observer", "observer_case"), ("nightly", "qualification_selection")])
+def test_case_metadata_must_be_emitted_by_the_actual_candidate_producer(root, kind, key):
+    evidence = Evidence(root)
+    entry = evidence.add(kind)
+    evidence.payloads[entry["run_id"]].pop(key)
+    with pytest.raises(ValueError):
+        evidence.verify("path_selection")
+
+
+def test_descriptor_cli_attaches_only_complete_actual_reports(root, monkeypatch):
+    output = root / "out/qualification.json"
+    record = root / "out/exercise.json"
+    record.parent.mkdir()
+    record.write_text('{"kind":"recipe-change"}')
+    replay = root / "out/replay.json"
+    replay.write_text(json.dumps({"count": 50, "prs": [{"number": number} for number in [102, 110, 112, 119, 137, 144]]}))
+    selection = root / "out/selection.json"
+    selection.write_text(json.dumps({"qualification_mode": True, "superseded": False, "selection": dict.fromkeys(rollout.GATES, True)}))
+    arguments = ["rollout", "--root", str(root), "--source", SOURCE, "--run-id", "1", "--attempt", "1", "--producer-job", "qualification-selector-replay", "--output", str(output), "--exercise-record", str(record), "--selector-report", str(replay), "--selection-report", str(selection)]
+    monkeypatch.setattr(sys, "argv", arguments)
+    rollout.main()
+    result = json.loads(output.read_text())
+    assert result["exercise"]["kind"] == "recipe-change"
+    assert result["selector_replay"]["count"] == 50
+    assert result["qualification_selection"]["qualification_mode"] is True
+    replay.write_text('{"count":49}')
+    with pytest.raises(SystemExit, match="2"):
+        rollout.main()
+    selection.write_text('{"qualification_mode":true,"superseded":false,"selection":{}}')
+    with pytest.raises(SystemExit, match="2"):
+        rollout.main()
+
+
+def test_qualification_requires_repository_and_exact_original_uploader(root):
+    evidence = Evidence(root)
+    entry = evidence.add("selector-replay")
+    evidence.runs[1]["repository"]["full_name"] = "foreign/repository"
+    with pytest.raises(ValueError, match="repository mismatch"):
+        evidence.verify("path_selection")
+    evidence.runs[1]["repository"]["full_name"] = REPOSITORY
+    wrong = dict(evidence.jobs[1][0], id=9999, name="unrelated-upload-job")
+    evidence.jobs[1].append(wrong)
+    evidence.payloads[1]["producer"]["job"] = wrong["name"]
+    entry["producer_job_id"] = wrong["id"]
+    with pytest.raises(ValueError, match="upload window"):
+        evidence.verify("path_selection")
+
+
+def test_initial_cutover_cannot_ignore_a_newer_failed_or_pending_nightly(root):
+    evidence = retirement_evidence(root)
+    red = dict(evidence.history[-1], id=555, created_at="2026-10-03T00:00:00Z", conclusion="failure")
+    evidence.history.append(red)
+    with pytest.raises(ValueError, match="Latest scheduled nightly"):
+        evidence.verify("arch_retirement")
+    red.update(status="in_progress", conclusion=None)
+    with pytest.raises(ValueError, match="Latest scheduled nightly"):
         evidence.verify("arch_retirement")

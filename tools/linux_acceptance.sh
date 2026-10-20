@@ -19,6 +19,16 @@ if [[ "$task_suite" == deb ]]; then
   exit 0
 fi
 [[ "$task_suite" == cpu || "$task_suite" == audio ]] || { echo 'Unknown acceptance suite' >&2; exit 2; }
+# Each omitted phase is authorized in the retained changes-job report. Manual,
+# preview, release and nightly plans always select every phase.
+for task_phase in "${CPU_MODELS_SELECTED:-true}" "${SOFTWARE_GPU_SELECTED:-true}" "${VIRTUAL_AUDIO_SELECTED:-true}"; do
+  [[ "$task_phase" == true || "$task_phase" == false ]] || { echo 'Malformed acceptance phase selection' >&2; exit 2; }
+done
+if [[ "$task_suite" == cpu && "${CPU_MODELS_SELECTED:-true}" == false ]] || [[ "$task_suite" == audio && "${SOFTWARE_GPU_SELECTED:-true}" == false && "${VIRTUAL_AUDIO_SELECTED:-true}" == false ]]; then
+  mkdir -p "test-results/acceptance-$task_suite"
+  printf '%s\n' 'Qualified phase omission; see acceptance-selection-observation artifact' > "test-results/acceptance-$task_suite/selection.txt"
+  exit 0
+fi
 : "${SDK_IMAGE:?Verified SDK required}"
 python tools/ci_app_build_transport.py --repository "$GITHUB_REPOSITORY" --acceptance
 task_repository=$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
@@ -40,9 +50,13 @@ if [[ "$task_suite" == cpu ]]; then
     --suite models --bundle dist/open-foresight --models /models --output /reports
 else
   task_status=0
+  if [[ "${SOFTWARE_GPU_SELECTED:-true}" == true ]]; then
   docker run "${task_common[@]}" foresight-acceptance:local python3 tools/accept_software_gpu.py \
     --allow-litert-unavailable --bundle dist/open-foresight --models /models --output /reports/software-gpu || task_status=$?
+  fi
+  if [[ "${VIRTUAL_AUDIO_SELECTED:-true}" == true ]]; then
   docker run "${task_common[@]}" foresight-acceptance:local dbus-run-session -- python3 tools/integration_gates.py \
     --suite virtual-audio --bundle dist/open-foresight --models /models --output /reports/virtual-audio || task_status=$?
+  fi
   exit "$task_status"
 fi

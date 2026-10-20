@@ -240,8 +240,12 @@ def _selection_repository(tmp_path):
     git("commit", "-am", "Documentation change")
     tools = tmp_path / "tools"
     tools.mkdir()
-    shutil.copy2(ROOT / "tools/ci_changes.py", tools / "ci_changes.py")
-    shutil.copy2(ROOT / "tools/ci_selection.py", tools / "ci_selection.py")
+    shutil.copytree(ROOT / "tools", tools, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__"))
+    fixture_bin = tmp_path / "bin"
+    fixture_bin.mkdir()
+    fixture_gh = fixture_bin / "gh"
+    fixture_gh.write_text("#!/bin/sh\nprintf '%s\\n' '{\"artifacts\":[]}'\n")
+    fixture_gh.chmod(0o755)
     workflow_dir = tmp_path / ".github/workflows"
     workflow_dir.mkdir(parents=True)
     shutil.copy2(ROOT / ".github/workflows/native-sanitizers.yml", workflow_dir / "native-sanitizers.yml")
@@ -266,6 +270,14 @@ def _run_actual_selection(tmp_path, event, base, push_base=""):
         cwd=tmp_path,
         env={
             **os.environ,
+            "PATH": str(tmp_path / "bin") + os.pathsep + os.environ["PATH"],
+            "GITHUB_REPOSITORY": "example/reviewed",
+            "GITHUB_REF": "refs/heads/main" if event != "pull_request" else "refs/pull/123/merge",
+            "GITHUB_EVENT_NAME": event,
+            "GH_TOKEN": "fixture-read-only",
+            "PR_NUMBER": "",
+            "SWEEP": "false",
+            "QUALIFICATION_MODE": "false",
             "BASE": base,
             "PUSH_BASE": push_base,
             "EVENT": event,

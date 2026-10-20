@@ -26,11 +26,9 @@ INDEX = ROOT / "docs/platforms/ci-rollout-index.json"
 def authorize(reader, source, *, index=None, root=None):
     """No environment variable or command flag can waive retained-closure proof."""
     if index is None:
-        if not INDEX.is_file():
-            raise ValueError(
-                "Production main evidence disabled: hosted rollout index absent"
-            )
-        index = json.loads(INDEX.read_text())
+        from tools.ci_qualification_index import capability
+
+        return capability("main_receipts", source, root=root or ROOT, repository=reader.repository, api=reader.api)
     from tools.ci_rollout import authorize as qualify_rollout
 
     return qualify_rollout(

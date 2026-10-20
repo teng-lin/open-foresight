@@ -98,6 +98,9 @@ def selection_jobs(selection):
         or any(type(value) is not bool for value in gates.values())
     ):
         raise ValueError("Missing or incompatible platform selection schema")
+    phases = selection.get("acceptance_phases")
+    if gates["linux-build"] and phases is not None and (not isinstance(phases, dict) or set(phases) != {"cpu-models", "software-gpu", "virtual-audio"} or any(value is not True for value in phases.values())):
+        raise ValueError("Partial acceptance phases cannot promote full main validation")
     if type(selection.get("arch_retired", False)) is not bool:
         raise ValueError("Arch retirement selection must be an explicit boolean")
     result = {name: gates.get(name, False) for name in APPLICATION}

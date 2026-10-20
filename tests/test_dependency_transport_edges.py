@@ -10,7 +10,7 @@ from unittest.mock import Mock
 import pytest
 from tools import cleanup_linux_packages as cleanup
 from tools import ci_sanitizer_artifacts as sanitizers
-from tools import ci_stage_environment as environment
+from tools import ci_build_environment as environment
 from tools import run_ci_stage as runner
 from test_ci_app_dependency_seed import seed
 from test_cleanup_linux_packages import version

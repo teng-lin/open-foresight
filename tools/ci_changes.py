@@ -7,6 +7,9 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import subprocess
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 GATES = (
@@ -182,7 +185,7 @@ def requires_build(paths):
     return any(select_gates(paths).values())
 
 
-def check_gates(jobs, selected, tier=""):
+def check_gates(jobs, selected, tier="", *, arch_retired=False):
     """Reject failed classification, malformed selection and skipped selected jobs."""
     if set(selected) != set(GATES) or any(
         type(value) is not bool for value in selected.values()
@@ -192,7 +195,7 @@ def check_gates(jobs, selected, tier=""):
     if tier not in ("", "pr", "sweep", "preview", "release", "local"):
         raise ValueError("Invalid CI tier")
     expected["linux-native"] = (
-        "success" if selected["linux-build"] and tier != "release" else "skipped"
+        "success" if selected["linux-build"] and tier != "release" and not arch_retired else "skipped"
     )
     expected.update(
         {
@@ -209,24 +212,53 @@ def check_gates(jobs, selected, tier=""):
 
 def selection_report(paths, *, force=False, revision_range=""):
     selected = select_gates(paths, force=force)
-    candidate = importlib.import_module("tools.ci_selection" if __package__ else "ci_selection")
+    try:
+        candidate = importlib.import_module("tools.ci_selection" if __package__ else "ci_selection")
+        proposed = candidate.select(paths, force=force)
+    except Exception as error:
+        proposed = {"error": str(error)}
     return {
         "range": revision_range,
         "force": force,
         "platforms": "all",
         "superseded": False,
-        "candidate": candidate.select(paths, force=force),
+        "candidate": proposed,
+        "arch_retired": False,
         "selection": selected,
         "paths": [
-            {
-                "path": path,
-                "gates": [
-                    gate for gate, value in select_gates([path]).items() if value
-                ],
-            }
+            {"path": path, "gates": [gate for gate, value in select_gates([path]).items() if value]}
             for path in paths
         ],
     }
+
+
+def activate_report(report, *, source, repository, root=None, capability=None):
+    """Apply only independently qualified routing; any unavailable proof broadens.
+
+    Candidate bugs remain observations before activation. Once the selector is
+    authorized, its errors are real classification failures and cannot fall back.
+    """
+    if capability is None:
+        from tools.ci_qualification_index import capability
+    active = {}
+    for name in ("path_selection", "arch_retirement", "main_receipts"):
+        try:
+            capability(name, source, repository=repository, **({"root": root} if root else {}))
+        except (ValueError, KeyError, TypeError) as error:
+            active[name] = {"active": False, "reason": str(error)}
+        else:
+            active[name] = {"active": True}
+    if active["path_selection"]["active"]:
+        if "error" in report["candidate"]:
+            raise ValueError("Qualified production selector failed: " + report["candidate"]["error"])
+        report["selection"] = report["candidate"]["selection"]
+    report["arch_retired"] = active["arch_retirement"]["active"]
+    if active["main_receipts"]["active"] and os.environ.get("GITHUB_REF") == "refs/heads/main" and os.environ.get("GITHUB_EVENT_NAME") == "push" and not report["force"]:
+        report["selection"] = dict.fromkeys(GATES, False)
+        report["main_coordination"] = True
+    report["activation"] = active
+    return report
+
 
 
 def write_report(report, destination):
@@ -262,6 +294,7 @@ def write_report(report, destination):
             stream.write(
                 "selection=" + json.dumps(selected, separators=(",", ":")) + "\n"
             )
+            stream.write("arch_retired=" + str(report.get("arch_retired", False)).lower() + "\n")
             for name, required in selected.items():
                 stream.write(f"{name.replace('-', '_')}={str(required).lower()}\n")
 
@@ -275,6 +308,8 @@ def main():
     parser.add_argument("--json-output", default="ci-selection.json")
     parser.add_argument("--check-gates", action="store_true")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--activate", action="store_true", help="Consume independently verified main qualification")
+    parser.add_argument("--candidate", action="store_true", help="Reviewed-main full candidate qualification only")
     parser.add_argument("--pull-request", type=int)
     parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY"))
     parser.add_argument("--tier", default=os.environ.get("CI_TIER", ""))
@@ -284,6 +319,7 @@ def main():
             json.loads(os.environ["NEEDS"]),
             json.loads(os.environ["SELECTION"]),
             args.tier,
+            arch_retired=os.environ.get("ARCH_RETIRED") == "true",
         )
         print("All selected platform gates passed.")
         return
@@ -315,6 +351,16 @@ def main():
         force=args.force,
         revision_range=args.explain or f"{revisions[0]}..HEAD",
     )
+    if args.candidate:
+        if os.environ.get("GITHUB_REF") != "refs/heads/main" or os.environ.get("GITHUB_EVENT_NAME") not in ("schedule", "workflow_dispatch") or not args.force:
+            raise ValueError("Candidate qualification requires reviewed-main full validation")
+        if "error" in report["candidate"]:
+            raise ValueError(report["candidate"]["error"])
+        report["selection"] = report["candidate"]["selection"]
+        report["qualification_mode"] = True
+    if args.activate:
+        source = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, timeout=300).strip()
+        activate_report(report, source=source, repository=args.repository)
     write_report(report, args.json_output)
 
 

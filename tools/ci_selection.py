@@ -103,6 +103,9 @@ def path_rule(path, *, root=ROOT):
         return "editorial", ()
     owners = contracts.owner_gates(path)
     if owners:
+        # A file can own both host contracts and an external installer case.
+        if path in contracts.SHARED and path in legacy.PACKAGING_FILES:
+            owners = tuple(dict.fromkeys((*owners, "packaging")))
         return "host-contract", owners
     if parsed.parent == PurePosixPath("tests") and parsed.name.startswith("test_") and parsed.suffix == ".py":
         # Existing installer/DMG contracts retain their explicit external owner.

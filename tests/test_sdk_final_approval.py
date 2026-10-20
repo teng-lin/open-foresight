@@ -485,7 +485,7 @@ def test_all_callers_share_final_source_boundary(
     monkeypatch, tmp_path, caller, case, expected, pages
 ):
     from tools import ci_sanitizer_artifacts as sanitizer
-    from tools import ci_stage_cache as stage
+    from tools import ci_native_cache as stage
 
     evidence = Evidence()
     candidate = run()

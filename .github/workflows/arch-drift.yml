@@ -88,6 +88,18 @@ jobs:
             --output test-results/arch/native-work.json -- -G Ninja
       - name: Build and test with the current Arch toolchain
         run: xvfb-run -a dbus-run-session -- bash tools/build.sh --platform linux -G Ninja
+      - name: Record actual scheduled retained Arch closure after validation
+        if: github.event_name == 'schedule' && github.ref == 'refs/heads/main'
+        run: .venv/bin/python -m tools.ci_rollout --source "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --producer-job arch --output build/qualification/qualification.json
+      - name: Retain original scheduled Arch qualification
+        if: github.event_name == 'schedule' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ci-rollout-qualification
+          path: build/qualification/qualification.json
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: true
       - name: Retain drift diagnostics and suite evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

@@ -220,6 +220,7 @@ def main():
             "range": args.source,
             "selection": selected,
             "superseded": bool(reason),
+            "arch_retired": reader.arch_retired(args.source),
             "sweep": True,
             "sweep_namespace": args.namespace,
             "reason": reason,
@@ -231,6 +232,7 @@ def main():
                 stream.write(
                     "selection=" + json.dumps(selected, separators=(",", ":")) + "\n"
                 )
+                stream.write("arch_retired=" + str(result["arch_retired"]).lower() + "\n")
                 for name, value in selected.items():
                     stream.write(f"{name.replace('-', '_')}={str(value).lower()}\n")
     args.output.parent.mkdir(parents=True, exist_ok=True)

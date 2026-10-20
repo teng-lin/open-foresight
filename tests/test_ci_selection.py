@@ -21,6 +21,7 @@ FIXTURE = Path(__file__).parent / "fixtures/ci-selector-50-prs.json"
     ("tools/package_macos.py", "apple-input", {"macos", "dmg"}, {"linux-build"}),
     ("tests/test_macos_tools.py", "host-contract", {"macos", "dmg"}, {"linux-build"}),
     ("tests/test_dmg_contract.py", "host-contract", {"dmg"}, {"linux-build"}),
+    ("tests/test_linux_packages.py", "host-contract", {"macos", "packaging", "linux-build", "dmg"}, set()),
     ("tests/test_app_dependency_cmake.py", "host-contract", {"macos", "linux-build"}, set()),
     ("tests/test_rpm_scriptlets.py", "host-contract", {"packaging", "linux-build", "dmg"}, set()),
     ("packaging/acceptance.Dockerfile", "acceptance-input", {"linux-build", "linux-test"}, {"macos", "packaging"}),
@@ -174,3 +175,43 @@ def test_live_full_label_broadens_real_classifier_cli_after_event_snapshot(tmp_p
     assert calls == [("owner/repo", 17)]
     assert report["force"] is True and all(report["selection"].values())
     assert report["candidate"]["mode"] == "observe-only"
+
+
+@pytest.mark.parametrize("ref,event,force", [("refs/pull/999/merge", "pull_request", True), ("refs/heads/main", "workflow_dispatch", False), ("refs/heads/main", "push", True), ("refs/heads/main", "workflow_dispatch", True)])
+def test_candidate_cli_is_main_only_full_qualification(tmp_path, monkeypatch, ref, event, force):
+    output = tmp_path / "selection.json"
+    arguments = ["changes", "--base", "a" * 40, "--candidate", "--json-output", str(output)]
+    if force:
+        arguments.append("--force")
+    monkeypatch.setattr(sys, "argv", arguments)
+    monkeypatch.setenv("GITHUB_REF", ref)
+    monkeypatch.setenv("GITHUB_EVENT_NAME", event)
+    monkeypatch.setattr(ci_changes.subprocess, "check_output", lambda *args, **kwargs: b"docs/guide.md\0")
+    monkeypatch.setattr(ci_changes.subprocess, "run", lambda *args, **kwargs: None)
+    if ref == "refs/heads/main" and event == "workflow_dispatch" and force:
+        ci_changes.main()
+        assert json.loads(output.read_text())["qualification_mode"] is True
+    else:
+        with pytest.raises(ValueError, match="reviewed-main full"):
+            ci_changes.main()
+
+
+def test_full_candidate_uses_qualified_retirement_without_narrowing_selected_suites(tmp_path, monkeypatch):
+    def output(command, **kwargs):
+        return "a" * 40 + "\n" if command[1] == "rev-parse" else b"docs/guide.md\0"
+    monkeypatch.setattr(ci_changes.subprocess, "check_output", output)
+    monkeypatch.setattr(ci_changes.subprocess, "run", lambda *args, **kwargs: None)
+    monkeypatch.setenv("GITHUB_REF", "refs/heads/main")
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "outputs"))
+    def activated(report, **kwargs):
+        assert report["qualification_mode"] and report["force"]
+        assert all(report["selection"].values())
+        report["arch_retired"] = True
+        return report
+    monkeypatch.setattr(ci_changes, "activate_report", activated)
+    monkeypatch.setattr(sys, "argv", ["changes", "--base", "HEAD", "--force", "--candidate", "--activate", "--json-output", str(tmp_path / "selection.json")])
+    ci_changes.main()
+    report = json.loads((tmp_path / "selection.json").read_text())
+    assert report["arch_retired"] and all(report["selection"].values())
+    assert "arch_retired=true" in (tmp_path / "outputs").read_text()

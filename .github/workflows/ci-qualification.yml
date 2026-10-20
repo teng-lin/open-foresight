@@ -1,0 +1,117 @@
+name: CI candidate qualification
+run-name: CI qualification ${{ inputs.exercise }} ${{ github.sha }}
+on:
+  workflow_dispatch:
+    inputs:
+      exercise:
+        description: Real reviewed-main candidate exercise; never changes production routing
+        type: choice
+        options: [selector-replay, acceptance-replay, archive-sdk, fork-sdk, recipe-change]
+        default: selector-replay
+permissions:
+  contents: read
+  actions: read
+  packages: read
+concurrency:
+  group: ci-qualification-${{ inputs.exercise }}-${{ github.sha }}
+  cancel-in-progress: false
+jobs:
+  qualify:
+    name: qualification-${{ inputs.exercise }}
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - name: Require reviewed main controls and exact checkout
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/ci-qualification.yml@refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - name: Install hash-verified fixture dependencies
+        run: python -m pip install --require-hashes -r requirements-dev.lock
+      - uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
+        if: inputs.exercise != 'selector-replay' && inputs.exercise != 'acceptance-replay'
+        with:
+          daemon-config: '{"features":{"containerd-snapshotter":true}}'
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+        if: inputs.exercise != 'selector-replay' && inputs.exercise != 'acceptance-replay'
+        with:
+          driver: docker
+      - name: Authenticate read-only SDK and tooling access
+        if: inputs.exercise != 'selector-replay' && inputs.exercise != 'acceptance-replay'
+        env:
+          REGISTRY_TOKEN: ${{ github.token }}
+        run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Replay the frozen complete fifty-PR path inventory
+        if: inputs.exercise == 'selector-replay'
+        run: |
+          task_checksum=$(cut -d' ' -f1 tests/fixtures/ci-selector-50-prs.sha256)
+          python -m tools.ci_selection --replay tests/fixtures/ci-selector-50-prs.json --sha256 "$task_checksum" --output build/qualification/replay.json
+          python -m pytest tests/test_ci_selection.py -q --junitxml=build/qualification/replay.junit.xml
+      - name: Replay the complete frozen acceptance dependency inventory
+        if: inputs.exercise == 'acceptance-replay'
+        run: |
+          task_checksum=$(cut -d' ' -f1 tests/fixtures/ci-selector-50-prs.sha256)
+          python -m tools.ci_acceptance_plan --replay tests/fixtures/ci-selector-50-prs.json --sha256 "$task_checksum" --output build/qualification/acceptance-replay.json
+          python -m pytest tests/test_ci_acceptance_plan.py -q --junitxml=build/qualification/acceptance-replay.junit.xml
+      - name: Load the actual document sandbox policy for application consumers
+        if: inputs.exercise != 'selector-replay' && inputs.exercise != 'acceptance-replay'
+        run: bash tools/ci_package_sandbox.sh
+      - name: Exercise real SDK transport and complete application gates
+        if: inputs.exercise != 'selector-replay' && inputs.exercise != 'acceptance-replay'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXERCISE: ${{ inputs.exercise }}
+          FORESIGHT_CONTAINER_APPARMOR: foresight-ci-document-sandbox
+          CI_TIER: sweep
+          SOURCE_REVISION: ${{ github.sha }}
+          REQUIRE_GOOGLE_CLIENT: '0'
+        run: |
+          df -h / /mnt
+          python -m tools.ci_transport_exercise --kind "$EXERCISE" --source "$GITHUB_SHA" --output build/qualification
+      - name: Record actual candidate exercise and original producer
+        env:
+          EXERCISE: ${{ inputs.exercise }}
+        run: |
+          task_args=()
+          if [[ "$EXERCISE" == selector-replay ]]; then
+            task_args+=(--selector-report build/qualification/replay.json)
+          elif [[ "$EXERCISE" == acceptance-replay ]]; then
+            task_args+=(--acceptance-report build/qualification/acceptance-replay.json)
+          else
+            task_args+=(--exercise-record build/qualification/exercise.json)
+          fi
+          python -m tools.ci_rollout --source "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --producer-job "qualification-$EXERCISE" --output build/qualification/qualification.json "${task_args[@]}"
+      - name: Retain original candidate qualification descriptor
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ci-rollout-qualification
+          path: build/qualification/qualification.json
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: true
+      - name: Retain failed commands and actual test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ci-qualification-${{ inputs.exercise }}-diagnostics
+          path: |
+            build/qualification/commands.log
+            build/qualification/exercise.json
+            build/qualification/replay.json
+            build/qualification/replay.junit.xml
+            build/qualification/application/evidence/
+          if-no-files-found: warn
+          retention-days: 30
+          overwrite: true
