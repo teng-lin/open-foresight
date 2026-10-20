@@ -290,6 +290,32 @@ void main() {
   });
 
   test(
+    'the service command line names an ignored record',
+    () async {
+      record().writeAsStringSync('[]');
+      final result = await Process.run(
+        Platform.resolvedExecutable,
+        ['bin/service.dart', '--status'],
+        environment: {
+          'HOME': root.path,
+          'FORESIGHT_DATA': profile.data,
+          'FORESIGHT_RUNTIME': profile.runtime,
+        },
+      );
+      // No owner serves this profile, so the status request itself fails.
+      expect(result.exitCode, 1, reason: '${result.stderr}');
+      expect(
+        result.stderr,
+        contains(
+          '.application-endpoint.json was ignored because it is not an '
+          'object with string data and runtime fields.',
+        ),
+      );
+    },
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
+
+  test(
     'a client names the ignored record when another owner holds the lock',
     () async {
       record().writeAsStringSync('{"data":');
