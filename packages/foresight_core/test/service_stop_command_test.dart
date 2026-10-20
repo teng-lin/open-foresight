@@ -177,11 +177,13 @@ void main() {
     }
     // A user and pid namespace with its own /proc, as in a sandbox. The
     // kernel leaves the owner, outside it, out of that /proc/locks.
-    final probe = await Process.run('unshare', [
-      '-Urpf',
-      '--mount-proc',
-      'true',
-    ]);
+    final ProcessResult probe;
+    try {
+      probe = await Process.run('unshare', ['-Urpf', '--mount-proc', 'true']);
+    } on ProcessException catch (error) {
+      markTestSkipped('unshare is not installed here: $error');
+      return;
+    }
     if (probe.exitCode != 0) {
       markTestSkipped('unshare is not permitted here: ${probe.stderr}');
       return;
