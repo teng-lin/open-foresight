@@ -29,6 +29,7 @@ void main() {
         'FORESIGHT_NATIVE',
         'FORESIGHT_RUNTIME_REVISION',
         'FORESIGHT_INSTALL_ROOT',
+        'FORESIGHT_MODEL_MANIFEST',
       ])
         key: runtimeConfiguration.environment.remove(key),
     };
@@ -196,13 +197,15 @@ void main() {
       await expectLater(
         client.call('service.stop_if_idle'),
         throwsA(
-          isA<StateError>().having(
+          isA<RpcError>().having((error) => error.code, 'code', RpcErrorCode.busy).having(
             (error) => error.message,
             'message',
             contains('could not be verified'),
           ),
         ),
       );
+      expect((await client.call('status') as Map)['pid'], pid);
+      expect(FileSystemEntity.typeSync(service.path), isNot(FileSystemEntityType.notFound));
       expect(
         File('${profile.data}/.application-endpoint.json').existsSync(),
         true,
