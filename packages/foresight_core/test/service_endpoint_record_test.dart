@@ -6,8 +6,16 @@ import 'package:foresight_core/src/platform_services.dart';
 import 'package:foresight_core/src/profile_paths.dart';
 import 'package:foresight_core/src/service.dart';
 import 'package:foresight_test_support/poll.dart';
+import 'package:foresight_test_support/service_fault_proxy.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
+
+import 'service_shutdown_handoff_test.dart'
+    show
+        expireDeadlineDuring,
+        ladderTimeout,
+        localOwnerDeadlines,
+        startupFailure;
 
 // A separate owner holds the real profile lock and serves status on its own
 // runtime. It never reads or replaces the endpoint record, so a client reaches
@@ -333,23 +341,39 @@ void main() {
           isTrue,
         );
         expect(lines.current, 'locked');
-        await expectLater(
-          ensureService(
-            profile,
-            startupTimeout: const Duration(milliseconds: 300),
-          ),
-          throwsA(
-            isA<TimeoutException>().having(
-              (error) => error.message,
-              'message',
-              allOf(
-                contains('profile lock is still held'),
-                contains(record().path),
-                contains('not valid JSON'),
+        await expireDeadlineDuring('a lock probe that found the lock held', (
+          deadline,
+        ) async {
+          final proxy = ServiceFaultProxy();
+          try {
+            final failure = await startupFailure(
+              proxy.run(() => ensureService(profile, startupTimeout: deadline)),
+            );
+            // The deadline names a held lock whenever nothing launched, even
+            // before any lock probe. A second connect follows only a probe
+            // that found the lock held; a free lock would have launched.
+            if (proxy.attempts.length < 2) return false;
+            expect(
+              failure,
+              isA<TimeoutException>().having(
+                (error) => error.message,
+                'message',
+                allOf(
+                  startsWith(
+                    'Application service profile lock is still held; its '
+                    'owner is not serving the endpoint. The endpoint record '
+                    '${record().path} was ignored because it is not valid '
+                    'JSON (',
+                  ),
+                  endsWith(').'),
+                ),
               ),
-            ),
-          ),
-        );
+            );
+            return true;
+          } finally {
+            await proxy.close();
+          }
+        }, deadlines: localOwnerDeadlines);
         expect(File('${profile.data}/launches').existsSync(), isFalse);
         expect(record().readAsStringSync(), '{"data":');
       } finally {
@@ -358,6 +382,7 @@ void main() {
         await lines.cancel();
       }
     },
+    timeout: ladderTimeout(localOwnerDeadlines),
   );
 
   test(
