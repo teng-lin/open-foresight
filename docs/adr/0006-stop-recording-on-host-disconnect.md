@@ -1,0 +1,23 @@
+# ADR 0006: Stopping recording when the host desktop disconnects (D6)
+
+| | |
+|---|---|
+| Status | Accepted 2026-10-19; no code change (the spurious-disconnect cause was fixed in fix plan step 1, SL-1) |
+| Deciders | Repository owner |
+| Source | [Service lifecycle fix plan](../plans/2026-10-19-service-lifecycle-fix-plan.md), decision D6, finding SL-1 |
+
+## Context
+
+The service stops an active recording the moment the desktop approval host detaches or its socket closes, because the on-screen recording indicator is no longer available. SL-1 showed this could fire spuriously: one reply over 16 MiB dropped the desktop's only socket, the service treated that as the host leaving, and stopped the recording. Opening the graph with about 1,000 indexed sources triggered it.
+
+## Decision
+
+Keep the immediate stop, for privacy. Fix the causes of spurious disconnects instead: cap reply frames server-side and fail only the oversized request, and batch graph embedding requests on the desktop.
+
+Rejected: give the recording stop the same 1 s reattach grace that the desktop's process lease has. A microphone that keeps capturing for a second after its indicator disappeared is the wrong trade.
+
+## Consequences
+
+- Transcription of already captured audio still finishes in the service after the stop.
+- Disconnecting only the MCP client leaves capture running while the desktop remains visible.
+- [ADR 0007](0007-service-lifetime-and-desktop-agent-boundary.md) keeps this rule unchanged: recording is desktop-owned, and only the process lifetime rule changes.
