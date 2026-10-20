@@ -430,6 +430,14 @@ class Reader:
             "jobs": {},
         }
         jobs = self.jobs(run)
+        result["historical_failure"] = bool(
+            run.get("run_attempt", 1) > 1
+            and any(
+                job.get("run_attempt", 1) < run["run_attempt"]
+                and job.get("conclusion") in ("failure", "timed_out")
+                for job in jobs
+            )
+        )
         try:
             for name in ("platform-checks", "acceptance-checks"):
                 candidate.latest(jobs, name)
@@ -490,6 +498,23 @@ def selected_on_push(root, before, source):
     )
 
 
+def observation_case(proposal):
+    if not observation_qualified(proposal):
+        return None
+    if proposal["actual_main"].get("historical_failure") is True:
+        return "failed-rerun"
+    if proposal.get("decision") == "validated":
+        if any(
+            origin.get("source") != proposal.get("source")
+            for origin in proposal.get("jobs", {}).values()
+        ):
+            return "partially-selected"
+        return "identical"
+    if proposal.get("reason") == "Final PR and reviewed main trees differ":
+        return "divergent"
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", required=True)
@@ -517,9 +542,8 @@ def main():
         proposal["actual_main"] = {"status": "unavailable", "reason": str(error)}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(proposal, indent=2, sort_keys=True) + "\n")
-    qualified = observation_qualified(proposal) and source == os.environ.get(
-        "GITHUB_SHA"
-    )
+    case = observation_case(proposal)
+    qualified = case is not None and source == os.environ.get("GITHUB_SHA")
     if args.qualification_output and qualified:
         from tools.ci_rollout import descriptor
 
@@ -533,6 +557,7 @@ def main():
             "decision": proposal["decision"],
             "actual_main": proposal["actual_main"],
         }
+        record["observer_case"] = case
         args.qualification_output.parent.mkdir(parents=True, exist_ok=True)
         args.qualification_output.write_text(json.dumps(record, sort_keys=True) + "\n")
     if output := os.environ.get("GITHUB_OUTPUT"):
