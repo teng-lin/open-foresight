@@ -141,6 +141,17 @@ def select(paths, *, force=False, labels=(), root=ROOT):
     }
 
 
+def referenced_owners(root=ROOT):
+    """Audit repository paths referenced by every workflow and composite action."""
+    found = set()
+    for directory in (root / ".github/workflows", root / ".github/actions"):
+        for path in directory.rglob("*.yml"):
+            for name in re.findall(r"(?:tools|packaging|cmake|native|services|packages|apps|tests|\.github/actions|\.github/workflows)/[A-Za-z0-9_./-]+", path.read_text()):
+                if (root / name).is_file():
+                    found.add(name)
+    return [{"path": name, "rule": path_rule(name, root=root)[0], "jobs": required_jobs(closure({gate: gate in path_rule(name, root=root)[1] for gate in GATES}))} for name in sorted(found)]
+
+
 def live_labels(repository, pull_request, *, api=None):
     """Read current labels, never the potentially stale pull_request event copy."""
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository or "") or type(pull_request) is not int or pull_request < 1:

@@ -3,6 +3,7 @@
 import copy
 import hashlib
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -118,3 +119,58 @@ def test_incomplete_or_foreign_replay_cannot_pass(fault):
 
 def test_candidate_and_production_have_same_gate_schema():
     assert set(selection.GATES) == set(ci_changes.GATES)
+
+
+def test_reference_audit_covers_every_real_workflow_and_action_input():
+    owners = selection.referenced_owners()
+    assert {row["path"] for row in owners}.issuperset({"tools/ci_changes.py", "tools/build.sh", "tools/ci_package_sandbox.sh"})
+    assert all(row["jobs"] or row["rule"] in {"editorial", "portable-quality", "maintenance"} for row in owners)
+
+
+def test_replay_rejects_a_known_escape_that_would_lose_acceptance():
+    snapshot = json.loads(FIXTURE.read_bytes())
+    row = next(pr for pr in snapshot["prs"] if pr["number"] == 102)
+    row["files"] = [{"filename": "docs/incorrectly-classified.md"}]
+    row["changedFiles"] = 1
+    with pytest.raises(ValueError, match="Historical escape"):
+        selection.replay(snapshot)
+
+
+def test_unsupported_sanitizer_path_syntax_and_api_errors_fail_closed(tmp_path):
+    path = tmp_path / ".github/workflows/native-sanitizers.yml"
+    path.parent.mkdir(parents=True)
+    path.write_text('  pull_request:\n    paths:\n      - 17\n')
+    with pytest.raises(ValueError, match="sanitizer path"):
+        selection.sanitizer_paths(tmp_path)
+    def unavailable(*args):
+        raise RuntimeError("transport unavailable")
+    with pytest.raises(RuntimeError, match="transport unavailable"):
+        selection.live_labels("owner/repo", 1, api=unavailable)
+
+
+def test_replay_cli_requires_correct_frozen_checksum_and_writes_report(tmp_path, monkeypatch):
+    output = tmp_path / "out/report.json"
+    args = ["selection", "--replay", str(FIXTURE), "--sha256", "wrong", "--output", str(output)]
+    monkeypatch.setattr(sys, "argv", args)
+    with pytest.raises(SystemExit, match="2"):
+        selection.main()
+    args[4] = FIXTURE.with_suffix(".sha256").read_text().split()[0]
+    selection.main()
+    assert json.loads(output.read_text())["count"] == 50
+
+
+def test_live_full_label_broadens_real_classifier_cli_after_event_snapshot(tmp_path, monkeypatch):
+    output = tmp_path / "selection.json"
+    monkeypatch.setattr(sys, "argv", ["changes", "--base", "a" * 40, "--pull-request", "17", "--repository", "owner/repo", "--json-output", str(output)])
+    monkeypatch.setattr(ci_changes.subprocess, "check_output", lambda *args, **kwargs: b"docs/guide.md\0")
+    monkeypatch.setattr(ci_changes.subprocess, "run", lambda *args, **kwargs: None)
+    calls = []
+    def labels(repository, number):
+        calls.append((repository, number))
+        return {"ci:full"}
+    monkeypatch.setattr(selection, "live_labels", labels)
+    ci_changes.main()
+    report = json.loads(output.read_text())
+    assert calls == [("owner/repo", 17)]
+    assert report["force"] is True and all(report["selection"].values())
+    assert report["candidate"]["mode"] == "observe-only"
