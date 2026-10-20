@@ -1210,6 +1210,33 @@ void main() {
     expect(approvals, hasLength(4));
   });
 
+  test('hiding the desktop closes the approval dialogs it showed', () async {
+    f.handler = (socket, request) => f.reply(socket, request, null);
+    final approvals = <Map<String, dynamic>>[];
+    await f.remote.enableDesktopApprovals(approvals.add);
+    f.event({
+      'event': 'approval',
+      'approval_id': 'open',
+      'method': 'sources.delete',
+      'args': {'id': 'source'},
+    });
+    await eventually(() => approvals.length == 1);
+    await f.remote.disableDesktopApprovals();
+    expect(approvals.last, {'event': 'approval_closed', 'approval_id': 'open'});
+    expect(f.requests.last['method'], Operation.securityDetachDesktop.wire);
+    // A desktop shown again does not close it a second time.
+    await f.remote.enableDesktopApprovals(approvals.add);
+    f.sockets.last.destroy();
+    await eventually(
+      () =>
+          f.requests
+              .where((r) => r['method'] == Operation.securityAttachDesktop.wire)
+              .length ==
+          3,
+    );
+    expect(approvals, hasLength(2));
+  });
+
   group('a clear whose reply is lost', () {
     setUp(() {
       f.status['workspace_epoch'] = f.owner.workspaceEpoch;

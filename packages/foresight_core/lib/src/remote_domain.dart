@@ -70,6 +70,9 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
 
   @override
   Future<void> disableDesktopApprovals() async {
+    // The service denies the approvals still open, but their
+    // approval_closed would find no listener; close their dialogs first.
+    _closeOpenApprovals();
     _approvalEvents = null;
     _attached = null;
     await client.call(Operation.securityDetachDesktop.wire);
