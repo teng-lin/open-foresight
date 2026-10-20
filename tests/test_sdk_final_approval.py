@@ -13,6 +13,7 @@ from test_sdk_producer_trust import git_api
 REPO = "owner/repo"
 ORIGINAL = "a" * 40
 FINAL = "b" * 40
+MERGE = "e" * 40
 
 
 def run():
@@ -206,6 +207,73 @@ def test_unmerged_or_unapproved_final_does_not_qualify():
     evidence.pull["merged_at"] = "merged"
     evidence.approved = False  # Reverted/unreachable or unequal rebase merge tree.
     assert not evidence.qualify()
+
+
+@pytest.mark.parametrize(
+    "case,expected",
+    [
+        ("unrelated-base-change", True),
+        ("different-build", False),
+        ("different-control", False),
+        ("different-mode", False),
+        ("unreachable", False),
+        ("missing-merge", False),
+        ("invalid-merge", False),
+    ],
+)
+def test_sdk_squash_approval_checks_actual_merged_input_and_control_closure(
+    case, expected
+):
+    evidence = Evidence()
+    evidence.approved = False  # Whole trees differ due to another merged PR.
+    evidence.pull["merge_commit_sha"] = MERGE
+    evidence.identities[MERGE] = evidence.identities[FINAL]
+    evidence.controls[MERGE] = copy.deepcopy(evidence.controls[FINAL])
+    if case == "different-build":
+        evidence.identities[MERGE] = "changed-build"
+    elif case == "different-control":
+        evidence.controls[MERGE]["pack.py"] = ("100644", b"changed")
+    elif case == "different-mode":
+        evidence.controls[MERGE]["pack.py"] = ("100755", b"reviewed")
+    elif case == "missing-merge":
+        evidence.pull.pop("merge_commit_sha")
+    elif case == "invalid-merge":
+        evidence.pull["merge_commit_sha"] = "main"
+    original_api = evidence.api
+
+    def api(repository, path):
+        if path == f"compare/{MERGE}...main":
+            return {"status": "behind" if case == "unreachable" else "identical"}
+        return original_api(repository, path)
+
+    evidence.api = api
+    assert evidence.qualify() is expected
+    # SDK approval never changes original provenance or the other callers' rule.
+    assert not list(
+        approval.approved_final_heads(
+            REPO,
+            run(),
+            workflow=approval.WORKFLOW,
+            api=evidence.api,
+            merged_source=evidence.merged,
+        )
+    )
+
+
+def test_sdk_squash_merge_api_failure_is_fatal():
+    evidence = Evidence()
+    evidence.approved = False
+    evidence.pull["merge_commit_sha"] = MERGE
+    original_api = evidence.api
+
+    def api(repository, path):
+        if path == f"compare/{MERGE}...main":
+            raise RuntimeError("merge proof unavailable")
+        return original_api(repository, path)
+
+    evidence.api = api
+    with pytest.raises(RuntimeError, match="merge proof unavailable"):
+        evidence.qualify()
 
 
 def test_changed_build_or_control_requires_review_not_cold_build():

@@ -14,7 +14,9 @@ WORKFLOW = PRODUCERS["dependency-sdk"].workflows[0]
 MAX_COMMIT_PAGES = 3  # GitHub's PR commits endpoint returns at most 250 commits.
 
 
-def approved_final_heads(repository, run, *, workflow, api, merged_source):
+def approved_final_heads(
+    repository, run, *, workflow, api, merged_source, merged_equivalent=None
+):
     """Yield related merged final heads with authoritative source approval.
 
     PR history is bounded to three 100-entry pages: GitHub exposes at most 250
@@ -67,7 +69,20 @@ def approved_final_heads(repository, run, *, workflow, api, merged_source):
             continue
         approved = {**run, "head_sha": final, "pull_requests": [{"number": number}]}
         if not merged_source(repository, approved):
-            continue
+            # A squash merge can include unrelated changes already on its base.
+            # SDK callers may prove their complete input/control closure equal
+            # to the authoritative merged tree. Other callers retain the whole
+            # tree boundary, including stage-result and instrumented outputs.
+            merge = pull.get("merge_commit_sha")
+            if (
+                merged_equivalent is None
+                or not isinstance(merge, str)
+                or not SHA.fullmatch(merge)
+                or api(repository, f"compare/{merge}...main")["status"]
+                not in ("ahead", "identical")
+                or not merged_equivalent(repository, final, merge)
+            ):
+                continue
         yield final
 
 
@@ -86,8 +101,21 @@ def approved_final_source(
         return False
     producer = run.get("head_sha")
     errors = []
+
+    def merged_equivalent(repo, final, merge):
+        return fingerprint_at(repo, final, component) == fingerprint_at(
+            repo, merge, component
+        ) and read_source(repo, final, paths=controls) == read_source(
+            repo, merge, paths=controls
+        )
+
     for final in approved_final_heads(
-        repository, run, workflow=WORKFLOW, api=api, merged_source=merged_source
+        repository,
+        run,
+        workflow=WORKFLOW,
+        api=api,
+        merged_source=merged_source,
+        merged_equivalent=merged_equivalent,
     ):
         if fingerprint_at(repository, producer, component) != fingerprint_at(
             repository, final, component
