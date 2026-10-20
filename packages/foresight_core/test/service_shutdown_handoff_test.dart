@@ -375,6 +375,16 @@ class HandoffFixture {
   }
 }
 
+/// The protocol error for a complete frame that is not a JSON object.
+final isInvalidReply = isA<RpcError>()
+    .having((error) => error.code, 'code', RpcErrorCode.internal)
+    .having(
+      (error) => error.message,
+      'message',
+      'Application service sent an invalid reply',
+    )
+    .having((error) => error.toJson()['reason'], 'reason', isNull);
+
 /// The error a startup failed with. A successful startup fails the test.
 Future<Object> startupFailure(Future<Object?> startup) async {
   try {
@@ -661,9 +671,7 @@ void main() {
         try {
           final failure = expectLater(
             RemoteDomain.connect(f.profile),
-            throwsA(
-              mode == 'malformed' ? isA<FormatException>() : isA<RpcError>(),
-            ),
+            throwsA(mode == 'malformed' ? isInvalidReply : isA<RpcError>()),
           );
           await f.next('healthy-observed');
           await f.next(
@@ -1213,7 +1221,9 @@ void main() {
     final f = HandoffFixture();
     await f.start(errorMessage: 'malformed');
     try {
-      await expectLater(f.connect(), throwsFormatException);
+      // A complete frame that is not JSON is a protocol error, not a caller
+      // error and not a lost connection to retry (SL-6).
+      await expectLater(f.connect(), throwsA(isInvalidReply));
       expect(f.launched, isFalse);
     } finally {
       await f.close();
@@ -1230,22 +1240,7 @@ void main() {
         client = await ServiceClient.connect(serviceEndpoint(f.profile));
         await f.next('malformed-sent');
         await eventually(() => client!.isClosed);
-        await expectLater(
-          client.call('status'),
-          throwsA(
-            isA<RpcError>()
-                .having(
-                  (error) => error.code,
-                  'code',
-                  RpcErrorCode.invalidArgument,
-                )
-                .having(
-                  (error) => error.message,
-                  'message',
-                  contains('not-json'),
-                ),
-          ),
-        );
+        await expectLater(client.call('status'), throwsA(isInvalidReply));
         expect(f.launched, isFalse);
       } finally {
         await client?.close();

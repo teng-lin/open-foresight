@@ -203,7 +203,17 @@ void main() {
       await held.reached;
       proxy.inject(ProxyDirection.toClient, 'not-json');
       held.release();
-      await expectLater(status, throwsA(isA<FormatException>()));
+      // A complete frame that is not JSON is a protocol error (SL-6).
+      await expectLater(
+        status,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.internal,
+          ),
+        ),
+      );
       expect(client.isClosed, isTrue);
     } finally {
       await client.close();

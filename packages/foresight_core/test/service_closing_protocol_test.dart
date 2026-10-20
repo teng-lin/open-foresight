@@ -3,8 +3,10 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:foresight_core/foresight_core.dart';
+import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/service.dart';
 import 'package:foresight_test_support/hooked_service.dart';
+import 'package:foresight_test_support/service_fault_proxy.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
 
@@ -15,6 +17,17 @@ import 'package:test/test.dart';
 
 const closingMessage =
     'Application service is shutting down; retry after it exits.';
+
+/// A bound only: startup of a compiled service child under parallel load.
+const startupBound = Duration(seconds: 90);
+
+/// An RpcError with [code], [message] and the wire reason [reason]. Reading
+/// the reason through toJson keeps this file runnable against older clients.
+Matcher rpcError(RpcErrorCode code, String message, String? reason) =>
+    isA<RpcError>()
+        .having((error) => error.code, 'code', code)
+        .having((error) => error.message, 'message', message)
+        .having((error) => error.toJson()['reason'], 'reason', reason);
 
 /// One raw request and its terminal frame, as a client that predates the
 /// `reason` field reads it: newline-delimited JSON, nothing else.
@@ -70,6 +83,87 @@ void main() {
     final directory = createTestTempDirectorySync(prefix);
     return ProfilePaths('${directory.path}/data', '${directory.path}/run');
   }
+
+  /// A launcher for replacements, beside [profile]'s data directory.
+  Future<ServiceLauncher> launcherFor(ProfilePaths profile) async {
+    final launcher = await build.launcher(Directory(profile.data).parent);
+    runtimeConfiguration.environment['FORESIGHT_SERVICE'] = launcher.executable;
+    return launcher;
+  }
+
+  test(
+    'a status reply cut off by EOF is retried and attaches to the live owner '
+    '(SL-6)',
+    () async {
+      final profile = newProfile('of-cut-');
+      final owner = await HookedServiceProcess.start(build, profile);
+      final launcher = await launcherFor(profile);
+      final proxy = ServiceFaultProxy();
+      ServiceClient? client;
+      try {
+        await owner.ready();
+        final cut = proxy.truncate(
+          ProxyDirection.toClient,
+          method: 'status',
+          keepBytes: 10,
+        );
+        final attached = await proxy.run(
+          () => ensureService(profile, startupTimeout: startupBound),
+        );
+        client = attached;
+        expect((await cut).method, 'status');
+        expect((await attached.call('status') as Map)['pid'], owner.pid);
+        // The cut probe, then one retry; the live owner kept its lock.
+        expect(proxy.connections, hasLength(2));
+        expect(launcher.launched, isEmpty);
+      } finally {
+        await client?.close();
+        await proxy.close();
+        await launcher.stopAll();
+        await owner.stop();
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test('a malformed status frame is a protocol error without a replacement '
+      '(SL-6)', () async {
+    final profile = newProfile('of-garbage-');
+    final owner = await HookedServiceProcess.start(build, profile);
+    final launcher = await launcherFor(profile);
+    final proxy = ServiceFaultProxy();
+    ServiceClient? direct;
+    try {
+      await owner.ready();
+      final reply = proxy.hold(ProxyDirection.toClient, method: 'status');
+      final startup = proxy.run(
+        () => ensureService(profile, startupTimeout: startupBound),
+      );
+      await reply.reached;
+      proxy.inject(ProxyDirection.toClient, 'not-json');
+      reply.release();
+      await expectLater(
+        startup,
+        throwsA(
+          rpcError(
+            RpcErrorCode.internal,
+            'Application service sent an invalid reply',
+            null,
+          ),
+        ),
+      );
+      expect(proxy.connections, hasLength(1));
+      expect(launcher.launched, isEmpty);
+      // The owner itself is unaffected.
+      direct = await ServiceClient.connect(serviceEndpoint(profile));
+      expect((await direct.call('status') as Map)['pid'], owner.pid);
+    } finally {
+      await direct?.close();
+      await proxy.close();
+      await launcher.stopAll();
+      await owner.stop();
+    }
+  }, timeout: const Timeout(Duration(minutes: 3)));
 
   test('an old client recognizes a closing refusal by its unchanged text (wire '
       'compatibility)', () async {

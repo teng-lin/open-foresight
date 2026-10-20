@@ -18,9 +18,10 @@ import 'store.dart';
 import 'service_socket.dart';
 
 const maxServiceMessage = 16 * 1024 * 1024;
-// Clients count bytes per socket read, not per frame, so a frame at their
-// limit followed by more bytes in the same read still fails. Keep frames 1 MiB
-// under it; clients already released need this headroom too.
+// Clients up to v0.1.2 counted bytes per socket read, not per frame, so a
+// frame at their limit followed by more bytes in the same read failed. Current
+// clients count each frame exactly; keep frames 1 MiB under the limit for the
+// released ones.
 const _maxServiceFrame = maxServiceMessage - 1024 * 1024;
 // Clients released before the reason field (v0.1.0-v0.1.2) match this text,
 // so it must stay byte-identical.
@@ -271,11 +272,59 @@ void _quarantineEndpointRecord(String data, String reason) {
 // Only the local transport can create this marker. A peer's serialized error
 // remains an ordinary RpcError, even if it copies the disconnect message.
 class _ServiceTransportLost extends RpcError {
-  _ServiceTransportLost()
-    : super(RpcErrorCode.unavailable, 'Application service disconnected');
+  _ServiceTransportLost(RpcErrorReason reason)
+    : super(
+        RpcErrorCode.unavailable,
+        'Application service disconnected',
+        reason: reason,
+      );
+}
+
+/// Splits a byte stream into newline-terminated frames. Each frame is counted
+/// exactly: with its newline it may be at most [limit] bytes. Bytes after the
+/// last newline are held until it arrives; they never form a frame.
+class _FrameSplitter {
+  _FrameSplitter(this.limit);
+  final int limit;
+  final _partial = BytesBuilder(copy: false);
+
+  /// Whether bytes of an unfinished frame are held.
+  bool get hasPartial => _partial.isNotEmpty;
+
+  /// The frames [chunk] completes, without newlines, or null as soon as a
+  /// frame exceeds [limit].
+  List<Uint8List>? add(Uint8List chunk) {
+    final frames = <Uint8List>[];
+    var start = 0;
+    while (true) {
+      final end = chunk.indexOf(10, start);
+      final length = (end < 0 ? chunk.length : end) - start;
+      if (_partial.length + length + 1 > limit) return null;
+      _partial.add(Uint8List.sublistView(chunk, start, start + length));
+      if (end < 0) return frames;
+      frames.add(_partial.takeBytes());
+      start = end + 1;
+    }
+  }
+}
+
+/// A complete frame that is a JSON object, or null for any other frame.
+Map<String, dynamic>? _decodeFrame(Uint8List frame) {
+  try {
+    final value = jsonDecode(utf8.decode(frame));
+    return value is Map<String, dynamic> ? value : null;
+  } on FormatException {
+    return null;
+  }
 }
 
 /// Newline framed, multiplexed local RPC. No network listener is opened.
+///
+/// Every failure reaches callers as an [RpcError]. A lost connection (EOF, a
+/// socket error, a frame cut off by EOF, or a frame over the limit) fails
+/// requests already written with [RpcErrorReason.outcomeUnknown] and later
+/// ones with [RpcErrorReason.notSent]. A complete frame that is not a JSON
+/// object is a protocol error, reported to every caller as `internal`.
 class ServiceClient {
   final Socket socket;
   final int _maxMessageBytes;
@@ -289,43 +338,50 @@ class ServiceClient {
   bool get isClosed => _closed;
   ServiceClient._(this.socket, this._maxMessageBytes) {
     unawaited(socket.done.catchError((Object _) {}));
-    var bytes = 0;
-    socket
-        .map((chunk) {
-          bytes += chunk.length;
-          if (bytes > _maxMessageBytes) {
-            throw StateError('Service message too large');
-          }
-          return chunk;
-        })
-        .cast<List<int>>()
-        .transform(utf8.decoder)
-        .transform(const LineSplitter())
-        .listen(
-          (line) {
-            bytes = 0;
-            try {
-              final value = jsonDecode(line) as Map<String, dynamic>;
-              if (value['event'] != null) {
-                events.add(value);
-                return;
-              }
-              final controller = _pending[value['id']];
-              if (controller == null) return;
-              controller.add(value);
-              if (value['done'] == true) {
-                _pending.remove(value['id']);
-                _methods.remove(value['id']);
-                _requestIds.remove(value['id']);
-                unawaited(controller.close());
-              }
-            } catch (e, st) {
-              _fail(e, st);
-            }
-          },
-          onError: (Object e, StackTrace st) => _fail(e, st),
-          onDone: () => _fail(_ServiceTransportLost(), StackTrace.current),
-        );
+    final frames = _FrameSplitter(_maxMessageBytes);
+    socket.listen(
+      (chunk) {
+        if (_closed) return;
+        final complete = frames.add(chunk);
+        if (complete == null) {
+          return _lose('a reply frame exceeds $_maxMessageBytes bytes');
+        }
+        for (final frame in complete) {
+          if (_closed) return;
+          _receive(frame);
+        }
+      },
+      onError: (Object error) => _lose('$error'),
+      onDone: () => _lose(frames.hasPartial ? 'EOF inside a frame' : 'EOF'),
+      cancelOnError: true,
+    );
+  }
+
+  void _receive(Uint8List frame) {
+    final value = _decodeFrame(frame);
+    if (value == null) {
+      _traceServiceTransport(
+        'client invalid frame ${utf8.decode(frame, allowMalformed: true)}',
+      );
+      final invalid = RpcError(
+        RpcErrorCode.internal,
+        'Application service sent an invalid reply',
+      );
+      return _fail(invalid, invalid);
+    }
+    if (value['event'] != null) {
+      events.add(value);
+      return;
+    }
+    final controller = _pending[value['id']];
+    if (controller == null) return;
+    controller.add(value);
+    if (value['done'] == true) {
+      _pending.remove(value['id']);
+      _methods.remove(value['id']);
+      _requestIds.remove(value['id']);
+      unawaited(controller.close());
+    }
   }
 
   /// Bound each reply frame; the default matches the service's 16 MiB limit.
@@ -347,14 +403,22 @@ class ServiceClient {
     );
   }
 
-  void _fail(Object error, StackTrace st) {
+  void _lose(String cause) {
+    _traceServiceTransport('client transport lost: $cause');
+    _fail(
+      _ServiceTransportLost(RpcErrorReason.outcomeUnknown),
+      _ServiceTransportLost(RpcErrorReason.notSent),
+    );
+  }
+
+  /// Fail requests already written with [inFlight] and every later one with
+  /// [later]. The first failure wins.
+  void _fail(RpcError inFlight, RpcError later) {
     if (_closed) return;
     _closed = true;
-    _failure ??= error is SocketException
-        ? _ServiceTransportLost()
-        : RpcError.from(error);
+    _failure ??= later;
     for (final c in _pending.values) {
-      c.addError(error, st);
+      c.addError(inFlight);
       unawaited(c.close());
     }
     _pending.clear();
@@ -383,7 +447,9 @@ class ServiceClient {
         ? null
         : utf8.encode(jsonEncode({'id': id, 'method': method, 'args': args}));
     if (frame == null) {
-      controller.addError(_failure ?? _ServiceTransportLost());
+      controller.addError(
+        _failure ?? _ServiceTransportLost(RpcErrorReason.notSent),
+      );
       unawaited(controller.close());
     } else if (frame.length + 1 > _maxServiceFrame) {
       // The service drops a connection whose request exceeds its limit, which
@@ -451,13 +517,18 @@ class ServiceClient {
   }
 
   Future<void> close() async {
-    if (!_closed) {
-      _failure = RpcError(
+    _fail(
+      RpcError(
         RpcErrorCode.unavailable,
         'Application service disconnected',
-      );
-    }
-    _fail(StateError('Client closed'), StackTrace.current);
+        reason: RpcErrorReason.outcomeUnknown,
+      ),
+      RpcError(
+        RpcErrorCode.unavailable,
+        'Application service disconnected',
+        reason: RpcErrorReason.notSent,
+      ),
+    );
   }
 }
 
