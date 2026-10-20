@@ -8,7 +8,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import zipfile
 
 from tools import ci_main_evidence as evidence
@@ -189,6 +189,47 @@ class MainEvidenceTests(unittest.TestCase):
         self.assertEqual(result["mode"], "observation")
         self.assertEqual(set(result["jobs"]), set(evidence.APPLICATION))
         self.assertEqual(len(result["jobs"]["linux-native"]["executions"]), 4)
+
+    def test_arch_owner_retirement_requires_independently_verified_current_proof(self):
+        self.reader.selection_record["arch_retired"] = True
+        with patch.object(self.reader, "arch_retired", return_value=False):
+            self.assertEqual(self.proposal()["decision"], "sweep")
+        self.reader.job_rows[10] = [
+            row for row in self.reader.job_rows[10]
+            if not row["name"].startswith("linux-native / ")
+        ]
+        with patch.object(self.reader, "arch_retired", return_value=True):
+            result = self.proposal()
+        self.assertEqual(result["decision"], "validated")
+        self.assertNotIn("linux-native", result["jobs"])
+        self.assertEqual(set(result["owners"]), set(evidence.APPLICATION) - {"linux-native"})
+        self.reader.selection_record["arch_retired"] = False
+        with patch.object(self.reader, "arch_retired", return_value=False):
+            # Revoked/unavailable proof restores the owner and fresh validation.
+            self.assertEqual(self.proposal()["decision"], "sweep")
+
+    def test_arch_retirement_capability_is_verified_with_reader_repository_and_api(self):
+        verifier = Mock(return_value={"eligible": True})
+        module = SimpleNamespace(capability=verifier)
+        with patch.dict("sys.modules", {"tools.ci_qualification_index": module}):
+            self.assertTrue(self.reader.arch_retired(SOURCE))
+            self.assertTrue(self.reader.arch_retired(SOURCE))
+        verifier.assert_called_once_with(
+            "arch_retirement", SOURCE,
+            repository=REPOSITORY, api=self.reader.api,
+        )
+        for error in (ValueError("missing"), KeyError("expired"), TypeError("invalid")):
+            with self.subTest(error=error):
+                reader = FixtureReader()
+                verifier.side_effect = error
+                with patch.dict("sys.modules", {"tools.ci_qualification_index": module}):
+                    self.assertFalse(reader.arch_retired(SOURCE))
+
+    def test_arch_retirement_marker_is_strict_and_false_keeps_original_owner(self):
+        for marker in (None, 1, "true"):
+            with self.subTest(marker=marker), self.assertRaisesRegex(ValueError, "boolean"):
+                evidence.selection_jobs({**self.reader.selection_record, "arch_retired": marker})
+        self.assertTrue(evidence.selection_jobs(self.reader.selection_record)["linux-native"])
 
     def test_different_main_tree_and_bad_pr_metadata_require_sweep(self):
         edits = [
@@ -841,6 +882,24 @@ class CoordinatorTests(unittest.TestCase):
         result["jobs"]["macos"]["head"] = HEAD
         with self.assertRaisesRegex(ValueError, "source differs"):
             self.reader.verify_origin(result["jobs"]["macos"])
+
+    def test_qualified_retirement_sweep_records_current_owners_without_arch_jobs(self):
+        run_record = run(40, source=SOURCE, event="workflow_dispatch")
+        run_record["display_title"] = sweep.sweep_title(SOURCE, "production")
+        self.reader.origins.append(run_record)
+        self.reader.job_rows[40] = [
+            row for row in self.reader.job_rows[10]
+            if not row["name"].startswith("linux-native / ")
+        ]
+        self.reader.selection_record.update(sweep=True, arch_retired=True)
+        with patch.object(self.reader, "arch_retired", return_value=True):
+            receipt = coordinator.sweep_receipt(self.reader, run_record, BEFORE)
+            self.reader.verify_origin(receipt["jobs"]["macos"])
+        self.assertNotIn("linux-native", receipt["jobs"])
+        self.assertEqual(set(receipt["owners"]), set(evidence.APPLICATION) - {"linux-native"})
+        with patch.object(self.reader, "arch_retired", return_value=False):
+            with self.assertRaisesRegex(ValueError, "verified hosted qualification"):
+                coordinator.sweep_receipt(self.reader, run_record, BEFORE)
 
     def test_chained_sweep_cannot_hide_newer_production_readiness(self):
         for status, conclusion in (
