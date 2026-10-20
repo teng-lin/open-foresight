@@ -617,9 +617,11 @@ class _WorkspaceState extends State<Workspace>
       meetingFeature.newNoteKey,
       meetingFeature.newMeetingKey,
       meetingFeature.quickStartKey,
+      meetingFeature.transcriptImportKey,
     ]) {
       key.reset();
     }
+    meetingFeature.transcriptImport = null;
     d.adoptWorkspace();
   }
 

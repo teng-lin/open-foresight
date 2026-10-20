@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/failure_text.dart';
@@ -19,6 +21,10 @@ class LostReplyDomain extends CommandFixtureDomain {
 
   /// Holds the next reply after its write committed.
   Completer<void>? hold;
+
+  /// Indexing is not under test here; it succeeds without a helper.
+  @override
+  Future<void> index(String id) async => store.state(id, 'indexed');
   @override
   Future<Object?> command(
     Operation operation, [
@@ -178,6 +184,62 @@ void main() {
     await tester.pumpAndSettle();
     expect(state.meetingFeature.noteId, isNull, reason: 'note $reused');
     expect(state.meetingFeature.noteTitle.text, isEmpty);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('importing a transcript again after a lost reply appends once', (
+    tester,
+  ) async {
+    final dynamic state = await show(tester);
+    final id = store.meeting('Imported transcript');
+    final directory = createTestTempDirectorySync('transcript-import-');
+    final transcript = File('${directory.path}/transcript.txt')
+      ..writeAsStringSync('Speaker: What is the deadline?');
+    final second = File('${directory.path}/second.txt')
+      ..writeAsStringSync('Speaker: Next Friday.');
+    var selected = transcript.path;
+    const channel = MethodChannel('plugins.flutter.io/file_selector');
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      channel,
+      (_) async => [selected],
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        channel,
+        null,
+      ),
+    );
+    // As the Import transcript button runs it, with real file reads.
+    Future<void> action() =>
+        state.meetingFeature.importMeetingTranscript(id) as Future<void>;
+    Future<void> importChosen() =>
+        tester.runAsync(() => state.run(action) as Future<void>);
+    List<Object?> segments() => [
+      for (final row in store.meetingTranscript(id)) row['text'],
+    ];
+    domain.lose.add(Operation.meetingsTranscript);
+    await importChosen();
+    await tester.pumpAndSettle();
+    expect(state.error, outcomeUnknownText);
+    expect(segments(), ['Speaker: What is the deadline?'], reason: 'committed');
+    // Choosing the same file again retries that import.
+    await importChosen();
+    await tester.pumpAndSettle();
+    expect(state.error, isEmpty);
+    expect(segments(), ['Speaker: What is the deadline?']);
+    final sent = keys(Operation.meetingsTranscript);
+    expect(sent, hasLength(2));
+    expect(sent.toSet(), hasLength(1));
+    expect(sent.first, isA<String>());
+    // Another file is a new import with its own key.
+    selected = second.path;
+    await importChosen();
+    await tester.pumpAndSettle();
+    expect(segments(), [
+      'Speaker: What is the deadline?',
+      'Speaker: Next Friday.',
+    ]);
+    expect(keys(Operation.meetingsTranscript).toSet(), hasLength(2));
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
