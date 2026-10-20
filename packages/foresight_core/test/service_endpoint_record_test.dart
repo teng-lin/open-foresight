@@ -192,8 +192,9 @@ void main() {
       }),
     ),
     'naming an uncreatable runtime': () {
-      final gone = Directory('${root.path}/gone')..createSync();
-      expect(Process.runSync('/bin/chmod', ['500', gone.path]).exitCode, 0);
+      // A regular file as the parent: nobody, not even root (as in the CI
+      // containers), can create a directory under it.
+      final gone = File('${root.path}/gone')..writeAsStringSync('');
       record().writeAsStringSync(
         jsonEncode({'data': profile.data, 'runtime': '${gone.path}/run'}),
       );
