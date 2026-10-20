@@ -435,7 +435,8 @@ void main() {
     expect(
       lost['content'][0]['text'],
       'Application service disconnected. The change may have been applied. '
-      'Retry with the same idempotency_key to apply it at most once.',
+      'Retry with the same idempotency_key to apply it at most once in the '
+      'same workspace (pass workspace_epoch).',
     );
     // The agent's retry is the next request the service sees.
     final retry = fixture.request('tools/call', {
@@ -467,7 +468,7 @@ void main() {
         lost['content'][0]['text'],
         'Application service disconnected. It may have completed; check before '
         'retrying. Pass an idempotency_key next time, so a retry applies the '
-        'change at most once.',
+        'change at most once in the same workspace (pass workspace_epoch).',
       );
     },
   );
