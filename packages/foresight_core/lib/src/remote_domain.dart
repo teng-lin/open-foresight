@@ -217,6 +217,10 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
   /// the backoff without waiting it out.
   Future<void> Function(Duration pause) reconnectPause = Future<void>.delayed;
 
+  /// How long a reconnect waits for its desktop approval attach; the same
+  /// bound as a startup status probe. Tests shorten it.
+  Duration attachLimit = const Duration(seconds: 30);
+
   /// The pause after [failures] consecutive failed reconnect attempts: 1 s,
   /// doubling up to 30 s.
   static Duration reconnectBackoff(int failures) =>
@@ -255,7 +259,19 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
         _listen();
         _apply(startup.status);
         _recheckWorkspace();
-        if (_approvalEvents != null) await _attachDesktop(next);
+        if (_approvalEvents != null) {
+          // An owner that answers status but never the attach must not hold
+          // the reconnect, and with it every request waiting for it. A
+          // timeout fails this attempt like any other: the connection is
+          // closed and the next attempt follows the backoff.
+          await _attachDesktop(next).timeout(
+            attachLimit,
+            onTimeout: () => throw TimeoutException(
+              'Application service did not attach the desktop approval '
+              'window within ${attachLimit.inSeconds} s',
+            ),
+          );
+        }
         attempt.complete();
         return;
       } catch (error, stack) {

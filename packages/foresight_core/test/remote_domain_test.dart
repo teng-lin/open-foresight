@@ -878,6 +878,50 @@ void main() {
     expect(launched(), 8);
   });
 
+  test('a reconnect whose desktop attach is never answered fails, closes '
+      'that connection and tries again after the backoff', () async {
+    var answerAttach = true;
+    f.handler = (socket, request) {
+      // An owner that answers status but never the attach.
+      if (request['method'] == Operation.securityAttachDesktop.wire &&
+          !answerAttach) {
+        return;
+      }
+      f.reply(socket, request, null);
+    };
+    final approvals = <Map<String, dynamic>>[];
+    await f.remote.enableDesktopApprovals(approvals.add);
+    f.remote.attachLimit = const Duration(milliseconds: 200);
+    final pauses = <Duration>[];
+    final paused = Completer<void>();
+    f.remote.reconnectPause = (pause) async {
+      pauses.add(pause);
+      await paused.future;
+    };
+    int attaches() => f.requests
+        .where((r) => r['method'] == Operation.securityAttachDesktop.wire)
+        .length;
+    answerAttach = false;
+    f.sockets.last.destroy();
+    await eventually(() => pauses.isNotEmpty);
+    expect(pauses, [const Duration(seconds: 1)]);
+    expect(attaches(), 2);
+    expect(f.remote.helper.state, contains('did not attach'));
+    // The connection whose attach hung is closed, not kept.
+    expect(f.remote.client.isClosed, isTrue);
+    answerAttach = true;
+    paused.complete();
+    await eventually(() => attaches() == 3 && !f.remote.client.isClosed);
+    // The reattached desktop still receives approvals.
+    f.event({
+      'event': 'approval',
+      'approval_id': 'after-reconnect',
+      'method': 'sources.delete',
+      'args': {'id': 'source'},
+    });
+    await eventually(() => approvals.isNotEmpty);
+  });
+
   test(
     'request-specific cancellation leaves another desktop generation active',
     () async {
