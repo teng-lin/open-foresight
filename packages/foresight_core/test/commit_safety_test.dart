@@ -10,6 +10,7 @@ import 'package:foresight_core/src/application.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/remote_domain.dart';
 import 'package:foresight_core/src/service.dart';
+import 'package:sqlite3/sqlite3.dart';
 import 'package:test/test.dart';
 
 const clearedMessage = 'This item was removed when the workspace was cleared.';
@@ -505,6 +506,32 @@ void main() {
       },
     );
 
+    test('a full disk surfaces as itself and leaves no key or note', () async {
+      final pages = store.rows('PRAGMA page_count').single.values.single;
+      store.db.execute('PRAGMA max_page_count=$pages');
+      final keyed = {
+        'title': 'Too large',
+        'body': 'x' * 200000,
+        'idempotency_key': 'full',
+      };
+      // SQLITE_FULL ends the whole transaction; rolling back to the savepoint
+      // would fail and hide it.
+      await expectLater(
+        app.call('notes.save', keyed),
+        throwsA(
+          isA<SqliteException>().having(
+            (error) => error.resultCode,
+            'resultCode',
+            13,
+          ),
+        ),
+      );
+      store.db.execute('PRAGMA max_page_count=1073741823');
+      expect(store.rows('SELECT * FROM notes'), isEmpty);
+      expect(store.rows('SELECT * FROM request_keys'), isEmpty);
+      expect(await app.call('notes.save', keyed), {'id': 1});
+    });
+
     test(
       'a replay reports the indexing failure of its first attempt',
       () async {
@@ -529,7 +556,7 @@ void main() {
       },
     );
 
-    test('attachments, the epoch preference and creates are checked', () async {
+    test('attachments and the epoch preference are checked', () async {
       await expectLater(
         app.call('google.attachments', {'id': 99}),
         throwsRpc(RpcErrorCode.notFound, 'Meeting not found: 99'),

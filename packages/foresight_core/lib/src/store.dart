@@ -596,7 +596,8 @@ class Store {
       'UPDATE sources SET deleted=1,state=\'deleting\',revision=revision+1 WHERE id=?',
       [id],
     );
-    // A deleted source's import key would keep a digest of its text.
+    // No idempotency digest of the deleted text outlives the delete. (The
+    // tombstoned row itself keeps its content, as it always has.)
     db.execute('DELETE FROM request_keys WHERE operation=? AND result=?', [
       Operation.sourcesImport.wire,
       jsonEncode({'id': id}),
