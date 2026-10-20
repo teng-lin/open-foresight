@@ -6,7 +6,9 @@ import sys
 from unittest.mock import Mock
 
 import pytest
-from tools import ci_stage_artifacts as stages
+from tools import ci_build_artifacts as stages
+from tools import ci_git as git_helper
+from tools import ci_stage_artifacts as stage_cli
 
 
 def native_payload(tmp_path, monkeypatch):
@@ -130,7 +132,7 @@ def test_force_changed_sources_advance_beyond_cached_objects(tmp_path, monkeypat
     binary.write_bytes(b"existing object")
     os.utime(binary, ns=(1_000_000_000, 1_000_000_000))
     monkeypatch.setattr(
-        stages,
+        git_helper,
         "source_times",
         lambda root: {"source.cpp": {"sha256": stages.digest(source)}},
     )
@@ -138,7 +140,7 @@ def test_force_changed_sources_advance_beyond_cached_objects(tmp_path, monkeypat
     stages.restore_source_times(tmp_path, manifest, force_changed=True)
     assert source.stat().st_mtime_ns > binary.stat().st_mtime_ns
     assert binary.read_bytes() == b"existing object"
-    monkeypatch.setattr(stages, "source_times", lambda root: {})
+    monkeypatch.setattr(git_helper, "source_times", lambda root: {})
     stages.restore_source_times(tmp_path, manifest, force_changed=True)
 
 
@@ -155,9 +157,9 @@ def test_changed_source_clock_and_path_guards(tmp_path, monkeypatch, failure):
         outside.write_text("outside")
         source.unlink()
         source.symlink_to(outside)
-    monkeypatch.setattr(stages, "source_times", lambda root: names)
+    monkeypatch.setattr(git_helper, "source_times", lambda root: names)
     monkeypatch.setattr(
-        stages.time,
+        git_helper.time,
         "time_ns",
         lambda: (
             0
@@ -168,7 +170,7 @@ def test_changed_source_clock_and_path_guards(tmp_path, monkeypatch, failure):
         ),
     )
     sleep = Mock()
-    monkeypatch.setattr(stages.time, "sleep", sleep)
+    monkeypatch.setattr(git_helper.time, "sleep", sleep)
     if failure == "clock-resolution":
         os.utime(source, ns=(1_000_000_000, 1_000_000_000))
         monkeypatch.setattr(stages.os, "utime", Mock())
@@ -258,14 +260,14 @@ def test_stage_cli_requires_complete_inputs(tmp_path, monkeypatch, arguments):
         ],
     )
     pack, unpack = Mock(), Mock()
-    monkeypatch.setattr(stages, "pack", pack)
-    monkeypatch.setattr(stages, "unpack", unpack)
+    monkeypatch.setattr(stage_cli, "pack", pack)
+    monkeypatch.setattr(stage_cli, "unpack", unpack)
     if len(arguments) == 1:
         with pytest.raises(SystemExit):
-            stages.main()
+            stage_cli.main()
         pack.assert_not_called()
         unpack.assert_not_called()
     else:
-        stages.main()
+        stage_cli.main()
         assert pack.called == (arguments[0] == "pack")
         assert unpack.called == (arguments[0] == "unpack")

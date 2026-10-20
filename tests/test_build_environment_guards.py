@@ -10,7 +10,7 @@ import pytest
 
 from tools import ci_artifacts as artifacts
 from tools import ci_changes as changes
-from tools import ci_stage_environment as environment
+from tools import ci_build_environment as environment
 from tools import sdk_workflow_recipe as workflow
 
 

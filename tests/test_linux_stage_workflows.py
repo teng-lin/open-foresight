@@ -500,9 +500,12 @@ def test_actual_acceptance_selection_uses_main_push_range_and_fails_safe(
     repository.mkdir()
     tools = repository / "tools"
     tools.mkdir()
-    shutil.copy2(ROOT / "tools/ci_changes.py", tools / "ci_changes.py")
-    for name in ("ci_selection.py", "platform_python_tests.py"):
-        shutil.copy2(ROOT / "tools" / name, tools / name)
+    shutil.copytree(ROOT / "tools", tools, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__"))
+    fixture_bin = tmp_path / "bin"
+    fixture_bin.mkdir()
+    fixture_gh = fixture_bin / "gh"
+    fixture_gh.write_text("#!/bin/sh\nprintf '%s\\n' '{\"artifacts\":[]}'\n")
+    fixture_gh.chmod(0o755)
     workflow_dir = repository / ".github/workflows"
     workflow_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT / ".github/workflows/native-sanitizers.yml", workflow_dir / "native-sanitizers.yml")
@@ -547,6 +550,14 @@ def test_actual_acceptance_selection_uses_main_push_range_and_fails_safe(
         cwd=repository,
         env={
             **os.environ,
+            "PATH": str(fixture_bin) + os.pathsep + os.environ["PATH"],
+            "GITHUB_REPOSITORY": "example/reviewed",
+            "GITHUB_REF": "refs/heads/main" if event != "pull_request" else "refs/pull/123/merge",
+            "GITHUB_EVENT_NAME": event,
+            "GH_TOKEN": "fixture-read-only",
+            "PR_NUMBER": "",
+            "SWEEP": "false",
+            "QUALIFICATION_MODE": "false",
             "BASE": before,
             "PUSH_BASE": before if event == "push" else "",
             "EVENT": event,

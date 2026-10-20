@@ -146,7 +146,7 @@ def test_malformed_small_metadata_cannot_authorize_cold_build(
         case.members["unexpected"] = b"untrusted"
     else:
         metadata["size_in_bytes"] = 1
-        monkeypatch.setattr(cache, "MAX_STAGE_RECEIPT_BYTES", 1)
+        monkeypatch.setattr(cache.retained, "MAX_STAGE_RECEIPT_BYTES", 1)
     result = case.find_work()
     assert result["hit"] is False and result["rejected_payloads"] == 1
     assert case.downloaded_ids == [metadata["id"]]
@@ -159,7 +159,7 @@ def test_bad_cached_receipt_keeps_destination_absent(tmp_path, monkeypatch, fail
         stream.writestr("identity.json", b"not JSON")
         stream.writestr("payload.tar.gz", b"verified payload")
     if failure == "size":
-        monkeypatch.setattr(cache, "MAX_STAGE_RECEIPT_BYTES", 1)
+        monkeypatch.setattr(cache.retained, "MAX_STAGE_RECEIPT_BYTES", 1)
     destination = tmp_path / "restored"
     with pytest.raises(ValueError):
         cache.read_zip(archive, destination)
