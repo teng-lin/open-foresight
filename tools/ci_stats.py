@@ -9,9 +9,11 @@ Use --current-since to separate removed job shapes from current configuration.
 
 import argparse
 import ast
+from collections import Counter
 from collections import defaultdict
 from datetime import datetime
 import io
+import importlib
 import json
 from pathlib import Path
 import re
@@ -20,6 +22,230 @@ import tokenize
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED = {"python", "format", "contracts", "platform-checks", "acceptance-checks"}
+FAILURES = {"failure", "timed_out", "startup_failure", "action_required", "stale"}
+
+
+def outcome(jobs):
+    """Derive an attempt from its jobs, never the run's later rerun conclusion."""
+    values = [
+        job.get("conclusion") if job.get("status") == "completed" else "incomplete"
+        for job in jobs
+    ]
+    if not values:
+        return "unknown"
+    if any(value in FAILURES for value in values):
+        return "failure"
+    if "incomplete" in values:
+        return "incomplete"
+    if "cancelled" in values:
+        return "cancelled"
+    if all(value in {"skipped", "neutral"} for value in values):
+        return "skipped"
+    return (
+        "success"
+        if all(value in {"success", "skipped", "neutral"} for value in values)
+        else "unknown"
+    )
+
+
+def failure_rate(values):
+    counts = Counter(values)
+    denominator = counts["success"] + counts["failure"]
+    return {
+        "failed": counts["failure"],
+        "eligible": denominator,
+        "rate": counts["failure"] / denominator if denominator else None,
+        "outcomes": dict(sorted(counts.items())),
+    }
+
+
+def first_attempt_state(run):
+    if run.get("run_attempt", 1) == 1 and run.get("status") not in (None, "completed"):
+        return "incomplete"
+    first = [job for job in run["jobs"] if job.get("run_attempt", 1) == 1]
+    if (
+        not first
+        and run.get("run_attempt", 1) == 1
+        and run.get("conclusion") in FAILURES
+    ):
+        return "failure"
+    return outcome(first)
+
+
+def failure_class(job):
+    """Only validated diagnostic observations can establish a root cause."""
+    observation = job.get("failure_evidence", {})
+    allowed = {
+        "package-network",
+        "test-assertion",
+        "provenance-abi",
+        "maintenance-publication",
+    }
+    if (
+        observation.get("class") in allowed
+        and observation.get("command")
+        and observation.get("diagnostic")
+        and observation.get("source")
+    ):
+        return observation["class"]
+    return "unknown"
+
+
+def run_category(run):
+    path = run["path"]
+    if "cache-publish" in path:
+        return "cache-publisher"
+    if "dependencies" in path:
+        return "sdk-producer"
+    if "release" in path:
+        return "release"
+    if run["event"] == "schedule":
+        return "nightly-or-drift"
+    return (
+        "pr"
+        if run["event"] == "pull_request"
+        else "main"
+        if run["event"] == "push"
+        else "dispatch-or-other"
+    )
+
+
+def operational_report(runs):
+    """Report comparable raw cohorts without discarding failures or cold runs."""
+    categories: dict[str, float] = defaultdict(float)
+    workflows, jobs, commits, failures, cohorts = (
+        [],
+        [],
+        defaultdict(list),
+        [],
+        defaultdict(list),
+    )
+    queue, start_latency = [], []
+    for run in runs:
+        category = run_category(run)
+        categories[category] += run["minutes"]
+        state = first_attempt_state(run)
+        workflows.append(state)
+        if run["event"] == "pull_request":
+            commits[run["source"]].append(state)
+        for job in run["jobs"]:
+            if job.get("run_attempt", 1) == 1:
+                jobs.append(outcome([job]))
+            if job.get("created_at") and job.get("started_at"):
+                queue.append(
+                    max(
+                        0,
+                        (
+                            stamp(job["started_at"]) - stamp(job["created_at"])
+                        ).total_seconds()
+                        / 60,
+                    )
+                )
+            if job.get("conclusion") in FAILURES:
+                failures.append(
+                    {
+                        "run": run["id"],
+                        "job": job["id"],
+                        "attempt": job["run_attempt"],
+                        "conclusion": job["conclusion"],
+                        "class": failure_class(job),
+                        "evidence": job.get("failure_evidence"),
+                    }
+                )
+        if run.get("run_started_at"):
+            start_latency.append(
+                max(
+                    0,
+                    (
+                        stamp(run["run_started_at"]) - stamp(run["created_at"])
+                    ).total_seconds()
+                    / 60,
+                )
+            )
+        key = json.dumps(
+            {
+                "configuration": run.get("configuration", "unknown"),
+                "scope": run.get("scope", "unknown"),
+                "workflow": run["path"],
+                "category": category,
+                "cache_state": run.get("cache_state", "unknown"),
+                "selection": run.get("selection", "unknown"),
+            },
+            sort_keys=True,
+        )
+        cohorts[key].append(
+            {
+                "run": run["id"],
+                "outcome": state,
+                "minutes": run["minutes"],
+                "jobs": [
+                    {
+                        "name": job["name"],
+                        "attempt": job["run_attempt"],
+                        "minutes": job["minutes"],
+                        "outcome": job.get("conclusion"),
+                        "platform": job.get("platform", "unknown"),
+                        "runner_labels": job.get("labels", []),
+                        "cache_state": job.get("cache_state", "unknown"),
+                    }
+                    for job in run["jobs"]
+                ],
+            }
+        )
+    commit_states = [
+        "failure"
+        if "failure" in states
+        else "success"
+        if all(state == "success" for state in states)
+        else "cancelled"
+        if "cancelled" in states
+        else "incomplete"
+        if "incomplete" in states
+        else "unknown"
+        for states in commits.values()
+    ]
+    return {
+        "first_attempt_workflows": failure_rate(workflows),
+        "first_attempt_jobs": failure_rate(jobs),
+        "first_attempt_pr_commits": failure_rate(commit_states),
+        "first_attempt_pr_workflows": failure_rate(
+            [first_attempt_state(run) for run in runs if run["event"] == "pull_request"]
+        ),
+        "first_attempt_job_conclusions": dict(
+            Counter(
+                job.get("conclusion") or "incomplete"
+                for run in runs
+                for job in run["jobs"]
+                if job.get("run_attempt", 1) == 1
+            )
+        ),
+        "job_queue_minutes": summary(queue),
+        "workflow_start_latency_minutes": summary(start_latency),
+        "runner_minutes_by_category": dict(sorted(categories.items())),
+        "failures": failures,
+        "cohorts": [
+            {"identity": json.loads(key), "observations": values}
+            for key, values in sorted(cohorts.items())
+        ],
+        "cache_observations": [
+            {"run": run["id"], "observations": run.get("cache_observations", [])}
+            for run in runs
+        ],
+        "manual_qualification_runs": [
+            run["id"] for run in runs if run.get("qualification") is True
+        ],
+        "run_sources": [
+            {
+                "run": run["id"],
+                "event": run["event"],
+                "trigger_source": run["head_sha"],
+                "workflow_source": run.get("workflow_source"),
+                "checked_out_source": run.get("checked_out_source"),
+                "bundle_source": run.get("bundle_source"),
+            }
+            for run in runs
+        ],
+    }
 
 
 def stamp(value):
@@ -62,15 +288,26 @@ def candidate_source(log):
 
 
 def load(directory):
+    snapshot = importlib.import_module(
+        "tools.ci_stats_snapshot" if __package__ else "ci_stats_snapshot"
+    )
+    snapshot.verify(directory)
+    observations_path = directory / "observations.json"
+    observations = (
+        json.loads(observations_path.read_text()) if observations_path.exists() else {}
+    )
+    snapshot.validate_observations(observations)
     runs = {run["id"]: run for run in jsonlines(directory / "runs.jsonl")}
     seen = set()
     for run in runs.values():
+        run.update(observations.get("runs", {}).get(str(run["id"]), {}))
         path = directory / "jobs" / f"{run['id']}.jsonl"
         run["jobs"] = []
         for job in sorted(
             jsonlines(path) if path.exists() else [],
             key=lambda job: (job["run_attempt"], job["id"]),
         ):
+            job.update(observations.get("jobs", {}).get(str(job["id"]), {}))
             # GitHub repeats unchanged successful jobs on a failed-jobs rerun.
             key = (job.get("runner_id") or job["id"], job["started_at"])
             if key in seen:
@@ -130,7 +367,7 @@ def report(runs, prs, trees, current_since):
     branches = defaultdict(list)
     for pull in prs:
         if pull.get("headRefName"):
-            branches[pull["headRefName"]].append(pull["number"])
+            branches[pull["headRefName"]].append(pull)
     pushes = defaultdict(list)
     main = defaultdict(list)
     shapes: dict[str, dict[str, float]] = defaultdict(
@@ -155,7 +392,18 @@ def report(runs, prs, trees, current_since):
             if not assignments:
                 # REST drops PR associations after merge; resolve only unique
                 # snapshot branch names, never guess between reused branches.
-                assignments = branches.get(run.get("head_branch"), [])
+                assignments = [
+                    pull["number"]
+                    for pull in branches.get(run.get("head_branch"), [])
+                    if (
+                        not pull.get("createdAt")
+                        or pull["createdAt"] <= run["created_at"]
+                    )
+                    and (
+                        not pull.get("closedAt")
+                        or run["created_at"] <= pull["closedAt"]
+                    )
+                ]
                 if len(assignments) != 1:
                     assignments = []
             for pull in assignments:
@@ -206,6 +454,24 @@ def report(runs, prs, trees, current_since):
             default=None,
         )
         start = min(stamp(run["created_at"]) for run in group)
+        readiness = {}
+        first_green = None
+        events = sorted(
+            (
+                job
+                for run in group
+                for job in run["jobs"]
+                if job["name"] in REQUIRED and job.get("completed_at")
+            ),
+            key=lambda job: (job["completed_at"], job["id"]),
+        )
+        for job in events:
+            readiness[job["name"]] = job.get("conclusion")
+            if set(readiness) == REQUIRED and all(
+                value == "success" for value in readiness.values()
+            ):
+                first_green = (stamp(job["completed_at"]) - start).total_seconds() / 60
+                break
         per_push.append(
             {
                 "pr": number,
@@ -213,6 +479,7 @@ def report(runs, prs, trees, current_since):
                 "sha": sha,
                 "final": sha == pull.get("headRefOid"),
                 "green_minutes": (end - start).total_seconds() / 60 if green else None,
+                "first_green_minutes": first_green,
                 "runner_minutes": sum(run["minutes"] for run in group),
                 "missing_or_red": sorted(
                     REQUIRED
@@ -249,6 +516,15 @@ def report(runs, prs, trees, current_since):
     identical = [merge for merge in observed if merge["identical_tree"] is True]
     divergent = [merge for merge in observed if merge["identical_tree"] is False]
     return {
+        "schema": 2,
+        "operational": operational_report(runs),
+        "push_to_first_green": summary(
+            [
+                push["first_green_minutes"]
+                for push in per_push
+                if push["first_green_minutes"] is not None
+            ]
+        ),
         "push_to_green": summary(
             [
                 push["green_minutes"]
@@ -368,14 +644,59 @@ def main():
     parser.add_argument("--current-since", default="2026-10-19T13:57:00Z")
     parser.add_argument("--lines", action="store_true")
     parser.add_argument("--root", type=Path, default=ROOT)
+    parser.add_argument(
+        "--report-output",
+        type=Path,
+        help="Write report.json and report.md alongside frozen inputs",
+    )
     args = parser.parse_args()
     if args.lines:
         result = line_inventory(args.root)
     elif args.directory:
         runs, prs, trees = load(args.directory)
         result = report(runs, prs, trees, args.current_since)
+        snapshot = importlib.import_module(
+            "tools.ci_stats_snapshot" if __package__ else "ci_stats_snapshot"
+        )
+        manifest = snapshot.verify(args.directory)
+        result["snapshot"] = {
+            "verified": manifest is not None,
+            "retrieved_at": manifest.get("retrieved_at") if manifest else None,
+        }
     else:
         parser.error("supply a snapshot directory or --lines")
+    if args.report_output:
+        args.report_output.mkdir(parents=True, exist_ok=True)
+        (args.report_output / "report.json").write_text(
+            json.dumps(result, indent=2, sort_keys=True) + "\n"
+        )
+        rates = result.get("operational", {})
+        lines = [
+            "# Frozen CI observations",
+            "",
+            "| First-attempt cohort | Failures | Eligible | Rate |",
+            "| --- | ---: | ---: | ---: |",
+        ]
+        for name in (
+            "first_attempt_workflows",
+            "first_attempt_jobs",
+            "first_attempt_pr_commits",
+        ):
+            value = rates.get(name, {})
+            rate = (
+                f"{value['rate']:.1%}" if value.get("rate") is not None else "unknown"
+            )
+            lines.append(
+                f"| {name} | {value.get('failed', 0)} | {value.get('eligible', 0)} | {rate} |"
+            )
+        lines.extend(
+            [
+                "",
+                "Cancellation, incomplete, skipped and unknown observations remain explicit in report.json. Cohorts are observational; small samples do not establish causality.",
+                "",
+            ]
+        )
+        (args.report_output / "report.md").write_text("\n".join(lines))
     print(json.dumps(result, indent=2, sort_keys=True))
 
 
