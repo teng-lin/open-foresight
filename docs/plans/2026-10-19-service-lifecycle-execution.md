@@ -82,14 +82,15 @@ issues: <failures that are not macOS-specific or need the implementer, with log 
 
 ## Linux verification
 
-Run this from the step worktree, following AGENTS.md ("Verify changes before pushing"). Use a disk-backed temporary root with a short path, `export TMPDIR=/var/tmp/ofs-prN/tmp FORESIGHT_TEST_TEMP_ROOT=/var/tmp/ofs-prN/t`. During the audit, `/tmp` hit its per-user quota (`EDQUOT`).
+Run this from the step worktree, following AGENTS.md ("Verify changes before pushing"). Use a disk-backed temporary root with a short path, `export TMPDIR=/var/tmp/ofs-prN/tmp FORESIGHT_TEST_TEMP_ROOT=/var/tmp/ofs-prN/t`, and create both with mode 0700 (`install -d -m 700`). macOS rejects a temporary root that is not private, and Linux follows the same rule so the recipes match. During the audit, `/tmp` hit its per-user quota (`EDQUOT`).
 
 1. **Dart core:** the full `dart test` in `packages/foresight_core`, then `tools/coverage_core.sh` with its threshold enforced.
 2. **Hook-enabled lifecycle files:** `dart -DFORESIGHT_ENABLE_TEST_HOOKS=true test --compiler=source <lifecycle files>`. From step 2 on, this includes the hook-free check against the release binary.
 3. **Determinism:** the lifecycle files 20 times with `--concurrency=1` and 5 times with `--concurrency=8`.
 4. **Built service/MCP suite:**
    - Compile `bin/service.dart` and `bin/mcp.dart` into the step's own build directory.
-   - Reuse the verified `ForesightHelper`, `model_worker_fixture` and `libforesight_native.so` from `~/src/open-foresight/build`. No rebuild is justified: these steps change only Dart and Python.
+   - Use `ForesightHelper`, `model_worker_fixture` and `libforesight_native.so` from `~/src/open-foresight/build`, built from `main` `18b67da9` sources. These steps change only Dart and Python, so no step needs another native build.
+   - Provenance, recorded 2026-10-19: the Oct 15 binaries predated helper and native source changes (`29b31182` and others). They were refreshed by an incremental build that recompiled 4 objects and relinked 3 targets. The SDKs were not rebuilt; gRPC 1.83 and the other dependencies come from `/tmp/foresight-deps` with `LD_LIBRARY_PATH=/tmp/foresight-deps/usr/lib`. The main-push CI artifact for `18b67da9` (run `39340692992`, `ci-stage-linux-native-36ff3009…`, digest and receipt verified) cannot run on this host, because it links the CI image's gRPC 1.84, which is not installed here.
    - Run `pytest tests/service` with the variables from `tools/build_service_gate.sh`.
 5. **Desktop** (from step 1 on, whenever a step touches `apps/desktop`): `flutter analyze`, then `flutter test --dart-define=FORESIGHT_ENABLE_TEST_HOOKS=true`, then the real desktop/service integration on an isolated display.
 6. **Counts:** compare test counts and skip reasons with the step's base.
@@ -102,7 +103,9 @@ The first request also asks the Mac verifier to inventory its environment:
 - the location of a Flutter 3.35.7 / Dart 3.9.2 SDK (it is not on the non-interactive `PATH`);
 - reusable `libforesight_native.dylib`, `ForesightHelper` and `model_worker_fixture` builds, with their provenance;
 - free disk space (`/System/Volumes/Data` is 92% used);
-- a short, disk-backed `TMPDIR` and `FORESIGHT_TEST_TEMP_ROOT`, because macOS Unix sockets are limited to 104 bytes.
+- a short, disk-backed `TMPDIR` and `FORESIGHT_TEST_TEMP_ROOT` with mode 0700, because macOS Unix sockets are limited to 104 bytes and `ProfilePaths.resolve` rejects a temporary root that is not private.
+
+Setup result (2026-10-19): Flutter 3.35.7 / Dart 3.9.2 at `/private/tmp/open-foresight-toolchain/flutter`. At `2bec29d8` the Dart core suite gave 1,078 passed, 0 failed and 8 skipped (all gated off by environment). The native artifacts reused, with their provenance, are recorded in `~/src/ofs-handoff/setup-result.md` on the Mac. The `main`-push run `39340692992` for `18b67da9` also has a `ci-stage-macos-native-ccfb669e…` artifact with a receipt, whose helper carries the current `0.1.2` build identity. Prefer it over the relinked helper once it is downloaded and verified.
 
 If no verified native or helper artifact exists, report it as `blocked` for the suites that need one and run everything else. Do not rebuild SDKs or vendor libraries. Rebuilding only the helper or native library from the step's sources is allowed only with a one-line justification in the report, as AGENTS.md requires.
 
