@@ -411,6 +411,93 @@ void main() {
     }
   });
 
+  for (final recorded in [false, true]) {
+    test('an older owner whose lock holder cannot be read fails startup at '
+        'once and says so (record: $recorded)', () async {
+      // An owner released before profile identity holds this profile's
+      // lock and answers status without profile_id.
+      final profile = ProfilePaths(
+        '${f.root.path}/older-data',
+        '${f.root.path}/own-run',
+      );
+      final runtime = recorded ? '${f.root.path}/older-run' : profile.runtime;
+      privateDirectory(profile.data);
+      privateDirectory(runtime);
+      final holder = await Process.start('python3', [
+        '-c',
+        'import fcntl,sys\nf=open(sys.argv[1],"a")\n'
+            'fcntl.lockf(f,fcntl.LOCK_EX)\nprint("locked",flush=True)\n'
+            'sys.stdin.read()',
+        '${profile.data}/.application.lock',
+      ]);
+      addTearDown(() => holder.kill(ProcessSignal.sigkill));
+      expect(
+        await utf8.decoder
+            .bind(holder.stdout)
+            .transform(const LineSplitter())
+            .first,
+        'locked',
+      );
+      final server = await ServerSocket.bind(
+        InternetAddress(
+          '$runtime/application.sock',
+          type: InternetAddressType.unix,
+        ),
+        0,
+      );
+      addTearDown(server.close);
+      server.listen((socket) {
+        unawaited(socket.done.catchError((Object _) {}));
+        utf8.decoder.bind(socket).transform(const LineSplitter()).listen((
+          line,
+        ) {
+          final request = jsonDecode(line) as Map;
+          socket.writeln(
+            jsonEncode({
+              'id': request['id'],
+              'result': {'pid': holder.pid, 'application_api_version': 1},
+              'done': true,
+            }),
+          );
+        }, onError: (Object _) {});
+      });
+      if (recorded) {
+        // The record it wrote names its runtime.
+        File('${profile.data}/.application-endpoint.json').writeAsStringSync(
+          jsonEncode({'data': profile.data, 'runtime': runtime}),
+        );
+      }
+      // As in another pid namespace, or without /proc/locks.
+      final reader = readPosixLockHolders;
+      readPosixLockHolders = (_) => null;
+      addTearDown(() => readPosixLockHolders = reader);
+      final startup = Stopwatch()..start();
+      await expectLater(
+        ensureService(profile, startupTimeout: const Duration(seconds: 20)),
+        throwsA(
+          isA<UnverifiableServiceOwner>().having(
+            (error) => error.message,
+            'message',
+            'Cannot verify the running older Open Foresight service (pid '
+                '${holder.pid}) for this profile; stop it with its own '
+                '--stop, then retry.',
+          ),
+        ),
+      );
+      expect(startup.elapsed, lessThan(const Duration(seconds: 10)));
+      // Once nothing holds this profile's lock, a service without
+      // profile_id is another profile's, as before.
+      holder.kill(ProcessSignal.sigkill);
+      await holder.exitCode;
+      runtimeConfiguration.environment['FORESIGHT_SERVICE'] =
+          '/missing/fixture-service';
+      await expectLater(
+        ensureService(profile, startupTimeout: const Duration(seconds: 5)),
+        throwsA(isNot(isA<UnverifiableServiceOwner>())),
+      );
+    });
+  }
+
   test(
     'closing during connect rejects the late connection and leaves no usable client',
     () async {

@@ -75,15 +75,34 @@ String anotherProfileMessage(
           "serves. Starting this profile's service replaces the record."
     : _sharedRuntimeMessage(endpoint, pid: pid);
 
+/// A service released before profile identity answers where this
+/// profile's owner would, and this profile's lock is held, but the lock's
+/// holder cannot be read (/proc/locks or stat is unavailable, or the
+/// holder runs in another pid namespace). Waiting cannot tell more.
+class UnverifiableServiceOwner extends StateError {
+  UnverifiableServiceOwner(int? pid)
+    : super(
+        'Cannot verify the running older Open Foresight service'
+        '${pid == null ? '' : ' (pid $pid)'} for this profile; stop it '
+        'with its own --stop, then retry.',
+      );
+}
+
+/// Reads the pids that hold a lock file's POSIX write lock, or null if they
+/// cannot be read. Tests replace it to model such a host.
+Set<int>? Function(String lock) readPosixLockHolders = _posixLockHolders;
+
 /// Whether [status], answered at [endpoint], comes from the service of a
 /// profile other than [profile]. A service released before profile identity
 /// reports none, and every released version holds its profile's lock (S4).
 /// Such a service is accepted only while this profile's endpoint record
 /// still leads to [endpoint], because a new owner claims the record as soon
 /// as it takes the lock. On Linux its status pid must also hold this
-/// profile's lock. macOS has no /proc/locks, so there any holder counts: a
-/// service of another profile that shares an explicit FORESIGHT_RUNTIME could
-/// pass while this profile's new owner is starting.
+/// profile's lock; when the holders cannot be read while the lock is held
+/// and the record still leads here, this throws [UnverifiableServiceOwner].
+/// macOS has no /proc/locks, so there any holder counts: a service of
+/// another profile that shares an explicit FORESIGHT_RUNTIME could pass
+/// while this profile's new owner is starting.
 bool servesAnotherProfile(
   Map<Object?, Object?> status,
   ProfilePaths profile,
@@ -101,9 +120,18 @@ bool servesAnotherProfile(
     return true;
   }
   if (Platform.isLinux) {
-    final holders = _posixLockHolders(lock);
+    final holders = readPosixLockHolders(lock);
     final pid = status['pid'];
-    if (holders == null || pid is! int || !holders.contains(pid)) return true;
+    if (holders == null) {
+      // No owner of this profile runs, or the lock holder claimed the
+      // record away from here: either way this service is not its owner.
+      if (_profileLockFree(lock) || serviceEndpoint(profile) != endpoint) {
+        return true;
+      }
+      // Polling to the startup deadline would only blame another profile.
+      throw UnverifiableServiceOwner(pid is int ? pid : null);
+    }
+    if (pid is! int || !holders.contains(pid)) return true;
   } else if (_profileLockFree(lock)) {
     return true;
   }
@@ -113,7 +141,7 @@ bool servesAnotherProfile(
 }
 
 /// The pids holding a POSIX write lock on [lock], from /proc/locks, or null
-/// if that cannot be read; callers then refuse. Only the inode is compared,
+/// if that cannot be read. Only the inode is compared,
 /// because btrfs reports a subvolume's device to stat (0:31, 0:58) but the
 /// file system's (00:1d) in /proc/locks. That fails open only if the same
 /// pid also locks a file with this inode in another subvolume, which is very
