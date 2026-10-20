@@ -132,16 +132,3 @@ jobs:
       - name: Remove disposable test container
         if: always()
         run: docker rm -f "$PACKAGE_CONTAINER" 2>/dev/null || true
-  dmg:
-    runs-on: macos-15
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          persist-credentials: false
-          ref: ${{ inputs.source }}
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
-        with:
-          python-version: '3.13'
-      - name: Package, mount and execute a tiny signed fixture
-        run: python3 -m unittest discover -s tests -p test_dmg_contract.py -v

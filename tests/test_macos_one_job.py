@@ -93,6 +93,7 @@ def test_aggregate_rejects_non_successful_consolidated_job(result):
     }
     jobs["changes"] = {"result": "success"}
     jobs["macos"] = {"result": result}
+    jobs["linux-native"] = {"result": "skipped"}
     with pytest.raises(ValueError, match="macos: expected success"):
         check_gates(jobs, selected)
 

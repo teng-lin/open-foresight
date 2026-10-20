@@ -70,6 +70,23 @@ def test_invalid_dmg_application_identity_is_rejected_before_building(tmp_path):
 BUSY = "hdiutil: verify failed - Resource temporarily unavailable\n"
 
 
+def test_retry_rejects_changed_disk_image_bytes(tmp_path):
+    image = tmp_path / "fixture.dmg"
+    image.write_bytes(b"original")
+    result = subprocess.CompletedProcess(["hdiutil"], 1, "", BUSY)
+    with (
+        patch.object(create_dmg.subprocess, "run", return_value=result) as run,
+        patch.object(
+            create_dmg.time,
+            "sleep",
+            side_effect=lambda _: image.write_bytes(b"changed"),
+        ),
+        pytest.raises(ValueError, match="DMG bytes changed"),
+    ):
+        create_dmg.verify_image(image)
+    run.assert_called_once()
+
+
 @pytest.mark.parametrize("output", [b"partial output\xff\n", "partial output\n", None])
 def test_verification_timeout_preserves_partial_output_without_retry(
     tmp_path, capsys, output

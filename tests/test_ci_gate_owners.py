@@ -1,0 +1,136 @@
+"""Required platform results follow actual host owners and never hide Arch failures."""
+
+from pathlib import Path
+import subprocess
+from types import SimpleNamespace
+import unittest
+import xml.etree.ElementTree as ET
+
+import pytest
+import yaml
+
+from tools import ci_changes as changes, platform_python_tests as contracts
+from tools import run_dmg_contracts as dmg
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def results(selection, tier=""):
+    jobs = {
+        name: {"result": "success" if value else "skipped"}
+        for name, value in selection.items()
+    }
+    jobs["changes"] = {"result": "success"}
+    jobs["linux-native"] = {
+        "result": "success"
+        if selection["linux-build"] and tier != "release"
+        else "skipped"
+    }
+    return jobs
+
+
+@pytest.mark.parametrize("tier", ["", "pr", "sweep", "preview", "release"])
+def test_selected_arch_failure_cannot_hide_behind_green_ubuntu(tier):
+    selection = changes.select_gates(["native/source.cpp"])
+    jobs = results(selection, tier)
+    changes.check_gates(jobs, selection, tier)
+    for outcome in ["failure", "cancelled", "skipped", None]:
+        if outcome == jobs["linux-native"]["result"]:
+            continue
+        with pytest.raises(ValueError, match="linux-native"):
+            changes.check_gates(
+                {**jobs, "linux-native": {"result": outcome}}, selection, tier
+            )
+    with pytest.raises(ValueError, match="Invalid CI tier"):
+        changes.check_gates(jobs, selection, "unknown")
+
+
+def test_every_host_inventory_selects_its_real_owners_and_notice_selects_apple():
+    for path in set(contracts.SHARED).union(
+        *contracts.PLATFORM.values(), contracts.EXTERNAL
+    ):
+        selection = changes.select_gates([path])
+        assert all(selection[owner] for owner in contracts.owner_gates(path)), path
+    assert all(changes.select_gates(["packaging/notices/vendor.md"]).values())
+    report = changes.selection_report(["README.md"])
+    assert report["superseded"] is False
+    assert not any(report["selection"].values())
+
+
+def test_dmg_is_independent_of_linux_bundle_and_required_for_apple_inputs():
+    jobs = yaml.safe_load((ROOT / ".github/workflows/macos.yml").read_text())["jobs"]
+    assert jobs["dmg"]["needs"] == "changes"
+    assert "dmg" in jobs["platform-checks"]["needs"]
+    assert (
+        jobs["platform-checks"]["steps"][-1]["env"]["CI_TIER"] == "${{ inputs.tier }}"
+    )
+    selection = changes.select_gates(["packaging/macos/entitlements.plist"])
+    assert {key for key, value in selection.items() if value} == {"macos", "dmg"}
+    for outcome in ["failure", "cancelled", "skipped", None]:
+        jobs = results(selection)
+        jobs["dmg"] = {"result": outcome}
+        with pytest.raises(ValueError, match="dmg"):
+            changes.check_gates(jobs, selection)
+
+
+@pytest.mark.parametrize("outcome", ["success", "skip", "failure", "error", "missing"])
+def test_dmg_runner_retains_junit_and_rejects_skipped_missing_or_failed_contracts(
+    tmp_path, outcome
+):
+    class Fixture(unittest.TestCase):
+        def test_contract(self):
+            if outcome == "skip":
+                self.skipTest("Apple unavailable")
+            if outcome == "failure":
+                self.fail("failed signed execution")
+            if outcome == "error":
+                raise RuntimeError("failed image mount")
+
+    suite = unittest.TestSuite(
+        Fixture("test_contract") for _ in range(1 if outcome == "missing" else 2)
+    )
+    report = tmp_path / "evidence/contracts.xml"
+    assert (dmg.run(suite, report) == 0) == (outcome == "success")
+    root = ET.parse(report).getroot()  # noqa: S314 - Locally generated runner fixture.
+    assert int(root.get("tests")) == (1 if outcome == "missing" else 2)
+    assert list(root.iter("testcase"))
+
+
+def test_dmg_diagnostics_keep_errors_and_timeout_output_bounded(monkeypatch, capsys):
+    attempts = iter(
+        [
+            SimpleNamespace(returncode=-9, stdout="diagnostic", stderr="killed"),
+            OSError("missing"),
+            subprocess.TimeoutExpired("log", 15),
+        ]
+    )
+
+    def run(command, **kwargs):
+        assert kwargs["timeout"] == 15
+        value = next(attempts)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    monkeypatch.setattr(dmg.subprocess, "run", run)
+    dmg.diagnostics()
+    stderr = capsys.readouterr().err
+    assert "exit=-9" in stderr and "killed" in stderr
+    assert "Diagnostic unavailable" in stderr
+
+
+def test_dmg_main_uses_actual_owned_suite_and_preserves_exit(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        dmg.sys, "argv", ["dmg", "--output", str(tmp_path / "report.xml")]
+    )
+    monkeypatch.setattr(dmg.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        dmg.unittest.defaultTestLoader, "discover", lambda *args: "owned-suite"
+    )
+    monkeypatch.setattr(
+        dmg, "run", lambda suite, output: 7 if suite == "owned-suite" else 0
+    )
+    observed = []
+    monkeypatch.setattr(dmg, "diagnostics", lambda: observed.append(True))
+    assert dmg.main() == 7
+    assert observed == [True]
