@@ -108,7 +108,7 @@ class ServiceFaultProxy {
   final bool Function(String path) _endpoint;
   final _rules = <_Rule>[];
   final _observers = <_Observer>[];
-  final _attemptObservers = <(bool? refused, Completer<ProxyConnectAttempt>)>[];
+  final _attemptObservers = <_AttemptObserver>[];
 
   /// Every connect attempt to a service endpoint, in order.
   final attempts = <ProxyConnectAttempt>[];
@@ -224,24 +224,33 @@ class ServiceFaultProxy {
     target.inject(direction, frame);
   }
 
-  /// Completes when the next matching frame is forwarded in full.
+  /// Completes when the [count]th matching frame from now is forwarded in
+  /// full. Frames that passed before this call never count.
   Future<ServiceFrame> seen(
     ProxyDirection direction, {
     String? method,
     int? id,
     String? event,
     bool Function(ServiceFrame frame)? where,
+    int count = 1,
   }) {
-    final observer = _Observer(direction, _match(method, id, event, where));
+    if (count < 1) throw ArgumentError.value(count, 'count');
+    final observer = _Observer(
+      direction,
+      _match(method, id, event, where),
+      count,
+    );
     _observers.add(observer);
     return observer.completer.future;
   }
 
-  /// Completes at the next connect attempt; [refused] filters by outcome.
-  Future<ProxyConnectAttempt> attempt({bool? refused}) {
-    final completer = Completer<ProxyConnectAttempt>();
-    _attemptObservers.add((refused, completer));
-    return completer.future;
+  /// Completes at the [count]th connect attempt from now; [refused] filters
+  /// by outcome. A retry loop anchors on this instead of on elapsed time.
+  Future<ProxyConnectAttempt> attempt({bool? refused, int count = 1}) {
+    if (count < 1) throw ArgumentError.value(count, 'count');
+    final observer = _AttemptObserver(refused, count);
+    _attemptObservers.add(observer);
+    return observer.completer.future;
   }
 
   /// Destroy every relayed connection and remove the relay directory.
@@ -272,8 +281,11 @@ class ServiceFaultProxy {
   void _record(ProxyConnectAttempt attempt) {
     attempts.add(attempt);
     _attemptObservers.removeWhere((observer) {
-      if (observer.$1 != null && observer.$1 != attempt.refused) return false;
-      observer.$2.complete(attempt);
+      if (observer.refused != null && observer.refused != attempt.refused) {
+        return false;
+      }
+      if (--observer.remaining > 0) return false;
+      observer.completer.complete(attempt);
       return true;
     });
   }
@@ -356,6 +368,7 @@ class ServiceFaultProxy {
       if (observer.direction != frame.direction || !observer.matches(frame)) {
         return false;
       }
+      if (--observer.remaining > 0) return false;
       observer.completer.complete(frame);
       return true;
     });
@@ -387,11 +400,18 @@ class ProxyConnection {
   final _methods = <int, String>{};
   final _stopped = <ProxyDirection>{};
   final _ended = <ProxyDirection>{};
+  final _endings = {
+    for (final direction in ProxyDirection.values) direction: Completer<void>(),
+  };
   final _closed = Completer<void>();
   bool _finished = false;
 
   /// Completes when both directions have ended.
   Future<void> get closed => _closed.future;
+
+  /// Completes when the sender in [direction] closed its side or the
+  /// connection was destroyed: `toService` ends when the client closes.
+  Future<void> ended(ProxyDirection direction) => _endings[direction]!.future;
 
   /// Write [frame] now in [direction]. A String or Map gets a newline.
   void inject(ProxyDirection direction, Object frame) {
@@ -410,6 +430,9 @@ class ProxyConnection {
     _client.destroy();
     _service.destroy();
     _finished = true;
+    for (final ending in _endings.values) {
+      if (!ending.isCompleted) ending.complete();
+    }
     if (!_closed.isCompleted) _closed.complete();
   }
 
@@ -475,22 +498,29 @@ class ProxyConnection {
           partial.add(Uint8List.sublistView(chunk, start));
         }
       },
-      onError: (Object _) => enqueue(() async => destroy()),
-      onDone: () => enqueue(() async {
-        // Preserve a real peer's partial frame and EOF exactly.
-        final rest = partial.takeBytes();
-        if (!_stopped.contains(direction)) {
-          if (rest.isNotEmpty) _write(target, rest);
-          try {
-            await target.flush();
-            await target.close();
-          } catch (_) {
-            /* The receiver already closed. */
+      onError: (Object _) {
+        if (!_endings[direction]!.isCompleted) _endings[direction]!.complete();
+        enqueue(() async => destroy());
+      },
+      onDone: () {
+        // The sender has closed, even if earlier frames are still held.
+        if (!_endings[direction]!.isCompleted) _endings[direction]!.complete();
+        enqueue(() async {
+          // Preserve a real peer's partial frame and EOF exactly.
+          final rest = partial.takeBytes();
+          if (!_stopped.contains(direction)) {
+            if (rest.isNotEmpty) _write(target, rest);
+            try {
+              await target.flush();
+              await target.close();
+            } catch (_) {
+              /* The receiver already closed. */
+            }
           }
-        }
-        _ended.add(direction);
-        if (_ended.length == ProxyDirection.values.length) destroy();
-      }),
+          _ended.add(direction);
+          if (_ended.length == ProxyDirection.values.length) destroy();
+        });
+      },
       cancelOnError: true,
     );
   }
@@ -525,8 +555,16 @@ class _Rule {
 }
 
 class _Observer {
-  _Observer(this.direction, this.matches);
+  _Observer(this.direction, this.matches, this.remaining);
   final ProxyDirection direction;
   final bool Function(ServiceFrame) matches;
+  int remaining;
   final completer = Completer<ServiceFrame>();
+}
+
+class _AttemptObserver {
+  _AttemptObserver(this.refused, this.remaining);
+  final bool? refused;
+  int remaining;
+  final completer = Completer<ProxyConnectAttempt>();
 }

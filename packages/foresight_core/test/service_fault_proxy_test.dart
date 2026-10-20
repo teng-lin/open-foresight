@@ -229,6 +229,7 @@ void main() {
     expect(await client.call('status'), {'method': 'status'});
     final disconnected = service.disconnected;
     await client.close();
+    await proxy.connections.single.ended(ProxyDirection.toService);
     await disconnected;
     await proxy.connections.single.closed;
   });
@@ -242,6 +243,36 @@ void main() {
     );
     expect((await refused).endpoint, missing);
     expect(proxy.connections, isEmpty);
+  });
+
+  test('counted observers skip earlier matches', () async {
+    final second = proxy.seen(
+      ProxyDirection.toService,
+      method: 'status',
+      count: 2,
+    );
+    final refusals = proxy.attempt(refused: true, count: 2);
+    final client = await proxy.run(() => ServiceClient.connect(service.path));
+    try {
+      await client.call('status');
+      await client.call('notes.list');
+      var counted = false;
+      unawaited(second.then((_) => counted = true));
+      // Only one status request has been sent so far.
+      expect(counted, isFalse);
+      await client.call('status');
+      expect((await second).id, 3);
+      final missing = '${service.directory.path}/missing/application.sock';
+      for (var i = 0; i < 2; i++) {
+        await expectLater(
+          proxy.run(() => ServiceClient.connect(missing)),
+          throwsA(isA<SocketException>()),
+        );
+      }
+      expect(await refusals, same(proxy.attempts.last));
+    } finally {
+      await client.close();
+    }
   });
 
   test('other Unix sockets and a predicate select what is relayed', () async {
