@@ -9,6 +9,7 @@ import 'package:test/test.dart';
 import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
 
 import 'package:foresight_test_support/remote_service.dart';
+import 'package:foresight_test_support/service_fault_proxy.dart';
 
 void main() {
   late RemoteFixture f;
@@ -521,6 +522,68 @@ void main() {
       'notes.list',
     ]);
   });
+
+  for (final cancelled in ['gen-3', 'another-answer']) {
+    test('a cancel during the handoff stops only that answer\'s resend '
+        '(cancel $cancelled)', () async {
+      final proxy = ServiceFaultProxy();
+      try {
+        var refusals = 1;
+        f.handler = (socket, request) {
+          if (request['method'] != 'meetings.generate') return;
+          if (refusals-- > 0) {
+            socket.writeln(
+              jsonEncode({
+                'id': request['id'],
+                'error': {
+                  'code': 'unavailable',
+                  'message':
+                      'Application service is shutting down; retry after it exits.',
+                  'reason': 'closing',
+                },
+                'done': true,
+              }),
+            );
+          } else {
+            f.reply(socket, request, {'generated': true});
+          }
+        };
+        // Hold the handoff's startup probe for the next owner.
+        final probe = proxy.hold(ProxyDirection.toService, method: 'status');
+        final pending = proxy.run(
+          () => f.remote.command(Operation.meetingsGenerate, {
+            'id': 3,
+            'requestId': 'gen-3',
+          }),
+        );
+        await probe.reached;
+        // The refused request is on no connection, so nothing is sent.
+        expect(f.remote.runtime.cancel(requestId: cancelled), isFalse);
+        probe.release();
+        final generates = f.requests.where(
+          (r) => r['method'] == 'meetings.generate',
+        );
+        if (cancelled == 'gen-3') {
+          await expectLater(
+            pending,
+            throwsA(
+              isA<RpcError>().having(
+                (error) => error.code,
+                'code',
+                RpcErrorCode.cancelled,
+              ),
+            ),
+          );
+          expect(generates, hasLength(1));
+        } else {
+          expect(await pending, {'generated': true});
+          expect(generates, hasLength(2));
+        }
+      } finally {
+        await proxy.close();
+      }
+    });
+  }
 
   test('a command whose outcome is unknown is never resent', () async {
     f.handler = (socket, request) => socket.writeln(

@@ -93,8 +93,14 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
     this.runtime,
     this.profile,
   ) {
+    runtime.onCancel = (requestId) =>
+        _cancellations[requestId] = ++_cancellationSequence;
     _listen();
   }
+  // The sequence number of the latest cancel for each request ID, or of all
+  // answers under null. A cancel during a handoff must stop the resend.
+  final _cancellations = <String?, int>{};
+  int _cancellationSequence = 0;
   final _captureLevels = StreamController<List<double>>.broadcast();
   @override
   Stream<List<double>> get captureLevels => _captureLevels.stream;
@@ -215,6 +221,12 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
     String method, [
     Map<String, dynamic> args = const {},
   ]) async {
+    final sent = _cancellationSequence;
+    bool cancelledSince() =>
+        cancellableAnswers.contains(method) &&
+        ((_cancellations[null] ?? 0) > sent ||
+            (args['requestId'] is String &&
+                (_cancellations[args['requestId']] ?? 0) > sent));
     for (var attempt = 0; ; attempt++) {
       final current = client;
       var received = false;
@@ -228,6 +240,11 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
       } on RpcError catch (error) {
         if (attempt > 0 || received || !_resendable(error)) rethrow;
         await _awaitReconnect(current, error);
+        // The old connection cannot carry a cancel for a request it refused;
+        // one made during the handoff applies to the resend.
+        if (cancelledSince()) {
+          throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+        }
       }
     }
   }
@@ -504,14 +521,19 @@ class RemoteHelper extends Helper {
 class RemoteRuntime implements GenerationStatus {
   ServiceClient client;
   Map<String, dynamic> state = {};
+  // Tells the domain, so an answer waiting for a handoff is not resent.
+  void Function(String? requestId)? onCancel;
   RemoteRuntime(this.client);
   @override
   Map<String, dynamic> get effectiveState => state;
   @override
   bool get generating => state['generating'] == true;
   @override
-  bool cancel({String? requestId}) =>
-      client.cancelAnswers(requestId: requestId);
+  bool cancel({String? requestId}) {
+    onCancel?.call(requestId);
+    return client.cancelAnswers(requestId: requestId);
+  }
+
   @override
   void close() {} // The service owns this worker.
 }

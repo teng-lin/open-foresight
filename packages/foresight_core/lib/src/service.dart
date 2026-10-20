@@ -323,6 +323,14 @@ Map<String, dynamic>? _decodeFrame(Uint8List frame) {
   }
 }
 
+/// The operations [ServiceClient.cancelAnswers] cancels.
+final cancellableAnswers = {
+  Operation.answerStream.wire,
+  Operation.answer.wire,
+  Operation.meetingsGenerate.wire,
+  Operation.meetingsEnhance.wire,
+};
+
 /// Newline framed, multiplexed local RPC. No network listener is opened.
 ///
 /// Every failure reaches callers as an [RpcError]. A lost connection (EOF, a
@@ -506,12 +514,7 @@ class ServiceClient {
     final ids = _methods.entries
         .where(
           (entry) =>
-              {
-                Operation.answerStream.wire,
-                Operation.answer.wire,
-                Operation.meetingsGenerate.wire,
-                Operation.meetingsEnhance.wire,
-              }.contains(entry.value) &&
+              cancellableAnswers.contains(entry.value) &&
               (requestId == null || _requestIds[entry.key] == requestId),
         )
         .map((e) => e.key)
