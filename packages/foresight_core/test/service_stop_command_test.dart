@@ -171,6 +171,10 @@ void main() {
 
   test('--status run in another pid namespace than this profile\'s older '
       'owner says it cannot verify that owner', () async {
+    if (!Platform.isLinux) {
+      markTestSkipped('unshare and /proc/locks are Linux only');
+      return;
+    }
     // A user and pid namespace with its own /proc, as in a sandbox. The
     // kernel leaves the owner, outside it, out of that /proc/locks.
     final probe = await Process.run('unshare', [

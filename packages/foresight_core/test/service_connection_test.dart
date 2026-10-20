@@ -458,6 +458,10 @@ void main() {
   ]) {
     test('an older owner whose lock holder cannot be read fails startup at '
         'once and says so (record: $recorded, holders: $holders)', () async {
+      if (!Platform.isLinux) {
+        markTestSkipped('/proc/locks is Linux only; macOS accepts any holder');
+        return;
+      }
       // An owner released before profile identity holds this profile's
       // lock and answers status without profile_id.
       final profile = ProfilePaths(
