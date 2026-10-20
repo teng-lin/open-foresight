@@ -14,53 +14,60 @@ from tools import ci_linux_shadow_sdk as shadow
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_main_dispatch_is_the_only_publisher_entrypoint():
+def test_maintenance_is_independent_main_only_and_preserves_original_upload_proof():
     config = yaml.safe_load(
         (ROOT / ".github/workflows/linux-cache-publish.yml").read_text()
     )
-    assert config.get("on", config.get(True)) == {"workflow_dispatch": None}
+    triggers = config.get("on", config.get(True))
+    assert set(triggers) == {"push", "workflow_dispatch", "schedule"}
+    assert triggers["push"] == {"branches": ["main"]}
+    assert triggers["schedule"] == [{"cron": "17,47 * * * *"}]
     assert all(value == "read" for value in config["permissions"].values())
-    assert not config["concurrency"]["cancel-in-progress"]
-    assert set(config["jobs"]) == {"publish-linux-caches"}
-    job = config["jobs"]["publish-linux-caches"]
-    assert (
-        job["if"]
-        == "github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'"
-    )
+    assert "concurrency" not in config
+    jobs = config["jobs"]
+    assert "needs" not in jobs["reconcile"]
+    assert "concurrency" not in jobs["reconcile"]
+    for name, job in jobs.items():
+        assert "github.ref == 'refs/heads/main'" in job["if"]
+        assert "github.event_name" in job["if"]
+        assert "pull_request" not in str(job["if"])
+        if name != "reconcile":
+            assert job["needs"] == "reconcile"
+            assert not job["concurrency"]["cancel-in-progress"]
+    job = jobs["publish-linux-caches"]
     assert job["permissions"] == {
         "contents": "read",
         "actions": "read",
         "packages": "write",
     }
     steps = job["steps"]
-    checkout = next(
-        s for s in steps if s.get("uses", "").startswith("actions/checkout@")
-    )
-    assert checkout["with"] == {
-        "persist-credentials": False,
-        "ref": "${{ github.sha }}",
-    }
-    fetch = next(i for i, s in enumerate(steps) if s.get("id") == "sdk")
-    assert (
-        steps[fetch]["run"]
-        == 'python3 tools/ci_linux_shadow_sdk.py --source "$GITHUB_SHA" --own-pr 0 --directory build/cache-sdk'
-    )
+    fetch = next(i for i, step in enumerate(steps) if step.get("id") == "sdk")
     assert "--fork" not in steps[fetch]["run"]
-    guards = [i for i, s in enumerate(steps) if "commits/main" in s.get("run", "")]
-    publish = next(
-        i
-        for i, s in enumerate(steps)
-        if s.get("run") == "bash tools/publish_linux_ci_caches.sh"
+    assert "ci_linux_shadow_sdk.py" in steps[fetch]["run"]
+    guards = [
+        i for i, step in enumerate(steps) if "commits/main" in step.get("run", "")
+    ]
+    tooling = next(i for i, step in enumerate(steps) if step.get("id") == "tooling")
+    assert guards[0] < fetch < guards[1] < tooling
+    receipt = next(
+        step
+        for step in steps
+        if step.get("uses", "").startswith("actions/upload-artifact@")
+        and "ci-tooling-" in step["with"]["name"]
     )
-    assert len(guards) == 2 and guards[0] < fetch < guards[1] == publish - 1
+    assert receipt["with"]["path"] == "build/cache-tooling/tooling.json"
+    assert receipt["with"]["if-no-files-found"] == "error"
+    assert "tooling_reused" in receipt["if"]
+    publish = next(
+        step
+        for step in steps
+        if step.get("run") == "bash tools/publish_linux_ci_caches.sh"
+    )
+    assert publish["env"]["CI_CACHE_NAMESPACE"] == "isolated-v2"
+    assert "steps.tooling.outputs.tooling_image" in publish["env"]["TOOLING_IMAGE"]
     assert (
         ".github/workflows/linux-cache-publish.yml@refs/heads/main"
         in steps[guards[0]]["run"]
-    )
-    assert steps[publish]["env"]["SDK_IMAGE"] == "${{ steps.sdk.outputs.image }}"
-    assert not any(
-        "ci_dependency_seed_provider" in str(s) or "upload-artifact" in str(s)
-        for s in steps
     )
 
 

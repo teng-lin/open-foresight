@@ -22,6 +22,8 @@ import tarfile
 import tempfile
 import zipfile
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 # Packaged installers and their bundle travel separately; tests consume build/.
 EXCLUDED = {".git", ".venv", "build/_deps", "dist"}
 EXTERNAL_LINK_ROOTS = ("/opt/", "/usr/")

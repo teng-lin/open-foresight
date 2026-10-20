@@ -104,6 +104,7 @@ EXPECTED["release-handoff"] = EXPECTED["release-inrun-application"]
 
 def test_exact_legacy_rows_have_no_tier_requirement_yet():
     assert set(PRODUCERS) == set(EXPECTED) | {
+        "linux-ci-tooling",
         "shadow-fork-sdk",
         "shadow-handoff",
         "weekly-preview-audit",

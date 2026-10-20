@@ -218,11 +218,21 @@ def verify_abi(sdk_image, tooling_image, *, profile=None):
 
     # Inspect exact compiler/header/runtime bytes without starting either image.
     # Image IDs and their transport names are provenance, not ABI equivalence.
+    # sdk_profile rejects every unapproved byte before returning. The reviewed
+    # CMake-only runtime migration changes its diagnostic counts/proof details,
+    # while preserving the original compiler/header proof and ABI contract.
     def compatible(image):
         return {
             key: value
             for key, value in profile(image).items()
-            if key not in ("image_id", "requested_image")
+            if key
+            not in (
+                "image_id",
+                "requested_image",
+                "matched_files",
+                "compatibility_proof_sha256",
+                "compatible_cmake_runtime_files",
+            )
         }
 
     original = compatible(sdk_image)

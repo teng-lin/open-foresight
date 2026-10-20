@@ -326,7 +326,8 @@ def test_platform_lists_execute_once_under_required_aggregate():
         "build_linux_container.sh --test-only" in step.get("run", "")
         for step in steps[:fixture]
     )
-    assert "FROM ${SDK_IMAGE}" in (ROOT / "packaging/build.Dockerfile").read_text()
+    assert "FROM ${SDK_IMAGE}" in (ROOT / "packaging/ci-tooling.Dockerfile").read_text()
+    assert "FROM ${TOOLING_IMAGE}" in (ROOT / "packaging/build.Dockerfile").read_text()
     assert (
         "ubuntu:24.04@sha256:" in (ROOT / "packaging/sdk-core.Dockerfile").read_text()
     )

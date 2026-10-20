@@ -83,7 +83,7 @@ def test_local_and_ci_container_paths_keep_secrets_out_of_layers_and_exact_packa
     assert "FROM application-dependencies AS ci" in dockerfile
     assert "FORESIGHT_PYTHON=/opt/dev-python/bin/python" in dockerfile
     for package in ("xvfb", "xauth", "dbus", "mesa", "poppler", "unrtf", "gh"):
-        assert package in dockerfile
+        assert package in (ROOT / "packaging/ci-tooling.Dockerfile").read_text()
     assert (
         'bash tools/build.sh --build-only "-DFORESIGHT_BUILD_REVISION=$SOURCE_REVISION"'
         in shared

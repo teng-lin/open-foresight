@@ -3,7 +3,10 @@
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import zipfile
 
 import pytest
@@ -545,3 +548,194 @@ def test_metadata_read_failure_never_authorizes_rebuild(docker_fixture, monkeypa
     with pytest.raises(RuntimeError, match="metadata unavailable"):
         tooling.prepare(REPO, "verified-sdk", SNAPSHOT, output)
     assert not any(r[:3] == ["docker", "buildx", "build"] for r in rows)
+
+
+@pytest.mark.parametrize(
+    "state", ["pull-request", "wrong-repository", "pending", "failed"]
+)
+def test_unqualified_maintenance_is_never_consumed_or_allowed_to_cancel_app_validation(
+    evidence, tmp_path, state
+):
+    e = evidence
+    run = copy.deepcopy(e["run"])
+    job = copy.deepcopy(e["job"])
+    if state == "pull-request":
+        run["event"] = "pull_request"
+    elif state == "wrong-repository":
+        run["repository"]["full_name"] = "foreign/repo"
+    else:
+        job["conclusion"] = None if state == "pending" else "failure"
+        job["status"] = "in_progress" if state == "pending" else "completed"
+
+    def fetch(repo, route):
+        return {"artifacts": [e["artifact"]]} if "artifacts?" in route else run
+
+    def forbidden(*args):
+        pytest.fail("Unqualified bytes must not be downloaded")
+
+    assert (
+        tooling.lookup(
+            REPO,
+            e["expected"],
+            tmp_path / "out",
+            fetch=fetch,
+            download=forbidden,
+            jobs=lambda *args: [job],
+        )
+        is None
+    )
+
+
+def test_cli_records_reuse_without_claiming_fresh_compilation(
+    tmp_path, monkeypatch, capsys
+):
+    output = tmp_path / "github-output"
+    result = {
+        "image": f"ghcr.io/{REPO}/linux-sdk@{DIGEST}",
+        "inputs": {"identity": "f" * 64},
+        "reused": True,
+    }
+    calls = []
+
+    def prepare(*args, **kwargs):
+        calls.append((args, kwargs))
+        return result
+
+    monkeypatch.setattr(tooling, "prepare", prepare)
+    monkeypatch.setattr(
+        tooling.sys,
+        "argv",
+        [
+            "ci_tooling_image.py",
+            "--repository",
+            REPO,
+            "--sdk-image",
+            "verified-sdk",
+            "--snapshot",
+            SNAPSHOT,
+            "--output",
+            str(tmp_path / "image"),
+            "--publish",
+        ],
+    )
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    tooling.main()
+    assert calls[0][1] == {"publish": True}
+    assert json.loads(capsys.readouterr().out) == result
+    assert "tooling_reused=true" in output.read_text()
+    assert "compiled" not in output.read_text()
+    monkeypatch.delenv("GITHUB_OUTPUT")
+    tooling.main()
+    assert json.loads(capsys.readouterr().out) == result
+
+
+def test_publisher_guard_reads_actual_checkout_without_history_dependency(monkeypatch):
+    monkeypatch.setattr(
+        tooling.subprocess, "check_output", lambda *args, **kwargs: SOURCE + "\n"
+    )
+    assert (
+        tooling.require_publisher(
+            REPO, environment=publisher_env(), fetch=lambda *args: {"sha": SOURCE}
+        )
+        == SOURCE
+    )
+
+
+def test_reviewed_cmake_runtime_migration_retains_qualified_abi_identity():
+    original = {
+        "compiler_package": "13.3.0-6ubuntu2~24.04.1",
+        "platform": "linux/amd64",
+        "ubuntu": "24.04",
+        "glibc": "2.39",
+        "cmake": "3.28",
+        "proof_sha256": "a" * 64,
+        "matched_files": 489,
+    }
+    migrated = {
+        **original,
+        "matched_files": 486,
+        "compatibility_proof_sha256": "b" * 64,
+        "compatible_cmake_runtime_files": {
+            "/usr/lib/x86_64-linux-gnu/libcurl.so.4": {
+                "original_sha256": "c" * 64,
+                "consumer_sha256": "d" * 64,
+            }
+        },
+    }
+    result = tooling.verify_abi(
+        "original",
+        "migrated",
+        profile=lambda image: original if image == "original" else migrated,
+    )
+    assert result == tooling.verify_abi(
+        "original", "original", profile=lambda image: original
+    )
+    incompatible = {**migrated, "compiler_package": "other"}
+    with pytest.raises(ValueError, match="compiler ABI"):
+        tooling.verify_abi(
+            "original",
+            "changed",
+            profile=lambda image: original if image == "original" else incompatible,
+        )
+    incompatible = {**migrated, "proof_sha256": "e" * 64}
+    with pytest.raises(ValueError, match="compiler ABI"):
+        tooling.verify_abi(
+            "original",
+            "changed",
+            profile=lambda image: original if image == "original" else incompatible,
+        )
+
+
+def test_actual_identity_cli_bootstraps_imports_without_pythonpath_or_git(tmp_path):
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    docker = binary / "docker"
+    docker.write_text(
+        f"#!{sys.executable}\nimport sys\nassert sys.argv[1:]==['image','inspect','--format','{{{{.Id}}}}','verified-sdk']\nprint({SDK!r})\n"
+    )
+    docker.chmod(0o755)
+    seed = tmp_path / "qualification.json"
+    seed.write_text('{"original_producer":41}')
+    recipe = tmp_path / "build.Dockerfile"
+    recipe.write_text("FROM fixture-tooling AS application-base\n")
+    metadata = tmp_path / "tooling.json"
+    metadata.write_text(json.dumps({"inputs": tooling.identity(SDK, SNAPSHOT)}))
+    output = tmp_path / "identity.json"
+    env = {
+        **os.environ,
+        "PATH": str(binary) + os.pathsep + os.environ["PATH"],
+        "GITHUB_REF": "refs/pull/999/merge",
+        "GITHUB_EVENT_NAME": "pull_request",
+    }
+    env.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(handoff.__file__)),
+            "identity",
+            "--sdk-image",
+            "verified-sdk",
+            "--qualification",
+            str(seed),
+            "--recipe",
+            str(recipe),
+            "--snapshot",
+            SNAPSHOT,
+            "--tooling",
+            str(metadata),
+            "--output",
+            str(output),
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    record = json.loads(output.read_text())
+    assert record["tooling_identity"] == tooling.identity(SDK, SNAPSHOT)["identity"]
+    assert (
+        record["dependency_seed_sha256"]
+        == hashlib.sha256(seed.read_bytes()).hexdigest()
+    )
