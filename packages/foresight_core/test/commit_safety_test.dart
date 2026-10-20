@@ -6,6 +6,7 @@ import 'dart:io';
 
 import 'package:clock/clock.dart';
 import 'package:foresight_core/foresight_core.dart';
+import 'package:foresight_core/remote.dart' show PendingRequestKey;
 import 'package:foresight_core/src/application.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/remote_domain.dart';
@@ -572,6 +573,51 @@ void main() {
           ),
         );
         expect(store.sources, hasLength(1));
+      },
+    );
+
+    test(
+      'a keyed transcript import whose first attempt committed before an internal error is appended once on retry',
+      () async {
+        final meeting = (await call('meetings.create', {'title': 'M'}))['id'];
+        domain.failIndex = true;
+        final pending = PendingRequestKey();
+        final sent = <Object?>[];
+        // What a client sees across the service: the error's wire form.
+        Future<Object?> import() => pending.run(
+          {'id': meeting, 'text': 'Once', 'source': 'imported transcript'},
+          (keyed) async {
+            sent.add(keyed['idempotency_key']);
+            try {
+              return await app.call('meetings.transcript', keyed);
+            } catch (error) {
+              throw RpcError.from(RpcError.from(error).toJson());
+            }
+          },
+        );
+        await expectLater(
+          import(),
+          throwsRpc(RpcErrorCode.internal, 'index worker disconnected'),
+        );
+        // The segment committed, so internal does not release the key.
+        expect(pending.pending, sent.single);
+        await expectLater(
+          import(),
+          throwsRpc(
+            RpcErrorCode.internal,
+            'Saved, but indexing failed: Bad state: index worker disconnected',
+          ),
+        );
+        expect(sent, hasLength(2));
+        expect(sent.toSet(), hasLength(1));
+        expect(
+          store.rows('SELECT text FROM transcript WHERE meeting_id=?', [
+            meeting,
+          ]),
+          [
+            {'text': 'Once'},
+          ],
+        );
       },
     );
 

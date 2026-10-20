@@ -110,7 +110,10 @@ class PendingRequestKey {
   /// Whether [error] proves the request did not commit: the service rejected
   /// it, refused it while closing, or it was never sent. A lost reply
   /// (outcomeUnknown, whatever its code), a lost connection without a reason
-  /// or a local cancellation leaves the outcome unknown.
+  /// or a local cancellation leaves the outcome unknown. So does an internal
+  /// error: a keyed write can commit before a later step, such as indexing
+  /// the imported text, fails, and a retry under the same key then replays
+  /// the stored result instead of writing again.
   static bool definiteFailure(Object error) {
     if (error is! RpcError) return false;
     if (error.reason == RpcErrorReason.outcomeUnknown) return false;
@@ -118,6 +121,7 @@ class PendingRequestKey {
       return true;
     }
     return error.code != RpcErrorCode.unavailable &&
-        error.code != RpcErrorCode.cancelled;
+        error.code != RpcErrorCode.cancelled &&
+        error.code != RpcErrorCode.internal;
   }
 }
