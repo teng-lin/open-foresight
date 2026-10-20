@@ -43,6 +43,13 @@ git remote add skywalker SkyWalker.local:/Users/blackmyth/src/open-foresight
 - **Integration sync:** after merging a step, Linux runs `git push skywalker open-foresight-services:svc/integration`. The Mac then runs `git merge --ff-only svc/integration` in `~/src/open-foresight-services`. A failed fast-forward means the branches diverged: stop and report it instead of merging.
 - **Nothing goes to GitHub** until the final PR. Pushing step branches to `origin` would start CI for no reason.
 
+### Rules learned during steps 0–2
+
+- **Checked-out branches refuse pushes.** A push to a step branch that the Mac has checked out is refused. Push updates to a new ref named `svc/prN-…-rK`, and have the Mac fast-forward or reset its worktree to it.
+- **Mac toolchain and artifacts live in `/var/tmp`.** The macOS `/tmp` cleaner removed most of the setup SDK at `/private/tmp/open-foresight-toolchain` overnight. From step 2 on, the Mac uses a Flutter 3.35.7 SDK extracted from the official, checksum-verified archive into `/var/tmp`. It also uses APFS clones of the verified native and helper artifacts under `/var/tmp`, with re-checked hashes.
+- **macOS service-suite temp root.** It is `FORESIGHT_TEST_TEMP_ROOT=/tmp/o<N>` (mode 0700). One existing service test's socket path needs that short a root to stay under 104 bytes.
+- **Canonical test paths.** macOS temp roots are symbolic links, and a hooked service records its canonical data path. Tests that start a `HookedServiceProcess`, or compare a child's recorded path, build their profile with `createServiceTestDirectorySync` or `ProfilePaths.resolve`.
+
 ## Step lifecycle
 
 Each step moves through these states in order:
