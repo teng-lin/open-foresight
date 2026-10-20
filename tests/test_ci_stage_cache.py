@@ -202,7 +202,7 @@ class FingerprintTests(SourceTree):
     def test_missing_commit_is_fetched_by_sha_without_executing_source(self):
         with (
             patch.object(
-                cache,
+                cache.ci_git,
                 "git",
                 side_effect=[subprocess.CalledProcessError(1, ["git"]), b""],
             ),

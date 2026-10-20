@@ -1,21 +1,14 @@
 """Build artifacts restore only their stage's verified outputs."""
 
 import copy
-import importlib.util
 import json
 import os
-from pathlib import Path
 import subprocess
 import tarfile
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location(
-    "stage_artifacts", ROOT / "tools/ci_stage_artifacts.py"
-)
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
+from tools import ci_stage_artifacts as module
 
 
 def repository(path):
