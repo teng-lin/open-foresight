@@ -115,7 +115,8 @@ def select_gates(paths, force=False):
         if owners:
             for gate in owners:
                 selected[gate] = True
-            continue
+            if path not in PACKAGING_FILES:
+                continue
         # These Markdown notices are installed payloads, so editorial suffix
         # rules must not hide changes to the package's legal contents.
         if path in PACKAGING_FILES or path.startswith("packaging/ci/"):

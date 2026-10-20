@@ -55,6 +55,11 @@ def test_every_host_inventory_selects_its_real_owners_and_notice_selects_apple()
     report = changes.selection_report(["README.md"])
     assert report["superseded"] is False
     assert not any(report["selection"].values())
+    # This SHARED file also owns a real makepkg probe, deselected on hosts.
+    selected = changes.select_gates(["tests/test_linux_packages.py"])
+    assert {"macos", "dmg", "packaging", "linux-build", "linux-test"} <= {
+        gate for gate, value in selected.items() if value
+    }
 
 
 def test_dmg_is_independent_of_linux_bundle_and_required_for_apple_inputs():
@@ -134,3 +139,27 @@ def test_dmg_main_uses_actual_owned_suite_and_preserves_exit(monkeypatch, tmp_pa
     monkeypatch.setattr(dmg, "diagnostics", lambda: observed.append(True))
     assert dmg.main() == 7
     assert observed == [True]
+
+
+@pytest.mark.parametrize("skip", [False, True])
+def test_dmg_class_setup_errors_and_skips_still_produce_diagnostic_junit(
+    tmp_path, capsys, skip
+):
+    class Fixture(unittest.TestCase):
+        @classmethod
+        def setUpClass(cls):
+            if skip:
+                raise unittest.SkipTest("Apple setup unavailable")
+            raise RuntimeError("Apple setup failed")
+
+        def test_contract(self):
+            pass
+
+    report = tmp_path / "class-error.xml"
+    assert (
+        dmg.run(unittest.defaultTestLoader.loadTestsFromTestCase(Fixture), report) == 1
+    )
+    root = ET.parse(report).getroot()  # noqa: S314 - Locally generated error fixture.
+    assert root.find("testcase/skipped" if skip else "testcase/error") is not None
+    diagnostic = capsys.readouterr().err
+    assert "ran=0" in diagnostic and "expected=2" in diagnostic

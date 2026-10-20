@@ -95,6 +95,7 @@ def test_measurement_window_uses_actual_timestamps_and_excludes_historical_merge
         "schema",
         "inputs",
         "annotations",
+        "logs",
     ],
 )
 def test_snapshot_rejects_corrupt_incomplete_or_unfrozen_input(tmp_path, invalid):
@@ -115,6 +116,9 @@ def test_snapshot_rejects_corrupt_incomplete_or_unfrozen_input(tmp_path, invalid
         manifest["schema"] = 999
     elif invalid == "annotations":
         (root / "observations.json").write_text("{}")
+    elif invalid == "logs":
+        (root / "logs").mkdir()
+        (root / "logs/1.txt").write_text("source=" + B)
     else:
         del manifest["checksums"]["trees.txt"]
     path.write_text(json.dumps(manifest))
@@ -272,7 +276,6 @@ def test_first_attempt_failures_queue_and_classification_never_follow_later_gree
     later = job(identity=2, attempt=2)
     sample = run(jobs=[failed, later]) | {
         "run_attempt": 2,
-        "qualification": True,
         "run_started_at": "2026-10-19T00:01:00Z",
     }
     data = stats.operational_report([sample, run(2, jobs=[job(status="cancelled")])])
@@ -288,7 +291,7 @@ def test_first_attempt_failures_queue_and_classification_never_follow_later_gree
     assert data["failures"][0]["class"] == "package-network"
     assert data["failures"][0]["attempt"] == 1
     assert data["first_attempt_job_conclusions"]["timed_out"] == 1
-    assert data["manual_qualification_runs"] == [1]
+    assert data["manual_qualification_runs"] == []
     assert (
         stats.failure_class({"failure_evidence": {"class": "test-assertion"}})
         == "unknown"
@@ -324,6 +327,45 @@ def test_first_green_survives_later_red_but_latest_readiness_does_not():
     assert data["push_to_first_green"]["p50"] == 2
     assert data["push_to_green"]["n"] == 0
     assert data["pushes"][0]["first_green_minutes"] == 2
+    assert data["pushes"][0]["first_green_attempt"] == 1
+
+
+def test_rerun_green_latency_is_separate_from_first_attempt_green():
+    jobs = [
+        job(name, identity=index)
+        for index, name in enumerate(sorted(stats.REQUIRED), 1)
+    ]
+    first = next(item for item in jobs if item["name"] == "python")
+    first["conclusion"] = "failure"
+    jobs.append(
+        job("python", "success", 99, 2) | {"completed_at": "2026-10-19T00:12:00Z"}
+    )
+    data = stats.report([run(jobs=jobs)], [pull()], {}, "2026-10-19T00:00:00Z")
+    assert data["push_to_first_green"]["p50"] == 12
+    assert data["push_to_first_attempt_green"]["n"] == 0
+    assert data["pushes"][0]["first_green_attempt"] == 2
+
+
+def test_green_qualification_repeats_cannot_improve_ordinary_error_rate():
+    ordinary = run(jobs=[job(status="failure")])
+    repeats = [run(index) | {"qualification": True} for index in range(2, 8)]
+    data = stats.operational_report([ordinary, *repeats])
+    assert data["first_attempt_workflows"]["rate"] == 1.0
+    assert data["first_attempt_workflows"]["eligible"] == 1
+    assert data["first_attempt_jobs"]["eligible"] == 1
+    assert data["first_attempt_pr_commits"]["failed"] == 1
+    assert data["qualification_first_attempts"]["outcomes"] == {"success": 6}
+    assert data["runner_minutes_by_category"]["pr"] == 14
+    assert data["manual_qualification_runs"] == list(range(2, 8))
+
+
+def test_workflow_cancellation_is_not_success_even_when_completed_jobs_are_green():
+    value = run() | {"status": "completed", "conclusion": "cancelled", "run_attempt": 1}
+    assert stats.first_attempt_state(value) == "cancelled"
+    assert stats.operational_report([value])["first_attempt_workflows"]["eligible"] == 0
+    # A cancelled later rerun does not rewrite the completed first attempt.
+    value["run_attempt"] = 2
+    assert stats.first_attempt_state(value) == "success"
 
 
 def test_branch_creation_window_excludes_unrelated_reuse():

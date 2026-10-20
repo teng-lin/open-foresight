@@ -1417,6 +1417,8 @@ Report schema 2 retains previous fields and adds first-attempt workflow, job and
 PR-commit denominators, cancellations, incomplete/unknown outcomes, actual job
 queue measurements when supplied by GitHub, workflow start latency, first green
 versus latest readiness, and independent SDK/release/nightly/maintenance spend.
+Each first-green observation records its contributing attempt; the separate
+`push_to_first_attempt_green` distribution excludes successes requiring reruns.
 Missing queue or cache metadata remains unknown. A failed first attempt stays
 failed after a successful rerun; copied successful jobs retain their original
 attempt and are counted once. Timeout and startup conclusions remain explicit.
@@ -1434,6 +1436,13 @@ a generic Docker warning does not establish a hit or failure cause. Keep full
 logs in run artifacts and link them from the observations.
 
 Compare at least five ordinary observations with matching configuration, scope
-and cache state; retain cold misses and failures. Qualification reruns remain
-separate. These tools measure observations and never authorize reuse, dispatch
+and cache state; retain cold misses and failures. Explicitly marked qualification
+runs have separate outcomes and never enter ordinary failure-rate denominators;
+all their runner spend and diagnostic failures remain visible. These tools
+measure observations and never authorize reuse, dispatch
 CI, establish producer trust or certify runtime improvements.
+
+The split DMG owner retains the existing broad packaging selection during
+qualification, including Linux-only packaging changes. Narrowing that breadth
+belongs to the separately qualified P9 selector; this batch does not claim the
+associated macOS scheduling savings.
