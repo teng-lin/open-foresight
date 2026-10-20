@@ -452,6 +452,26 @@ void main() {
     );
   });
 
+  test(
+    'a lost reply without a key never tells the agent to reuse one',
+    () async {
+      final id = fixture.request('tools/call', {
+        'name': 'create_meeting',
+        'arguments': {'title': 'Standup'},
+      });
+      await fixture.serviceRequest();
+      fixture.sockets.last.destroy();
+      final lost = (await fixture.response(id))['result'] as Map;
+      expect(lost['structuredContent']['error']['reason'], 'outcomeUnknown');
+      expect(
+        lost['content'][0]['text'],
+        'Application service disconnected. It may have completed; check before '
+        'retrying. Pass an idempotency_key next time, so a retry applies the '
+        'change at most once.',
+      );
+    },
+  );
+
   test('cancellation reaches the service and leaves MCP responsive', () async {
     final id = fixture.request('tools/call', {
       'name': 'ask',

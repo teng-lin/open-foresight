@@ -141,10 +141,18 @@ Future<void> main() async {
             // A change whose reply was lost may have been applied.
             if (!readOnly && failure.reason == RpcErrorReason.outcomeUnknown) {
               if (!text.endsWith('.')) text += '.';
-              text += Operation.parse(operation).acceptsIdempotencyKey
-                  ? ' The change may have been applied. Retry with the same '
-                        'idempotency_key to apply it at most once.'
-                  : ' It may have completed; check before retrying.';
+              if (args['idempotency_key'] != null) {
+                text +=
+                    ' The change may have been applied. Retry with the same '
+                    'idempotency_key to apply it at most once.';
+              } else {
+                text += ' It may have completed; check before retrying.';
+                if (Operation.parse(operation).acceptsIdempotencyKey) {
+                  text +=
+                      ' Pass an idempotency_key next time, so a retry '
+                      'applies the change at most once.';
+                }
+              }
             }
             return CallToolResult(
               content: [TextContent(text: text)],
