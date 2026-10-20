@@ -314,8 +314,22 @@ class ServiceClient {
         }
       },
     );
-    if (_closed) {
+    final frame = _closed
+        ? null
+        : utf8.encode(jsonEncode({'id': id, 'method': method, 'args': args}));
+    if (frame == null) {
       controller.addError(_failure ?? _ServiceTransportLost());
+      unawaited(controller.close());
+    } else if (frame.length + 1 > _maxServiceFrame) {
+      // The service drops a connection whose request exceeds its limit, which
+      // for the desktop also stops recording. It counts bytes per read too.
+      controller.addError(
+        RpcError(
+          RpcErrorCode.invalidArgument,
+          'Request exceeds ${_maxServiceFrame ~/ (1024 * 1024)} MiB; '
+          'send less data.',
+        ),
+      );
       unawaited(controller.close());
     } else {
       _pending[id] = controller;
@@ -323,7 +337,9 @@ class ServiceClient {
       if (args['requestId'] is String) {
         _requestIds[id] = args['requestId'] as String;
       }
-      socket.writeln(jsonEncode({'id': id, 'method': method, 'args': args}));
+      socket
+        ..add(frame)
+        ..add(const [10]);
     }
     return controller.stream
         .where((v) => v.containsKey('result') || v.containsKey('error'))

@@ -369,6 +369,46 @@ void main() {
       app.recordingMeeting = null;
     }
   });
+  test(
+    'an oversized request is refused locally without dropping the desktop',
+    () async {
+      await attach();
+      final app = service.domain.application;
+      final recording = CountingRecording();
+      app.recording = recording;
+      app.recordingMeeting = service.domain.store.meeting('Recording');
+      try {
+        // Sent, this would exceed the service's request limit, and the
+        // service would close the connection.
+        await expectLater(
+          desktop.call('notes.save', {
+            'title': 'Large',
+            'body': 'x' * maxServiceMessage,
+          }),
+          throwsA(
+            isA<RpcError>()
+                .having(
+                  (error) => error.code,
+                  'code',
+                  RpcErrorCode.invalidArgument,
+                )
+                .having(
+                  (error) => error.message,
+                  'message',
+                  'Request exceeds 15 MiB; send less data.',
+                ),
+          ),
+        );
+        expect(desktop.isClosed, isFalse);
+        expect(await desktop.call('notes.list'), isEmpty);
+        expect(service.access.hasHost, isTrue);
+        expect(recording.stops, 0);
+      } finally {
+        app.recording = null;
+        app.recordingMeeting = null;
+      }
+    },
+  );
   test('an oversized event is dropped without dropping the desktop', () async {
     await attach();
     final app = service.domain.application;
