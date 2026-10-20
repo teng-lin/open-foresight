@@ -138,6 +138,53 @@ void main() {
       await client.close();
     }
   });
+  // 'é' is two UTF-8 bytes but one UTF-16 code unit, so these replies tell a
+  // byte cap from one that counts characters.
+  String notesReply() => jsonEncode({
+    'id': 1,
+    'result': service.domain.store.rows('SELECT * FROM notes ORDER BY id'),
+    'done': false,
+  });
+  test('the reply cap counts UTF-8 bytes, not characters', () async {
+    const cap = maxServiceMessage - 1024 * 1024;
+    service.domain.store.saveNote(null, 'Wide', 'é' * (cap ~/ 2 + 64 * 1024));
+    final reply = notesReply();
+    expect(reply.length, lessThan(cap));
+    expect(utf8.encode(reply).length, greaterThan(cap));
+    final client = await ServiceClient.connect(service.path);
+    try {
+      await expectLater(
+        client.call('notes.list'),
+        throwsA(
+          isA<RpcError>()
+              .having((error) => error.code, 'code', RpcErrorCode.internal)
+              .having(
+                (error) => error.message,
+                'message',
+                'Reply exceeds 15 MiB; request fewer items.',
+              ),
+        ),
+      );
+      expect(client.isClosed, isFalse);
+      expect((await client.call('status') as Map)['pid'], pid);
+    } finally {
+      await client.close();
+    }
+  });
+  test('a multibyte reply under the byte cap arrives intact', () async {
+    const cap = maxServiceMessage - 1024 * 1024;
+    final body = 'é' * (cap ~/ 2 - 64 * 1024);
+    service.domain.store.saveNote(null, 'Wide', body);
+    expect(utf8.encode(notesReply()).length, lessThan(cap));
+    final client = await ServiceClient.connect(service.path);
+    try {
+      final notes = await client.call('notes.list') as List;
+      expect(notes.single['body'], body);
+      expect(client.isClosed, isFalse);
+    } finally {
+      await client.close();
+    }
+  });
   test(
     'desktop socket closure shuts down service and persists committed data',
     () async {
