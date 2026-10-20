@@ -144,9 +144,11 @@ dist/open-foresight/open-foresight-service --stop
 `--stop` gracefully finalizes active recording, and returns only once the
 service has released its profile (its lock is free or its process is gone),
 failing if that takes more than 30 s after the service closed its
-connections. The service closes them only after any recording finalizes
-(--stop waits up to 30 minutes for that), then stops its helper. Scripts
-should therefore allow at least 60 s plus any recording finalization. If the
+connections. The service finalizes any recording (--stop waits up to 30
+minutes for that) and stops its helper before it closes them; it then closes
+its store, removes its sockets and endpoint record, and releases its profile
+lock. Scripts should therefore allow at least 60 s plus any recording
+finalization. If the
 service stopped without a clean shutdown, during `--stop` or before it,
 `--stop` still succeeds and prints a warning; the next start recovers its
 runtime. With no service and no endpoint record, `--stop` fails. For installers,
@@ -198,6 +200,23 @@ The service takes a nonblocking POSIX advisory lock on
 private `.application-endpoint.json` records the active runtime directory. Clients
 validate that directory and attach to the recorded endpoint. A service launched
 with another runtime cannot acquire a competing profile writer. An unclean shutdown retains its runtime endpoint so a replacement service can adopt surviving helpers even when launched with a different runtime override. A clean shutdown closes workers and removes the endpoint record, allowing the next launch to relocate its runtime. Endpoint records are published only after acquiring the profile lock and binding a socket. Disconnected mutations with unknown commit state are still never replayed.
+
+Lock probes never run in a process that hosts an owner of the same profile
+(L8). POSIX record locks belong to the process, not to a Dart isolate or a
+file descriptor, so closing any descriptor of the lock file drops every lock
+the process holds on it. `ensureService` (through `_profileOwnerAvailable`),
+`--stop`'s release wait (`awaitProfileRelease`), `profileLeftUnclean`, and on
+macOS the identity check for a service that reports no profile identity
+(`servesAnotherProfile`) each open, lock and close the profile lock to probe
+it. In a process that hosts an owner, any of them would release that owner's
+lock and let a second owner start. `_localServiceOwners` keeps `ensureService`
+and the identity check from probing, but only in the isolates that started the
+owner: another isolate of the same process sees no local owner and probes
+anyway. The release wait and `profileLeftUnclean` have no such guard. No
+shipped binary does this: a serving service process makes no client calls
+(`--stop` and `--status` run as separate processes), and the desktop and MCP
+host no owner. Keep it that way, or move the probe to a short-lived subprocess
+or ownership to `flock(2)`, whose locks belong to the open file description.
 
 Installed executables discover `Contents/Resources/runtime.json` in the nearest
 enclosing `.app`. It maps `FORESIGHT_*` resource-path keys to paths relative to that
