@@ -168,15 +168,17 @@ def test_dmg_class_setup_errors_and_skips_still_produce_diagnostic_junit(
     assert "ran=0" in diagnostic and "expected=1" in diagnostic
 
 
-def test_dmg_suite_inventory_can_grow_but_cannot_be_empty(tmp_path):
+def test_dmg_suite_inventory_can_grow_but_cannot_lose_either_existing_contract(tmp_path):
     class Fixture(unittest.TestCase):
         def test_contract(self):
             pass
 
-    for count in (1, 3):
+    for count in (2, 3):
         suite = unittest.TestSuite(Fixture("test_contract") for _ in range(count))
         assert dmg.run(suite, tmp_path / f"contracts-{count}.xml") == 0
-    assert dmg.run(unittest.TestSuite(), tmp_path / "empty.xml") == 1
+    for count in (0, 1):
+        suite = unittest.TestSuite(Fixture("test_contract") for _ in range(count))
+        assert dmg.run(suite, tmp_path / f"missing-{count}.xml") == 1
 
 
 def test_dmg_evidence_preserves_each_failed_attempt():

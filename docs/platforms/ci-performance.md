@@ -1418,8 +1418,9 @@ freezes the October 20, 22:13–22:14 UTC window: two actual main workflows,
 25 jobs, both original attempts, and 122 pull requests collected across API pages.
 Its checksum manifest passed verification and the reporting loader. This verifies
 the read-only collector against GitHub; the narrow window does not measure a CI
-performance improvement. Queries use whole seconds while exact requested
-boundaries remain recorded for PR cohort membership.
+performance improvement. Queries use whole seconds while returned runs and PR
+merge membership are filtered against the exact requested boundaries recorded
+in the manifest.
 
 Report schema 2 retains previous fields and adds first-attempt workflow, job and
 PR-commit denominators, cancellations, incomplete/unknown outcomes, actual job
