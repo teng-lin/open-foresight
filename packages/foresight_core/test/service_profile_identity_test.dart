@@ -871,6 +871,51 @@ void main() {
     expect(FileStat.statSync(profile.runtime).mode & 0x1ff, 0x1c0);
   });
 
+  test('a stale record is still named when the deadline cuts a status probe '
+      'short (S1)', () async {
+    final directory = createServiceTestDirectorySync('of-cut-');
+    final shared = '${directory.path}/run';
+    final owner = await HookedServiceProcess.start(
+      build,
+      ProfilePaths('${directory.path}/a', shared),
+    );
+    await owner.ready();
+    final endpoint = '$shared/application.sock';
+    final profile = ProfilePaths(
+      '${directory.path}/b',
+      '${directory.path}/own',
+    );
+    writeCrashRecord(profile, shared);
+    // This profile's lock is held, so no launch replaces the record and the
+    // startup polls until its deadline.
+    await holdProfileLock(profile);
+    final proxy = ServiceFaultProxy();
+    addTearDown(proxy.close);
+    // The second probe's result is never released; the deadline ends it.
+    var results = 0;
+    final held = proxy.hold(
+      ProxyDirection.toClient,
+      where: (frame) =>
+          frame.method == 'status' &&
+          frame.json?.containsKey('result') == true &&
+          ++results == 2,
+    );
+    await expectLater(
+      proxy.run(
+        () =>
+            ensureService(profile, startupTimeout: const Duration(seconds: 3)),
+      ),
+      throwsA(
+        isA<TimeoutException>().having(
+          (error) => error.message,
+          'message',
+          staleRecordRefusal(profile, endpoint, owner.pid),
+        ),
+      ),
+    );
+    await held.reached;
+  }, timeout: const Timeout(Duration(minutes: 3)));
+
   test('the directory a default runtime lives in is private too (S5)', () {
     final directory = createServiceTestDirectorySync('of-parent-');
     final xdg = '${directory.path}/xdg';

@@ -2272,6 +2272,12 @@ class _ClosingService implements Exception {
 
 typedef ServiceStartup = ({ServiceClient client, Map<String, dynamic> status});
 
+/// The startup deadline ended a status probe before its reply.
+class _ProbeCutShort extends TimeoutException {
+  _ProbeCutShort()
+    : super('Application service did not answer its startup status probe');
+}
+
 /// The service of another profile answered at [endpoint] (SL-7), which a
 /// valid endpoint record named ([fromRecord]) or this profile's runtime holds.
 class _ForeignOwner implements Exception {
@@ -2318,14 +2324,14 @@ Future<ServiceStartup> _connectCompatibleService(
         .call(Operation.status.wire, args)
         .timeout(
           capped ? statusProbeLimit : deadline,
-          onTimeout: () => throw TimeoutException(
-            capped
-                ? 'Application service at $path accepted the connection but '
-                      'did not answer status within '
-                      '${_describeDuration(statusProbeLimit)}; it may be busy '
-                      'or hung.'
-                : 'Application service did not answer its startup status probe',
-          ),
+          onTimeout: () => throw capped
+              ? TimeoutException(
+                  'Application service at $path accepted the connection but '
+                  'did not answer status within '
+                  '${_describeDuration(statusProbeLimit)}; it may be busy '
+                  'or hung.',
+                )
+              : _ProbeCutShort(),
         );
     final value = Map<String, dynamic>.from(reply as Map);
     // Another profile's owner is never ours, whatever its version. The first
@@ -2862,6 +2868,11 @@ Future<ServiceStartup> _ensureService(
         // another profile's service now uses. Never attach there; once this
         // profile's lock is free, the launch below replaces the record (S1).
         staleRecord = message;
+      } on _ProbeCutShort {
+        // A probe the deadline cut short says nothing new about the stale
+        // record this startup already found.
+        if (staleRecord == null) rethrow;
+        throw deadlineFailure();
       } on _ClosingService catch (closing) {
         closingOwner = true;
         try {
