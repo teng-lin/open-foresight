@@ -1417,8 +1417,10 @@ Report schema 2 retains previous fields and adds first-attempt workflow, job and
 PR-commit denominators, cancellations, incomplete/unknown outcomes, actual job
 queue measurements when supplied by GitHub, workflow start latency, first green
 versus latest readiness, and independent SDK/release/nightly/maintenance spend.
-Each first-green observation records its contributing attempt; the separate
-`push_to_first_attempt_green` distribution excludes successes requiring reruns.
+Each first-green observation records contributing workflow runs and attempts;
+the separate `push_to_first_attempt_green` distribution requires the earliest
+observed run of each required workflow and excludes reruns and replacement
+runs of the same head.
 Missing queue or cache metadata remains unknown. A failed first attempt stays
 failed after a successful rerun; copied successful jobs retain their original
 attempt and are counted once. Timeout and startup conclusions remain explicit.

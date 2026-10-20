@@ -346,6 +346,22 @@ def test_rerun_green_latency_is_separate_from_first_attempt_green():
     assert data["pushes"][0]["first_green_attempt"] == 2
 
 
+def test_same_head_retrigger_cannot_be_called_first_attempt_green():
+    original = run(jobs=[job("python", "failure")])
+    jobs = [
+        job(name, identity=index + 10)
+        | {"started_at": "2026-10-19T00:10:00Z", "completed_at": "2026-10-19T00:12:00Z"}
+        for index, name in enumerate(sorted(stats.REQUIRED), 1)
+    ]
+    replacement = run(2, jobs=jobs) | {"created_at": "2026-10-19T00:10:00Z"}
+    data = stats.report([original, replacement], [pull()], {}, "2026-10-19T00:00:00Z")
+    assert data["push_to_first_green"]["p50"] == 12
+    assert data["push_to_first_attempt_green"]["n"] == 0
+    assert data["pushes"][0]["first_green_attempt"] == 1
+    assert data["pushes"][0]["first_attempt_green"] is False
+    assert data["pushes"][0]["first_green_runs"]["python"]["run"] == 2
+
+
 def test_green_qualification_repeats_cannot_improve_ordinary_error_rate():
     ordinary = run(jobs=[job(status="failure")])
     repeats = [run(index) | {"qualification": True} for index in range(2, 8)]
