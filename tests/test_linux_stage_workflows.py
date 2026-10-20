@@ -578,7 +578,9 @@ def test_package_and_acceptance_share_the_exact_inrun_build_without_compiling_ag
             if step.get("uses") == "./.github/actions/setup-linux-consumer"
         )
         assert "needs.linux-build.outputs.bundle_id" in setup["with"]["artifact-id"]
-        assert setup["with"]["artifact-id"] == "${{ needs.linux-build.outputs.bundle_id }}"
+        assert (
+            setup["with"]["artifact-id"] == "${{ needs.linux-build.outputs.bundle_id }}"
+        )
         assert not any(
             step.get("with", {}).get("file") == "packaging/build.Dockerfile"
             for step in job["steps"]
@@ -606,6 +608,7 @@ def test_failed_consolidated_macos_cannot_be_hidden_by_successful_packaging(resu
         },
     }
     results["macos"] = {"result": result}
+    results["linux-native"] = {"result": "skipped"}
     with pytest.raises(ValueError, match="macos: expected success"):
         check_gates(results, selected)
 
