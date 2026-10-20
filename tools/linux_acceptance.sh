@@ -24,6 +24,7 @@ python tools/ci_app_build_transport.py --repository "$GITHUB_REPOSITORY" --accep
 task_repository=$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
 docker buildx build --builder "$(docker context show)" --platform linux/amd64 --load \
   --file packaging/acceptance.Dockerfile --target acceptance --build-arg "SDK_IMAGE=$SDK_IMAGE" \
+  --cache-from "type=registry,ref=ghcr.io/$task_repository/linux-sdk:qualified-v2-acceptance-tools-buildcache-v1" \
   --cache-from "type=registry,ref=ghcr.io/$task_repository/linux-sdk:acceptance-tools-buildcache-v1" \
   --cache-from "type=registry,ref=ghcr.io/$task_repository/linux-sdk:app-buildcache-x86-64" \
   --tag foresight-acceptance:local .

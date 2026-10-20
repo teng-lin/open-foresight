@@ -451,13 +451,16 @@ def test_ubuntu_build_images_pin_every_apt_transaction_to_the_reviewed_snapshot(
         "sdk-litert.Dockerfile",
         "sdk-whisper.Dockerfile",
         "sdk.Dockerfile",
-        "build.Dockerfile",
+        "ci-tooling.Dockerfile",
     ):
         source = (root / "packaging" / name).read_text()
         assert "ARG UBUNTU_SNAPSHOT=" + snapshot in source
         for command in re.findall(r"apt-get[^;&\\\n]*", source):
             assert '--snapshot "$UBUNTU_SNAPSHOT"' in command, (name, command)
         assert "org.openforesight.ubuntu-snapshot" in source
+    application = (root / "packaging/build.Dockerfile").read_text()
+    assert "FROM ${TOOLING_IMAGE} AS application-base" in application
+    assert "apt-get" not in application
 
 
 def test_monthly_snapshot_refresh_proposes_review_instead_of_silent_package_updates():

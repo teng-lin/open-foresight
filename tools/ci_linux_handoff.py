@@ -22,6 +22,8 @@ import tarfile
 import tempfile
 import zipfile
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 # Packaged installers and their bundle travel separately; tests consume build/.
 EXCLUDED = {".git", ".venv", "build/_deps", "dist"}
 EXTERNAL_LINK_ROOTS = ("/opt/", "/usr/")
@@ -136,7 +138,7 @@ def inventory(root):
     return dict(sorted(result.items()))
 
 
-def input_identity(sdk_image, qualification, recipe, snapshot):
+def input_identity(sdk_image, qualification, recipe, snapshot, tooling=None):
     """Image rebuilds may differ; the verified SDK/seed/recipe inputs may not."""
     image_id = subprocess.check_output(
         ["docker", "image", "inspect", "--format", "{{.Id}}", sdk_image],
@@ -156,6 +158,14 @@ def input_identity(sdk_image, qualification, recipe, snapshot):
         "ci_recipe_sha256": digest(recipe),
         "snapshot": snapshot,
     }
+    if tooling is not None:
+        from tools.ci_tooling_image import identity as tooling_identity
+
+        resolved = json.loads(Path(tooling).read_text())
+        expected = tooling_identity(image_id, snapshot)
+        if resolved.get("inputs") != expected:
+            raise ValueError("Tooling inputs differ from the actual consumed SDK/recipe")
+        record["tooling_identity"] = expected["identity"]
     return {**record, "identity": hashlib.sha256(canonical(record)).hexdigest()}
 
 
@@ -422,6 +432,7 @@ def main():
         "--recipe", type=Path, default=Path("packaging/build.Dockerfile")
     )
     identity.add_argument("--snapshot", required=True)
+    identity.add_argument("--tooling", type=Path)
     identity.add_argument("--output", type=Path, required=True)
     producer = commands.add_parser("qualify")
     producer.add_argument("--directory", type=Path, required=True)
@@ -453,7 +464,7 @@ def main():
         )
     elif args.command == "identity":
         value = input_identity(
-            args.sdk_image, args.qualification, args.recipe, args.snapshot
+            args.sdk_image, args.qualification, args.recipe, args.snapshot, args.tooling
         )
         args.output.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
         print(value["identity"])

@@ -2,6 +2,7 @@
 """Select expensive CI only for changes that can affect application outputs."""
 
 import argparse
+import importlib
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -14,11 +15,13 @@ GATES = (
     "linux-test",
     "linux-document-imports",
     "packaging",
+    "dmg",
 )
 
 # Standalone quality/maintenance controls do not change installed application bytes.
 MAINTENANCE = {
     "tools/ci_stats.py",
+    "tools/ci_stats_snapshot.py",
     "tests/test_ci_stats.py",
     ".coveragerc",
     "pytest.ini",
@@ -104,14 +107,24 @@ LINUX_FILES = {
 
 def select_gates(paths, force=False):
     selected = dict.fromkeys(GATES, force)
+    contracts = importlib.import_module(
+        "tools.platform_python_tests" if __package__ else "platform_python_tests"
+    )
     for path in paths:
+        owners = contracts.owner_gates(path)
+        if owners:
+            for gate in owners:
+                selected[gate] = True
+            if path not in PACKAGING_FILES:
+                continue
         # These Markdown notices are installed payloads, so editorial suffix
         # rules must not hide changes to the package's legal contents.
         if path in PACKAGING_FILES or path.startswith("packaging/ci/"):
             selected["packaging"] = True
+            selected["dmg"] = True
             continue
         if path.startswith("packaging/notices/"):
-            for gate in GATES[1:]:
+            for gate in GATES:
                 selected[gate] = True
             continue
         # Root Python tests run in the unconditional quality job. Keep explicit
@@ -137,7 +150,12 @@ def select_gates(paths, force=False):
         ):
             selected["macos"] = True
         elif path in LINUX_FILES or path.startswith("apps/desktop/linux/"):
-            for gate in GATES[1:]:
+            for gate in (
+                "linux-build",
+                "linux-test",
+                "linux-document-imports",
+                "packaging",
+            ):
                 selected[gate] = True
         else:
             selected = dict.fromkeys(GATES, True)
@@ -147,6 +165,8 @@ def select_gates(paths, force=False):
         selected["linux-build"] = True
     if selected["linux-build"]:
         selected["linux-test"] = True
+    if selected["macos"] or selected["packaging"]:
+        selected["dmg"] = True
     return selected
 
 
@@ -154,13 +174,18 @@ def requires_build(paths):
     return any(select_gates(paths).values())
 
 
-def check_gates(jobs, selected):
+def check_gates(jobs, selected, tier=""):
     """Reject failed classification, malformed selection and skipped selected jobs."""
     if set(selected) != set(GATES) or any(
         type(value) is not bool for value in selected.values()
     ):
         raise ValueError("Invalid platform selection")
     expected = {"changes": "success"}
+    if tier not in ("", "pr", "sweep", "preview", "release", "local"):
+        raise ValueError("Invalid CI tier")
+    expected["linux-native"] = (
+        "success" if selected["linux-build"] and tier != "release" else "skipped"
+    )
     expected.update(
         {
             name: "success" if required else "skipped"
@@ -180,6 +205,7 @@ def selection_report(paths, *, force=False, revision_range=""):
         "range": revision_range,
         "force": force,
         "platforms": "all",
+        "superseded": False,
         "selection": selected,
         "paths": [
             {
@@ -239,11 +265,13 @@ def main():
     parser.add_argument("--json-output", default="ci-selection.json")
     parser.add_argument("--check-gates", action="store_true")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--tier", default=os.environ.get("CI_TIER", ""))
     args = parser.parse_args()
     if args.check_gates:
         check_gates(
             json.loads(os.environ["NEEDS"]),
             json.loads(os.environ["SELECTION"]),
+            args.tier,
         )
         print("All selected platform gates passed.")
         return

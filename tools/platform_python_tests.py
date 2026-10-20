@@ -43,7 +43,6 @@ PLATFORM = {
     "linux": (),
     # These execute Apple tools/metadata APIs rather than portable mocks.
     "macos": (
-        "tests/test_dmg_contract.py",
         "tests/test_macos_bundle.py",
         "tests/test_macos_deployment_target.py",
         "tests/test_macos_tools.py",
@@ -52,16 +51,36 @@ PLATFORM = {
 # These platform probes are fully replaced by fixtures; quality executes every
 # case independently of its operating system. Keep explicit reasons for audit.
 QUALITY_ONLY = {
+    "tests/test_ci_gate_owners.py": "Apple runner and host metadata are fixture inputs; real DMG contracts have an external owner.",
     "tests/test_build_recipes.py": "All platform/tool probes are monkeypatched.",
     "tests/test_litert_build_orchestration.py": "Host platform/machine are fixture inputs.",
 }
 
 
 EXTERNAL = {
+    "tests/test_dmg_contract.py": "dmg-contracts.yml executes both real Apple signing/mount/upgrade contracts.",
     "tests/inference/test_litert_identity.py": "native_litert_identity runs real loader fixtures in CTest on both platforms.",
     "tests/test_rpm_scriptlets.py": "Fedora package contract executes real rpmspec.",
     "tests/test_acceptance_image_cache.py": "Ubuntu acceptance executes opt-in Docker fixture.",
 }
+
+
+def owner_gates(path):
+    """Resolve selection from the actual host inventories, including external owners."""
+    if path in SHARED:
+        return ("macos", "linux-build")
+    for platform, paths in PLATFORM.items():
+        if path in paths:
+            return ("macos",) if platform == "macos" else ("linux-build",)
+    if path in EXTERNAL:
+        if path == "tests/test_dmg_contract.py":
+            return ("dmg",)
+        if path == "tests/test_rpm_scriptlets.py":
+            return ("packaging",)
+        if path == "tests/test_acceptance_image_cache.py":
+            return ("linux-build",)
+        return ("macos", "linux-build")
+    return ()
 
 
 def host_sensitive(path):

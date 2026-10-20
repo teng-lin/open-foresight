@@ -63,7 +63,7 @@ def test_mixed_changes_preserve_packaging_and_apple_runtime_gates():
             ]
         ).items()
         if needed
-    } == {"macos", "packaging", "linux-build", "linux-test"}
+    } == {"macos", "packaging", "dmg", "linux-build", "linux-test"}
 
 
 def test_current_build_resolves_the_sdk_before_dependency_inspection():

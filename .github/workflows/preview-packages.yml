@@ -174,7 +174,8 @@ jobs:
         if: needs.plan.outputs.validation == 'full'
         with:
           path: build/acceptance-models
-          key: preview-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
+          key: main-integration-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
+          restore-keys: preview-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
       - name: Full installed model acceptance
         if: needs.plan.outputs.validation == 'full'
         env:
@@ -184,11 +185,6 @@ jobs:
           mkdir -p reports
           python tools/test_installed_release.py --prepare-models-only --models build/acceptance-models --output reports
           docker run --rm --cap-add NET_ADMIN --security-opt seccomp=unconfined --security-opt systempaths=unconfined --security-opt apparmor=foresight-ci-document-sandbox -e OPEN_FORESIGHT_ACCEPTANCE_DISPOSABLE=1 -v "$PWD:/work:ro" -v "$PWD/dist/packages:/assets:ro" -v "$PWD/build/acceptance-models:/models:ro" -v "$PWD/reports:/reports" "$IMAGE" bash /work/packaging/ci/test-release-package.sh "$FORMAT"
-      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
-        if: needs.plan.outputs.validation == 'full'
-        with:
-          path: build/acceptance-models
-          key: preview-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
       - name: Full bundled cloud acceptance on Linux
         if: needs.plan.outputs.validation == 'full' && matrix.format == 'deb'
         env:
@@ -251,7 +247,8 @@ jobs:
         if: needs.plan.outputs.validation == 'full'
         with:
           path: build/acceptance-models
-          key: preview-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
+          key: main-integration-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
+          restore-keys: preview-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
       - name: Prepare model fixtures for full acceptance
         if: needs.plan.outputs.validation == 'full'
         run: python tools/test_installed_release.py --prepare-models-only --models build/acceptance-models --output reports
@@ -261,11 +258,6 @@ jobs:
         run: |
           task_dmg=(dist/*.dmg)
           python tools/test_release_dmg.py --dmg "${task_dmg[0]}" --destination "$RUNNER_TEMP/preview-install/Open Foresight.app" --validation "$VALIDATION" --models build/acceptance-models --output reports
-      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
-        if: needs.plan.outputs.validation == 'full'
-        with:
-          path: build/acceptance-models
-          key: preview-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
       - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         if: needs.plan.outputs.validation == 'full'
         with:
@@ -423,7 +415,8 @@ jobs:
       - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: build/acceptance-models
-          key: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
+          key: main-integration-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
+          restore-keys: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
       - name: Audit external CPU models using the original preview
         id: cpu-audit
         if: "!cancelled() && steps.bundle.outcome == 'success' && steps.sdk.outcome == 'success'"

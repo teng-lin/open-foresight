@@ -22,6 +22,9 @@ PROTECTED_CACHE_TAGS = {
     "app-deps-buildcache-v1",
     "ci-tools-buildcache-v1",
     "acceptance-tools-buildcache-v1",
+    "qualified-v2-app-deps-buildcache-v1",
+    "qualified-v2-ci-tools-buildcache-v1",
+    "qualified-v2-acceptance-tools-buildcache-v1",
 }
 ACCEPT = ", ".join(
     (
@@ -96,7 +99,10 @@ def candidates(versions, identity, protected, retained=()):
     return [
         v
         for v in versions
-        if tags(v) and not tags(v) & keep and v["name"] not in protected
+        if tags(v)
+        and not tags(v) & keep
+        and v["name"] not in protected
+        and not any(tag.startswith("ci-tooling-v1-") for tag in tags(v))
     ]
 
 
