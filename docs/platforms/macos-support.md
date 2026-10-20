@@ -2,8 +2,11 @@
 
 The implementation targets Apple Silicon and macOS 15 or later. Flutter is the
 desktop shell; the AOT Dart application service owns the profile, model workers,
-recording, and writes. MCP and the desktop attach to that service. Closing a
-window or an MCP client does not shut down the service.
+recording, and writes. MCP and the desktop attach to that service. The desktop
+keeps the service running; after it leaves, desktop-only use keeps the one-second
+shutdown grace, and recent agent use follows the busy-aware idle rule, so models
+are released one idle period after the last agent request whether or not the
+agent is still connected.
 
 This document describes the implementation and its build commands. A development
 bundle is not a validated public release. The [release gates](#release-gates)
@@ -205,8 +208,9 @@ audio, notarization, quarantine, minimum-OS, and fresh-user checks.
 The installer defers replacement while the destination is running by default.
 Its explicit stop-services option requires verified profile ownership, graceful
 idle-only service shutdown, and closed desktop clients. Recording, final
-transcription, or another active operation defers the upgrade. A shared installation lock held
-through every service lifetime excludes replacement; the installer holds the
+transcription, another active operation, or executing background model work defers
+the upgrade. A shared installation lock held through every service lifetime
+excludes replacement; the installer holds the
 exclusive counterpart through staging, atomic exchange, verification, and
 rollback. Copying uses `ditto` to preserve quarantine and extended metadata.
 Ad-hoc installation requires the explicit development option. Do not replace an

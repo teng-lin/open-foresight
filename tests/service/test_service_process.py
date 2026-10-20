@@ -98,7 +98,7 @@ class Peer:
 class ApprovalDesktop:
     """Explicit synthetic UI host for tests that exercise approved operations."""
 
-    def __init__(self, path, profile, root):
+    def __init__(self, path, profile, root, preferences=None):
         self.peer = Peer(path)
         self.peer.call(
             "status"
@@ -108,6 +108,10 @@ class ApprovalDesktop:
             {"token": (profile / ".desktop-capability").read_text()},
         )
         self.peer.call("security.allow_import_root", {"path": str(root)})
+        # The review thread owns the reader after it starts. Set preferences
+        # synchronously while this connection is still ours to read.
+        for key, value in (preferences or {}).items():
+            self.peer.call("preferences.set", {"key": key, "value": value})
         self.thread = threading.Thread(target=self._review, daemon=True)
         self.thread.start()
 
@@ -259,6 +263,12 @@ def running(tmp_path, request):
     assert SERVICE.is_file() and MCP.is_file(), (
         "Build service and MCP executables first"
     )
+    parameter = getattr(request, "param", None)
+    options = parameter.split(",") if parameter else []
+    preferences = {}
+    for option in options:
+        if option.startswith("idle="):
+            preferences["serviceIdleMinutes"] = option.removeprefix("idle=")
     fixtures = tmp_path / "fixtures"
     fixtures.mkdir(mode=0o700)
     model = fixtures / "model.litertlm"
@@ -301,7 +311,7 @@ def running(tmp_path, request):
         FORESIGHT_DELAY_GENERATION=str(fixtures / "delay"),
         PATH=str(fixtures) + ":" + env["PATH"],
     )
-    if getattr(request, "param", None) == "capture_poll_gate":
+    if "capture_poll_gate" in options:
         wrapper = fixtures / (
             "capture_poll_gate.dylib"
             if sys.platform == "darwin"
@@ -351,9 +361,12 @@ def running(tmp_path, request):
                     raise AssertionError(log.read()) from None
                 poll_delay(deadline)
         desktop = ApprovalDesktop(
-            tmp_path / "run/application.sock", tmp_path / "data", tmp_path
+            tmp_path / "run/application.sock",
+            tmp_path / "data",
+            tmp_path,
+            preferences=preferences,
         )
-        if getattr(request, "param", None) != "without_embedding":
+        if "without_embedding" not in options:
             deadline = time.monotonic() + 5
             while True:
                 try:
@@ -760,6 +773,9 @@ def test_native_desktop_and_mcp_share_service(running):
         },
     )
     peer.call("preferences.set", {"key": "inactivity", "value": "0"})
+    # The model calls are agent activity: the fixture service outlives this
+    # approval desktop, and Flutter attaches to it. Desktop restart therefore
+    # preserves the owner without racing the desktop-only shutdown grace.
     running[
         "desktop"
     ].close()  # The real desktop owns approval and the capture indicator below.
@@ -998,8 +1014,15 @@ def test_url_and_directory_imports_run_in_the_service(running):
         thread.join(timeout=5)
 
 
-@pytest.mark.parametrize("shutdown", ["explicit-stop", "desktop-close"])
-def test_service_stop_waits_for_active_capture_and_finalizes_transcript(running, shutdown):
+@pytest.mark.parametrize(
+    "running,shutdown",
+    [("idle=0.1", "desktop-close"), (None, "explicit-stop")],
+    indirect=["running"],
+    ids=["desktop-close", "explicit-stop"],
+)
+def test_service_stop_waits_for_active_capture_and_finalizes_transcript(
+    running, shutdown
+):
     import sqlite3
 
     peer = running["peer"]
@@ -1021,7 +1044,9 @@ def test_service_stop_waits_for_active_capture_and_finalizes_transcript(running,
         poll_delay(deadline)
     helper_pid = int(peer.call("status")["helper"]["instanceId"].split("-", 1)[0])
     if shutdown == "desktop-close":
-        # Leave the agent connected: it must not retain the UI's daemon.
+        assert peer.call("status")["lifetime"]["idle_minutes"] == 0.1
+        # Recent agent work keeps the service alive through finalization; the
+        # desktop departure stops capture and the idle rule releases the owner.
         running["desktop"].close()
     else:
         stopped = subprocess.run(
@@ -1050,6 +1075,126 @@ def test_service_stop_waits_for_active_capture_and_finalizes_transcript(running,
             ).fetchone()[0]
             > 0
         )
+
+
+@pytest.mark.parametrize("running", ["without_embedding,idle=0.1"], indirect=True)
+def test_agent_only_service_exits_after_the_idle_period(running):
+    peer = running["peer"]
+    owner = running["process"]
+    assert peer.call("status")["lifetime"]["idle_minutes"] == 0.1
+    started = int(time.time() * 1000)
+    assert peer.call("notes.list") == []
+    running["desktop"].close()
+    deadline = time.monotonic() + 5
+    state = None
+    while True:
+        try:
+            state = peer.call("status")
+        except (AssertionError, OSError, RuntimeError):
+            pytest.fail(f"Service exited before publishing an idle deadline: {state}")
+        lifetime = state["lifetime"]
+        if not lifetime["pinned_by_desktop"] and lifetime["exit_after"] is not None:
+            break
+        assert time.monotonic() < deadline, state
+        poll_delay(deadline)
+    assert state["pid"] == owner.pid
+    assert lifetime["last_agent_activity"] >= started
+    assert lifetime["exit_after"] >= started + 6000
+    assert owner.wait(timeout=15) == 0
+    assert not running["path"].exists()
+    data = running["root"] / "data"
+    assert not (data / ".application-endpoint.json").exists()
+    with (data / ".application.lock").open("a") as probe:
+        fcntl.lockf(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.lockf(probe, fcntl.LOCK_UN)
+
+    launches = running["root"] / "idle-launches"
+    wrapper = running["root"] / "launch-after-idle"
+    replacement_log = running["root"] / "idle-replacement.log"
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        f'printf "%s\\n" "$$" >> "{launches}"\n'
+        f'exec "{SERVICE}" "$@" >> "{replacement_log}" 2>&1\n'
+    )
+    wrapper.chmod(0o700)
+    mcp = None
+    try:
+        mcp = McpPeer({**running["env"], "FORESIGHT_SERVICE": str(wrapper)})
+        mcp.initialize()
+        result = mcp.tool("list_notes")
+        assert not result.get("isError"), result
+        assert result["structuredContent"]["result"] == []
+        replacements = [int(line) for line in launches.read_text().split()]
+        assert len(replacements) == 1 and replacements[0] != owner.pid
+    finally:
+        try:
+            if mcp is not None:
+                mcp.close()
+        finally:
+            # The running fixture owns only the original. Verify the process
+            # identity before stopping any replacement started by MCP.
+            for line in launches.read_text().split() if launches.exists() else []:
+                command = subprocess.run(
+                    ["/bin/ps", "-p", line, "-o", "command="],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                ).stdout
+                if str(SERVICE) in command:
+                    try:
+                        os.kill(int(line), signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                    deadline = time.monotonic() + 15
+                    while not process_gone(int(line)):
+                        assert time.monotonic() < deadline, command
+                        poll_delay(deadline)
+            if replacement_log.exists():
+                print(replacement_log.read_text())
+
+
+@pytest.mark.parametrize("running", ["without_embedding"], indirect=True)
+def test_desktop_departure_without_agent_work_exits_after_the_grace(running):
+    state = running["peer"].call("status")
+    assert state["lifetime"]["idle_minutes"] == 30
+    assert state["lifetime"]["last_agent_activity"] is None
+    running["desktop"].close()
+    assert running["process"].wait(timeout=15) == 0
+    assert not running["path"].exists()
+
+
+def wait_for_background_idle(peer):
+    deadline = time.monotonic() + 30
+    while True:
+        try:
+            state = peer.call("status")
+        except (AssertionError, OSError, RuntimeError) as error:
+            pytest.fail(f"Service closed before background work settled: {error}")
+        if not state["lifetime"]["busy"]:
+            return
+        assert time.monotonic() < deadline, state
+        poll_delay(deadline)
+
+
+def stop_if_idle_after_background_work(pid, env):
+    # A scheduled enhancement retry can begin after our idle observation.
+    # Retry only that explicit busy refusal, at most three times.
+    for attempt in range(4):
+        stopped = subprocess.run(
+            [str(SERVICE), f"--stop-if-idle={pid}"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        if (
+            stopped.returncode == 0
+            or "Background model work" not in stopped.stderr
+            or attempt == 3
+        ):
+            return stopped
+        print(stopped.stderr)
+        threading.Event().wait(1)
 
 
 def test_idle_upgrade_shutdown_defers_capture_and_requires_verified_ack(running):
@@ -1092,13 +1237,8 @@ def test_idle_upgrade_shutdown_defers_capture_and_requires_verified_ack(running)
         assert time.monotonic() < deadline, "capture stopped after deferred upgrade"
         poll_delay(deadline)
     peer.call("meetings.stop")
-    stopped = subprocess.run(
-        [str(SERVICE), f"--stop-if-idle={owner.pid}"],
-        env=running["env"],
-        capture_output=True,
-        text=True,
-        timeout=15,
-    )
+    wait_for_background_idle(peer)
+    stopped = stop_if_idle_after_background_work(owner.pid, running["env"])
     assert stopped.returncode == 0, stopped.stderr
     assert json.loads(stopped.stdout) == {"stopped": True, "shutdown_verified": True}
     assert owner.wait(timeout=5) == 0
@@ -1236,13 +1376,8 @@ def assert_idle_shutdown_verifies_a_real_adopted_helper(
             if helper_exits_first:
                 helper.terminate()
                 helper.wait(timeout=10)
-            stopped = subprocess.run(
-                [str(SERVICE), f"--stop-if-idle={service.pid}"],
-                env=env,
-                text=True,
-                capture_output=True,
-                timeout=20,
-            )
+            wait_for_background_idle(peer)
+            stopped = stop_if_idle_after_background_work(service.pid, env)
             assert stopped.returncode == 0, stopped.stderr
             assert json.loads(stopped.stdout) == {
                 "stopped": True,
