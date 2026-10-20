@@ -206,6 +206,17 @@ class Reader:
         return fingerprint(sorted(entries))
 
     def required_checks(self, head):
+        rules = self.get("rules/branches/main")
+        required = [
+            check
+            for rule in rules
+            if rule.get("type") == "required_status_checks"
+            for check in rule["parameters"]["required_status_checks"]
+        ]
+        if {check["context"] for check in required} != set(REQUIRED) or any(
+            check.get("integration_id") != APP for check in required
+        ):
+            raise ValueError("Main required-check set or GitHub App binding changed")
         checks = self.rows(f"commits/{head}/check-runs?filter=all", "check_runs")
         proofs = {}
         for name, workflow in REQUIRED.items():
@@ -254,7 +265,8 @@ class Reader:
             except ValueError:
                 continue
             if (
-                receipt.get("schema") != 1
+                type(receipt.get("schema")) is not int
+                or receipt.get("schema") != 1
                 or receipt.get("mode") != self.mode
                 or receipt.get("source") != source
                 or receipt.get("repository") != self.repository
