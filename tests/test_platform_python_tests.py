@@ -113,9 +113,24 @@ def test_removed_assigned_contract_fails_instead_of_silently_shrinking_suite(
 
 
 @pytest.mark.parametrize("status", [0, 7])
-def test_runner_preserves_pytest_exit_status_and_subprocess_output(monkeypatch, status):
+@pytest.mark.parametrize("isolated", [False, True])
+def test_runner_preserves_pytest_exit_status_and_subprocess_output(
+    monkeypatch, status, isolated, tmp_path
+):
     commands = []
-    monkeypatch.setattr(contracts.sys, "argv", ["contracts", "--platform", "macos"])
+    extra = (
+        [
+            "--basetemp",
+            str(tmp_path / "private pytest"),
+            "--cache-dir",
+            str(tmp_path / "private cache"),
+        ]
+        if isolated
+        else []
+    )
+    monkeypatch.setattr(
+        contracts.sys, "argv", ["contracts", "--platform", "macos", *extra]
+    )
 
     def run(command, **kwargs):
         commands.append((command, kwargs))
@@ -127,7 +142,17 @@ def test_runner_preserves_pytest_exit_status_and_subprocess_output(monkeypatch, 
         contracts.main()
     assert result.value.code == status
     command, options = commands[0]
-    assert command == contracts.command("macos")
+    expected = (
+        [
+            "--basetemp",
+            str(tmp_path / "private pytest"),
+            "-o",
+            "cache_dir=" + str(tmp_path / "private cache"),
+        ]
+        if isolated
+        else []
+    )
+    assert command == [*contracts.command("macos"), *expected]
     assert options == {"cwd": ROOT, "timeout": 1800}
 
 
