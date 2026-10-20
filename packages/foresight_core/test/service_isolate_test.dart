@@ -466,6 +466,105 @@ void main() {
     timeout: const Timeout(Duration(minutes: 3)),
   );
 
+  test(
+    'a refused client that reads slowly gets every closing refusal before its '
+    'connection ends with the public socket (SL-3)',
+    () async {
+      final saved = Map<String, String>.from(runtimeConfiguration.environment);
+      for (final key in [
+        'FORESIGHT_HELPER',
+        'FORESIGHT_NATIVE',
+        'FORESIGHT_INSTALL_ROOT',
+        'FORESIGHT_RUNTIME_REVISION',
+        'FORESIGHT_MODEL_MANIFEST',
+      ]) {
+        runtimeConfiguration.environment.remove(key);
+      }
+      final directory = createTestTempDirectorySync('of-slow-refused-');
+      final gates = await ServiceGates.create(directory);
+      runtimeConfiguration.environment['FORESIGHT_SERVICE_GATES'] =
+          gates.directory.path;
+      // The worker holds before it asks the frontend to remove the public
+      // socket, which then ends every refused connection.
+      gates.hold('close.before_frontend_release');
+      final profile = ProfilePaths(
+        '${directory.path}/data',
+        '${directory.path}/run',
+      );
+      IsolatedApplicationService? host;
+      ServiceClient? latecomer;
+      Socket? raw;
+      try {
+        host = await IsolatedApplicationService.start(profile);
+        final endpoint = serviceEndpoint(profile);
+        final shutdown = host.close();
+        await gates.reached('close.before_frontend_release');
+        raw = await Socket.connect(
+          InternetAddress(endpoint, type: InternetAddressType.unix),
+          0,
+        );
+        final received = <int>[];
+        final ended = Completer<void>();
+        final reading = raw.listen(
+          received.addAll,
+          onError: (Object _) => ended.complete(),
+          onDone: ended.complete,
+        );
+        // This client stops reading, so its refusals queue in the frontend
+        // once the socket buffers are full.
+        reading.pause();
+        const count = 5000;
+        raw.add(
+          utf8.encode(
+            [for (var id = 1; id <= count; id++) '{"id":$id}\n'].join(),
+          ),
+        );
+        await raw.flush();
+        // A client that reads normally is refused too, after the frontend
+        // has read the requests above.
+        latecomer = await ServiceClient.connect(endpoint);
+        expect(
+          await latecomer
+              .call('status')
+              .then<Object?>((_) => null, onError: (Object e) => e),
+          isClosingRefusal,
+        );
+        gates.release('close.before_frontend_release');
+        // Read only once the public socket is gone, when the frontend ends
+        // the refused connections.
+        await eventually(
+          () =>
+              FileSystemEntity.typeSync(endpoint, followLinks: false) ==
+              FileSystemEntityType.notFound,
+          timeout: const Duration(seconds: 30),
+        );
+        reading.resume();
+        await ended.future.timeout(const Duration(seconds: 30));
+        await reading.cancel();
+        final lines = const LineSplitter().convert(utf8.decode(received));
+        // Every request got its refusal, which a client resends, before EOF;
+        // a bare EOF would have left the rest outcomeUnknown.
+        expect(lines, hasLength(count));
+        for (final line in lines) {
+          final frame = jsonDecode(line) as Map;
+          expect(RpcError.from(frame['error'] as Object), isClosingRefusal);
+        }
+        await shutdown.timeout(const Duration(seconds: 30));
+      } finally {
+        gates.releaseAll();
+        raw?.destroy();
+        await latecomer?.close();
+        await host?.close();
+        directory.deleteSync(recursive: true);
+        runtimeConfiguration.environment
+          ..clear()
+          ..addAll(saved);
+      }
+    },
+    // Above the 60 s gate wait and the 30 s waits, so a hang reports which.
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
   test('a frontend whose worker died never unlinks a socket that replaced its '
       'own (SL-3)', () async {
     final saved = Map<String, String>.from(runtimeConfiguration.environment);
