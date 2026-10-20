@@ -401,6 +401,8 @@ void main() {
     expect(reply['structuredContent']['error'], {
       'code': 'internal',
       'message': 'Application service sent an invalid reply',
+      // The tool's request had been sent; it may have taken effect.
+      'reason': 'outcomeUnknown',
     });
     expect(
       reply['content'][0]['text'],

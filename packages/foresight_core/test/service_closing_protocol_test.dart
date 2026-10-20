@@ -242,7 +242,7 @@ void main() {
           rpcError(
             RpcErrorCode.internal,
             'Application service sent an invalid reply',
-            null,
+            'outcomeUnknown',
           ),
         ),
       );
@@ -851,4 +851,49 @@ void main() {
       holder.kill(ProcessSignal.sigkill);
     }
   });
+
+  test('a startup probe that the closing owner ends with outcomeUnknown hands '
+      'off to one replacement', () async {
+    final profile = newProfile('of-probe-');
+    final owner = await HookedServiceProcess.start(
+      build,
+      profile,
+      hold: ['close.helper_closed'],
+    );
+    final launcher = await launcherFor(profile);
+    final proxy = ServiceFaultProxy();
+    ServiceClient? attached;
+    try {
+      await owner.ready();
+      // Hold the next status at its commit, so the probe is in flight.
+      owner.hold('request.committed.status');
+      final ended = proxy
+          .seen(
+            ProxyDirection.toClient,
+            where: (frame) => frame.error?['reason'] == 'outcomeUnknown',
+          )
+          .timeout(const Duration(seconds: 120));
+      final startup = proxy.run(
+        () => ensureService(profile, startupTimeout: startupBound),
+      );
+      final settled = settledFlag(startup);
+      await owner.reached('request.committed.status');
+      owner.signal(ProcessSignal.sigterm);
+      await owner.reached('close.helper_closed');
+      await ended;
+      // Status is read-only: startup waits for this owner, not fails.
+      expect(settled(), isFalse);
+      expect(launcher.launched, isEmpty);
+      owner.release('close.helper_closed');
+      owner.release('request.committed.status');
+      expect(await owner.exited(), 0, reason: owner.output);
+      attached = await startup.timeout(startupBound);
+      expect(launcher.launched, [
+        (await attached.call('status') as Map)['pid'],
+      ]);
+    } finally {
+      await attached?.close();
+      await proxy.close();
+    }
+  }, timeout: const Timeout(Duration(minutes: 3)));
 }

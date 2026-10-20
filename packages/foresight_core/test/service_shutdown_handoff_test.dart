@@ -375,15 +375,16 @@ class HandoffFixture {
   }
 }
 
-/// The protocol error for a complete frame that is not a JSON object.
-final isInvalidReply = isA<RpcError>()
+/// The protocol error for a complete frame that is not a JSON object, with
+/// [reason] outcomeUnknown for a request already written.
+Matcher isInvalidReply(String? reason) => isA<RpcError>()
     .having((error) => error.code, 'code', RpcErrorCode.internal)
     .having(
       (error) => error.message,
       'message',
       'Application service sent an invalid reply',
     )
-    .having((error) => error.toJson()['reason'], 'reason', isNull);
+    .having((error) => error.toJson()['reason'], 'reason', reason);
 
 /// The error a startup failed with. A successful startup fails the test.
 Future<Object> startupFailure(Future<Object?> startup) async {
@@ -671,7 +672,11 @@ void main() {
         try {
           final failure = expectLater(
             RemoteDomain.connect(f.profile),
-            throwsA(mode == 'malformed' ? isInvalidReply : isA<RpcError>()),
+            throwsA(
+              mode == 'malformed'
+                  ? isInvalidReply('outcomeUnknown')
+                  : isA<RpcError>(),
+            ),
           );
           await f.next('healthy-observed');
           await f.next(
@@ -1256,7 +1261,7 @@ void main() {
     try {
       // A complete frame that is not JSON is a protocol error, not a caller
       // error and not a lost connection to retry (SL-6).
-      await expectLater(f.connect(), throwsA(isInvalidReply));
+      await expectLater(f.connect(), throwsA(isInvalidReply('outcomeUnknown')));
       expect(f.launched, isFalse);
     } finally {
       await f.close();
@@ -1273,7 +1278,7 @@ void main() {
         client = await ServiceClient.connect(serviceEndpoint(f.profile));
         await f.next('malformed-sent');
         await eventually(() => client!.isClosed);
-        await expectLater(client.call('status'), throwsA(isInvalidReply));
+        await expectLater(client.call('status'), throwsA(isInvalidReply(null)));
         expect(f.launched, isFalse);
       } finally {
         await client?.close();

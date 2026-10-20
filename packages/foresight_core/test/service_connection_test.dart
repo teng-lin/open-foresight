@@ -28,10 +28,11 @@ Matcher disconnected(String reason) => rpcError(
 const closingText =
     'Application service is shutting down; retry after it exits.';
 
-final invalidReply = rpcError(
+/// A protocol error: requests already written may have taken effect.
+Matcher invalidReply(String? reason) => rpcError(
   RpcErrorCode.internal,
   'Application service sent an invalid reply',
-  null,
+  reason,
 );
 
 void main() {
@@ -494,7 +495,7 @@ void main() {
           throwsA(
             malformed == 'oversized'
                 ? disconnected('outcomeUnknown')
-                : invalidReply,
+                : invalidReply('outcomeUnknown'),
           ),
         );
         await eventually(
@@ -516,7 +517,9 @@ void main() {
         await expectLater(
           client.stream('after.close').toList(),
           throwsA(
-            malformed == 'oversized' ? disconnected('notSent') : invalidReply,
+            malformed == 'oversized'
+                ? disconnected('notSent')
+                : invalidReply(null),
           ),
         );
         final cause = await client

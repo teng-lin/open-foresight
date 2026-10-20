@@ -329,7 +329,8 @@ Map<String, dynamic>? _decodeFrame(Uint8List frame) {
 /// socket error, a frame cut off by EOF, or a frame over the limit) fails
 /// requests already written with [RpcErrorReason.outcomeUnknown] and later
 /// ones with [RpcErrorReason.notSent]. A complete frame that is not a JSON
-/// object is a protocol error, reported to every caller as `internal`.
+/// object is a protocol error, reported to every caller as `internal`, with
+/// [RpcErrorReason.outcomeUnknown] for requests already written.
 class ServiceClient {
   final Socket socket;
   final int _maxMessageBytes;
@@ -368,11 +369,16 @@ class ServiceClient {
       _traceServiceTransport(
         'client invalid frame ${utf8.decode(frame, allowMalformed: true)}',
       );
-      final invalid = RpcError(
-        RpcErrorCode.internal,
-        'Application service sent an invalid reply',
+      const message = 'Application service sent an invalid reply';
+      // Requests already written may have taken effect.
+      return _fail(
+        RpcError(
+          RpcErrorCode.internal,
+          message,
+          reason: RpcErrorReason.outcomeUnknown,
+        ),
+        RpcError(RpcErrorCode.internal, message),
       );
-      return _fail(invalid, invalid);
     }
     if (value['event'] != null) {
       events.add(value);
@@ -2060,7 +2066,12 @@ Future<ServiceStartup> _connectCompatibleService(
     if (snapshot) initial = await status(desktop: true);
     return (client: client, status: initial);
   } on RpcError catch (error) {
-    if (isClosingRefusal(error)) {
+    // A closing owner refused the probe, or ended it as it began closing.
+    // Status is read-only, so both mean: wait for this owner, then hand off.
+    if (isClosingRefusal(error) ||
+        (error.code == RpcErrorCode.unavailable &&
+            error.reason == RpcErrorReason.outcomeUnknown &&
+            error is! _ServiceTransportLost)) {
       // Transfer ownership of this specific socket to the startup handoff.
       throw _ClosingService(client);
     }
