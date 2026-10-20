@@ -110,6 +110,8 @@ void main() {
   late ServiceClient agent;
   late Map<String, String> environment;
   var now = DateTime.utc(2026, 10, 20);
+  DateTime Function()? readClock;
+  Duration? lastTimerDelay;
   bool editingNotes = false;
   Timer? enhancementTimer;
   void Function()? fireEnhancement;
@@ -122,13 +124,16 @@ void main() {
     root = createTestTempDirectorySync('lifetime-');
     profile = ProfilePaths('${root.path}/d', '${root.path}/r');
     now = DateTime.utc(2026, 10, 20);
+    readClock = null;
+    lastTimerDelay = null;
     editingNotes = false;
     enhancementTimer = null;
     fireEnhancement = null;
     service = await ApplicationService.start(
       profile,
-      clock: Clock(() => now),
+      clock: Clock(() => readClock?.call() ?? now),
       createTimer: (delay, callback) {
+        lastTimerDelay = delay;
         final timer = Timer(delay, callback);
         if (editingNotes &&
             enhancementTimer == null &&
@@ -315,6 +320,35 @@ void main() {
       expect(service.lastAgentActivity, null);
     },
   );
+
+  for (final desktopBranch in [false, true]) {
+    test(
+      '${desktopBranch ? 'desktop grace' : 'idle period'} uses one clock snapshot when evaluation straddles its deadline',
+      () async {
+        if (desktopBranch) {
+          final d = await desktop();
+          await d.close();
+          await departed();
+          expect(service.desktopShutdownScheduled, true);
+        }
+        final deadline = now.add(
+          desktopBranch
+              ? const Duration(seconds: 1)
+              : const Duration(minutes: 30),
+        );
+        var reads = 0;
+        readClock = () => reads++ == 0
+            ? deadline.subtract(const Duration(microseconds: 1))
+            : deadline.add(const Duration(microseconds: 1));
+        // The first evaluation is just before the deadline; only its real
+        // sub-millisecond timer may trigger the next evaluation. Polling again
+        // would hide a mistaken fallback to the 30-second periodic check.
+        await lifetime();
+        await service.closed.timeout(const Duration(seconds: 3));
+        expect(reads, greaterThanOrEqualTo(2));
+      },
+    );
+  }
 
   test(
     'a disconnected one-shot agent can reconnect warm before the period',
@@ -562,6 +596,9 @@ void main() {
       await lifetime();
       expect(service.domain.mutating, 1);
       await backgroundRefusal();
+      // A passed grace with executing work retains the periodic check instead
+      // of repeatedly scheduling a zero-delay timer while that work is gated.
+      expect(lastTimerDelay, const Duration(seconds: 30));
       rag.release.complete();
       await work;
       await exited();

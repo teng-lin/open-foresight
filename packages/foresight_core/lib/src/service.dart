@@ -1012,9 +1012,8 @@ class ApplicationService {
     return (lastAgentActivity ?? _started).add(period);
   }
 
-  bool _shouldExit() {
+  bool _shouldExit(DateTime now) {
     if (_closing || !_unpinned) return false;
-    final now = domain.clock.now();
     if (lastDesktopDeparture != null) {
       return !now.isBefore(lastDesktopDeparture!.add(_desktopDetachGrace)) &&
           !_agentWorkInFlight &&
@@ -1029,7 +1028,10 @@ class ApplicationService {
     _lifetime?.cancel();
     _lifetime = null;
     if (_closing) return;
-    if (_shouldExit()) {
+    // Share the decision's clock snapshot with its remaining timer delay: a
+    // deadline crossed between two reads must not fall back to a full tick.
+    final now = domain.clock.now();
+    if (_shouldExit(now)) {
       unawaited(
         close().catchError((Object error) {
           stderr.writeln('Automatic service exit: $error');
@@ -1038,7 +1040,6 @@ class ApplicationService {
       return;
     }
     final after = _exitAfter();
-    final now = domain.clock.now();
     var delay = const Duration(seconds: 30);
     if (after != null && after.isAfter(now) && after.difference(now) < delay) {
       delay = after.difference(now);
