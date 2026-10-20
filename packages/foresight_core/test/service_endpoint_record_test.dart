@@ -362,6 +362,25 @@ void main() {
     }
   });
 
+  test('a leftover the owner cannot delete does not block startup', () async {
+    final leftover = Directory('${record().path}.5');
+    final locked = Directory('${leftover.path}/locked')
+      ..createSync(recursive: true);
+    File('${locked.path}/child').writeAsStringSync('');
+    expect(Process.runSync('/bin/chmod', ['500', locked.path]).exitCode, 0);
+    final service = await ApplicationService.start(profile);
+    try {
+      expect(jsonDecode(record().readAsStringSync()), {
+        'data': profile.data,
+        'runtime': profile.runtime,
+      });
+      // The superuser can delete it anyway.
+      if (!privileged) expect(leftover.existsSync(), isTrue);
+    } finally {
+      await service.close();
+    }
+  });
+
   test(
     'a failed start removes its temporary record before releasing ownership',
     () async {
