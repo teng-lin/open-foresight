@@ -685,6 +685,7 @@ class Application implements ModelGate {
             'id': await importFile(a['path'] as String, current: current),
           };
         case Operation.sourcesIndex:
+          store.requireSource(a['id'] as String);
           await domain.index(a['id'] as String);
           return null;
         case Operation.sourcesDelete:
@@ -806,12 +807,13 @@ class Application implements ModelGate {
         case Operation.notesList:
           return store.rows('SELECT * FROM notes ORDER BY id');
         case Operation.notesSave:
-          store.saveNote(
-            a['id'] as int?,
-            a['title'] as String,
-            a['body'] as String,
-          );
-          return {'id': a['id'] ?? store.db.lastInsertRowId};
+          return {
+            'id': store.saveNote(
+              a['id'] as int?,
+              a['title'] as String,
+              a['body'] as String,
+            ),
+          };
         case Operation.preferencesSet:
           if (a['key'] == 'echoCancellation') {
             final enabled = a['value'] == 'true';
@@ -874,6 +876,15 @@ class Application implements ModelGate {
           proactive.notify(id);
           return null;
         case Operation.meetingsLinkAnswer:
+          _meeting(a['id'] as int);
+          if (store.rows('SELECT 1 FROM answers WHERE id=?', [
+            a['answer'],
+          ]).isEmpty) {
+            throw RpcError(
+              RpcErrorCode.notFound,
+              'This answer no longer exists.',
+            );
+          }
           store.db.execute(
             'INSERT OR IGNORE INTO meeting_answers(meeting_id,answer_id) VALUES(?,?)',
             [a['id'], a['answer']],
@@ -997,6 +1008,7 @@ class Application implements ModelGate {
           await indexMeeting(a['id'] as int);
           return null;
         case Operation.meetingsGenerate:
+          _meeting(a['id'] as int);
           await generateMeeting(
             a['id'] as int,
             a['kind'] as String,
@@ -1005,6 +1017,7 @@ class Application implements ModelGate {
           );
           return null;
         case Operation.meetingsEnhance:
+          _meeting(a['id'] as int);
           await enhanceNotes(
             a['id'] as int,
             forceRegenerate: a['force_regenerate'] == true,

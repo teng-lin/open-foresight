@@ -596,7 +596,10 @@ class Store {
       modelResponse == null ? null : jsonEncode(modelResponse),
     ],
   );
-  void saveNote(int? id, String title, String body) {
+
+  /// Returns the note's ID. An update that finds no note fails rather than
+  /// reporting a save that wrote nothing.
+  int saveNote(int? id, String title, String body) {
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     if (id == null) {
       db.execute('INSERT INTO notes(title,body,timestamp) VALUES(?,?,?)', [
@@ -604,12 +607,16 @@ class Store {
         body,
         timestamp,
       ]);
-    } else {
-      db.execute(
-        'UPDATE notes SET title=?,body=?,revision=revision+1,timestamp=? WHERE id=?',
-        [title, body, timestamp, id],
-      );
+      return db.lastInsertRowId;
     }
+    db.execute(
+      'UPDATE notes SET title=?,body=?,revision=revision+1,timestamp=? WHERE id=?',
+      [title, body, timestamp, id],
+    );
+    if (db.updatedRows != 1) {
+      throw RpcError(RpcErrorCode.notFound, 'This note no longer exists.');
+    }
+    return id;
   }
 
   static const _runtimeResources = {
@@ -952,6 +959,12 @@ class Store {
         db.execute('UPDATE artifacts SET edited=? WHERE id=?', [text, id]);
     if (enhanced == null) {
       update();
+      if (db.updatedRows != 1) {
+        throw RpcError(
+          RpcErrorCode.notFound,
+          'This artifact no longer exists.',
+        );
+      }
     } else {
       _writeEnhancedNote(
         enhanced['meeting_id'] as int,
@@ -1032,6 +1045,7 @@ class Store {
     [key, value],
   );
   void putDocumentLabel(DocumentLabel label) {
+    requireSource(label.documentId);
     db.execute('SAVEPOINT put_document_label');
     try {
       db.execute(
@@ -1163,10 +1177,17 @@ class Store {
     }
   }
 
-  void labels(String id, List<String> labels) {
-    if (rows('SELECT 1 FROM source_details WHERE source_id=?', [id]).isEmpty) {
-      return;
+  void requireSource(String id) {
+    if (rows(
+      'SELECT 1 FROM sources JOIN source_details ON source_id=id WHERE id=? AND deleted=0',
+      [id],
+    ).isEmpty) {
+      throw RpcError(RpcErrorCode.notFound, 'This source no longer exists.');
     }
+  }
+
+  void labels(String id, List<String> labels) {
+    requireSource(id);
     db.execute('BEGIN IMMEDIATE');
     try {
       _writeLabelRecords(id, labels);
