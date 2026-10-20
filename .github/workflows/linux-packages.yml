@@ -46,6 +46,7 @@ jobs:
       if: steps.version.outputs.formats != '[]'
       with:
         name: portable-bundle
+        overwrite: true
         path: dist/packages/
         if-no-files-found: error
         retention-days: 90
@@ -126,6 +127,9 @@ jobs:
       if: always()
       with:
         name: open-foresight-${{ matrix.format }}-x86-64
+        # A failed format can retain diagnostic bytes before its job retry.
+        # Replace only that format's unqualified same-run diagnostic artifact.
+        overwrite: true
         path: dist/packages/
         if-no-files-found: ignore
         retention-days: 90
@@ -169,6 +173,19 @@ jobs:
       with:
         subject-path: ${{ steps.installer.outputs.path }}
         sbom-path: ${{ runner.temp }}/installer.spdx.json
+    - name: Bind the installer to its original verified candidate
+      env:
+        FORMAT: ${{ matrix.format }}
+        INSTALLER: ${{ steps.installer.outputs.path }}
+      run: python -m tools.ci_release_evidence package --tag "$RELEASE_TAG" --format "$FORMAT" --directory artifacts --installer "$INSTALLER" --output test-results/package-receipt.json
+    - name: Retain original installer packaging receipt
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: release-packaging-${{ matrix.format }}
+        path: test-results/package-receipt.json
+        overwrite: true
+        if-no-files-found: error
+        retention-days: 90
     - name: Record validation independently of retained installer bytes
       if: always()
       env:
@@ -186,6 +203,7 @@ jobs:
       if: always()
       with:
         name: package-validation-${{ matrix.format }}
+        overwrite: true
         path: test-results/package/
         retention-days: 90
     - name: Remove disposable package-test container

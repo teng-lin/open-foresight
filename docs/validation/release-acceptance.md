@@ -5,9 +5,10 @@ reviewed intended product commit (`git tag vX.Y.Z <commit>` and
 `git push origin vX.Y.Z`). The protected `v*` tag rules allow only administrators
 to create, move or delete release tags; the workflow token cannot create a missing
 tag. Then run `gh workflow run release.yml --ref main -f tag=vX.Y.Z`. This is the supported publication path. The coordinator requires
-successful exact-main Linux and macOS candidates for that tag. If
-candidates are missing, expired, or absent after a documentation-only commit, it
-forces the platform workflow and waits. A failed candidate build leaves the administrator-created tag unpublished.
+qualified Linux and macOS candidates for the immutable reviewed product tag.
+Unavailable or incompatible candidate evidence prevents publication; follow
+[release preparation](../../RELEASING.md) for the source and candidate protocol.
+A failed candidate build leaves the administrator-created tag unpublished.
 
 The release remains a draft while reusable Linux and macOS workflows check out
 `refs/tags/vX.Y.Z`, package the exact tested candidate, and upload installers.
@@ -16,11 +17,15 @@ Missing assets, failed tests, and skipped gates fail publication. Only a complet
 successful installed-package matrix publishes the draft and marks it Latest only when its stable semantic version is the highest published version.
 Public releases cannot be rebuilt or overwritten; increment the app version.
 
-To retry a failed draft, rerun **all jobs** in the coordinator. Preparation removes
-only that draft's old assets, and reserves a higher Linux package release in a
-durable release-body counter before removing any asset. Re-running an older
-workflow also increments this counter. This supports real package upgrades and prevents
-mixed installer generations. Draft assets are never uploaded with `--clobber`.
+Retry transient external failures with `gh run rerun ORIGINAL_RELEASE_RUN --failed`.
+This retains successful sibling formats and their original receipt/upload attempts.
+A rerun uses the original workflow and tooling commit; a later merged tooling fix
+cannot repair that old run's code. If the original code cannot produce a qualified
+evidence index, publication stays held for reviewed recovery. Preserve existing
+installer bytes, logs and provenance; do not delete assets or use a fresh partial
+coordinator or standalone packaging dispatch to replace original proof.
+`publish_only=true` re-verifies an existing qualified index and never builds or
+packages. See [release recovery](../../RELEASING.md#recover-from-a-failed-run).
 
 The downloader rejects any installer source revision different from the tag.
 `--allow-recovery-revision` is an explicit historical audit escape hatch recorded
@@ -151,7 +156,7 @@ Repeat for RPM, Arch and DMG installers. Provenance and SBOM attestations bind
 SHA-256 installer bytes to the release workflow; checksum and `.build.json`
 verification remain mandatory for installer acceptance.
 
-The installed functional report records `gpu_inference.status = manual_pending` and `automated_passed_manual_pending`. This requires the release-day physical GPU check above. Automated software Vulkan evidence does not complete it. Before dispatching publication, supply the `gpu_evidence` JSON input with one Linux and one macOS record, each containing `platform`, `installer_sha256`, `gpu`, `backend`, `tester`, `tested_at_utc` (UTC RFC3339 seconds) and `evidence` (the observed decode/speech result and evidence location). Use the SHA256 of an exact installer tested in this release; Linux may use any accepted native distribution installer. First dispatch the coordinator with empty GPU evidence to build and automatically test draft candidates; publication will remain blocked. Download those exact draft installers and complete the physical GPU checks, then dispatch with `publish_only=true` and the evidence JSON. This mode preserves the draft bytes, reruns acceptance and publishes only after the bound GPU records pass. Rebuilding would change installer hashes and require new manual checks. The separate acceptance workflow can audit the same draft without publishing.
+The installed functional report records `gpu_inference.status = manual_pending` and `automated_passed_manual_pending`. This requires the release-day physical GPU check above. Automated software Vulkan evidence does not complete it. Before dispatching publication, supply the `gpu_evidence` JSON input with one Linux and one macOS record, each containing `platform`, `installer_sha256`, `gpu`, `backend`, `tester`, `tested_at_utc` (UTC RFC3339 seconds) and `evidence` (the observed decode/speech result and evidence location). Use the SHA256 of an exact installer tested in this release; Linux may use any accepted native distribution installer. First dispatch the coordinator with empty GPU evidence to build and automatically test draft candidates; publication will remain blocked. Download those exact draft installers and complete the physical GPU checks, then dispatch with `publish_only=true` and the evidence JSON. This mode requires the existing qualified release evidence index, preserves the draft bytes, reruns acceptance and publishes only after the bound GPU records pass; it never builds or packages. Rebuilding would change installer hashes and require new manual checks. The separate acceptance workflow can audit the same draft without publishing.
 
 The acceptance aggregate retains the installer identities and manual records in `release-acceptance-summary/release-acceptance.json`. Publication downloads and reads that report, checks the release tag and the GPU evidence's installer hashes, and refuses to publish while manual GPU evidence is pending. The release operator supplies the evidence; CI does not assert that it performed a physical GPU test.
 

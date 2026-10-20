@@ -95,6 +95,158 @@ class DmgContractTest(unittest.TestCase):
                     ["hdiutil", "detach", str(mount)], check=True, timeout=60
                 )
 
+    def test_previous_signed_dmg_upgrades_owned_copy_without_losing_database(self):
+        """Real DMG/signature/atomic-install boundaries with a tiny SQLite fixture."""
+        import sqlite3
+        from unittest.mock import patch
+
+        sys.path.insert(0, str(ROOT / "tools"))
+        import test_release_dmg as acceptance
+        from install_macos import install, metadata, verify_signature
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            images = []
+
+            def assert_fixture_version(bundle, version):
+                result = subprocess.run(
+                    [str(bundle / "Contents/MacOS/fixture")],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                self.assertEqual(
+                    result.returncode,
+                    0,
+                    f"fixture exit={result.returncode}: "
+                    f"stdout={result.stdout!r}, stderr={result.stderr!r}",
+                )
+                self.assertEqual(result.stdout, version + "\n")
+
+            for version in ("1.2.2", "1.2.3"):
+                build = root / version
+                app = build / "Open Foresight.app"
+                executable = app / "Contents/MacOS/fixture"
+                executable.parent.mkdir(parents=True)
+                source = build / "fixture.c"
+                source.write_text(
+                    '#include <stdio.h>\n'
+                    f'int main(void) {{ puts("{version}"); return 0; }}\n'
+                )
+                subprocess.run(
+                    ["cc", str(source), "-o", str(executable)], check=True, timeout=60
+                )
+                (app / "Contents/Info.plist").write_bytes(
+                    plistlib.dumps(
+                        {
+                            "CFBundleIdentifier": "io.openforesight.App",
+                            "CFBundleExecutable": "fixture",
+                            "CFBundlePackageType": "APPL",
+                            "CFBundleVersion": version,
+                            "CFBundleShortVersionString": version,
+                        }
+                    )
+                )
+                subprocess.run(
+                    ["codesign", "--force", "--sign", "-", str(app)],
+                    check=True,
+                    timeout=60,
+                )
+                assert_fixture_version(app, version)
+                manifest = build / "manifest.json"
+                manifest.write_text(
+                    json.dumps(
+                        {
+                            "revision": "a" * 40,
+                            "architecture": "arm64",
+                            "version": version,
+                            "build_number": 1,
+                        }
+                    )
+                )
+                image = packager.create(
+                    app,
+                    manifest,
+                    "Open-Foresight-upgrade-fixture-macos-arm64.dmg",
+                    build / "dist",
+                )
+                checksum = hashlib.sha256(image.read_bytes()).hexdigest()
+                (image.parent / "installer.json").write_text(
+                    json.dumps(
+                        {
+                            "tag": "v" + version,
+                            "asset": image.name,
+                            "sha256": checksum,
+                            "source_commit": "a" * 40,
+                            "status": "verified_download",
+                        }
+                    )
+                )
+                images.append(image)
+            temporary = root / "real-temp"
+            temporary.mkdir()
+            alias = root / "temp-alias"
+            alias.symlink_to(temporary, target_is_directory=True)
+            destination = root / "owned/Open Foresight.app"
+            destination.mkdir(parents=True)
+            output = root / "reports"
+            output.mkdir()
+
+            def persistence(bundle, profile, state, phase):
+                self.assertEqual(
+                    metadata(bundle)["CFBundleShortVersionString"], "1.2.2"
+                )
+                assert_fixture_version(bundle, "1.2.2")
+                profile.mkdir()
+                with sqlite3.connect(profile / "application.db") as connection:
+                    connection.execute("CREATE TABLE notes(body TEXT)")
+                    connection.execute(
+                        "INSERT INTO notes VALUES (?)", ("upgrade data",)
+                    )
+
+            with patch.object(acceptance, "persistence_probe", side_effect=persistence):
+                acceptance.previous_installation(
+                    images[0], destination, alias, output, images[1]
+                )
+            mount = root / "new-volume"
+            mount.mkdir()
+            subprocess.run(
+                [
+                    "hdiutil",
+                    "attach",
+                    "-readonly",
+                    "-nobrowse",
+                    "-mountpoint",
+                    str(mount),
+                    str(images[1]),
+                ],
+                check=True,
+                timeout=60,
+            )
+            try:
+                install(
+                    mount / "Open Foresight.app",
+                    destination,
+                    allow_adhoc=True,
+                    active=lambda app: set(),
+                )
+                self.assertEqual(
+                    metadata(destination)["CFBundleShortVersionString"], "1.2.3"
+                )
+                verify_signature(destination)
+                with sqlite3.connect(
+                    temporary / "upgrade-profile/application.db"
+                ) as connection:
+                    self.assertEqual(
+                        connection.execute("SELECT body FROM notes").fetchall(),
+                        [("upgrade data",)],
+                    )
+                assert_fixture_version(destination, "1.2.3")
+            finally:
+                subprocess.run(
+                    ["hdiutil", "detach", str(mount)], check=True, timeout=60
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

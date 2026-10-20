@@ -332,6 +332,7 @@ def line_inventory(root):
     paths = set(root.glob(".github/workflows/*.yml"))
     helpers = {
         "platform_python_tests",
+        "release_upgrade",
         "integration_application",
         "preview_reuse",
         "preview_packages",
