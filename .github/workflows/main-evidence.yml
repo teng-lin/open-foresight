@@ -1,0 +1,120 @@
+name: Main validation evidence
+run-name: Main evidence observation ${{ github.event.workflow_run.head_sha || github.sha }}
+on:
+  push:
+    branches: [main]
+  workflow_run:
+    workflows: [Platform candidates and checks]
+    types: [completed]
+    branches: [main]
+  schedule:
+    - cron: '17,47 * * * *'
+  workflow_dispatch:
+    inputs:
+      exercise_sweep:
+        description: Dispatch an isolated application sweep on current reviewed main
+        type: boolean
+        default: false
+permissions:
+  contents: read
+  actions: read
+  checks: read
+  pull-requests: read
+concurrency:
+  group: main-evidence-observation-${{ github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: false
+jobs:
+  observe:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name != 'workflow_run' ||
+        (github.event.workflow_run.event != 'pull_request' &&
+         github.event.workflow_run.head_branch == 'main' &&
+         github.event.workflow_run.path == '.github/workflows/macos.yml' &&
+         github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      activate: ${{ steps.activation.outputs.active }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Observe proposed per-job receipts against actual main validation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: python3 tools/ci_main_evidence.py --source "$SOURCE"
+      - name: Verify independent hosted activation gate without writing
+        id: activation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: python3 tools/ci_main_coordinator.py status --source "$SOURCE" --output main-evidence/activation.json
+      - name: Retain observation and reconciliation heartbeat
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ci-main-observation-${{ github.event.workflow_run.head_sha || github.sha }}
+          path: main-evidence/receipt.json
+          overwrite: true
+          if-no-files-found: error
+          retention-days: 90
+  coordinate:
+    needs: observe
+    if: github.ref == 'refs/heads/main' && needs.observe.outputs.activate == 'true' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    concurrency:
+      group: main-evidence-production-coordinator
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: write
+      checks: read
+      pull-requests: read
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Reconcile independently qualified current main only
+        id: result
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/ci_main_coordinator.py reconcile --source "$GITHUB_SHA"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ci-main-validation-${{ steps.result.outputs.source }}
+          path: main-evidence/receipt.json
+          overwrite: true
+          if-no-files-found: error
+          retention-days: 90
+  exercise-coordinator:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.exercise_sweep
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    concurrency:
+      group: main-evidence-exercise-coordinator
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Reconcile one isolated current-main sweep
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/ci_main_sweep.py exercise --source "$GITHUB_SHA" --output main-evidence/exercise.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ci-main-exercise-${{ github.sha }}
+          path: main-evidence/exercise.json
+          overwrite: true
+          if-no-files-found: error
