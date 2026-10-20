@@ -311,20 +311,53 @@ void main() {
     );
   }
 
-  test('endpoint records reject stale data identities and symbolic links', () {
+  test('endpoint records ignore stale data identities and symbolic links', () {
     final record = File('${f.profile.data}/.application-endpoint.json');
+    void ignored(String reason) {
+      expect(
+        readEndpointRecord(f.profile),
+        isA<EndpointInvalid>().having(
+          (record) => record.reason,
+          'reason',
+          contains(reason),
+        ),
+      );
+      // Record content never fails a client; it uses its own runtime instead.
+      expect(
+        serviceEndpoint(f.profile),
+        '${f.profile.runtime}/application.sock',
+      );
+    }
+
     record.writeAsStringSync(
       jsonEncode({'data': '/other/profile', 'runtime': f.profile.runtime}),
     );
-    expect(() => serviceEndpoint(f.profile), throwsStateError);
+    ignored('names another profile (/other/profile)');
     record.writeAsStringSync(
       jsonEncode({'data': f.profile.data, 'runtime': 42}),
     );
-    expect(() => serviceEndpoint(f.profile), throwsStateError);
+    ignored('string data and runtime fields');
+    record.writeAsStringSync(
+      jsonEncode({'data': f.profile.data, 'runtime': 'relative-runtime'}),
+    );
+    ignored('not an absolute path');
+    expect(Directory('relative-runtime').existsSync(), isFalse);
+    record.writeAsStringSync(
+      jsonEncode({'data': f.profile.data, 'runtime': f.profile.runtime}),
+    );
+    expect(
+      readEndpointRecord(f.profile),
+      isA<EndpointValid>().having(
+        (record) => record.runtime,
+        'runtime',
+        f.profile.runtime,
+      ),
+    );
     record.deleteSync();
+    expect(readEndpointRecord(f.profile), isA<EndpointAbsent>());
     final target = File('${f.root.path}/target')..writeAsStringSync('{}');
     Link(record.path).createSync(target.path);
-    expect(() => serviceEndpoint(f.profile), throwsStateError);
+    ignored('symbolic link');
     expect(target.readAsStringSync(), '{}');
   });
   test(
