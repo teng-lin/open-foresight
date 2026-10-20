@@ -783,7 +783,14 @@ class ApplicationService {
           0) {
         throw StateError('Cannot protect profile ownership lock');
       }
-      lock.lockSync(FileLock.exclusive);
+      try {
+        lock.lockSync(FileLock.exclusive);
+      } on FileSystemException catch (error) {
+        if (!_lockContended(error)) rethrow;
+        throw ServiceOwnershipContended(
+          'Another application service owns this profile: $error',
+        );
+      }
     } catch (_) {
       lock.closeSync();
       rethrow;
@@ -1651,7 +1658,9 @@ class IsolatedApplicationService {
       );
     } else if (value.first == 'failure') {
       _traceServiceTransport('worker failure received ${value[1]}');
-      _failure = StateError(value[1] as String);
+      _failure = value.length > 2 && value[2] == true
+          ? ServiceOwnershipContended(value[1] as String)
+          : StateError(value[1] as String);
       if (!_ready.isCompleted) _ready.completeError(_failure!);
     }
   }
@@ -2013,7 +2022,11 @@ Future<void> _runApplicationServiceWorker(List<Object?> configuration) async {
     await Future<void>.delayed(Duration.zero);
   } catch (error, stack) {
     _traceServiceTransport('worker main failed $error\n$stack');
-    parent.send(['failure', '$error\n$stack']);
+    parent.send([
+      'failure',
+      '$error\n$stack',
+      error is ServiceOwnershipContended,
+    ]);
     try {
       await service?.close();
     } catch (_) {}
@@ -2021,6 +2034,11 @@ Future<void> _runApplicationServiceWorker(List<Object?> configuration) async {
     _traceServiceTransport('worker main finally');
     control.close();
   }
+}
+
+/// Another process holds the profile lock, so this owner did not start.
+class ServiceOwnershipContended extends StateError {
+  ServiceOwnershipContended(super.message);
 }
 
 class _ClosingService implements Exception {
@@ -2147,6 +2165,11 @@ bool _profileOwnerAvailable(
   return true;
 }
 
+/// Whether a failed lockSync means another process holds the lock. F_SETLK
+/// may report contention as EACCES or EAGAIN/EWOULDBLOCK (35 on macOS).
+bool _lockContended(FileSystemException error) =>
+    const {11, 13, 35}.contains(error.osError?.errorCode);
+
 /// Whether no other process holds the profile lock at [path]. Only call this
 /// from a process that hosts no owner of the profile: POSIX record locks
 /// belong to the process, and closing this probe's descriptor drops them all.
@@ -2158,14 +2181,9 @@ bool _profileLockFree(String path) {
     ownership.lockSync(FileLock.exclusive);
     return true;
   } on FileSystemException catch (error) {
-    // F_SETLK may report contention as EACCES or EAGAIN/EWOULDBLOCK (35 on
-    // macOS). This catch only covers lockSync; opening an inaccessible file
-    // still fails.
-    if (error.osError?.errorCode == 11 ||
-        error.osError?.errorCode == 13 ||
-        error.osError?.errorCode == 35) {
-      return false;
-    }
+    // This catch only covers lockSync; opening an inaccessible file still
+    // fails.
+    if (_lockContended(error)) return false;
     rethrow;
   } finally {
     ownership.closeSync();
@@ -2274,7 +2292,9 @@ final _startupStatusName = RegExp(r'^startup-[A-Za-z0-9_-]+\.json$');
 /// [profile]'s runtime directory, and anything else is ignored.
 void recordServiceStartupFailure(ProfilePaths profile, Object error) {
   final path = runtimeConfiguration['FORESIGHT_STARTUP_STATUS'];
-  if (path == null) return;
+  // A start that lost the profile lock is no failure: another owner holds
+  // it, or will after a momentary probe, and its launcher keeps waiting.
+  if (path == null || error is ServiceOwnershipContended) return;
   try {
     if (!_startupStatusName.hasMatch(_entryName(path)) ||
         canonicalProfilePath(File(path).parent.path) != profile.runtime) {

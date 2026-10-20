@@ -1011,4 +1011,52 @@ void main() {
     },
     timeout: const Timeout(Duration(minutes: 3)),
   );
+
+  test('a replacement that loses the profile lock records no startup failure '
+      '(L3)', () async {
+    final profile = newProfile('of-contended-');
+    privateDirectory(profile.data);
+    privateDirectory(profile.runtime);
+    final lock = '${profile.data}/.application.lock';
+    File(lock).writeAsStringSync('');
+    // Another process holds the lock, as a winning replacement, or a
+    // momentary probe by another launcher or --stop, would.
+    final holder = await Process.start('python3', [
+      '-c',
+      'import fcntl,sys\nf=open(sys.argv[1],"a")\n'
+          'fcntl.lockf(f,fcntl.LOCK_EX)\nprint("locked",flush=True)\n'
+          'sys.stdin.read()',
+      lock,
+    ]);
+    try {
+      expect(
+        await utf8.decoder
+            .bind(holder.stdout)
+            .transform(const LineSplitter())
+            .first,
+        'locked',
+      );
+      final status = File('${profile.runtime}/startup-contended.json');
+      final run = await Process.run(
+        Platform.resolvedExecutable,
+        [build.kernel],
+        environment: {
+          for (final entry in Platform.environment.entries)
+            if (!entry.key.startsWith('FORESIGHT_')) entry.key: entry.value,
+          'FORESIGHT_DATA': profile.data,
+          'FORESIGHT_RUNTIME': profile.runtime,
+          'FORESIGHT_HELPER': '',
+          'FORESIGHT_STARTUP_STATUS': status.path,
+        },
+        includeParentEnvironment: false,
+      ).timeout(startupBound);
+      expect(run.exitCode, isNot(0));
+      expect(run.stderr, contains('Another application service owns'));
+      // Its launcher keeps waiting for the owner that holds the lock.
+      expect(status.existsSync(), isFalse);
+    } finally {
+      holder.kill(ProcessSignal.sigkill);
+      await holder.exitCode;
+    }
+  }, timeout: const Timeout(Duration(minutes: 3)));
 }
