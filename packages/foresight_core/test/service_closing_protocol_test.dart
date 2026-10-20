@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:foresight_core/foresight_core.dart';
+import 'package:foresight_core/src/remote_domain.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/service.dart';
 import 'package:foresight_test_support/gated_helper.dart';
@@ -515,4 +516,172 @@ void main() {
       await probe.dispose();
     }
   }, timeout: const Timeout(Duration(minutes: 4)));
+
+  test(
+    'an attached ServiceConnection and RemoteDomain follow a closing owner and '
+    'send each refused request to it only once (SL-9)',
+    () async {
+      final profile = newProfile('of-attached-');
+      final owner = await HookedServiceProcess.start(
+        build,
+        profile,
+        hold: ['close.helper_closed'],
+      );
+      final launcher = await launcherFor(profile);
+      final proxy = ServiceFaultProxy();
+      final connection = ServiceConnection(profile);
+      RemoteDomain? remote;
+      try {
+        await owner.ready();
+        await proxy.run(() => connection.connect());
+        final domain = await proxy.run(() => RemoteDomain.connect(profile));
+        remote = domain;
+        owner.signal(ProcessSignal.sigterm);
+        await owner.reached('close.helper_closed');
+        // The owner refuses each request, then its frontend refuses each
+        // client's startup probe for the next owner.
+        final refused = proxy
+            .seen(ProxyDirection.toClient, where: isClosingFrame, count: 4)
+            .timeout(const Duration(seconds: 60));
+        final listed = proxy.run(
+          () => connection.stream('notes.list').toList(),
+        );
+        final commanded = proxy.run(() => domain.command(Operation.notesList));
+        await refused;
+        expect(launcher.launched, isEmpty);
+        final oldConnections = proxy.connections.toSet();
+        owner.release('close.helper_closed');
+        expect(await owner.exitCode, 0, reason: owner.output);
+        expect(await listed, [isEmpty]);
+        expect(await commanded, isEmpty);
+        final pids = {
+          (await connection.stream('status').single as Map)['pid'],
+          (await domain.command(Operation.status) as Map)['pid'],
+        };
+        expect(pids, hasLength(1));
+        expect(launcher.launched, contains(pids.single));
+        List<ServiceFrame> lists({required bool toClosingOwner}) => [
+          for (final frame in proxy.frames)
+            if (frame.direction == ProxyDirection.toService &&
+                frame.method == 'notes.list' &&
+                oldConnections.contains(frame.connection) == toClosingOwner)
+              frame,
+        ];
+        // Each client sent notes.list to the closing owner exactly once and
+        // once more to the replacement.
+        expect(lists(toClosingOwner: true), hasLength(2));
+        expect(lists(toClosingOwner: false), hasLength(2));
+      } finally {
+        remote?.close();
+        remote?.store.close();
+        await connection.close();
+        await proxy.close();
+        await launcher.stopAll();
+        await owner.stop();
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  // A desktop's startup snapshot reserves the owner's lifetime, so the race
+  // left is the grace ending before that reservation arrives.
+  for (final held in ['status']) {
+    test(
+      'a desktop starting as the detach grace ends follows the owner to its '
+      'replacement and attaches approvals once (held $held) (SL-9)',
+      () async {
+        final directory = createTestTempDirectorySync('of-grace-');
+        final profile = ProfilePaths(
+          '${directory.path}/data',
+          '${directory.path}/run',
+        );
+        // This in-process owner reads the gate directory as it closes.
+        final gates = await ServiceGates.create(directory);
+        runtimeConfiguration.environment['FORESIGHT_SERVICE_GATES'] =
+            gates.directory.path;
+        gates.hold('close.begin');
+        final launcher = await launcherFor(profile);
+        // In process, an unset helper disables it; replacements get ''.
+        runtimeConfiguration.environment.remove('FORESIGHT_HELPER');
+        final service = await ApplicationService.start(
+          profile,
+          desktopDetachGrace: Duration.zero,
+        );
+        runtimeConfiguration.environment['FORESIGHT_HELPER'] = '';
+        final proxy = ServiceFaultProxy();
+        ServiceClient? previous;
+        RemoteDomain? remote;
+        try {
+          previous = await ServiceClient.connect(serviceEndpoint(profile));
+          await previous.call('security.attach_desktop', {
+            'token': File(
+              '${profile.data}/.desktop-capability',
+            ).readAsStringSync(),
+          });
+          // The second status is the desktop's reserving snapshot.
+          var statuses = 0;
+          final request = proxy.hold(
+            ProxyDirection.toService,
+            where: (frame) =>
+                frame.method == held && (held != 'status' || ++statuses == 2),
+          );
+          final connecting = proxy.run(() async {
+            final domain = await RemoteDomain.connect(profile);
+            await domain.enableDesktopApprovals((_) {});
+            return domain;
+          });
+          await request.reached;
+          // The previous desktop leaves while the new one is between its
+          // calls; the grace ends and the owner begins closing.
+          await previous.close();
+          await gates.reached('close.begin');
+          runtimeConfiguration.environment.remove('FORESIGHT_SERVICE_GATES');
+          // The owner refuses the snapshot; startup then waits for this
+          // owner inside the same handoff.
+          final refused = proxy
+              .seen(ProxyDirection.toClient, where: isClosingFrame)
+              .timeout(const Duration(seconds: 60));
+          request.release();
+          await refused;
+          expect(launcher.launched, isEmpty);
+          final oldConnections = proxy.connections.toSet();
+          gates.release('close.begin');
+          await service.closed;
+          remote = await connecting;
+          final pid = (await remote.command(Operation.status) as Map)['pid'];
+          expect(launcher.launched, [pid]);
+          Iterable<ServiceFrame> sent(String method, bool toClosingOwner) =>
+              proxy.frames.where(
+                (frame) =>
+                    frame.direction == ProxyDirection.toService &&
+                    frame.method == method &&
+                    oldConnections.contains(frame.connection) == toClosingOwner,
+              );
+          // Approvals are attached once on the replacement; nothing other
+          // than status and that attach was ever sent.
+          expect(sent('security.attach_desktop', false), hasLength(1));
+          expect(
+            sent('security.attach_desktop', true),
+            hasLength(held == 'status' ? 0 : 1),
+          );
+          expect(
+            proxy.frames
+                .where((frame) => frame.direction == ProxyDirection.toService)
+                .map((frame) => frame.method)
+                .toSet(),
+            {'status', 'security.attach_desktop'},
+          );
+        } finally {
+          gates.releaseAll();
+          await previous?.close();
+          remote?.close();
+          remote?.store.close();
+          await proxy.close();
+          await service.close();
+          await launcher.stopAll();
+        }
+      },
+      timeout: const Timeout(Duration(minutes: 3)),
+    );
+  }
 }

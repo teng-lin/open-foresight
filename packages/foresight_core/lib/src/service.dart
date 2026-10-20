@@ -557,6 +557,13 @@ class ServiceClient {
   }
 }
 
+/// Whether [error] says its request never took effect, so sending it once
+/// more, after a handoff, is safe: a closing owner refused it before dispatch,
+/// or it never reached a live socket. An `outcomeUnknown` request is never
+/// resent.
+bool _resendable(RpcError error) =>
+    isClosingRefusal(error) || error.reason == RpcErrorReason.notSent;
+
 /// Reattach on the next request after a disconnect; never replay a request
 /// whose commit status is unknown.
 class ServiceConnection {
@@ -581,12 +588,71 @@ class ServiceConnection {
     return _client = client;
   }
 
+  /// A request refused by a closing owner, or never sent, before any result
+  /// arrived is sent once more after [connect] hands off to the next owner
+  /// (SL-9). Anything else, including `outcomeUnknown`, reaches the caller.
+  /// Cancelling the stream cancels the request at once.
   Stream<Object?> stream(
     String method, [
     Map<String, dynamic> args = const {},
-  ]) async* {
-    final client = await connect();
-    yield* client.stream(method, args);
+  ]) {
+    late final StreamController<Object?> output;
+    StreamSubscription<Object?>? request;
+    var cancelled = false;
+    Future<void> send({required bool resent}) async {
+      final ServiceClient client;
+      try {
+        client = await connect();
+      } catch (error, stack) {
+        if (!cancelled) {
+          output.addError(error, stack);
+          unawaited(output.close());
+        }
+        return;
+      }
+      if (cancelled) return;
+      var received = false;
+      var handedOff = false;
+      request = client
+          .stream(method, args)
+          .listen(
+            (value) {
+              received = true;
+              output.add(value);
+            },
+            onError: (Object error, StackTrace stack) {
+              if (!resent &&
+                  !received &&
+                  error is RpcError &&
+                  _resendable(error)) {
+                handedOff = true;
+                _traceServiceTransport('connection resends $method: $error');
+                unawaited(() async {
+                  // A closing owner keeps the refused connection open.
+                  if (identical(_client, client)) _client = null;
+                  await client.close();
+                  await send(resent: true);
+                }());
+                return;
+              }
+              output.addError(error, stack);
+            },
+            onDone: () {
+              if (!handedOff) unawaited(output.close());
+            },
+          );
+    }
+
+    output = StreamController<Object?>(
+      onListen: () => unawaited(send(resent: false)),
+      onPause: () => request?.pause(),
+      onResume: () => request?.resume(),
+      onCancel: () {
+        cancelled = true;
+        return request?.cancel();
+      },
+    );
+    return output.stream;
   }
 
   Future<void> close() async {
@@ -617,6 +683,7 @@ class ApplicationService {
   StreamSubscription<void>? _captureLevels;
   Timer? _heartbeat;
   Timer? _desktopShutdown;
+  Duration _desktopDetachGrace = const Duration(seconds: 1);
   final _desktopClients = <Socket>{};
   bool _closing = false;
   Future<void>? _shutdown;
@@ -668,10 +735,14 @@ class ApplicationService {
       (_) => _broadcast(),
     );
   }
+
+  /// [desktopDetachGrace] is how long the service waits for a desktop to
+  /// reattach after its approval connection closes before it shuts down.
   static Future<ApplicationService> start(
     ProfilePaths profile, {
     SearchCallbacks? webSearch,
     bool internalWorker = false,
+    Duration desktopDetachGrace = const Duration(seconds: 1),
   }) async {
     // This must precede native loads, database opens, and worker creation.
     final installationLock = acquireInstallationLock();
@@ -684,6 +755,7 @@ class ApplicationService {
         webSearch: webSearch,
         internalWorker: internalWorker,
       );
+      service._desktopDetachGrace = desktopDetachGrace;
       unawaited(service.closed.whenComplete(releaseLocalOwner));
       return service;
     } catch (_) {
@@ -1167,7 +1239,7 @@ class ApplicationService {
               // Allow a transient socket reconnect. Once the desktop has gone,
               // agent connections must not keep its helper/models alive forever.
               _desktopShutdown?.cancel();
-              _desktopShutdown = Timer(const Duration(seconds: 1), () {
+              _desktopShutdown = Timer(_desktopDetachGrace, () {
                 if (_desktopClients.isNotEmpty || access.hasHost || _closing) {
                   return;
                 }

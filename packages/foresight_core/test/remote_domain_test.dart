@@ -481,6 +481,90 @@ void main() {
     },
   );
 
+  test('a command refused by a closing owner is sent once more after the '
+      'reconnect reattaches approvals (SL-9)', () async {
+    File(
+      '${f.profile.data}/.desktop-capability',
+    ).writeAsStringSync('test-token');
+    var refusals = 1;
+    f.handler = (socket, request) {
+      if (request['method'] == 'notes.list' && refusals-- > 0) {
+        // An owner older than the reason field sends only the text.
+        socket.writeln(
+          jsonEncode({
+            'id': request['id'],
+            'error': {
+              'code': 'unavailable',
+              'message':
+                  'Application service is shutting down; retry after it exits.',
+            },
+            'done': true,
+          }),
+        );
+      } else {
+        f.reply(socket, request, request['method'] == 'notes.list' ? [] : null);
+      }
+    };
+    await f.remote.enableDesktopApprovals((_) {});
+    final before = f.requests.length;
+    final previous = f.remote.client;
+    expect(await f.remote.command(Operation.notesList), isEmpty);
+    expect(f.remote.client, isNot(same(previous)));
+    expect(previous.isClosed, isTrue);
+    // Refused, then the reconnect's probe and reserving snapshot, its one
+    // approval attach, and the request once more.
+    expect(f.requests.skip(before).map((r) => r['method']), [
+      'notes.list',
+      'status',
+      'status',
+      'security.attach_desktop',
+      'notes.list',
+    ]);
+  });
+
+  test('a command whose outcome is unknown is never resent', () async {
+    f.handler = (socket, request) => socket.writeln(
+      jsonEncode({
+        'id': request['id'],
+        'error': {
+          'code': 'unavailable',
+          'message': 'stopped',
+          'reason': 'outcomeUnknown',
+        },
+        'done': true,
+      }),
+    );
+    await expectLater(
+      f.remote.command(Operation.notesSave, {'title': 'once'}),
+      throwsA(
+        isA<RpcError>().having(
+          (error) => error.toJson()['reason'],
+          'reason',
+          'outcomeUnknown',
+        ),
+      ),
+    );
+    expect(f.requests.where((r) => r['method'] == 'notes.save'), hasLength(1));
+  });
+
+  test(
+    'a command on a connection that already closed is sent once, on the next',
+    () async {
+      final lost = f.remote.client;
+      final closed = lost.events.stream.drain<void>();
+      f.sockets.last.destroy();
+      await closed;
+      // The reconnect has begun but not finished: the request is not sent.
+      expect(identical(f.remote.client, lost), isTrue);
+      f.handler = (socket, request) => f.reply(socket, request, ['listed']);
+      expect(await f.remote.command(Operation.notesList), ['listed']);
+      expect(
+        f.requests.where((r) => r['method'] == 'notes.list'),
+        hasLength(1),
+      );
+    },
+  );
+
   test('recording snapshots convert numeric levels and retain route state', () {
     final snapshot = RemoteRecording({
       'finishing': true,

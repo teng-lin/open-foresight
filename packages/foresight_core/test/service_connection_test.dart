@@ -25,6 +25,9 @@ Matcher disconnected(String reason) => rpcError(
   reason,
 );
 
+const closingText =
+    'Application service is shutting down; retry after it exits.';
+
 final invalidReply = rpcError(
   RpcErrorCode.internal,
   'Application service sent an invalid reply',
@@ -99,6 +102,129 @@ void main() {
       await expectLater(connection.connect(), throwsStateError);
     },
   );
+
+  // An owner older than the reason field sent only one of two texts (13).
+  for (final refusal in <Map<String, Object?>>[
+    {'code': 'unavailable', 'message': closingText},
+    {'code': 'unavailable', 'message': 'Application service is shutting down'},
+    {'code': 'unavailable', 'message': closingText, 'reason': 'closing'},
+  ]) {
+    test('a closing refusal before any result is sent once more after the '
+        'handoff (SL-9): $refusal', () async {
+      final connection = ServiceConnection(f.profile);
+      await connection.connect();
+      final before = f.requests.length;
+      var refusals = 1;
+      f.handler = (socket, request) {
+        if (refusals-- > 0) {
+          socket.writeln(
+            jsonEncode({'id': request['id'], 'error': refusal, 'done': true}),
+          );
+        } else {
+          f.reply(socket, request, ['listed']);
+        }
+      };
+      expect(await connection.stream('notes.list').toList(), [
+        ['listed'],
+      ]);
+      // Refused, a new startup probe, then the same request once more.
+      expect(f.requests.skip(before).map((r) => r['method']), [
+        'notes.list',
+        'status',
+        'notes.list',
+      ]);
+      await connection.close();
+    });
+  }
+
+  test('a request is resent at most once', () async {
+    final connection = ServiceConnection(f.profile);
+    f.handler = (socket, request) => socket.writeln(
+      jsonEncode({
+        'id': request['id'],
+        'error': {
+          'code': 'unavailable',
+          'message': closingText,
+          'reason': 'closing',
+        },
+        'done': true,
+      }),
+    );
+    await expectLater(
+      connection.stream('notes.list').toList(),
+      throwsA(rpcError(RpcErrorCode.unavailable, closingText, 'closing')),
+    );
+    expect(f.requests.where((r) => r['method'] == 'notes.list'), hasLength(2));
+    await connection.close();
+  });
+
+  test(
+    'a request with an unknown outcome, or one that already had a result, is '
+    'never resent',
+    () async {
+      final connection = ServiceConnection(f.profile);
+      const unknown = {
+        'code': 'unavailable',
+        'message': 'stopped',
+        'reason': 'outcomeUnknown',
+      };
+      f.handler = (socket, request) {
+        if (request['method'] == 'notes.stream') {
+          f.reply(socket, request, 'partial', done: false);
+          socket.writeln(
+            jsonEncode({
+              'id': request['id'],
+              'error': {
+                'code': 'unavailable',
+                'message': closingText,
+                'reason': 'closing',
+              },
+              'done': true,
+            }),
+          );
+        } else {
+          socket.writeln(
+            jsonEncode({'id': request['id'], 'error': unknown, 'done': true}),
+          );
+        }
+      };
+      await expectLater(
+        connection.stream('notes.save').toList(),
+        throwsA(
+          rpcError(RpcErrorCode.unavailable, 'stopped', 'outcomeUnknown'),
+        ),
+      );
+      final results = <Object?>[];
+      await expectLater(
+        connection.stream('notes.stream').forEach(results.add),
+        throwsA(rpcError(RpcErrorCode.unavailable, closingText, 'closing')),
+      );
+      expect(results, ['partial']);
+      for (final method in ['notes.save', 'notes.stream']) {
+        expect(f.requests.where((r) => r['method'] == method), hasLength(1));
+      }
+      await connection.close();
+    },
+  );
+
+  test('cancelling a stream cancels its request and never resends', () async {
+    final connection = ServiceConnection(f.profile);
+    f.handler = (socket, request) =>
+        f.reply(socket, request, 'preview', done: false);
+    final first = Completer<void>();
+    final subscription = connection.stream('answer.stream').listen((_) {
+      if (!first.isCompleted) first.complete();
+    });
+    await first.future;
+    final request = f.requests.lastWhere((r) => r['method'] == 'answer.stream');
+    await subscription.cancel();
+    await eventually(() => f.requests.any((r) => r['cancel'] == request['id']));
+    expect(
+      f.requests.where((r) => r['method'] == 'answer.stream'),
+      hasLength(1),
+    );
+    await connection.close();
+  });
 
   test('launcher waits for model verification beyond ten seconds', () async {
     runtimeConfiguration.environment.removeWhere(
