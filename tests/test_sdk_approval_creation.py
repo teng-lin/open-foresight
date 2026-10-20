@@ -267,7 +267,7 @@ def test_application_descriptor_rejects_corrupt_or_unqualified_metadata(
     expected = {
         "digest": "sidecar does not bind its original payload",
         "receipt": "mismatched.*original receipt",
-        "attempt": "mismatched.*original receipt",
+        "attempt": "Candidate index differs from required source, tier, original receipt job or latest gates",
         "version": "no stamped distribution identity",
         "build-number": "no stamped distribution identity",
         "archive": "Unexpected candidate evidence archive members",

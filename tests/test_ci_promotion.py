@@ -68,7 +68,7 @@ def test_application_promotion_rejects_failed_or_unbound_outputs(
         producer.blobs[payload["id"]] += b"corrupt transport"
     expected = {
         "failed_job": "Latest required job must succeed",
-        "wrong_attempt": "mismatched.*original receipt",
+        "wrong_attempt": "Candidate index differs from required source, tier, original receipt job or latest gates",
         "wrong_upload": "Missing unambiguous original upload",
         "untrusted_workflow": "completed reviewed-main release controller",
         "corrupt_zip": "ZIP digest",
