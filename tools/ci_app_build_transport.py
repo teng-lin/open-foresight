@@ -72,9 +72,13 @@ def prepare(repository, *, request=subprocess.check_output, acceptance=False, ci
         legacy_available = inspect_registry_cache(legacy_cache, request)
     if not available:
         print(
-            "Registry confirms the acceptance tools cache is absent; only "
+            "Registry confirms the CI tools cache is absent; only CI package/tool "
+            "setup is needed, using the verified SDK and qualified dependency seed "
+            "unchanged. No SDK or dependency compilation is authorized."
+            if ci
+            else "Registry confirms the acceptance tools cache is absent; only "
             "package/tool setup is needed, using the verified SDK unchanged."
-            if acceptance or ci
+            if acceptance
             else "Registry confirms the application cache is absent; retained qualified "
             "dependency objects remain required before application compilation.",
             flush=True,

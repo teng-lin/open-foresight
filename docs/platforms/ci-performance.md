@@ -410,8 +410,9 @@ descriptor alone does not load an image; failed inspection must never authorize
 recompiling the SDK or dependencies.
 
 Acceptance tooling has its own `acceptance-tools-buildcache-v1` registry cache.
-Only the existing reviewed-main `linux-bundle` job can publish it; PR and
-acceptance consumers have read-only registry access. Its dependency stage binds
+The dedicated main-only `linux-cache-publish.yml` workflow and retained guarded
+`linux-bundle` job can publish it; PR and acceptance consumers have read-only
+registry access. Its dependency stage binds
 the immutable SDK, snapshot package recipe, Flutter verification and all local
 package manifests/lockfiles. Sources are copied afterward, so ordinary source or
 test edits reuse package setup and dependency downloads. Registry authentication,
@@ -541,9 +542,10 @@ the containerd image store. Provisioning happens before loading a qualified SDK
 archive; a separate container driver cannot see that archive's local tag. The
 fixed same-repository application caches are imported even when the SDK comes from
 an approved legacy archive. Registry errors stop the job instead of silently
-starting an uncached dependency build. PR acceptance reads the cache; the existing
-main-only Linux bundle job exports only its secret-free `application-dependencies` stage to
-`app-deps-buildcache-v1`. It never overwrites the original
+starting an uncached dependency build. PR acceptance reads the cache. The
+dedicated main-only `linux-cache-publish.yml` workflow and retained guarded
+Linux bundle job export the secret-free `application-dependencies` stage to
+`app-deps-buildcache-v1`. They never overwrite the original
 `app-buildcache-x86-64` tag: that tag keeps the reviewed migration manifest and
 layers referenced while both caches remain importable. Packaging
 stages containing distribution secrets never export caches.
@@ -1184,6 +1186,12 @@ PR runs cannot enter this workflow or write its registry tags.
 
 After this workflow lands on main, dispatch it with
 `gh workflow run linux-cache-publish.yml --ref main`. The job checks current main
-before setup and immediately before publication; retry a failed job after
-reading its logs. Cache publication is a prerequisite to measure the later
+before setup and before entering publication. If main advanced, dispatch a new
+run so it checks out the current SHA; rerunning the old job retains its stale SHA.
+For a transient failure while that SHA is still current, read the logs and retry
+only the failed job. Cache publication is a prerequisite to measure the later
 runner switch, and does not establish a performance improvement by itself.
+
+The retained legacy writer can replace the acceptance cache with layers keyed
+on stamped manifests. The later measurement must verify actual cache reuse;
+publication alone does not prove a hit for every consumer.

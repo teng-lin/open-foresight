@@ -236,7 +236,7 @@ def test_publisher_stops_on_the_original_command_failure(
 @pytest.mark.parametrize("guard_index", [0, 1])
 @pytest.mark.parametrize("state", ["current", "stale", "pr", "wrong-ref"])
 def test_actual_workflow_guards_reject_stale_or_unreviewed_source(
-    tmp_path, guard_index, state
+    tmp_path, monkeypatch, guard_index, state
 ):
     config = yaml.safe_load(
         (ROOT / ".github/workflows/linux-cache-publish.yml").read_text()
@@ -248,11 +248,15 @@ def test_actual_workflow_guards_reject_stale_or_unreviewed_source(
     ]
     binary = tmp_path / "bin"
     binary.mkdir()
+    commands = tmp_path / "guard-commands.jsonl"
     for name in ["git", "gh"]:
         stub = binary / name
         stub.write_text(
             f"#!{sys.executable}\n"
-            "import os,sys\n"
+            "import json,os,sys\n"
+            "from pathlib import Path\n"
+            "with open(os.environ['GUARD_COMMAND_LOG'], 'a') as stream:\n"
+            "    stream.write(json.dumps([Path(sys.argv[0]).name,*sys.argv[1:]])+'\\n')\n"
             "if sys.argv[0].endswith('/git'):\n"
             "    assert sys.argv[1:]==['rev-parse','HEAD'];print(os.environ['GITHUB_SHA'])\n"
             "else:\n"
@@ -260,13 +264,20 @@ def test_actual_workflow_guards_reject_stale_or_unreviewed_source(
             "    print(os.environ['AUTHORITATIVE_MAIN'])\n"
         )
         stub.chmod(0o755)
+    # Remote Mac Bash can source ~/.bashrc for inherited SSH_CLIENT and reset
+    # PATH even with -c. Run exact guard text without host startup/environment.
+    poison = tmp_path / "ambient-bash-env"
+    poison.write_text("echo unexpected-host-startup >&2; exit 99\n")
+    monkeypatch.setenv("BASH_ENV", str(poison))
+    monkeypatch.setenv("SSH_CLIENT", "fixture remote connection")
     source = "a" * 40
     result = subprocess.run(
-        ["/bin/bash", "-e", "-c", guards[guard_index]],
+        ["/bin/bash", "--noprofile", "--norc", "-e", "-c", guards[guard_index]],
         cwd=tmp_path,
         env={
-            **os.environ,
             "PATH": str(binary),
+            "HOME": str(tmp_path),
+            "GUARD_COMMAND_LOG": str(commands),
             "GITHUB_REPOSITORY": "owner/repo",
             "GITHUB_REF": "refs/heads/feature"
             if state == "wrong-ref"
@@ -285,3 +296,18 @@ def test_actual_workflow_guards_reject_stale_or_unreviewed_source(
     assert (result.returncode == 0) == (state == "current"), (
         result.stdout + result.stderr
     )
+
+    rows = (
+        [json.loads(line) for line in commands.read_text().splitlines()]
+        if commands.exists()
+        else []
+    )
+    assert rows == (
+        [
+            ["git", "rev-parse", "HEAD"],
+            ["gh", "api", "repos/owner/repo/commits/main", "--jq", ".sha"],
+        ]
+        if state in ("current", "stale")
+        else []
+    )
+    assert "unexpected-host-startup" not in result.stderr

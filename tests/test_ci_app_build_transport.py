@@ -224,3 +224,24 @@ def test_transport_rejects_combined_ci_and_acceptance(monkeypatch):
     with pytest.raises(SystemExit) as result:
         transport.main()
     assert result.value.code == 2
+
+
+def test_missing_ci_tools_cache_keeps_verified_sdk_and_dependency_seed(capsys):
+    def request(arguments, **kwargs):
+        if arguments[:3] == ["docker", "buildx", "imagetools"] and arguments[
+            4
+        ].endswith(":ci-tools-buildcache-v1"):
+            raise subprocess.CalledProcessError(
+                1, arguments, stderr=arguments[4] + ": not found"
+            )
+        return cli(arguments, **kwargs)
+
+    result = transport.prepare("teng-lin/open-foresight", request=request, ci=True)
+    assert result["cache_available"] is False
+    assert result["cache"].endswith(":ci-tools-buildcache-v1")
+    assert result["legacy_cache"].endswith(":app-buildcache-x86-64")
+    message = capsys.readouterr().out
+    assert "CI tools cache is absent" in message
+    assert "verified SDK and qualified dependency seed unchanged" in message
+    assert "No SDK or dependency compilation is authorized" in message
+    assert "acceptance tools" not in message
