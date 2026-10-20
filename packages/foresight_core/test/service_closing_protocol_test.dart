@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:clock/clock.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -282,6 +283,49 @@ void main() {
     return launcher;
   }
 
+  test(
+    'a one-shot agent idle exit relaunches exactly one replacement on its next call',
+    () async {
+      final profile = newProfile('of-idle-relaunch-');
+      final launcher = await launcherFor(profile);
+      var now = DateTime.utc(2026, 10, 20);
+      runtimeConfiguration.environment.remove('FORESIGHT_HELPER');
+      final owner = await ApplicationService.start(
+        profile,
+        clock: Clock(() => now),
+      );
+      final oneShot = await ServiceClient.connect(serviceEndpoint(profile));
+      final connection = ServiceConnection(profile);
+      try {
+        await oneShot.call('notes.list');
+        await oneShot.close();
+        now = now.add(const Duration(minutes: 29));
+        expect((await connection.stream('status').single as Map)['pid'], pid);
+        expect(launcher.launched, isEmpty);
+        final attachedClient = await connection.connect();
+        now = now.add(const Duration(minutes: 1));
+        await connection.stream('status').single;
+        await owner.closed.timeout(startupBound);
+        // Server cleanup can finish before the OS delivers EOF to its client.
+        // Start the next call after that disconnect, rather than while an old
+        // socket can still accept a write and report outcomeUnknown.
+        await attachedClient.closed.timeout(startupBound);
+        await eventually(() => owner.dispatchedCount == 0);
+        expect(owner.application.backgroundBusy, false);
+        runtimeConfiguration.environment['FORESIGHT_HELPER'] = '';
+        expect(await connection.stream('notes.list').single, isEmpty);
+        expect(launcher.launched, hasLength(1));
+        final status = await connection.stream('status').single as Map;
+        expect(launcher.launched, [status['pid']]);
+      } finally {
+        await oneShot.close();
+        await connection.close();
+        await owner.close();
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
   test('a request in flight when the worker begins closing gets a terminal '
       'outcomeUnknown frame (SL-4)', () async {
     final profile = newProfile('of-drain-');
@@ -305,9 +349,8 @@ void main() {
         }),
       );
       await owner.reached('request.committed.notes.save');
-      // The desktop leaving starts a worker-initiated close after its
-      // reattach grace; the frontend keeps relaying attached clients.
-      await desktop.close();
+      // Explicit stop is authoritative while dispatched work holds automatic exits.
+      owner.signal(ProcessSignal.sigterm);
       expect(
         await save,
         rpcError(
@@ -415,6 +458,7 @@ void main() {
     ServiceClient? stopper;
     try {
       await owner.ready();
+      await eventually(() => owner.output.contains('Helper startup:'));
       stopper = await ServiceClient.connect(serviceEndpoint(profile));
       final idle = stopper.call('service.stop_if_idle');
       await owner.reached('close.helper_closed');
@@ -1431,6 +1475,11 @@ while not os.path.exists(sys.argv[3]): time.sleep(0.005)' "\$FORESIGHT_DATA/.app
       final owner = int.parse(ownerPid.readAsStringSync().trim());
       expect((await client.call('status') as Map)['pid'], owner);
       // The loser did nothing and was not launched again.
+      // Attaching to the winner can finish before the losing wrapper runs.
+      await eventually(
+        () => launcher.launched.isNotEmpty,
+        timeout: startupBound,
+      );
       expect(launcher.launched, hasLength(1));
       expect(launcher.launched.single, isNot(owner));
       await eventually(

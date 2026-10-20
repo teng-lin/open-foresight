@@ -16,6 +16,23 @@ import 'web_search.dart';
 import 'web_content.dart';
 import 'generated/rag_service.pbgrpc.dart';
 
+/// An independently disposable waiter on shared, uncancelled work.
+class CancellationWatch {
+  final bool Function() current;
+  final _signal = Completer<void>();
+  final void Function(CancellationWatch) _remove;
+  CancellationWatch(this.current, this._remove);
+  Future<void> get future => _signal.future;
+  void dispose() => _remove(this);
+  void check() {
+    if (!current() && !_signal.isCompleted) {
+      _signal.completeError(
+        RpcError(RpcErrorCode.cancelled, 'Operation cancelled'),
+      );
+    }
+  }
+}
+
 class Domain {
   final Store store;
   final Helper helper;
@@ -75,7 +92,43 @@ class Domain {
   }
 
   /// Invalidate work before deleting local data.
-  void invalidateWorkspace() => _workspaceGeneration++;
+  void invalidateWorkspace() {
+    _workspaceGeneration++;
+    checkCancellations();
+  }
+
+  final _cancellations = <CancellationWatch>{};
+
+  /// Test-only observation that every shared-work waiter disposes its watch.
+  int get cancellationWatchCount => _cancellations.length;
+  CancellationWatch whenCancelled(bool Function() current) {
+    final watch = CancellationWatch(current, _cancellations.remove);
+    _cancellations.add(watch);
+    watch.check();
+    return watch;
+  }
+
+  void checkCancellations() {
+    for (final watch in _cancellations.toList()) {
+      watch.check();
+    }
+  }
+
+  Future<T> awaitCurrent<T>(Future<T> shared, bool Function()? current) async {
+    if (current == null) return shared;
+    shared.ignore();
+    final watch = whenCancelled(current);
+    try {
+      return await Future.any<T>([
+        shared,
+        watch.future.then<T>(
+          (_) => throw StateError('Cancellation waiter completed'),
+        ),
+      ]);
+    } finally {
+      watch.dispose();
+    }
+  }
 
   /// Durable deletes survive helper downtime and are retried on reconnect.
   Future<void> retryPendingHelperDeletes() => _serialize(() async {
@@ -134,11 +187,22 @@ class Domain {
     signal?.complete();
   }
 
-  Future<void> waitForSourceWork() async {
-    _checkOpen();
-    while (sourcesPaused) {
-      await (_sourceWorkResumed ??= Completer<void>()).future;
+  Future<void> waitForSourceWork({bool Function()? current}) async {
+    void check() {
       _checkOpen();
+      if (current != null && !current()) {
+        throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+      }
+    }
+
+    check();
+    while (sourcesPaused) {
+      await awaitCurrent(
+        (_sourceWorkResumed ??= Completer<void>()).future,
+        current,
+      );
+      checkCancellations();
+      check();
     }
   }
 
@@ -152,12 +216,20 @@ class Domain {
     if (_closed) throw RpcError(RpcErrorCode.cancelled, 'Workspace closed');
   }
 
+  int mutating = 0;
+  void Function()? onBackgroundSettled;
   Future<void> _mutationTail = Future<void>.value();
   Future<T> _serialize<T>(Future<T> Function() operation) {
     final generation = workspaceGeneration;
-    final task = _mutationTail.then((_) {
+    final task = _mutationTail.then((_) async {
       checkWorkspace(generation);
-      return operation();
+      mutating++;
+      try {
+        return await operation();
+      } finally {
+        mutating--;
+        onBackgroundSettled?.call();
+      }
     });
     _mutationTail = task.then<void>((_) {}, onError: (Object _) {});
     return task;
@@ -193,11 +265,11 @@ class Domain {
     return result;
   }
 
-  Future<void> index(String id) async {
+  Future<void> index(String id, {bool Function()? current}) async {
     final generation = workspaceGeneration;
     while (true) {
       // Wait outside the mutation queue so deletions can still proceed.
-      await waitForSourceWork();
+      await waitForSourceWork(current: current);
       checkWorkspace(generation);
       final completed = await _serialize(() async {
         // Pause may have happened while an earlier mutation was finishing.
@@ -393,16 +465,26 @@ class Domain {
 
   Future<void>? _resuming;
   Future<void>? _initialization;
+  bool _initializationDone = false;
+  bool get initializationPending =>
+      _initialization != null && !_initializationDone;
+  bool get resumeInProgress => _resuming != null;
   void initialize(Future<void> task) {
-    _initialization = task;
+    _initializationDone = false;
+    _initialization = task.whenComplete(() {
+      _initializationDone = true;
+      onBackgroundSettled?.call();
+    });
     // The restore path reports failures; attaching a listener also covers a
     // bootstrap failure before a helper connection has been established.
-    unawaited(task.catchError((Object _) {}));
+    unawaited(_initialization!.catchError((Object _) {}));
   }
 
   bool get restoring => _resuming != null || _initialization != null;
-  Future<void> resume() =>
-      _resuming ??= _resume().whenComplete(() => _resuming = null);
+  Future<void> resume() => _resuming ??= _resume().whenComplete(() {
+    _resuming = null;
+    onBackgroundSettled?.call();
+  });
   Future<void> _resume() async {
     _checkOpen();
     await retryPendingHelperDeletes();

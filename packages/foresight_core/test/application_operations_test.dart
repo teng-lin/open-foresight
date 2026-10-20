@@ -60,7 +60,7 @@ class OperationsDomain extends AdapterDomain {
   bool rejectIndex = false;
   Completer<void>? indexEntered, indexRelease;
   @override
-  Future<void> index(String id) async {
+  Future<void> index(String id, {bool Function()? current}) async {
     if (indexEntered?.isCompleted == false) indexEntered!.complete();
     await indexRelease?.future;
     if (rejectIndex) throw StateError('index worker disconnected');

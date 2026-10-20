@@ -21,7 +21,7 @@ class CommitDomain extends AdapterDomain {
   CommitDomain(super.store, super.helper);
   bool failIndex = false;
   @override
-  Future<void> index(String id) async {
+  Future<void> index(String id, {bool Function()? current}) async {
     if (!failIndex) return super.index(id);
     store.state(id, 'failed', 'Bad state: index worker disconnected');
     throw StateError('index worker disconnected');

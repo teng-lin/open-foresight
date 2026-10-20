@@ -8,6 +8,7 @@ import 'package:foresight_core/src/service.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:test/test.dart';
+import 'package:clock/clock.dart';
 
 class FailingDetachRecording extends Recording {
   FailingDetachRecording()
@@ -58,10 +59,11 @@ void main() {
   late ApplicationService service;
   late ServiceClient agent, desktop;
   late Map<String, String> original;
-  Future<void> startService(Duration grace) async {
+  Future<void> startService(Duration grace, {Clock? clock}) async {
     service = await ApplicationService.start(
       ProfilePaths('${temp.path}/profile', '${temp.path}/run'),
       desktopDetachGrace: grace,
+      clock: clock,
     );
     agent = await ServiceClient.connect(service.path);
     desktop = await ServiceClient.connect(service.path);
@@ -69,11 +71,11 @@ void main() {
 
   /// Restart the service with [grace], for a test whose reconnect or
   /// reservation must land while a shutdown is pending.
-  Future<void> restartService(Duration grace) async {
+  Future<void> restartService(Duration grace, {Clock? clock}) async {
     await agent.close();
     await desktop.close();
     await service.close();
-    await startService(grace);
+    await startService(grace, clock: clock);
   }
 
   setUp(() async {
@@ -368,6 +370,40 @@ void main() {
       );
       expect(service.desktopShutdownScheduled, isFalse);
       expect((await agent.call('status') as Map)['pid'], pid);
+    },
+  );
+  test(
+    'headless agent work keeps the service until one idle period has passed',
+    () async {
+      var now = DateTime.utc(2026, 10, 20);
+      await restartService(shortGrace, clock: Clock(() => now));
+      service.domain.store.setPreference('serviceIdleMinutes', '30');
+      await agent.call('notes.list');
+      final stamp = service.lastAgentActivity!;
+      // End only the write side and wait for the service to answer with EOF.
+      // ServiceClient.close marks itself closed before the peer observes EOF.
+      await desktop.socket.close();
+      await desktop.closed.timeout(const Duration(seconds: 3));
+      expect(service.desktopShutdownScheduled, isFalse);
+      now = stamp.add(const Duration(minutes: 29));
+      final status = await agent.call('status') as Map;
+      expect(status['pid'], pid);
+      expect(status['lifetime']['pinned_by_desktop'], false);
+      expect(
+        status['lifetime']['exit_after'],
+        stamp.add(const Duration(minutes: 30)).millisecondsSinceEpoch,
+      );
+      expect(service.desktopShutdownScheduled, isFalse);
+      now = stamp.add(const Duration(minutes: 30));
+      await agent.call('status');
+      await service.closed.timeout(const Duration(seconds: 10));
+      await agent.closed.timeout(const Duration(seconds: 3));
+      expect(
+        FileSystemEntity.typeSync(service.path),
+        FileSystemEntityType.notFound,
+      );
+      await eventually(() => service.dispatchedCount == 0);
+      expect(service.application.backgroundBusy, false);
     },
   );
   test(

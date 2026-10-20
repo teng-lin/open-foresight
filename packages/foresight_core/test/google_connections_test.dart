@@ -16,7 +16,7 @@ class FailingImportDomain extends AdapterDomain {
   FailingImportDomain(super.store, super.helper);
   bool rejectIndex = false;
   @override
-  Future<void> index(String id) async {
+  Future<void> index(String id, {bool Function()? current}) async {
     if (rejectIndex) throw StateError('Indexing unavailable');
     await super.index(id);
   }

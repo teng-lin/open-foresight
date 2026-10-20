@@ -9,7 +9,7 @@ class TestDomain extends Domain {
   final indexed = <String>[];
   TestDomain(super.store, super.helper);
   @override
-  Future<void> index(String id) async {
+  Future<void> index(String id, {bool Function()? current}) async {
     indexed.add(id);
   }
 }

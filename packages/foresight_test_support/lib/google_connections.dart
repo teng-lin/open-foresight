@@ -266,7 +266,7 @@ class AdapterDomain extends Domain {
   final indexed = <String>[];
   AdapterDomain(super.store, super.helper);
   @override
-  Future<void> index(String id) async {
+  Future<void> index(String id, {bool Function()? current}) async {
     indexed.add(id);
     store.state(id, 'indexed');
   }
@@ -281,10 +281,10 @@ class PausedAdapterDomain extends AdapterDomain {
   PausedAdapterDomain(super.store, super.helper);
   var pausedCheckpoint = Completer<void>();
   @override
-  Future<void> waitForSourceWork() {
+  Future<void> waitForSourceWork({bool Function()? current}) {
     if (sourcesPaused && !pausedCheckpoint.isCompleted) {
       pausedCheckpoint.complete();
     }
-    return super.waitForSourceWork();
+    return super.waitForSourceWork(current: current);
   }
 }

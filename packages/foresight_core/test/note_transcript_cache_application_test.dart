@@ -1,5 +1,6 @@
 import 'package:foresight_test_support/native_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
+import 'package:foresight_test_support/poll.dart';
 import 'package:foresight_core/src/operations.dart';
 import 'package:foresight_core/src/application.dart';
 import 'dart:async';
@@ -85,11 +86,36 @@ class PromptRuntime extends NativeRuntime {
   }
 }
 
+class ChainRuntime extends PromptRuntime {
+  bool finishedFirst = false;
+  int calls = 0;
+  @override
+  Stream<Map<String, dynamic>> generateConversation(
+    String id,
+    String prompt, {
+    int? maxOutputTokens = 1024,
+    int? maxInputTokens,
+    List<List<int>> stopTokenIds = const [],
+    Duration timeout = const Duration(minutes: 5),
+  }) async* {
+    final first = calls++ == 0;
+    yield* super.generateConversation(
+      id,
+      prompt,
+      maxOutputTokens: maxOutputTokens,
+      maxInputTokens: maxInputTokens,
+      stopTokenIds: stopTokenIds,
+      timeout: timeout,
+    );
+    if (first) finishedFirst = true;
+  }
+}
+
 class TranscriptDomain extends Domain {
-  TranscriptDomain(super.store, super.helper);
+  TranscriptDomain(super.store, super.helper, {super.createTimer});
 
   @override
-  Future<void> index(String id) async {}
+  Future<void> index(String id, {bool Function()? current}) async {}
 }
 
 Future<void> withTranscriptFixture(
@@ -138,6 +164,78 @@ Future<void> withTranscriptFixture(
 }
 
 void main() {
+  test(
+    'a chained live enhancement never exposes a zero producer count between producers',
+    () async {
+      final directory = createTestTempDirectorySync('chained-enhance-');
+      final socket = '${directory.path}/h.sock';
+      final embeddings = EmbeddingService()..embeddingGate = Completer<void>();
+      final server = Server.create(services: [embeddings]);
+      await server.serve(
+        address: InternetAddress(socket, type: InternetAddressType.unix),
+        port: 0,
+      );
+      final store = Store('${directory.path}/app.db');
+      final helper = Helper(
+        socket,
+        '${directory.path}/helper',
+        manageProcess: false,
+      )..snapshot = control.State(pipeline: 'ready');
+      final runtime = ChainRuntime();
+      late TranscriptDomain domain;
+      var observedChain = false;
+      domain = TranscriptDomain(
+        store,
+        helper,
+        createTimer: (duration, callback) {
+          if (runtime.finishedFirst && runtime.calls == 1) {
+            observedChain = true;
+            expect(domain.application.activeEnhancements, greaterThan(0));
+          }
+          return Timer(duration, callback);
+        },
+      )..generator = runtime;
+      addTearDown(() async {
+        if (!embeddings.embeddingGate!.isCompleted) {
+          embeddings.embeddingGate!.complete();
+        }
+        await domain.application.close();
+        domain.close();
+        await helper.close();
+        await server.shutdown();
+        store.close();
+      });
+      store.setPreference('liveEnhance', 'true');
+      store.setPreference('proactiveAnswers', 'false');
+      final first = store.meeting('First'), second = store.meeting('Second');
+      for (final id in [first, second]) {
+        store.saveMeetingNotes(id, '- Draft shorthand');
+        store.transcript(
+          id,
+          'Saved evidence for the draft.',
+          true,
+          0,
+          20,
+          'imported',
+        );
+      }
+      final work = domain.application.enhanceNotes(first, isLive: true);
+      await embeddings.embeddingEntered.future;
+      await domain.application.enhanceNotes(
+        second,
+        isLive: true,
+        deferWhenBusy: true,
+        targetBulletIndices: {0},
+      );
+      embeddings.embeddingGate!.complete();
+      await work;
+      await eventually(() => domain.application.activeEnhancements == 0);
+      expect(runtime.calls, 2);
+      expect(observedChain, true);
+      expect(domain.application.backgroundBusy, false);
+    },
+  );
+
   test(
     'saved structured transcript records reach enhancement as readable text',
     () async {
@@ -276,6 +374,9 @@ void main() {
         try {
           await embeddings.embeddingEntered.future;
           expect(runtime.generating, isFalse);
+          expect(domain.application.activeEnhancements, 1);
+          expect(domain.application.transcriptComputing, 1);
+          expect(domain.application.backgroundBusy, true);
           expect(runtime.prompts, isEmpty);
           for (final method in [
             Operation.modelsEmbedding,
@@ -291,6 +392,9 @@ void main() {
           gate.complete();
           await enhancement;
         }
+        expect(domain.application.activeEnhancements, 0);
+        expect(domain.application.transcriptComputing, 0);
+        expect(domain.application.backgroundBusy, false);
         expect(runtime.prompts, hasLength(1));
       });
     },
