@@ -5,7 +5,9 @@ import 'dart:io';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/service.dart';
+import 'package:foresight_test_support/gated_helper.dart';
 import 'package:foresight_test_support/hooked_service.dart';
+import 'package:foresight_test_support/poll.dart';
 import 'package:foresight_test_support/service_fault_proxy.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
@@ -44,7 +46,24 @@ Future<Object> failureOf(Future<Object?> request) => request
       (value) => fail('Expected a failure, got $value'),
       onError: (Object error) => error,
     )
-    .timeout(const Duration(seconds: 60));
+    .timeout(const Duration(seconds: 120));
+
+/// Whether [frame] is a closing refusal that carries its reason.
+bool isClosingFrame(ServiceFrame frame) =>
+    frame.error?['reason'] == 'closing' &&
+    frame.error?['message'] == closingMessage;
+
+/// Whether [startup] has completed, observed without waiting for it.
+bool Function() settledFlag(Future<Object?> startup) {
+  var settled = false;
+  unawaited(
+    startup.then<void>(
+      (_) => settled = true,
+      onError: (Object _) => settled = true,
+    ),
+  );
+  return () => settled;
+}
 
 /// An RpcError with [code], [message] and the wire reason [reason]. Reading
 /// the reason through toJson keeps this file runnable against older clients.
@@ -132,16 +151,18 @@ void main() {
       await desktop.call('security.attach_desktop', {
         'token': File('${profile.data}/.desktop-capability').readAsStringSync(),
       });
-      final save = writer.call('notes.save', {
-        'title': 'Committed before close',
-        'body': 'its reply is lost',
-      });
+      final save = failureOf(
+        writer.call('notes.save', {
+          'title': 'Committed before close',
+          'body': 'its reply is lost',
+        }),
+      );
       await owner.reached('request.committed.notes.save');
       // The desktop leaving starts a worker-initiated close after its
       // reattach grace; the frontend keeps relaying attached clients.
       await desktop.close();
       expect(
-        await failureOf(save),
+        await save,
         rpcError(
           RpcErrorCode.unavailable,
           outcomeUnknownMessage,
@@ -267,4 +288,231 @@ void main() {
       await owner.stop();
     }
   }, timeout: const Timeout(Duration(minutes: 3)));
+
+  test('startup joins a real closing owner and attaches to its one replacement '
+      '(T3, SL-3)', () async {
+    final profile = newProfile('of-join-');
+    final helper = await GatedHelper.create(Directory(profile.data).parent);
+    // The helper exits at once on SIGTERM; the gate holds the owner.
+    helper.release();
+    final owner = await HookedServiceProcess.start(
+      build,
+      profile,
+      environment: {'FORESIGHT_HELPER': helper.executable},
+      hold: ['close.helper_closed'],
+    );
+    final launcher = await launcherFor(profile);
+    final proxy = ServiceFaultProxy();
+    ServiceClient? stopper, attached;
+    try {
+      await owner.ready();
+      await helper.started();
+      stopper = await ServiceClient.connect(serviceEndpoint(profile));
+      final idle = stopper.call('service.stop_if_idle');
+      await owner.reached('close.helper_closed');
+      final refused = proxy
+          .seen(ProxyDirection.toClient, where: isClosingFrame)
+          .timeout(const Duration(seconds: 60));
+      final startup = proxy.run(
+        () => ensureService(profile, startupTimeout: startupBound),
+      );
+      final settled = settledFlag(startup);
+      await refused;
+      // The refused probe waits for its connection to end; the owner still
+      // holds the profile, so nothing launches.
+      expect(settled(), isFalse);
+      expect(launcher.launched, isEmpty);
+      final toOldOwner = proxy.connections.length;
+      owner.release('close.helper_closed');
+      expect(await idle, {'stopped': true, 'shutdown_verified': true});
+      expect(await owner.exitCode, 0, reason: owner.output);
+      attached = await startup;
+      final status = await attached.call('status') as Map;
+      expect(launcher.launched, [status['pid']]);
+      // Every probe the closing owner received got a structured refusal;
+      // none ended in a bare EOF (D3).
+      for (final connection in proxy.connections.take(toOldOwner)) {
+        final replies = proxy.frames.where(
+          (frame) =>
+              frame.connection == connection &&
+              frame.direction == ProxyDirection.toClient &&
+              frame.method == 'status',
+        );
+        expect(replies, isNotEmpty, reason: 'connection ${connection.index}');
+        expect(replies.every(isClosingFrame), isTrue);
+      }
+    } finally {
+      await stopper?.close();
+      await attached?.close();
+      await proxy.close();
+      await launcher.stopAll();
+      await owner.stop();
+      helper.kill();
+    }
+  }, timeout: const Timeout(Duration(minutes: 3)));
+
+  test(
+    'after an unexpected worker exit new clients are refused and the handoff '
+    'reaches one replacement (SL-3)',
+    () async {
+      final profile = newProfile('of-crash-');
+      final owner = await HookedServiceProcess.start(
+        build,
+        profile,
+        hold: ['frontend.draining'],
+      );
+      final launcher = await launcherFor(profile);
+      final proxy = ServiceFaultProxy();
+      ServiceClient? client, latecomer, replacement;
+      try {
+        await owner.ready();
+        // The worker dies at this point without any cleanup.
+        File(
+          '${owner.gates.directory.path}/request.committed.notes.list.crash',
+        ).writeAsStringSync('');
+        client = await ServiceClient.connect(serviceEndpoint(profile));
+        final lost = failureOf(client.call('notes.list'));
+        // Only a crash ends a request with a bare EOF (D3).
+        expect(
+          await lost,
+          rpcError(
+            RpcErrorCode.unavailable,
+            'Application service disconnected',
+            'outcomeUnknown',
+          ),
+        );
+        await owner.reached('frontend.draining');
+        latecomer = await ServiceClient.connect(serviceEndpoint(profile));
+        expect(
+          await failureOf(latecomer.call('status')),
+          rpcError(RpcErrorCode.unavailable, closingMessage, 'closing'),
+        );
+        final refused = proxy
+            .seen(ProxyDirection.toClient, where: isClosingFrame)
+            .timeout(const Duration(seconds: 60));
+        final startup = proxy.run(
+          () => ensureService(profile, startupTimeout: startupBound),
+        );
+        final settled = settledFlag(startup);
+        await refused;
+        expect(settled(), isFalse);
+        expect(launcher.launched, isEmpty);
+        owner.release('frontend.draining');
+        // The process reports the worker's failure.
+        expect(await owner.exitCode, isNot(0), reason: owner.output);
+        replacement = await startup;
+        expect(launcher.launched, [
+          (await replacement.call('status') as Map)['pid'],
+        ]);
+        // The old frontend left the replacement's public socket alone.
+        expect(
+          FileSystemEntity.typeSync(serviceEndpoint(profile)),
+          FileSystemEntityType.unixDomainSock,
+        );
+        final direct = await ServiceClient.connect(serviceEndpoint(profile));
+        try {
+          expect(
+            (await direct.call('status') as Map)['pid'],
+            launcher.launched.single,
+          );
+        } finally {
+          await direct.close();
+        }
+      } finally {
+        await client?.close();
+        await latecomer?.close();
+        await replacement?.close();
+        await proxy.close();
+        await launcher.stopAll();
+        await owner.stop();
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test('two launcher processes join one closing owner and attach to the same '
+      'replacement', () async {
+    final probe = await HookedServiceBuild.compile(
+      testHooks: false,
+      entryPoint: 'test/fixtures/closing_owner_launcher.dart',
+    );
+    final profile = newProfile('of-two-');
+    final owner = await HookedServiceProcess.start(
+      build,
+      profile,
+      hold: ['close.helper_closed'],
+    );
+    final launcher = await launcherFor(profile);
+    final launchers = <Process>[];
+    try {
+      await owner.ready();
+      owner.signal(ProcessSignal.sigterm);
+      await owner.reached('close.helper_closed');
+      for (var i = 0; i < 2; i++) {
+        launchers.add(
+          await Process.start(
+            Platform.resolvedExecutable,
+            [probe.kernel],
+            environment: {
+              for (final entry in Platform.environment.entries)
+                if (!entry.key.startsWith('FORESIGHT_')) entry.key: entry.value,
+              'FORESIGHT_DATA': profile.data,
+              'FORESIGHT_RUNTIME': profile.runtime,
+              'FORESIGHT_SERVICE': launcher.executable,
+              'FORESIGHT_HELPER': '',
+            },
+            includeParentEnvironment: false,
+          ),
+        );
+      }
+      final errors = [
+        for (final process in launchers)
+          utf8.decoder.bind(process.stderr).join(),
+      ];
+      final lines = [
+        for (final process in launchers)
+          StreamIterator(
+            utf8.decoder.bind(process.stdout).transform(const LineSplitter()),
+          ),
+      ];
+      Future<String> next(int index) async {
+        final more = await lines[index].moveNext().timeout(
+          const Duration(seconds: 120),
+        );
+        if (!more) fail('Launcher $index exited: ${await errors[index]}');
+        return lines[index].current;
+      }
+
+      // Both launcher processes got the closing refusal; neither launched
+      // while the owner held the profile.
+      expect(await next(0), 'refused');
+      expect(await next(1), 'refused');
+      expect(launcher.launched, isEmpty);
+      owner.release('close.helper_closed');
+      expect(await owner.exitCode, 0, reason: owner.output);
+      final attached = {await next(0), await next(1)};
+      expect(attached, hasLength(1));
+      final pid = int.parse(attached.single.split(' ').last);
+      expect(launcher.launched, contains(pid));
+      // Each launches at most once; a losing replacement exits.
+      expect(launcher.launched.length, inInclusiveRange(1, 2));
+      for (final process in launchers) {
+        expect(await process.exitCode, 0);
+      }
+      for (final other in launcher.launched.where((other) => other != pid)) {
+        await eventually(
+          () async => !await isRunning(other),
+          timeout: startupBound,
+        );
+      }
+      expect(await isRunning(pid), isTrue);
+    } finally {
+      for (final process in launchers) {
+        process.kill(ProcessSignal.sigkill);
+      }
+      await launcher.stopAll();
+      await owner.stop();
+      await probe.dispose();
+    }
+  }, timeout: const Timeout(Duration(minutes: 4)));
 }

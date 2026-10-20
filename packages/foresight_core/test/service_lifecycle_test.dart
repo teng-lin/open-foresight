@@ -10,9 +10,8 @@ import 'package:foresight_test_support/poll.dart';
 import 'package:foresight_test_support/service_fault_proxy.dart';
 import 'package:test/test.dart';
 
-// Characterization tests: the real bin/service.dart (IsolatedApplicationService)
-// on one side and the real ensureService/ServiceClient on the other. They pin
-// lifecycle behavior as it is today; tests marked PINNED change in PR 3.
+// Lifecycle tests with the real bin/service.dart (IsolatedApplicationService)
+// on one side and the real ensureService/ServiceClient on the other.
 
 const closingMessage =
     'Application service is shutting down; retry after it exits.';
@@ -44,15 +43,31 @@ bool lockHeld(ProfilePaths profile) {
   }
 }
 
-/// A connection the service dropped: EOF, or a write into the closed socket.
-final isTransportLoss = anyOf(
-  isA<SocketException>(),
-  isA<RpcError>().having(
-    (error) => error.message,
-    'message',
-    'Application service disconnected',
-  ),
-);
+/// A closing owner's refusal of a request it never dispatched (D3).
+final closingRefusal = isA<RpcError>()
+    .having((error) => error.code, 'code', RpcErrorCode.unavailable)
+    .having((error) => error.message, 'message', closingMessage)
+    .having((error) => error.toJson()['reason'], 'reason', 'closing');
+
+/// The owner's terminal frame for a request it dispatched but did not finish.
+final outcomeUnknown = isA<RpcError>()
+    .having((error) => error.code, 'code', RpcErrorCode.unavailable)
+    .having(
+      (error) => error.message,
+      'message',
+      'Application service stopped before this request finished; it may or '
+          'may not have completed.',
+    )
+    .having((error) => error.toJson()['reason'], 'reason', 'outcomeUnknown');
+
+/// The error [request] failed with; a bound only, so a request that gets no
+/// terminal frame fails the test instead of hanging it.
+Future<Object> failureOf(Future<Object?> request) => request
+    .then<Object>(
+      (value) => fail('Expected a failure, got $value'),
+      onError: (Object error) => error,
+    )
+    .timeout(const Duration(seconds: 120));
 
 void main() {
   late HookedServiceBuild build;
@@ -184,8 +199,8 @@ void main() {
   );
 
   test(
-    'PINNED (SL-3, reordered by PR 3): at close.before_record_delete the '
-    'record and public socket remain, new clients get EOF and no launch',
+    'at close.before_record_delete the public socket is gone, the record '
+    'remains, and startup waits for the lock without a launch (SL-3)',
     () async {
       final directory = createServiceTestDirectorySync('of-record-');
       final profile = ProfilePaths(
@@ -201,34 +216,31 @@ void main() {
       runtimeConfiguration.environment['FORESIGHT_SERVICE'] =
           launcher.executable;
       final proxy = ServiceFaultProxy();
-      ServiceClient? attached, latecomer, replacement;
+      ServiceClient? attached, replacement;
       try {
         await owner.ready();
         attached = await ServiceClient.connect(serviceEndpoint(profile));
         expect((await attached.call('status') as Map)['pid'], owner.pid);
         owner.signal(ProcessSignal.sigterm);
         await owner.reached('close.before_record_delete');
-        // The worker has closed its own socket and still owns the profile.
+        // Worker socket, then public socket, are gone; the record and lock
+        // remain, so a record never outlives its owner's lock (SL-3).
         expect(recordedRuntime(profile), profile.runtime);
-        expect(
-          FileSystemEntity.typeSync('${profile.runtime}/application.sock'),
-          FileSystemEntityType.unixDomainSock,
-        );
-        expect(
-          FileSystemEntity.typeSync('${profile.runtime}/worker.sock'),
-          FileSystemEntityType.notFound,
-        );
+        for (final name in ['application.sock', 'worker.sock']) {
+          expect(
+            FileSystemEntity.typeSync('${profile.runtime}/$name'),
+            FileSystemEntityType.notFound,
+            reason: name,
+          );
+        }
         expect(lockHeld(profile), isTrue);
-        // SIGTERM already dropped the attached client.
+        // The worker closed the attached client after its terminal frames.
         await attached.events.stream.drain<void>().timeout(connectionBound);
         expect(attached.isClosed, isTrue);
-        // The frontend still accepts, then closes without any reply.
-        latecomer = await ServiceClient.connect(serviceEndpoint(profile));
-        await expectLater(latecomer.call('status'), throwsA(isTransportLoss));
-        // Startup retries while the lock is held. The frontend accepts each
-        // connection and drops it, so its second connection follows a
-        // complete lock probe: startup has decided not to launch.
-        final secondProbe = proxy.attempt(refused: false, count: 2);
+        // Startup finds no socket while the lock is held. Its second refused
+        // connect follows a complete lock probe, so it has decided not to
+        // launch.
+        final secondProbe = proxy.attempt(refused: true, count: 2);
         final pending = proxy.run(
           () => ensureService(profile, startupTimeout: startupBound),
         );
@@ -241,15 +253,6 @@ void main() {
         );
         await secondProbe;
         expect(settled, isFalse);
-        expect(
-          proxy.frames.where(
-            (frame) =>
-                frame.direction == ProxyDirection.toClient &&
-                frame.method == 'status',
-          ),
-          isEmpty,
-          reason: 'The closing owner answered no probe',
-        );
         expect(launcher.launched, isEmpty);
         owner.release('close.before_record_delete');
         expect(await owner.exited(), 0, reason: owner.output);
@@ -259,7 +262,6 @@ void main() {
         ]);
       } finally {
         await attached?.close();
-        await latecomer?.close();
         await replacement?.close();
         await proxy.close();
         await launcher.stopAll();
@@ -269,55 +271,67 @@ void main() {
     timeout: const Timeout(Duration(minutes: 3)),
   );
 
-  test('PINNED (D3, changed by PR 3): during a SIGTERM close a new client gets '
-      'EOF or a broken pipe, never the closing reply', () async {
-    final directory = createServiceTestDirectorySync('of-sigterm-');
-    final profile = ProfilePaths(
-      '${directory.path}/data',
-      '${directory.path}/run',
-    );
-    final owner = await HookedServiceProcess.start(
-      build,
-      profile,
-      hold: ['close.helper_closed'],
-    );
-    ServiceClient? attached, latecomer;
-    try {
-      await owner.ready();
-      attached = await ServiceClient.connect(serviceEndpoint(profile));
-      expect((await attached.call('status') as Map)['pid'], owner.pid);
-      owner.signal(ProcessSignal.sigterm);
-      await owner.reached('close.helper_closed');
-      // The frontend destroys attached peers as soon as SIGTERM arrives.
-      await attached.events.stream.drain<void>().timeout(connectionBound);
-      expect(attached.isClosed, isTrue);
-      await expectLater(attached.call('status'), throwsA(isTransportLoss));
-      latecomer = await ServiceClient.connect(serviceEndpoint(profile));
-      Object? failure;
-      try {
-        await latecomer.call('status');
-      } catch (error) {
-        failure = error;
-      }
-      // PR 3 (D3) replaces this with a structured closing refusal.
-      expect(failure, isTransportLoss);
-      expect(
-        failure,
-        isNot(
-          isA<RpcError>().having(
-            (error) => error.message,
-            'message',
-            closingMessage,
-          ),
-        ),
+  test(
+    'during a SIGTERM close a new client gets the closing refusal and an '
+    'in-flight request outcomeUnknown, never a bare EOF (SL-3, SL-4)',
+    () async {
+      final directory = createServiceTestDirectorySync('of-sigterm-');
+      final profile = ProfilePaths(
+        '${directory.path}/data',
+        '${directory.path}/run',
       );
-      owner.release('close.helper_closed');
-      expect(await owner.exited(), 0, reason: owner.output);
-      expect(recordedRuntime(profile), isNull);
-    } finally {
-      await attached?.close();
-      await latecomer?.close();
-      await owner.stop();
-    }
-  }, timeout: const Timeout(Duration(minutes: 3)));
+      final owner = await HookedServiceProcess.start(
+        build,
+        profile,
+        hold: ['request.committed.notes.save', 'close.helper_closed'],
+      );
+      ServiceClient? attached, writer, latecomer;
+      try {
+        await owner.ready();
+        attached = await ServiceClient.connect(serviceEndpoint(profile));
+        writer = await ServiceClient.connect(serviceEndpoint(profile));
+        expect((await attached.call('status') as Map)['pid'], owner.pid);
+        final save = failureOf(
+          writer.call('notes.save', {
+            'title': 'In flight at SIGTERM',
+            'body': 'committed',
+          }),
+        );
+        await owner.reached('request.committed.notes.save');
+        owner.signal(ProcessSignal.sigterm);
+        await owner.reached('close.helper_closed');
+        expect(await save, outcomeUnknown);
+        // An attached client keeps its connection and gets the refusal.
+        expect(await failureOf(attached.call('status')), closingRefusal);
+        expect(attached.isClosed, isFalse);
+        latecomer = await ServiceClient.connect(serviceEndpoint(profile));
+        expect(await failureOf(latecomer.call('status')), closingRefusal);
+        expect(latecomer.isClosed, isFalse);
+        owner.release('close.helper_closed');
+        owner.release('request.committed.notes.save');
+        expect(await owner.exited(), 0, reason: owner.output);
+        expect(recordedRuntime(profile), isNull);
+        // The write whose reply was lost had committed.
+        final store = Store.readOnly('${profile.data}/application.db');
+        try {
+          expect(
+            store.rows('SELECT title FROM notes').single['title'],
+            'In flight at SIGTERM',
+          );
+        } finally {
+          store.close();
+        }
+        for (final client in [attached, latecomer]) {
+          await client.events.stream.drain<void>().timeout(connectionBound);
+          expect(client.isClosed, isTrue);
+        }
+      } finally {
+        await attached?.close();
+        await writer?.close();
+        await latecomer?.close();
+        await owner.stop();
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
 }

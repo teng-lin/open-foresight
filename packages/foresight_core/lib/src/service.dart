@@ -109,7 +109,9 @@ final _serviceGateNames = RegExp(r'^[A-Za-z0-9_.-]+$');
 /// directory, it publishes `<point>.reached` (this pid) there. If the test
 /// armed the point with `<point>.hold`, it then waits for `<point>.release`
 /// or `release-all`. Polling only delays a release; the test decides the
-/// order. Without the key it returns at once.
+/// order. A `<point>.crash` file instead makes the calling isolate fail with
+/// an uncaught error, as a fatal fault would, without any cleanup. Without
+/// the key it returns at once.
 Future<void> serviceGate(String point) async {
   final directory = runtimeConfiguration['FORESIGHT_SERVICE_GATES'];
   if (directory == null) return;
@@ -120,6 +122,15 @@ Future<void> serviceGate(String point) async {
     final staging = File('$directory/.$point.$pid.${Random().nextInt(1 << 32)}')
       ..writeAsStringSync('$pid', flush: true);
     staging.renameSync('$directory/$point.reached');
+    if (File('$directory/$point.crash').existsSync()) {
+      _traceServiceTransport('gate crash $point');
+      // The root zone is outside the worker's guarded zone, so the isolate
+      // dies and its owner sees only an error and an exit.
+      Zone.root.run(
+        () => Timer.run(() => throw StateError('Service gate $point crashed')),
+      );
+      await Completer<void>().future;
+    }
     if (!File('$directory/$point.hold').existsSync()) return;
     _traceServiceTransport('gate held $point');
     while (!File('$directory/$point.release').existsSync() &&
@@ -609,6 +620,7 @@ class ApplicationService {
   final _desktopClients = <Socket>{};
   bool _closing = false;
   Future<void>? _shutdown;
+  void Function()? _onDraining;
   Future<void> Function()? _beforeReleaseOwnership;
   final _closed = Completer<void>();
   Future<void> get closed => _closed.future;
@@ -1328,6 +1340,8 @@ class ApplicationService {
     _closing = true;
     _heartbeat?.cancel();
     _desktopShutdown?.cancel();
+    // An isolated frontend refuses new connections from here on.
+    _onDraining?.call();
     // Every request in flight gets a terminal frame before its lease is
     // cancelled. Nothing awaits before this loop, so no request can complete
     // in between: a client sees either its result or this error (SL-4).
@@ -1382,10 +1396,19 @@ class ApplicationService {
     }
     if (serviceGatesEnabled) await serviceGate('close.listener_closed');
     await attempt(domain.store.close);
-    await attempt(() async {
+    await attempt(() {
       if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound) {
         File(path).deleteSync();
       }
+    });
+    if (serviceGatesEnabled) await serviceGate('close.before_frontend_release');
+    await attempt(() async {
+      await _beforeReleaseOwnership?.call();
+    });
+    // The record outlives every socket of this owner: worker socket, public
+    // socket, record, then lock. A record therefore always means its owner is
+    // live, draining or crashed (SL-3).
+    await attempt(() async {
       final endpoint = File(
         '${File(domain.store.path).parent.path}/.application-endpoint.json',
       );
@@ -1397,10 +1420,6 @@ class ApplicationService {
           endpoint.existsSync()) {
         endpoint.deleteSync();
       }
-    });
-    if (serviceGatesEnabled) await serviceGate('close.before_frontend_release');
-    await attempt(() async {
-      await _beforeReleaseOwnership?.call();
     });
     if (serviceGatesEnabled) await serviceGate('close.before_lock_release');
     await attempt(lock.closeSync);
@@ -1415,6 +1434,13 @@ class ApplicationService {
 /// Domain (SQLite connections, native handles, model ownership, approvals and
 /// request leases) lives in one long-lived worker isolate. Byte streams preserve
 /// multiplexed requests, events, cancellation and shutdown acknowledgements.
+///
+/// Once the worker begins closing (its `draining` message) or this frontend is
+/// asked to close, new connections are no longer bridged: [_refuse] answers
+/// their requests with the closing refusal until the public socket is removed.
+/// Attached clients keep their bridges, so they receive the worker's terminal
+/// frames and refusals before it closes their connections. Only a worker that
+/// exits unexpectedly leaves them with a bare EOF.
 class IsolatedApplicationService {
   final String _dataPath;
   final ReceivePort _messages;
@@ -1423,15 +1449,23 @@ class IsolatedApplicationService {
   final _ready = Completer<void>();
   final _closed = Completer<void>();
   final _peers = <Socket>{};
+  final _refused = <Socket>{};
   final _bridges = <Future<void>>{};
   SendPort? _control;
   ServiceSocketBinding? _binding;
   Future<void>? _listening;
   bool _publicClosing = false;
   String? _publicPath;
+  // The device and inode of the public socket this frontend published.
+  String? _publicIdentity;
   String? _workerPath;
   Object? _failure;
+  // This frontend asked the worker to close.
   bool _closing = false;
+  // The worker announced that it is closing.
+  bool _workerClosing = false;
+  // New connections get the closing refusal instead of a bridge.
+  bool _draining = false;
   Future<void>? _shutdown;
   Future<void>? _finishing;
   final _workerExited = Completer<void>();
@@ -1461,6 +1495,8 @@ class IsolatedApplicationService {
       _traceServiceTransport(
         'worker exit received failed=${host._failure != null}',
       );
+      final unexpected =
+          host._ready.isCompleted && !host._closing && !host._workerClosing;
       if (!host._workerExited.isCompleted) host._workerExited.complete();
       if (!host._ready.isCompleted) {
         host._ready.completeError(
@@ -1468,6 +1504,7 @@ class IsolatedApplicationService {
               StateError('Application worker exited during startup'),
         );
       }
+      if (unexpected) host._workerLost();
       unawaited(host._finish());
     });
     var spawned = false;
@@ -1518,6 +1555,10 @@ class IsolatedApplicationService {
           },
         ),
       );
+    } else if (value.first == 'draining') {
+      _traceServiceTransport('worker draining received');
+      _workerClosing = true;
+      _draining = true;
     } else if (value.first == 'closing') {
       _traceServiceTransport('worker ownership closing received');
       unawaited(
@@ -1551,21 +1592,24 @@ class IsolatedApplicationService {
       await binding.close();
       throw StateError('Service closed before socket publication');
     }
-    binding.publish((client) {
-      final bridge = _bridge(client);
-      _bridges.add(bridge);
-      unawaited(bridge.whenComplete(() => _bridges.remove(bridge)));
-    });
-    _traceServiceTransport('frontend listening');
+    binding.publish(_accept);
+    _publicIdentity = await _fileIdentity(path);
+    _traceServiceTransport('frontend listening $_publicIdentity');
+  }
+
+  void _accept(Socket client) {
+    if (_draining) {
+      _refuse(client);
+      return;
+    }
+    final bridge = _bridge(client);
+    _bridges.add(bridge);
+    unawaited(bridge.whenComplete(() => _bridges.remove(bridge)));
   }
 
   Future<void> _bridge(Socket client) async {
     final peer = identityHashCode(client);
-    _traceServiceTransport('frontend accept peer=$peer closing=$_closing');
-    if (_closing) {
-      client.destroy();
-      return;
-    }
+    _traceServiceTransport('frontend accept peer=$peer');
     _peers.add(client);
     Socket? backend;
     try {
@@ -1578,9 +1622,11 @@ class IsolatedApplicationService {
       );
       _traceServiceTransport('frontend backend connected peer=$peer');
       _peers.add(backend);
-      if (_closing) {
-        client.destroy();
+      if (_draining) {
+        // The worker began closing while this connected; nothing was sent.
         backend.destroy();
+        _peers.remove(client);
+        _refuse(client);
         return;
       }
       // pipe applies stream backpressure and flushes before closing. Keeping
@@ -1618,11 +1664,82 @@ class IsolatedApplicationService {
       ]);
     } catch (error) {
       _traceServiceTransport('frontend bridge failed peer=$peer $error');
-      client.destroy();
       backend?.destroy();
+      if (backend == null && _draining) {
+        // A closing worker no longer accepts; this client sent nothing yet.
+        _peers.remove(client);
+        _refuse(client);
+      } else {
+        client.destroy();
+      }
     } finally {
       _peers.remove(client);
       if (backend != null) _peers.remove(backend);
+    }
+  }
+
+  /// Answer every request on [client] with the closing refusal instead of
+  /// bridging it, until the public socket is removed. A launcher waits for
+  /// this connection's EOF before it probes the profile lock.
+  void _refuse(Socket client) {
+    if (_publicRemoved) {
+      client.destroy();
+      return;
+    }
+    final peer = identityHashCode(client);
+    _traceServiceTransport('frontend refuse peer=$peer');
+    _refused.add(client);
+    unawaited(client.done.catchError((Object _) {}));
+    final frames = _FrameSplitter(maxServiceMessage);
+    void stop() {
+      _refused.remove(client);
+      client.destroy();
+    }
+
+    client.listen(
+      (chunk) {
+        final complete = frames.add(chunk);
+        if (complete == null) {
+          stop();
+          return;
+        }
+        for (final frame in complete) {
+          final request = _decodeFrame(frame);
+          final id = request?['id'];
+          if (request == null || (id is! int && request['cancel'] is! int)) {
+            _traceServiceTransport('frontend refused malformed peer=$peer');
+            stop();
+            return;
+          }
+          // Nothing was dispatched, so there is nothing to cancel.
+          if (id is! int) continue;
+          try {
+            client.add(
+              utf8.encode(
+                '${jsonEncode({'id': id, 'error': _closingRefusal().toJson(), 'done': true})}\n',
+              ),
+            );
+          } catch (_) {
+            stop();
+            return;
+          }
+        }
+      },
+      onError: (Object _) => stop(),
+      onDone: stop,
+      cancelOnError: true,
+    );
+  }
+
+  /// A worker that dies without closing leaves its sockets open with nobody
+  /// reading them. Refuse new connections and end attached ones now: only
+  /// this crash path gives clients a bare EOF.
+  void _workerLost() {
+    _traceServiceTransport('worker exited unexpectedly');
+    _failure ??= StateError('Application worker exited unexpectedly');
+    _draining = true;
+    for (final peer in _peers.toList()) {
+      peer.destroy();
     }
   }
 
@@ -1630,12 +1747,10 @@ class IsolatedApplicationService {
     _traceServiceTransport('frontend close closing=$_closing');
     if (!_closing) {
       _closing = true;
-      // An explicit stop must make cached clients observe EOF immediately.
-      // Keep worker cleanup and ownership release independent of frontend pipes;
-      // the worker-initiated idle-stop path still flushes its acknowledgement.
-      for (final peer in _peers.toList()) {
-        peer.destroy();
-      }
+      // Attached clients keep their bridges: the worker answers each request
+      // in flight with a terminal frame and refuses later ones before it
+      // closes their connections. New connections are refused here.
+      _draining = true;
       _control?.send('close');
     }
     await closed;
@@ -1653,31 +1768,50 @@ class IsolatedApplicationService {
     }
     await _binding?.close();
     _traceServiceTransport('frontend listener closed');
-    if (_publicRemoved || _publicPath == null) return;
-    RandomAccessFile? ownership;
-    if (!workerOwnsLock) {
-      // An unexpected worker exit may release its lock before this isolate
-      // processes the exit message. A new process can already own the profile.
-      // Reacquire ownership before touching its public socket path.
-      try {
-        _traceServiceTransport('frontend reacquiring ownership');
-        ownership = await File(
-          '$_dataPath/.application.lock',
-        ).open(mode: FileMode.append);
-        ownership.lockSync(FileLock.exclusive);
-        _traceServiceTransport('frontend ownership reacquired');
-      } on FileSystemException {
-        await ownership?.close();
-        return;
-      }
-    }
     try {
-      final path = File(_publicPath!);
-      if (await path.exists()) await path.delete();
-      _publicRemoved = true;
-      _traceServiceTransport('frontend socket removed ${path.path}');
+      if (_publicRemoved || _publicPath == null) return;
+      RandomAccessFile? ownership;
+      if (!workerOwnsLock) {
+        // An unexpected worker exit may release its lock before this isolate
+        // processes the exit message. A new process can already own the
+        // profile. Reacquire ownership before touching its public socket path.
+        try {
+          _traceServiceTransport('frontend reacquiring ownership');
+          ownership = await File(
+            '$_dataPath/.application.lock',
+          ).open(mode: FileMode.append);
+          ownership.lockSync(FileLock.exclusive);
+          _traceServiceTransport('frontend ownership reacquired');
+        } on FileSystemException {
+          await ownership?.close();
+          return;
+        }
+      }
+      try {
+        final path = _publicPath!;
+        // Unlink only the socket this frontend published. A replacement, or
+        // an owner in this process or of another profile sharing the runtime
+        // directory, may own the path now.
+        final identity = await _fileIdentity(path);
+        if (identity != null &&
+            _publicIdentity != null &&
+            identity != _publicIdentity) {
+          _traceServiceTransport('frontend leaves a replaced socket $path');
+        } else if (FileSystemEntity.typeSync(path, followLinks: false) !=
+            FileSystemEntityType.notFound) {
+          File(path).deleteSync();
+          _traceServiceTransport('frontend socket removed $path');
+        }
+        _publicRemoved = true;
+      } finally {
+        await ownership?.close();
+      }
     } finally {
-      await ownership?.close();
+      // Refused clients wait for this EOF before probing the profile lock.
+      for (final client in _refused.toList()) {
+        client.destroy();
+      }
+      _refused.clear();
     }
   }
 
@@ -1685,7 +1819,10 @@ class IsolatedApplicationService {
   Future<void> _finishOnce() async {
     _traceServiceTransport('frontend finish begin');
     if (_closed.isCompleted) return;
-    _closing = true;
+    // The worker has exited. New clients are refused until the public socket
+    // is gone, if the worker did not already release it.
+    _draining = true;
+    if (serviceGatesEnabled) await serviceGate('frontend.draining');
     try {
       await _removePublicSocket();
       // The worker flushes an idle-stop acknowledgement before exiting.
@@ -1706,6 +1843,20 @@ class IsolatedApplicationService {
       if (!_closed.isCompleted) _closed.complete();
     }
   }
+}
+
+/// The device and inode of [path] itself, without following a link, or null
+/// when it is missing or cannot be inspected.
+Future<String?> _fileIdentity(String path) async {
+  if (FileSystemEntity.typeSync(path, followLinks: false) ==
+      FileSystemEntityType.notFound) {
+    return null;
+  }
+  final result = await Process.run(
+    '/usr/bin/stat',
+    Platform.isMacOS ? ['-f', '%d:%i', path] : ['-c', '%d:%i', path],
+  );
+  return result.exitCode == 0 ? result.stdout.toString().trim() : null;
 }
 
 void _applicationServiceWorker(List<Object?> configuration) {
@@ -1761,6 +1912,7 @@ Future<void> _runApplicationServiceWorker(List<Object?> configuration) async {
     );
     service = await ApplicationService.start(profile, internalWorker: true);
     _traceServiceTransport('worker ready ${service.path}');
+    service._onDraining = () => parent.send(['draining']);
     service._beforeReleaseOwnership = () {
       parent.send(['closing']);
       return frontendClosed.future;

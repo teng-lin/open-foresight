@@ -1251,6 +1251,7 @@ LIFECYCLE_GATES = (
     "close.before_record_delete",
     "close.before_frontend_release",
     "close.before_lock_release",
+    "frontend.draining",
     "request.committed.status",
 )
 
@@ -1333,6 +1334,117 @@ def test_release_service_ignores_lifecycle_gates(tmp_path):
             if process.poll() is None:
                 process.kill()
                 process.wait(timeout=10)
+            helper.kill()
+
+
+def test_mcp_startup_joins_a_closing_owner_and_attaches_to_one_replacement(
+    tmp_path,
+):
+    """Built service, MCP and helper on both sides of the closing handoff (T3).
+
+    A gated helper holds the closing owner inside its helper shutdown, with
+    its profile lock. MCP startup gets the frontend's closing refusal and
+    launches nothing while the owner holds the profile; once the owner exits
+    it starts exactly one replacement and attaches to it.
+    """
+    assert SERVICE.is_file() and MCP.is_file(), "Build service and MCP first"
+    data, runtime = tmp_path / "data", tmp_path / "run"
+    helper = GatedHelper(tmp_path)
+    launches = tmp_path / "launches"
+    wrapper = tmp_path / "launch-service"
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        f'printf "%s\\n" "$$" >> "{launches}"\n'
+        f'exec "{SERVICE}" "$@" >> "{tmp_path / "replacement.log"}" 2>&1\n'
+    )
+    wrapper.chmod(0o700)
+    env = os.environ.copy()
+    for key in (
+        "FORESIGHT_MODEL_MANIFEST",
+        "FORESIGHT_RESOURCES",
+        "FORESIGHT_RUNTIME_REVISION",
+        "FORESIGHT_INSTALL_ROOT",
+        "FORESIGHT_SERVICE_GATES",
+    ):
+        env.pop(key, None)
+    env.update(
+        FORESIGHT_DATA=str(data),
+        FORESIGHT_RUNTIME=str(runtime),
+        FORESIGHT_NATIVE=str(NATIVE),
+        FORESIGHT_SERVICE=str(wrapper),
+        FORESIGHT_SERVICE_TRACE="1",
+    )
+    # The replacement runs without a helper; only the owner's is gated.
+    owner_env = {**env, "FORESIGHT_HELPER": str(helper.executable)}
+    mcp_env = {**env, "FORESIGHT_HELPER": ""}
+    mcp = None
+    with (tmp_path / "service.log").open("w+") as log:
+        owner = subprocess.Popen([str(SERVICE)], env=owner_env, stdout=log, stderr=log)
+        try:
+            deadline = time.monotonic() + 60
+            helper.published("started", deadline, owner)
+            peer = None
+            while peer is None:
+                assert owner.poll() is None
+                try:
+                    peer = Peer(runtime / "application.sock")
+                except (FileNotFoundError, ConnectionRefusedError):
+                    poll_delay(deadline)
+            try:
+                assert peer.call("status")["pid"] == owner.pid
+            finally:
+                peer.close()
+            owner.send_signal(signal.SIGTERM)
+            held = helper.published("stopping", deadline, owner)
+            mcp = McpPeer(mcp_env)
+            # The draining frontend answers the startup probe with a refusal.
+            while "frontend refuse peer=" not in Path(log.name).read_text():
+                assert mcp.process.poll() is None, mcp.process.stderr.read()
+                poll_delay(deadline)
+            # The service kills a helper that holds SIGTERM for 5 s. Only
+            # while it is still held does the owner provably hold the lock.
+            try:
+                os.kill(held, 0)
+                still_held = True
+            except ProcessLookupError:
+                still_held = False
+            if still_held:
+                assert not launches.exists()
+            helper.release()
+            assert owner.wait(timeout=30) == 0
+            if still_held:
+                assert helper.released()
+            mcp.initialize()
+            status = mcp.tool("get_status")["structuredContent"]["result"]
+            replacement = status["pid"]
+            assert replacement != owner.pid
+            assert [int(line) for line in launches.read_text().split()] == [replacement]
+            mcp.close()
+            mcp = None
+        except Exception:
+            profile_failure_diagnostics(owner, log)
+            replacement_log = tmp_path / "replacement.log"
+            if replacement_log.exists():
+                print(replacement_log.read_text())
+            raise
+        finally:
+            helper.release()
+            if mcp is not None and mcp.process.poll() is None:
+                mcp.process.kill()
+                mcp.process.wait(timeout=30)
+            if owner.poll() is None:
+                owner.kill()
+                owner.wait(timeout=10)
+            # Stop every service MCP launched, even if the test failed first.
+            for line in launches.read_text().split() if launches.exists() else []:
+                command = subprocess.run(
+                    ["/bin/ps", "-p", line, "-o", "command="],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                ).stdout
+                if str(SERVICE) in command:
+                    os.kill(int(line), signal.SIGTERM)
             helper.kill()
 
 
