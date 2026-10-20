@@ -16,7 +16,9 @@ Writable opens hold `BEGIN IMMEDIATE` while re-reading the version and applying
 all pending steps. Each step advances `PRAGMA user_version` inside the same
 transaction. A failure or process exit before commit rolls back schema, backfills,
 and version together; reopening retries the pending steps. No per-open table or
-column repair occurs after the current version has been committed.
+column repair occurs after the current version has been committed. The same
+transaction creates the `workspaceEpoch` preference when it is missing, which
+does not change the schema.
 
 | Version | Change |
 | --- | --- |

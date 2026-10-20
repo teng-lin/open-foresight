@@ -198,6 +198,10 @@ class RpcTool {
 List<RpcTool> get rpcTools {
   final text = JsonSchema.string();
   final integer = JsonSchema.integer();
+  final epoch = JsonSchema.string(
+    description:
+        'Optional workspace_epoch from get_status. If the workspace was cleared since, the call fails with notFound instead of acting on an ID that may now name a different item.',
+  );
   return [
     RpcTool(
       'audio_capabilities',
@@ -241,7 +245,7 @@ List<RpcTool> get rpcTools {
       'get_source',
       Operation.sourcesGet,
       'Read a complete active source by ID.',
-      {'id': text},
+      {'id': text, 'workspace_epoch': epoch},
       ['id'],
       readOnly: true,
     ),
@@ -257,7 +261,7 @@ List<RpcTool> get rpcTools {
       'import_text',
       Operation.sourcesImport,
       'Create or update a text source and index it. Supplying an existing ID replaces its content and increments its revision.',
-      {'title': text, 'text': text, 'id': text},
+      {'title': text, 'text': text, 'id': text, 'workspace_epoch': epoch},
       ['title', 'text'],
     ),
     RpcTool(
@@ -305,7 +309,7 @@ List<RpcTool> get rpcTools {
       'delete_source',
       Operation.sourcesDelete,
       'Delete a source from the application and search index.',
-      {'id': text},
+      {'id': text, 'workspace_epoch': epoch},
       ['id'],
       destructive: true,
     ),
@@ -321,7 +325,7 @@ List<RpcTool> get rpcTools {
       'save_note',
       Operation.notesSave,
       'Create a personal note or update an existing note by ID.',
-      {'id': integer, 'title': text, 'body': text},
+      {'id': integer, 'title': text, 'body': text, 'workspace_epoch': epoch},
       ['title', 'body'],
     ),
     RpcTool(
@@ -343,7 +347,7 @@ List<RpcTool> get rpcTools {
       'get_meeting',
       Operation.meetingsGet,
       'Read meeting notes, transcript segments, and generated/edited artifacts.',
-      {'id': integer},
+      {'id': integer, 'workspace_epoch': epoch},
       ['id'],
       readOnly: true,
     ),
@@ -351,7 +355,7 @@ List<RpcTool> get rpcTools {
       'save_meeting_notes',
       Operation.meetingsNotes,
       'Save original meeting notes. Live enhancement uses final transcript evidence when enabled.',
-      {'id': integer, 'body': text},
+      {'id': integer, 'body': text, 'workspace_epoch': epoch},
       ['id', 'body'],
     ),
     RpcTool(
@@ -364,6 +368,7 @@ List<RpcTool> get rpcTools {
         'start': integer,
         'end': integer,
         'source': text,
+        'workspace_epoch': epoch,
       },
       ['id', 'text'],
     ),
@@ -374,6 +379,7 @@ List<RpcTool> get rpcTools {
       {
         'id': integer,
         'kind': JsonSchema.string(enumValues: ['summary', 'actions']),
+        'workspace_epoch': epoch,
       },
       ['id', 'kind'],
     ),
@@ -381,35 +387,35 @@ List<RpcTool> get rpcTools {
       'enhance_meeting_notes',
       Operation.meetingsEnhance,
       'Generate an enhanced version of original meeting notes using final transcript evidence.',
-      {'id': integer},
+      {'id': integer, 'workspace_epoch': epoch},
       ['id'],
     ),
     RpcTool(
       'edit_artifact',
       Operation.artifactsEdit,
       'Save an edited version of a meeting artifact while retaining its generated text.',
-      {'id': integer, 'text': text},
+      {'id': integer, 'text': text, 'workspace_epoch': epoch},
       ['id', 'text'],
     ),
     RpcTool(
       'start_recording',
       Operation.meetingsStart,
       'Request visible desktop confirmation to start microphone and playback recording. Requires an open desktop with a recording indicator. Only one meeting can record per profile.',
-      {'id': integer},
+      {'id': integer, 'workspace_epoch': epoch},
       ['id'],
     ),
     RpcTool(
       'pause_recording',
       Operation.meetingsPause,
       'Pause microphone and playback capture, retaining pre-pause transcription. An optional meeting ID guards ownership.',
-      {'id': integer},
+      {'id': integer, 'workspace_epoch': epoch},
       [],
     ),
     RpcTool(
       'resume_recording',
       Operation.meetingsResume,
       'Request visible desktop confirmation to resume a paused recording with the same audio routes and transcript timeline.',
-      {'id': integer},
+      {'id': integer, 'workspace_epoch': epoch},
       [],
     ),
     RpcTool(

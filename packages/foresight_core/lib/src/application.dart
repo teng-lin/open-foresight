@@ -595,6 +595,20 @@ class Application implements ModelGate {
     if (!current()) {
       throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
     }
+    final epoch = a['workspace_epoch'];
+    if (epoch != null && epoch is! String) {
+      throw RpcError(
+        RpcErrorCode.invalidArgument,
+        'workspace_epoch must be a string',
+      );
+    }
+    // An ID read before a clear can name a different item after it.
+    if (epoch != null && epoch != store.workspaceEpoch) {
+      throw RpcError(
+        RpcErrorCode.notFound,
+        'This item was removed when the workspace was cleared.',
+      );
+    }
     if (method.startsWith('models.') &&
         method != Operation.modelsCancelQueryAcquisition.wire &&
         (modelBusy ||
@@ -645,6 +659,7 @@ class Application implements ModelGate {
             'answer_validation_failures': answerValidationFailures,
             'revision': store.dataRevision,
             'google': googleState,
+            'workspace_epoch': store.workspaceEpoch,
           };
         case Operation.sourcesList:
           return store.sourceSummaries;
@@ -932,6 +947,7 @@ class Application implements ModelGate {
               store.db.execute(
                 "DELETE FROM preferences WHERE key GLOB 'webAnswer.v1.*'",
               );
+              store.renewWorkspaceEpoch();
               store.markPrivacyMaintenancePending();
               store.db.execute('COMMIT');
               store.compactAfterClear();

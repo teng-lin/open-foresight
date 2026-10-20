@@ -39,6 +39,17 @@ void main() {
     );
   });
 
+  test('MCP tools that take an ID accept the workspace epoch', () {
+    for (final tool in rpcTools) {
+      expect(
+        tool.properties.containsKey('workspace_epoch'),
+        tool.properties.containsKey('id'),
+        reason: tool.name,
+      );
+      expect(tool.required, isNot(contains('workspace_epoch')));
+    }
+  });
+
   test(
     'remote facades and service reference registry operation identities',
     () {

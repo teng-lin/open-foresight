@@ -9,6 +9,7 @@ import 'dart:io';
 import 'graph_labels.dart';
 import 'label_propagation.dart';
 import 'graph_layout.dart';
+import 'dart:math' show Random;
 import 'package:crypto/crypto.dart';
 import 'package:sqlite3/sqlite3.dart';
 
@@ -36,6 +37,10 @@ class Store {
   final Database db;
   final String path;
   static const schemaVersion = 12;
+
+  /// Names one workspace between clears. SQLite reuses INTEGER PRIMARY KEY
+  /// values after a clear, so a caller holding an ID sends this back with it.
+  static const workspaceEpochKey = 'workspaceEpoch';
   static const _privacyMaintenanceKey = 'internal.privacyMaintenancePending';
   Timer? _privacyMaintenanceRetry;
   var _privacyRetrySeconds = 1;
@@ -76,6 +81,11 @@ class Store {
           _migrateTo(++version);
           db.execute('PRAGMA user_version=$version');
         }
+        // The first start creates the epoch; later starts keep it.
+        db.execute('INSERT OR IGNORE INTO preferences(key,value) VALUES(?,?)', [
+          workspaceEpochKey,
+          _newWorkspaceEpoch(),
+        ]);
         db.execute('COMMIT');
       } catch (_) {
         // SQLITE_FULL/IOERR can already roll back the transaction.
@@ -617,6 +627,20 @@ class Store {
       throw RpcError(RpcErrorCode.notFound, 'This note no longer exists.');
     }
     return id;
+  }
+
+  String get workspaceEpoch => preference(workspaceEpochKey);
+
+  /// Called inside the clear transaction, so IDs from before it never match.
+  void renewWorkspaceEpoch() =>
+      setPreference(workspaceEpochKey, _newWorkspaceEpoch());
+
+  static String _newWorkspaceEpoch() {
+    final random = Random.secure();
+    return [
+      for (var i = 0; i < 16; i++)
+        random.nextInt(256).toRadixString(16).padLeft(2, '0'),
+    ].join();
   }
 
   static const _runtimeResources = {
