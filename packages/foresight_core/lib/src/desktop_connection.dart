@@ -80,6 +80,18 @@ abstract interface class DesktopConnection {
   Map<String, dynamic> get googleStatus;
   bool get webSearchAvailable;
   bool get sourcesPaused;
+
+  /// The workspace the desktop's views and the IDs they hold belong to.
+  /// [command] sends it with edits by ID, so after a clear they fail instead
+  /// of changing an unrelated item that reuses the ID.
+  String? get workspaceEpoch;
+
+  /// The service reports a cleared workspace that the views still predate.
+  bool get workspaceReplaced;
+
+  /// Moves [workspaceEpoch] to the service's current workspace. Call it only
+  /// after dropping every view and draft that holds an ID from before.
+  void adoptWorkspace();
   Future<Object?> command(
     Operation operation, [
     Map<String, dynamic> args = const {},

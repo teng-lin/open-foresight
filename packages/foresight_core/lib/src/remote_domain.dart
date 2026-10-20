@@ -88,6 +88,14 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
   @override
   bool get webSearchAvailable => _webSearchAvailable;
   StreamSubscription<Map<String, dynamic>>? _events;
+  String? _workspaceEpoch, _serviceEpoch;
+  @override
+  String? get workspaceEpoch => _workspaceEpoch;
+  @override
+  bool get workspaceReplaced =>
+      _serviceEpoch != null && _serviceEpoch != _workspaceEpoch;
+  @override
+  void adoptWorkspace() => _workspaceEpoch = _serviceEpoch;
   RemoteDomain._(
     this.store,
     this.helper,
@@ -123,6 +131,13 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
     final signature = jsonEncode(event);
     if (_eventSignature == signature) return;
     _eventSignature = signature;
+    final epoch = event['workspace_epoch'];
+    if (epoch is String) {
+      _serviceEpoch = epoch;
+      // The first epoch names the workspace the desktop starts in. A later one
+      // waits for the desktop to drop views that hold older IDs.
+      _workspaceEpoch ??= epoch;
+    }
     _webSearchAvailable = event['web_search_available'] == true;
     googleStatus = Map<String, dynamic>.from(event['google'] as Map? ?? {});
     capture = Map<String, dynamic>.from(event['capture'] as Map? ?? {});
@@ -309,7 +324,10 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
             : File(path).parent.path,
       });
     }
-    final result = await _call(operation.wire, args);
+    final result = await _call(
+      operation.wire,
+      operation.scopedToWorkspace(args, _workspaceEpoch),
+    );
     if (operation == Operation.workspaceClear) {
       try {
         _apply(
@@ -350,7 +368,10 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
           return;
         }
         subscription = client
-            .stream(operation.wire, args)
+            .stream(
+              operation.wire,
+              operation.scopedToWorkspace(args, _workspaceEpoch),
+            )
             .listen(
               (value) {
                 if (controller.isClosed) return;

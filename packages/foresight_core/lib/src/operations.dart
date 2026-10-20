@@ -128,6 +128,41 @@ enum Operation {
     Operation.meetingsTranscript,
   }.contains(this);
 
+  /// Edits and appends whose `id` names a row that a workspace clear can hand
+  /// to a different item. The desktop sends its workspace epoch with them.
+  bool get carriesWorkspaceEpoch => {
+    Operation.notesSave,
+    Operation.sourcesImport,
+    Operation.sourcesIndex,
+    Operation.sourcesDelete,
+    Operation.meetingsNotes,
+    Operation.meetingsTranscript,
+    Operation.meetingsIndex,
+    Operation.meetingsGenerate,
+    Operation.meetingsEnhance,
+    Operation.meetingsStart,
+    Operation.meetingsRetryQuestion,
+    Operation.meetingsRetryDetection,
+    Operation.meetingsLinkAnswer,
+    Operation.artifactsEdit,
+    Operation.labelsPut,
+    Operation.labelsSet,
+    Operation.googleAttachments,
+  }.contains(this);
+
+  /// [args] with [epoch] added when this call edits an existing row by ID and
+  /// does not already name the epoch its ID was read in.
+  Map<String, dynamic> scopedToWorkspace(
+    Map<String, dynamic> args,
+    String? epoch,
+  ) =>
+      epoch != null &&
+          carriesWorkspaceEpoch &&
+          args['id'] != null &&
+          !args.containsKey('workspace_epoch')
+      ? {...args, 'workspace_epoch': epoch}
+      : args;
+
   bool get notifiesChanges => !{
     Operation.status,
     Operation.audioCapabilities,

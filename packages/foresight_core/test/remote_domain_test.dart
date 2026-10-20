@@ -894,6 +894,75 @@ void main() {
     },
   );
   test(
+    'by-ID edits carry the workspace the desktop views were read in',
+    () async {
+      var changes = 0;
+      f.remote.helper.changed = () => changes++;
+      f.handler = (socket, request) => f.reply(socket, request, {'id': 3});
+      f.event({...f.status, 'workspace_epoch': 'before-clear'});
+      await eventually(() => changes == 1);
+      Future<Map> sent(Operation operation, Map<String, dynamic> args) async {
+        await f.remote.command(operation, args);
+        return f.requests.last['args'] as Map;
+      }
+
+      expect(
+        await sent(Operation.notesSave, {'id': 3, 'title': 'T', 'body': 'B'}),
+        containsPair('workspace_epoch', 'before-clear'),
+      );
+      await f.remote.commandCurrent(Operation.meetingsEnhance, {
+        'id': 3,
+      }, () => true);
+      expect(
+        f.requests.last['args'],
+        containsPair('workspace_epoch', 'before-clear'),
+      );
+      // Creates and calls without an ID name no existing row.
+      expect(
+        await sent(Operation.notesSave, {'title': 'T', 'body': 'B'}),
+        isNot(contains('workspace_epoch')),
+      );
+      expect(
+        await sent(Operation.meetingsCreate, {'title': 'T'}),
+        isNot(contains('workspace_epoch')),
+      );
+      // A dialog that read its ID earlier names that workspace itself.
+      expect(
+        await sent(Operation.artifactsEdit, {
+          'id': 3,
+          'text': 'T',
+          'workspace_epoch': 'dialog',
+        }),
+        containsPair('workspace_epoch', 'dialog'),
+      );
+      // Another client clears the workspace; the open views still predate it.
+      f.event({...f.status, 'workspace_epoch': 'after-clear'});
+      await eventually(() => changes == 2);
+      expect(
+        await sent(Operation.meetingsNotes, {'id': 3, 'body': 'stale'}),
+        containsPair('workspace_epoch', 'before-clear'),
+      );
+    },
+  );
+
+  test('a cleared workspace is adopted only after the views reset', () async {
+    f.handler = (socket, request) => f.reply(socket, request, null);
+    f.event({...f.status, 'workspace_epoch': 'before-clear'});
+    await eventually(() => f.remote.workspaceEpoch == 'before-clear');
+    expect(f.remote.workspaceReplaced, isFalse);
+    f.event({...f.status, 'workspace_epoch': 'after-clear'});
+    await eventually(() => f.remote.workspaceReplaced);
+    expect(f.remote.workspaceEpoch, 'before-clear');
+    f.remote.adoptWorkspace();
+    expect(f.remote.workspaceReplaced, isFalse);
+    await f.remote.command(Operation.labelsSet, {'id': 'source', 'labels': []});
+    expect(
+      f.requests.last['args'],
+      containsPair('workspace_epoch', 'after-clear'),
+    );
+  });
+
+  test(
     'approval events preserve the current service helper snapshot',
     () async {
       File(

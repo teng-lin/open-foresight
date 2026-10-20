@@ -197,6 +197,8 @@ class _MeetingsController extends _FeatureController {
       text: (a['edited'] ?? a['generated']) as String,
     );
     final original = controller.text;
+    // The artifact ID belongs to the workspace this dialog opened in.
+    final epoch = d.workspaceEpoch;
     int? lastManualEdit;
     final saved = await shell.showInputDialog<bool>(
       builder: (context) => ServiceEditDialog(
@@ -217,6 +219,7 @@ class _MeetingsController extends _FeatureController {
             'id': a['id'],
             'text': controller.text,
             if (lastManualEdit != null) 'last_manual_edit': lastManualEdit,
+            if (epoch != null) 'workspace_epoch': epoch,
           });
         },
       ),
@@ -1088,6 +1091,7 @@ class _MeetingsController extends _FeatureController {
   }
 
   Future<void> importMeetingTranscript(int id) async {
+    final epoch = d.workspaceEpoch;
     final file = await openFile(
       acceptedTypeGroups: [
         const XTypeGroup(label: 'Transcript text', extensions: ['txt']),
@@ -1098,6 +1102,7 @@ class _MeetingsController extends _FeatureController {
       'id': id,
       'text': await File(file.path).readAsString(),
       'source': 'imported transcript',
+      if (epoch != null) 'workspace_epoch': epoch,
     });
   }
 

@@ -326,6 +326,9 @@ class _WorkspaceState extends State<Workspace>
 
   Timer? serviceUiTimer;
   void serviceChanged() {
+    // Another client cleared the workspace: views must not keep editing IDs
+    // that the service may hand to new items.
+    if (mounted && d.workspaceReplaced) update(resetWorkspaceViews);
     if (!mounted || serviceUiTimer != null) return;
     serviceUiTimer = Timer(const Duration(milliseconds: 100), () {
       serviceUiTimer = null;
@@ -538,6 +541,26 @@ class _WorkspaceState extends State<Workspace>
       c.dispose();
     }
     super.dispose();
+  }
+
+  /// Drop every view and draft that holds an ID from the cleared workspace,
+  /// then let by-ID edits name the new one.
+  void resetWorkspaceViews() {
+    meetingFeature.meetingNoteSaves.discardAll();
+    meetingFeature.meetingId = null;
+    meetingFeature.loadedMeetingNotes = null;
+    meetingFeature.meetingNotesController.clear();
+    meetingFeature.meetingEnhanceStatus = '';
+    sourceFeature.sourceQuery = '';
+    sourceFeature.sourceSearchController.clear();
+    meetingFeature.meetingQuery = '';
+    sourceFeature.labelFilter = '';
+    meetingFeature.noteId = null;
+    meetingFeature.noteTitle.clear();
+    meetingFeature.noteBody.clear();
+    chatFeature.hiddenAnswers.clear();
+    chatFeature.answer = '';
+    d.adoptWorkspace();
   }
 
   void reportAsyncError(Object failure) {

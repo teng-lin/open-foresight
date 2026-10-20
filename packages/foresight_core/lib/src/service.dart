@@ -1247,6 +1247,7 @@ class ApplicationService {
       'google': application.googleState,
       'helper': domain.helper.snapshot?.toProto3Json(),
       'helper_state': domain.helper.state,
+      'workspace_epoch': domain.store.workspaceEpoch,
     };
     for (final client in _clients) {
       _send(client, message);

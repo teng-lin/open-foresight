@@ -193,6 +193,8 @@ class _SourcesController extends _FeatureController {
 
   Future<void> editSource(Map<String, Object?> s) async {
     final text = TextEditingController(text: s['content'] as String);
+    // The source ID belongs to the workspace this dialog opened in.
+    final epoch = d.workspaceEpoch;
     final saved = await shell.showInputDialog<bool>(
       builder: (context) => ServiceEditDialog(
         title: 'Edit ${s['title']}',
@@ -208,6 +210,7 @@ class _SourcesController extends _FeatureController {
             'id': s['id'],
             'locallyEdited': true,
             'index': false,
+            if (epoch != null) 'workspace_epoch': epoch,
           });
           await d.index(s['id'] as String);
         },

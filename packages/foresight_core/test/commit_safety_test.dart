@@ -7,6 +7,7 @@ import 'package:clock/clock.dart';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:foresight_core/src/rpc_error.dart';
+import 'package:foresight_core/src/remote_domain.dart';
 import 'package:foresight_core/src/service.dart';
 import 'package:test/test.dart';
 
@@ -442,6 +443,60 @@ void main() {
         await service.close();
       }
     }
+
+    test('change events carry the workspace epoch', () async {
+      await serve((client) async {
+        final epoch = (await client.call('status') as Map)['workspace_epoch'];
+        final changed = client.events.stream.firstWhere(
+          (event) => event['event'] == 'changed',
+        );
+        await client.call('notes.save', {'title': 'T', 'body': ''});
+        expect(await changed, containsPair('workspace_epoch', epoch));
+      });
+    });
+
+    test(
+      'a desktop edit from before another client\'s clear cannot land',
+      () async {
+        final service = await ApplicationService.start(profile);
+        RemoteDomain? desktop;
+        try {
+          desktop = await RemoteDomain.connect(profile);
+          final note =
+              (await desktop.command(Operation.notesSave, {
+                    'title': 'Before',
+                    'body': 'old',
+                  })
+                  as Map)['id'];
+          final owner = service.domain.application;
+          await owner.call(Operation.workspaceClear.wire, {});
+          final fresh =
+              (await owner.call(Operation.notesSave.wire, {
+                    'title': 'After',
+                    'body': 'new',
+                  })
+                  as Map)['id'];
+          expect(fresh, note);
+          await expectLater(
+            desktop.command(Operation.notesSave, {
+              'id': note,
+              'title': 'Before',
+              'body': 'stale edit',
+            }),
+            throwsRpc(RpcErrorCode.notFound, clearedMessage),
+          );
+          expect(service.domain.store.rows('SELECT body FROM notes').single, {
+            'body': 'new',
+          });
+        } finally {
+          desktop?.close();
+          await desktop?.client.close();
+          await desktop?.helper.close();
+          desktop?.store.close();
+          await service.close();
+        }
+      },
+    );
 
     test('a stale workspace epoch is still rejected after a restart', () async {
       final (stale, note, cleared) = await serve((client) async {
