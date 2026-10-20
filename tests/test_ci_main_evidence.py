@@ -105,6 +105,17 @@ class FixtureReader(evidence.Reader):
             "user": {"login": "developer"},
         }
         self.records = {
+            "rules/branches/main": [
+                {
+                    "type": "required_status_checks",
+                    "parameters": {
+                        "required_status_checks": [
+                            {"context": name, "integration_id": evidence.APP}
+                            for name in evidence.REQUIRED
+                        ]
+                    },
+                }
+            ],
             f"git/commits/{SOURCE}": {
                 "tree": {"sha": TREE},
                 "parents": [{"sha": BEFORE}],
@@ -223,6 +234,16 @@ class MainEvidenceTests(unittest.TestCase):
         bad = deepcopy(self.reader.checks[0])
         bad.update(id=9999, conclusion="cancelled")
         self.reader.checks.append(bad)
+        self.assertEqual(self.proposal()["decision"], "sweep")
+
+    def test_ruleset_changes_cannot_silently_reuse_old_required_set(self):
+        checks = self.reader.records["rules/branches/main"][0]["parameters"][
+            "required_status_checks"
+        ]
+        checks.append({"context": "new-required-gate", "integration_id": evidence.APP})
+        self.assertEqual(self.proposal()["decision"], "sweep")
+        checks.pop()
+        checks[0]["integration_id"] = 1
         self.assertEqual(self.proposal()["decision"], "sweep")
         self.setUp()
         self.reader.quality["path"] = ".github/workflows/renamed.yml"
