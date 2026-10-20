@@ -127,8 +127,8 @@ void main() {
         // gRPC reconstructs the deadline when headers arrive. Connection and
         // event-loop startup before that point are not part of this timeout.
         expect(
-          service.deadline!.difference(service.observedAt!),
-          inInclusiveRange(Duration.zero, const Duration(seconds: 3)),
+          service.deadline!.difference(service.observedAt!).inMicroseconds,
+          inInclusiveRange(0, const Duration(seconds: 3).inMicroseconds),
         );
       } finally {
         await channel.terminate();
