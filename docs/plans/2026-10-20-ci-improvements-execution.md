@@ -42,7 +42,18 @@ must include its prerequisites and pass from that exact source.
   frozen with a SHA256 alongside implementation logs.
 - A Mac batch-2 snapshot at `95edae94` passed 125 tests but had eight native-work
   fixture errors, revealing missing retained-helper dependencies. That snapshot
-  is not accepted. The dependency fix must receive its own final verification.
+  is not accepted. The corrected `03d982c9` snapshot passed 282 affected Python
+  tests on HanSolo. Follow-up sweep/review fixes at `0e276bc2` passed 49 tests
+  and 28 subtests on HanSolo and Linux.
+- Reliability head `ceecb9b7` passed the exact full Python gate from source and
+  a complete export without `.git`: 4,497 passed, 29 skipped, 95.67% coverage
+  in each. Export fixture checks passed under inherited PR, main and unset refs
+  (467 tests plus 97 subtests in each context). HanSolo passed both actual Apple
+  DMG contracts and 357 affected Python tests on that head.
+- Tooling head `ed8dd1bd` and evidence follow-up `0e276bc2` received a converged
+  native implementation review. The review independently reran 71 tooling tests
+  and 49 evidence tests plus 28 subtests. Final composition and CLI reviews are
+  still required; these results do not certify later changes.
 
 Implementation logs, frozen review inputs and original CLI results are under
 `/home/blackmyth/.cache/open-foresight/ci-implementation-2026-10-20/`. HanSolo test
@@ -55,6 +66,11 @@ Claude's first implementation review found actionable owner-selection, metrics,
 snapshot-integrity and DMG error-reporting issues; fixes require another review
 on the corrected source. Native cross-review also found stale readiness and
 qualification-namespace issues. Passing unrelated checks do not verify fixes.
+
+The final reliability snapshot and tooling snapshot have fresh immutable Claude
+review inputs. Agy has been retried on the final reliability snapshot. An earlier
+Claude process ended without a saved verdict and is incomplete; its replacement
+review must produce an actual result. No missing review counts as convergence.
 
 Agy's first implementation review exhausted its account quota and returned an
 error with no review verdict. This is an incomplete review, not agreement. Its

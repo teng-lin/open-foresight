@@ -75,6 +75,19 @@ Existing owner decisions remain in force. This work keeps daily Arch drift, cons
 
 ## Delivery sequence
 
+**Execution update (2026-10-20).** The user's later instruction supersedes the
+GitHub PR sequence below: implement three batches in separate worktrees, review
+and test each, merge them locally, then open one final GitHub PR and drive it to
+merge. The table remains the dependency and qualification order. This changes
+delivery, not the integrity or hosted evidence requirements. The combined code
+must include the complete evidence-gated activation path: a dedicated main-only
+publisher records authenticated qualification evidence, and read-only consumers
+activate only capabilities whose source/control closure and required real runs
+verify. Missing, expired or invalid evidence preserves the broader legacy path.
+No additional activation code PR, unmerged-source publication, synthetic proof,
+or elapsed-time bypass substitutes for qualification. The four-green-week gate
+still applies to acceptance narrowing, independently of earlier capabilities.
+
 Deliver this work in **three PRs**. The P1 through P9 identifiers below now name work packages, preserving the detailed contracts and review references; they do not require nine separate pull requests. Keep related changes in separate commits inside each PR so reviewers can inspect the boundaries and regressions can be reverted selectively.
 
 | PR | Scope | Internal order | Gate before the next merge |
