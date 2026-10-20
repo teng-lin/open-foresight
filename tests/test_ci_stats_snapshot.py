@@ -99,8 +99,45 @@ def test_github_collection_query_uses_whole_seconds_without_changing_cohort_boun
     from urllib.parse import parse_qs, urlparse
 
     query = parse_qs(urlparse(next(path for path in calls if "/actions/runs?" in path)).query)
-    assert query["created"] == ["2026-10-19T00:05:00Z..2026-10-19T01:00:00Z"]
+    assert query["created"] == ["2026-10-19T00:05:00Z..2026-10-19T01:00:01Z"]
     assert not json.loads((destination / "prs.json").read_text())[0]["measurement_window"]
+
+
+@pytest.mark.parametrize("bounded", [False, True])
+def test_precise_snapshot_window_controls_actual_workflow_job_and_spend_denominators(tmp_path, bounded):
+    records = [
+        run(1) | {"created_at": "2026-10-19T00:05:00Z"},
+        run(2) | {"created_at": "2026-10-19T00:05:00.500Z"},
+        run(3) | {"created_at": "2026-10-19T00:05:01.500Z"},
+        run(4) | {"created_at": "2026-10-19T00:05:02Z"},
+    ]
+    requested_jobs = []
+
+    def actual_request(path):
+        if "/actions/runs?" in path:
+            return [{"workflow_runs": records}]
+        if "/attempts/" in path:
+            identity = int(path.split("/runs/")[1].split("/")[0])
+            requested_jobs.append(identity)
+            # An out-of-window red run must not enter error-rate denominators.
+            return [{"jobs": [job(identity=identity, status="failure" if identity in (1, 4) else "success")]}]
+        return request(path)
+
+    root = tmp_path / "precise-window"
+    snapshot.collect(
+        "owner/repository", "2026-10-19T00:05:00.500Z", root, actual_request,
+        until="2026-10-19T00:05:01.500Z" if bounded else None,
+    )
+    runs, _, _ = stats.load(root)
+    expected = [2, 3] if bounded else [2, 3, 4]
+    assert [value["id"] for value in runs] == expected
+    assert requested_jobs == expected
+    data = stats.operational_report(runs)
+    assert data["first_attempt_workflows"]["eligible"] == len(expected)
+    assert data["first_attempt_jobs"]["eligible"] == len(expected)
+    assert data["first_attempt_workflows"]["failed"] == (0 if bounded else 1)
+    assert data["first_attempt_jobs"]["failed"] == (0 if bounded else 1)
+    assert data["runner_minutes_by_category"]["pr"] == 2 * len(expected)
 
 
 @pytest.mark.parametrize("event", ["pull_request", "push"])

@@ -2,7 +2,7 @@
 """Freeze complete paginated GitHub CI metadata; never dispatch or rerun work."""
 
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -177,20 +177,26 @@ def collect(repository, since, directory, request=api, observations=None, until=
         # GitHub date search accepts whole seconds. Keep the exact requested
         # boundaries above and in cohort membership, widening only this query.
         query_since = beginning.isoformat(timespec="seconds").replace("+00:00", "Z")
-        query_until = end.isoformat(timespec="seconds").replace("+00:00", "Z") if end else None
+        query_end = end + timedelta(seconds=1) if end and end.microsecond else end
+        query_until = query_end.isoformat(timespec="seconds").replace("+00:00", "Z") if query_end else None
         query = urlencode(
             {
                 "per_page": 100,
                 "created": query_since + ".." + query_until if query_until else ">=" + query_since,
             }
         )
-        runs = pages(
+        discovered = pages(
             request, f"repos/{repository}/actions/runs?{query}", "workflow_runs"
         )
-        if len(runs) >= 1000:
+        if len(discovered) >= 1000:
             raise ValueError(
                 "GitHub's filtered run limit may truncate this window; collect narrower windows instead"
             )
+        runs = [
+            run for run in discovered
+            if timestamp(run["created_at"]) >= beginning
+            and (end is None or timestamp(run["created_at"]) <= end)
+        ]
         (directory / "runs.jsonl").write_text(
             "".join(json.dumps(run) + "\n" for run in runs)
         )
