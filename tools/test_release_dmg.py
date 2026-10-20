@@ -14,6 +14,52 @@ from installed_documents import probe_installed_documents
 from install_macos import install, metadata, verify_signature
 from release_asset_acceptance import verify_checksum
 from test_installed_persistence import run as persistence_probe
+from release_upgrade import verified_pair
+
+
+def previous_installation(previous, destination, temporary, output, current):
+    """Seed data with the verified prior release in this harness-owned copy."""
+    previous = previous.resolve(strict=True)
+    identity, current_identity = verified_pair(previous.parent, current.parent)
+    if identity["asset"] != previous.name or current_identity["asset"] != current.name:
+        raise ValueError("Upgrade identity names different installer paths")
+    mount = temporary.resolve() / "previous-volume"
+    mount.mkdir()
+    attached = False
+    try:
+        subprocess.run(["hdiutil", "verify", str(previous)], check=True, timeout=300)
+        subprocess.run(
+            [
+                "hdiutil",
+                "attach",
+                "-readonly",
+                "-nobrowse",
+                "-mountpoint",
+                str(mount),
+                str(previous),
+            ],
+            check=True,
+            timeout=300,
+        )
+        attached = True
+        source = mount / "Open Foresight.app"
+        if not source.resolve(strict=True).is_relative_to(mount):
+            raise ValueError("Previous DMG application escapes its volume")
+        metadata(source)
+        subprocess.run(
+            ["ditto", str(source), str(destination)], check=True, timeout=300
+        )
+        verify_signature(destination)
+        persistence_probe(
+            destination,
+            temporary / "upgrade-profile",
+            output / "upgrade-persistence.json",
+            "create",
+        )
+    finally:
+        if attached:
+            subprocess.run(["hdiutil", "detach", str(mount)], check=True, timeout=120)
+    return identity
 
 
 def run(args):
@@ -42,6 +88,14 @@ def run(args):
     try:
         subprocess.run(["hdiutil", "verify", str(dmg)], check=True, timeout=300)
         with tempfile.TemporaryDirectory(prefix="of-dmg-", dir="/tmp") as temporary:
+            previous = None
+            if getattr(args, "previous_dmg", None) is not None:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.mkdir()  # Exclusive ownership before seeding the old release.
+                created = True
+                previous = previous_installation(
+                    args.previous_dmg, destination, Path(temporary), args.output, dmg
+                )
             mount = Path(temporary).resolve() / "volume"
             mount.mkdir()
             try:
@@ -63,12 +117,36 @@ def run(args):
                 if not source.resolve(strict=True).is_relative_to(mount):
                     raise ValueError("DMG application escapes the mounted image")
                 metadata(source)
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.mkdir()  # Exclusive ownership of this disposable installation.
-                created = True
-                subprocess.run(
-                    ["ditto", str(source), str(destination)], check=True, timeout=300
-                )
+                if previous is None:
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    destination.mkdir()  # Exclusive ownership of this disposable installation.
+                    created = True
+                    subprocess.run(
+                        ["ditto", str(source), str(destination)],
+                        check=True,
+                        timeout=300,
+                    )
+                else:
+                    install(source, destination, allow_adhoc=True)
+                    persistence_probe(
+                        destination,
+                        Path(temporary) / "upgrade-profile",
+                        args.output / "upgrade-persistence.json",
+                        "verify",
+                    )
+                    (args.output / "upgrade.json").write_text(
+                        json.dumps(
+                            {
+                                "status": "passed",
+                                "previous_tag": previous["tag"],
+                                "previous_sha256": previous["sha256"],
+                                "current_sha256": digest,
+                                "persistence_verified": True,
+                            }
+                        )
+                        + "\n"
+                    )
+                    report["previous_release_upgrade"] = "passed"
                 report["signature"] = verify_signature(destination)
                 assessment = subprocess.run(
                     ["spctl", "--assess", "--type", "execute", str(destination)],
@@ -198,6 +276,7 @@ def run(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dmg", type=Path, required=True)
+    parser.add_argument("--previous-dmg", type=Path)
     parser.add_argument("--destination", type=Path, required=True)
     parser.add_argument("--models", type=Path)
     parser.add_argument("--validation", choices=("standard", "full"), default="full")

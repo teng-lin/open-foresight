@@ -196,8 +196,9 @@ added by packaging. The bundled Whisper defaults to Vulkan device 0; override
 Artifacts are retained for 14 days with SHA-256 sidecars, the source revision,
 version/release, source-date epoch and ABI report. Tar preserves executable modes
 across Actions artifact upload/download. Release tags must match pubspec, and the
-native package release is a durable per-draft counter that increases on every
-full rebuild, including when an older workflow is rerun. After native installation
+native package generation is recorded durably on the draft and retained when
+resuming its existing installers. A retry does not delete successful assets or
+advance their generation. After native installation
 tests pass, CI attaches the portable archive, `.deb`, `.rpm`, `.pkg.tar.zst`,
 checksums, provenance and ABI report to the draft. The coordinator publishes only
 after every downloaded installer passes acceptance. Public assets are immutable;
@@ -210,13 +211,14 @@ Prepare a release from reviewed main with:
 gh workflow run release.yml --repo teng-lin/open-foresight --ref main -f tag=v0.1.1
 ```
 
-Missing, expired, and documentation-only candidates cause the coordinator to force
-main CI before creating the tag. A failed build leaves no new tag. To rebuild a
-failed draft, rerun all coordinator jobs: preparation reserves the next package
-release and removes only the draft's old assets before both platforms rebuild.
-After fixing orchestration, a fresh dispatch on reviewed main can resume the same
-unpublished tag. It retains the tag's product commit and requires its verified
-candidates to remain available; acceptance tools follow the new control commit.
+Follow [release preparation](../../RELEASING.md) for the protected product tag
+and verified candidates. Retry transient external failures only through failed
+jobs in the original release coordinator. This retains successful formats and
+uses the original workflow/tooling commit; a new dispatch cannot apply a tooling
+fix to that historical run or reconstruct missing original packaging proof.
+Publication-only re-verifies an existing qualified evidence index without
+building or packaging. If old code cannot produce that index, hold publication
+for reviewed recovery while preserving installers, logs and provenance.
 Uploading to an existing public release from a different branch is unsupported.
 See [installer acceptance](../validation/release-acceptance.md) for exact-source
 verification and the explicit historical recovery audit option.

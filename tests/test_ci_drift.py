@@ -533,3 +533,18 @@ def test_queued_run_cannot_promote_copied_job_rows_to_new_authoritative_evidence
     )
     drift.reconcile(REPOSITORY, "arch-drift.yml", 100, SOURCE, request=request)
     assert "/runs/100" in calls[-1][2]["body"]
+
+
+def test_release_upload_aliases_have_explicit_original_run_retry_contracts():
+    # External artifact backend attempt namespaces are not emulated here.
+    # Require explicit replacement at own-run copies/diagnostics only; release
+    # assets still pass release_upload's immutable-byte checks independently.
+    for filename in ("linux-packages.yml", "macos-release.yml"):
+        uploads = [
+            step
+            for job in workflow(filename)["jobs"].values()
+            for step in job.get("steps", [])
+            if step.get("uses", "").startswith("actions/upload-artifact@")
+        ]
+        assert uploads
+        assert all(step["with"].get("overwrite") is True for step in uploads)

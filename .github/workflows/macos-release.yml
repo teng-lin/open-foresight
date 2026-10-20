@@ -98,6 +98,7 @@ jobs:
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: macos-release-application
+        overwrite: true
         path: artifacts/
         if-no-files-found: error
         retention-days: 90
@@ -105,6 +106,7 @@ jobs:
       if: always()
       with:
         name: macos-release-promotion-evidence
+        overwrite: true
         path: test-results/
         retention-days: 30
   dmg:
@@ -127,8 +129,12 @@ jobs:
         name: macos-release-application
         path: artifacts
     - name: Restore tested application and create disk image
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
       run: |
         set -euo pipefail
+        python3 -m tools.release_upload --tag "$RELEASE_TAG" --require-missing-dmg
         mkdir -p staging dist
         ditto -x -k artifacts/Open-Foresight-macos-arm64.zip staging
         codesign --verify --deep --strict --verbose=2 'staging/Open Foresight.app'
@@ -155,10 +161,24 @@ jobs:
       with:
         subject-path: dist/*.dmg
         sbom-path: ${{ runner.temp }}/installer.spdx.json
+    - name: Bind the DMG to its original verified candidate
+      run: |
+        task_installers=(dist/*.dmg)
+        test "${#task_installers[@]}" = 1
+        python3 -m tools.ci_release_evidence package --tag "$RELEASE_TAG" --format dmg --directory artifacts --installer "${task_installers[0]}" --output test-results/package-receipt.json
+    - name: Retain original installer packaging receipt
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: release-packaging-dmg
+        path: test-results/package-receipt.json
+        overwrite: true
+        if-no-files-found: error
+        retention-days: 90
     - name: Retain disk image and provenance
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: open-foresight-macos-arm64-dmg
+        overwrite: true
         path: dist/
         if-no-files-found: error
         retention-days: 90

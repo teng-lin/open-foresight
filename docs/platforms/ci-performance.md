@@ -576,14 +576,16 @@ attempt, receipt, upload bounds and checksums intact. Candidates and small
 identity receipts are retained for 90 days. Missing or incompatible candidates
 stop with an actionable error, preserving completed outputs and active producers.
 
-The main-only `linux-packages.yml` workflow can be dispatched with `tag=v0.1.2`,
-`candidate_run=39189741345` and `format=rpm` to recover only the missing RPM.
-`format=all` considers DEB, RPM and Arch independently; `macos-release.yml`
-handles the DMG. These workflows use current packaging controls and original
-verified application bytes from the immutable product tag. They preserve the
-draft generation, retain identical verified assets, and reject conflicting
-bytes instead of deleting or overwriting them. Neither workflow builds an
-application, SDK, LiteRT or Whisper library.
+Recover transient external failures by retrying failed jobs in the original
+`release.yml` coordinator, retaining successful sibling formats and original
+candidate, receipt, upload-attempt and attestation bindings. The retry executes
+its original workflow/tooling revision; a merged tooling fix cannot repair that
+historical code. Standalone packaging dispatches and fresh partial coordinators
+do not replace missing publication proof. Publication-only re-verifies an
+existing qualified evidence index without building or packaging. If the original
+code cannot produce that index, hold publication for reviewed recovery and
+preserve installers, logs and provenance; do not delete successful formats or
+rebuild accepted bytes. See [release recovery](../../RELEASING.md#recover-from-a-failed-run).
 
 Installer creation and validation are separate steps. Installer bytes upload
 before installation tests; validation evidence uploads separately. A lifecycle
