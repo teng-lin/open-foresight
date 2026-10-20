@@ -143,7 +143,12 @@ def test_reusable_contract_preserves_native_lifecycles_debian_cross_install_and_
     assert inputs["source"]["required"] is True
     assert inputs["head_repository"]["required"] is True
     assert inputs["linux_enabled"] == {"type": "boolean", "default": True}
-    linux, dmg = config["jobs"]["linux"], config["jobs"]["dmg"]
+    linux = config["jobs"]["linux"]
+    dmg_config = yaml.safe_load(
+        (ROOT / ".github/workflows/dmg-contracts.yml").read_text()
+    )
+    dmg = dmg_config["jobs"]["dmg"]
+    assert "dmg" not in config["jobs"]
     assert linux["if"] == "inputs.linux_enabled"
     assert "if" not in dmg
     assert {row["format"] for row in linux["strategy"]["matrix"]["include"]} == {
@@ -170,7 +175,7 @@ def test_reusable_contract_preserves_native_lifecycles_debian_cross_install_and_
     assert '"$PWD/dist/packages:/packages:ro"' in debian["run"]
     assert "debian:13@sha256:" in debian["run"]
     assert "packaging/ci/test-debian.sh" in debian["run"]
-    assert "test_dmg_contract.py" in str(dmg)
+    assert "tools/run_dmg_contracts.py" in str(dmg)
     for job in (linux, dmg):
         checkout = next(
             item for item in job["steps"] if "checkout@" in item.get("uses", "")

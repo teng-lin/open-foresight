@@ -21,10 +21,18 @@ def print_output(stdout, stderr):
             print(output, end="", file=stream, flush=True)
 
 
+def image_digest(destination):
+    with destination.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
 def verify_image(destination):
     # DiskImages can report EAGAIN immediately after successfully creating the
     # image. Retry verification of those same bytes, never image creation.
+    original_digest = image_digest(destination) if destination.exists() else None
     for attempt in range(3):
+        if original_digest is not None and image_digest(destination) != original_digest:
+            raise ValueError("DMG bytes changed during verification retries")
         try:
             result = subprocess.run(
                 ["hdiutil", "verify", str(destination)],
@@ -38,6 +46,11 @@ def verify_image(destination):
         print_output(result.stdout, result.stderr)
         if result.returncode == 0:
             return
+        print(
+            f"DMG verification failed: exit={result.returncode} sha256={original_digest}",
+            file=sys.stderr,
+            flush=True,
+        )
         if (
             attempt == 2
             or result.returncode != 1

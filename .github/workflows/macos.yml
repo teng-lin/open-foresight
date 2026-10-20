@@ -231,6 +231,7 @@ jobs:
       linux_test: ${{ steps.changes.outputs.linux_test }}
       linux_document_imports: ${{ steps.changes.outputs.linux_document_imports }}
       packaging: ${{ steps.changes.outputs.packaging }}
+      dmg: ${{ steps.changes.outputs.dmg }}
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
@@ -353,6 +354,12 @@ jobs:
         SOURCE: ${{ inputs.source || github.sha }}
       run: |
         python -m tools.candidate_identity --source "$SOURCE"
+  dmg:
+    needs: changes
+    if: needs.changes.outputs.dmg == 'true'
+    uses: ./.github/workflows/dmg-contracts.yml
+    with:
+      source: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
   packaging:
     needs: [changes, linux-build]
     if: "!cancelled() && needs.changes.outputs.packaging == 'true' && contains(fromJSON('[\"success\",\"skipped\"]'), needs.linux-build.result)"
@@ -1012,6 +1019,8 @@ jobs:
     needs:
     - changes
     - workflow-lint
+    - linux-native
+    - dmg
     - macos
     - linux-build
     - linux-test
@@ -1028,6 +1037,7 @@ jobs:
         NEEDS: ${{ toJSON(needs) }}
         SELECTION: ${{ needs.changes.outputs.selection }}
         WORKFLOW_LINT: ${{ needs.workflow-lint.result }}
+        CI_TIER: ${{ inputs.tier }}
       run: |
         test "$WORKFLOW_LINT" = success
         python tools/ci_changes.py --check-gates

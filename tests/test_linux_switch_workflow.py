@@ -18,7 +18,7 @@ def workflow(name="macos.yml"):
 def test_required_build_test_and_acceptance_jobs_use_one_successful_producer():
     jobs = workflow()["jobs"]
     assert {"linux-build", "linux-test"}.issubset(jobs["platform-checks"]["needs"])
-    assert "linux-native" not in jobs["platform-checks"]["needs"]
+    assert "linux-native" in jobs["platform-checks"]["needs"]
     assert "linux-shadow-comparison" not in jobs
     assert jobs["linux-test"]["needs"] == "linux-build"
     for name in ("acceptance-cpu", "acceptance-audio", "acceptance-deb"):
@@ -241,6 +241,9 @@ def _selection_repository(tmp_path):
     tools = tmp_path / "tools"
     tools.mkdir()
     shutil.copy2(ROOT / "tools/ci_changes.py", tools / "ci_changes.py")
+    shutil.copy2(
+        ROOT / "tools/platform_python_tests.py", tools / "platform_python_tests.py"
+    )
     return git, initial
 
 
