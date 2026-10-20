@@ -36,6 +36,17 @@ RUN cmake -G "Unix Makefiles" -S /src -B /src/build -DCMAKE_BUILD_TYPE=Release &
     if [[ "$REQUIRE_DEPENDENCY_REUSE" == 1 ]]; then python3 /opt/foresight/verify_app_dependency_reuse.py --build /src/build; fi && \
     cmake --build /src/build --parallel 4
 
+# Secret-free test environment shared by independent shadow build/test runners.
+# This is application tooling; it never changes component SDK recipe identities.
+FROM application-dependencies AS ci
+LABEL org.openforesight.ci-handoff="source-scoped-sdk-transport"
+ENV FORESIGHT_PYTHON=/opt/dev-python/bin/python \
+    FORESIGHT_PARALLEL_GATES=1 FORESIGHT_REQUIRE_APP_DEPENDENCY_REUSE=${REQUIRE_DEPENDENCY_REUSE}
+RUN apt-get -o Acquire::Retries=3 -o APT::Update::Error-Mode=any --snapshot "$UBUNTU_SNAPSHOT" update && \
+    apt-get -o Acquire::Retries=3 --snapshot "$UBUNTU_SNAPSHOT" install -y --no-install-recommends \
+      xvfb xauth dbus-x11 libgl1-mesa-dri mesa-vulkan-drivers poppler-utils unrtf bubblewrap gh && \
+    rm -rf /var/lib/apt/lists/*
+
 # Source revisions invalidate application work while the dependency tree above
 # stays reusable. Reconfiguration retains the same _deps paths and compiler flags.
 FROM application-dependencies AS tested

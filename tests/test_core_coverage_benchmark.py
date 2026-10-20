@@ -172,6 +172,9 @@ def test_default_runs_full_suite_once_and_keeps_native_and_hook_gates(gate, cove
     assert any(arg.startswith("--coverage=") for arg in tests[0]["args"]) == (
         coverage == "1"
     )
+    assert ("--coverage-package=^foresight_core$" in tests[0]["args"]) == (
+        coverage == "1"
+    )
     assert tests[0]["native"].endswith("build/native/libforesight_native.so")
     assert tests[0]["helper"].endswith("build/services/helper/ForesightHelper")
     assert any(
@@ -217,6 +220,9 @@ def test_benchmark_runs_both_full_suites_and_preserves_coverage_threshold(
     modes = ["coverage", "plain"] if coverage_first else ["plain", "coverage"]
     for command, mode in zip(tests, modes, strict=True):
         assert any(arg.endswith(f"/{mode}.events.jsonl") for arg in command["args"])
+        assert ("--coverage-package=^foresight_core$" in command["args"]) == (
+            mode == "coverage"
+        )
     assert f"Core benchmark order: {' then '.join(modes)}" in result.stdout
     assert "minimum 90%" in result.stdout
     assert "Core benchmark matched: 1 passed, 0 skipped" in result.stdout

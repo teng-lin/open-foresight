@@ -91,6 +91,48 @@ def test_cli_forwards_explicit_consumer_context(monkeypatch, tmp_path):
     fetch.assert_called_once_with("owner/repo", "linux-sdk", tmp_path, "a" * 40, 23, 60)
 
 
+@pytest.mark.parametrize("active", [False, True])
+def test_optional_absence_never_authorizes_assembly_while_compatible_producer_is_active(
+    monkeypatch, tmp_path, active
+):
+    monkeypatch.setattr(waiter.artifacts, "fingerprint", lambda component: "identity")
+    monkeypatch.setattr(waiter.artifacts, "pull", Mock(return_value=False))
+    monkeypatch.setattr(
+        waiter, "waiting_producers", Mock(return_value=[71] if active else [])
+    )
+    monkeypatch.setattr(waiter.time, "monotonic", lambda: 0)
+    if active:
+        with pytest.raises(RuntimeError, match="duplicate SDK build"):
+            waiter.fetch(
+                "owner/repo", "linux-sdk", tmp_path, "a" * 40, 23, 0, optional=True
+            )
+    else:
+        assert (
+            waiter.fetch(
+                "owner/repo", "linux-sdk", tmp_path, "a" * 40, 23, 0, optional=True
+            )
+            is False
+        )
+
+
+def test_optional_wait_survives_skipped_alternative_until_the_original_artifact_is_visible(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(waiter.artifacts, "fingerprint", lambda component: "identity")
+    monkeypatch.setattr(waiter.artifacts, "pull", Mock(side_effect=[False, True]))
+    monkeypatch.setattr(waiter, "waiting_producers", Mock(return_value=[71]))
+    monkeypatch.setattr(waiter.time, "monotonic", lambda: 0)
+    sleep = Mock()
+    monkeypatch.setattr(waiter.time, "sleep", sleep)
+    assert (
+        waiter.fetch(
+            "owner/repo", "linux-sdk", tmp_path, "a" * 40, 23, 1800, optional=True
+        )
+        is True
+    )
+    sleep.assert_called_once_with(60)
+
+
 @pytest.mark.parametrize("prior_wait", [False, True])
 def test_successful_producer_completion_race_gets_final_qualified_pull(
     monkeypatch, tmp_path, prior_wait

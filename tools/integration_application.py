@@ -45,9 +45,7 @@ def original_producer(
         jobs = [job for job in listed if matches(job)]
         if len(jobs) == 1:
             break
-        if len(jobs) > 1 or any(
-            PRODUCERS[consumer].matches_job(job) for job in listed
-        ):
+        if len(jobs) > 1 or any(PRODUCERS[consumer].matches_job(job) for job in listed):
             reject(
                 f"found {len(jobs)} matching producer jobs; identity is ambiguous or mismatched"
             )
@@ -108,18 +106,38 @@ def original_producer(
                 time.sleep(min(5, remaining))
 
 
-def save_sdk(source, image, output):
+def save_sdk(
+    source, image, output, *, shadow=False, source_prefix=None, reuse_archive=False
+):
     """Retain a fork's already-built SDK for this workflow, never compile it twice."""
     actual = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=artifacts.ROOT, text=True, timeout=30
     ).strip()
     if actual != source or not re.fullmatch(r"[a-f0-9]{40}", source):
         raise ValueError("SDK source must match the actual built checkout")
-    with tempfile.TemporaryDirectory(prefix="foresight-integration-sdk-") as directory:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix="foresight-integration-sdk-", dir=output.parent
+    ) as directory:
         prefix = Path(directory)
         image_id = sdk.inspect(image)
         archive = prefix / "image.tar"
-        sdk.run(["docker", "image", "save", "--output", str(archive), image_id])
+        if reuse_archive:
+            if not shadow or source_prefix is None:
+                raise ValueError("Archive reuse requires a verified shadow SDK prefix")
+            metadata = sdk.record(source_prefix, "linux-sdk")
+            if (
+                metadata.get("transport") != "docker-archive"
+                or metadata.get("image_id") != image_id
+            ):
+                raise ValueError(
+                    "Retained archive differs from the inspected SDK image"
+                )
+            # The validated payload and output share a task filesystem. A hardlink
+            # preserves its exact bytes without a second multi-GB docker save/copy.
+            os.link(source_prefix / "image.tar", archive)
+        else:
+            sdk.run(["docker", "image", "save", "--output", str(archive), image_id])
         (prefix / "image.json").write_text(
             json.dumps(
                 {
@@ -132,13 +150,36 @@ def save_sdk(source, image, output):
                     "archive_sha256": artifacts.digest(archive),
                     "source_scope": source,
                     "local_recipe_sha256": artifacts.digest(
-                        artifacts.ROOT / "tools/build_linux_sdk_local.sh"
+                        artifacts.ROOT
+                        / (
+                            "tools/linux_sdk_artifacts.py"
+                            if shadow
+                            else "tools/build_linux_sdk_local.sh"
+                        )
                     ),
                 }
             )
             + "\n"
         )
-        artifacts.pack("linux-sdk", artifacts.fingerprint("linux-sdk"), prefix, output)
+        if source_prefix is not None:
+            for name in ("source-qualification.json", "approved-source.json"):
+                previous = source_prefix / name
+                if previous.is_symlink():
+                    raise ValueError("SDK source qualification must be regular")
+                if previous.is_file():
+                    (prefix / name).write_bytes(previous.read_bytes())
+        if shadow:
+            artifacts.pack(
+                "linux-sdk",
+                artifacts.fingerprint("linux-sdk"),
+                prefix,
+                output,
+                tier="pr",
+            )
+        else:
+            artifacts.pack(
+                "linux-sdk", artifacts.fingerprint("linux-sdk"), prefix, output
+            )
 
 
 def retrieve(
@@ -153,6 +194,7 @@ def retrieve(
     *,
     component="linux-app",
     producer_wait=60,
+    shadow=False,
 ):
     if (
         component not in ("linux-app", "linux-sdk")
@@ -170,10 +212,18 @@ def retrieve(
     name = (
         artifacts.name(component, identity)
         if component == "linux-app"
-        else f"integration-sdk-{source}-{attempt}"
+        else f"{'shadow' if shadow else 'integration'}-sdk-{source}-{attempt}"
     )
     run = artifacts.api(repository, f"actions/runs/{run_id}")
-    consumer = "pr-application" if component == "linux-app" else "fork-sdk"
+    if shadow and component != "linux-sdk":
+        raise ValueError("Shadow handoff only restores its source-scoped fork SDK")
+    consumer = (
+        "pr-application"
+        if component == "linux-app"
+        else "shadow-fork-sdk"
+        if shadow
+        else "fork-sdk"
+    )
     if (
         run.get("id") != run_id
         or not PRODUCERS[consumer].matches_run(run)
@@ -213,6 +263,11 @@ def retrieve(
             or not PRODUCERS[consumer].matches_receipt(receipt)
             or receipt["source_commit"] != source
             or receipt["source_run_attempt"] != attempt
+            or (shadow and receipt.get("label") != "")
+            or (
+                PRODUCERS[consumer].receipt_tier is not None
+                and receipt.get("tier") != PRODUCERS[consumer].receipt_tier
+            )
         ):
             raise ValueError("Application receipt source or original attempt mismatch")
         artifacts.unpack(component, identity, root / "receipt", destination)
@@ -228,7 +283,14 @@ def retrieve(
         descriptor = sdk.record(destination, component)
         if descriptor.get("source_scope") != source or descriptor.get(
             "local_recipe_sha256"
-        ) != artifacts.digest(artifacts.ROOT / "tools/build_linux_sdk_local.sh"):
+        ) != artifacts.digest(
+            artifacts.ROOT
+            / (
+                "tools/linux_sdk_artifacts.py"
+                if shadow
+                else "tools/build_linux_sdk_local.sh"
+            )
+        ):
             raise ValueError("Fork SDK transport differs from its source-scoped recipe")
     qualification = {
         "schema": 1,
@@ -259,11 +321,15 @@ def main():
         "--component", choices=("linux-app", "linux-sdk"), default="linux-app"
     )
     parser.add_argument("--save-sdk", action="store_true")
+    parser.add_argument("--shadow", action="store_true")
     parser.add_argument("--image", default="foresight-sdk:pr")
     parser.add_argument("--directory", type=Path, required=True)
     args = parser.parse_args()
     if args.save_sdk:
-        save_sdk(args.source, args.image, args.directory)
+        if args.shadow:
+            save_sdk(args.source, args.image, args.directory, shadow=True)
+        else:
+            save_sdk(args.source, args.image, args.directory)
         return
     if any(
         value is None
@@ -289,6 +355,7 @@ def main():
                 args.artifact_digest,
                 args.directory,
                 component=args.component,
+                **({"shadow": True} if args.shadow else {}),
             ),
             indent=2,
         )

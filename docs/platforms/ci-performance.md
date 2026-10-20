@@ -60,7 +60,11 @@ Other original SDK artifacts may qualify after their PR merges when immutable
 Git evidence relates the producer to the approved final PR head, the consumer
 computes identical component build identities, and all producer-control files
 (including the dependency workflow) have identical bytes and modes. The final
-head must pass the authoritative merge-tree and main-reachability proof. This
+head must pass the authoritative merge-tree and main-reachability proof. When a
+squash merge includes unrelated changes from an advanced base, SDK qualification
+instead requires the authoritative merge commit to be reachable from main and
+its complete component build identity and producer-control bytes/modes to equal
+the approved final head's. Original-to-final equivalence remains mandatory. This
 retains the original receipt, source, successful attempt and payload checksums;
 it does not relabel the output as a new build. Changed build inputs or controls
 require a compatibility review and preserve the artifact rather than silently
@@ -73,7 +77,9 @@ merged-source proof, and limits PR commit history to three 100-entry pages
 (GitHub exposes at most 250 commits). Each consumer still checks its own build
 and control equivalence. The exact-manifest historical SDK approval bridge
 retains its separate policy and history bound. Qualification refactors do not
-change SDK build identities: existing approved merged producers and exact
+change SDK build identities. Only SDK callers may supply the scoped merged-input
+equivalence proof; compiler-work and sanitizer callers retain the whole-tree
+proof. Existing approved merged producers and exact
 manifest originals keep their verified reuse paths, original receipts and bytes.
 
 ## Consumer-scoped producer trust (WS2-0)
@@ -1004,11 +1010,163 @@ issue job does not discard its run's otherwise completed test evidence, and a
 stale queued writer reports the newer tests instead of assuming a replacement
 writer will run.
 
+## WS2a Ubuntu shadow build and test
+
+The additional `linux-build`, `linux-test` and `linux-shadow-comparison` jobs in
+`macos.yml` observe the Ubuntu design on pull requests only. All three jobs are
+nonblocking during this shadow phase; main and called nightly previews skip them,
+so preview packaging neither waits for them nor inherits their failures. The required platform and
+acceptance aggregates keep their current dependencies. These jobs never publish
+registry images or caches. They restore the existing verified SDK and qualified
+Make dependency seed before building the secret-free Docker `ci` target. A cache
+miss may rebuild that application test image, while unchanged SDKs and dependency
+objects remain verified and reused.
+
+`tools/build.sh --build-only` compiles native products, service/MCP AOT and Flutter
+release without running suites. `--test-only` first rejects any nonempty full
+application build plan, then runs CTest and the existing Dart/service gates against
+the restored outputs. Compiler, generated-file and link commands fail that guard;
+Make's recursive no-work bookkeeping is retained in a diagnostic log. Dart tests
+and analysis run only in the test phase; AOT/release compilation runs only in the
+build phase. Linux retains both 90% coverage gates. macOS collects desktop coverage
+when its gate/report configuration requests it, and the ordinary all-mode path
+continues to build and test.
+
+`tools/linux_container_build.sh` is the single in-container build/package script.
+A previously materialized dependency seed is revalidated against the complete
+verified producer layers, including headers, object bytes and timestamps; its
+retained files are never replaced while checking reuse. The host driver
+`tools/build_linux_container.sh` calls it locally and in CI through
+`/workspace/tools/linux_container_build.sh`, mounting source read-only and
+configuration secrets read-only outside the image. Distribution stamping happens
+on the verified host checkout. Packaging retains the exact GPU runtime flags,
+Google-client requirement, ABI report and tar package used by the existing builder.
+Only the host's Git checkout writes the application receipt, including tier/label.
+The shadow bundle uses `linux-bundle-<run>-<attempt>`, never candidate lookup names.
+
+The input identity covers the SDK image ID, dependency-seed qualification digest,
+CI/dependency Docker recipe and pinned Ubuntu snapshot. A rebuilt CI image may
+have another image ID; its recorded inputs must still match exactly. The handoff
+archive preserves source and build bytes, modes, symlinks and nanosecond timestamps,
+excluding `.git`, virtual environments, `build/_deps` and the separately uploaded
+`dist` bundle/installers. The second runner keeps
+its independently verified seed at that same `/src/build/_deps` path. Before any
+restore or execution, API provenance checks bind the artifact to its repository,
+workflow, original successful job/attempt and upload window, and verify the actual
+downloaded ZIP digest. The archive checksum and complete restored manifest are
+then checked. The Dart package cache lives at `/src/.pub-cache` and travels in
+this manifest with the lockfiles and package configuration. Consumers pin the exact
+original SDK run, artifact ID and ZIP digest selected by the build runner,
+including approved original artifacts. Fork consumers first reuse that verified SDK.
+Only a missing assembled SDK permits the existing component producer to use
+qualified parents and read-only cache layers; missing parents or transport errors
+fail without compiling those libraries. A new SDK is saved once and its verified
+archive is retained for the in-run envelope; a producer reuse race preserves the
+original qualification instead of relabeling bytes. That source-scoped SDK is uploaded once
+for the in-run consumer, retaining any original reused receipt; its scoped trust
+row cannot serve release lookup.
+
+The comparison retains per-test pass/skip sets for CTest, core, desktop, compiled
+service/MCP and host Python. Byte-identical reports forwarded with legacy stage
+prerequisites are counted once; conflicting copies fail. Service/MCP requires zero skips. The `makepkg` notice probe is deselected from
+host inventories and runs explicitly in the Arch installer contract. The Ubuntu
+`dpkg-deb` notice probe is the one directional distro difference; other missing,
+failing or changed test identities fail comparison. Native JUnit
+reports travel with the legacy stage artifact so comparisons remain possible when
+that existing tier restores a compatible result. Source/build archive byte counts
+are printed in producer logs and retained with the manifest.
+
+Local verification uses real Unix Makefiles and a tiny static dependency archive
+across replaced runner filesystems: source timestamps keep the restored graph idle,
+changed source is rejected, and dependency bytes remain unchanged. Hosted acceptance
+still needs archive-SDK, fork-style and recipe-changing shadow runs, per-test outcome
+comparison, and at least five runs for build/test latency and tar-size measurements.
+The target is build p50 at most 7 minutes and test at most 11 minutes. No hosted
+measurements or Docker runtime pass are inferred from local fixtures. The SDK recipe
+projection is unchanged by this workstream; the foundation's SentencePiece Python
+wheel change affects only the assembled Linux SDK Python layer, retaining all
+core, LiteRT, Whisper and macOS component identities.
+
 SDK consumer waits ignore skipped alternatives with duplicate display names.
 GitHub may expose the skipped main-registry job before its PR-archive counterpart
 is created after parent jobs finish. That placeholder is not proof that the
 component finished. Linux application consumers use `ci_dependency_wait.py` to
 share the qualified source/identity wait with macOS, capped at 1,800 seconds.
-Network and provenance failures remain fatal. This consumer-only correction
-preserves every SDK producer-control byte, allowing the already running producer
-and its eventual original artifact to remain qualified without recompilation.
+Network and provenance failures remain fatal. The foundation's consumer-only
+correction preserved every SDK producer-control byte, allowing its running
+producer and eventual original artifact to remain qualified without recompilation.
+This shadow follow-up also corrects the internal `ci_artifacts.pull(wait>0)`
+completion race: when the producer finishes or the deadline expires, it performs
+one final qualified artifact read without another sleep or a fresh deadline.
+Every candidate still passes the original source, successful-attempt, receipt and
+checksum checks, and rejected candidates retain their qualification error. The
+follow-up lands after the foundation's merged-final approval so its unchanged SDK
+recipes can reuse those original verified bytes despite consumer-control edits.
+
+### Hosted shadow diagnostics
+
+The [D313 transport/benchmark run](https://github.com/teng-lin/open-foresight/actions/runs/39368931590)
+verified the canonical SDK tag, original qualification and restored build inputs.
+Its source/build archive was 106,639,256 bytes (110,482,468-byte artifact ZIP),
+with all 14,675 payload entries and 1,008 tracked source entries verified.
+No SDK or dependency compilation was needed. An offline diagnostic comparison of
+the downloaded native, core, desktop, service and host-Python artifacts matched
+the same-head Arch outcomes. The hosted comparison job was skipped; this offline
+match does not replace that gate. Compiled service/MCP had 22 passes and zero
+skips. The separate
+[acceptance run](https://github.com/teng-lin/open-foresight/actions/runs/39368931645)
+passed private virtual-audio desktop/core/meeting checks (2/1/1, zero skips).
+
+The same-host core benchmark ran plain then covered: 220s and 191s, respectively,
+with identical 1,105-pass/10-skip outcomes and 92.61% core coverage. This single
+ordered observation does not establish a coverage speedup or ordinary latency.
+The build job took 310s; the test job took 804s and failed its final host Docker
+cache fixture because loading an SDK does not restore the base image's own
+reference. It is diagnostic evidence, not a passing timing sample. The host step
+now inspects the same pinned Ubuntu base and pulls it when missing, before
+running the offline fixture.
+
+Normal measurements require a new PR event with `ci:validate-sdk-transport` and
+`ci:benchmark-core` removed beforehand. Rerunning an old labeled event is not an ordinary sample.
+Record each fresh build/test/comparison execution by run ID, attempt and job IDs;
+report a shared event explicitly when using targeted build-job retries. Exclude
+failed, skipped and special executions from ordinary p50 values. Preserve the
+original successful producer attempt, upload window and checksums on every retry.
+
+The [first ordinary event](https://github.com/teng-lin/open-foresight/actions/runs/39375443052)
+passed attempt 1 (build 360s, test 654s, comparison 13s). Attempt 2 built in
+322s but failed a host-Python fixture: its historical SDK receipt inherited the
+consumer's attempt 2 while its successful original producer job was attempt 1.
+The verifier correctly rejected that mismatch. Fixture packing now supplies the
+historical attempt explicitly, including the forged-receipt negative case;
+regressions exercise consumer attempts 2 and 7 and still reject a wrong producer
+attempt. Full-suite rerun validation also exposed the same inherited-attempt
+assumption in historical sanitizer and candidate-selection fixtures; their real
+packing now supplies the original attempt too. No production provenance rule
+changed. The failed attempt is excluded
+and the five-execution measurement must restart on the corrected source.
+
+The subsequent `575ef4e3` measurements use run `39381008467`. These are fresh
+application job executions on one PR event, with targeted build-job reruns;
+they are not independent pushes or representative PR workloads. Two attempts
+qualified before the pagination correction:
+
+| Attempt | Build job (seconds) | Test job (seconds) | Comparison job (seconds) |
+| --- | --- | --- | --- |
+| 1 | `118489943107` (349) | `118491795737` (618) | `118495044588` (9) |
+| 4 | `118508574379` (550) | `118511943647` (974) | `118517946884` (8) |
+
+Attempt 2 failed on Ubuntu snapshot HTTP 500/502 before application tests;
+attempt 3 recovered only that test job and retains the original build, so it is
+excluded from fresh build timings. Attempt 5 built successfully but exhausted
+three GitHub HTTP 502 responses while qualifying its producer, again before
+application tests. Attempt 6 retried only the failed test with attempt 5's
+successful build and failed on the same API response; it is also excluded.
+
+The same 100-job API page still failed on inspection; 10-, 30- and 50-job pages
+and the attempt-specific endpoint succeeded. Producer enumeration now uses
+30-job pages with `filter=all`, retaining every original attempt and propagating
+later-page errors. Receipts, successful upload attempts, upload windows and
+checksums remain mandatory. The two qualified measurements above remain part of
+the diagnostic record; the five-execution gate restarts on the pagination
+correction's new source. No five-sample median is established by these results.

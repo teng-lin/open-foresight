@@ -6,13 +6,17 @@ task_build=${FORESIGHT_BUILD_DIR:-"$task_root/build"}
 task_python=${FORESIGHT_PYTHON:-"$task_root/.venv/bin/python"}
 task_platform=${FORESIGHT_PLATFORM:-}
 task_stage=all
-while [[ "${1:-}" == --platform || "${1:-}" == --stage ]]; do
+task_mode=all
+while [[ "${1:-}" == --platform || "${1:-}" == --stage || "${1:-}" == --build-only || "${1:-}" == --test-only ]]; do
   case "$1" in
-    --platform) task_platform=${2:?Missing platform} ;;
-    --stage) task_stage=${2:?Missing stage} ;;
+    --platform) task_platform=${2:?Missing platform}; shift 2 ;;
+    --stage) task_stage=${2:?Missing stage}; shift 2 ;;
+    --build-only|--test-only)
+      [[ "$task_mode" == all ]] || { echo 'Choose only one build/test mode' >&2; exit 2; }
+      task_mode=${1#--}; shift ;;
   esac
-  shift 2
 done
+export FORESIGHT_BUILD_MODE="$task_mode"
 case "$task_stage" in
   all|native|core|desktop|service) ;;
   *) echo 'Stage must be all, native, core, desktop, or service' >&2; exit 2 ;;
@@ -55,14 +59,21 @@ if [[ ! -x "$task_python" ]]; then
   exit 1
 fi
 if [[ "$task_stage" == all || "$task_stage" == native ]]; then
-  "$task_python" "$task_root/tools/check_build_cache.py" "$task_build/CMakeCache.txt"
-  "$task_python" "$task_root/tools/verify_descriptor.py"
-  ci_timed "native configure" cmake -S "$task_root" -B "$task_build" -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$task_python" ${task_cmake_platform[@]+"${task_cmake_platform[@]}"} "$@"
-  if [[ "${FORESIGHT_REQUIRE_APP_DEPENDENCY_REUSE:-0}" == 1 ]]; then
-    "$task_python" "$task_root/tools/verify_app_dependency_reuse.py" --build "$task_build"
+  if [[ "$task_mode" == test-only ]]; then
+    "$task_python" "$task_root/tools/verify_application_no_build.py" --build "$task_build"
+  else
+    "$task_python" "$task_root/tools/check_build_cache.py" "$task_build/CMakeCache.txt"
+    "$task_python" "$task_root/tools/verify_descriptor.py"
+    ci_timed "native configure" cmake -S "$task_root" -B "$task_build" -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$task_python" ${task_cmake_platform[@]+"${task_cmake_platform[@]}"} "$@"
+    if [[ "${FORESIGHT_REQUIRE_APP_DEPENDENCY_REUSE:-0}" == 1 ]]; then
+      "$task_python" "$task_root/tools/verify_app_dependency_reuse.py" --build "$task_build"
+    fi
+    ci_timed "native compile" cmake --build "$task_build" --parallel "${FORESIGHT_BUILD_JOBS:-4}"
   fi
-  ci_timed "native compile" cmake --build "$task_build" --parallel "${FORESIGHT_BUILD_JOBS:-4}"
-  ci_timed "native tests" ctest --test-dir "$task_build" --output-on-failure
+  if [[ "$task_mode" != build-only ]]; then
+    mkdir -p "$task_root/test-results/$task_platform/native"
+    ci_timed "native tests" ctest --test-dir "$task_build" --output-on-failure --output-junit "$task_root/test-results/$task_platform/native/results.xml"
+  fi
 fi
 task_build=$(cd -- "$task_build" && pwd)
 case "$task_stage" in
@@ -87,6 +98,6 @@ else
     echo "Native build passed. Add Flutter to PATH to also build/test the desktop app." >&2
   fi
 fi
-if [[ -x "$task_build/application/foresight-service" && -x "$task_build/application/foresight-mcp" ]]; then
+if [[ "$task_mode" != build-only && -x "$task_build/application/foresight-service" && -x "$task_build/application/foresight-mcp" ]]; then
   bash "$task_root/tools/build_service_gate.sh" "$task_platform" "$task_build" "$task_python"
 fi

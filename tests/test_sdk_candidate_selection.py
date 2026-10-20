@@ -15,7 +15,9 @@ IDENTITY = "a" * 64
 
 
 @pytest.fixture
-def candidates(tmp_path, monkeypatch):
+def candidates(tmp_path, monkeypatch, request):
+    if getattr(request, "param", None) is not None:
+        monkeypatch.setenv("GITHUB_RUN_ATTEMPT", request.param)
     payload = tmp_path / "payload"
     payload.mkdir()
     (payload / "retained").write_text("verified SDK fixture")
@@ -28,6 +30,7 @@ def candidates(tmp_path, monkeypatch):
 
     with monkeypatch.context() as packing:
         packing.setattr(artifacts.subprocess, "check_output", revision)
+        packing.setenv("GITHUB_RUN_ATTEMPT", "1")
         artifacts.pack(COMPONENT, IDENTITY, payload, packed)
     receipt = json.loads((packed / "identity.json").read_text())
     archives = {}
@@ -141,6 +144,7 @@ def lookup(mode, state, **kwargs):
 
 
 @pytest.mark.parametrize("mode", ["probe", "pull"])
+@pytest.mark.parametrize("candidates", [None, "2", "7"], indirect=True)
 def test_unqualified_first_candidate_does_not_hide_later_valid_candidate(
     candidates, mode
 ):
@@ -178,12 +182,16 @@ def test_pull_retries_until_deadline_before_raising_qualification_error(
 ):
     candidates["all_bad"] = True
     clock = iter([0, 0, 0, 2])
+    delays = []
     monkeypatch.setattr(artifacts.time, "monotonic", lambda: next(clock))
-    monkeypatch.setattr(artifacts.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(artifacts.time, "sleep", delays.append)
     monkeypatch.setattr(artifacts, "waiting_for_dependency", lambda *args: [71])
     with pytest.raises(ValueError, match="require requalification"):
         lookup("pull", candidates, wait=1)
-    assert candidates["lists"] == 2
+    # The deadline permits one final qualified read without reopening the wait.
+    assert candidates["lists"] == 3
+    assert candidates["seen"] == [1, 2] * 3
+    assert delays == [1]
 
 
 def test_only_bad_artifacts_never_reach_local_compilation(candidates, monkeypatch):

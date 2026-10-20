@@ -206,7 +206,7 @@ def name(component, identity):
     return f"ci-{component}-{identity}"
 
 
-def pack(component, identity, prefix, output):
+def pack(component, identity, prefix, output, *, tier=None, label=""):
     """Archive verified outputs with executable modes, symlinks and a digest."""
     source_commit = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True, timeout=30
@@ -216,6 +216,11 @@ def pack(component, identity, prefix, output):
             raise ValueError(
                 "Application identity must match the actual built checkout"
             )
+    if tier is not None and (
+        tier not in ("pr", "sweep", "preview", "release", "local")
+        or (tier == "release" and label)
+    ):
+        raise ValueError("Invalid application artifact tier/label")
     output.mkdir(parents=True, exist_ok=True)
     archive = output / "payload.tar.gz"
     with tarfile.open(archive, "w:gz", compresslevel=1) as stream:
@@ -237,6 +242,7 @@ def pack(component, identity, prefix, output):
                 "sha256": digest(archive),
                 "source_commit": source_commit,
                 "source_run_attempt": int(os.environ.get("GITHUB_RUN_ATTEMPT", "1")),
+                **({"tier": tier, "label": label} if tier is not None else {}),
                 **(
                     {
                         "distribution": application_distribution(
@@ -443,15 +449,18 @@ def merged_source(repository, run):
 
 def dependency_jobs(repository, run_id):
     """Retain completed producers when a later workflow attempt reruns failures."""
+    # Large retried runs can time out while GitHub assembles 100 job/step rows.
+    # Smaller pages retain every original attempt without weakening provenance.
+    page_size = 30
     jobs = []
     page = 1
     while True:
         batch = api(
             repository,
-            f"actions/runs/{run_id}/jobs?filter=all&per_page=100&page={page}",
+            f"actions/runs/{run_id}/jobs?filter=all&per_page={page_size}&page={page}",
         )["jobs"]
         jobs.extend(batch)
-        if len(batch) < 100:
+        if len(batch) < page_size:
             return jobs
         page += 1
 
@@ -826,16 +835,12 @@ def waiting_for_dependency(repository, component, identity, own_head, own_pr):
     if component not in FILES or not own_head:
         return []
     result = []
-    for status, scope in (
-        (status, scope)
-        for status in ("queued", "in_progress", "waiting", "pending", "requested")
-        for scope in (f"head_sha={own_head}", "branch=main")
-    ):
+    for scope in (f"head_sha={own_head}", "branch=main"):
         page = 1
         while True:
             runs = api(
                 repository,
-                f"actions/workflows/ci-dependencies.yml/runs?{scope}&status={status}&per_page=100&page={page}",
+                f"actions/workflows/ci-dependencies.yml/runs?{scope}&per_page=100&page={page}",
             )["workflow_runs"]
             for run in runs:
                 if (
@@ -845,7 +850,8 @@ def waiting_for_dependency(repository, component, identity, own_head, own_pr):
                         else run.get("head_branch") == "main"
                         and run.get("event") != "pull_request"
                     )
-                    or run.get("status") != status
+                    or run.get("status")
+                    not in ("queued", "in_progress", "waiting", "pending", "requested")
                     or not trusted_run(run, component, own_head, repository, own_pr)
                 ):
                     continue
@@ -853,6 +859,7 @@ def waiting_for_dependency(repository, component, identity, own_head, own_pr):
                     job
                     for job in dependency_jobs(repository, run["id"])
                     if job.get("name") == JOBS[component]
+                    and job.get("conclusion") != "skipped"
                     and job.get("run_attempt", 1) == run.get("run_attempt", 1)
                 ]
                 if jobs and all(job.get("conclusion") is not None for job in jobs):
@@ -897,9 +904,29 @@ def pull(
     source_run=0,
     *,
     consumer="artifact-pull",
+    artifact_id=0,
+    artifact_digest="",
 ):
+    if bool(artifact_id) != bool(artifact_digest) or (
+        artifact_id
+        and (
+            type(artifact_id) is not int
+            or artifact_id < 1
+            or not re.fullmatch(r"sha256:[a-f0-9]{64}", artifact_digest)
+        )
+    ):
+        raise ValueError("Exact artifact pin requires a positive ID and SHA-256 digest")
     original = approved_original(repository, component, identity)
-    if original:
+    if original and (
+        (
+            not artifact_id
+            or (
+                original[1]["id"] == artifact_id
+                and original[1]["digest"] == artifact_digest
+            )
+        )
+        and (not source_run or original[1]["workflow_run"]["id"] == source_run)
+    ):
         entry, artifact = original
         with tempfile.TemporaryDirectory() as temporary:
             archive = Path(temporary) / "original.zip"
@@ -935,11 +962,21 @@ def pull(
     artifact_name = name(component, identity)
     deadline = time.monotonic() + max(0, min(wait, 1800))
     qualification_errors: list[ValueError] = []
+    terminal_read = False
     while True:
-        artifacts = api(
-            repository, f"actions/artifacts?name={artifact_name}&per_page=100"
-        )["artifacts"]
+        artifacts = (
+            [api(repository, f"actions/artifacts/{artifact_id}")]
+            if artifact_id
+            else api(
+                repository, f"actions/artifacts?name={artifact_name}&per_page=100"
+            )["artifacts"]
+        )
         for artifact in artifacts:
+            if artifact_id and (
+                artifact.get("id") != artifact_id
+                or artifact.get("digest") != artifact_digest
+            ):
+                raise ValueError("Pinned SDK artifact ID/digest changed")
             if artifact["expired"] or artifact["name"] != artifact_name:
                 continue
             if source_run and artifact["workflow_run"]["id"] != source_run:
@@ -1047,14 +1084,24 @@ def pull(
                 flush=True,
             )
             return True
+        if terminal_read:
+            if qualification_errors:
+                raise qualification_errors[-1]
+            return False
         if time.monotonic() >= deadline or not waiting_for_dependency(
             repository, component, identity, own_head, own_pr
         ):
+            if wait > 0:
+                # The successful upload/job may become eligible between reads.
+                # Re-read the exact same qualified artifact once, without sleep
+                # or reopening the deadline. Nonwaiting callers stay single-read.
+                terminal_read = True
+                continue
             if qualification_errors:
                 raise qualification_errors[-1]
             return False
         print(f"Waiting for verified dependency/candidate {artifact_name}", flush=True)
-        time.sleep(min(20, max(0, deadline - time.monotonic())))
+        time.sleep(min(60, max(0, deadline - time.monotonic())))
 
 
 def application_descriptor(
@@ -1133,6 +1180,11 @@ def main():
     parser.add_argument("--prefix", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--artifact-id", type=int)
+    parser.add_argument("--artifact-digest", default="")
+    parser.add_argument(
+        "--tier", choices=("pr", "sweep", "preview", "release", "local")
+    )
+    parser.add_argument("--label", default="")
     parser.add_argument(
         "--repository",
         default=os.environ.get("GITHUB_REPOSITORY", "teng-lin/open-foresight"),
@@ -1196,7 +1248,17 @@ def main():
     if args.command == "pack":
         if not args.output:
             parser.error("--output is required")
-        pack(args.component, identity, args.prefix, args.output)
+        if args.tier is None:
+            pack(args.component, identity, args.prefix, args.output)
+        else:
+            pack(
+                args.component,
+                identity,
+                args.prefix,
+                args.output,
+                tier=args.tier,
+                label=args.label,
+            )
     elif not pull(
         args.repository,
         args.component,
@@ -1206,6 +1268,8 @@ def main():
         args.own_head,
         args.own_pr,
         source_run=args.run_id,
+        artifact_id=args.artifact_id or 0,
+        artifact_digest=args.artifact_digest,
     ):
         if args.optional:
             raise SystemExit(4)

@@ -8,6 +8,8 @@ import 'package:foresight_test_support/poll.dart';
 import 'package:foresight_test_support/service_fault_proxy.dart';
 import 'package:foresight_core/src/profile_paths.dart';
 import 'package:foresight_core/src/rpc_error.dart';
+import 'package:foresight_core/src/remote_domain.dart';
+import 'package:foresight_core/src/store.dart';
 import 'package:foresight_core/src/service.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
@@ -89,8 +91,11 @@ Future<void> main() async {
     if (File('$data/replacement.stop').existsSync()) stop();
   });
   var observedEof = false;
+  var healthyProbe = false;
+  var connectionCount = 0;
   server.listen((socket) {
     peers.add(socket);
+    if (old) File('$data/old-connections').writeAsStringSync('${++connectionCount}');
     if (old && Platform.environment['ERROR_MESSAGE'] == 'malformed-push') {
       socket.writeln('not-json');
       unawaited(socket.flush().then((_) => stdout.writeln('malformed-sent')));
@@ -111,8 +116,19 @@ Future<void> main() async {
         stdout.writeln('closing-observed');
         return;
       }
+      if (old && (Platform.environment['ERROR_MESSAGE'] ?? '').startsWith('healthy-then-') && !healthyProbe) {
+        healthyProbe = true;
+        Timer(Duration(milliseconds: int.parse(Platform.environment['FIRST_PROBE_DELAY_MS'] ?? '0')), () {
+          socket.writeln(jsonEncode({'id': request['id'], 'result': {'pid': pid, 'application_api_version': 1, 'runtime_revision': 'fixture-revision', 'installation_root': Directory(data).resolveSymbolicLinksSync()}, 'done': true}));
+          stdout.writeln('healthy-observed');
+        });
+        return;
+      }
+      if (old && Platform.environment['ERROR_MESSAGE'] == 'healthy-then-invalid-state') { socket.writeln(jsonEncode({'id': request['id'], 'result': {'generation': 1, 'pid': pid, 'application_api_version': 1, 'runtime_revision': 'fixture-revision', 'installation_root': Directory(data).resolveSymbolicLinksSync()}, 'done': true})); stdout.writeln('final-observed'); return; }
+      if (old && Platform.environment['ERROR_MESSAGE'] == 'healthy-then-stall') { stdout.writeln('final-observed'); return; }
+      if (old && Platform.environment['ERROR_MESSAGE'] == 'healthy-then-malformed') { socket.writeln('not-json'); stdout.writeln('final-observed'); return; }
       if (old || Platform.environment['REPLACEMENT_CLOSING'] == '1') {
-        socket.writeln(jsonEncode({'id': request['id'], 'error': {'code': 'unavailable', 'message': Platform.environment['ERROR_MESSAGE'] ?? 'Application service is shutting down; retry after it exits.'}, 'done': true}));
+        socket.writeln(jsonEncode({'id': request['id'], 'error': {'code': 'unavailable', 'message': Platform.environment['ERROR_MESSAGE'] == 'healthy-then-closing' ? 'Application service is shutting down; retry after it exits.' : Platform.environment['ERROR_MESSAGE'] ?? 'Application service is shutting down; retry after it exits.'}, 'done': true}));
         if (old) { stdout.writeln('closing-observed'); }
         else { unawaited(socket.flush().then((_) {
           File('$data/closing-replied').writeAsStringSync(jsonEncode({'pid': pid, 'method': request['method'], 'message': 'Application service is shutting down; retry after it exits.'}));
@@ -123,6 +139,7 @@ Future<void> main() async {
         if (request['method'] == 'fixture.stop') unawaited(socket.flush().then((_) => stop()));
       }
     }, onError: (Object _) {}, onDone: () {
+      if (old) File('$data/old-peer-closed').writeAsStringSync('closed');
       if (old && Platform.environment['ERROR_MESSAGE'] == 'stall') stdout.writeln('peer-closed');
     });
   });
@@ -212,6 +229,7 @@ class HandoffFixture {
     String errorMessage = closingMessage,
     bool keepEndpoint = false,
     bool separateOwnerRuntime = false,
+    int firstProbeDelayMs = 0,
   }) async {
     root = await createPrivateTempDirectory(shortTestTempRoot, 'of-handoff-');
     profile = ProfilePaths('${root.path}/data', '${root.path}/run');
@@ -219,6 +237,9 @@ class HandoffFixture {
     privateDirectory(profile.data);
     privateDirectory(profile.runtime);
     privateDirectory(ownerRuntime);
+    File(
+      '${profile.data}/.desktop-capability',
+    ).writeAsStringSync('fixture-desktop-token');
     final owner = File('${root.path}/owner.dart')
       ..writeAsStringSync(ownerSource);
     final launcher = File('${root.path}/launch')
@@ -238,6 +259,7 @@ class HandoffFixture {
         'FORESIGHT_DATA': profile.data,
         'FORESIGHT_RUNTIME': ownerRuntime,
         'OLD_OWNER': '1',
+        'FIRST_PROBE_DELAY_MS': '$firstProbeDelayMs',
         'ERROR_MESSAGE': errorMessage,
         'KEEP_ENDPOINT': keepEndpoint ? '1' : '0',
       },
@@ -435,6 +457,233 @@ void ownerRuntimeVariants(
 }
 
 void main() {
+  test(
+    'ordinary ensureService retains one status probe and no desktop reservation',
+    () async {
+      final f = HandoffFixture();
+      await f.start(errorMessage: 'healthy-then-closing');
+      try {
+        final pending = f.connect();
+        await f.next('healthy-observed');
+        final client = await pending.timeout(const Duration(seconds: 5));
+        expect(client.isClosed, isFalse);
+        expect(f.launched, isFalse);
+        await expectLater(
+          client.call('status'),
+          throwsA(
+            isA<RpcError>().having((e) => e.message, 'message', closingMessage),
+          ),
+        );
+        await f.next('closing-observed');
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
+  test(
+    'desktop final status joins closing owner after a healthy first probe',
+    () async {
+      final f = HandoffFixture();
+      await f.start(errorMessage: 'healthy-then-closing');
+      Store('${f.profile.data}/application.db').close();
+      RemoteDomain? domain;
+      try {
+        final pending = RemoteDomain.connect(
+          f.profile,
+        ).then((value) => domain = value);
+        final success = expectLater(pending, completes);
+        await f.next('healthy-observed');
+        await f.next('closing-observed');
+        expect(f.launched, isFalse);
+        await f.closeSocket();
+        await expectLater(
+          pending.timeout(const Duration(milliseconds: 100)),
+          throwsA(isA<TimeoutException>()),
+        );
+        expect(f.launched, isFalse);
+        await f.release();
+        final connected = await pending.timeout(const Duration(seconds: 15));
+        await success;
+        expect(
+          (await connected.client.call('status') as Map)['pid'],
+          isNot(f.old.pid),
+        );
+        expect(File('${f.profile.data}/launches').readAsLinesSync(), [
+          'launch',
+        ]);
+        expect(
+          File('${f.profile.data}/requests').readAsLinesSync(),
+          everyElement('status'),
+        );
+      } finally {
+        domain?.close();
+        domain?.store.close();
+        await f.close();
+      }
+    },
+  );
+  test(
+    'desktop final snapshot shares the original overall startup deadline',
+    () async {
+      final f = HandoffFixture();
+      await f.start(
+        errorMessage: 'healthy-then-stall',
+        firstProbeDelayMs: 1500,
+      );
+      Store('${f.profile.data}/application.db').close();
+      try {
+        final failure = expectLater(
+          RemoteDomain.connect(
+            f.profile,
+            startupTimeout: const Duration(seconds: 2),
+          ),
+          throwsA(isA<TimeoutException>()),
+        );
+        await f.next('healthy-observed');
+        await f.next('final-observed');
+        await failure.timeout(const Duration(milliseconds: 1200));
+        await eventually(
+          () => File('${f.profile.data}/old-peer-closed').existsSync(),
+        );
+        expect(f.launched, isFalse);
+        expect(
+          File('${f.profile.data}/old-connections').readAsStringSync(),
+          '1',
+        );
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
+  test('desktop final snapshot follows an owner that closes uncleanly to one '
+      'adopting replacement (D2)', () async {
+    final f = HandoffFixture();
+    await f.start(errorMessage: 'healthy-then-closing', keepEndpoint: true);
+    Store('${f.profile.data}/application.db').close();
+    RemoteDomain? domain;
+    try {
+      final pending = RemoteDomain.connect(
+        f.profile,
+      ).then((value) => domain = value);
+      final success = expectLater(pending, completes);
+      await f.next('healthy-observed');
+      await f.next('closing-observed');
+      expect(f.launched, isFalse);
+      // The old owner exits without deleting its record.
+      await f.release();
+      final connected = await pending.timeout(const Duration(seconds: 15));
+      await success;
+      expect(
+        (await connected.client.call('status') as Map)['pid'],
+        int.parse(File('${f.profile.data}/replacement.pid').readAsStringSync()),
+      );
+      expect(File('${f.profile.data}/launches').readAsLinesSync(), ['launch']);
+      expect(File('${f.profile.data}/old-connections').readAsStringSync(), '1');
+    } finally {
+      domain?.close();
+      domain?.store.close();
+      await f.close();
+    }
+  });
+
+  test(
+    'desktop final handoff launches at most one replacement within its deadline',
+    () async {
+      final f = HandoffFixture();
+      await f.start(errorMessage: 'healthy-then-closing');
+      Store('${f.profile.data}/application.db').close();
+      runtimeConfiguration.environment['REPLACEMENT_CLOSING'] = '1';
+      try {
+        final failure = expectLater(
+          RemoteDomain.connect(
+            f.profile,
+            startupTimeout: const Duration(seconds: 3),
+          ),
+          throwsA(isA<TimeoutException>()),
+        );
+        await f.next('healthy-observed');
+        await f.next('closing-observed');
+        await f.release();
+        await eventually(
+          () => File('${f.profile.data}/closing-replied').existsSync(),
+          timeout: const Duration(seconds: 2),
+        );
+        await failure.timeout(const Duration(seconds: 4));
+        expect(File('${f.profile.data}/launches').readAsLinesSync(), [
+          'launch',
+        ]);
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
+  test(
+    'desktop snapshot construction failure closes partial domain without reconnect',
+    () async {
+      final f = HandoffFixture();
+      await f.start(errorMessage: 'healthy-then-invalid-state');
+      Store('${f.profile.data}/application.db').close();
+      try {
+        final failure = expectLater(
+          RemoteDomain.connect(f.profile),
+          throwsA(isA<TypeError>()),
+        );
+        await f.next('healthy-observed');
+        await f.next('final-observed');
+        await failure;
+        await eventually(
+          () => File('${f.profile.data}/old-peer-closed').existsSync(),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 150));
+        expect(f.launched, isFalse);
+        expect(
+          File('${f.profile.data}/old-connections').readAsStringSync(),
+          '1',
+        );
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
+  for (final mode in ['unavailable', 'malformed']) {
+    test(
+      'desktop final $mode failure closes client before resources or reconnect',
+      () async {
+        final f = HandoffFixture();
+        await f.start(errorMessage: 'healthy-then-$mode');
+        Store('${f.profile.data}/application.db').close();
+        try {
+          final failure = expectLater(
+            RemoteDomain.connect(f.profile),
+            throwsA(
+              mode == 'malformed' ? isA<FormatException>() : isA<RpcError>(),
+            ),
+          );
+          await f.next('healthy-observed');
+          await f.next(
+            mode == 'malformed' ? 'final-observed' : 'closing-observed',
+          );
+          await failure;
+          await eventually(
+            () => File('${f.profile.data}/old-peer-closed').existsSync(),
+          );
+          await Future<void>.delayed(const Duration(milliseconds: 150));
+          expect(f.launched, isFalse);
+          expect(
+            File('${f.profile.data}/old-connections').readAsStringSync(),
+            '1',
+          );
+        } finally {
+          await f.close();
+        }
+      },
+    );
+  }
+
   ownerRuntimeVariants(
     'desktop startup joins the closing owner before one replacement launch',
     (separate) async {

@@ -13,6 +13,7 @@ from test_sdk_producer_trust import git_api
 REPO = "owner/repo"
 ORIGINAL = "a" * 40
 FINAL = "b" * 40
+MERGE = "e" * 40
 
 
 def run():
@@ -50,6 +51,8 @@ class Evidence:
             return self.pull
         if path == f"compare/{ORIGINAL}...{FINAL}":
             return {"status": self.status}
+        if path == f"compare/{MERGE}...main":
+            return {"status": "identical"}
         if path.startswith("pulls/119/commits?"):
             page = int(path.rsplit("=", 1)[1])
             return self.members[(page - 1) * 100 : page * 100]
@@ -206,6 +209,92 @@ def test_unmerged_or_unapproved_final_does_not_qualify():
     evidence.pull["merged_at"] = "merged"
     evidence.approved = False  # Reverted/unreachable or unequal rebase merge tree.
     assert not evidence.qualify()
+
+
+@pytest.mark.parametrize(
+    "case,expected",
+    [
+        ("unrelated-base-change", True),
+        ("different-build", False),
+        ("different-control", False),
+        ("different-mode", False),
+        ("unreachable", False),
+        ("missing-merge", False),
+        ("invalid-merge", False),
+    ],
+)
+def test_sdk_squash_approval_checks_actual_merged_input_and_control_closure(
+    case, expected
+):
+    evidence = Evidence()
+    evidence.approved = False  # Whole trees differ due to another merged PR.
+    evidence.pull["merge_commit_sha"] = MERGE
+    evidence.identities[MERGE] = evidence.identities[FINAL]
+    evidence.controls[MERGE] = copy.deepcopy(evidence.controls[FINAL])
+    if case == "different-build":
+        evidence.identities[MERGE] = "changed-build"
+    elif case == "different-control":
+        evidence.controls[MERGE]["pack.py"] = ("100644", b"changed")
+    elif case == "different-mode":
+        evidence.controls[MERGE]["pack.py"] = ("100755", b"reviewed")
+    elif case == "missing-merge":
+        evidence.pull.pop("merge_commit_sha")
+    elif case == "invalid-merge":
+        evidence.pull["merge_commit_sha"] = "main"
+    original_api = evidence.api
+
+    def api(repository, path):
+        if path == f"compare/{MERGE}...main":
+            return {"status": "behind" if case == "unreachable" else "identical"}
+        return original_api(repository, path)
+
+    evidence.api = api
+    assert evidence.qualify() is expected
+    # SDK approval never changes original provenance or the other callers' rule.
+    assert not list(
+        approval.approved_final_heads(
+            REPO,
+            run(),
+            workflow=approval.WORKFLOW,
+            api=evidence.api,
+            merged_source=evidence.merged,
+        )
+    )
+
+
+def test_sdk_squash_merge_api_failure_is_fatal():
+    evidence = Evidence()
+    evidence.approved = False
+    evidence.pull["merge_commit_sha"] = MERGE
+    original_api = evidence.api
+
+    def api(repository, path):
+        if path == f"compare/{MERGE}...main":
+            raise RuntimeError("merge proof unavailable")
+        return original_api(repository, path)
+
+    evidence.api = api
+    with pytest.raises(RuntimeError, match="merge proof unavailable"):
+        evidence.qualify()
+
+
+@pytest.mark.parametrize("part", ["build", "control", "mode"])
+def test_squash_proof_still_requires_original_to_final_equivalence(part):
+    evidence = Evidence()
+    evidence.approved = False
+    evidence.pull["merge_commit_sha"] = MERGE
+    evidence.identities[MERGE] = evidence.identities[FINAL]
+    evidence.controls[MERGE] = copy.deepcopy(evidence.controls[FINAL])
+    if part == "build":
+        evidence.identities[ORIGINAL] = "incompatible-original"
+        message = "build inputs differ"
+    else:
+        evidence.controls[ORIGINAL]["pack.py"] = (
+            ("100755", b"reviewed") if part == "mode" else ("100644", b"unreviewed")
+        )
+        message = "producer controls changed"
+    with pytest.raises(ValueError, match=message):
+        evidence.qualify()
 
 
 def test_changed_build_or_control_requires_review_not_cold_build():
@@ -382,6 +471,7 @@ def test_original_head_approval_remains_strictly_separate():
         ("unrelated", False, 1),
         ("unmerged", False, 0),
         ("unapproved", False, 0),
+        ("squash_base_change", True, 0),
         ("fork_head", False, 0),
         ("fork_base", False, 0),
         ("wrong_repository", False, 0),
@@ -417,6 +507,12 @@ def test_all_callers_share_final_source_boundary(
         evidence.pull["merged_at"] = None
     elif case == "unapproved":
         evidence.approved = False
+    elif case == "squash_base_change":
+        evidence.approved = False
+        evidence.pull["merge_commit_sha"] = MERGE
+        evidence.identities[MERGE] = evidence.identities[FINAL]
+        evidence.controls[MERGE] = copy.deepcopy(evidence.controls[FINAL])
+        expected = caller == "sdk"
     elif case in ("fork_head", "fork_base"):
         evidence.pull[case.removeprefix("fork_")]["repo"]["full_name"] = "fork/repo"
     elif case == "wrong_repository":

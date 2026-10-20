@@ -133,9 +133,17 @@ def receipt(directory, kind, source):
 
 
 def manifest(directory, version, number, label, source, validation):
+    by_format = {
+        kind: list(directory.rglob("*" + extension))
+        for kind, extension in EXTENSIONS.items()
+    }
+    if len(by_format["arch"]) == 1:
+        # make_arch retains this exact rebuild input beside its installer. It
+        # remains in the file/checksum manifest, but is not a second installer.
+        retained = by_format["arch"][0].parent / "arch-recipe/payload.tar.gz"
+        by_format["tar"] = [path for path in by_format["tar"] if path != retained]
     receipts = []
-    for kind in EXTENSIONS:
-        installers = list(directory.rglob("*" + EXTENSIONS[kind]))
+    for kind, installers in by_format.items():
         if len(installers) != 1:
             raise ValueError(f"Missing or duplicate preview installer: {kind}")
         item = receipt(installers[0].parent, kind, source)

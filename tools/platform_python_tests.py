@@ -24,6 +24,7 @@ SHARED = (
     "tests/test_helper_build_identity.py",
     "tests/test_installed_documents.py",
     "tests/test_linux_packages.py",
+    "tests/test_linux_ci_handoff.py",
     "tests/test_litert_build_snapshot.py",
     "tests/test_native_incremental_work.py",
     "tests/test_parallel_build_gates.py",
@@ -148,6 +149,8 @@ def command(platform, root=ROOT):
         f"--junitxml=coverage/python/{platform}-contracts.xml",
         *SHARED,
         *PLATFORM[platform],
+        # The real makepkg notice probe belongs to the Arch installer job.
+        "--deselect=tests/test_linux_packages.py::test_nlohmann_notice_is_listed_in_arch_package",
     ]
 
 

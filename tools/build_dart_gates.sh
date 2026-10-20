@@ -7,6 +7,8 @@ task_build=${3:?absolute build directory}
 task_python=${4:?Python executable}
 task_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 source "$task_root/tools/ci_timing.sh"
+task_mode=${FORESIGHT_BUILD_MODE:-all}
+case "$task_mode" in all|build-only|test-only) ;; *) echo 'Unknown build mode' >&2; exit 2 ;; esac
 case "$task_platform" in
   macos) task_native="$task_build/native/libforesight_native.dylib" ;;
   linux) task_native="$task_build/native/libforesight_native.so" ;;
@@ -21,7 +23,10 @@ case "$task_gate" in
     task_reports="$task_root/test-results/$task_platform/core"
     mkdir -p "$task_reports"
     rm -f -- "$task_reports"/*.events.jsonl
-    ci_timed "core dependency resolution" dart pub get --enforce-lockfile
+    if [[ "$task_mode" != test-only ]]; then
+      ci_timed "core dependency resolution" dart pub get --enforce-lockfile
+    fi
+    if [[ "$task_mode" != build-only ]]; then
     ci_timed "core analysis" dart analyze
     if [[ "${FORESIGHT_CORE_COVERAGE_BENCHMARK:-0}" == 1 ]]; then
       # Compare the full suite on the same host/native binaries. Keep coverage
@@ -62,10 +67,13 @@ case "$task_gate" in
       ci_timed "core tests" dart test --file-reporter="json:$task_reports/core.events.jsonl"
     fi
     ci_timed "core enabled-hook regression" dart -DFORESIGHT_ENABLE_TEST_HOOKS=true test --compiler=source test/platform_services_test.dart --name 'crash and delay hooks'
+    fi
   )
+  if [[ "$task_mode" != test-only ]]; then
   mkdir -p "$task_build/application"
   ci_timed "service compilation" dart compile exe "$task_root/packages/foresight_core/bin/service.dart" -o "$task_build/application/foresight-service"
   ci_timed "MCP compilation" dart compile exe "$task_root/packages/foresight_core/bin/mcp.dart" -o "$task_build/application/foresight-mcp"
+  fi
     ;;
   desktop)
     (
@@ -73,13 +81,23 @@ case "$task_gate" in
       task_reports="$task_root/test-results/$task_platform/desktop"
       mkdir -p "$task_reports"
       rm -f -- "$task_reports"/*.events.jsonl
-      ci_timed "desktop dependency resolution" flutter pub get --enforce-lockfile
+      if [[ "$task_mode" != test-only ]]; then
+        ci_timed "desktop dependency resolution" flutter pub get --enforce-lockfile
+      fi
+      if [[ "$task_mode" != build-only ]]; then
       ci_timed "desktop analysis" flutter analyze
-      ci_timed "desktop tests and coverage" flutter test --dart-define=FORESIGHT_ENABLE_TEST_HOOKS=true --coverage --file-reporter="json:$task_reports/desktop.events.jsonl"
+      task_coverage=()
+      if [[ "$task_platform" == linux || "${FORESIGHT_COVERAGE:-0}" == 1 || "${FORESIGHT_DESKTOP_COVERAGE_REPORT:-0}" == 1 ]]; then
+        task_coverage=(--coverage)
+      fi
+      ci_timed "desktop tests and coverage" flutter test --dart-define=FORESIGHT_ENABLE_TEST_HOOKS=true ${task_coverage[@]+"${task_coverage[@]}"} --file-reporter="json:$task_reports/desktop.events.jsonl"
       if [[ "$task_platform" == linux ]]; then
         python3 "$task_root/tools/check_coverage.py" coverage/lcov.info --label Desktop --minimum 90
       fi
-      ci_timed "desktop release compilation" flutter build "$task_platform" --release
+      fi
+      if [[ "$task_mode" != test-only ]]; then
+        ci_timed "desktop release compilation" flutter build "$task_platform" --release
+      fi
     )
     ;;
   *) echo 'Gate must be core or desktop' >&2; exit 2 ;;

@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import tarfile
 from unittest.mock import patch
 
 import pytest
@@ -208,7 +209,12 @@ def installers(root):
         )
 
 
-def test_final_manifest_requires_all_formats_same_source_and_build(tmp_path):
+def test_final_manifest_requires_all_formats_same_source_and_build(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv(
+        "GITHUB_STEP_SUMMARY", str(tmp_path.parent / (tmp_path.name + ".summary"))
+    )
     installers(tmp_path)
     result = preview.manifest(tmp_path, "0.1.2", 12, LABEL, SHA, "standard")
     assert len(result["installers"]) == 5
@@ -220,7 +226,10 @@ def test_final_manifest_requires_all_formats_same_source_and_build(tmp_path):
         preview.receipt(tmp_path / "deb", "deb", SHA)
 
 
-def test_missing_formats_and_foreign_source_cannot_be_published(tmp_path):
+def test_missing_formats_and_foreign_source_cannot_be_published(tmp_path, monkeypatch):
+    monkeypatch.setenv(
+        "GITHUB_STEP_SUMMARY", str(tmp_path.parent / (tmp_path.name + ".summary"))
+    )
     installers(tmp_path)
     with pytest.raises(ValueError, match="pinned source"):
         preview.receipt(tmp_path / "dmg", "dmg", "b" * 40)
@@ -335,3 +344,145 @@ def test_preview_dmg_receipt_rejects_foreign_build_bytes(tmp_path):
     path.write_text(json.dumps(metadata))
     with pytest.raises(ValueError, match="checksum or format"):
         preview.receipt(tmp_path / "dmg", "dmg", SHA)
+
+
+@pytest.fixture
+def workflow_installer_tree(tmp_path, monkeypatch):
+    # Keep fixture provenance and summaries separate from inherited hosted CI.
+    monkeypatch.setenv("GITHUB_REPOSITORY", "fixture/preview")
+    monkeypatch.setenv("GITHUB_RUN_ID", "41")
+    monkeypatch.setenv(
+        "GITHUB_STEP_SUMMARY", str(tmp_path.parent / (tmp_path.name + "-summary.md"))
+    )
+    # Match download-artifact's non-merged preview-installer-* directories and
+    # the separately downloaded canonical portable bundle.
+    installers(tmp_path)
+    names = {
+        "deb": "preview-installer-linux-deb",
+        "rpm": "preview-installer-linux-rpm",
+        "arch": "preview-installer-linux-arch",
+        "dmg": "preview-installer-macos",
+        "tar": "portable",
+    }
+    for kind, name in names.items():
+        (tmp_path / kind).rename(tmp_path / name)
+    staged = tmp_path.parent / (tmp_path.name + "-arch-stage")
+    staged.mkdir()
+    (staged / "application").write_bytes(b"actual retained package input")
+    output = tmp_path / names["arch"] / "installer.pkg.tar.zst"
+
+    def makepkg(command, *, cwd, check, timeout):
+        assert command == ["makepkg", "--nodeps", "--noconfirm"]
+        assert check is True and timeout == 300
+        (Path(cwd) / "fixture.pkg.tar.zst").write_bytes(b"Arch installer fixture")
+
+    # Execute make_arch's real archive/recipe retention. Only the external Arch
+    # tool is substituted, keeping this filesystem contract portable on macOS.
+    with monkeypatch.context() as context:
+        context.setattr(package.subprocess, "run", makepkg)
+        package.make_arch(staged, output, "0.1.2", "0.12", package.METADATA, 1234)
+    digest = hashlib.sha256(output.read_bytes()).hexdigest()
+    Path(str(output) + ".sha256").write_text(f"{digest}  {output.name}\n")
+    metadata = Path(str(output) + ".build.json")
+    record = json.loads(metadata.read_text())
+    metadata.write_text(json.dumps({**record, "sha256": digest}))
+    recipe = output.parent / "arch-recipe"
+    retained = recipe / "payload.tar.gz"
+    with tarfile.open(retained) as archive:
+        assert archive.extractfile("payload/application").read() == (
+            b"actual retained package input"
+        )
+    assert (
+        hashlib.sha256(retained.read_bytes()).hexdigest()
+        in (recipe / "PKGBUILD").read_text()
+    )
+    return tmp_path
+
+
+def test_workflow_manifest_preserves_retained_arch_input_without_counting_it_as_installer(
+    workflow_installer_tree,
+):
+    root = workflow_installer_tree
+    retained = root / "preview-installer-linux-arch/arch-recipe/payload.tar.gz"
+    before = retained.read_bytes()
+    result = preview.manifest(root, "0.1.2", 12, LABEL, SHA, "standard")
+    assert len(result["installers"]) == 5
+    assert result["run_url"] == "https://github.com/fixture/preview/actions/runs/41"
+    portable = next(item for item in result["installers"] if item["format"] == "tar")
+    assert portable["asset"] == "installer.tar.gz"
+    checksum = next(
+        item
+        for item in result["files"]
+        if item["path"] == retained.relative_to(root).as_posix()
+    )
+    assert checksum["sha256"] == hashlib.sha256(before).hexdigest()
+    assert retained.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "change", ["checksum", "source", "format", "version", "build-number"]
+)
+def test_retained_arch_input_does_not_weaken_installer_provenance(
+    workflow_installer_tree, change
+):
+    root = workflow_installer_tree
+    portable = root / "portable/installer.tar.gz"
+    if change == "checksum":
+        portable.write_bytes(b"changed installer bytes")
+    else:
+        metadata = Path(str(portable) + ".build.json")
+        record = json.loads(metadata.read_text())
+        field, value = {
+            "source": ("revision", "b" * 40),
+            "format": ("format", "arch"),
+            "version": ("version", "9.9.9~" + LABEL),
+            "build-number": ("build_number", 13),
+        }[change]
+        metadata.write_text(json.dumps({**record, field: value}))
+    message = {
+        "checksum": "checksum",
+        "source": "pinned source",
+        "format": "checksum or format",
+        "version": "preview identity",
+        "build-number": "build numbers",
+    }[change]
+    with pytest.raises(ValueError, match=message):
+        preview.manifest(root, "0.1.2", 12, LABEL, SHA, "standard")
+    assert not (root / "preview.json").exists()
+
+
+@pytest.mark.parametrize(
+    "duplicate",
+    [
+        "surprise.tar.gz",
+        "preview-installer-linux-arch/arch-recipe/another.tar.gz",
+        "unrelated/arch-recipe/payload.tar.gz",
+        "preview-installer-linux-arch/arch-recipe/nested/payload.tar.gz",
+    ],
+)
+def test_manifest_still_rejects_unexpected_duplicate_tar_archives(
+    workflow_installer_tree, duplicate
+):
+    path = workflow_installer_tree / duplicate
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"unexpected duplicate archive")
+    with pytest.raises(ValueError, match="Missing or duplicate preview installer: tar"):
+        preview.manifest(workflow_installer_tree, "0.1.2", 12, LABEL, SHA, "standard")
+
+
+def test_retained_arch_input_cannot_replace_missing_portable_installer(
+    workflow_installer_tree,
+):
+    (workflow_installer_tree / "portable/installer.tar.gz").unlink()
+    with pytest.raises(ValueError, match="Missing or duplicate preview installer: tar"):
+        preview.manifest(workflow_installer_tree, "0.1.2", 12, LABEL, SHA, "standard")
+
+
+def test_retained_input_exception_requires_one_unambiguous_arch_installer(
+    workflow_installer_tree,
+):
+    (workflow_installer_tree / "duplicate.pkg.tar.zst").write_bytes(b"duplicate")
+    with pytest.raises(
+        ValueError, match="Missing or duplicate preview installer: arch"
+    ):
+        preview.manifest(workflow_installer_tree, "0.1.2", 12, LABEL, SHA, "standard")

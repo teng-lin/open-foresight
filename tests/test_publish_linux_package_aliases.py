@@ -211,7 +211,7 @@ def published(tmp_path, monkeypatch):
             return {"artifacts": state["items"]}
         if route == "actions/runs/7":
             return run
-        if route == "actions/runs/7/jobs?filter=all&per_page=100&page=1":
+        if route == "actions/runs/7/jobs?filter=all&per_page=30&page=1":
             return {"jobs": [job]}
         if route == f"compare/{source}...main":
             return {"status": "identical"}

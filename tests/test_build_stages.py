@@ -42,6 +42,9 @@ def build_tree(tmp_path):
         "PATH": f"{binary}:/usr/bin:/bin",
         "FORESIGHT_BUILD_DIR": str(build),
         "FORESIGHT_PYTHON": shutil.which("python3"),
+        # This miniature tree has no dependency seed or reuse verifier. Real
+        # dependency-reuse fixtures exercise that production guard separately.
+        "FORESIGHT_REQUIRE_APP_DEPENDENCY_REUSE": "0",
     }
 
 
@@ -76,6 +79,19 @@ def test_native_failure_cannot_be_reported_as_success(build_tree):
     result = run_stage(build_tree, "native", {"FIXTURE_CTEST_EXIT": "7"})
     assert result.returncode == 7
     assert "dart-stage" not in result.stdout
+
+
+def test_native_reuse_guard_can_be_enabled_and_blocks_compilation(build_tree):
+    root, _ = build_tree
+    (root / "tools/verify_app_dependency_reuse.py").write_text(
+        "import sys\nprint('fixture reuse guard rejected dependency rebuild')\nsys.exit(19)\n"
+    )
+    result = run_stage(
+        build_tree, "native", {"FORESIGHT_REQUIRE_APP_DEPENDENCY_REUSE": "1"}
+    )
+    assert result.returncode == 19, result.stdout + result.stderr
+    assert "fixture reuse guard rejected dependency rebuild" in result.stdout
+    assert "native compile" not in result.stdout
 
 
 @pytest.mark.parametrize("stage", ["core", "desktop", "service"])

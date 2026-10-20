@@ -940,6 +940,26 @@ class ApplicationService {
                 }
                 return;
               }
+              if (method == Operation.status.wire &&
+                  securityArgs['desktop'] == true) {
+                // Reserve desktop lifetime atomically before its startup snapshot.
+                // This authenticates liveness only: visible approvals still need
+                // security.attach_desktop and its separate host assignment.
+                if (securityArgs['token'] != access.desktopToken ||
+                    access.desktopToken.isEmpty) {
+                  _send(client, {
+                    'id': id,
+                    'error': RpcError(
+                      RpcErrorCode.denied,
+                      'Invalid desktop capability',
+                    ).toJson(),
+                    'done': true,
+                  });
+                  return;
+                }
+                _desktopClients.add(client);
+                _desktopShutdown?.cancel();
+              }
               if (request['method'] == Operation.serviceStopIfIdle.wire) {
                 unawaited(
                   _stopIfIdle(
@@ -1023,13 +1043,16 @@ class ApplicationService {
             }
             client.destroy();
             if (_desktopClients.remove(client) &&
+                _desktopClients.isEmpty &&
                 !access.hasHost &&
                 !_closing) {
               // Allow a transient socket reconnect. Once the desktop has gone,
               // agent connections must not keep its helper/models alive forever.
               _desktopShutdown?.cancel();
               _desktopShutdown = Timer(const Duration(seconds: 1), () {
-                if (access.hasHost || _closing) return;
+                if (_desktopClients.isNotEmpty || access.hasHost || _closing) {
+                  return;
+                }
                 unawaited(
                   close().catchError((Object error) {
                     stderr.writeln('Shutdown after desktop closed: $error');
@@ -1654,10 +1677,14 @@ class _ClosingService implements Exception {
   _ClosingService(this.client);
 }
 
-Future<ServiceClient> _connectCompatibleService(
+typedef ServiceStartup = ({ServiceClient client, Map<String, dynamic> status});
+
+Future<ServiceStartup> _connectCompatibleService(
+  ProfilePaths profile,
   String path,
-  Duration Function() remaining,
-) async {
+  Duration Function() remaining, {
+  required bool snapshot,
+}) async {
   final left = remaining();
   final client = await ServiceClient.connect(
     path,
@@ -1665,22 +1692,38 @@ Future<ServiceClient> _connectCompatibleService(
         ? left
         : const Duration(seconds: 2),
   );
+  Future<Map<String, dynamic>> status({bool desktop = false}) async {
+    final statusTimeout = remaining();
+    final args = desktop
+        ? <String, dynamic>{
+            'desktop': true,
+            'token': File(
+              '${profile.data}/.desktop-capability',
+            ).readAsStringSync(),
+          }
+        : const <String, dynamic>{};
+    final reply = await client
+        .call(Operation.status.wire, args)
+        .timeout(
+          statusTimeout,
+          onTimeout: () => throw TimeoutException(
+            'Application service did not answer its startup status probe',
+          ),
+        );
+    final value = Map<String, dynamic>.from(reply as Map);
+    if (runtimeConfiguration['FORESIGHT_RUNTIME_REVISION'] != null) {
+      validateServiceCompatibility(value);
+    }
+    return value;
+  }
+
   try {
     // Even development launches must not hand a closing owner to the desktop.
-    final statusTimeout = remaining();
-    final status =
-        await client
-                .call(Operation.status.wire)
-                .timeout(
-                  statusTimeout,
-                  onTimeout: () => throw TimeoutException(
-                    'Application service did not answer its startup status probe',
-                  ),
-                )
-            as Map;
-    if (runtimeConfiguration['FORESIGHT_RUNTIME_REVISION'] != null) {
-      validateServiceCompatibility(status);
-    }
+    var initial = await status();
+    // The desktop's final snapshot is part of startup, with the same deadline,
+    // exact closing-error classification, and clean profile-owner handoff.
+    if (snapshot) initial = await status(desktop: true);
+    return (client: client, status: initial);
   } on RpcError catch (error) {
     if (error.code == RpcErrorCode.unavailable &&
         error.message == _serviceClosingMessage) {
@@ -1693,7 +1736,6 @@ Future<ServiceClient> _connectCompatibleService(
     await client.close();
     rethrow;
   }
-  return client;
 }
 
 bool _profileOwnerAvailable(
@@ -1827,6 +1869,22 @@ Future<File> writeServiceStartupEnvironment(
 Future<ServiceClient> ensureService(
   ProfilePaths profile, {
   Duration startupTimeout = const Duration(minutes: 3),
+}) async =>
+    (await _ensureService(profile, startupTimeout: startupTimeout)).client;
+
+/// Reserve desktop socket lifetime and obtain its final startup snapshot.
+/// This does not grant the visible desktop's approval-host capability.
+/// Closing/transport failures here use the original startup deadline and owner
+/// handoff; no business operation is retried.
+Future<ServiceStartup> ensureServiceSnapshot(
+  ProfilePaths profile, {
+  Duration startupTimeout = const Duration(minutes: 3),
+}) => _ensureService(profile, startupTimeout: startupTimeout, snapshot: true);
+
+Future<ServiceStartup> _ensureService(
+  ProfilePaths profile, {
+  required Duration startupTimeout,
+  bool snapshot = false,
 }) async {
   if (startupTimeout <= Duration.zero ||
       startupTimeout > const Duration(minutes: 3)) {
@@ -1927,8 +1985,10 @@ Future<ServiceClient> ensureService(
         final record = readEndpointRecord(profile);
         ignoredRecord = record is EndpointInvalid ? record.reason : null;
         return await _connectCompatibleService(
+          profile,
           serviceEndpoint(profile, record),
           remaining,
+          snapshot: snapshot,
         );
       } on _ClosingService catch (closing) {
         closingOwner = true;
