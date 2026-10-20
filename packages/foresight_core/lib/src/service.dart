@@ -783,14 +783,7 @@ class ApplicationService {
           0) {
         throw StateError('Cannot protect profile ownership lock');
       }
-      try {
-        lock.lockSync(FileLock.exclusive);
-      } on FileSystemException catch (error) {
-        if (!_lockContended(error)) rethrow;
-        throw ServiceOwnershipContended(
-          'Another application service owns this profile: $error',
-        );
-      }
+      await acquireProfileOwnership(lock);
     } catch (_) {
       lock.closeSync();
       rethrow;
@@ -2039,6 +2032,33 @@ Future<void> _runApplicationServiceWorker(List<Object?> configuration) async {
 /// Another process holds the profile lock, so this owner did not start.
 class ServiceOwnershipContended extends StateError {
   ServiceOwnershipContended(super.message);
+}
+
+/// Take the profile [lock] for an owner that is starting. A launcher's lock
+/// probe, or `--stop`'s, holds it only for a moment, so contention is retried
+/// briefly; a lock still held after [attempts] belongs to another owner.
+/// [onBusy] observes each contended attempt that will be retried.
+Future<void> acquireProfileOwnership(
+  RandomAccessFile lock, {
+  int attempts = 10,
+  Duration retryDelay = const Duration(milliseconds: 20),
+  void Function()? onBusy,
+}) async {
+  for (var attempt = 1; ; attempt++) {
+    try {
+      lock.lockSync(FileLock.exclusive);
+      return;
+    } on FileSystemException catch (error) {
+      if (!_lockContended(error)) rethrow;
+      if (attempt >= attempts) {
+        throw ServiceOwnershipContended(
+          'Another application service owns this profile: $error',
+        );
+      }
+      onBusy?.call();
+      await Future<void>.delayed(retryDelay);
+    }
+  }
 }
 
 class _ClosingService implements Exception {

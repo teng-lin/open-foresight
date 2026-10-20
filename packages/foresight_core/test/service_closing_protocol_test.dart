@@ -1163,8 +1163,12 @@ void main() {
       ).timeout(startupBound);
       expect(run.exitCode, isNot(0));
       expect(run.stderr, contains('Another application service owns'));
-      // Its launcher keeps waiting for the owner that holds the lock.
+      // Its launcher keeps waiting for the owner that holds the lock. The
+      // file is absent because the start chose not to record it, not because
+      // the status path was rejected or could not be written.
       expect(status.existsSync(), isFalse);
+      expect(run.stderr, isNot(contains('Ignoring a startup status')));
+      expect(run.stderr, isNot(contains('Cannot record')));
     } finally {
       holder.kill(ProcessSignal.sigkill);
       await holder.exitCode.timeout(startupBound);
@@ -1204,6 +1208,64 @@ void main() {
         {'startup-fresh.json', 'startup-dir.json'},
       );
       expect(target.readAsStringSync(), 'kept');
+    },
+  );
+
+  test(
+    'an owner waits out a momentary lock probe but not another owner (L3)',
+    () async {
+      final profile = newProfile('of-probed-');
+      privateDirectory(profile.data);
+      final path = '${profile.data}/.application.lock';
+      File(path).writeAsStringSync('');
+      Future<Process> holdLock() async {
+        // Another process holds the lock until its stdin closes.
+        final holder = await Process.start('python3', [
+          '-c',
+          'import fcntl,sys\nf=open(sys.argv[1],"a")\n'
+              'fcntl.lockf(f,fcntl.LOCK_EX)\nprint("locked",flush=True)\n'
+              'sys.stdin.read()',
+          path,
+        ]);
+        addTearDown(() => holder.kill(ProcessSignal.sigkill));
+        expect(
+          await utf8.decoder
+              .bind(holder.stdout)
+              .transform(const LineSplitter())
+              .first,
+          'locked',
+        );
+        return holder;
+      }
+
+      final lock = File(path).openSync(mode: FileMode.append);
+      try {
+        // A probe (another launcher's, or --stop's) ends after the first
+        // contended attempt: the owner takes the lock on a later one.
+        final probe = await holdLock();
+        var busy = 0;
+        await acquireProfileOwnership(
+          lock,
+          attempts: 1000,
+          onBusy: () {
+            if (busy++ == 0) unawaited(probe.stdin.close());
+          },
+        );
+        expect(busy, greaterThan(0));
+        lock.unlockSync();
+        await probe.exitCode.timeout(startupBound);
+        // An owner holds it throughout: the start gives up after its bound.
+        final owner = await holdLock();
+        busy = 0;
+        await expectLater(
+          acquireProfileOwnership(lock, attempts: 3, onBusy: () => busy++),
+          throwsA(isA<ServiceOwnershipContended>()),
+        );
+        expect(busy, 2);
+        await owner.stdin.close();
+      } finally {
+        lock.closeSync();
+      }
     },
   );
 }
