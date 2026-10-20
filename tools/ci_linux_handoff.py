@@ -22,7 +22,8 @@ import tarfile
 import tempfile
 import zipfile
 
-EXCLUDED = {".git", ".venv", "build/_deps"}
+# Packaged installers and their bundle travel separately; tests consume build/.
+EXCLUDED = {".git", ".venv", "build/_deps", "dist"}
 EXTERNAL_LINK_ROOTS = ("/opt/", "/usr/")
 
 

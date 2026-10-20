@@ -55,12 +55,16 @@ def test_real_make_handoff_between_runner_filesystems_is_idle(compiled, tmp_path
     (root / "native-link").symlink_to("build/app")
     (root / ".git").mkdir()
     (root / ".git/config").write_text("not exported")
+    packaged = root / "dist/open-foresight"
+    packaged.mkdir(parents=True)
+    shutil.copy2(original, packaged / "app")
+    (root / "dist/installer.tar.gz").write_bytes(b"separately uploaded installer")
     seed = tmp_path / "verified-seed"
     shutil.copytree(root / "build/_deps", seed, copy_function=shutil.copy2)
     archive = tmp_path / "handoff"
     manifest = handoff.pack(root, archive, "a" * 40, inputs)
     assert not any(
-        name.startswith((".git", "build/_deps")) for name in manifest["files"]
+        name.startswith((".git", "build/_deps", "dist")) for name in manifest["files"]
     )
     # Both isolated runners mount their independent tree at /src. Replace this
     # entire filesystem with the dependency-only image, preserving that path.
@@ -68,6 +72,7 @@ def test_real_make_handoff_between_runner_filesystems_is_idle(compiled, tmp_path
     shutil.copytree(seed, root / "build/_deps", copy_function=shutil.copy2)
     retained = handoff.digest(root / "build/_deps/vendor-build/libdep.a")
     handoff.restore(archive, root, "a" * 40, inputs)
+    assert not (root / "dist").exists()
     assert handoff.digest(original) == checksum
     assert original.stat().st_mtime_ns == stamp
     assert handoff.digest(root / "build/_deps/vendor-build/libdep.a") == retained

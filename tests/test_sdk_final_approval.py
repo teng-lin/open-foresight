@@ -51,6 +51,8 @@ class Evidence:
             return self.pull
         if path == f"compare/{ORIGINAL}...{FINAL}":
             return {"status": self.status}
+        if path == f"compare/{MERGE}...main":
+            return {"status": "identical"}
         if path.startswith("pulls/119/commits?"):
             page = int(path.rsplit("=", 1)[1])
             return self.members[(page - 1) * 100 : page * 100]
@@ -276,6 +278,25 @@ def test_sdk_squash_merge_api_failure_is_fatal():
         evidence.qualify()
 
 
+@pytest.mark.parametrize("part", ["build", "control", "mode"])
+def test_squash_proof_still_requires_original_to_final_equivalence(part):
+    evidence = Evidence()
+    evidence.approved = False
+    evidence.pull["merge_commit_sha"] = MERGE
+    evidence.identities[MERGE] = evidence.identities[FINAL]
+    evidence.controls[MERGE] = copy.deepcopy(evidence.controls[FINAL])
+    if part == "build":
+        evidence.identities[ORIGINAL] = "incompatible-original"
+        message = "build inputs differ"
+    else:
+        evidence.controls[ORIGINAL]["pack.py"] = (
+            ("100755", b"reviewed") if part == "mode" else ("100644", b"unreviewed")
+        )
+        message = "producer controls changed"
+    with pytest.raises(ValueError, match=message):
+        evidence.qualify()
+
+
 def test_changed_build_or_control_requires_review_not_cold_build():
     evidence = Evidence()
     evidence.identities[FINAL] = "different-build"
@@ -450,6 +471,7 @@ def test_original_head_approval_remains_strictly_separate():
         ("unrelated", False, 1),
         ("unmerged", False, 0),
         ("unapproved", False, 0),
+        ("squash_base_change", True, 0),
         ("fork_head", False, 0),
         ("fork_base", False, 0),
         ("wrong_repository", False, 0),
@@ -485,6 +507,12 @@ def test_all_callers_share_final_source_boundary(
         evidence.pull["merged_at"] = None
     elif case == "unapproved":
         evidence.approved = False
+    elif case == "squash_base_change":
+        evidence.approved = False
+        evidence.pull["merge_commit_sha"] = MERGE
+        evidence.identities[MERGE] = evidence.identities[FINAL]
+        evidence.controls[MERGE] = copy.deepcopy(evidence.controls[FINAL])
+        expected = caller == "sdk"
     elif case in ("fork_head", "fork_base"):
         evidence.pull[case.removeprefix("fork_")]["repo"]["full_name"] = "fork/repo"
     elif case == "wrong_repository":

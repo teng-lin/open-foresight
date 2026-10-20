@@ -60,7 +60,11 @@ Other original SDK artifacts may qualify after their PR merges when immutable
 Git evidence relates the producer to the approved final PR head, the consumer
 computes identical component build identities, and all producer-control files
 (including the dependency workflow) have identical bytes and modes. The final
-head must pass the authoritative merge-tree and main-reachability proof. This
+head must pass the authoritative merge-tree and main-reachability proof. When a
+squash merge includes unrelated changes from an advanced base, SDK qualification
+instead requires the authoritative merge commit to be reachable from main and
+its complete component build identity and producer-control bytes/modes to equal
+the approved final head's. Original-to-final equivalence remains mandatory. This
 retains the original receipt, source, successful attempt and payload checksums;
 it does not relabel the output as a new build. Changed build inputs or controls
 require a compatibility review and preserve the artifact rather than silently
@@ -73,7 +77,9 @@ merged-source proof, and limits PR commit history to three 100-entry pages
 (GitHub exposes at most 250 commits). Each consumer still checks its own build
 and control equivalence. The exact-manifest historical SDK approval bridge
 retains its separate policy and history bound. Qualification refactors do not
-change SDK build identities: existing approved merged producers and exact
+change SDK build identities. Only SDK callers may supply the scoped merged-input
+equivalence proof; compiler-work and sanitizer callers retain the whole-tree
+proof. Existing approved merged producers and exact
 manifest originals keep their verified reuse paths, original receipts and bytes.
 
 ## Consumer-scoped producer trust (WS2-0)
@@ -1042,7 +1048,8 @@ The input identity covers the SDK image ID, dependency-seed qualification digest
 CI/dependency Docker recipe and pinned Ubuntu snapshot. A rebuilt CI image may
 have another image ID; its recorded inputs must still match exactly. The handoff
 archive preserves source and build bytes, modes, symlinks and nanosecond timestamps,
-excluding `.git`, virtual environments and `build/_deps`. The second runner keeps
+excluding `.git`, virtual environments, `build/_deps` and the separately uploaded
+`dist` bundle/installers. The second runner keeps
 its independently verified seed at that same `/src/build/_deps` path. Before any
 restore or execution, API provenance checks bind the artifact to its repository,
 workflow, original successful job/attempt and upload window, and verify the actual
