@@ -850,18 +850,21 @@ def test_two_headless_mcp_launchers_share_one_automatically_started_owner(runnin
 
 
 def assert_no_late_owner(data, runtime, quiet=2.0):
-    """For `quiet` seconds, no process holds the profile lock or serves."""
-    lock = data / ".application.lock"
+    """For `quiet` seconds no process serves, and then none holds the lock.
+
+    Probing the lock during the window could make a late start lose it and
+    hide; only the socket is watched until the single final probe.
+    """
     until = time.monotonic() + quiet
     while time.monotonic() < until:
         assert not (runtime / "application.sock").exists(), "a late owner serves"
-        with lock.open("a") as probe:
-            try:
-                fcntl.lockf(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError:
-                pytest.fail("a late owner holds the profile lock")
-            fcntl.lockf(probe, fcntl.LOCK_UN)
         threading.Event().wait(0.05)
+    with (data / ".application.lock").open("a") as probe:
+        try:
+            fcntl.lockf(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            pytest.fail("a late owner holds the profile lock")
+        fcntl.lockf(probe, fcntl.LOCK_UN)
 
 
 def test_cancelled_model_setup_preserves_previous_registration(running):

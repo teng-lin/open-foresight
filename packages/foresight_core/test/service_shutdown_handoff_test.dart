@@ -130,7 +130,7 @@ Future<void> main() async {
       if (old && Platform.environment['ERROR_MESSAGE'] == 'healthy-then-stall') { stdout.writeln('final-observed'); return; }
       if (old && Platform.environment['ERROR_MESSAGE'] == 'healthy-then-malformed') { socket.writeln('not-json'); stdout.writeln('final-observed'); return; }
       if (old || Platform.environment['REPLACEMENT_CLOSING'] == '1') {
-        socket.writeln(jsonEncode({'id': request['id'], 'error': {'code': 'unavailable', 'message': Platform.environment['ERROR_MESSAGE'] == 'healthy-then-closing' ? 'Application service is shutting down; retry after it exits.' : Platform.environment['ERROR_MESSAGE'] ?? 'Application service is shutting down; retry after it exits.'}, 'done': true}));
+        socket.writeln(jsonEncode({'id': request['id'], 'error': Platform.environment['ERROR_MESSAGE'] == 'healthy-then-unknown' ? {'code': 'unavailable', 'message': 'Application service stopped before this request finished; it may or may not have completed.', 'reason': 'outcomeUnknown'} : {'code': 'unavailable', 'message': Platform.environment['ERROR_MESSAGE'] == 'healthy-then-closing' ? 'Application service is shutting down; retry after it exits.' : Platform.environment['ERROR_MESSAGE'] ?? 'Application service is shutting down; retry after it exits.'}, 'done': true}));
         if (old) { stdout.writeln('closing-observed'); }
         else { unawaited(socket.flush().then((_) {
           File('$data/closing-replied').writeAsStringSync(jsonEncode({'pid': pid, 'method': request['method'], 'message': 'Application service is shutting down; retry after it exits.'}));
@@ -628,6 +628,42 @@ void main() {
           'launch',
         ]);
       } finally {
+        await f.close();
+      }
+    },
+  );
+
+  test(
+    'desktop final status that the owner ends as outcomeUnknown hands off to '
+    'one replacement',
+    () async {
+      // A status the owner answered as it began closing: read-only, so the
+      // snapshot waits for that owner and follows the handoff.
+      final f = HandoffFixture();
+      await f.start(errorMessage: 'healthy-then-unknown');
+      Store('${f.profile.data}/application.db').close();
+      RemoteDomain? domain;
+      try {
+        final pending = RemoteDomain.connect(
+          f.profile,
+        ).then((value) => domain = value);
+        final success = expectLater(pending, completes);
+        await f.next('healthy-observed');
+        await f.next('closing-observed');
+        expect(f.launched, isFalse);
+        await f.release();
+        final connected = await pending.timeout(const Duration(seconds: 15));
+        await success;
+        expect(
+          (await connected.client.call('status') as Map)['pid'],
+          isNot(f.old.pid),
+        );
+        expect(File('${f.profile.data}/launches').readAsLinesSync(), [
+          'launch',
+        ]);
+      } finally {
+        domain?.close();
+        domain?.store.close();
         await f.close();
       }
     },

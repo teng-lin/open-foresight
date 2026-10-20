@@ -132,6 +132,8 @@ void main() {
           ..addAll(original);
       }
     },
+    // Above the 60 s bound on the index request, so that bound decides.
+    timeout: const Timeout(Duration(minutes: 2)),
   );
 
   for (final adopted in [false, true]) {
