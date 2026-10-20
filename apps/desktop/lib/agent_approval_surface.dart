@@ -20,7 +20,10 @@ class AgentApprovalSurface extends StatefulWidget {
 class _AgentApprovalSurfaceState extends State<AgentApprovalSurface>
     with WidgetsBindingObserver {
   Future<void> _queue = Future.value();
+  // Closed before their dialog could show; only queued IDs are recorded, so
+  // a later request that reuses an ID is never swallowed.
   final _closed = <String>{};
+  final _queued = <String>{};
   String? _activeId;
   DialogRoute<bool>? _route;
   String? _failure;
@@ -55,16 +58,18 @@ class _AgentApprovalSurfaceState extends State<AgentApprovalSurface>
   void _event(Map<String, dynamic> event) {
     final id = event['approval_id'] as String;
     if (event['event'] == 'approval_closed') {
-      _closed.add(id);
+      if (_queued.contains(id) || _activeId == id) _closed.add(id);
       if (_activeId == id && _route?.isActive == true)
         Navigator.of(context).removeRoute(_route!);
       return;
     }
+    _queued.add(id);
     _queue = _queue.then((_) => _show(event)).catchError((Object _) {});
   }
 
   Future<void> _show(Map<String, dynamic> event) async {
     final id = event['approval_id'] as String;
+    _queued.remove(id);
     if (!mounted || _closed.remove(id)) return;
     if (!widget.allowAgentRequests) {
       await widget.domain.command(Operation.securityDecide, {

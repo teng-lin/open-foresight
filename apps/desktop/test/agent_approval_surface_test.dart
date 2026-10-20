@@ -92,6 +92,45 @@ void main() {
   });
 
   testWidgets(
+    'a decided approval ID that a replacement owner reuses is shown',
+    (tester) async {
+      final domain = ApprovalDomain();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: AgentApprovalSurface(
+            domain: domain,
+            child: const Scaffold(body: Text('Workspace')),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      Map<String, dynamic> approval() => {
+        'event': 'approval',
+        'approval_id': 'approval-1',
+        'method': 'sources.delete',
+        'args': {'id': 'source'},
+      };
+      domain.events!(approval());
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Allow once'));
+      await tester.pumpAndSettle();
+      expect(domain.client.decisions.single['approval_id'], 'approval-1');
+      // The owner closes the decided request, then a replacement owner, whose
+      // IDs start over, asks again under the same ID.
+      domain.events!({'event': 'approval_closed', 'approval_id': 'approval-1'});
+      domain.events!(approval());
+      await tester.pumpAndSettle();
+      expect(find.text('Allow this operation?'), findsOneWidget);
+      await tester.tap(find.text('Deny'));
+      await tester.pumpAndSettle();
+      expect(domain.client.decisions.last, {
+        'approval_id': 'approval-1',
+        'allow': false,
+      });
+    },
+  );
+
+  testWidgets(
     'setup keeps the desktop authenticated while denying external agent requests',
     (tester) async {
       final domain = ApprovalDomain();
