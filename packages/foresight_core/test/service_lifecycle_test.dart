@@ -226,13 +226,10 @@ void main() {
         // The frontend still accepts, then closes without any reply.
         latecomer = await ServiceClient.connect(serviceEndpoint(profile));
         await expectLater(latecomer.call('status'), throwsA(isTransportLoss));
-        // Startup retries while the lock is held. Its second probe follows a
-        // complete lock probe, so it has decided not to launch.
-        final secondProbe = proxy.seen(
-          ProxyDirection.toService,
-          method: 'status',
-          count: 2,
-        );
+        // Startup retries while the lock is held. The frontend accepts each
+        // connection and drops it, so its second connection follows a
+        // complete lock probe: startup has decided not to launch.
+        final secondProbe = proxy.attempt(refused: false, count: 2);
         final pending = proxy.run(
           () => ensureService(profile, startupTimeout: startupBound),
         );

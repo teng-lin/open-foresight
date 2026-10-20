@@ -338,8 +338,8 @@ class HandoffFixture {
         );
       }
       await messages.cancel();
-      await proxy.close();
     } finally {
+      await proxy.close();
       runtimeConfiguration.environment
         ..clear()
         ..addAll(environment);

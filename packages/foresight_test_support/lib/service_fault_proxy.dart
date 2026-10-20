@@ -13,33 +13,40 @@ import 'test_paths.dart';
 enum ProxyDirection { toService, toClient }
 
 /// One newline-delimited frame seen by the proxy, without its newline.
+///
+/// The proxy keeps only the bytes and a few routing fields. [text], [json]
+/// and [error] decode on each access, so the frame log never holds a parsed
+/// copy of a large reply.
 class ServiceFrame {
   ServiceFrame._(
     this.connection,
     this.direction,
     this.bytes,
-    this.json,
+    this.id,
     this.method,
-  ) : text = utf8.decode(bytes, allowMalformed: true);
+    this.event,
+    this.done,
+  );
 
   final ProxyConnection connection;
   final ProxyDirection direction;
   final Uint8List bytes;
-  final String text;
-
-  /// The decoded frame, or null when it is not a JSON object.
-  final Map<String, Object?>? json;
+  final int? id;
 
   /// A request's method; for a reply, the method of the request it answers.
   final String? method;
+  final String? event;
+  final bool done;
 
-  int? get id => json?['id'] is int ? json!['id'] as int : null;
-  String? get event =>
-      json?['event'] is String ? json!['event'] as String : null;
-  bool get done => json?['done'] == true;
-  Map<String, Object?>? get error => json?['error'] is Map
-      ? Map<String, Object?>.from(json!['error'] as Map)
-      : null;
+  String get text => utf8.decode(bytes, allowMalformed: true);
+
+  /// The decoded frame, or null when it is not a JSON object.
+  Map<String, Object?>? get json => _object(bytes);
+
+  Map<String, Object?>? get error {
+    final value = json?['error'];
+    return value is Map ? Map<String, Object?>.from(value) : null;
+  }
 
   @override
   String toString() =>
@@ -100,7 +107,13 @@ class ProxyHold {
 ///
 /// Only connects made through `Socket.connect` inside [run] are relayed, so
 /// it covers `ensureService`, `ServiceClient`, `ServiceConnection` and
-/// `RemoteDomain` in this isolate, not other processes or isolates.
+/// `RemoteDomain` in this isolate, not other processes or isolates (for
+/// example an MCP subprocess).
+///
+/// When either peer closes, the proxy forwards what it sent and then closes
+/// the other side completely, because the service and `ServiceClient` both
+/// destroy their sockets: the other side sees EOF and its later writes fail.
+/// Only [truncate] leaves a half-closed connection.
 class ServiceFaultProxy {
   ServiceFaultProxy({bool Function(String path)? endpoint})
     : _endpoint = endpoint ?? ((path) => path.endsWith('/application.sock'));
@@ -303,16 +316,18 @@ class ServiceFaultProxy {
       _record(ProxyConnectAttempt._(address.address, error, null));
       rethrow;
     }
-    // Pair the caller with a private relay socket under a short path.
-    final directory = (await _directory)!;
-    final relayPath = '${directory.path}/${_relays++}.sock';
-    final server = await ServerSocket.bind(
-      InternetAddress(relayPath, type: InternetAddressType.unix),
-      0,
-    );
-    final accepted = Completer<Socket>();
-    final subscription = server.listen(accepted.complete);
+    ServerSocket? server;
+    StreamSubscription<Socket>? accepting;
     try {
+      // Pair the caller with a private relay socket under a short path.
+      final directory = (await _directory)!;
+      final relayPath = '${directory.path}/${_relays++}.sock';
+      server = await ServerSocket.bind(
+        InternetAddress(relayPath, type: InternetAddressType.unix),
+        0,
+      );
+      final accepted = Completer<Socket>();
+      accepting = server.listen(accepted.complete);
       final client = await Socket.connect(
         InternetAddress(relayPath, type: InternetAddressType.unix),
         0,
@@ -327,13 +342,15 @@ class ServiceFaultProxy {
       );
       connections.add(connection);
       _record(ProxyConnectAttempt._(address.address, null, connection));
+      // close() may have run while this connection was being set up.
+      if (_closed) connection.destroy();
       return client;
     } catch (_) {
       upstream.destroy();
       rethrow;
     } finally {
-      await subscription.cancel();
-      await server.close();
+      await accepting?.cancel();
+      await server?.close();
     }
   }
 
@@ -399,7 +416,6 @@ class ProxyConnection {
   final Socket _service;
   final _methods = <int, String>{};
   final _stopped = <ProxyDirection>{};
-  final _ended = <ProxyDirection>{};
   final _endings = {
     for (final direction in ProxyDirection.values) direction: Completer<void>(),
   };
@@ -470,7 +486,8 @@ class ProxyConnection {
     Future<void> deliver(ServiceFrame frame) async {
       if (_stopped.contains(direction)) return;
       if (!await _proxy._apply(frame) || _stopped.contains(direction)) return;
-      _write(target, [...frame.bytes, 10]);
+      _write(target, frame.bytes);
+      _write(target, const [10]);
       _proxy._forwarded(frame);
     }
 
@@ -481,14 +498,19 @@ class ProxyConnection {
           if (chunk[i] != 10) continue;
           partial.add(Uint8List.sublistView(chunk, start, i));
           final bytes = partial.takeBytes();
+          // Decode once for routing; only the small fields are kept.
           final json = ServiceFrame._object(bytes);
+          final id = json?['id'];
+          final event = json?['event'];
           // Log on arrival, so frames queued behind a hold are visible.
           final frame = ServiceFrame._(
             this,
             direction,
             bytes,
-            json,
+            id is int ? id : null,
             _method(direction, json),
+            event is String ? event : null,
+            json?['done'] == true,
           );
           _proxy.frames.add(frame);
           enqueue(() => deliver(frame));
@@ -506,19 +528,21 @@ class ProxyConnection {
         // The sender has closed, even if earlier frames are still held.
         if (!_endings[direction]!.isCompleted) _endings[direction]!.complete();
         enqueue(() async {
-          // Preserve a real peer's partial frame and EOF exactly.
+          // Preserve a real peer's trailing partial frame exactly.
           final rest = partial.takeBytes();
           if (!_stopped.contains(direction)) {
             if (rest.isNotEmpty) _write(target, rest);
             try {
               await target.flush();
-              await target.close();
             } catch (_) {
               /* The receiver already closed. */
             }
           }
-          _ended.add(direction);
-          if (_ended.length == ProxyDirection.values.length) destroy();
+          // The service and ServiceClient close by destroying their sockets,
+          // never by half-closing. Mirror that: the other side sees EOF, and
+          // its later writes fail as they would against the real peer. Only
+          // truncate() half-closes.
+          destroy();
         });
       },
       cancelOnError: true,

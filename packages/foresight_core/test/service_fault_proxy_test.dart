@@ -224,6 +224,32 @@ void main() {
     }
   });
 
+  test('after a peer closes, later client writes fail as they would', () async {
+    final socket = await proxy.run(
+      () => Socket.connect(
+        InternetAddress(service.path, type: InternetAddressType.unix),
+        0,
+      ),
+    );
+    final received = socket.fold<List<int>>(
+      [],
+      (bytes, chunk) => bytes..addAll(chunk),
+    );
+    try {
+      socket.writeln(jsonEncode({'id': 1, 'method': 'status', 'args': {}}));
+      await proxy.seen(ProxyDirection.toClient, method: 'status');
+      service.peers.single.destroy();
+      // The reply arrives, then EOF, as from the real peer.
+      expect(utf8.decode(await received), contains('"method":"status"'));
+      await proxy.connections.single.closed;
+      // The relay closed its side completely, not just its write side.
+      socket.writeln(jsonEncode({'id': 2, 'method': 'status', 'args': {}}));
+      await expectLater(socket.done, throwsA(isA<SocketException>()));
+    } finally {
+      socket.destroy();
+    }
+  });
+
   test('a client close reaches the service as EOF', () async {
     final client = await proxy.run(() => ServiceClient.connect(service.path));
     expect(await client.call('status'), {'method': 'status'});
