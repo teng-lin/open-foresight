@@ -500,6 +500,32 @@ void main() {
     expect(() => privateDirectory(alias.path), throwsStateError);
     Process.runSync('/bin/chmod', ['755', path]);
     expect(() => privateDirectory(path), throwsStateError);
+    // Something other than a directory in the way, or a parent it cannot
+    // write, fails with the reason instead of being accepted.
+    final file = File('${scratch.path}/private-file')..writeAsStringSync('');
+    Process.runSync('/bin/chmod', ['600', file.path]);
+    expect(
+      () => privateDirectory(file.path),
+      throwsA(isA<FileSystemException>()),
+    );
+    expect(
+      () => privateDirectory(file.path, repairOwnedPermissions: true),
+      throwsA(isA<FileSystemException>()),
+    );
+    expect(file.statSync().mode & 0x1ff, 0x180);
+    final sealed = Directory('${scratch.path}/sealed')..createSync();
+    Process.runSync('/bin/chmod', ['500', sealed.path]);
+    try {
+      if (Process.runSync('/usr/bin/id', ['-u']).stdout.toString().trim() !=
+          '0') {
+        expect(
+          () => privateDirectory('${sealed.path}/run'),
+          throwsA(isA<FileSystemException>()),
+        );
+      }
+    } finally {
+      Process.runSync('/bin/chmod', ['700', sealed.path]);
+    }
   });
 
   test(
@@ -513,7 +539,13 @@ void main() {
         final port = ReceivePort();
         final messages = StreamIterator(port);
         try {
-          await Isolate.spawn(_publicModesSeen, [path, port.sendPort]);
+          await Isolate.spawn(
+            _publicModesSeen,
+            [path, port.sendPort],
+            // A watcher that fails reports here instead of leaving the test
+            // waiting.
+            onError: port.sendPort,
+          );
           expect(await messages.moveNext(), isTrue);
           expect(messages.current, 'watching');
           privateDirectory(path);

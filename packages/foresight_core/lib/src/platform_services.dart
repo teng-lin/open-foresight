@@ -231,12 +231,20 @@ void privateDirectory(String path, {bool repairOwnedPermissions = false}) {
     // the endpoint while its owner starts, which then refuses it.
     final nativePath = path.toNativeUtf8(allocator: calloc);
     try {
-      // Another creator may win the race; the checks below decide either way.
-      if (_mkdir(nativePath, 0x1c0) == 0 &&
-          (dir.statSync().mode & 0x1ff) != 0x1c0 &&
-          _chmod(nativePath, 0x1c0) != 0) {
-        throw StateError('Cannot protect $path');
+      if (_mkdir(nativePath, 0x1c0) == 0) {
+        // A umask stricter than 077 can strip the owner's own bits.
+        if ((dir.statSync().mode & 0x1ff) != 0x1c0 &&
+            _chmod(nativePath, 0x1c0) != 0) {
+          throw StateError('Cannot protect $path');
+        }
+      } else if (FileSystemEntity.typeSync(path, followLinks: false) !=
+          FileSystemEntityType.directory) {
+        // Not another creator winning the race. Creating it again reports
+        // the reason, such as a file in the way or an unwritable parent.
+        dir.createSync();
+        throw FileSystemException('Cannot create private directory', path);
       }
+      // Otherwise another creator won the race; the checks below decide.
     } finally {
       calloc.free(nativePath);
     }
