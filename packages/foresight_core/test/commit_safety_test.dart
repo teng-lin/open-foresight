@@ -56,12 +56,14 @@ void main() {
           secretStore: const UnavailableSecretStore(),
         ),
       );
-    });
-    tearDown(() async {
-      await app.close();
-      domain.close();
-      await helper.close();
-      store.close();
+      // Close before the temporary directory goes: tear-downs run last in,
+      // first out, and macOS SQLite fails a query on an unlinked database.
+      addTearDown(() async {
+        await app.close();
+        domain.close();
+        await helper.close();
+        store.close();
+      });
     });
 
     Future<Map> call(String method, [Map<String, dynamic> args = const {}]) =>
