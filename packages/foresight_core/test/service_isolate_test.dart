@@ -462,6 +462,8 @@ void main() {
           ..addAll(saved);
       }
     },
+    // Above the 60 s gate wait and the 30 s waits, so a hang reports which.
+    timeout: const Timeout(Duration(minutes: 3)),
   );
 
   test('a frontend whose worker died never unlinks a socket that replaced its '
@@ -528,5 +530,6 @@ void main() {
         ..clear()
         ..addAll(saved);
     }
-  });
+    // Above the 60 s gate wait, so a hang reports it.
+  }, timeout: const Timeout(Duration(minutes: 2)));
 }
