@@ -16,7 +16,6 @@ void main() {
     tester,
   ) async {
     final fixture = RemoteFixture();
-    fixture.status['workspace_epoch'] = 'before-clear';
     await tester.runAsync(fixture.start);
     addTearDown(() => tester.runAsync(fixture.close));
     fixture.handler = (socket, request) => fixture.reply(socket, request, null);
@@ -30,7 +29,10 @@ void main() {
       state.meetingFeature.noteTitle.text = 'Note 3';
       state.meetingFeature.noteBody.text = 'Body of note 3';
     });
-    fixture.event({...fixture.status, 'workspace_epoch': 'after-clear'});
+    // The clear commits to the profile before its event arrives.
+    fixture.owner.renewWorkspaceEpoch();
+    final cleared = fixture.owner.workspaceEpoch;
+    fixture.event({...fixture.status, 'workspace_epoch': cleared});
     await pumpUntil(tester, () => state.meetingFeature.noteId == null);
     expect(state.meetingFeature.noteTitle.text, isEmpty);
     expect(state.meetingFeature.noteBody.text, isEmpty);
@@ -44,7 +46,7 @@ void main() {
     );
     expect(
       fixture.requests.last['args'],
-      containsPair('workspace_epoch', 'after-clear'),
+      containsPair('workspace_epoch', cleared),
     );
     await tester.runAsync(fixture.remote.helper.close);
     await tester.pumpWidget(const SizedBox.shrink());

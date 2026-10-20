@@ -90,14 +90,24 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
   bool get webSearchAvailable => _webSearchAvailable;
   StreamSubscription<Map<String, dynamic>>? _events;
   String? _workspaceEpoch, _serviceEpoch;
-  // Epochs are random and a clear never brings one back, so an event that
-  // carries a replaced epoch is late and must not reset the views again.
-  final _replacedEpochs = <String>{};
-  void _observeEpoch(String epoch) {
-    if (epoch == _serviceEpoch || _replacedEpochs.contains(epoch)) return;
-    final previous = _serviceEpoch;
-    if (previous != null) _replacedEpochs.add(previous);
-    _serviceEpoch = epoch;
+
+  /// An event or status names an epoch other than the current one. It can
+  /// be late, from a connection a reconnect replaced, or predate a clear,
+  /// so the profile's database decides which epoch is current: a late
+  /// event must neither reset the views again nor take the epoch back.
+  void _observeEpoch(String reported) {
+    if (reported == _serviceEpoch) return;
+    final stored = _storedEpoch();
+    _serviceEpoch = stored.isEmpty ? reported : stored;
+  }
+
+  String _storedEpoch() {
+    try {
+      return store.workspaceEpoch;
+    } catch (_) {
+      // A store that cannot be read, or is closed, leaves the service's word.
+      return '';
+    }
   }
 
   @override
@@ -177,9 +187,9 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
   /// startup status can predate a clear among them. The profile already
   /// holds that clear's epoch, so read it once the connection is listened to.
   void _recheckWorkspace() {
-    final stored = store.workspaceEpoch;
+    final stored = _storedEpoch();
     if (stored.isEmpty || stored == _serviceEpoch) return;
-    _observeEpoch(stored);
+    _serviceEpoch = stored;
     _workspaceEpoch ??= stored;
     helper.changed?.call();
   }

@@ -1149,8 +1149,10 @@ void main() {
         containsPair('workspace_epoch', 'dialog'),
       );
       // Another client clears the workspace; the open views still predate it.
-      f.event({...f.status, 'workspace_epoch': 'after-clear'});
+      f.owner.renewWorkspaceEpoch();
+      f.event({...f.status, 'workspace_epoch': f.owner.workspaceEpoch});
       await eventually(() => changes == 2);
+      expect(f.remote.workspaceReplaced, isTrue);
       expect(
         await sent(Operation.meetingsNotes, {'id': 3, 'body': 'stale'}),
         containsPair('workspace_epoch', before),
@@ -1163,16 +1165,15 @@ void main() {
     final before = f.owner.workspaceEpoch;
     expect(f.remote.workspaceEpoch, before);
     expect(f.remote.workspaceReplaced, isFalse);
-    f.event({...f.status, 'workspace_epoch': 'after-clear'});
+    f.owner.renewWorkspaceEpoch();
+    final after = f.owner.workspaceEpoch;
+    f.event({...f.status, 'workspace_epoch': after});
     await eventually(() => f.remote.workspaceReplaced);
     expect(f.remote.workspaceEpoch, before);
     f.remote.adoptWorkspace();
     expect(f.remote.workspaceReplaced, isFalse);
     await f.remote.command(Operation.labelsSet, {'id': 'source', 'labels': []});
-    expect(
-      f.requests.last['args'],
-      containsPair('workspace_epoch', 'after-clear'),
-    );
+    expect(f.requests.last['args'], containsPair('workspace_epoch', after));
   });
 
   test('approvals open on a lost connection close when it drops', () async {
@@ -1292,6 +1293,41 @@ void main() {
     expect(resets, 0);
     expect(f.remote.workspaceReplaced, isFalse);
     expect(f.remote.workspaceEpoch, current);
+  });
+
+  test('a late event for a clear the desktop never saw does not strand the '
+      'epoch it was cleared past', () async {
+    f.handler = (socket, request) => f.reply(socket, request, null);
+    f.status['workspace_epoch'] = f.owner.workspaceEpoch;
+    // Two clears while the desktop is disconnected; it sees neither event.
+    f.owner.renewWorkspaceEpoch();
+    final skipped = f.owner.workspaceEpoch;
+    f.owner.renewWorkspaceEpoch();
+    final current = f.owner.workspaceEpoch;
+    // The reconnect reads the second clear from the profile.
+    f.sockets.last.destroy();
+    await eventually(() => f.remote.workspaceReplaced);
+    // The first clear's event arrives after that recheck.
+    f.sockets.last.writeln(
+      jsonEncode({'event': 'changed', 'workspace_epoch': skipped}),
+    );
+    f.sockets.last.writeln(
+      jsonEncode({'event': 'changed', 'sources_paused': true}),
+    );
+    await eventually(() => f.remote.sourcesPaused);
+    // The current epoch's own event must still count.
+    f.sockets.last.writeln(
+      jsonEncode({'event': 'changed', 'workspace_epoch': current}),
+    );
+    f.sockets.last.writeln(
+      jsonEncode({'event': 'changed', 'sources_paused': false}),
+    );
+    await eventually(() => !f.remote.sourcesPaused);
+    f.remote.adoptWorkspace();
+    expect(f.remote.workspaceReplaced, isFalse);
+    expect(f.remote.workspaceEpoch, current);
+    await f.remote.command(Operation.labelsSet, {'id': 'source', 'labels': []});
+    expect(f.requests.last['args'], containsPair('workspace_epoch', current));
   });
 
   test(
