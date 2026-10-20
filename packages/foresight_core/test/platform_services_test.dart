@@ -530,8 +530,13 @@ void main() {
         '$runtime/application.sock',
       );
       // A record naming a non-private runtime is never used. Clients fall back
-      // to their own runtime instead of failing on record content.
+      // to their own runtime instead of failing on record content, and that
+      // runtime must be private too.
       Process.runSync('/bin/chmod', ['755', runtime]);
+      expect(
+        () => serviceEndpoint(ProfilePaths(data, runtime)),
+        throwsStateError,
+      );
       final other = ProfilePaths(data, '${scratch.path}/other');
       expect(
         readEndpointRecord(other),

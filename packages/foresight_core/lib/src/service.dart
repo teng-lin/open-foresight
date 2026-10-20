@@ -131,15 +131,18 @@ EndpointRecord readEndpointRecord(ProfilePaths profile) {
   return EndpointValid(runtime);
 }
 
-/// Only a valid record redirects clients; otherwise they use their own runtime.
-String serviceEndpoint(ProfilePaths profile) =>
-    _endpointSocket(profile, readEndpointRecord(profile));
-
-String _endpointSocket(ProfilePaths profile, EndpointRecord record) =>
-    switch (record) {
-      EndpointValid(:final runtime) => '$runtime/application.sock',
-      _ => '${profile.runtime}/application.sock',
-    };
+/// Only a valid record redirects clients; otherwise they use their own runtime,
+/// which must be private just as a recorded one must. Pass [record] to reuse
+/// a record the caller has already read.
+String serviceEndpoint(ProfilePaths profile, [EndpointRecord? record]) {
+  if ((record ?? readEndpointRecord(profile)) case EndpointValid(
+    :final runtime,
+  )) {
+    return '$runtime/application.sock';
+  }
+  privateDirectory(profile.runtime);
+  return '${profile.runtime}/application.sock';
+}
 
 // Match the listed path's last segment, not its URI: a directory's URI ends
 // with a separator.
@@ -1825,7 +1828,7 @@ Future<ServiceClient> ensureService(
         final record = readEndpointRecord(profile);
         ignoredRecord = record is EndpointInvalid ? record.reason : null;
         return await _connectCompatibleService(
-          _endpointSocket(profile, record),
+          serviceEndpoint(profile, record),
           remaining,
         );
       } on _ClosingService catch (closing) {
