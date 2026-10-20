@@ -1567,7 +1567,10 @@ def process_gone(pid):
         # contain spaces or parentheses.
         return stat[stat.rindex(")") + 2] == "Z"
     state = subprocess.run(
-        ["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True
+        ["ps", "-o", "stat=", "-p", str(pid)],
+        capture_output=True,
+        text=True,
+        timeout=10,
     ).stdout.strip()
     return not state or state.startswith("Z")
 
