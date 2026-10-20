@@ -46,6 +46,9 @@ RUN apt-get -o Acquire::Retries=3 -o APT::Update::Error-Mode=any --snapshot "$UB
     apt-get -o Acquire::Retries=3 --snapshot "$UBUNTU_SNAPSHOT" install -y --no-install-recommends \
       xvfb xauth dbus-x11 libgl1-mesa-dri mesa-vulkan-drivers poppler-utils unrtf bubblewrap gh && \
     rm -rf /var/lib/apt/lists/*
+# The test image uses the flat scheduler by default; a runtime value of 0
+# retains the legacy sequence without rebuilding this image or its dependencies.
+ENV FORESIGHT_LINUX_TEST_SCHEDULE=1
 
 # Source revisions invalidate application work while the dependency tree above
 # stays reusable. Reconfiguration retains the same _deps paths and compiler flags.
