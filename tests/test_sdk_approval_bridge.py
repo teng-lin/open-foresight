@@ -5,6 +5,7 @@ from dataclasses import replace
 import hashlib
 import io
 import json
+import os
 import subprocess
 import zipfile
 
@@ -72,6 +73,10 @@ def test_deleted_original_is_skipped_but_api_failures_abort(
 
 @pytest.fixture
 def original(tmp_path, monkeypatch):
+    return historical_original(tmp_path, monkeypatch)
+
+
+def historical_original(tmp_path, monkeypatch):
     definition = (
         "FILES = {'linux-core': ['packaging/sdk-core.Dockerfile']}\n"
         "PRODUCER_INPUTS = ('tools/ci_artifacts.py', 'tools/pins.json')\n"
@@ -101,7 +106,8 @@ def original(tmp_path, monkeypatch):
         )
     )
 
-    # Packing remains real; only this fixture's checkout revision is supplied.
+    # Packing remains real; supply the historical producer's checkout and
+    # upload attempt independently of the current consumer's CI metadata.
     # The archive/receipt tests must also work in source exports without .git.
     def fixture_revision(command, **kwargs):
         assert command == ["git", "rev-parse", "HEAD"]
@@ -110,6 +116,7 @@ def original(tmp_path, monkeypatch):
 
     with monkeypatch.context() as packing:
         packing.setattr(artifacts.subprocess, "check_output", fixture_revision)
+        packing.setenv("GITHUB_RUN_ATTEMPT", "1")
         artifacts.pack("linux-core", legacy, prefix, tmp_path / "packed")
     receipt = json.loads((tmp_path / "packed/identity.json").read_text())
     receipt["source_commit"] = "f" * 40  # Historical synthetic merge event SHA.
@@ -242,6 +249,23 @@ def original(tmp_path, monkeypatch):
         "job": job,
         "payloads": payloads,
     }
+
+
+@pytest.mark.parametrize("consumer_attempt", ["2", "7"])
+def test_historical_upload_attempt_is_independent_of_consumer_rerun(
+    tmp_path, monkeypatch, consumer_attempt
+):
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", consumer_attempt)
+    original = historical_original(tmp_path, monkeypatch)
+    assert os.environ["GITHUB_RUN_ATTEMPT"] == consumer_attempt
+    receipt = original["entry"]["source_receipt"]
+    assert receipt["source_run_attempt"] == original["job"]["run_attempt"] == 1
+    assert linux.produce("linux-core", tmp_path / "unused", REPOSITORY) == (
+        "approved-original"
+    )
+    assert original["downloads"] == [6, 5]
+    original["job"]["run_attempt"] = 2
+    assert artifacts.approved_original(REPOSITORY, "linux-core", SEMANTIC) is None
 
 
 def test_exact_original_reuses_through_probe_pull_and_linux_resolve(
@@ -395,7 +419,9 @@ def test_ordinary_payload_cannot_import_legacy_approval(original, monkeypatch):
         artifacts.subprocess, "check_output", lambda *args, **kwargs: PRODUCER
     )
     packed = original["root"] / "forged"
-    artifacts.pack("linux-core", SEMANTIC, prefix, packed)
+    with monkeypatch.context() as packing:
+        packing.setenv("GITHUB_RUN_ATTEMPT", str(original["job"]["run_attempt"]))
+        artifacts.pack("linux-core", SEMANTIC, prefix, packed)
     stream = io.BytesIO()
     with zipfile.ZipFile(stream, "w") as output:
         for name in ("identity.json", "payload.tar.gz"):

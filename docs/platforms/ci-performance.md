@@ -1132,3 +1132,13 @@ Record each fresh build/test/comparison execution by run ID, attempt and job IDs
 report a shared event explicitly when using targeted build-job retries. Exclude
 failed, skipped and special executions from ordinary p50 values. Preserve the
 original successful producer attempt, upload window and checksums on every retry.
+
+The [first ordinary event](https://github.com/teng-lin/open-foresight/actions/runs/39375443052)
+passed attempt 1 (build 360s, test 654s, comparison 13s). Attempt 2 built in
+322s but failed a host-Python fixture: its historical SDK receipt inherited the
+consumer's attempt 2 while its successful original producer job was attempt 1.
+The verifier correctly rejected that mismatch. Fixture packing now supplies the
+historical attempt explicitly, including the forged-receipt negative case;
+regressions exercise consumer attempts 2 and 7 and still reject a wrong producer
+attempt. No production provenance rule changed. The failed attempt is excluded
+and the five-execution measurement must restart on the corrected source.
