@@ -589,9 +589,13 @@ jobs:
         OWN_HEAD: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
         OWN_PR: ${{ github.event.pull_request.number || 0 }}
         FORK_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        VALIDATE_SDK_TRANSPORT: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:validate-sdk-transport') }}
+        CI_TIER: pr
+        SHADOW_PREVIEW: ${{ inputs.preview && 'true' || 'false' }}
       run: |
         task_args=()
         if [[ "$FORK_PR" == true ]]; then task_args+=(--fork); fi
+        if [[ "$VALIDATE_SDK_TRANSPORT" == true ]]; then task_args+=(--validate-in-run-transport); fi
         python tools/ci_linux_shadow_sdk.py --source "$OWN_HEAD" --own-pr "$OWN_PR" --directory build/shadow-sdk ${task_args[@]+"${task_args[@]}"}
     - name: Retain the source-scoped in-run fork SDK
       if: steps.sdk.outputs.in_run == 'true'
@@ -738,7 +742,7 @@ jobs:
         SDK_IMAGE: ${{ steps.sdk.outputs.image }}
         SOURCE_REVISION: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
         FORESIGHT_CONTAINER_APPARMOR: foresight-ci-document-sandbox
-        FORESIGHT_CORE_COVERAGE_BENCHMARK: ${{ inputs.core_coverage_benchmark && '1' || '0' }}
+        FORESIGHT_CORE_COVERAGE_BENCHMARK: ${{ (inputs.core_coverage_benchmark || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:benchmark-core'))) && '1' || '0' }}
       run: bash tools/build_linux_container.sh --test-only --output build/linux-shadow
     - name: Run the real Docker cache fixture on the host
       env:
