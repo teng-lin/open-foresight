@@ -303,13 +303,12 @@ def test_platform_lists_execute_once_under_required_aggregate():
     required = main["jobs"]["platform-checks"]["needs"]
     runs = [command for name in required for command in commands(main, name)]
     for platform in contracts.PLATFORM:
-        assert (
-            sum(
-                f"tools/platform_python_tests.py --platform {platform}" in run
-                for run in runs
-            )
-            == 1
-        )
+        assert sum(
+            f"tools/platform_python_tests.py --platform {platform}" in run
+            for run in runs
+        ) == (2 if platform == "linux" else 1)
+    # Ubuntu and retained Arch are distinct required host environments.
+    assert "linux-native" in required
     assert "tests/test_rpm_scriptlets.py" not in contracts.command("linux")
     assert "tests/test_acceptance_image_cache.py" not in contracts.command("linux")
     fedora = (workflows / "package-contracts.yml").read_text()
