@@ -230,6 +230,7 @@ class _SourcesController extends _FeatureController {
               onPressed: () {
                 setState(() {
                   meetingFeature.noteId = null;
+                  meetingFeature.newNoteKey.reset();
                   meetingFeature.noteTitle.clear();
                   meetingFeature.noteBody.clear();
                 });
@@ -280,12 +281,20 @@ class _SourcesController extends _FeatureController {
             ),
             FilledButton(
               onPressed: () => shell.run(() async {
+                final note = {
+                  'id': meetingFeature.noteId,
+                  'title': meetingFeature.noteTitle.text,
+                  'body': meetingFeature.noteBody.text,
+                };
                 final saved =
-                    await d.command(Operation.notesSave, {
-                          'id': meetingFeature.noteId,
-                          'title': meetingFeature.noteTitle.text,
-                          'body': meetingFeature.noteBody.text,
-                        })
+                    await (note['id'] == null
+                            ? meetingFeature.newNoteKey.run(
+                                (key) => d.command(Operation.notesSave, {
+                                  ...note,
+                                  'idempotency_key': key,
+                                }),
+                              )
+                            : d.command(Operation.notesSave, note))
                         as Map;
                 if (mounted)
                   setState(() => meetingFeature.noteId = saved['id'] as int);

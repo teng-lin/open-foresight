@@ -560,6 +560,13 @@ class _WorkspaceState extends State<Workspace>
     meetingFeature.noteBody.clear();
     chatFeature.hiddenAnswers.clear();
     chatFeature.answer = '';
+    for (final key in [
+      meetingFeature.newNoteKey,
+      meetingFeature.newMeetingKey,
+      meetingFeature.quickStartKey,
+    ]) {
+      key.reset();
+    }
     d.adoptWorkspace();
   }
 
@@ -664,6 +671,7 @@ class _WorkspaceState extends State<Workspace>
       ): () => update(() {
         tab = 2;
         meetingFeature.noteId = null;
+        meetingFeature.newNoteKey.reset();
         meetingFeature.noteTitle.clear();
         meetingFeature.noteBody.clear();
       }),

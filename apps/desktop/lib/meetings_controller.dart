@@ -37,6 +37,11 @@ class _MeetingsController extends _FeatureController {
 
   final meetingNotesController = TextEditingController();
 
+  /// A retry of an unconfirmed create reuses its key, so it creates once.
+  final newNoteKey = PendingRequestKey(),
+      newMeetingKey = PendingRequestKey(),
+      quickStartKey = PendingRequestKey();
+
   late final NoteSaveScheduler meetingNoteSaves = NoteSaveScheduler(
     (id, body, lastManualEdit) async {
       await d.command(Operation.meetingsNotes, {
@@ -256,9 +261,12 @@ class _MeetingsController extends _FeatureController {
       if (!await integrationFeature.ensureRecordingAccess() || !mounted) return;
       await shell.run(() async {
         final created =
-            await d.command(Operation.meetingsCreate, {
-                  'title': '[New Meeting]',
-                })
+            await quickStartKey.run(
+                  (key) => d.command(Operation.meetingsCreate, {
+                    'title': '[New Meeting]',
+                    'idempotency_key': key,
+                  }),
+                )
                 as Map;
         if (!mounted) return;
         shell.update(() {
@@ -332,9 +340,12 @@ class _MeetingsController extends _FeatureController {
             ? null
             : () => shell.run(() async {
                 final created =
-                    await d.command(Operation.meetingsCreate, {
-                          'title': '[New Meeting]',
-                        })
+                    await newMeetingKey.run(
+                          (key) => d.command(Operation.meetingsCreate, {
+                            'title': '[New Meeting]',
+                            'idempotency_key': key,
+                          }),
+                        )
                         as Map;
                 if (mounted)
                   shell.update(() => meetingId = created['id'] as int);
