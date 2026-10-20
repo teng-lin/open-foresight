@@ -28,7 +28,7 @@ else
 fi
 task_seed=$(cd -- "$task_seed" && pwd)
 task_repository=${GITHUB_REPOSITORY:-teng-lin/open-foresight}
-task_repository=${task_repository,,}
+task_repository=$(printf '%s' "$task_repository" | tr '[:upper:]' '[:lower:]')
 task_image=foresight-ci:local
 task_builder=${FORESIGHT_BUILDER:-$(docker context show)}
 docker buildx build --builder "$task_builder" --platform linux/amd64 --load \
@@ -88,6 +88,7 @@ fi
 if [[ "$task_mode" == all ]]; then
   task_package="open-foresight-$VERSION-$RELEASE-linux-x86_64.tar.gz"
   (cd "$task_output/packages" && sha256sum --check "$task_package.sha256")
+  rm -rf -- "$task_output/dist"
   mkdir -p "$task_output/dist"
   "$task_python" -m tarfile --extract "$task_output/packages/$task_package" "$task_output/dist" --filter data
 fi

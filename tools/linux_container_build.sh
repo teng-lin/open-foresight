@@ -30,4 +30,5 @@ if [[ -f /run/secrets/foresight_web_content_api_key ]]; then FORESIGHT_WEB_CONTE
   --version "${VERSION:?Package version required}" --release "${RELEASE:-1}"
 "$FORESIGHT_PYTHON" tools/ci_linux_handoff.py pack --root /src --directory /out/handoff \
   --revision "$SOURCE_REVISION" --inputs /ci-inputs.json --tier "${CI_TIER:-pr}" --label "${BUILD_LABEL:-}"
+rm -rf -- /out/packages
 cp -a dist/packages /out/packages
