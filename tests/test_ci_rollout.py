@@ -344,3 +344,18 @@ def test_descriptor_cli_attaches_only_complete_actual_reports(root, monkeypatch)
     selection.write_text('{"qualification_mode":true,"superseded":false,"selection":{}}')
     with pytest.raises(SystemExit, match="2"):
         rollout.main()
+
+
+def test_qualification_requires_repository_and_exact_original_uploader(root):
+    evidence = Evidence(root)
+    entry = evidence.add("selector-replay")
+    evidence.runs[1]["repository"]["full_name"] = "foreign/repository"
+    with pytest.raises(ValueError, match="repository mismatch"):
+        evidence.verify("path_selection")
+    evidence.runs[1]["repository"]["full_name"] = REPOSITORY
+    wrong = dict(evidence.jobs[1][0], id=9999, name="unrelated-upload-job")
+    evidence.jobs[1].append(wrong)
+    evidence.payloads[1]["producer"]["job"] = wrong["name"]
+    entry["producer_job_id"] = wrong["id"]
+    with pytest.raises(ValueError, match="upload window"):
+        evidence.verify("path_selection")

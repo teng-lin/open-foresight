@@ -342,3 +342,26 @@ def test_successful_index_is_renewed_without_changing_qualified_retirement_basel
     assert result["source"] == SOURCE
     proof.payloads[999]["capabilities"] = []
     assert index.collect(REPOSITORY, "b" * 40, root=proof.root, api=proof.api, download=proof.download)["source"] == "b" * 40
+
+
+def test_candidate_read_errors_are_observations_until_production_authorization(monkeypatch):
+    from tools import ci_selection
+    def broken(*args, **kwargs):
+        raise OSError("unavailable candidate-only inventory")
+    monkeypatch.setattr(ci_selection, "select", broken)
+    report = ci_changes.selection_report(["docs/guide.md"])
+    assert report["candidate"] == {"error": "unavailable candidate-only inventory"}
+    assert report["selection"] == ci_changes.select_gates(["docs/guide.md"])
+
+
+def test_arch_retirement_continues_across_application_only_changes(proof):
+    from tests.test_ci_rollout import retirement_evidence
+    evidence = retirement_evidence(proof.root)
+    evidence.verify("arch_retirement")
+    (proof.root / "native").mkdir()
+    (proof.root / "native/runtime.cpp").write_text("product change")
+    result = rollout.authorize(evidence.index, root=proof.root, source="b" * 40, capabilities=["arch_retirement"], repository=REPOSITORY, api=evidence.api, download=evidence.download, ongoing=True)
+    assert result["qualified_source"] == SOURCE
+    (proof.root / "tools/ci_changes.py").write_text("changed routing contract")
+    with pytest.raises(ValueError, match="Retained candidate closure"):
+        rollout.authorize(evidence.index, root=proof.root, source="b" * 40, capabilities=["arch_retirement"], repository=REPOSITORY, api=evidence.api, download=evidence.download, ongoing=True)
