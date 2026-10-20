@@ -47,7 +47,7 @@ def identity(sdk_id, snapshot, root=ROOT):
         "snapshot": snapshot,
         "recipe": {
             "sha256": artifacts.digest(recipe),
-            "mode": recipe.stat().st_mode & 0o777,
+            "mode": 0o755 if recipe.stat().st_mode & 0o111 else 0o644,
         },
     }
     return {**inputs, "identity": hashlib.sha256(canonical(inputs)).hexdigest()}
@@ -287,8 +287,6 @@ def prepare(repository, sdk_image, snapshot, output, *, publish=False):
             "CI_TOOLING_ID=" + expected["identity"],
             "--build-arg",
             "UBUNTU_SNAPSHOT=" + snapshot,
-            "--cache-from",
-            "type=registry,ref=" + reference(repository, ci=True),
         ]
         if publish:
             require_publisher(repository)

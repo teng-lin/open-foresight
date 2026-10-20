@@ -131,7 +131,7 @@ jobs:
   publish-macos-models:
     if: >-
       inputs.publish_models && github.ref == 'refs/heads/main' &&
-      contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event_name) &&
+      github.event_name == 'workflow_dispatch' &&
       (github.workflow_ref == format('{0}/.github/workflows/linux-cache-publish.yml@refs/heads/main', github.repository) ||
        (github.event_name == 'workflow_dispatch' && github.workflow_ref == format('{0}/.github/workflows/macos-cache-publish.yml@refs/heads/main', github.repository)))
     runs-on: macos-15

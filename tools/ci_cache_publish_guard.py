@@ -25,7 +25,7 @@ def current_main(environment=None, *, fetch=None, head=None):
         not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository)
         or not re.fullmatch(r"[a-f0-9]{40}", source)
         or env.get("GITHUB_REF") != "refs/heads/main"
-        or env.get("GITHUB_EVENT_NAME") not in ("push", "workflow_dispatch", "schedule")
+        or env.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
         or env.get("GITHUB_WORKFLOW_REF")
         not in (
             repository + "/.github/workflows/" + workflow + "@refs/heads/main"

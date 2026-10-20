@@ -33,7 +33,7 @@ class Producer:
 PRODUCERS = {
     "linux-ci-tooling": Producer(
         (".github/workflows/linux-cache-publish.yml",),
-        ("push", "workflow_dispatch", "schedule"),
+        ("workflow_dispatch",),
         {"": ("publish-linux-caches",)},
         receipt_tier="tooling",
     ),

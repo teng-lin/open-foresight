@@ -822,6 +822,7 @@ jobs:
       with:
         path: build/acceptance-models
         key: main-integration-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
+        restore-keys: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
     - name: Run independent cpu acceptance against the restored bytes
       env:
         GH_TOKEN: ${{ github.token }}
@@ -894,6 +895,7 @@ jobs:
       with:
         path: build/acceptance-models
         key: main-integration-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
+        restore-keys: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
     - name: Run independent audio acceptance against the restored bytes
       env:
         GH_TOKEN: ${{ github.token }}

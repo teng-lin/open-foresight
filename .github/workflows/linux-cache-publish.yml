@@ -15,7 +15,7 @@ permissions:
   actions: read
 jobs:
   reconcile:
-    if: github.ref == 'refs/heads/main' && contains(fromJSON('["push","workflow_dispatch","schedule"]'), github.event_name)
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -24,6 +24,7 @@ jobs:
     outputs:
       current: ${{ steps.source.outputs.current }}
       common: ${{ steps.source.outputs.common }}
+      registry_needed: ${{ steps.source.outputs.registry_needed }}
       formatter: ${{ steps.source.outputs.formatter }}
       document: ${{ steps.source.outputs.document }}
       models_linux: ${{ steps.source.outputs.models_linux }}
@@ -39,6 +40,7 @@ jobs:
       id: source
       env:
         GH_TOKEN: ${{ github.token }}
+        QUALIFY_CONSUMERS: ${{ inputs.qualify_consumers && 'true' || 'false' }}
         CORE_LOCK_HASH: ${{ hashFiles('packages/foresight_core/pubspec.lock') }}
         UI_LOCK_HASH: ${{ hashFiles('packages/foresight_core/pubspec.lock', 'apps/desktop/pubspec.lock') }}
         MODEL_INPUT_HASH: ${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
@@ -49,9 +51,27 @@ jobs:
         path: build/cache-reconciliation.json
         overwrite: true
         if-no-files-found: error
+  dispatch-refresh:
+    needs: reconcile
+    if: github.ref == 'refs/heads/main' && needs.reconcile.outputs.current == 'true' && contains(fromJSON('["push","schedule"]'), github.event_name) && (needs.reconcile.outputs.registry_needed == 'true' || needs.reconcile.outputs.common == 'true' || needs.reconcile.outputs.arch_needed == 'true' || needs.reconcile.outputs.models_macos == 'true')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    steps:
+    - name: Dispatch the dedicated current-main cache publisher
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        test "$GITHUB_REF" = refs/heads/main
+        case "$GITHUB_EVENT_NAME" in push|schedule) ;; *) exit 1 ;; esac
+        test "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$GITHUB_SHA"
+        gh api "repos/$GITHUB_REPOSITORY/actions/workflows/linux-cache-publish.yml/dispatches" \
+          --method POST --field ref=main
   publish-linux-caches:
     needs: reconcile
-    if: github.ref == 'refs/heads/main' && needs.reconcile.outputs.current == 'true' && contains(fromJSON('["push","workflow_dispatch","schedule"]'), github.event_name)
+    if: github.ref == 'refs/heads/main' && needs.reconcile.outputs.current == 'true' && needs.reconcile.outputs.registry_needed == 'true' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     concurrency:
@@ -74,7 +94,7 @@ jobs:
         GH_TOKEN: ${{ github.token }}
       run: |
         test "$GITHUB_REF" = refs/heads/main
-        case "$GITHUB_EVENT_NAME" in push|workflow_dispatch|schedule) ;; *) exit 1 ;; esac
+        test "$GITHUB_EVENT_NAME" = workflow_dispatch
         test "$GITHUB_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/linux-cache-publish.yml@refs/heads/main"
         test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
         test "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$GITHUB_SHA"
@@ -99,7 +119,7 @@ jobs:
         GH_TOKEN: ${{ github.token }}
       run: |
         test "$GITHUB_REF" = refs/heads/main
-        case "$GITHUB_EVENT_NAME" in push|workflow_dispatch|schedule) ;; *) exit 1 ;; esac
+        test "$GITHUB_EVENT_NAME" = workflow_dispatch
         test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
         test "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$GITHUB_SHA"
     - name: Publish or reuse immutable qualified CI tooling
@@ -149,7 +169,7 @@ jobs:
         if-no-files-found: error
   publish-common-caches:
     needs: reconcile
-    if: github.ref == 'refs/heads/main' && needs.reconcile.outputs.current == 'true' && needs.reconcile.outputs.common == 'true' && contains(fromJSON('["push","workflow_dispatch","schedule"]'), github.event_name)
+    if: github.ref == 'refs/heads/main' && needs.reconcile.outputs.current == 'true' && needs.reconcile.outputs.common == 'true' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     concurrency:
@@ -242,7 +262,7 @@ jobs:
         key: main-integration-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
   publish-arch-caches:
     needs: reconcile
-    if: github.ref == 'refs/heads/main' && needs.reconcile.outputs.current == 'true' && needs.reconcile.outputs.arch_needed == 'true' && contains(fromJSON('["push","workflow_dispatch","schedule"]'), github.event_name)
+    if: github.ref == 'refs/heads/main' && needs.reconcile.outputs.current == 'true' && needs.reconcile.outputs.arch_needed == 'true' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     container: archlinux:base-devel@sha256:061679925e5d5028f2df9395d441ce6c4b9accf0157ff3486c06b6962e014ef1
     timeout-minutes: 30
@@ -271,7 +291,7 @@ jobs:
         publish-language-caches: 'true'
   publish-macos-models:
     needs: reconcile
-    if: github.ref == 'refs/heads/main' && needs.reconcile.outputs.current == 'true' && needs.reconcile.outputs.models_macos == 'true' && contains(fromJSON('["push","workflow_dispatch","schedule"]'), github.event_name)
+    if: github.ref == 'refs/heads/main' && needs.reconcile.outputs.current == 'true' && needs.reconcile.outputs.models_macos == 'true' && github.event_name == 'workflow_dispatch'
     uses: ./.github/workflows/macos-cache-publish.yml
     with:
       publish_toolchain: false

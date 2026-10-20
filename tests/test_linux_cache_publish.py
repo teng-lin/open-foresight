@@ -31,7 +31,12 @@ def test_maintenance_is_independent_main_only_and_preserves_original_upload_proo
         assert "github.ref == 'refs/heads/main'" in job["if"]
         assert "github.event_name" in job["if"]
         assert "pull_request" not in str(job["if"])
-        if name == "qualification-consumers":
+        if name == "dispatch-refresh":
+            assert job["needs"] == "reconcile"
+            assert "concurrency" not in job
+            assert job["permissions"] == {"contents": "read", "actions": "write"}
+            assert '"push","schedule"' in job["if"]
+        elif name == "qualification-consumers":
             assert job["needs"] == ["reconcile", "publish-linux-caches"]
             assert "inputs.qualify_consumers" in job["if"]
             assert "concurrency" not in job
@@ -64,6 +69,7 @@ def test_maintenance_is_independent_main_only_and_preserves_original_upload_proo
     )
     assert receipt["with"]["path"] == "build/cache-tooling/tooling.json"
     assert receipt["with"]["if-no-files-found"] == "error"
+    assert receipt["with"]["overwrite"] is True
     assert "tooling_reused" in receipt["if"]
     publish = next(
         step
@@ -76,6 +82,37 @@ def test_maintenance_is_independent_main_only_and_preserves_original_upload_proo
         ".github/workflows/linux-cache-publish.yml@refs/heads/main"
         in steps[guards[0]]["run"]
     )
+
+
+def test_only_dispatched_jobs_publish_shared_bytes_and_schedule_only_dispatches():
+    config = yaml.safe_load((ROOT / ".github/workflows/linux-cache-publish.yml").read_text())
+    jobs = config["jobs"]
+    assert "registry_needed" in jobs["reconcile"]["outputs"]
+    assert "QUALIFY_CONSUMERS" in next(
+        step["env"] for step in jobs["reconcile"]["steps"] if step.get("id") == "source"
+    )
+    for name in ("publish-linux-caches", "publish-common-caches", "publish-arch-caches", "publish-macos-models"):
+        assert "github.event_name == 'workflow_dispatch'" in jobs[name]["if"]
+    assert "needs.reconcile.outputs.registry_needed == 'true'" in jobs["publish-linux-caches"]["if"]
+    dispatcher = jobs["dispatch-refresh"]
+    assert "registry_needed" in dispatcher["if"] and "common" in dispatcher["if"]
+    script = dispatcher["steps"][0]["run"]
+    assert 'test "$GITHUB_REF" = refs/heads/main' in script
+    assert "commits/main" in script and "--field ref=main" in script
+    assert "docker" not in script and "cache/save" not in script
+
+
+def test_linux_acceptance_restores_legacy_models_until_new_writer_is_qualified():
+    jobs = yaml.safe_load((ROOT / ".github/workflows/macos.yml").read_text())["jobs"]
+    for name in ("acceptance-cpu", "acceptance-audio"):
+        restore = next(
+            step for step in jobs[name]["steps"]
+            if step.get("uses", "").startswith("actions/cache/restore@")
+            and step["with"]["path"] == "build/acceptance-models"
+        )["with"]
+        assert restore["key"].startswith("main-integration-models-${{ runner.os }}-")
+        assert restore["restore-keys"].startswith("integration-models-v1-")
+        assert restore["key"].split("hashFiles(", 1)[1] == restore["restore-keys"].split("hashFiles(", 1)[1]
 
 
 def test_main_sdk_miss_never_falls_back_to_sdk_compilation(monkeypatch, tmp_path):
@@ -120,6 +157,8 @@ def test_publisher_rejects_prs_before_any_tool(ref, event, tmp_path):
 
 @pytest.fixture
 def publisher(tmp_path):
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools/pins.json").write_text('{"ubuntu_snapshot":"20261001T000000Z"}')
     binary = tmp_path / "bin"
     binary.mkdir()
     log = tmp_path / "commands.jsonl"
@@ -135,6 +174,11 @@ if row[0]=='python' and 'tools/ci_app_dependency_seed.py' in row:
     if '--verify-existing' in row:assert (seed/'original-provenance').read_bytes()==b'original producer receipt'
 if row[0]=='python' and '--ci' in row and os.getenv('FAIL_STAGE')=='transport':
     print('transport lookup failed',file=sys.stderr);sys.exit(24)
+if row[0]=='python' and 'tools/ci_tooling_image.py' in row:
+    output=Path(row[row.index('--output')+1]);output.mkdir(parents=True,exist_ok=True)
+    (output/'inputs.json').write_text(json.dumps({{'image':'fixture-tooling@sha256:'+'b'*64}}))
+if row[0]=='python' and len(row)>1 and row[1]=='-c':
+    os.execv({sys.executable!r},[{sys.executable!r},*sys.argv[1:]])
 if row[:3]==['docker','buildx','build'] and row[row.index('--target')+1]==os.getenv('FAIL_STAGE'):
     print('cache export failed',file=sys.stderr);sys.exit(25)
 """
@@ -144,7 +188,7 @@ if row[:3]==['docker','buildx','build'] and row[row.index('--target')+1]==os.get
         p.chmod(0o755)
     seed = tmp_path / "verified-seed"
 
-    def run(*, existing=False, failure=""):
+    def run(*, existing=False, failure="", namespace="legacy"):
         if existing:
             seed.mkdir()
             (seed / "original-provenance").write_bytes(b"original producer receipt")
@@ -160,6 +204,7 @@ if row[:3]==['docker','buildx','build'] and row[row.index('--target')+1]==os.get
                 "GITHUB_REPOSITORY": "Owner/Repo",
                 "APP_DEPENDENCY_SEED": str(seed),
                 "SDK_IMAGE": "sha256:" + "a" * 64,
+                "CI_CACHE_NAMESPACE": namespace,
                 "FAIL_STAGE": failure,
                 "GOOGLE_CLIENT_ID": "secret-must-not-be-forwarded",
             },
@@ -173,8 +218,9 @@ if row[:3]==['docker','buildx','build'] and row[row.index('--target')+1]==os.get
 
 
 @pytest.mark.parametrize("existing", [False, True])
-def test_only_secret_free_dependency_targets_are_exported(publisher, existing):
-    result, rows, seed = publisher(existing=existing)
+@pytest.mark.parametrize("namespace", ["legacy", "isolated-v2"])
+def test_only_secret_free_dependency_targets_are_exported(publisher, existing, namespace):
+    result, rows, seed = publisher(existing=existing, namespace=namespace)
     assert result.returncode == 0, result.stdout + result.stderr
     probes = [r for r in rows if "tools/ci_app_build_transport.py" in r]
     assert [r[-1] if r[-1].startswith("--") else "" for r in probes] == [
@@ -202,11 +248,16 @@ def test_only_secret_free_dependency_targets_are_exported(publisher, existing):
         )
         if target != "acceptance-dependencies":
             assert row[row.index("--build-context") + 1] == "appdeps_seed=" + str(seed)
+            assert "TOOLING_IMAGE=fixture-tooling@sha256:" + "b" * 64 in row
+        else:
+            assert not any(value.startswith("TOOLING_IMAGE=") for value in row)
         tag = {
             "application-dependencies": "app-deps-buildcache-v1",
             "ci": "ci-tools-buildcache-v1",
             "acceptance-dependencies": "acceptance-tools-buildcache-v1",
         }[target]
+        if namespace == "isolated-v2":
+            tag = "qualified-v2-" + tag
         assert (
             row[row.index("--cache-to") + 1]
             == "type=registry,ref=ghcr.io/owner/repo/linux-sdk:"

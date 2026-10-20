@@ -195,6 +195,19 @@ def test_identity_rejects_symlink_recipe(evidence):
         tooling.identity(SDK, SNAPSHOT, evidence["root"])
 
 
+def test_identity_uses_git_executable_mode_not_checkout_umask(evidence):
+    recipe = evidence["root"] / tooling.RECIPE
+    original = tooling.identity(SDK, SNAPSHOT, evidence["root"])
+    recipe.chmod(0o664)
+    assert tooling.identity(SDK, SNAPSHOT, evidence["root"]) == original
+    recipe.chmod(0o775)
+    executable = tooling.identity(SDK, SNAPSHOT, evidence["root"])
+    assert executable["identity"] != original["identity"]
+    assert executable["recipe"]["mode"] == 0o755
+    recipe.chmod(0o755)
+    assert tooling.identity(SDK, SNAPSHOT, evidence["root"]) == executable
+
+
 def test_lookup_checks_paginated_zip_checksum_and_preserves_original_receipt(
     evidence, tmp_path
 ):
