@@ -69,6 +69,11 @@ def load(prefix, *, retain_archive=False):
 
 
 def forward(prefix, directory, source, image, *, reuse_archive):
+    # Registry and archive resolution load this same job-local tag. Both
+    # runners must request it so the exact seed qualification stays identical.
+    local_image = sdk.local_tag("linux-sdk")
+    if sdk.inspect(local_image) != sdk.inspect(image):
+        raise ValueError("Verified SDK local tag differs from the forwarded image")
     application.save_sdk(
         source,
         image,
@@ -78,7 +83,7 @@ def forward(prefix, directory, source, image, *, reuse_archive):
         reuse_archive=reuse_archive,
     )
     shutil.rmtree(prefix)
-    sdk.write_outputs(image)
+    sdk.write_outputs(local_image)
     if output := os.environ.get("GITHUB_OUTPUT"):
         with open(output, "a") as stream:
             stream.write("in_run=true\n")

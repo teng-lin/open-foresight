@@ -1,5 +1,6 @@
 """Opt-in transport validation forwards verified bytes, never produces an SDK."""
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,9 @@ import pytest
 import yaml
 
 from tools import ci_linux_shadow_sdk as shadow
+from tools import ci_app_dependency_seed as seed
+from tools import ci_linux_handoff as handoff
+from tests.test_ci_app_dependency_seed import archive, file, PREFIX
 from tests.test_linux_sdk_artifacts import IMAGE_ID, REGISTRY_IMAGE, write_archive
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -74,7 +78,13 @@ def test_enabled_transport_retains_actual_envelope_and_original_provenance(
 
     with (
         patch.object(shadow.waiter, "fetch", side_effect=fetch),
-        patch.object(shadow.sdk, "resolve", return_value=IMAGE_ID),
+        patch.object(
+            shadow.sdk,
+            "resolve",
+            return_value=REGISTRY_IMAGE
+            if transport == "registry"
+            else "foresight-sdk:pr",
+        ),
         patch.object(shadow.sdk, "inspect", return_value=IMAGE_ID),
         patch.object(shadow.sdk, "produce") as produce,
         patch.object(shadow.sdk, "run", side_effect=save) as docker,
@@ -117,6 +127,55 @@ def test_enabled_transport_retains_actual_envelope_and_original_provenance(
     assert "producer_artifact_digest=" + original["artifact_digest"] in output
     assert "in_run=true\n" in output
     assert "not an SDK compilation" in capsys.readouterr().out
+    producer_image = next(
+        line.removeprefix("image=")
+        for line in output.splitlines()
+        if line.startswith("image=")
+    )
+    with (
+        patch.object(shadow.sdk, "run"),
+        patch.object(shadow.sdk, "inspect", return_value=IMAGE_ID),
+    ):
+        consumer_image = shadow.sdk.resolve(restored)
+    layer = archive(tmp_path / "seed-layer.gz", [file(PREFIX + "/flatc", b"compiler")])
+    identities = []
+    with patch.object(
+        seed, "REQUIRED", {PREFIX + "/flatc": hashlib.sha256(b"compiler").hexdigest()}
+    ):
+        for name, image in (("producer", producer_image), ("consumer", consumer_image)):
+            destination = tmp_path / name
+            seed.materialize(
+                [layer], destination, {"image_id": IMAGE_ID, "requested_image": image}
+            )
+            with patch.object(
+                handoff.subprocess, "check_output", return_value=IMAGE_ID
+            ):
+                identities.append(
+                    handoff.input_identity(
+                        image,
+                        destination / "qualification.json",
+                        ROOT / "packaging/build.Dockerfile",
+                        "20261001T000000Z",
+                    )
+                )
+    assert identities[0] == identities[1]
+
+
+def test_forward_rejects_a_local_tag_for_a_different_sdk(context, tmp_path):
+    prefix = tmp_path / "verified"
+    prefix.mkdir()
+    with (
+        patch.object(
+            shadow.sdk, "inspect", side_effect=[IMAGE_ID, "sha256:" + "f" * 64]
+        ),
+        patch.object(shadow.application, "save_sdk") as save,
+    ):
+        with pytest.raises(ValueError, match="local tag"):
+            shadow.forward(
+                prefix, tmp_path, SOURCE, REGISTRY_IMAGE, reuse_archive=False
+            )
+        save.assert_not_called()
+    assert prefix.is_dir()
 
 
 @pytest.mark.parametrize(
