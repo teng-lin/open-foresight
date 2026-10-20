@@ -14,11 +14,13 @@ import json
 from pathlib import Path
 import re
 import stat
+import sys
 import tempfile
 import zipfile
 
-from tools import ci_artifacts as artifacts
-from tools.ci_selection import GATES
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools import ci_artifacts as artifacts  # noqa: E402
+from tools.ci_selection import GATES  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 CAPABILITIES = {"main_receipts", "path_selection", "arch_retirement", "acceptance_narrowing"}

@@ -12,18 +12,20 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import xml.etree.ElementTree as ET
 
-from tools import ci_artifacts as artifacts
-from tools import ci_dependency_wait as waiter
-from tools import ci_linux_shadow_sdk as shadow
-from tools import integration_application as application
-from tools import linux_sdk_artifacts as sdk
-from tools import ci_rollout
-from tools import ci_linux_handoff as handoff
-from tools import compare_test_runs
-from tools import check_coverage
-from tools import platform_python_tests
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools import ci_artifacts as artifacts  # noqa: E402
+from tools import ci_dependency_wait as waiter  # noqa: E402
+from tools import ci_linux_shadow_sdk as shadow  # noqa: E402
+from tools import integration_application as application  # noqa: E402
+from tools import linux_sdk_artifacts as sdk  # noqa: E402
+from tools import ci_rollout  # noqa: E402
+from tools import ci_linux_handoff as handoff  # noqa: E402
+from tools import compare_test_runs  # noqa: E402
+from tools import check_coverage  # noqa: E402
+from tools import platform_python_tests  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 
