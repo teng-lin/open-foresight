@@ -1179,6 +1179,42 @@ def assert_idle_shutdown_verifies_a_real_adopted_helper(
                     process.wait(timeout=10)
 
 
+GATED_HELPER = Path(__file__).resolve().parent / "gated_helper.py"
+
+
+class GatedHelper:
+    """Python side of package:foresight_test_support/gated_helper.dart.
+
+    Set FORESIGHT_HELPER to `executable`. The helper holds SIGTERM until
+    `release()`, so a closing service stays inside its helper shutdown.
+    """
+
+    def __init__(self, directory):
+        self.control = directory / "helper-control"
+        self.control.mkdir(mode=0o700)
+        self.executable = directory / "helper"
+        self.executable.write_text(
+            f'#!/bin/sh\nexec "{sys.executable}" "{GATED_HELPER}" '
+            f'"{self.control}" "$@"\n'
+        )
+        self.executable.chmod(0o700)
+
+    def published(self, name, deadline):
+        path = self.control / name
+        while not path.exists():
+            poll_delay(deadline)
+        return int(path.read_text())
+
+    def release(self):
+        (self.control / "release").write_text("")
+
+
+def test_gated_helper_twin_matches_the_dart_fixture():
+    """Dart lifecycle tests and this suite must hold helper shutdown alike."""
+    shared = ROOT / "packages/foresight_test_support/lib/gated_helper.py"
+    assert GATED_HELPER.read_bytes() == shared.read_bytes()
+
+
 def poll_delay(deadline):
     """Yield between observations without extending the operation's deadline."""
     remaining = deadline - time.monotonic()

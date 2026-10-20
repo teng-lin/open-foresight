@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:foresight_core/src/platform_services.dart';
+import 'package:foresight_test_support/gated_helper.dart';
 import 'package:foresight_test_support/poll.dart';
 import 'package:foresight_core/src/profile_paths.dart';
 import 'package:foresight_core/src/rpc_error.dart';
@@ -463,28 +464,12 @@ void main() {
           shortTestTempRoot,
           'of-local-owner-',
         );
-        final started = File('${directory.path}/started');
-        final stopping = File('${directory.path}/stopping');
-        final release = File('${directory.path}/release');
         final marker = File('${directory.path}/launched');
-        final helper = File('${directory.path}/helper');
-        helper.writeAsStringSync('''#!/usr/bin/env python3
-import os,pathlib,signal,time
-started=pathlib.Path(${jsonEncode(started.path)})
-stopping=pathlib.Path(${jsonEncode(stopping.path)})
-release=pathlib.Path(${jsonEncode(release.path)})
-def shutdown(signum, frame):
- stopping.touch()
- while not release.exists(): time.sleep(.005)
- raise SystemExit(0)
-signal.signal(signal.SIGTERM,shutdown)
-started.write_text(str(os.getpid()))
-while True: signal.pause()
-''');
+        final helper = await GatedHelper.create(directory);
         final launcher = File(
           '${directory.path}/launch',
         )..writeAsStringSync('#!/bin/sh\nprintf launched > "${marker.path}"\n');
-        await Process.run('/bin/chmod', ['700', helper.path, launcher.path]);
+        await Process.run('/bin/chmod', ['700', launcher.path]);
         for (final key in [
           'FORESIGHT_NATIVE',
           'FORESIGHT_INSTALL_ROOT',
@@ -493,7 +478,8 @@ while True: signal.pause()
         ]) {
           runtimeConfiguration.environment.remove(key);
         }
-        runtimeConfiguration.environment['FORESIGHT_HELPER'] = helper.path;
+        runtimeConfiguration.environment['FORESIGHT_HELPER'] =
+            helper.executable;
         runtimeConfiguration.environment['FORESIGHT_SERVICE'] = launcher.path;
         final profile = ProfilePaths(
           '${directory.path}/data',
@@ -508,9 +494,9 @@ while True: signal.pause()
             final service = await ApplicationService.start(profile);
             close = service.close;
           }
-          await eventually(started.existsSync);
+          await helper.started();
           final shutdown = close();
-          await eventually(stopping.existsSync);
+          await helper.stopping();
           // Simulate the normal socket-before-lock cleanup interval. The worker
           // is deterministically held in its owned helper shutdown, not a sleep.
           File(serviceEndpoint(profile)).deleteSync();
@@ -543,10 +529,10 @@ while True: signal.pause()
             reason:
                 'Startup must not release another isolate or local owner lock: ${probe.stderr}',
           );
-          release.writeAsStringSync('release');
+          helper.release();
           await shutdown.timeout(const Duration(seconds: 10));
         } finally {
-          release.writeAsStringSync('release');
+          helper.release();
           await close?.call();
           runtimeConfiguration.environment
             ..clear()
