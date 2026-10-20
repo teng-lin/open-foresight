@@ -80,10 +80,22 @@ Future<void> main(List<String> args) async {
             'Waiting for the application service (pid $owner) to release '
             'its profile.',
           );
-          if (!await awaitProfileRelease(profile, owner)) {
-            throw StateError(
-              'The application service (pid $owner) closed its connections '
-              'but did not release its profile within 30 s.',
+          final bound = int.tryParse(
+            runtimeConfiguration['FORESIGHT_TEST_STOP_RELEASE_MS'] ?? '',
+          );
+          await requireProfileRelease(
+            profile,
+            owner,
+            timeout: bound == null
+                ? const Duration(seconds: 30)
+                : Duration(milliseconds: bound),
+          );
+          // The service stopped; tell the user its next start recovers.
+          if (profileLeftUnclean(profile)) {
+            stderr.writeln(
+              'The application service stopped without a clean shutdown; '
+              'its endpoint record remains, and the next start recovers its '
+              'runtime.',
             );
           }
         }

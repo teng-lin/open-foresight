@@ -20,6 +20,7 @@ void main() {
         'FORESIGHT_CRASH_AT': 'commit',
         'FORESIGHT_TEST_DELAY_MS': '500',
         'FORESIGHT_SERVICE_GATES': '/gates',
+        'FORESIGHT_TEST_STOP_RELEASE_MS': '50',
       },
       executable: '/service',
     );
@@ -35,6 +36,11 @@ void main() {
     expect(
       configuration['FORESIGHT_SERVICE_GATES'],
       foresightTestHooksEnabled ? '/gates' : isNull,
+    );
+    // A release --stop always allows its owner the full release bound.
+    expect(
+      configuration['FORESIGHT_TEST_STOP_RELEASE_MS'],
+      foresightTestHooksEnabled ? '50' : isNull,
     );
   });
 

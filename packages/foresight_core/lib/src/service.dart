@@ -2190,8 +2190,16 @@ bool _profileLockFree(String path) {
   }
 }
 
-Future<bool> _processRunning(int pid) async =>
-    (await Process.run('/bin/kill', ['-0', '$pid'])).exitCode == 0;
+/// Whether [pid] may still run. Without a way to tell, assume it does, so
+/// only the profile lock decides.
+Future<bool> _processRunning(int pid) async {
+  if (Platform.isLinux) return Directory('/proc/$pid').existsSync();
+  try {
+    return (await Process.run('/bin/kill', ['-0', '$pid'])).exitCode == 0;
+  } on ProcessException {
+    return true;
+  }
+}
 
 /// After `--stop` signalled the owner [ownerPid] and saw its connection close,
 /// wait until the owner released the profile: its lock is free, or the
@@ -2205,6 +2213,7 @@ Future<bool> awaitProfileRelease(
 }) async {
   final lock = '${profile.data}/.application.lock';
   final waited = Stopwatch()..start();
+  var held = false;
   while (true) {
     if (!await _processRunning(ownerPid) ||
         FileSystemEntity.typeSync(lock, followLinks: false) ==
@@ -2212,9 +2221,42 @@ Future<bool> awaitProfileRelease(
         _profileLockFree(lock)) {
       return true;
     }
+    if (!held) {
+      held = true;
+      _traceServiceTransport('stop: service $ownerPid still holds its profile');
+    }
     if (waited.elapsed >= timeout) return false;
     await Future<void>.delayed(const Duration(milliseconds: 50));
   }
+}
+
+/// [awaitProfileRelease], failing with a message when it times out.
+Future<void> requireProfileRelease(
+  ProfilePaths profile,
+  int ownerPid, {
+  Duration timeout = const Duration(seconds: 30),
+}) async {
+  if (!await awaitProfileRelease(profile, ownerPid, timeout: timeout)) {
+    throw StateError(
+      'The application service (pid $ownerPid) closed its connections but '
+      'did not release its profile within ${_describeDuration(timeout)}.',
+    );
+  }
+}
+
+/// Whether the profile has no owner but still has an endpoint record: the
+/// last owner did not shut down cleanly, and the next one recovers its
+/// runtime. Never call this from a process that hosts an owner.
+bool profileLeftUnclean(ProfilePaths profile) {
+  final lock = '${profile.data}/.application.lock';
+  return FileSystemEntity.typeSync(
+            '${profile.data}/$_endpointRecordName',
+            followLinks: false,
+          ) !=
+          FileSystemEntityType.notFound &&
+      (FileSystemEntity.typeSync(lock, followLinks: false) ==
+              FileSystemEntityType.notFound ||
+          _profileLockFree(lock));
 }
 
 /// Start packaged services as applications through LaunchServices so macOS can

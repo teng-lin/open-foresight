@@ -98,6 +98,54 @@ Future<Map<String, dynamic>> rawRequest(
   }
 }
 
+/// A running `--stop`, with its stderr lines as they arrive.
+class StopRun {
+  StopRun(this.process) {
+    unawaited(process.stdout.drain<void>());
+    utf8.decoder
+        .bind(process.stderr)
+        .transform(const LineSplitter())
+        .listen(
+          (line) {
+            lines.add(line);
+            for (final waiter in _waiters.toList()) {
+              if (!line.contains(waiter.text)) continue;
+              _waiters.remove(waiter);
+              waiter.found.complete(line);
+            }
+          },
+          onDone: () {
+            for (final waiter in _waiters) {
+              waiter.found.completeError(
+                StateError(
+                  'stderr ended without "${waiter.text}":\n${lines.join('\n')}',
+                ),
+              );
+            }
+            _waiters.clear();
+          },
+        );
+  }
+
+  final Process process;
+  final lines = <String>[];
+  final _waiters = <({String text, Completer<String> found})>[];
+
+  /// The first stderr line containing [text]; fails if stderr ends first.
+  Future<String> line(String text) {
+    for (final line in lines) {
+      if (line.contains(text)) return Future.value(line);
+    }
+    final found = Completer<String>();
+    _waiters.add((text: text, found: found));
+    return found.future.timeout(const Duration(seconds: 120));
+  }
+
+  /// The exit code; a bound only, since --stop's own waits are at most 30 s.
+  Future<int> exited() =>
+      process.exitCode.timeout(const Duration(seconds: 120));
+}
+
 void main() {
   late HookedServiceBuild build;
   late Map<String, String> saved;
@@ -750,6 +798,28 @@ void main() {
     expect(FileStat.statSync(inside).mode & 0x1ff, 0x180);
   });
 
+  /// `bin/service.dart --stop` for [profile], with service traces on.
+  Future<StopRun> startStop(
+    ProfilePaths profile, {
+    Map<String, String> environment = const {},
+  }) async {
+    final process = await Process.start(
+      Platform.resolvedExecutable,
+      [build.kernel, '--stop'],
+      environment: {
+        for (final entry in Platform.environment.entries)
+          if (!entry.key.startsWith('FORESIGHT_')) entry.key: entry.value,
+        'FORESIGHT_DATA': profile.data,
+        'FORESIGHT_RUNTIME': profile.runtime,
+        'FORESIGHT_SERVICE_TRACE': '1',
+        ...environment,
+      },
+      includeParentEnvironment: false,
+    );
+    addTearDown(() => process.kill(ProcessSignal.sigkill));
+    return StopRun(process);
+  }
+
   test(
     '--stop returns only after the owner releases its profile lock (L6)',
     () async {
@@ -759,50 +829,81 @@ void main() {
         profile,
         hold: ['close.before_lock_release'],
       );
-      Process? stop;
-      try {
-        await owner.ready();
-        stop = await Process.start(
-          Platform.resolvedExecutable,
-          [build.kernel, '--stop'],
-          environment: {
-            for (final entry in Platform.environment.entries)
-              if (!entry.key.startsWith('FORESIGHT_')) entry.key: entry.value,
-            'FORESIGHT_DATA': profile.data,
-            'FORESIGHT_RUNTIME': profile.runtime,
-          },
-          includeParentEnvironment: false,
-        );
-        final output = utf8.decoder.bind(stop.stdout).join();
-        final errors = StreamIterator(
-          utf8.decoder.bind(stop.stderr).transform(const LineSplitter()),
-        );
-        await owner.reached('close.before_lock_release');
-        // The owner closed every connection and still holds its lock. --stop
-        // says it is waiting instead of reporting success at that EOF.
-        final waiting = await Future.any([
-          errors.moveNext().then(
-            (more) => more ? errors.current : 'stderr closed',
-          ),
-          stop.exitCode.then((code) => 'exited $code'),
-        ]).timeout(const Duration(seconds: 120));
-        expect(
-          waiting,
+      await owner.ready();
+      final stop = await startStop(profile);
+      var exited = false;
+      unawaited(stop.process.exitCode.then((_) => exited = true));
+      await owner.reached('close.before_lock_release');
+      // Every connection has closed; --stop found the lock still held and
+      // keeps waiting instead of reporting success at that EOF.
+      await stop.line('still holds its profile');
+      expect(exited, isFalse);
+      owner.release('close.before_lock_release');
+      expect(await stop.exited(), 0, reason: stop.lines.join('\n'));
+      expect(
+        stop.lines,
+        contains(
           'Waiting for the application service (pid ${owner.pid}) to '
           'release its profile.',
-        );
-        owner.release('close.before_lock_release');
-        expect(await stop.exitCode, 0);
-        expect(await output, isEmpty);
-        expect(await owner.exitCode, 0, reason: owner.output);
-        await errors.cancel();
-      } finally {
-        stop?.kill(ProcessSignal.sigkill);
-        await owner.stop();
-      }
+        ),
+      );
+      expect(await owner.exited(), 0, reason: owner.output);
+      // A clean shutdown gets no warning.
+      expect(stop.lines.join('\n'), isNot(contains('clean shutdown')));
     },
     timeout: const Timeout(Duration(minutes: 3)),
   );
+
+  test('--stop fails when the owner keeps its profile past the release bound '
+      '(L6)', () async {
+    final profile = newProfile('of-stuck-');
+    final owner = await HookedServiceProcess.start(
+      build,
+      profile,
+      hold: ['close.before_lock_release'],
+    );
+    await owner.ready();
+    final stop = await startStop(
+      profile,
+      environment: {'FORESIGHT_TEST_STOP_RELEASE_MS': '200'},
+    );
+    await owner.reached('close.before_lock_release');
+    expect(await stop.exited(), isNot(0));
+    expect(
+      stop.lines.join('\n'),
+      contains(
+        'The application service (pid ${owner.pid}) closed its connections '
+        'but did not release its profile within 200 ms.',
+      ),
+    );
+    owner.release('close.before_lock_release');
+    expect(await owner.exited(), 0, reason: owner.output);
+  }, timeout: const Timeout(Duration(minutes: 3)));
+
+  test('--stop succeeds but warns when the owner stops without a clean '
+      'shutdown (L6)', () async {
+    final profile = newProfile('of-unclean-');
+    final owner = await HookedServiceProcess.start(build, profile);
+    await owner.ready();
+    // The worker dies just before deleting its record, leaving it behind.
+    File(
+      '${owner.gates.directory.path}/close.before_record_delete.crash',
+    ).writeAsStringSync('');
+    final stop = await startStop(profile);
+    expect(await stop.exited(), 0, reason: stop.lines.join('\n'));
+    expect(
+      stop.lines,
+      contains(
+        'The application service stopped without a clean shutdown; its '
+        'endpoint record remains, and the next start recovers its runtime.',
+      ),
+    );
+    await owner.exited();
+    expect(
+      File('${profile.data}/.application-endpoint.json').existsSync(),
+      isTrue,
+    );
+  }, timeout: const Timeout(Duration(minutes: 3)));
 
   test('the release wait ends when the lock is free or the owner is gone, and '
       'gives up after its bound', () async {

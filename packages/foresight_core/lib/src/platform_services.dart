@@ -12,6 +12,8 @@ const _testHookKeys = {
   'FORESIGHT_CRASH_AT',
   'FORESIGHT_TEST_DELAY_MS',
   'FORESIGHT_SERVICE_GATES',
+  // How long `--stop` waits for the owner to release its profile.
+  'FORESIGHT_TEST_STOP_RELEASE_MS',
 };
 
 /// The same immutable resource map is used by Finder, MCP and detached workers.
