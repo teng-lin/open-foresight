@@ -34,7 +34,7 @@ void appendLine(String path, String line) {
 }
 Future<void> main() async {
   final data = Platform.environment['FORESIGHT_DATA']!;
-  final runtime = Platform.environment['FORESIGHT_RUNTIME']!;
+  var runtime = Platform.environment['FORESIGHT_RUNTIME']!;
   final old = Platform.environment['OLD_OWNER'] == '1';
   if (!old) {
     appendLine('$data/launches', 'launch');
@@ -59,13 +59,26 @@ Future<void> main() async {
   }
   if (!old) File('$data/replacement.pid').writeAsStringSync('$pid');
   final endpoint = File('$data/.application-endpoint.json');
-  // Publish the record atomically, as production does.
-  File('${endpoint.path}.$pid')
-    ..writeAsStringSync(jsonEncode({'data': data, 'runtime': runtime}))
-    ..renameSync(endpoint.path);
+  // As in production, a replacement adopts the runtime that an unclean
+  // predecessor recorded; only the record links that runtime to the profile.
+  if (!old && endpoint.existsSync()) {
+    final record = jsonDecode(endpoint.readAsStringSync());
+    if (record is Map && record['data'] == data && record['runtime'] is String) {
+      runtime = record['runtime'] as String;
+    }
+  }
+  // Publish the record atomically and privately, as production does.
+  final temporary = File('${endpoint.path}.$pid')
+    ..writeAsStringSync(jsonEncode({'data': data, 'runtime': runtime}));
+  if (Process.runSync('/bin/chmod', ['600', temporary.path]).exitCode != 0) {
+    throw StateError('Cannot protect the endpoint record');
+  }
+  temporary.renameSync(endpoint.path);
   final path = '$runtime/application.sock';
-  final server = await ServerSocket.bind(InternetAddress(path, type: InternetAddressType.unix), 0);
-  if (!old) File('$data/replacement.ready').writeAsStringSync('$pid');
+  // Bind under a private name, then rename, as ServiceSocketBinding does.
+  // Closing the listener then never unlinks the public path; teardown must.
+  final bound = '$runtime/.s$pid';
+  final server = await ServerSocket.bind(InternetAddress(bound, type: InternetAddressType.unix), 0);
   final peers = <Socket>[];
   final stopped = Completer<void>();
   void stop() { if (!stopped.isCompleted) stopped.complete(); }
@@ -110,22 +123,27 @@ Future<void> main() async {
       if (old && Platform.environment['ERROR_MESSAGE'] == 'stall') stdout.writeln('peer-closed');
     });
   });
+  // Publish only after the handler is attached.
+  File(bound).renameSync(path);
+  if (!old) File('$data/replacement.ready').writeAsStringSync('$pid');
+  // Teardown follows production: public socket, then record, then lock.
+  Future<void> removeSocket() async {
+    for (final socket in peers) { socket.destroy(); }
+    await server.close();
+    if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound) File(path).deleteSync();
+  }
   if (old) {
     stdout.writeln('ready');
     await for (final command in stdin.transform(utf8.decoder).transform(const LineSplitter())) {
       if (command == 'close-socket' || command == 'release') {
-        for (final socket in peers) { socket.destroy(); }
-        await server.close();
-        if (File(path).existsSync()) File(path).deleteSync();
+        await removeSocket();
         if (command == 'close-socket') stdout.writeln('socket-closed');
       }
       if (command == 'release') break;
     }
   } else {
     await stopped.future;
-    for (final socket in peers) { socket.destroy(); }
-    await server.close();
-    if (File(path).existsSync()) File(path).deleteSync();
+    await removeSocket();
   }
   control?.cancel();
   if (Platform.environment['KEEP_ENDPOINT'] != '1') endpoint.deleteSync();
@@ -170,6 +188,10 @@ class HandoffFixture {
   final environment = Map.of(runtimeConfiguration.environment);
   late Directory root;
   late ProfilePaths profile;
+
+  /// The old owner's runtime. With a separate one, only the endpoint record
+  /// links it to the profile; clients use [ProfilePaths.runtime] otherwise.
+  late String ownerRuntime;
   late Process old;
   late StreamIterator<String> messages;
   late Future<String> errors;
@@ -180,11 +202,14 @@ class HandoffFixture {
   Future<void> start({
     String errorMessage = closingMessage,
     bool keepEndpoint = false,
+    bool separateOwnerRuntime = false,
   }) async {
     root = await createPrivateTempDirectory(shortTestTempRoot, 'of-handoff-');
     profile = ProfilePaths('${root.path}/data', '${root.path}/run');
+    ownerRuntime = separateOwnerRuntime ? '${root.path}/own' : profile.runtime;
     privateDirectory(profile.data);
     privateDirectory(profile.runtime);
+    privateDirectory(ownerRuntime);
     final owner = File('${root.path}/owner.dart')
       ..writeAsStringSync(ownerSource);
     final launcher = File('${root.path}/launch')
@@ -202,7 +227,7 @@ class HandoffFixture {
       [owner.path],
       environment: {
         'FORESIGHT_DATA': profile.data,
-        'FORESIGHT_RUNTIME': profile.runtime,
+        'FORESIGHT_RUNTIME': ownerRuntime,
         'OLD_OWNER': '1',
         'ERROR_MESSAGE': errorMessage,
         'KEEP_ENDPOINT': keepEndpoint ? '1' : '0',
@@ -294,10 +319,9 @@ class HandoffFixture {
             timeout: const Duration(seconds: 15),
           );
         }
-        expect(
-          File('${profile.runtime}/application.sock').existsSync(),
-          isFalse,
-        );
+        for (final runtime in {profile.runtime, ownerRuntime}) {
+          expect(File('$runtime/application.sock').existsSync(), isFalse);
+        }
         expect(
           File('${profile.data}/.application-endpoint.json').existsSync(),
           isFalse,
@@ -314,12 +338,26 @@ class HandoffFixture {
   }
 }
 
+/// Closing-owner tests run twice: with the owner in the client's runtime, and
+/// in a separate runtime that only the endpoint record links to the profile.
+void ownerRuntimeVariants(
+  String name,
+  Future<void> Function(bool separateOwnerRuntime) body,
+) {
+  for (final separate in [false, true]) {
+    test(
+      separate ? '$name (separate owner runtime)' : name,
+      () => body(separate),
+    );
+  }
+}
+
 void main() {
-  test(
+  ownerRuntimeVariants(
     'desktop startup joins the closing owner before one replacement launch',
-    () async {
+    (separate) async {
       final f = HandoffFixture();
-      await f.start();
+      await f.start(separateOwnerRuntime: separate);
       try {
         final pending = f.connect();
         final success = expectLater(pending, completes);
@@ -350,11 +388,11 @@ void main() {
     },
   );
 
-  test(
+  ownerRuntimeVariants(
     'EOF before status waits for the real owner lock before one launch',
-    () async {
+    (separate) async {
       final f = HandoffFixture();
-      await f.start(errorMessage: 'eof');
+      await f.start(errorMessage: 'eof', separateOwnerRuntime: separate);
       try {
         final pending = f.connect();
         final success = expectLater(pending, completes);
@@ -544,11 +582,11 @@ void main() {
   }
 
   for (final socketClosed in [false, true]) {
-    test(
+    ownerRuntimeVariants(
       'owner handoff deadline preserves a live owner (socket closed: $socketClosed)',
-      () async {
+      (separate) async {
         final f = HandoffFixture();
-        await f.start();
+        await f.start(separateOwnerRuntime: separate);
         try {
           final pending = f.connect(
             startupTimeout: const Duration(milliseconds: 500),
@@ -574,11 +612,15 @@ void main() {
 
   for (final mode in [closingMessage, 'eof']) {
     final observed = mode == 'eof' ? 'eof-observed' : 'closing-observed';
-    test(
+    ownerRuntimeVariants(
       'unclean owner shutdown hands off to one adopting replacement ($observed)',
-      () async {
+      (separate) async {
         final f = HandoffFixture();
-        await f.start(errorMessage: mode, keepEndpoint: true);
+        await f.start(
+          errorMessage: mode,
+          keepEndpoint: true,
+          separateOwnerRuntime: separate,
+        );
         try {
           final pending = f.connect();
           final success = expectLater(pending, completes);
@@ -598,6 +640,16 @@ void main() {
           expect(File('${f.profile.data}/launches').readAsLinesSync(), [
             'launch',
           ]);
+          // The replacement adopted the runtime the old owner recorded.
+          expect(
+            (jsonDecode(
+                  File(
+                    '${f.profile.data}/.application-endpoint.json',
+                  ).readAsStringSync(),
+                )
+                as Map)['runtime'],
+            f.ownerRuntime,
+          );
         } finally {
           await f.close();
         }
@@ -605,11 +657,11 @@ void main() {
     );
   }
 
-  test(
+  ownerRuntimeVariants(
     'concurrent launchers after an unclean shutdown converge on one owner',
-    () async {
+    (separate) async {
       final f = HandoffFixture();
-      await f.start(keepEndpoint: true);
+      await f.start(keepEndpoint: true, separateOwnerRuntime: separate);
       // Hold replacements before the lock, so both launchers find it free and
       // each launches exactly once.
       runtimeConfiguration.environment['REPLACEMENT_GATE'] = '1';
