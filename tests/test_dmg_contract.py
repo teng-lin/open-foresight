@@ -97,7 +97,6 @@ class DmgContractTest(unittest.TestCase):
 
     def test_previous_signed_dmg_upgrades_owned_copy_without_losing_database(self):
         """Real DMG/signature/atomic-install boundaries with a tiny SQLite fixture."""
-        import shutil
         import sqlite3
         from unittest.mock import patch
 
@@ -108,14 +107,35 @@ class DmgContractTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             images = []
+
+            def assert_fixture_version(bundle, version):
+                result = subprocess.run(
+                    [str(bundle / "Contents/MacOS/fixture")],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                self.assertEqual(
+                    result.returncode,
+                    0,
+                    f"fixture exit={result.returncode}: "
+                    f"stdout={result.stdout!r}, stderr={result.stderr!r}",
+                )
+                self.assertEqual(result.stdout, version + "\n")
+
             for version in ("1.2.2", "1.2.3"):
                 build = root / version
                 app = build / "Open Foresight.app"
                 executable = app / "Contents/MacOS/fixture"
                 executable.parent.mkdir(parents=True)
-                # Re-sign an owned copy of a tiny existing Mach-O. No SDK build.
-                shutil.copyfile("/usr/bin/true", executable)
-                executable.chmod(0o755)
+                source = build / "fixture.c"
+                source.write_text(
+                    '#include <stdio.h>\n'
+                    f'int main(void) {{ puts("{version}"); return 0; }}\n'
+                )
+                subprocess.run(
+                    ["cc", str(source), "-o", str(executable)], check=True, timeout=60
+                )
                 (app / "Contents/Info.plist").write_bytes(
                     plistlib.dumps(
                         {
@@ -132,6 +152,7 @@ class DmgContractTest(unittest.TestCase):
                     check=True,
                     timeout=60,
                 )
+                assert_fixture_version(app, version)
                 manifest = build / "manifest.json"
                 manifest.write_text(
                     json.dumps(
@@ -175,6 +196,7 @@ class DmgContractTest(unittest.TestCase):
                 self.assertEqual(
                     metadata(bundle)["CFBundleShortVersionString"], "1.2.2"
                 )
+                assert_fixture_version(bundle, "1.2.2")
                 profile.mkdir()
                 with sqlite3.connect(profile / "application.db") as connection:
                     connection.execute("CREATE TABLE notes(body TEXT)")
@@ -219,11 +241,7 @@ class DmgContractTest(unittest.TestCase):
                         connection.execute("SELECT body FROM notes").fetchall(),
                         [("upgrade data",)],
                     )
-                subprocess.run(
-                    [str(destination / "Contents/MacOS/fixture")],
-                    check=True,
-                    timeout=30,
-                )
+                assert_fixture_version(destination, "1.2.3")
             finally:
                 subprocess.run(
                     ["hdiutil", "detach", str(mount)], check=True, timeout=60
