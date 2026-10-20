@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'package:test/test.dart';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/service.dart'
@@ -502,6 +503,30 @@ void main() {
   });
 
   test(
+    'a created private directory is never visible with a public mode',
+    () async {
+      // An owner creates its runtime directory while a client resolving the
+      // endpoint may create the same one. If the mode were set after mkdir, the
+      // other creator could see the directory public in between and refuse it.
+      for (var round = 0; round < 5; round++) {
+        final path = '${scratch.path}/watched-$round/run';
+        final port = ReceivePort();
+        final messages = StreamIterator(port);
+        try {
+          await Isolate.spawn(_publicModesSeen, [path, port.sendPort]);
+          expect(await messages.moveNext(), isTrue);
+          expect(messages.current, 'watching');
+          privateDirectory(path);
+          expect(await messages.moveNext(), isTrue);
+          expect(messages.current, isEmpty, reason: 'round $round');
+        } finally {
+          port.close();
+        }
+      }
+    },
+  );
+
+  test(
     'owned legacy profile permissions are repaired without changing data',
     () {
       final path = '${scratch.path}/legacy-profile';
@@ -617,4 +642,19 @@ void main() {
       expect(physicalMemoryGb(), greaterThan(0));
     }
   });
+}
+
+/// Watch [args] path until it is a private directory, then send the public
+/// modes it had before that. [args] is the path and a [SendPort].
+void _publicModesSeen(List<Object> args) {
+  final path = args[0] as String, out = args[1] as SendPort;
+  out.send('watching');
+  final modes = <int>{};
+  for (final clock = Stopwatch()..start(); clock.elapsed.inSeconds < 30;) {
+    final stat = FileStat.statSync(path);
+    if (stat.type != FileSystemEntityType.directory) continue;
+    if (stat.mode & 0x3f == 0) break;
+    modes.add(stat.mode & 0x1ff);
+  }
+  out.send(modes.toList());
 }

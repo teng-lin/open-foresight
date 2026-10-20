@@ -189,6 +189,16 @@ final int Function(Pointer<Utf8>, int) _chmod = Platform.isMacOS
         int Function(Pointer<Utf8>, int)
       >('chmod');
 
+final int Function(Pointer<Utf8>, int) _mkdir = Platform.isMacOS
+    ? DynamicLibrary.process().lookupFunction<
+        Int32 Function(Pointer<Utf8>, Uint16),
+        int Function(Pointer<Utf8>, int)
+      >('mkdir')
+    : DynamicLibrary.process().lookupFunction<
+        Int32 Function(Pointer<Utf8>, Uint32),
+        int Function(Pointer<Utf8>, int)
+      >('mkdir');
+
 /// Set mode 0600 before exposing a private local endpoint to its clients.
 void protectPrivateFile(String path) {
   if (path.contains('\u0000')) {
@@ -212,9 +222,23 @@ void privateDirectory(String path, {bool repairOwnedPermissions = false}) {
     throw StateError('Private directory must not be a symbolic link: $path');
   }
   if (!dir.existsSync()) {
-    dir.createSync(recursive: true);
-    if (Process.runSync('/bin/chmod', ['700', path]).exitCode != 0) {
-      throw StateError('Cannot protect $path');
+    if (path.contains('\u0000')) {
+      throw StateError('Private directory path contains a NUL character');
+    }
+    dir.parent.createSync(recursive: true);
+    // Create it with mode 0700: a directory created first and protected after
+    // looks public to another creator in between, such as a client resolving
+    // the endpoint while its owner starts, which then refuses it.
+    final nativePath = path.toNativeUtf8(allocator: calloc);
+    try {
+      // Another creator may win the race; the checks below decide either way.
+      if (_mkdir(nativePath, 0x1c0) == 0 &&
+          (dir.statSync().mode & 0x1ff) != 0x1c0 &&
+          _chmod(nativePath, 0x1c0) != 0) {
+        throw StateError('Cannot protect $path');
+      }
+    } finally {
+      calloc.free(nativePath);
     }
   }
   final owner = Process.runSync(
