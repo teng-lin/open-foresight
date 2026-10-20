@@ -19,13 +19,25 @@ const ownerSource = r'''
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+// Concurrent replacements append to shared logs. FileMode.append seeks to the
+// end at open rather than using O_APPEND, so serialize each append.
+void appendLine(String path, String line) {
+  final log = File(path).openSync(mode: FileMode.append);
+  try {
+    log.lockSync(FileLock.blockingExclusive);
+    log.setPositionSync(log.lengthSync());
+    log.writeStringSync('$line\n');
+  } finally {
+    log.closeSync();
+  }
+}
 Future<void> main() async {
   final data = Platform.environment['FORESIGHT_DATA']!;
   final runtime = Platform.environment['FORESIGHT_RUNTIME']!;
   final old = Platform.environment['OLD_OWNER'] == '1';
   if (!old) {
-    File('$data/launches').writeAsStringSync('launch\n', mode: FileMode.append);
-    File('$data/launched-pids').writeAsStringSync('$pid\n', mode: FileMode.append);
+    appendLine('$data/launches', 'launch');
+    appendLine('$data/launched-pids', '$pid');
     // A test may hold replacements before they contend for the lock.
     if (Platform.environment['REPLACEMENT_GATE'] == '1') {
       while (!File('$data/replacement.go').existsSync()) {
@@ -36,10 +48,12 @@ Future<void> main() async {
   final lock = File('$data/.application.lock').openSync(mode: FileMode.append);
   try {
     lock.lockSync(FileLock.exclusive);
-  } on FileSystemException {
-    // Concurrent launchers may start two replacements; the loser exits.
-    if (old) rethrow;
-    File('$data/lost-launches').writeAsStringSync('$pid\n', mode: FileMode.append);
+  } on FileSystemException catch (error) {
+    // Concurrent launchers may start two replacements; only the one that
+    // loses lock contention (EAGAIN on Linux or macOS, or EACCES) exits.
+    final code = error.osError?.errorCode;
+    if (old || (code != 11 && code != 13 && code != 35)) rethrow;
+    appendLine('$data/lost-launches', '$pid');
     exit(3);
   }
   if (!old) File('$data/replacement.pid').writeAsStringSync('$pid');
