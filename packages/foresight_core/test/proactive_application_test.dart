@@ -23,11 +23,30 @@ class _Domain extends Domain {
     this,
     queryRuntime: detector,
   );
-  Completer<void>? indexGate;
+  Completer<void>? indexGate, indexEntered, indexParked;
+  bool productionIndex = false;
   @override
   Future<void> index(String id, {bool Function()? current}) async {
+    if (indexEntered != null && !indexEntered!.isCompleted) {
+      indexEntered!.complete();
+    }
     await indexGate?.future;
-    store.state(id, 'indexed');
+    if (productionIndex) {
+      await super.index(id, current: current);
+    } else {
+      store.state(id, 'indexed');
+    }
+  }
+
+  @override
+  Future<void> waitForSourceWork({bool Function()? current}) {
+    if (productionIndex &&
+        sourcesPaused &&
+        indexParked != null &&
+        !indexParked!.isCompleted) {
+      indexParked!.complete();
+    }
+    return super.waitForSourceWork(current: current);
   }
 }
 
@@ -56,6 +75,12 @@ class _Rag extends RagServiceBase {
       ],
     );
   }
+
+  @override
+  Future<IndexResponse> indexDocument(
+    ServiceCall call,
+    IndexRequest request,
+  ) async => IndexResponse(success: true);
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -330,6 +355,45 @@ void main() {
         store.rows('SELECT state FROM meeting_questions').single['state'],
         'queued',
       );
+    },
+  );
+
+  test(
+    'cancelled proactive preparation leaves a real paused shared index durable and not busy',
+    () async {
+      final id = store.meeting('Paused preparation');
+      final queue = domain.application.proactive;
+      queue.begin(id);
+      store.transcript(
+        id,
+        'Mira owns the draft. Who owns the draft?',
+        true,
+        0,
+        1000,
+        'microphone',
+      );
+      queue.notify(id);
+      await queue.process();
+      domain.productionIndex = true;
+      domain.indexEntered = Completer<void>();
+      domain.indexParked = Completer<void>();
+      domain.indexGate = Completer<void>();
+      final work = queue.process();
+      await domain.indexEntered!.future;
+      domain.pauseSources();
+      domain.indexGate!.complete();
+      await domain.indexParked!.future;
+      await queue.close();
+      await work;
+      expect(queue.running, false);
+      expect(domain.application.proactiveWork, 0);
+      expect(domain.mutating, 0);
+      expect(domain.application.backgroundBusy, false);
+      expect(store.sources.single['state'], 'pending');
+      expect(domain.cancellationWatchCount, 0);
+      domain.resumeSources();
+      await eventually(() => store.sources.single['state'] == 'indexed');
+      expect(domain.application.backgroundBusy, false);
     },
   );
 

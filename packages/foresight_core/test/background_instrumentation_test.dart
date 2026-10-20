@@ -86,11 +86,11 @@ void main() {
       if (discard == 'clear') cache.clear();
       if (discard == 'invalidate') cache.invalidate(1);
       if (discard == 'evict') {
-        for (var id = 2; id < 8; id++) {
-          cache.schedule(id, '', isLive: false).ignore();
-        }
+        await Future.wait([
+          for (var id = 2; id < 8; id++) cache.schedule(id, '', isLive: false),
+        ]);
       }
-      expect(cache.computing, greaterThanOrEqualTo(1));
+      expect(cache.computing, 1);
       release.complete();
       await work;
       expect(cache.computing, 0);
