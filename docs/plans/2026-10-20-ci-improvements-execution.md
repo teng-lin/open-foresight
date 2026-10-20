@@ -62,6 +62,49 @@ is `/var/tmp/ofci/venv`. No successful dependency cache has been deleted.
 
 ## Review and qualification limits
 
+## Current implementation checkpoints
+
+| Scope | Reviewed source | Validation |
+| --- | --- | --- |
+| Tooling and dedicated cache ownership | `14e3dcad` | Native review converged; full source and complete archive each 4,624 passed, 29 skipped, 95.78% coverage; HanSolo 380 tests plus 843 subtests; archive PR/main/unset contexts also passed |
+| Gates, metrics and DMG follow-up | `fbf83ef1` | Native review verified the precision predecessor `0d873105`; final source focused suite 567 tests plus 97 subtests passed; final CLI/Mac checks pending |
+| Main evidence and receipt owners | `c7ffa7d0` | Native review converged; frozen export 57 tests plus 44 subtests passed; integrated authorization reviewed with the activation batch |
+| Dynamic qualification and production activation | `be2d1b62` | Native review converged; frozen export 236 tests plus 44 subtests passed; full source/archive, final Mac and CLI checks pending |
+
+The reliability `33e20c2e` full source/archive checks reached 95.68% coverage
+but failed one retry-safety structural assertion. That assertion was corrected
+to recognize immutable attempt-specific artifact names. These runs are retained
+as failures, not counted as final passing gates. Earlier activation full runs
+also exposed stale helper-mocking targets and isolated CLI fixtures; the final
+combined gate must verify their corrections.
+
+Review fixes include the actual preview DMG job name, conservative legacy owner
+selection, retained failed-attempt DMG evidence, exact metrics cohort boundaries,
+newer sweep readiness versus verified no-op duplicates, original qualification
+uploader identity, actual Docker recipe selection, nightly recovery windows,
+and receipt/aggregate ownership after qualified Arch retirement. The final
+reliability follow-up also preserves a minimum of both existing Apple contracts
+while accepting future inventory growth.
+
+Scheduled cache reconciliation remains read-only toward shared caches and
+dispatches dedicated main publishers. Missing language/model keys warm
+independently. Registry work is bounded by actual current-source publisher
+readiness and 24-hour freshness, with a 30-minute active-producer limit.
+
+Agy's latest implementation retry also returned an account-quota error and no
+verdict. Its reset diagnostic was approximately 70 hours; no account, billing,
+model or permission settings were changed. Native/Claude convergence cannot be
+reported as a completed Agy review.
+
+Physical deletion of bootstrap Arch stages and legacy publisher code remains
+deferred: the single-PR delivery needs those implementations before hosted
+qualification and for conservative rollback. Runtime retirement is evidence-gated
+and executable without another activation code PR. Net CI code deletion is not
+an achieved target. Matched runtime/error-rate improvements are also unmeasured
+until at least five comparable ordinary hosted observations exist.
+
+## Review and qualification limits
+
 Claude's first implementation review found actionable owner-selection, metrics,
 snapshot-integrity and DMG error-reporting issues; fixes require another review
 on the corrected source. Native cross-review also found stale readiness and
