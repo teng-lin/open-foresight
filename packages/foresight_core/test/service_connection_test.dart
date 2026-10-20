@@ -207,9 +207,9 @@ void main() {
     ]) {
       expect(f.requests.where((r) => r['method'] == method), hasLength(count));
     }
-    // With nothing left pending, the retired connection closed, and new
-    // requests use the next owner's.
-    expect(previous.isClosed, isTrue);
+    // With nothing left pending, the retired connection closed (the owner
+    // sees its end), and new requests use the next owner's.
+    await eventually(() => f.ended.contains(closing));
     expect(await connection.connect(), isNot(same(previous)));
     await connection.close();
   });

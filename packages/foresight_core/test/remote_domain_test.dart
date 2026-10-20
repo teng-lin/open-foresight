@@ -605,8 +605,9 @@ void main() {
     ]) {
       expect(f.requests.where((r) => r['method'] == method), hasLength(count));
     }
-    // With nothing left pending, the retired connection closed.
-    expect(previous.isClosed, isTrue);
+    // With nothing left pending, the retired connection closed: the owner
+    // sees its end.
+    await eventually(() => f.ended.contains(closing));
     await expectLater(
       previous.call('after.handoff'),
       throwsA(
