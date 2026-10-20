@@ -157,6 +157,8 @@ void main() {
       ProfilePaths('${temp.path}/profile', '${temp.path}/run'),
     );
     await service.closed.timeout(const Duration(seconds: 10));
+    // Server cleanup can finish before this client's EOF callback runs.
+    await agent.socket.done.timeout(const Duration(seconds: 3));
     expect(agent.isClosed, isTrue);
   });
 
@@ -177,6 +179,7 @@ void main() {
       await attach();
       await desktop.close();
       await service.closed.timeout(const Duration(seconds: 10));
+      await agent.socket.done.timeout(const Duration(seconds: 3));
       expect(agent.isClosed, isTrue);
     },
   );
