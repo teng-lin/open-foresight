@@ -271,7 +271,8 @@ Future<SocketPathInUse?> probeSocketPath(String path) async {
   }
   const bound = Duration(milliseconds: 200);
   final elapsed = Stopwatch()..start();
-  for (var attempt = 1; ; attempt++) {
+  var resets = 0, refusals = 0;
+  while (true) {
     final left = bound - elapsed.elapsed;
     final SocketException error;
     try {
@@ -296,7 +297,11 @@ Future<SocketPathInUse?> probeSocketPath(String path) async {
     // The listener this connect reached closed while it waited: its owner
     // stopped, or the last copy went, such as one a child process inherited
     // until it called exec. Ask again what is at the path now.
-    if (_listenerReset(error) && attempt < 3 && elapsed.elapsed < bound) {
+    // The first reset is asked again even past the bound: the load that
+    // delays reading it does not delay the next connect, which a local
+    // socket answers at once.
+    if (_listenerReset(error) &&
+        (++resets == 1 || (resets <= 3 && elapsed.elapsed < bound))) {
       continue;
     }
     if (!nobodyListening(error)) return SocketPathInUse(path, cause: error);
@@ -308,7 +313,7 @@ Future<SocketPathInUse?> probeSocketPath(String path) async {
     // since macOS runtimes are per profile by default.
     if (!Platform.isMacOS ||
         error.osError?.errorCode != 61 ||
-        attempt >= 3 ||
+        ++refusals >= 3 ||
         elapsed.elapsed >= bound) {
       return null;
     }

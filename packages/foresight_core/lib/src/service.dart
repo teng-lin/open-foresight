@@ -670,14 +670,13 @@ class ServiceClient {
         maxMessageBytes,
         path,
       );
-    } on OSError catch (error) {
+    } on OSError catch (error, stack) {
       // A connect that waited and then failed, for example because a closing
       // owner's listener went while it waited, reports the socket's pending
       // error as a bare OSError. Callers expect a SocketException.
-      throw SocketException(
-        'Connection failed',
-        osError: error,
-        address: address,
+      Error.throwWithStackTrace(
+        SocketException('Connection failed', osError: error, address: address),
+        stack,
       );
     }
   }

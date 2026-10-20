@@ -58,7 +58,18 @@ void main() {
         final closed = listener.close();
         // Hold this isolate while the closed listener resets that connect.
         sleep(const Duration(milliseconds: 50));
-        await expectLater(connecting, throwsA(isA<SocketException>()));
+        // Only the reset path; a plain refused or missing socket would be a
+        // SocketException too.
+        await expectLater(
+          connecting,
+          throwsA(
+            isA<SocketException>().having(
+              (error) => error.osError?.errorCode,
+              'errno',
+              104,
+            ),
+          ),
+        );
         await closed;
       } finally {
         await listener.close();
