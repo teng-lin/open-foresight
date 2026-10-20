@@ -1140,5 +1140,8 @@ consumer's attempt 2 while its successful original producer job was attempt 1.
 The verifier correctly rejected that mismatch. Fixture packing now supplies the
 historical attempt explicitly, including the forged-receipt negative case;
 regressions exercise consumer attempts 2 and 7 and still reject a wrong producer
-attempt. No production provenance rule changed. The failed attempt is excluded
+attempt. Full-suite rerun validation also exposed the same inherited-attempt
+assumption in historical sanitizer and candidate-selection fixtures; their real
+packing now supplies the original attempt too. No production provenance rule
+changed. The failed attempt is excluded
 and the five-execution measurement must restart on the corrected source.
