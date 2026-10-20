@@ -1341,15 +1341,17 @@ def test_release_service_ignores_lifecycle_gates(tmp_path):
             helper.kill()
 
 
-def test_mcp_startup_joins_a_closing_owner_and_attaches_to_one_replacement(
-    tmp_path,
-):
+def test_attached_mcp_follows_a_closing_owner_to_one_replacement(tmp_path):
     """Built service, MCP and helper on both sides of the closing handoff (T3).
 
     A gated helper holds the closing owner inside its helper shutdown, with
-    its profile lock. MCP startup gets the frontend's closing refusal and
-    launches nothing while the owner holds the profile; once the owner exits
-    it starts exactly one replacement and attaches to it.
+    its profile lock. An attached MCP's next request is refused by the owner;
+    the handoff's startup probe gets the draining frontend's refusal, and
+    nothing launches while the owner holds the profile. Once the owner exits,
+    MCP starts exactly one replacement and sends the request to it.
+
+    MCP starts and attaches before the close, so only the refusals, not MCP's
+    own startup, must fit in the helper's 5 s hold.
     """
     assert SERVICE.is_file() and MCP.is_file(), "Build service and MCP first"
     data, runtime = tmp_path / "data", tmp_path / "run"
@@ -1398,10 +1400,16 @@ def test_mcp_startup_joins_a_closing_owner_and_attaches_to_one_replacement(
                 assert peer.call("status")["pid"] == owner.pid
             finally:
                 peer.close()
+            mcp = McpPeer(mcp_env)
+            mcp.service_pid = owner.pid
+            mcp.initialize()
+            attached = mcp.tool("get_status")["structuredContent"]["result"]
+            assert attached["pid"] == owner.pid
             owner.send_signal(signal.SIGTERM)
             held = helper.published("stopping", deadline, owner)
-            mcp = McpPeer(mcp_env)
-            # The draining frontend answers the startup probe with a refusal.
+            pending = mcp.send("tools/call", {"name": "get_status", "arguments": {}})
+            # The owner refuses the request; the draining frontend then
+            # refuses the handoff's startup probe and keeps it open.
             while "frontend refuse peer=" not in Path(log.name).read_text():
                 assert mcp.process.poll() is None, mcp.process.stderr.read()
                 poll_delay(deadline)
@@ -1415,8 +1423,9 @@ def test_mcp_startup_joins_a_closing_owner_and_attaches_to_one_replacement(
             helper.release()
             assert owner.wait(timeout=30) == 0
             assert helper.released(), "hold window missed: the helper was killed"
-            mcp.initialize()
-            status = mcp.tool("get_status")["structuredContent"]["result"]
+            response = mcp.result(pending)
+            assert "error" not in response, response
+            status = response["result"]["structuredContent"]["result"]
             replacement = status["pid"]
             assert replacement != owner.pid
             assert [int(line) for line in launches.read_text().split()] == [replacement]

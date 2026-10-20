@@ -523,7 +523,8 @@ void main() {
     ]);
   });
 
-  for (final cancelled in ['gen-3', 'another-answer']) {
+  // The desktop cancels with no request ID (generator.cancel()).
+  for (final cancelled in <String?>['gen-3', null, 'another-answer']) {
     test('a cancel during the handoff stops only that answer\'s resend '
         '(cancel $cancelled)', () async {
       final proxy = ServiceFaultProxy();
@@ -563,7 +564,7 @@ void main() {
         final generates = f.requests.where(
           (r) => r['method'] == 'meetings.generate',
         );
-        if (cancelled == 'gen-3') {
+        if (cancelled != 'another-answer') {
           await expectLater(
             pending,
             throwsA(
