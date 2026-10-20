@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:foresight_core/src/platform_services.dart';
 import 'package:foresight_test_support/gated_helper.dart';
 import 'package:foresight_test_support/poll.dart';
+import 'package:foresight_test_support/service_fault_proxy.dart';
 import 'package:foresight_core/src/profile_paths.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/service.dart';
@@ -13,6 +14,8 @@ import 'package:test/test.dart';
 
 const closingMessage =
     'Application service is shutting down; retry after it exits.';
+const probeTimeoutMessage =
+    'Application service did not answer its startup status probe';
 
 // A real separate owner holds the same OS lock as the application service.
 // Its socket can close before that owner releases the lock, as in production.
@@ -199,6 +202,10 @@ class HandoffFixture {
   ServiceClient? client;
   bool released = false;
 
+  /// Relays [connect]'s socket connects, so tests anchor on observed frames
+  /// and connect attempts instead of elapsed time.
+  final proxy = ServiceFaultProxy();
+
   Future<void> start({
     String errorMessage = closingMessage,
     bool keepEndpoint = false,
@@ -250,10 +257,13 @@ class HandoffFixture {
 
   Future<ServiceClient> connect({
     Duration startupTimeout = const Duration(minutes: 3),
-  }) => pending = ensureService(
-    profile,
-    startupTimeout: startupTimeout,
-  ).then((value) => client = value);
+  }) => pending = proxy
+      .run(() => ensureService(profile, startupTimeout: startupTimeout))
+      .then((value) => client = value);
+
+  /// Whether a launched replacement lost the profile lock to a live owner,
+  /// which would mean a launch happened while the old owner held the lock.
+  bool get lostLaunch => File('${profile.data}/lost-launches').existsSync();
 
   Future<void> closeSocket() async {
     old.stdin.writeln('close-socket');
@@ -328,6 +338,7 @@ class HandoffFixture {
         );
       }
       await messages.cancel();
+      await proxy.close();
     } finally {
       runtimeConfiguration.environment
         ..clear()
@@ -336,6 +347,50 @@ class HandoffFixture {
     // Never remove a running child's executable or owned resources.
     root.deleteSync(recursive: true);
   }
+}
+
+/// The error a startup failed with. A successful startup fails the test.
+Future<Object> startupFailure(Future<Object?> startup) async {
+  try {
+    await startup;
+  } catch (error) {
+    return error;
+  }
+  fail('Startup unexpectedly succeeded');
+}
+
+/// Whether [startup] has completed, observed without waiting for it.
+bool Function() settledFlag(Future<Object?> startup) {
+  var settled = false;
+  unawaited(
+    startup.then<void>(
+      (_) => settled = true,
+      onError: (Object _) => settled = true,
+    ),
+  );
+  return () => settled;
+}
+
+/// ensureService's startup deadline runs from its call, so on a loaded host
+/// it can expire before the phase a test is about, and that run would test
+/// nothing. [attempt] runs one startup with the given deadline and returns
+/// whether the deadline expired during [phase], judged from observed frames
+/// and connect attempts, never from elapsed time. Only then does it assert.
+/// A longer deadline is tried only when the phase was not reached.
+Future<void> expireDeadlineDuring(
+  String phase,
+  Future<bool> Function(Duration startupTimeout) attempt, {
+  List<Duration> deadlines = const [
+    Duration(milliseconds: 500),
+    Duration(seconds: 2),
+    Duration(seconds: 8),
+  ],
+}) async {
+  for (final deadline in deadlines) {
+    if (await attempt(deadline)) return;
+    print('Startup deadline $deadline expired before $phase; retrying.');
+  }
+  fail('Every startup deadline expired before $phase');
 }
 
 /// Closing-owner tests run twice: with the owner in the client's runtime, and
@@ -360,16 +415,17 @@ void main() {
       await f.start(separateOwnerRuntime: separate);
       try {
         final pending = f.connect();
+        final settled = settledFlag(pending);
         final success = expectLater(pending, completes);
         await f.next('closing-observed');
         expect(f.launched, isFalse);
+        // Once the closing socket is gone, startup probes the endpoint again.
+        // The second refusal follows a complete lock probe, which found the
+        // controlled old process still owning the real profile lock.
+        final retried = f.proxy.attempt(refused: true, count: 2);
         await f.closeSocket();
-        // Observe that startup remains pending while the socket has closed but
-        // the controlled old process still owns the real profile lock.
-        await expectLater(
-          pending.timeout(const Duration(milliseconds: 100)),
-          throwsA(isA<TimeoutException>()),
-        );
+        await retried;
+        expect(settled(), isFalse);
         expect(f.launched, isFalse);
         await f.release();
         final client = await pending.timeout(const Duration(seconds: 5));
@@ -378,6 +434,7 @@ void main() {
         expect(File('${f.profile.data}/launches').readAsLinesSync(), [
           'launch',
         ]);
+        expect(f.lostLaunch, isFalse);
         expect(
           File('${f.profile.data}/requests').readAsLinesSync(),
           everyElement('status'),
@@ -394,13 +451,19 @@ void main() {
       final f = HandoffFixture();
       await f.start(errorMessage: 'eof', separateOwnerRuntime: separate);
       try {
+        // Each probe of the old owner meets EOF. The second probe follows a
+        // complete lock probe, which found the old owner still holding it.
+        final secondProbe = f.proxy.seen(
+          ProxyDirection.toService,
+          method: 'status',
+          count: 2,
+        );
         final pending = f.connect();
+        final settled = settledFlag(pending);
         final success = expectLater(pending, completes);
         await f.next('eof-observed');
-        await expectLater(
-          pending.timeout(const Duration(milliseconds: 150)),
-          throwsA(isA<TimeoutException>()),
-        );
+        await secondProbe;
+        expect(settled(), isFalse);
         expect(f.launched, isFalse);
         expect(
           File('${f.profile.data}/.application-endpoint.json').existsSync(),
@@ -413,6 +476,7 @@ void main() {
         expect(File('${f.profile.data}/launches').readAsLinesSync(), [
           'launch',
         ]);
+        expect(f.lostLaunch, isFalse);
         expect(
           File('${f.profile.data}/requests').readAsLinesSync(),
           everyElement('status'),
@@ -429,13 +493,31 @@ void main() {
       final f = HandoffFixture();
       await f.start(errorMessage: 'stall');
       try {
-        final failure = expectLater(
-          f.connect(startupTimeout: const Duration(milliseconds: 500)),
-          throwsA(isA<TimeoutException>()),
-        );
-        await f.next('closing-observed');
-        await failure;
-        await f.next('peer-closed');
+        await expireDeadlineDuring('the stalled status probe', (
+          deadline,
+        ) async {
+          final earlier = f.proxy.connections.length;
+          ServiceFrame? probe;
+          unawaited(
+            f.proxy
+                .seen(
+                  ProxyDirection.toService,
+                  method: 'status',
+                  where: (frame) => frame.connection.index >= earlier,
+                )
+                .then((frame) => probe = frame),
+          );
+          final failure = await startupFailure(
+            f.connect(startupTimeout: deadline),
+          );
+          expect(failure, isA<TimeoutException>());
+          // Only a probe that reached the stalled owner tests the timeout.
+          if (probe == null) return false;
+          expect((failure as TimeoutException).message, probeTimeoutMessage);
+          // The timed-out probe closed its own connection.
+          await probe!.connection.ended(ProxyDirection.toService);
+          return true;
+        });
         expect(f.launched, isFalse);
       } finally {
         await f.close();
@@ -446,50 +528,66 @@ void main() {
   test(
     'a closing post-launch owner remains bounded without another launch',
     () async {
-      final f = HandoffFixture();
-      await f.start();
-      try {
-        await f.release();
-        runtimeConfiguration.environment['REPLACEMENT_CLOSING'] = '1';
-        final failure = expectLater(
-          f.connect(startupTimeout: const Duration(seconds: 15)),
-          throwsA(
-            isA<TimeoutException>().having(
-              (error) => error.message,
-              'message',
+      // The deadline also covers launching the replacement, so start with
+      // a longer one than the owner-handoff tests.
+      await expireDeadlineDuring(
+        "the replacement's closing reply",
+        (deadline) async {
+          final f = HandoffFixture();
+          await f.start();
+          try {
+            await f.release();
+            runtimeConfiguration.environment['REPLACEMENT_CLOSING'] = '1';
+            ServiceFrame? closing;
+            unawaited(
+              f.proxy
+                  .seen(
+                    ProxyDirection.toClient,
+                    method: 'status',
+                    where: (frame) => frame.error?['message'] == closingMessage,
+                  )
+                  .then((frame) => closing = frame),
+            );
+            final failure = await startupFailure(
+              f.connect(startupTimeout: deadline),
+            );
+            expect(failure, isA<TimeoutException>());
+            final message = (failure as TimeoutException).message;
+            // The deadline must expire after startup took the closing reply,
+            // not while the replacement launched or the reply was in flight.
+            if (closing == null || message == probeTimeoutMessage) return false;
+            expect(
+              message,
               allOf(
                 contains('${f.root.path}/launch'),
                 contains('startup error'),
               ),
-            ),
-          ),
-        );
-        final ready = File('${f.profile.data}/replacement.ready');
-        await eventually(
-          ready.existsSync,
-          timeout: const Duration(seconds: 12),
-        );
-        final replied = File('${f.profile.data}/closing-replied');
-        await eventually(
-          replied.existsSync,
-          timeout: const Duration(seconds: 12),
-        );
-        final reply = jsonDecode(replied.readAsStringSync()) as Map;
-        expect(reply['method'], 'status');
-        expect(reply['message'], closingMessage);
-        expect(
-          reply['pid'],
-          int.parse(
-            File('${f.profile.data}/replacement.pid').readAsStringSync(),
-          ),
-        );
-        await failure;
-        expect(File('${f.profile.data}/launches').readAsLinesSync(), [
-          'launch',
-        ]);
-      } finally {
-        await f.close();
-      }
+            );
+            final replied = File('${f.profile.data}/closing-replied');
+            await eventually(replied.existsSync);
+            final reply = jsonDecode(replied.readAsStringSync()) as Map;
+            expect(reply['method'], 'status');
+            expect(reply['message'], closingMessage);
+            expect(
+              reply['pid'],
+              int.parse(
+                File('${f.profile.data}/replacement.pid').readAsStringSync(),
+              ),
+            );
+            expect(File('${f.profile.data}/launches').readAsLinesSync(), [
+              'launch',
+            ]);
+            return true;
+          } finally {
+            await f.close();
+          }
+        },
+        deadlines: const [
+          Duration(seconds: 1),
+          Duration(seconds: 4),
+          Duration(seconds: 16),
+        ],
+      );
     },
   );
 
@@ -538,23 +636,48 @@ void main() {
           // Simulate the normal socket-before-lock cleanup interval. The worker
           // is deterministically held in its owned helper shutdown, not a sleep.
           File(serviceEndpoint(profile)).deleteSync();
-          await expectLater(
-            ensureService(
-              profile,
-              startupTimeout: const Duration(milliseconds: 300),
-            ),
-            throwsA(
-              isA<TimeoutException>().having(
-                (error) => error.message,
-                'message',
-                allOf(
-                  contains('profile lock'),
-                  contains('owner'),
-                  isNot(contains('null')),
-                ),
-              ),
-            ),
-          );
+          final proxy = ServiceFaultProxy();
+          try {
+            // The service kills a helper that ignores SIGTERM for 5 s, so
+            // these deadlines stay well inside that hold.
+            await expireDeadlineDuring(
+              'a lock probe',
+              (deadline) async {
+                // A second refused connect follows a complete lock probe.
+                var probed = false;
+                unawaited(
+                  proxy
+                      .attempt(refused: true, count: 2)
+                      .then((_) => probed = true),
+                );
+                final failure = await startupFailure(
+                  proxy.run(
+                    () => ensureService(profile, startupTimeout: deadline),
+                  ),
+                );
+                expect(
+                  failure,
+                  isA<TimeoutException>().having(
+                    (error) => error.message,
+                    'message',
+                    allOf(
+                      contains('profile lock'),
+                      contains('owner'),
+                      isNot(contains('null')),
+                    ),
+                  ),
+                );
+                return probed;
+              },
+              deadlines: const [
+                Duration(milliseconds: 300),
+                Duration(seconds: 1),
+                Duration(seconds: 2),
+              ],
+            );
+          } finally {
+            await proxy.close();
+          }
           expect(marker.existsSync(), isFalse);
           final probe = await Process.run('python3', [
             '-c',
@@ -585,27 +708,60 @@ void main() {
     ownerRuntimeVariants(
       'owner handoff deadline preserves a live owner (socket closed: $socketClosed)',
       (separate) async {
-        final f = HandoffFixture();
-        await f.start(separateOwnerRuntime: separate);
-        try {
-          final pending = f.connect(
-            startupTimeout: const Duration(milliseconds: 500),
-          );
-          final failure = expectLater(
-            pending,
-            throwsA(isA<TimeoutException>()),
-          );
-          await f.next('closing-observed');
-          if (socketClosed) await f.closeSocket();
-          await failure;
-          expect(f.launched, isFalse);
-          expect(
-            File('${f.profile.data}/.application-endpoint.json').existsSync(),
-            isTrue,
-          );
-        } finally {
-          await f.close();
-        }
+        await expireDeadlineDuring(
+          socketClosed
+              ? 'lock probes after the closing socket closed'
+              : 'the wait for the closing socket',
+          (deadline) async {
+            final f = HandoffFixture();
+            await f.start(separateOwnerRuntime: separate);
+            try {
+              ServiceFrame? closing;
+              final replied = f.proxy
+                  .seen(ProxyDirection.toClient, method: 'status')
+                  .then((frame) => closing = frame);
+              // A second refusal follows a complete lock probe.
+              var probed = false;
+              unawaited(
+                f.proxy
+                    .attempt(refused: true, count: 2)
+                    .then((_) => probed = true),
+              );
+              final failure = startupFailure(
+                f.connect(startupTimeout: deadline),
+              );
+              await Future.any([replied, failure]);
+              if (closing != null && socketClosed) {
+                await f.next('closing-observed');
+                await f.closeSocket();
+              }
+              final error = await failure;
+              expect(error, isA<TimeoutException>());
+              final message = (error as TimeoutException).message;
+              // Startup must have taken the closing reply before the deadline,
+              // and, once the socket closed, probed the lock while it was held.
+              if (closing == null ||
+                  message == probeTimeoutMessage ||
+                  (socketClosed && !probed)) {
+                return false;
+              }
+              expect(
+                message,
+                'Application service owner handoff did not finish',
+              );
+              expect(f.launched, isFalse);
+              expect(
+                File(
+                  '${f.profile.data}/.application-endpoint.json',
+                ).existsSync(),
+                isTrue,
+              );
+              return true;
+            } finally {
+              await f.close();
+            }
+          },
+        );
       },
     );
   }
