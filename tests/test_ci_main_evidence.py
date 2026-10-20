@@ -541,6 +541,81 @@ class MainEvidenceTests(unittest.TestCase):
         self.assertTrue(all(selected.values()))
         self.assertEqual(command.call_args.args[0][-3:], [BEFORE, SOURCE, "--"])
 
+    def test_observer_qualification_requires_completed_actual_parity(self):
+        proposal = {
+            "decision": "validated",
+            "actual_main": {
+                "status": "completed",
+                "conclusion": "success",
+                "aggregates_success": True,
+                "jobs": {},
+            },
+        }
+        self.assertTrue(evidence.observation_qualified(proposal))
+        for field, value in (
+            ("status", "in_progress"),
+            ("conclusion", "failure"),
+            ("aggregates_success", False),
+        ):
+            candidate = deepcopy(proposal)
+            candidate["actual_main"][field] = value
+            self.assertFalse(evidence.observation_qualified(candidate))
+        proposal["decision"] = "sweep"
+        self.assertFalse(evidence.observation_qualified(proposal))
+        proposal["actual_main"]["jobs"] = {
+            name: {"result": "success"} for name in evidence.APPLICATION
+        }
+        self.assertTrue(evidence.observation_qualified(proposal))
+        proposal["actual_main"]["jobs"]["macos"]["result"] = "unresolved"
+        self.assertFalse(evidence.observation_qualified(proposal))
+
+    def test_observer_descriptor_is_emitted_only_for_actual_current_source_parity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            receipt = Path(temporary) / "receipt.json"
+            qualification = Path(temporary) / "qualification.json"
+            github_output = Path(temporary) / "outputs"
+            env = {
+                "GITHUB_REPOSITORY": REPOSITORY,
+                "GITHUB_REF": "refs/heads/main",
+                "GITHUB_EVENT_NAME": "push",
+                "GITHUB_SHA": SOURCE,
+                "GITHUB_RUN_ID": "50",
+                "GITHUB_RUN_ATTEMPT": "1",
+                "GITHUB_OUTPUT": str(github_output),
+            }
+            args = [
+                "evidence",
+                "--source",
+                SOURCE,
+                "--output",
+                str(receipt),
+                "--qualification-output",
+                str(qualification),
+            ]
+            actual = {
+                "status": "completed",
+                "conclusion": "success",
+                "aggregates_success": True,
+                "jobs": {},
+            }
+            with (
+                patch.dict(os.environ, env, clear=True),
+                patch("sys.argv", args),
+                patch.object(evidence, "Reader", return_value=self.reader),
+                patch.object(evidence, "selected_on_push", return_value=self.selected),
+                patch.object(self.reader, "actual", return_value=actual),
+                patch(
+                    "tools.ci_rollout.descriptor", return_value={"schema": 1}
+                ) as descriptor,
+            ):
+                evidence.main()
+            self.assertEqual(descriptor.call_args.kwargs["producer_job"], "observe")
+            self.assertEqual(
+                json.loads(qualification.read_text())["observation"]["decision"],
+                "validated",
+            )
+            self.assertIn("qualified=true", github_output.read_text())
+
 
 class SweepTests(unittest.TestCase):
     def setUp(self):

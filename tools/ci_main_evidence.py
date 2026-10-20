@@ -422,8 +422,20 @@ class Reader:
 
     def actual(self, source, selected):
         run = self.latest_run(PLATFORM, source, ("push",))
-        result = {"run": run["id"], "status": run["status"], "jobs": {}}
+        result = {
+            "run": run["id"],
+            "status": run["status"],
+            "conclusion": run.get("conclusion"),
+            "attempt": run.get("run_attempt"),
+            "jobs": {},
+        }
         jobs = self.jobs(run)
+        try:
+            for name in ("platform-checks", "acceptance-checks"):
+                candidate.latest(jobs, name)
+            result["aggregates_success"] = True
+        except ValueError:
+            result["aggregates_success"] = False
         for name, required in selected.items():
             if not required:
                 continue
@@ -439,6 +451,22 @@ class Reader:
             except ValueError as error:
                 result["jobs"][name] = {"result": "unresolved", "reason": str(error)}
         return result
+
+
+def observation_qualified(proposal):
+    actual = proposal.get("actual_main", {})
+    if (
+        actual.get("status") != "completed"
+        or actual.get("conclusion") != "success"
+        or actual.get("aggregates_success") is not True
+        or any(
+            job.get("result") != "success" for job in actual.get("jobs", {}).values()
+        )
+    ):
+        return False
+    if proposal.get("decision") == "validated":
+        return True
+    return set(actual.get("jobs", {})) == set(APPLICATION)
 
 
 def selected_on_push(root, before, source):
@@ -466,6 +494,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", required=True)
     parser.add_argument("--before")
+    parser.add_argument("--qualification-output", type=Path)
     parser.add_argument(
         "--output", type=Path, default=Path("main-evidence/receipt.json")
     )
@@ -488,6 +517,27 @@ def main():
         proposal["actual_main"] = {"status": "unavailable", "reason": str(error)}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(proposal, indent=2, sort_keys=True) + "\n")
+    qualified = observation_qualified(proposal) and source == os.environ.get(
+        "GITHUB_SHA"
+    )
+    if args.qualification_output and qualified:
+        from tools.ci_rollout import descriptor
+
+        record = descriptor(
+            source,
+            run_id=int(os.environ["GITHUB_RUN_ID"]),
+            attempt=int(os.environ["GITHUB_RUN_ATTEMPT"]),
+            producer_job="observe",
+        )
+        record["observation"] = {
+            "decision": proposal["decision"],
+            "actual_main": proposal["actual_main"],
+        }
+        args.qualification_output.parent.mkdir(parents=True, exist_ok=True)
+        args.qualification_output.write_text(json.dumps(record, sort_keys=True) + "\n")
+    if output := os.environ.get("GITHUB_OUTPUT"):
+        with open(output, "a") as stream:
+            stream.write(f"qualified={str(qualified).lower()}\n")
     summary = (
         f"Observation only: {proposal['decision']} for {source}: {proposal['reason']}\n"
     )
