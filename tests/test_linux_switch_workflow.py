@@ -241,6 +241,10 @@ def _selection_repository(tmp_path):
     tools = tmp_path / "tools"
     tools.mkdir()
     shutil.copy2(ROOT / "tools/ci_changes.py", tools / "ci_changes.py")
+    shutil.copy2(ROOT / "tools/ci_selection.py", tools / "ci_selection.py")
+    workflow_dir = tmp_path / ".github/workflows"
+    workflow_dir.mkdir(parents=True)
+    shutil.copy2(ROOT / ".github/workflows/native-sanitizers.yml", workflow_dir / "native-sanitizers.yml")
     shutil.copy2(
         ROOT / "tools/platform_python_tests.py", tools / "platform_python_tests.py"
     )

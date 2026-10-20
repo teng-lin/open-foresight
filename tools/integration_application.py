@@ -16,7 +16,7 @@ import tempfile
 import time
 
 from tools import ci_artifacts as artifacts
-from tools.ci_stage_cache import read_zip
+from tools.ci_git import read_zip
 from tools import linux_sdk_artifacts as sdk
 from tools.ci_producer_trust import PRODUCERS
 

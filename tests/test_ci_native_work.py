@@ -13,12 +13,8 @@ from tools import ci_native_work as work
 def resolver(monkeypatch):
     resolver = Mock(return_value={"hit": False, "reason": "verified miss"})
     monkeypatch.setattr(work.cache, "find_native_work", resolver)
-    monkeypatch.setattr(
-        work.cache, "find", Mock(side_effect=AssertionError("result reuse"))
-    )
-    monkeypatch.setattr(
-        work.cache, "publish", Mock(side_effect=AssertionError("publish"))
-    )
+    assert not hasattr(work.cache, "find")
+    assert not hasattr(work.cache, "publish")
     return resolver
 
 

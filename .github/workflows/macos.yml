@@ -1,12 +1,12 @@
 name: Platform candidates and checks
-run-name: ${{ inputs.request_id && format('Release candidate {0}', inputs.request_id) || format('Platform checks {0}', github.ref_name) }}
+run-name: ${{ inputs.sweep && format('Main sweep {0} [{1}]', inputs.source || github.sha, inputs.sweep_namespace) || (inputs.request_id && format('Release candidate {0}', inputs.request_id) || format('Platform checks {0}', github.ref_name)) }}
 permissions:
   contents: read
   actions: read
 env:
   RELEASE_SOURCE_FLOOR: ${{ vars.RELEASE_SOURCE_FLOOR }}
 concurrency:
-  group: platform-checks-${{ github.workflow }}-${{ inputs.request_id || (inputs.preview && format('preview-{0}', github.run_id) || (github.event_name == 'pull_request' && github.ref || inputs.source || github.sha)) }}
+  group: ${{ inputs.sweep && format('main-sweep-{0}', inputs.sweep_namespace) || format('platform-checks-{0}-{1}', github.workflow, inputs.request_id || (inputs.preview && format('preview-{0}', github.run_id) || (github.event_name == 'pull_request' && github.ref || inputs.source || github.sha))) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   macos:
@@ -225,6 +225,10 @@ jobs:
   changes:
     timeout-minutes: 5
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
     outputs:
       selection: ${{ steps.changes.outputs.selection }}
       macos: ${{ steps.changes.outputs.macos }}
@@ -273,8 +277,17 @@ jobs:
         BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
         PUSH_BASE: ${{ github.event.before }}
         EVENT: ${{ github.event_name }}
+        SWEEP: ${{ inputs.sweep }}
+        SWEEP_NAMESPACE: ${{ inputs.sweep_namespace }}
+        SOURCE: ${{ inputs.source || github.sha }}
+        GH_TOKEN: ${{ github.token }}
+        PR_NUMBER: ${{ github.event.pull_request.number || '' }}
         FORCE: ${{ (inputs.tier == 'release' || inputs.preview || github.event_name == 'workflow_dispatch') && '--force' || '' }}
       run: |-
+        if [[ "$SWEEP" == true ]]; then
+          python tools/ci_main_sweep.py guard --source "$SOURCE" --namespace "$SWEEP_NAMESPACE"
+          exit 0
+        fi
         if [[ "$EVENT" == pull_request ]]; then
           BASE=$(git merge-base "$BASE" HEAD)
         elif [[ "$EVENT" == push ]]; then
@@ -287,6 +300,9 @@ jobs:
           fi
         fi
         task_args=(--base "$BASE")
+        if [[ -n "$PR_NUMBER" ]]; then
+          task_args+=(--pull-request "$PR_NUMBER" --repository "$GITHUB_REPOSITORY")
+        fi
         if [[ "$FORCE" == --force ]]; then
           task_args+=(--force)
         fi
@@ -679,7 +695,7 @@ jobs:
       run: echo 'complete=true' >> "$GITHUB_OUTPUT"
   publish-caches:
     needs: linux-build
-    if: "!cancelled() && inputs.tier != 'release' && github.ref == 'refs/heads/main' && contains(fromJSON('[\"push\",\"workflow_dispatch\",\"schedule\"]'), github.event_name) && needs.linux-build.result == 'success' && (inputs.source == '' || inputs.source == github.sha)"
+    if: "!cancelled() && !inputs.sweep && inputs.tier != 'release' && github.ref == 'refs/heads/main' && contains(fromJSON('[\"push\",\"workflow_dispatch\",\"schedule\"]'), github.event_name) && needs.linux-build.result == 'success' && (inputs.source == '' || inputs.source == github.sha)"
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -1051,6 +1067,15 @@ jobs:
   pull_request: null
   workflow_dispatch:
     inputs:
+      sweep:
+        description: Exercise the complete application tier on current reviewed main without stamping
+        type: boolean
+        default: false
+      sweep_namespace:
+        description: Isolated qualification or independently authorized production evidence
+        type: choice
+        options: [exercise, production]
+        default: exercise
       acceptance:
         description: Standard portable acceptance or full external and Debian 13 coverage
         type: choice

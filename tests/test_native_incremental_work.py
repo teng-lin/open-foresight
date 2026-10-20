@@ -281,6 +281,8 @@ def test_compiler_only_restore_keeps_objects_and_always_runs_current_build_and_t
     else:
         (root / "validation.txt").write_text("current validation contract")
     revision = commit(root)
+    assert not hasattr(native_work.cache, "find")
+    assert not hasattr(native_work.cache, "publish")
     original["configuration_changed"] = native_work.cache.changed_configuration(
         root, original["receipt"]["source_commit"]
     )
@@ -288,10 +290,10 @@ def test_compiler_only_restore_keeps_objects_and_always_runs_current_build_and_t
     with (
         patch.object(native_work.cache, "find_native_work", return_value=original),
         patch.object(
-            native_work.cache, "find", side_effect=AssertionError("result reuse")
+            runner.cache, "find", side_effect=AssertionError("result reuse")
         ),
         patch.object(
-            native_work.cache, "publish", side_effect=AssertionError("publication")
+            runner.cache, "publish", side_effect=AssertionError("publication")
         ),
     ):
         result = native_work.restore(

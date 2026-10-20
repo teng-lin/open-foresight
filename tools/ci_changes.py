@@ -209,11 +209,13 @@ def check_gates(jobs, selected, tier=""):
 
 def selection_report(paths, *, force=False, revision_range=""):
     selected = select_gates(paths, force=force)
+    candidate = importlib.import_module("tools.ci_selection" if __package__ else "ci_selection")
     return {
         "range": revision_range,
         "force": force,
         "platforms": "all",
         "superseded": False,
+        "candidate": candidate.select(paths, force=force),
         "selection": selected,
         "paths": [
             {
@@ -273,6 +275,8 @@ def main():
     parser.add_argument("--json-output", default="ci-selection.json")
     parser.add_argument("--check-gates", action="store_true")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--pull-request", type=int)
+    parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY"))
     parser.add_argument("--tier", default=os.environ.get("CI_TIER", ""))
     args = parser.parse_args()
     if args.check_gates:
@@ -303,6 +307,9 @@ def main():
     subprocess.run(
         ["git", "diff", "--check", *revisions, "--"], check=True, timeout=300
     )
+    if args.pull_request is not None:
+        candidate = importlib.import_module("tools.ci_selection" if __package__ else "ci_selection")
+        args.force = args.force or "ci:full" in candidate.live_labels(args.repository, args.pull_request)
     report = selection_report(
         [path for path in paths if path],
         force=args.force,
