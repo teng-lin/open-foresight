@@ -100,11 +100,14 @@ void main() {
         expect(followup.last, contains('CEDAR-8492'), reason: reason);
         expect(queries.length, searchCount + 1, reason: reason);
         expect(store.rows('SELECT id FROM answers'), hasLength(2));
+        // Exceed the conservative UTF-8 history budget, while leaving room
+        // for the compressed memo beside the recent turns and incoming query.
+        // Oversized recent turns force FIFO pruning to discard that memo.
         for (var i = 0; i < 6; i++) {
           final body = i < 3
               ? '${i == 0 ? 'The user chose violet as the project theme color. ' : ''}'
-                    '${'Planning context remains consistent across the project. ' * 90}'
-              : 'The current work is on schedule. ' * 16;
+                    '${'Planning context remains consistent across the project. ' * 16}'
+              : 'The current work is on schedule. ' * 4;
           store.answer(
             'Planning note $i',
             body,
@@ -137,7 +140,7 @@ void main() {
         }
         final checkpoint = store
             .rows(
-              "SELECT * FROM conversation_memory WHERE conversation='web-only-v1:controlled-compression-fixture'",
+              "SELECT * FROM conversation_memory WHERE conversation LIKE 'web-memory-v2:%:controlled-compression-fixture'",
             )
             .single;
         final memory = List<Map<String, dynamic>>.from(
