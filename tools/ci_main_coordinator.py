@@ -116,12 +116,10 @@ def reconcile(reader, source, before, *, root=ROOT, index=None):
             return {"source": source, "decision": "waiting", "run": run["id"]}
         try:
             return sweep_receipt(reader, run, before)
-        except RetirementQualificationLapsed as error:
-            if run.get("conclusion") != "success":
-                raise
-            fresh = dispatch(reader, source=source, index=index, root=root)
-            return {"decision": "sweep-requested", "reason": str(error), **fresh}
         except ValueError as error:
+            if isinstance(error, RetirementQualificationLapsed) and run.get("conclusion") == "success":
+                fresh = dispatch(reader, source=source, index=index, root=root)
+                return {"decision": "sweep-requested", "reason": str(error), **fresh}
             # Retry only failed jobs, once, preserving original successful bytes.
             if (
                 run.get("conclusion") in ("failure", "timed_out")

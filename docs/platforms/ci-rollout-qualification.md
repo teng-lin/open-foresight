@@ -49,6 +49,11 @@ reusable-workflow prefix. An authorized reviewed-main job must upload only that
 file as artifact `ci-rollout-qualification`. The qualification index identifies
 its artifact ID, run ID, original attempt, original uploading job ID and complete
 ZIP checksum. No current artifact without the candidate marker qualifies.
+Publisher qualification certifies both actual consumption of a verified shared
+tooling image and successful cache publication in the qualification dispatch.
+The consumed image may come from an older compatible reviewed-main publisher;
+its original uploader, attempt, receipt and immutable image digest remain bound.
+The proof does not claim that this dispatch uploaded that reused image.
 The main-only `ci-qualification.yml` dispatch executes selector-replay,
 archive-SDK, source-scoped fork-format, and tooling-recipe-change exercises.
 Transport exercises load and export an existing verified SDK with the real Docker

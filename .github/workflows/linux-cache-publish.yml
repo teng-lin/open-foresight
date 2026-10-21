@@ -374,6 +374,8 @@ jobs:
         docker image inspect "$CACHE_FIXTURE_BASE" >/dev/null 2>&1 || docker pull "$CACHE_FIXTURE_BASE"
         python -m pytest tests/test_acceptance_image_cache.py -ra
     - name: Record actual current-source application and coverage evidence
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
         python -m tools.ci_transport_exercise --kind publisher --source "$GITHUB_SHA" \
           --record-application build/qualify-consumers --output build/qualification/publisher.json

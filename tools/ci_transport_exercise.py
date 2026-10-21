@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -40,12 +41,27 @@ def verify_publisher_proof(record, repository, source, run_id, *, api=None):
     resolution = consumed.get("resolution", {})
     receipt = consumed.get("receipt", {})
     saved_artifact = consumed.get("artifact", {})
+    identities = (run_id, published.get("run_id"), published.get("attempt"), published.get("job_id"), saved_artifact.get("id"), receipt.get("source_run_id"), receipt.get("source_run_attempt"), receipt.get("source_job_id"))
+    if any(type(identity) is not int or identity < 1 for identity in identities):
+        raise ValueError("Publisher proof requires positive original run/job/attempt/artifact identities")
+
+    def read(repo, route):
+        try:
+            return api(repo, route)
+        except subprocess.CalledProcessError as error:
+            diagnostic = error.stderr or b""
+            if isinstance(diagnostic, bytes):
+                diagnostic = diagnostic.decode("utf-8", errors="replace")
+            if set(re.findall(r"\bHTTP (\d{3})\b", diagnostic)) == {"404"}:
+                raise ValueError("Original publisher proof record no longer exists") from error
+            raise
+
     if (published.get("run_id") != run_id or type(published.get("attempt")) is not int
             or published["attempt"] < 1 or type(published.get("job_id")) is not int
             or resolution.get("reused") is not True
             or record.get("ci_inputs", {}).get("tooling_identity") != resolution.get("inputs", {}).get("identity")):
         raise ValueError("Publisher qualification requires consumed shared tooling and its publication")
-    run = api(repository, f"actions/runs/{run_id}")
+    run = read(repository, f"actions/runs/{run_id}")
     if (run.get("head_sha"), run.get("head_branch"), run.get("event"), run.get("path"),
             run.get("repository", {}).get("full_name"), (run.get("head_repository") or {}).get("full_name")) != (
             source, "main", "workflow_dispatch", ".github/workflows/linux-cache-publish.yml", repository, repository):
@@ -53,7 +69,7 @@ def verify_publisher_proof(record, repository, source, run_id, *, api=None):
     jobs = []
     page = 1
     while True:
-        batch = api(repository, f"actions/runs/{run_id}/attempts/{published['attempt']}/jobs?per_page=100&page={page}")["jobs"]
+        batch = read(repository, f"actions/runs/{run_id}/attempts/{published['attempt']}/jobs?per_page=100&page={page}")["jobs"]
         jobs.extend(batch)
         if len(batch) < 100:
             break
@@ -66,19 +82,19 @@ def verify_publisher_proof(record, repository, source, run_id, *, api=None):
                        and step.get("conclusion") == "success" for step in job.get("steps", []))]
     if len(matches) != 1:
         raise ValueError("Qualification run lacks its actual successful cache publication step")
-    artifact = api(repository, f"actions/artifacts/{saved_artifact.get('id')}")
+    artifact = read(repository, f"actions/artifacts/{saved_artifact['id']}")
     if artifact.get("digest") != saved_artifact.get("digest") or artifact.get("id") != saved_artifact.get("id"):
         raise ValueError("Consumed tooling artifact metadata changed")
-    producer = api(repository, f"actions/runs/{receipt.get('source_run_id')}")
+    producer = read(repository, f"actions/runs/{receipt['source_run_id']}")
     original_jobs = []
     page = 1
     while True:
-        batch = api(repository, f"actions/runs/{producer['id']}/attempts/{receipt.get('source_run_attempt')}/jobs?per_page=100&page={page}")["jobs"]
+        batch = read(repository, f"actions/runs/{producer['id']}/attempts/{receipt['source_run_attempt']}/jobs?per_page=100&page={page}")["jobs"]
         original_jobs.extend(batch)
         if len(batch) < 100:
             break
         page += 1
-    image = tooling.verify_receipt(repository, resolution.get("inputs"), receipt, artifact, producer, original_jobs, fetch=api)
+    image = tooling.verify_receipt(repository, resolution.get("inputs"), receipt, artifact, producer, original_jobs, fetch=read)
     if resolution.get("image") != image:
         raise ValueError("Application did not consume the published immutable tooling image")
     return record

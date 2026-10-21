@@ -108,6 +108,24 @@ def test_lapsed_retirement_on_green_sweep_dispatches_fresh_validation():
     assert api.call_args.args[3]["inputs"]["sweep_namespace"] == "production"
 
 
+@pytest.mark.parametrize("conclusion,attempt,decision", [("failure", 1, "retry-requested"), ("timed_out", 1, "retry-requested"), ("failure", 2, "failed"), ("neutral", 1, "failed")])
+def test_lapsed_retirement_on_failed_sweep_preserves_retry_and_issue_tracking(conclusion, attempt, decision):
+    reader = FixtureReader()
+    previous = run(40, source=SOURCE, event="workflow_dispatch")
+    previous.update(display_title=f"Main sweep {SOURCE} [production]", conclusion=conclusion, run_attempt=attempt)
+    reader.origins.append(previous)
+    with patch.object(coordinator, "authorize"), patch.object(reader, "proposal", return_value={"decision": "sweep"}), patch.object(coordinator, "selected_on_push", return_value={}), patch.object(coordinator, "sweep_receipt", side_effect=evidence.RetirementQualificationLapsed("expired original retirement proof")), patch.object(reader, "api") as api, patch.object(coordinator, "dispatch") as dispatch:
+        result = coordinator.reconcile(reader, SOURCE, BEFORE)
+        assert result["decision"] == decision
+        dispatch.assert_not_called()
+        if decision == "retry-requested":
+            assert api.call_args.args[1:3] == ("actions/runs/40/rerun-failed-jobs", "POST")
+        with patch.object(reader, "rows", return_value=[{"number": 42}]):
+            coordinator.track(reader, result)
+        assert api.call_args.args[1:3] == ("issues/42", "PATCH")
+        assert "expired original retirement proof" in api.call_args.args[3]["body"]
+
+
 def test_missing_needed_kind_short_circuits_before_any_descriptor_download(tmp_path):
     for name in ("tools/ci_changes.py", "tools/ci_selection.py", ".github/workflows/macos.yml"):
         path = tmp_path / name

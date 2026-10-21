@@ -2,10 +2,12 @@
 
 import hashlib
 import json
+from pathlib import Path
 import subprocess
 import sys
 
 import pytest
+import yaml
 
 from tools import ci_transport_exercise as exercise
 
@@ -265,3 +267,47 @@ def test_local_tooling_miss_has_actionable_failure_before_any_api_or_producer_re
     monkeypatch.setattr(exercise.artifacts, "dependency_jobs", forbidden)
     with pytest.raises(ValueError, match="Local tooling fallback cannot qualify"):
         exercise.publisher_record(tmp_path, {}, SOURCE)
+
+
+def test_hosted_publisher_record_has_api_credentials_and_read_permission():
+    config = yaml.safe_load((Path(__file__).resolve().parents[1] / ".github/workflows/linux-cache-publish.yml").read_text())
+    consumer = config["jobs"]["qualification-consumers"]
+    record = next(step for step in consumer["steps"] if "--kind publisher" in step.get("run", ""))
+    assert record["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert consumer["permissions"]["actions"] == "read"
+
+
+@pytest.mark.parametrize("section,key", [("publisher", "run_id"), ("publisher", "attempt"), ("publisher", "job_id"), ("artifact", "id"), ("receipt", "source_run_id"), ("receipt", "source_run_attempt"), ("receipt", "source_job_id")])
+@pytest.mark.parametrize("invalid", [None, 0, -1, True, "7"])
+def test_nested_publisher_identities_are_validated_before_api_calls(publisher_proof, section, key, invalid):
+    record, *_ = publisher_proof
+    target = record[section] if section == "publisher" else record["tooling"][section]
+    target[key] = invalid
+    with pytest.raises(ValueError, match="positive original"):
+        exercise.verify_publisher_proof(record, "owner/repo", SOURCE, 7, api=lambda *args: pytest.fail("Malformed identity must not reach API"))
+
+
+@pytest.mark.parametrize("diagnostic,missing", [("gh: Not Found (HTTP 404)", True), (b"gh: Not Found (HTTP 404)", True), ("gh: Forbidden (HTTP 403)", False), ("gh: server error (HTTP 503)", False), ("connection unavailable", False), ("HTTP 404; upstream HTTP 403", False)])
+@pytest.mark.parametrize("route", ["actions/artifacts/9", "actions/runs/7", "actions/runs/7/attempts/1/jobs?per_page=100&page=1", f"compare/{SOURCE}...main"])
+def test_missing_nested_publisher_records_revoke_proof_but_transport_failures_propagate(publisher_proof, diagnostic, missing, route):
+    record, _, _, _, api = publisher_proof
+    def get(repository, requested):
+        if requested == route:
+            raise subprocess.CalledProcessError(1, ["gh", "api"], stderr=diagnostic)
+        return api(repository, requested)
+    with pytest.raises(ValueError if missing else subprocess.CalledProcessError):
+        exercise.verify_publisher_proof(record, "owner/repo", SOURCE, 7, api=get)
+
+
+def test_current_publication_may_consume_an_older_verified_tooling_image(publisher_proof):
+    record, run, job, artifact, api = publisher_proof
+    record["tooling"]["receipt"].update(source_run_id=6, source_job_id=60)
+    artifact["workflow_run"] = {"id": 6}
+    record["tooling"]["artifact"] = artifact.copy()
+    def get(repository, route):
+        if route == "actions/runs/6":
+            return {**run, "id": 6}
+        if route == "actions/runs/6/attempts/1/jobs?per_page=100&page=1":
+            return {"jobs": [{**job, "id": 60, "run_id": 6}]}
+        return api(repository, route)
+    assert exercise.verify_publisher_proof(record, "owner/repo", SOURCE, 7, api=get) is record
