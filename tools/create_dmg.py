@@ -36,7 +36,7 @@ def verify_image(destination):
     while True:
         if original_digest is not None and image_digest(destination) != original_digest:
             raise ValueError("DMG bytes changed during verification retries")
-        timeout = 300
+        timeout: float = 300
         if last_failure is not None:
             timeout = deadline - time.monotonic()
             if timeout <= 0:
