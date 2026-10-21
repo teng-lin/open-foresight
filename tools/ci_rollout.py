@@ -182,7 +182,7 @@ def _qualified(entry, *, repository, expected, api, download, controls=False):
     if kind == "observer" and result.get("observer_case") not in {"identical", "divergent", "partially-selected", "failed-rerun"}:
         raise ValueError("Observation lacks its actual parity case")
     compare(result["control_closure" if controls else "closure"], expected)
-    return {"kind": kind, "run_id": run["id"], "source": source, "created_at": run["created_at"], "observer_case": result.get("observer_case"), "acceptance_coverage": result.get("acceptance_replay", {}).get("coverage")}
+    return {"kind": kind, "run_id": run["id"], "source": source, "created_at": run["created_at"], "completed_at": uploaders[0]["completed_at"], "observer_case": result.get("observer_case"), "acceptance_coverage": result.get("acceptance_replay", {}).get("coverage")}
 
 
 def authorize(index, *, root=ROOT, source, capabilities, repository="teng-lin/open-foresight", api=None, download=None, ongoing=False):
@@ -257,8 +257,9 @@ def authorize(index, *, root=ROOT, source, capabilities, repository="teng-lin/op
         if len({row["run_id"] for row in nights}) < 28 or datetime.fromisoformat(nights[-1]["created_at"].replace("Z", "+00:00")) - datetime.fromisoformat(nights[0]["created_at"].replace("Z", "+00:00")) < timedelta(weeks=4):
             raise ValueError("Acceptance narrowing needs four green weeks of actual observation")
         cutoff = max(datetime.fromisoformat(row["acceptance_coverage"]["until"].replace("Z", "+00:00")) for row in qualified if row["kind"] == "acceptance-replay")
-        if cutoff < datetime.fromisoformat(nights[-1]["created_at"].replace("Z", "+00:00")):
-            raise ValueError("Acceptance failure replay must cover the latest qualified nightly; dispatch a fresh main acceptance-replay qualification")
+        completed = max(datetime.fromisoformat(row["completed_at"].replace("Z", "+00:00")) for row in nights)
+        if not ongoing and cutoff < completed:
+            raise ValueError("Acceptance failure replay must cover the latest qualified nightly completion; dispatch a fresh main acceptance-replay qualification")
     return {"source": source, "qualified_source": index["source"], "closure_sha256": expected["sha256"], "capabilities": sorted(requested), "qualified": qualified}
 
 

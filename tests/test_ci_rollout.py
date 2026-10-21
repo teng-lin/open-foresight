@@ -48,6 +48,11 @@ class Evidence:
             self.history.append(run)
         self.jobs[run_id] = [{"id": run_id * 100 + i, "name": name, "conclusion": "success", "run_attempt": 1, "started_at": "2026-10-01T00:00:00Z", "completed_at": "2026-10-01T00:10:00Z"} for i, name in enumerate(names)]
         self.artifacts[run_id] = {"id": run_id, "name": "ci-rollout-qualification", "expired": False, "workflow_run": {"id": run_id}, "created_at": "2026-10-01T00:05:00Z"}
+        if kind == "nightly":
+            started = datetime.fromisoformat(created.replace("Z", "+00:00"))
+            for job in self.jobs[run_id]:
+                job.update(started_at=created, completed_at=(started + timedelta(minutes=10)).isoformat().replace("+00:00", "Z"))
+            self.artifacts[run_id]["created_at"] = (started + timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
         self.payloads[run_id] = rollout.descriptor(SOURCE, root=self.root, run_id=run_id, attempt=1, producer_job=gate)
         if kind in {"archive-sdk", "fork-sdk", "recipe-change", "publisher"}:
             self.payloads[run_id]["exercise"] = {"kind": kind}
@@ -496,3 +501,22 @@ def test_initial_narrowing_cannot_use_failure_replay_older_than_qualification_wi
     assert evidence.verify("acceptance_narrowing")["capabilities"] == [
         "acceptance_narrowing"
     ]
+
+
+def test_replay_after_nightly_creation_but_before_original_upload_completion_is_stale(root):
+    evidence = retirement_evidence(root)
+    for day in range(2, 29):
+        evidence.add("nightly", day)
+    entry = evidence.add("acceptance-replay")
+    run_id = entry["run_id"]
+    evidence.runs[run_id]["created_at"] = "2026-10-29T00:00:00Z"
+    evidence.jobs[run_id][0].update(started_at="2026-10-29T00:00:00Z", completed_at="2026-10-29T00:20:00Z")
+    evidence.artifacts[run_id]["created_at"] = "2026-10-29T00:15:00Z"
+    replay = evidence.payloads[run_id]["acceptance_replay"]
+    replay["coverage"]["until"] = "2026-10-29T00:05:00Z"
+    with pytest.raises(ValueError, match="latest qualified nightly completion"):
+        evidence.verify("acceptance_narrowing")
+    replay["coverage"]["until"] = "2026-10-29T00:10:00Z"
+    result = evidence.verify("acceptance_narrowing")
+    latest = max(row["completed_at"] for row in result["qualified"] if row["kind"] == "nightly")
+    assert latest == replay["coverage"]["until"]
