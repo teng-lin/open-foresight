@@ -1,8 +1,12 @@
 """Main cache discovery schedules warmers only for missing exact outputs."""
 
 import json
+import importlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import shlex
+import subprocess
+import sys
 from unittest.mock import patch
 
 import pytest
@@ -145,11 +149,12 @@ def test_main_advancement_before_or_during_listing_prevents_stale_publication(ma
 )
 def test_untrusted_requests_fail_before_any_api_or_warmer(key, value):
     env = environment() | {key: value}
-    with (
-        pytest.raises(ValueError, match="dedicated reviewed-main"),
-        patch.object(reconcile, "api", side_effect=AssertionError("No API permitted")),
-    ):
-        reconcile.reconcile(env, head=SOURCE)
+
+    def forbidden(*args):
+        raise AssertionError("No API permitted")
+
+    with pytest.raises(ValueError, match="dedicated reviewed-main"):
+        reconcile.reconcile(env, head=SOURCE, fetch=forbidden)
 
 
 def test_missing_post_checkout_hash_and_wrong_checkout_fail_closed():
@@ -294,6 +299,21 @@ def test_manual_consumer_qualification_executes_real_sdk_container_and_evidence_
     )
     assert "--exercise-record build/qualification/publisher.json" in record
     assert "--producer-job qualification-consumers" in record
+    commands = {
+        tokens[2]: tokens
+        for line in record.replace("\\\n", " ").splitlines()
+        if (tokens := shlex.split(line)) and tokens[:2] == ["python", "-m"]
+    }
+    for module_name in ("tools.ci_transport_exercise", "tools.ci_rollout"):
+        module = importlib.import_module(module_name)
+        assert callable(module.main)
+        help_result = subprocess.run(
+            [sys.executable, "-m", module_name, "--help"], cwd=ROOT,
+            capture_output=True, text=True, timeout=30,
+        )
+        assert help_result.returncode == 0, help_result.stdout + help_result.stderr
+        for flag in (token for token in commands[module_name] if token.startswith("--")):
+            assert flag in help_result.stdout, (module_name, flag)
     assert any(
         step.get("with", {}).get("name") == "ci-rollout-qualification" for step in steps
     )
@@ -367,6 +387,7 @@ def publisher(run_id=10, *, hours=1, state="success", attempt=1):
         "completed_at": None
         if active
         else (started + timedelta(minutes=1)).isoformat(),
+        "steps": [{"name": reconcile.PUBLISH_STEP, "status": "completed", "conclusion": state}],
     }
     return run, job
 
@@ -523,3 +544,102 @@ def test_explicit_reconciliation_metadata_ignores_inherited_ci_ref_and_qualifica
             reconcile.reconcile(
                 metadata | {key: value}, fetch=fetch_for([]), head=SOURCE, now=NOW
             )
+
+
+def publisher_environment():
+    return environment() | {"GITHUB_JOB": "publish-linux-caches", "GITHUB_RUN_ID": "300"}
+
+
+def recheck_fetch(records, *, mains=None):
+    registry = registry_fetch(records)
+    current = iter(mains or [SOURCE, SOURCE])
+
+    def fetch(repository, route):
+        return {"sha": next(current)} if route == "commits/main" else registry(repository, route)
+
+    return fetch
+
+
+def test_post_queue_recheck_skips_duplicate_after_long_running_sibling_succeeds():
+    sibling = publisher(10, hours=0.6, state="in_progress")
+    assert reconcile.registry_schedule(
+        "owner/repo", SOURCE, fetch=registry_fetch([sibling]), now=NOW,
+    )["needed"]
+    completed = publisher(10, hours=0.1)
+    own = publisher(300, hours=0.05, state="in_progress")
+    result = reconcile.publisher_recheck(
+        publisher_environment(), fetch=recheck_fetch([completed, own]), head=SOURCE, now=NOW,
+    )
+    assert result["publish"] is False
+    assert "within 24 hours" in result["reason"]
+    assert reconcile.publisher_recheck(
+        publisher_environment() | {"QUALIFY_CONSUMERS": "true"},
+        fetch=recheck_fetch([completed, own]), head=SOURCE, now=NOW,
+    )["publish"] is True
+
+
+def test_successful_noop_job_never_renews_original_publication_freshness():
+    actual = publisher(10, hours=25)
+    noop = publisher(20, hours=0.1)
+    noop[1]["steps"][0]["conclusion"] = "skipped"
+    result = reconcile.registry_schedule(
+        "owner/repo", SOURCE, fetch=registry_fetch([actual, noop]), now=NOW,
+    )
+    assert result["needed"] is True
+    assert result["job"] == actual[1]["id"]
+    noop[1].pop("steps")
+    assert reconcile.registry_schedule(
+        "owner/repo", SOURCE, fetch=registry_fetch([noop]), now=NOW,
+    )["needed"] is True
+
+
+@pytest.mark.parametrize("key,value", [
+    ("GITHUB_JOB", "reconcile"), ("GITHUB_RUN_ID", "0"),
+    ("GITHUB_REF", "refs/pull/1/merge"), ("GITHUB_EVENT_NAME", "schedule"),
+    ("GITHUB_EVENT_NAME", "push"), ("GITHUB_REPOSITORY", "wrong"),
+    ("GITHUB_SHA", "main"), ("GITHUB_WORKFLOW_REF", "untrusted"),
+])
+def test_publisher_recheck_rejects_untrusted_context_before_explicit_api_sentinel(key, value):
+    def forbidden(*args):
+        raise AssertionError("No API permitted")
+
+    with pytest.raises(ValueError, match="dedicated reviewed-main"):
+        reconcile.publisher_recheck(publisher_environment() | {key: value}, fetch=forbidden, head=SOURCE)
+
+
+def test_publisher_recheck_binds_checkout_current_main_and_api_failures():
+    with pytest.raises(ValueError, match="checkout differs"):
+        reconcile.publisher_recheck(publisher_environment(), head="f" * 40)
+    with pytest.raises(ValueError, match="qualification"):
+        reconcile.publisher_recheck(publisher_environment() | {"QUALIFY_CONSUMERS": "1"}, head=SOURCE)
+    for mains in (["f" * 40], [SOURCE, "f" * 40]):
+        assert not reconcile.publisher_recheck(
+            publisher_environment(), fetch=recheck_fetch([], mains=mains), head=SOURCE, now=NOW,
+        )["publish"]
+
+    def unavailable(*args):
+        raise RuntimeError("API unavailable")
+
+    with pytest.raises(RuntimeError, match="API unavailable"):
+        reconcile.publisher_recheck(publisher_environment(), fetch=unavailable, head=SOURCE)
+    with patch.object(reconcile.subprocess, "check_output", return_value=SOURCE + "\n"):
+        assert reconcile.publisher_recheck(publisher_environment(), fetch=recheck_fetch([]), now=NOW)["publish"]
+
+
+def test_post_queue_recheck_cli_and_workflow_gate_all_heavy_steps(tmp_path, monkeypatch):
+    output, github_output = tmp_path / "recheck.json", tmp_path / "github-output"
+    monkeypatch.setattr(sys, "argv", ["reconcile", "--publisher-recheck", "--output", str(output)])
+    monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
+    with patch.object(reconcile, "publisher_recheck", return_value={"publish": False, "reason": "Fresh sibling"}):
+        reconcile.main()
+    assert "publish=false" in github_output.read_text()
+    assert json.loads(output.read_text())["publish"] is False
+    monkeypatch.delenv("GITHUB_OUTPUT")
+    with patch.object(reconcile, "publisher_recheck", return_value={"publish": True}):
+        reconcile.main()
+    steps = workflow("linux-cache-publish.yml")["jobs"]["publish-linux-caches"]["steps"]
+    recheck = next(index for index, step in enumerate(steps) if step.get("id") == "readiness")
+    heavy = [step for step in steps[recheck + 1:] if not step.get("if") == "always()"]
+    assert heavy
+    assert all("steps.readiness.outputs.publish == 'true'" in step["if"] for step in heavy)
+    assert next(step for step in steps if step.get("id") == "publication")["name"] == reconcile.PUBLISH_STEP

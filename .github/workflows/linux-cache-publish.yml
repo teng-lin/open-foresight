@@ -98,23 +98,34 @@ jobs:
         test "$GITHUB_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/linux-cache-publish.yml@refs/heads/main"
         test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
         test "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$GITHUB_SHA"
+    - name: Recheck sibling readiness after acquiring the publisher queue
+      id: readiness
+      env:
+        GH_TOKEN: ${{ github.token }}
+        QUALIFY_CONSUMERS: ${{ inputs.qualify_consumers && 'true' || 'false' }}
+      run: python3 tools/ci_cache_reconcile.py --publisher-recheck --output test-results/cache-maintenance/recheck.json
     - uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
+      if: steps.readiness.outputs.publish == 'true'
       with:
         daemon-config: '{"features":{"containerd-snapshotter":true}}'
     - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      if: steps.readiness.outputs.publish == 'true'
       with:
         driver: docker
     - name: Authenticate the dedicated main cache publisher
+      if: steps.readiness.outputs.publish == 'true'
       env:
         REGISTRY_TOKEN: ${{ github.token }}
       run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
     - name: Restore qualified SDK outputs without a local SDK build fallback
       id: sdk
+      if: steps.readiness.outputs.publish == 'true'
       env:
         GH_TOKEN: ${{ github.token }}
         CI_TIER: sweep
       run: python3 tools/ci_linux_shadow_sdk.py --source "$GITHUB_SHA" --own-pr 0 --directory build/cache-sdk
     - name: Recheck current main immediately before registry writes
+      if: steps.readiness.outputs.publish == 'true'
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
@@ -124,6 +135,7 @@ jobs:
         test "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$GITHUB_SHA"
     - name: Publish or reuse immutable qualified CI tooling
       id: tooling
+      if: steps.readiness.outputs.publish == 'true'
       env:
         GH_TOKEN: ${{ github.token }}
         SDK_IMAGE: ${{ steps.sdk.outputs.image }}
@@ -132,7 +144,7 @@ jobs:
         python3 tools/ci_tooling_image.py --repository "$GITHUB_REPOSITORY" \
           --sdk-image "$SDK_IMAGE" --snapshot "$task_snapshot" --output build/cache-tooling --publish
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-      if: steps.tooling.outputs.tooling_reused != 'true'
+      if: steps.readiness.outputs.publish == 'true' && steps.tooling.outputs.tooling_reused != 'true'
       with:
         name: ci-tooling-${{ steps.tooling.outputs.tooling_identity }}
         path: build/cache-tooling/tooling.json
@@ -140,6 +152,8 @@ jobs:
         if-no-files-found: error
         retention-days: 30
     - name: Publish only isolated secret-free dependency and acceptance caches
+      id: publication
+      if: steps.readiness.outputs.publish == 'true'
       env:
         GH_TOKEN: ${{ github.token }}
         SDK_IMAGE: ${{ steps.sdk.outputs.image }}
@@ -150,6 +164,7 @@ jobs:
       if: always()
       env:
         MAINTENANCE_RESULT: ${{ job.status }}
+        PUBLICATION_EXECUTED: ${{ steps.publication.outcome == 'success' && 'true' || 'false' }}
       run: |
         mkdir -p test-results/cache-maintenance
         python3 - <<'PY'
@@ -159,6 +174,7 @@ jobs:
             'source': os.environ['GITHUB_SHA'], 'run': os.environ['GITHUB_RUN_ID'],
             'attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'result': os.environ['MAINTENANCE_RESULT'],
             'scope': 'isolated-v2',
+            'publication_executed': os.environ['PUBLICATION_EXECUTED'] == 'true',
         }) + '\n')
         PY
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

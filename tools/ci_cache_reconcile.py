@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.ci_artifacts import api  # noqa: E402
 
 WORKFLOW = ".github/workflows/linux-cache-publish.yml"
+PUBLISH_STEP = "Publish only isolated secret-free dependency and acceptance caches"
 
 
 def timestamp(value):
@@ -89,6 +90,15 @@ def registry_schedule(repository, source, *, fetch=api, now=None, current_run=No
                 job.get("status") != "completed" or not job.get("started_at")
             ):
                 continue
+            if job.get("conclusion") == "success" and not any(
+                step.get("name") == PUBLISH_STEP
+                and step.get("status") == "completed"
+                and step.get("conclusion") == "success"
+                for step in job.get("steps", [])
+            ):
+                # Post-queue no-op jobs preserve success without publishing.
+                # They cannot move the original producer's freshness window.
+                continue
             started = timestamp(job.get("started_at") or run.get("created_at"))
             finished = started if active else timestamp(job.get("completed_at"))
             if finished < started:
@@ -125,6 +135,42 @@ def registry_schedule(repository, source, *, fetch=api, now=None, current_run=No
         if stale
         else "Current-source registry publisher succeeded within 24 hours",
         "job": job["id"],
+    }
+
+
+def publisher_recheck(environment=None, *, fetch=api, head=None, now=None):
+    """Recheck actual sibling readiness after acquiring the publisher queue."""
+    env = os.environ if environment is None else environment
+    repository, source = env.get("GITHUB_REPOSITORY", ""), env.get("GITHUB_SHA", "")
+    run_id = env.get("GITHUB_RUN_ID", "")
+    if (
+        not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository)
+        or not re.fullmatch(r"[a-f0-9]{40}", source)
+        or not re.fullmatch(r"[1-9][0-9]*", run_id)
+        or env.get("GITHUB_REF") != "refs/heads/main"
+        or env.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
+        or env.get("GITHUB_JOB") != "publish-linux-caches"
+        or env.get("GITHUB_WORKFLOW_REF") != f"{repository}/{WORKFLOW}@refs/heads/main"
+    ):
+        raise ValueError("Publisher recheck requires its dedicated reviewed-main dispatch job")
+    if head is None:
+        head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, timeout=30).strip()
+    if head != source:
+        raise ValueError("Publisher recheck checkout differs from its reviewed source")
+    qualification = env.get("QUALIFY_CONSUMERS", "false")
+    if qualification not in ("", "true", "false"):
+        raise ValueError("Malformed consumer qualification request")
+    if fetch(repository, "commits/main").get("sha") != source:
+        return {"publish": False, "reason": "Main advanced; current source owns publication"}
+    result = (
+        {"needed": True, "reason": "Explicit current-source consumer qualification"}
+        if qualification == "true"
+        else registry_schedule(repository, source, fetch=fetch, now=now, current_run=int(run_id))
+    )
+    current = fetch(repository, "commits/main").get("sha") == source
+    return {
+        "publish": current and result["needed"],
+        "reason": result["reason"] if current else "Main advanced during publisher recheck",
     }
 
 
@@ -244,15 +290,20 @@ def reconcile(environment=None, *, fetch=api, head=None, now=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--publisher-recheck", action="store_true")
     parser.add_argument(
         "--output", type=Path, default=Path("build/cache-reconciliation.json")
     )
     args = parser.parse_args()
-    result = reconcile()
+    result = publisher_recheck() if args.publisher_recheck else reconcile()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     if output := os.environ.get("GITHUB_OUTPUT"):
         with open(output, "a") as stream:
+            if args.publisher_recheck:
+                stream.write(f"publish={str(result['publish']).lower()}\n")
+                print(json.dumps(result, sort_keys=True))
+                return
             for key in (
                 "current",
                 "registry_needed",
