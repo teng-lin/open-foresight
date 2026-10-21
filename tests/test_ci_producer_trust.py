@@ -31,11 +31,6 @@ EXPECTED = {
         ("pull_request", "push", "workflow_dispatch", "schedule"),
         {"": ("linux-build", "build / linux-build")},
     ),
-    "dependency-seed-current": (
-        ("macos.yml", "preview-packages.yml"),
-        ("push", "workflow_dispatch", "schedule"),
-        {"": ("publish-caches", "build / publish-caches")},
-    ),
     "dependency-sdk": (
         ("ci-dependencies.yml",),
         ("push", "workflow_dispatch", "schedule", "pull_request"),

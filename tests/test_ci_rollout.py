@@ -370,3 +370,15 @@ def test_initial_cutover_cannot_ignore_a_newer_failed_or_pending_nightly(root):
     red.update(status="in_progress", conclusion=None)
     with pytest.raises(ValueError, match="Latest scheduled nightly"):
         evidence.verify("arch_retirement")
+
+
+@pytest.mark.parametrize("name", [".github/actions/setup-linux-stage/action.yml", ".gitattributes"])
+def test_active_writer_and_checkout_policy_revoke_controls(root, name):
+    path = root / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("reviewed policy\n")
+    original = rollout.control_closure(root)
+    assert name in original["files"]
+    path.write_text("changed policy\n")
+    with pytest.raises(ValueError, match="closure differs"):
+        rollout.compare(original, rollout.control_closure(root))

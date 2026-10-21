@@ -69,11 +69,6 @@ PRODUCERS = {
         ("pull_request", "push", "workflow_dispatch", "schedule"),
         {"": ("linux-build", "build / linux-build")},
     ),
-    "dependency-seed-current": Producer(
-        (".github/workflows/macos.yml", ".github/workflows/preview-packages.yml"),
-        ("push", "workflow_dispatch", "schedule"),
-        {"": ("publish-caches", "build / publish-caches")},
-    ),
     "dependency-sdk": Producer(
         (".github/workflows/ci-dependencies.yml",),
         ("push", "workflow_dispatch", "schedule", "pull_request"),

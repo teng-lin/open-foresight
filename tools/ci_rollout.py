@@ -25,7 +25,7 @@ from tools.ci_selection import GATES  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 CAPABILITIES = {"main_receipts", "path_selection", "arch_retirement", "acceptance_narrowing"}
 LEGACY = {
-    ".github/workflows/linux-platform-stages.yml", ".github/actions/setup-linux-stage/action.yml",
+    ".github/workflows/linux-platform-stages.yml",
     "tools/run_ci_stage.py", "tools/ci_stage_artifacts.py", "tools/ci_stage_cache.py", "tools/ci_stage_environment.py",
 }
 SUFFIXES = {".py", ".sh", ".json", ".yml", ".yaml", ".toml", ".lock", ".cmake", ".txt", ".cc", ".cpp", ".h", ".hpp", ".mm", ".dart", ".plist", ".swift", ".patch", ".proto", ".ini", ".cfg"}
@@ -63,7 +63,7 @@ def closure(root=ROOT):
             if path.is_file():
                 record[relative.as_posix()] = {"sha256": digest(path), "mode": stat.S_IMODE(path.stat().st_mode)}
     for path in root.iterdir():
-        if path.is_file() and (path.suffix in SUFFIXES or path.name in {"CMakeLists.txt", ".coveragerc"}):
+        if path.is_file() and (path.suffix in SUFFIXES or path.name in {"CMakeLists.txt", ".coveragerc", ".gitattributes"}):
             record[path.name] = {"sha256": digest(path), "mode": stat.S_IMODE(path.stat().st_mode)}
     if not {"tools/ci_changes.py", ".github/workflows/macos.yml", "tools/ci_selection.py"}.issubset(record):
         raise ValueError("Incomplete source export for retained closure")
@@ -83,7 +83,7 @@ def control_closure(root=ROOT, *, full=None):
     controls = {}
     for name, value in record.items():
         path = Path(name)
-        if name.startswith((".github/", "tools/", "packaging/", "cmake/", "tests/fixtures/ci")) or path.name == "CMakeLists.txt" or path.suffix == ".cmake" or path.name in {"pubspec.yaml", "pubspec.lock", "Podfile", "Podfile.lock"} or (path.parent == Path(".") and (path.suffix in {".lock", ".toml", ".ini", ".cfg"} or name == ".coveragerc")) or (name.startswith("tests/test_ci_") and name.endswith(".py")):
+        if name.startswith((".github/", "tools/", "packaging/", "cmake/", "tests/fixtures/ci")) or path.name == "CMakeLists.txt" or path.suffix == ".cmake" or path.name in {"pubspec.yaml", "pubspec.lock", "Podfile", "Podfile.lock"} or (path.parent == Path(".") and (path.suffix in {".lock", ".toml", ".ini", ".cfg"} or name in {".coveragerc", ".gitattributes"})) or (name.startswith("tests/test_ci_") and name.endswith(".py")):
             controls[name] = value
     checksum = hashlib.sha256(json.dumps(controls, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return {"schema": 2, "scope": "ci-controls", "sha256": checksum, "files": controls}
