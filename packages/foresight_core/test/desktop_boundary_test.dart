@@ -60,12 +60,18 @@ void main() {
       );
       for (final entry in ['desktop.dart', 'desktop_bootstrap.dart']) {
         final path = '${package.path}/lib/$entry';
-        final result = await contexts
-            .contextFor(path)
-            .currentSession
-            .getResolvedLibrary(path);
-        expect(result, isA<ResolvedLibraryResult>());
-        final names = (result as ResolvedLibraryResult)
+        final session = contexts.contextFor(path).currentSession;
+        final uri = session.uriConverter.pathToUri(path);
+        expect(
+          uri,
+          isNotNull,
+          reason: '$entry must retain its exact file binding',
+        );
+        // Only linked export elements are needed; avoid requesting full
+        // analysis of this target library.
+        final result = await session.getLibraryByUri(uri!.toString());
+        expect(result, isA<LibraryElementResult>());
+        final names = (result as LibraryElementResult)
             .element
             .exportNamespace
             .definedNames2

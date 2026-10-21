@@ -426,3 +426,56 @@ The remaining full Python, sanitizer, container, packaged model/audio and
 four-distro installer gates remain local obligations. HanSolo discovery found
 the pinned Flutter/Dart installation and a Python 3.13 environment; full Xcode
 license acceptance remains an owner prerequisite for final Mac acceptance.
+
+## Core candidate 2d388 and semantic namespace guard
+
+`2d388cf64d1b9a60a48ad3027769b1c6436f6547` preserves all 1,321 exported Git
+blobs/modes. Fresh host native Debug passes 30/30, compiling 67 project actions
+and reusing the original 124 verified dependency files. The first standalone
+canonical core run passes 1,825 tests, 12 expected skips and 92.04% coverage
+(15,053/16,354), both source-hook configurations and fresh service/MCP AOT
+compilation. Full desktop passes 286 tests, 17 expected skips, 91.33% coverage
+and define-free Release compilation. All seven dependency component identities
+equal reviewed main. Claude round 5 converges on the three-language private
+journal delta and its regression/documentation changes.
+
+The full container passes all 30 native targets, including the two former root
+journal failures, and desktop passes 286 tests with 17 expected skips and 91.35%
+coverage. Portable package, ABI and restored build-handoff checks pass. The core
+namespace guard times out at its unchanged 30-second default; teardown then
+disposes the pending analyzer request. This remains a failed full container run:
+later service, fast-integration and platform-Python stages do not run. Comparing
+named outcomes explains every count difference: one host pass becomes the
+namespace error, two permission cases explicitly skip as root, and one
+unreadable-endpoint case is intentionally not registered for root. The resulting
+container count is 1,821 passed, 14 skipped and one error; the 222 hidden
+successful loading/teardown cases match the host inventory.
+
+The unchanged failed guard passes alone with its original coverage flags in
+six seconds. A separate diagnostic compares complete namespaces from independent
+analyzer contexts: both APIs return the same 132 desktop exports and five
+bootstrap exports. The narrow fixture correction requests `LibraryElementResult`
+through `getLibraryByUri`, using the same session and a checked `pathToUri`
+conversion, rather than requesting full target-library analysis. Transitive
+export linking, combinators and the active conditional branch still come from
+the analyzer. Every existing required/forbidden/export/import assertion, context
+configuration, disposal and timeout remains unchanged. This avoids requested
+target-library AST analysis; it does not claim the old API resolved every
+imported body or a different request priority. Both native reviewers converge;
+the whole file passes 2/2 locally and as root with the original coverage flags.
+These remain diagnostic proofs until the next frozen checkpoint passes.
+
+The external container adapter now routes the dependency verifier's supported
+blob-cache directory outside its pristine source context. Four task-owned
+checksum-addressed blobs are relocated intact, preserving bytes, modes,
+ownership and inodes; no shared cache is deleted. Exact source inventory and
+unchanged verifier/tooling-recipe admission pass again. Failed container attempts
+remain preserved and noncanonical.
+
+HanSolo's original main SDK is qualified in a task-private directory using the
+unchanged current artifact pull and dependency verifier: 1,564 files, original
+receipt, payload/ZIP/sidecar hashes and successful producer proofs. Its pinned
+Flutter/Dart and Python 3.13 environment are available. No SDK is rebuilt, no
+application test is claimed, and full Xcode license acceptance is still required.
+No core acceptance SHA, desktop extraction, PR or merge is complete; the next
+frozen source still needs independent Claude delta review and the full matrix.
