@@ -5,6 +5,7 @@ import 'package:foresight_core/remote.dart'
 import 'dart:async';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/application.dart';
+import 'package:foresight_core/src/rpc_error.dart';
 
 /// Explicit test adapter for the desktop capability contract. Production only
 /// constructs RemoteDomain; widget fixtures can control core services directly.
@@ -14,13 +15,25 @@ class TestDesktopConnection implements DesktopConnection {
   StreamSubscription<void>? _changes;
   final _events = StreamController<void>.broadcast(sync: true);
   Future<void>? _closing;
-  bool _helperReady = false;
+  final _ready = Completer<void>();
+  Future<void>? _initializing;
   @override
   Stream<void> get changes => _events.stream;
   @override
   Future<void> get closed => _closing ?? Future<void>.value();
   @override
-  Future<void> initialize() => domain.helper.start();
+  Future<void> initialize() => _initializing ??= _initialize();
+  Future<void> _initialize() async {
+    if (_closing != null) {
+      throw RpcError(RpcErrorCode.cancelled, 'Desktop connection closed');
+    }
+    await domain.helper.start();
+    await _ready.future;
+    if (_closing != null) {
+      throw RpcError(RpcErrorCode.cancelled, 'Desktop connection closed');
+    }
+  }
+
   @override
   DesktopModelAssets get modelAssets => DesktopModelAssets(
     generation: Directory(
@@ -31,7 +44,7 @@ class TestDesktopConnection implements DesktopConnection {
   String? _workspaceEpoch;
   TestDesktopConnection(this.application) : domain = application.domain {
     domain.helper.onReady = () async {
-      _helperReady = true;
+      if (!_ready.isCompleted) _ready.complete();
     };
     if (domain is CommandFixtureDomain) {
       (domain as CommandFixtureDomain).application = application;
@@ -109,11 +122,7 @@ class TestDesktopConnection implements DesktopConnection {
   @override
   Future<void> delete(String id) => domain.delete(id);
   @override
-  // The former widget lifecycle resumed only from Helper.onReady. Offline
-  // helpers finish start() without readiness and must not start discovery I/O
-  // under the widget clock merely because initialize() completed.
-  Future<void> resume() =>
-      _helperReady ? domain.resume() : Future<void>.value();
+  Future<void> resume() => domain.resume();
   @override
   void pauseSources() => domain.pauseSources();
   @override
@@ -179,6 +188,7 @@ class TestDesktopConnection implements DesktopConnection {
     if (_closing != null) return;
     domain.helper.changed = null;
     domain.helper.onReady = null;
+    if (!_ready.isCompleted) _ready.complete();
     application.google.close();
     // Cancel owned application timers before the first asynchronous join, as
     // the production service does when closing its application owner.
@@ -188,6 +198,7 @@ class TestDesktopConnection implements DesktopConnection {
       await _changes?.cancel();
       await applicationClosing;
       await domain.helper.close();
+      await _initializing?.then<void>((_) {}, onError: (Object _) {});
       domain.store.close();
       await _events.close();
     }();

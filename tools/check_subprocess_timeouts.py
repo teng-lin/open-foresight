@@ -2,8 +2,10 @@
 """Reject synchronous subprocess operations without an explicit finite timeout."""
 
 import ast
+import os
 from pathlib import Path
 import subprocess
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 BLOCKING_CALLS = {"run", "call", "check_call", "check_output"}
@@ -90,21 +92,60 @@ def missing_timeouts(source: str) -> list[int]:
 def source_files(root: Path) -> list[str]:
     # Check new source before staging too; otherwise local success can become a
     # CI failure solely because git add made an unchecked file visible.
-    files = subprocess.check_output(
-        [
-            "git",
-            "ls-files",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-            "-z",
-            "--",
-            "*.py",
-        ],
-        cwd=root,
-        text=True,
-        timeout=30,
-    ).split("\0")
+    environment = {
+        name: value for name, value in os.environ.items() if not name.startswith("GIT_")
+    }
+    environment.update(
+        GIT_CONFIG_GLOBAL="/dev/null",
+        GIT_CONFIG_SYSTEM="/dev/null",
+        GIT_CONFIG_NOSYSTEM="1",
+    )
+    git = ["git", "-c", "core.excludesFile=/dev/null"]
+    listing = [
+        "ls-files",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "-z",
+        "--",
+        "*.py",
+    ]
+    metadata = root / ".git"
+    if metadata.exists() or metadata.is_symlink():
+        # A broken or inaccessible checkout must fail, never become an archive.
+        output = subprocess.check_output(
+            [*git, *listing], cwd=root, env=environment, text=True, timeout=30
+        )
+    else:
+        # Complete source exports have no index/history. Use Git's real nested
+        # .gitignore semantics rather than maintaining an incomplete source-root
+        # allowlist or scanning generated build/.venv trees. Metadata lives only
+        # in private temporary storage; the exported source is never initialized
+        # or modified. Ignore policy comes from the archive, not the user's HOME.
+        with tempfile.TemporaryDirectory(
+            prefix="foresight-source-inventory-"
+        ) as temporary:
+            subprocess.run(
+                [*git, "init", "--bare", "--quiet", temporary],
+                check=True,
+                capture_output=True,
+                env=environment,
+                text=True,
+                timeout=30,
+            )
+            output = subprocess.check_output(
+                [
+                    *git,
+                    f"--git-dir={temporary}",
+                    f"--work-tree={root.resolve()}",
+                    *listing,
+                ],
+                cwd=root,
+                env=environment,
+                text=True,
+                timeout=30,
+            )
+    files = output.split("\0")
     return sorted({name for name in files if name and (root / name).is_file()})
 
 

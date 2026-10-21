@@ -589,3 +589,50 @@ characterization suggestions remain assessable at the complete gate/review; no
 optional note waives ownership, schema or responsiveness acceptance. The final
 combined implementation still requires independent native-team/Claude review
 and complete Linux/HanSolo evidence after the desktop work package.
+
+
+## Core implementation review round 2
+
+Claude CLI independently converged on core6A–6E at frozen commit
+`f225633b8c0eff18470bc883c9c9433f2ff3d030`. The full verbatim result and raw
+Read/Glob/Grep-only transcript are retained in
+`/var/tmp/foresight-core-implementation-review-r2/`. It verified the owned
+embedding RPC cancellation plus actual configuration join, the three native
+review corrections, typed persistence/JSON identity preservation, Application
+schema error mapping, explicit bindings and structural limits. It ran no tests.
+This verdict covers core implementation review, not the complete Linux checkpoint
+or the final combined implementation.
+
+Its optional inter-child reservation suggestion was accepted as useful coverage:
+three permanent tests hold the actual scheduling gap after a native child settles,
+prove valid foreground/configuration peers are refused, then verify eventual
+reservation release and exactly one artifact for Summary, Actions and Preparation.
+These and the recovery-readiness fixture pass9 tests.
+
+The optional streamed-schema error-code observation was promoted to a correction
+because6C requires actionable unavailable RPC errors. A real service/socket test
+also reproduced an uncaught future-schema failure in idle-policy reads during
+request settlement. The correction preserves the last verified normalized idle
+policy and monotonically retires only unsupported policy reads; the same service
+still owns activity, departure/grace, timers and close. Both epoch and no-epoch
+stream cases retain unavailable errors, settled dispatch accounting, compatible
+preference refresh, retired policy after database restoration and grace-driven
+shutdown while preferences are incompatible. These and existing lifetime/handoff
+regressions pass87 tests with one existing Mac-only skip. Narrow source review
+and full exact-candidate gates for these post-f225 changes remain required.
+
+
+The independent verification reviewer caught one additional future-schema path:
+the real heartbeat and application change broadcasts could still throw from
+snapshot reads. The final narrow fix shares monotonic schema-read retirement,
+cancels only the owned heartbeat, and suppresses unsupported snapshots without
+fabricating data. The lifetime policy keeps its last verified normalized value;
+activity, busy accounting, departure/grace and close retain the same authority.
+The real-socket tests separately trigger change and actual heartbeat retirement,
+then check both epoch/no-epoch errors and existing grace behavior. The expanded
+service/lifetime/handoff/recovery batch passes93 tests with one existing Mac-only
+skip. Independent native verification review converges on this final fix. Pinned
+format/analyzer/AST size checks pass; ApplicationService remains923 lines. The
+archive timeout fixtures/quality gates pass13 tests, and its checkout CLI passes.
+A new frozen source candidate will now run the complete Linux checkpoint; f225's
+failed complete gates are preserved and are not acceptance evidence.

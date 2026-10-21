@@ -12,6 +12,7 @@ import 'operations.dart';
 import 'operation_requests.dart';
 import 'operation_descriptor.dart';
 import 'platform_services.dart';
+import 'persistence/read_schema_guard.dart';
 import 'profile_paths.dart';
 import 'rpc_error.dart';
 import 'service_admission.dart';
@@ -59,31 +60,51 @@ class ApplicationService {
   DateTime? lastDesktopDeparture;
   Duration _desktopDetachGrace = const Duration(seconds: 1);
   bool _closing = false;
+  double _lastIdleMinutes = 30;
+  bool _schemaReadsRetired = false;
   int get dispatchedCount => _ledger.dispatchedCount;
   bool get desktopShutdownScheduled =>
       lastDesktopDeparture != null && !_closing;
   bool get _agentWorkInFlight => _ledger.agentWorkInFlight;
   Map<Socket, Map<int, ServiceRequestLease>> get _leases => _ledger.leases;
-  ServiceLifetimeSnapshot get _lifetimeSnapshot {
-    final value =
-        double.tryParse(domain.store.preference('serviceIdleMinutes', '30')) ??
-        30;
-    return ServiceLifetimeSnapshot(
-      started: _started,
-      lastAgentActivity: lastAgentActivity,
-      lastDesktopDeparture: lastDesktopDeparture,
-      idleMinutes: !value.isFinite || value <= 0 ? 0 : value,
-      desktopDetachGrace: _desktopDetachGrace,
-      pinned: _desktopClients.isNotEmpty || access.hasHost,
-      busy:
-          _ledger.operationsBusy ||
-          application.recording != null ||
-          application.backgroundBusy,
-      agentWorkInFlight: _agentWorkInFlight,
-      mutating: domain.mutating,
-      closing: _closing,
-    );
+  double get _idleMinutes {
+    if (!_schemaReadsRetired) {
+      try {
+        final value =
+            double.tryParse(
+              domain.store.preference('serviceIdleMinutes', '30'),
+            ) ??
+            30;
+        _lastIdleMinutes = !value.isFinite || value <= 0 ? 0 : value;
+      } on IncompatibleReadSchema {
+        // Retire unsupported storage reads while request errors and shutdown
+        // settle. The last verified policy still governs this service owner.
+        _retireSchemaReads();
+      }
+    }
+    return _lastIdleMinutes;
   }
+
+  void _retireSchemaReads() {
+    _schemaReadsRetired = true;
+    _heartbeat?.cancel();
+  }
+
+  ServiceLifetimeSnapshot get _lifetimeSnapshot => ServiceLifetimeSnapshot(
+    started: _started,
+    lastAgentActivity: lastAgentActivity,
+    lastDesktopDeparture: lastDesktopDeparture,
+    idleMinutes: _idleMinutes,
+    desktopDetachGrace: _desktopDetachGrace,
+    pinned: _desktopClients.isNotEmpty || access.hasHost,
+    busy:
+        _ledger.operationsBusy ||
+        application.recording != null ||
+        application.backgroundBusy,
+    agentWorkInFlight: _agentWorkInFlight,
+    mutating: domain.mutating,
+    closing: _closing,
+  );
 
   void _exitIfIdle() {
     _lifetime?.cancel();
@@ -367,19 +388,25 @@ class ApplicationService {
   }
 
   void _broadcast() {
-    if (_closing) return;
-    final message = {
-      'event': 'changed',
-      'capture': application.captureState,
-      'revision': domain.store.dataRevision,
-      'sources_paused': domain.sourcesPaused,
-      'generation': application.generationState,
-      'web_search_available': domain.webSearchAvailable,
-      'google': application.googleState,
-      'helper': domain.helper.snapshot?.toProto3Json(),
-      'helper_state': domain.helper.state,
-      'workspace_epoch': domain.store.workspaceEpoch,
-    };
+    if (_closing || _schemaReadsRetired) return;
+    late final Map<String, Object?> message;
+    try {
+      message = {
+        'event': 'changed',
+        'capture': application.captureState,
+        'revision': domain.store.dataRevision,
+        'sources_paused': domain.sourcesPaused,
+        'generation': application.generationState,
+        'web_search_available': domain.webSearchAvailable,
+        'google': application.googleState,
+        'helper': domain.helper.snapshot?.toProto3Json(),
+        'helper_state': domain.helper.state,
+        'workspace_epoch': domain.store.workspaceEpoch,
+      };
+    } on IncompatibleReadSchema {
+      _retireSchemaReads();
+      return;
+    }
     for (final client in _clients) {
       _messages.send(client, message);
     }

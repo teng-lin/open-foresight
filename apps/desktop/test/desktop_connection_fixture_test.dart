@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:foresight_core/src/domain.dart';
 import 'package:foresight_core/src/helper.dart';
+import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/store.dart';
 import 'package:foresight_test_support/test_paths.dart';
 
@@ -28,7 +30,7 @@ class ResumeDomain extends Domain {
 
 void main() {
   for (final ready in [false, true]) {
-    test('fixture resumes only after helper readiness ($ready)', () async {
+    test('fixture initializes only after helper readiness ($ready)', () async {
       final Directory directory = createTestTempDirectorySync('fixture-ready-');
       final domain = ResumeDomain(
         Store('${directory.path}/application.db'),
@@ -40,15 +42,20 @@ void main() {
       );
       final connection = TestDesktopConnection(Application(domain));
       try {
-        await connection.initialize();
-        await connection.resume();
-        expect(domain.resumes, ready ? 1 : 0);
+        final initialization = connection.initialize();
+        expect(connection.initialize(), same(initialization));
         if (!ready) {
-          // A later owner readiness notification admits the pending resume.
+          var initialized = false;
+          unawaited(initialization.then((_) => initialized = true));
+          await Future<void>.delayed(Duration.zero);
+          expect(initialized, isFalse);
+          expect(domain.resumes, 0);
+          // A later owner readiness notification admits the pending initializer.
           await domain.helper.onReady!();
-          await connection.resume();
-          expect(domain.resumes, 1);
         }
+        await initialization;
+        await connection.resume();
+        expect(domain.resumes, 1);
       } finally {
         connection.close();
         await connection.closed;
@@ -56,4 +63,32 @@ void main() {
       }
     });
   }
+  test('closing settles an initializer waiting for helper readiness', () async {
+    final directory = createTestTempDirectorySync('fixture-ready-close-');
+    final domain = ResumeDomain(
+      Store('${directory.path}/application.db'),
+      ReadinessHelper(
+        '${directory.path}/socket',
+        '${directory.path}/helper',
+        false,
+      ),
+    );
+    final connection = TestDesktopConnection(Application(domain));
+    final initialization = connection.initialize();
+    final rejected = expectLater(
+      initialization,
+      throwsA(
+        isA<RpcError>().having(
+          (error) => error.code,
+          'code',
+          RpcErrorCode.cancelled,
+        ),
+      ),
+    );
+    connection.close();
+    await connection.closed;
+    await rejected;
+    expect(domain.resumes, 0);
+    directory.deleteSync(recursive: true);
+  });
 }

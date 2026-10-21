@@ -248,3 +248,97 @@ No host sysctl, shared cache or successful SDK producer was changed.
 This freezes a candidate for full Linux execution, not core_acceptance_sha approval.
 No desktop feature extraction, PR, push or merge has occurred yet. Final combined
 Linux/HanSolo matrices and whole-implementation team/Claude review remain required.
+
+
+## Frozen core candidate f225 and verification corrections
+
+Core candidate `f225633b8c0eff18470bc883c9c9433f2ff3d030` contains the
+completed6A–6E implementation, before desktop feature extraction. Its complete
+Git-free export contains1316 files independently matched to Git blob hashes,
+SHA256 and file modes. The source archive SHA256 is
+`475462add1b87b8eba062e6a05ce973be3669d74332e58e13ed0b2328835bdd7`.
+Main was fetched again and remains3fb25924; the reviewed plan revision11 is
+unchanged. This candidate is not `core_acceptance_sha`.
+
+Fresh root native compilation reused verified dependency bytes and passes30/30
+CTest targets, including inference and helper schema-preflight coverage. The
+complete Python coverage command passes5164 tests,31 skips and95.86% coverage.
+Artifact/provenance fixtures also pass under explicit unrelated PR998, main and
+unset-ref environments:2672 tests plus1162 subtests in each environment. The
+real opt-in offline Docker cache fixture passes. Pinned Dart/clang-format,
+Ruff/Mypy and actionlint with ShellCheck available pass.
+
+The initial full core suite reports1816 passed,12 skipped and two failures:
+a30-second analyzer-boundary timeout and a3-second startup-index-recovery poll.
+Both failed files pass in isolation unchanged. A full rerun is retained
+separately; its startup-index poll has failed again and is under investigation.
+These are failed complete gates; isolated passes do not establish coverage or
+checkpoint acceptance. Enabled source-compiler hook regression and fresh AOT
+service/MCP compilation pass independently, without a full-gate claim.
+
+The full adapted desktop suite reports283 passed,17 skipped and two fixture
+lifecycle failures. Focused reproduction showed that the explicit test adapter
+completed initialize before an offline helper became ready. Its pending narrow
+fix waits for onReady, caches initialization, and joins/cancels pending readiness
+on close; production lifecycle behavior is unchanged. Seven affected files pass
+23 tests with two existing Apple skips. The exact candidate's independent
+Flutter release build passes; measured failed-suite coverage91.44% does not
+make the failed full gate pass.
+
+The timeout static checker also failed on the required source export because it
+unconditionally required Git metadata. Its pending correction uses Git's ignore
+engine with private external bare metadata only for archives, sanitizes inherited
+Git configuration, and preserves failures for broken existing checkout metadata.
+Thirteen fixture tests pass, including independent archived source after deleting
+its producer repository; the candidate's Python inventory matches all361 tracked
+Python files exactly. Frozen source bytes remain unchanged. These corrections
+and any valid recovery-test fix will be batched into a new frozen candidate.
+
+The complete local container/package/installer gate inventory is retained at
+`desktop-boundary/linux-packaging-gate-inventory.md` under the evidence root.
+Docker, inner document namespaces and all four pinned Linux distro routes are
+locally executable; none is waived as hosted-only. Qualified SDK/seed/weights are
+reused without dependency rebuild. Private synthetic audio/software GPU evidence
+will remain separate from physical hardware acceptance. The existing HanSolo
+full-Xcode license block still prevents Mac application acceptance.
+
+Claude's second independent core implementation review is running against the
+frozen f225 export. Native review identified a meaningful coverage gap between
+settled native children of Summary/Actions/Preparation; a dedicated regression
+will verify that peer admission remains busy while the parent reservation is
+owned, then verifies release and single acceptance. Full combined implementation
+review, final Linux/HanSolo evidence and PR/merge remain outstanding.
+
+
+The repeated full core run finishes1817 passed,12 skipped and the one recovery
+poll failure; its complete gate and coverage remain unverified. The fixture now
+joins actual `service.ready` recovery instead of a3-second DB poll. A diagnostic
+on frozen production records socket publication at107ms before helper/model
+readiness, then recovery completion at190ms with the original durable indexing
+error. This establishes the ordering gap without claiming isolated execution
+reproduced the loaded3-second delay.
+
+The new between-native-child reservation cases pass for Summary, Actions and
+Preparation. Together with the fixed recovery fixture,9 focused cases pass.
+Explicit default-disabled and enabled source-compiler hook checks each pass.
+Claude core implementation round2 converged atf225; its optional streamed schema
+observation led to the narrow error mapping and future-schema idle-policy
+retirement described in the review record. The real stream/lifetime/handoff
+batch passes87 tests with one existing Mac-only skip; analyzer and size audits
+pass. These changes require a new frozen candidate and complete checkpoint gates.
+
+
+The independent verification reviewer caught one additional future-schema path:
+the real heartbeat and application change broadcasts could still throw from
+snapshot reads. The final narrow fix shares monotonic schema-read retirement,
+cancels only the owned heartbeat, and suppresses unsupported snapshots without
+fabricating data. The lifetime policy keeps its last verified normalized value;
+activity, busy accounting, departure/grace and close retain the same authority.
+The real-socket tests separately trigger change and actual heartbeat retirement,
+then check both epoch/no-epoch errors and existing grace behavior. The expanded
+service/lifetime/handoff/recovery batch passes93 tests with one existing Mac-only
+skip. Independent native verification review converges on this final fix. Pinned
+format/analyzer/AST size checks pass; ApplicationService remains923 lines. The
+archive timeout fixtures/quality gates pass13 tests, and its checkout CLI passes.
+A new frozen source candidate will now run the complete Linux checkpoint; f225's
+failed complete gates are preserved and are not acceptance evidence.

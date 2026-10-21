@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'platform_services.dart';
+import 'persistence/read_schema_guard.dart';
 import 'rpc_error.dart';
 
 void traceServiceTransport(String Function() message) {
@@ -15,7 +16,9 @@ void traceServiceTransport(String Function() message) {
 
 // Keep programming diagnostics in service logs, never in a wire stack field.
 RpcError requestFailure(Object error, StackTrace stack) {
-  final failure = RpcError.from(error);
+  final failure = error is IncompatibleReadSchema
+      ? error.rpcError
+      : RpcError.from(error);
   if (failure.code == RpcErrorCode.internal) {
     stderr.writeln('Application service request failed: $error\n$stack');
   }
