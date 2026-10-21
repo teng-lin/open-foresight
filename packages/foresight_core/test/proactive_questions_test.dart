@@ -138,7 +138,7 @@ void main() {
       await queue.process();
       final work = queue.process();
       await entered.future;
-      await queue.yieldToForeground();
+      await Future.wait([queue.yieldToForeground(), queue.yieldToForeground()]);
       await work;
       expect(store.meetingQuestions(meeting).single['state'], 'queued');
       busy = true;

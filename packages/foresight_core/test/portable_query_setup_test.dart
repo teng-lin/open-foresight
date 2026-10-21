@@ -29,6 +29,23 @@ for line in sys.stdin:
       await Process.run('chmod', ['700', worker.path]);
       try {
         final digest = sha256.convert(model.readAsBytesSync()).toString();
+        for (final paths in [
+          (root.path, worker.path),
+          (model.path, root.path),
+        ]) {
+          await expectLater(
+            configurePortableQuery(store, paths.$1, paths.$2, digest),
+            throwsStateError,
+          );
+          expect(store.model(dedicatedQueryModelKind), isNull);
+        }
+        await Process.run('chmod', ['600', worker.path]);
+        await expectLater(
+          configurePortableQuery(store, model.path, worker.path, digest),
+          throwsStateError,
+        );
+        expect(store.model(dedicatedQueryModelKind), isNull);
+        await Process.run('chmod', ['700', worker.path]);
         await expectLater(
           configurePortableQuery(store, model.path, worker.path, '0' * 64),
           throwsStateError,

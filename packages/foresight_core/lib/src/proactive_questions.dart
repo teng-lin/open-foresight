@@ -46,7 +46,7 @@ class ProactiveQuestions {
   String? _request;
   int? _activeMeeting;
   bool _closed = false, _suspended = false;
-  bool _yielded = false;
+  int _yields = 0;
   bool get enabled => store.preference('proactiveAnswers', 'true') == 'true';
   bool get running => _inFlight != null;
   bool ownsRequest(String request) => _allowed && _request == request;
@@ -203,7 +203,7 @@ class ProactiveQuestions {
     ).isNotEmpty;
   }
 
-  bool get _allowed => !_closed && !_suspended && !_yielded && enabled;
+  bool get _allowed => !_closed && !_suspended && _yields == 0 && enabled;
   bool _linkCommittedAnswer(int question, [int? answer]) {
     final saved = store.rows(
       "SELECT id,status FROM answers WHERE status='completed' AND ${answer == null ? 'request_id=?' : 'id=?'} ORDER BY id DESC LIMIT 1",
@@ -218,14 +218,14 @@ class ProactiveQuestions {
   }
 
   Future<void> yieldToForeground() async {
-    _yielded = true;
+    _yields++;
     _timer?.cancel();
     _timer = null;
-    if (_request != null) cancel(_request!);
     try {
+      if (_request != null) cancel(_request!);
       await _inFlight;
     } finally {
-      _yielded = false;
+      _yields--;
       wake();
     }
   }

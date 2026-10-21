@@ -12,6 +12,7 @@ import 'package:test/test.dart';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/dedicated_query_runtime.dart';
 import 'package:foresight_core/src/application.dart';
+import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
 
 class _Domain extends Domain {
@@ -357,6 +358,59 @@ void main() {
       );
     },
   );
+
+  for (final cancelCaller in [false, true]) {
+    test(
+      'model configuration yields retrieval and preserves queued answer (cancel caller: $cancelCaller)',
+      () async {
+        final id = store.meeting('Model configuration during retrieval');
+        final queue = domain.application.proactive;
+        queue.begin(id);
+        store.transcript(
+          id,
+          'Mira owns the draft. Who owns the draft?',
+          true,
+          0,
+          1000,
+          'microphone',
+        );
+        queue.notify(id);
+        await queue.process();
+        rag.gate = Completer<void>();
+        final work = queue.process();
+        await rag.entered.future.timeout(const Duration(seconds: 2));
+        var current = true;
+        final configure = domain.application.call(
+          Operation.modelsAcquireQuery.wire,
+          {},
+          current: () => current,
+        );
+        if (cancelCaller) current = false;
+        // No download is authorized in this fixture. Even a denied model
+        // request must leave the interrupted automatic answer retryable.
+        await expectLater(
+          configure,
+          throwsA(
+            isA<RpcError>().having(
+              (error) => error.code,
+              'code',
+              cancelCaller ? RpcErrorCode.cancelled : RpcErrorCode.denied,
+            ),
+          ),
+        );
+        await work;
+        expect(queue.running, false);
+        expect(queue.errors, isEmpty);
+        expect(store.meetingQuestions(id).single['state'], 'queued');
+        expect(runtime.requests, isEmpty);
+        rag.gate!.complete();
+        await eventually(() => domain.application.proactiveWork == 0);
+        await queue.process();
+        expect(store.meetingQuestions(id).single['state'], 'completed');
+        expect(runtime.requests, hasLength(1));
+      },
+    );
+  }
 
   test(
     'cancelled proactive preparation leaves a real paused shared index durable and not busy',

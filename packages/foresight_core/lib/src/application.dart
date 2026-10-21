@@ -797,8 +797,19 @@ class Application implements ModelGate, GenerationReservationGate {
           write,
           arguments: key == null ? '' : requestArgumentsDigest(a),
         );
-    if (method.startsWith('models.') &&
-        method != Operation.modelsCancelQueryAcquisition.wire &&
+    final modelOperation =
+        method.startsWith('models.') &&
+        method != Operation.modelsCancelQueryAcquisition.wire;
+    if (modelOperation && proactive.running) {
+      await proactive.yieldToForeground();
+      if (_closed) {
+        throw RpcError(RpcErrorCode.unavailable, 'Application closed');
+      }
+      if (!current()) {
+        throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+      }
+    }
+    if (modelOperation &&
         (modelBusy ||
             domain.generator?.generating == true ||
             _noteEnhancements.values.any((state) => state.active) ||
@@ -810,9 +821,6 @@ class Application implements ModelGate, GenerationReservationGate {
         'Model configuration is busy while generation or recording is active',
       );
     }
-    final modelOperation =
-        method.startsWith('models.') &&
-        method != Operation.modelsCancelQueryAcquisition.wire;
     if (modelOperation) _modelBusy = true;
     try {
       switch (Operation.parse(method)) {
