@@ -85,6 +85,9 @@ def verify_publisher_proof(record, repository, source, run_id, *, api=None):
 
 
 def publisher_record(directory, inputs, source):
+    resolution = json.loads((directory / "tooling/inputs.json").read_text())
+    if resolution.get("reused") is not True:
+        raise ValueError("Local tooling fallback cannot qualify publication; rerun with a verified shared image")
     repository = os.environ["GITHUB_REPOSITORY"]
     run_id = int(os.environ["GITHUB_RUN_ID"])
     jobs = artifacts.dependency_jobs(repository, run_id)
@@ -94,7 +97,7 @@ def publisher_record(directory, inputs, source):
     job = max(candidates, key=lambda item: (item["run_attempt"], item["id"]))
     producer = json.loads((directory / "tooling/producer.json").read_text())
     record = {"ci_inputs": inputs, "publisher": {"run_id": run_id, "attempt": job["run_attempt"], "job_id": job["id"]},
-              "tooling": {**producer, "resolution": json.loads((directory / "tooling/inputs.json").read_text())}}
+              "tooling": {**producer, "resolution": resolution}}
     return verify_publisher_proof(record, repository, source, run_id)
 
 

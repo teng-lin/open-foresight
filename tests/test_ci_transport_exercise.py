@@ -254,3 +254,14 @@ def test_publisher_application_record_retains_real_tooling_and_publisher_provena
     result = exercise.application_record("publisher", SOURCE, application)
     assert result["publisher"] == {"run_id": 7, "attempt": 1, "job_id": 70}
     assert result["tooling"]["receipt"]["image_digest"] == "sha256:" + "d" * 64
+
+
+def test_local_tooling_miss_has_actionable_failure_before_any_api_or_producer_read(tmp_path, monkeypatch):
+    directory = tmp_path / "tooling"
+    directory.mkdir()
+    (directory / "inputs.json").write_text('{"reused":false}')
+    def forbidden(*args):
+        raise AssertionError("Known local fallback must not query publishers")
+    monkeypatch.setattr(exercise.artifacts, "dependency_jobs", forbidden)
+    with pytest.raises(ValueError, match="Local tooling fallback cannot qualify"):
+        exercise.publisher_record(tmp_path, {}, SOURCE)
