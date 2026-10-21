@@ -6,12 +6,14 @@ import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.ci_main_evidence import (  # noqa: E402
     PLATFORM,
     REQUIRED,
     Reader,
+    RetirementQualificationLapsed,
     job_proof,
     require_source,
     scoped_run,
@@ -20,7 +22,6 @@ from tools.ci_main_evidence import (  # noqa: E402
 from tools.ci_main_sweep import dispatch, qualify, validation_runs  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-INDEX = ROOT / "docs/platforms/ci-rollout-index.json"
 
 
 def authorize(reader, source, *, index=None, root=None):
@@ -44,7 +45,7 @@ def authorize(reader, source, *, index=None, root=None):
 def activation(reader, source):
     try:
         authorize(reader, source)
-    except (ValueError, ImportError, KeyError, TypeError) as error:
+    except (ValueError, ImportError, KeyError, TypeError, subprocess.SubprocessError, RuntimeError, OSError) as error:
         return {"active": False, "reason": str(error)}
     return {"active": True, "reason": "Hosted retained-closure qualification verified"}
 
@@ -115,6 +116,11 @@ def reconcile(reader, source, before, *, root=ROOT, index=None):
             return {"source": source, "decision": "waiting", "run": run["id"]}
         try:
             return sweep_receipt(reader, run, before)
+        except RetirementQualificationLapsed as error:
+            if run.get("conclusion") != "success":
+                raise
+            fresh = dispatch(reader, source=source, index=index, root=root)
+            return {"decision": "sweep-requested", "reason": str(error), **fresh}
         except ValueError as error:
             # Retry only failed jobs, once, preserving original successful bytes.
             if (

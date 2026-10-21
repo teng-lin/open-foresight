@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import subprocess
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools import ci_release_candidates as candidate  # noqa: E402
@@ -80,6 +81,10 @@ def scoped_run(run, repository, workflow, source, events):
     return run
 
 
+class RetirementQualificationLapsed(ValueError):
+    """A previously retired Arch owner is required again for fresh validation."""
+
+
 def selection_jobs(selection):
     if selection.get("superseded") is not False:
         raise ValueError("Selection lacks explicit non-superseded execution evidence")
@@ -133,6 +138,7 @@ class Reader:
         self.api = api
         self.mode = mode
         self._arch_retirement: dict[str, bool] = {}
+        self.arch_retirement_reasons: dict[str, str] = {}
 
     def get(self, route):
         return self.api(self.repository, route)
@@ -145,7 +151,8 @@ class Reader:
             from tools.ci_qualification_index import capability
 
             capability("arch_retirement", source, repository=self.repository, api=self.api)
-        except (ImportError, ValueError, KeyError, TypeError):
+        except (ImportError, ValueError, KeyError, TypeError, subprocess.SubprocessError, RuntimeError, OSError) as error:
+            self.arch_retirement_reasons[source] = f"{type(error).__name__}: {error}"
             self._arch_retirement[source] = False
             return False
         self._arch_retirement[source] = True
@@ -222,7 +229,7 @@ class Reader:
         )
         selection_jobs(selection)
         if selection.get("arch_retired") is True and not self.arch_retired(run["head_sha"]):
-            raise ValueError("Arch retirement selection lacks verified hosted qualification")
+            raise RetirementQualificationLapsed("Arch retirement selection lacks verified hosted qualification")
         return selection, upload
 
     def input_identity(self, source):
@@ -380,6 +387,8 @@ class Reader:
         try:
             owners = self.application_owners(source)
             base["owners"] = list(owners)
+            if reason := self.arch_retirement_reasons.get(source):
+                base["arch_retirement_reason"] = reason
             commit = self.get(f"git/commits/{source}")
             if before != commit["parents"][0]["sha"]:
                 raise ValueError("Push predecessor is not a direct main parent")

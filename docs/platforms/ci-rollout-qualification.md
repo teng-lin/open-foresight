@@ -1,10 +1,15 @@
 # CI candidate qualification and activation
 
 The reliability work lands preparation with direct main validation, the current
-production selector and the transitional Arch checks retained. The committed
-`ci-rollout-index.json` has no enabled capabilities and no hosted evidence.
-An empty index cannot authorize receipt reuse, path narrowing, acceptance-phase
-narrowing or Arch retirement. A PR run cannot qualify its own new main-only
+production selector and the transitional Arch checks retained until hosted proof
+qualifies. The dedicated main-only `CI qualification index` workflow publishes
+the runtime `ci-qualification-index` artifact. Its repository, workflow/event,
+reviewed-main source, original successful uploader/attempt, upload window, receipt
+and ZIP checksum are verified before its capability evidence is independently
+rechecked. Scheduled reconciliation discovers observer proofs within 30 minutes;
+observer completion does not queue another full index verification. The committed `ci-rollout-index.json` is only an inactive schema
+example; an empty index cannot authorize receipt reuse, path narrowing, acceptance
+phase narrowing or Arch retirement. A PR run cannot qualify its own new main-only
 producer controls.
 
 `tools/ci_selection.py` observes the WS3 path union and prerequisite/consumer
@@ -85,3 +90,31 @@ collection now live in `ci_native_cache.py`, `ci_build_artifacts.py` and
 The legacy stage modules delegate to these same implementations until retirement
 qualifies. Restoring compiler objects still requires fresh configure, build and
 tests. No successful test result is promoted through those retained helpers.
+
+## Evidence expiry and renewal
+
+Qualification artifacts expire normally. The JSON file
+`docs/platforms/ci-rollout-index.json` is an inactive schema example, not runtime
+activation input. Runtime consumers discover only the authenticated main-only
+`ci-qualification-index` artifact and reverify its original producer and the
+capability evidence. No committed file, environment flag or local report can
+waive that proof.
+
+When a pinned proof expires, the affected capability becomes inactive and checks
+expand. Do not copy or restamp old receipts to preserve retirement, delete caches,
+or restart successful SDK jobs. A content-key miss or expired SDK artifact may
+cause one normal rebuild by its authorized producer; it is not a reason to build
+an expiry migration.
+
+Renew qualification on the current reviewed main source using the existing
+`CI candidate qualification` dispatch: run `archive-sdk`, `fork-sdk` and
+`recipe-change`; run `selector-replay` or `acceptance-replay` when renewing those
+capabilities. Use `Publish Linux application caches` with `qualify_consumers`
+for publisher-consumer proof. Allow two consecutive actual scheduled full
+nightlies and the scheduled Arch drift to qualify the same retained closure for
+initial Arch retirement again. Coordinate that source window rather than forcing
+proof acceptance. The index publisher will discover the fresh artifacts and
+verify the gates without another code change. Main receipts additionally need
+fresh actual observer parity cases. Acceptance narrowing additionally retains
+its zero-miss historical-failure replay and four green weeks of real nightly
+observation. Until renewal succeeds, broader checks remain the supported path.

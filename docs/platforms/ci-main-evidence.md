@@ -22,8 +22,10 @@ invalidate the conservative shared input closure.
 Observation artifacts use `ci-main-observation-*`. Production receipt artifacts
 use `ci-main-validation-*` and cannot chain from observations. Production
 coordination remains disabled without independently verified hosted qualification
-from `ci_rollout.authorize(..., capabilities=('main_receipts',))`. No environment
-flag waives that proof. This evidence never authorizes PR/preview application
+from the authenticated main-only `ci-qualification-index` artifact and
+`ci_rollout.authorize(..., capabilities=('main_receipts',))`. The committed
+`ci-rollout-index.json` is an inactive schema example, not a runtime configuration
+file. No environment flag waives that proof. This evidence never authorizes PR/preview application
 bytes as release bytes, and it does not claim a new compilation.
 
 Manual `exercise_sweep` dispatches a current-main application-tier sweep without

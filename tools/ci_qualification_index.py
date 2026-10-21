@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import subprocess
 import sys
 import tempfile
 import zipfile
@@ -19,6 +20,8 @@ WORKFLOW = ".github/workflows/ci-qualification-index.yml"
 NAME = "ci-qualification-index"
 JOB = "publish-index"
 ROOT = Path(__file__).resolve().parents[1]
+TRANSPORT_FAILURES = (subprocess.SubprocessError, RuntimeError, OSError)
+CONSUMER_FAILURES = (ValueError, KeyError, TypeError, ImportError, zipfile.BadZipFile, *TRANSPORT_FAILURES)
 
 
 @lru_cache(maxsize=None)
@@ -169,6 +172,35 @@ def capability(name, source, *, root=ROOT, repository=None, api=cached_api, down
     repository = repository or os.environ["GITHUB_REPOSITORY"]
     index = load(repository, api=api, download=download)
     return rollout.authorize(index, root=root, source=source, capabilities=[name], repository=repository, api=api, download=download, ongoing=True)
+
+
+def resolve(source, *, root=ROOT, repository=None, api=cached_api, download=cached_download):
+    """Read a single index for all routing decisions in this changes job.
+
+    Transport failures expand production checks. The publisher uses collect()
+    directly and keeps its API/transport failures visible.
+    """
+    def inactive(error):
+        reason = f"{type(error).__name__}: {error}"
+        return {name: {"active": False, "reason": reason} for name in sorted(rollout.CAPABILITIES)}
+    repository = repository or os.environ.get("GITHUB_REPOSITORY")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository or ""):
+        return inactive(ValueError("Explicit repository required for qualification discovery"))
+    try:
+        index = load(repository, api=api, download=download)
+    except CONSUMER_FAILURES as error:
+        return inactive(error)
+    result = {}
+    for name in sorted(rollout.CAPABILITIES):
+        try:
+            rollout.authorize(index, root=root, source=source, capabilities=[name], repository=repository, api=api, download=download, ongoing=True)
+        except TRANSPORT_FAILURES as error:
+            return inactive(error)
+        except (ValueError, KeyError, TypeError, ImportError, zipfile.BadZipFile) as error:
+            result[name] = {"active": False, "reason": f"{type(error).__name__}: {error}"}
+        else:
+            result[name] = {"active": True}
+    return result
 
 
 def main():

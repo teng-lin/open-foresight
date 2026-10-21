@@ -87,20 +87,29 @@ def changed_paths(root, base):
     return [name for name in result.decode().split("\0") if name]
 
 
-def activate(result, *, source, repository, force=False, capability=None):
+def activate(result, *, source, repository, force=False, capability=None, activation=None):
     """Only PR observations may narrow after actual four-week hosted proof."""
     if result["event"] != "pull_request" or force:
         result["executed"] = dict.fromkeys(PHASES, True)
         return result
-    if capability is None:
-        from tools.ci_qualification_index import capability
-    try:
-        capability("acceptance_narrowing", source, repository=repository)
-    except (ValueError, KeyError, TypeError) as error:
-        result["activation_reason"] = str(error)
-        result["executed"] = dict.fromkeys(PHASES, True)
-    else:
+    reason = "Verified selection report unavailable"
+    qualified = False
+    if activation is not None:
+        decision = activation.get("acceptance_narrowing", {})
+        qualified = decision.get("active") is True
+        reason = decision.get("reason", "Acceptance narrowing is not qualified")
+    elif capability is not None:
+        try:
+            capability("acceptance_narrowing", source, repository=repository)
+        except (ValueError, KeyError, TypeError, subprocess.SubprocessError, RuntimeError, OSError) as error:
+            reason = f"{type(error).__name__}: {error}"
+        else:
+            qualified = True
+    if qualified:
         result.update(mode="qualified", permits_skipping=True, executed=result["proposed"], execution_policy="Execute qualified selected phases; packaging acceptance remains required")
+    else:
+        result["activation_reason"] = reason
+        result["executed"] = dict.fromkeys(PHASES, True)
     return result
 
 
@@ -147,10 +156,14 @@ def main():
             ):
                 fallback = "Cannot read complete PR diff: select all"
     result = plan(paths, args.event, fallback)
+    activation = {}
     if args.selection_report:
-        args.force = args.force or json.loads(args.selection_report.read_text())["force"]
+        verified = json.loads(args.selection_report.read_text())
+        args.force = args.force or verified["force"]
+        if verified.get("activation_source") == os.environ.get("GITHUB_SHA") and verified.get("activation_repository") == os.environ.get("GITHUB_REPOSITORY"):
+            activation = verified.get("activation", {})
     if args.activate:
-        result = activate(result, source=os.environ["GITHUB_SHA"], repository=os.environ["GITHUB_REPOSITORY"], force=args.force)
+        result = activate(result, source=os.environ["GITHUB_SHA"], repository=os.environ["GITHUB_REPOSITORY"], force=args.force, activation=activation)
     if args.selection_report:
         selection = json.loads(args.selection_report.read_text())
         selection["acceptance_phases"] = result.get("executed", dict.fromkeys(PHASES, True))

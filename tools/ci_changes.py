@@ -238,16 +238,21 @@ def activate_report(report, *, source, repository, root=None, capability=None):
     Candidate bugs remain observations before activation. Once the selector is
     authorized, its errors are real classification failures and cannot fall back.
     """
-    if capability is None:
-        from tools.ci_qualification_index import capability
-    active = {}
-    for name in ("path_selection", "arch_retirement", "main_receipts"):
-        try:
-            capability(name, source, repository=repository, **({"root": root} if root else {}))
-        except (ValueError, KeyError, TypeError) as error:
-            active[name] = {"active": False, "reason": str(error)}
-        else:
-            active[name] = {"active": True}
+    from tools.ci_qualification_index import CONSUMER_FAILURES, resolve
+    names = ("path_selection", "arch_retirement", "main_receipts", "acceptance_narrowing")
+    if reason := report.get("label_lookup_failure"):
+        active = {name: {"active": False, "reason": reason} for name in names}
+    elif capability is None:
+        active = resolve(source, repository=repository, **({"root": root} if root else {}))
+    else:
+        active = {}
+        for name in names:
+            try:
+                capability(name, source, repository=repository, **({"root": root} if root else {}))
+            except CONSUMER_FAILURES as error:
+                active[name] = {"active": False, "reason": f"{type(error).__name__}: {error}"}
+            else:
+                active[name] = {"active": True}
     if active["path_selection"]["active"]:
         if "error" in report["candidate"]:
             raise ValueError("Qualified production selector failed: " + report["candidate"]["error"])
@@ -257,6 +262,8 @@ def activate_report(report, *, source, repository, root=None, capability=None):
         report["selection"] = dict.fromkeys(GATES, False)
         report["main_coordination"] = True
     report["activation"] = active
+    report["activation_source"] = source
+    report["activation_repository"] = repository
     return report
 
 
@@ -343,14 +350,21 @@ def main():
     subprocess.run(
         ["git", "diff", "--check", *revisions, "--"], check=True, timeout=300
     )
+    label_lookup_failure = None
     if args.pull_request is not None:
         candidate = importlib.import_module("tools.ci_selection" if __package__ else "ci_selection")
-        args.force = args.force or "ci:full" in candidate.live_labels(args.repository, args.pull_request)
+        try:
+            args.force = args.force or "ci:full" in candidate.live_labels(args.repository, args.pull_request)
+        except (ValueError, KeyError, TypeError, subprocess.SubprocessError, RuntimeError, OSError) as error:
+            args.force = True
+            label_lookup_failure = f"Live ci:full lookup unavailable; fresh full validation: {type(error).__name__}: {error}"
     report = selection_report(
         [path for path in paths if path],
         force=args.force,
         revision_range=args.explain or f"{revisions[0]}..HEAD",
     )
+    if label_lookup_failure:
+        report["label_lookup_failure"] = label_lookup_failure
     if args.candidate:
         if os.environ.get("GITHUB_REF") != "refs/heads/main" or os.environ.get("GITHUB_EVENT_NAME") not in ("schedule", "workflow_dispatch") or not args.force:
             raise ValueError("Candidate qualification requires reviewed-main full validation")

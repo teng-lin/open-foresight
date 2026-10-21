@@ -214,6 +214,9 @@ def authorize(index, *, root=ROOT, source, capabilities, repository="teng-lin/op
     if all(capability in qualified_sets for capability in requested):
         allowed_artifacts = {artifact for capability in requested for artifact in qualified_sets[capability]}
     entries = [entry for entry in index["evidence"] if entry.get("kind") in needed and (allowed_artifacts is None or entry.get("artifact_id") in allowed_artifacts) and (controls or entry.get("closure_sha256", expected["sha256"]) == expected["sha256"])]
+    present = {entry.get("kind") for entry in entries}
+    if not needed.issubset(present):
+        raise ValueError("Missing actual hosted cutover exercises: " + ", ".join(sorted(needed - present)))
     qualified = [_qualified(entry, repository=repository, expected=expected, api=api or artifacts.api, download=download or artifacts.download_zip, controls=controls) for entry in entries]
     kinds = {row["kind"] for row in qualified}
     if not needed.issubset(kinds):
