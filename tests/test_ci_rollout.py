@@ -93,7 +93,7 @@ class Evidence:
     def download(self, repository, artifact, path):
         assert repository == REPOSITORY
         with zipfile.ZipFile(path, "w") as stream:
-            stream.writestr("qualification.json", json.dumps(self.payloads[artifact["id"]]))
+            stream.writestr(zipfile.ZipInfo("qualification.json", date_time=(2026, 10, 1, 0, 0, 0)), json.dumps(self.payloads[artifact["id"]]))
 
     def verify(self, *capabilities):
         # Compute actual ZIP checksums, so mutation tests keep the transport

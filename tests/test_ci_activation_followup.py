@@ -169,3 +169,21 @@ def test_unrelated_green_sweep_provenance_error_does_not_trigger_lapse_recovery(
         result = coordinator.reconcile(reader, SOURCE, BEFORE)
     assert result["decision"] == "failed"
     dispatch.assert_not_called()
+
+
+def test_qualification_fixture_zip_checksums_do_not_depend_on_wall_clock(tmp_path, monkeypatch):
+    import zipfile
+    from tests.test_ci_qualification_index import IndexEvidence
+    for name in ("tools/ci_changes.py", "tools/ci_selection.py", ".github/workflows/macos.yml"):
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("reviewed input")
+    fixture = IndexEvidence(tmp_path)
+    fixture.add("selector-replay")
+    with monkeypatch.context() as clock:
+        def unexpected_clock(*args):
+            raise AssertionError("Frozen archive metadata must not consult the wall clock")
+        clock.setattr(zipfile.time, "localtime", unexpected_clock)
+        fixture.verify("path_selection")
+        fixture.publish()
+        index.capability("path_selection", SOURCE, root=tmp_path, repository=REPOSITORY, api=fixture.api, download=fixture.download)

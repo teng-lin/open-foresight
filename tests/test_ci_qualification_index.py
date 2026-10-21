@@ -88,9 +88,7 @@ class IndexEvidence(Evidence):
     def download(self, repository, artifact, path):
         with zipfile.ZipFile(path, "w") as stream:
             stream.writestr(
-                "index.json"
-                if artifact["name"] == index.NAME
-                else "qualification.json",
+                zipfile.ZipInfo("index.json" if artifact["name"] == index.NAME else "qualification.json", date_time=(2026, 10, 1, 0, 0, 0)),
                 json.dumps(self.payloads[artifact["id"]]),
             )
 
