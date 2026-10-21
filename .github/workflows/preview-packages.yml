@@ -67,6 +67,7 @@ jobs:
           VALIDATION: ${{ inputs.validation || 'standard' }}
           REBUILD_REASON: ${{ inputs.rebuild_reason }}
           EXERCISE: ${{ inputs.exercise_failure_path }}
+          EVENT: ${{ github.event_name }}
         run: |
           if [[ "$EXERCISE" == true ]]; then
             echo "build=false" >> "$GITHUB_OUTPUT"
@@ -74,6 +75,7 @@ jobs:
           fi
           task_args=()
           if [[ "$FORCE" == true ]]; then task_args+=(--force); fi
+          if [[ "$EVENT" == schedule ]]; then task_args+=(--qualification-observation); fi
           python tools/preview_packages.py plan --repository "$GITHUB_REPOSITORY" --validation "$VALIDATION" --rebuild-reason "$REBUILD_REASON" "${task_args[@]}"
   build:
     needs: plan

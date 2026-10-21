@@ -65,6 +65,14 @@ exercises and unchanged/no-build nights emit no qualifying descriptor. All these
 hosted exercises remain pending until reviewed main executes them; local fixture
 passes are not retirement evidence.
 
+While either Arch retirement or acceptance narrowing lacks proof, the scheduled
+preview runs fresh application validation even when main has not changed. Its
+new dated preview label changes embedded application metadata; verified SDKs and
+native compiler outputs remain reusable. An active original producer is preserved,
+and a failed original producer retries only its failed jobs. Once both capabilities
+qualify, unchanged-source preview skipping resumes. A skipped controller is never
+counted as an actual nightly observation.
+
 `ci_rollout.authorize` independently rereads repository, workflow/event/main ref,
 main reachability, exact original-attempt jobs, uploading-job success/window,
 artifact origin, downloaded checksum, descriptor marker and retained closure.

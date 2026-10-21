@@ -30,7 +30,7 @@ def preview_version(source, latest):
     return source
 
 
-def plan(repository, force, validation, reason=""):
+def plan(repository, force, validation, reason="", *, qualification_observation=False):
     if force and not reason.strip():
         raise ValueError(
             "A forced new preview identity requires an exact output-affecting rebuild reason"
@@ -43,7 +43,17 @@ def plan(repository, force, validation, reason=""):
     ).strip()
     if head != commit:
         raise ValueError("Main advanced before planning; retry the workflow")
-    previous = previous_nightly(repository, commit, force, request=request)
+    observe = False
+    qualification_reason = ""
+    if qualification_observation:
+        if os.environ.get("GITHUB_EVENT_NAME") != "schedule":
+            raise ValueError("Qualification observation requires the actual scheduled main event")
+        from tools.ci_qualification_index import resolve
+        decisions = resolve(commit, repository=repository)
+        missing = [name for name in ("arch_retirement", "acceptance_narrowing") if decisions[name]["active"] is not True]
+        observe = bool(missing)
+        qualification_reason = ", ".join(missing)
+    previous = previous_nightly(repository, commit, force, request=request, require_observation=observe)
     if previous:
         if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
             with open(summary, "a") as stream:
@@ -54,7 +64,9 @@ def plan(repository, force, validation, reason=""):
     version, minimum = read_version()
     release = request(repository, "releases/latest", optional=True)
     version = preview_version(version, release["tag_name"] if release else None)
-    if force:
+    if observe:
+        print("Scheduled qualification requires fresh current-run tests for " + qualification_reason + ". A new dated preview label changes embedded application metadata; reuse verified SDKs and native compiler outputs.", flush=True)
+    elif force:
         print("Explicit preview replacement reason: " + reason, flush=True)
     else:
         print(
@@ -72,6 +84,7 @@ def plan(repository, force, validation, reason=""):
         "label": label,
         "package_version": f"{version}~{label}",
         "validation": validation,
+        "qualification_observation": str(observe).lower(),
     }
 
 
@@ -220,6 +233,7 @@ def main():
     planning = commands.add_parser("plan")
     planning.add_argument("--repository", required=True)
     planning.add_argument("--force", action="store_true")
+    planning.add_argument("--qualification-observation", action="store_true")
     planning.add_argument("--rebuild-reason", default="")
     planning.add_argument(
         "--validation", choices=("standard", "full"), default="standard"
@@ -247,6 +261,7 @@ def main():
             args.force,
             args.validation,
             args.rebuild_reason,
+            qualification_observation=args.qualification_observation,
         )
         with open(os.environ["GITHUB_OUTPUT"], "a") as output:
             for key, value in result.items():
