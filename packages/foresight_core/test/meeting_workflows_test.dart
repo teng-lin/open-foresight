@@ -13,6 +13,7 @@ class WorkflowRuntime extends NativeRuntime {
   WorkflowRuntime()
     : super(Platform.isMacOS ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6');
   final calls = <String>[], cancelled = <String>[];
+  final prompts = <String>[];
   Completer<void>? entered, release;
   int? failCall;
   void Function()? beforeDone;
@@ -31,6 +32,7 @@ class WorkflowRuntime extends NativeRuntime {
     int maxOutputTokens = 1024,
   }) async* {
     calls.add(id);
+    prompts.add(prompt);
     if (entered?.isCompleted == false) entered!.complete();
     await release?.future;
     String body;
@@ -254,6 +256,50 @@ void main() {
       runtime.failCall = runtime.calls.length + 1;
       await expectLater(app.prepareMeeting(meeting, [a]), throwsStateError);
       expect(store.meetingArtifacts(meeting, 'preparation'), hasLength(1));
+    },
+  );
+  test(
+    'retrying degraded preparation regenerates only failed documents',
+    () async {
+      final a = store.importText(
+        'A',
+        'Content A ' * 50,
+        'text/plain',
+        'fixture',
+      );
+      final b = store.importText(
+        'B',
+        'Content B ' * 50,
+        'text/plain',
+        'fixture',
+      );
+      runtime.failCall = 1;
+      await app.prepareMeeting(meeting, [a, b]);
+      expect(store.rows('SELECT * FROM document_summary_cache'), hasLength(1));
+      final before = runtime.prompts.length;
+      runtime.failCall = null;
+      await app.prepareMeeting(meeting, [a, b]);
+      final retried = runtime.prompts.skip(before).toList();
+      expect(retried, hasLength(2)); // Failed document, then combined brief.
+      expect(retried.first, startsWith(documentMapPrefix));
+      expect(retried.first, contains('Content A'));
+      expect(retried.first, isNot(contains('Content B')));
+      expect(retried.last, startsWith(preparationSynthesisInstructions));
+      expect(store.rows('SELECT * FROM document_summary_cache'), hasLength(2));
+      final versions = store.meetingArtifacts(meeting, 'preparation');
+      expect(versions, hasLength(2));
+      expect(
+        (jsonDecode(versions.first['manifest'] as String) as Map)['degraded'],
+        isFalse,
+      );
+      expect(
+        versions.first['generated'],
+        isNot(contains('Unavailable documents')),
+      );
+      final completed = runtime.calls.length;
+      await app.prepareMeeting(meeting, [a, b]);
+      expect(runtime.calls, hasLength(completed));
+      expect(store.meetingArtifacts(meeting, 'preparation'), hasLength(2));
     },
   );
   test(

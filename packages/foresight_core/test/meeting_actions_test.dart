@@ -90,6 +90,77 @@ void main() {
       );
     }
   });
+  test('short consecutive sources share byte-bounded evidence windows', () {
+    final sources = List.generate(
+      60,
+      (i) => MeetingEvidence('transcript:$i', 'Row $i: 中文😀 "quoted"\n'),
+    );
+    final windows = actionEvidenceWindows(sources, 4096, 768);
+    expect(windows.length, lessThan(10));
+    expect(
+      windows.expand((window) => window).map((entry) => entry.json),
+      sources.map((entry) => entry.json),
+    );
+    for (final window in windows) {
+      final prompt = jsonEncode({
+        'evidence': window.map((entry) => entry.json).toList(),
+      });
+      expect(
+        utf8
+                .encode(
+                  '$workflowSourcePolicy$meetingActionsInstructions\n\n$prompt',
+                )
+                .length +
+            768 +
+            128,
+        lessThanOrEqualTo(4096),
+      );
+    }
+  });
+  test(
+    'adjacent transcript rows support one commitment and its fields',
+    () async {
+      const sources = [
+        MeetingEvidence('transcript:1', 'We will ship the release.'),
+        MeetingEvidence('transcript:2', 'Alice will own it.'),
+        MeetingEvidence('transcript:3', 'Friday is the deadline.'),
+      ];
+      var calls = 0;
+      final tasks = await extractMeetingActions(
+        evidence: sources,
+        checkCurrent: () {},
+        onProgress: (_) {},
+        complete: (prompt, _, __) async {
+          calls++;
+          expect(
+            (jsonDecode(prompt) as Map)['evidence'],
+            sources.map((source) => source.json).toList(),
+          );
+          return jsonEncode({
+            'tasks': [
+              {
+                'task': 'Ship release',
+                'owner': 'Alice',
+                'due': 'Friday',
+                'state': 'open',
+                'evidence': [
+                  for (final source in sources)
+                    {'id': source.id, 'quote': source.text},
+                ],
+              },
+            ],
+          });
+        },
+      );
+      expect(calls, 1);
+      expect(tasks.single.owner, 'Alice');
+      expect(tasks.single.due, 'Friday');
+      expect(
+        tasks.single.evidence.map((entry) => entry['id']),
+        sources.map((source) => source.id),
+      );
+    },
+  );
   test('deduplicates commitments and accepts later cancellation', () async {
     var calls = 0;
     final tasks = await extractMeetingActions(

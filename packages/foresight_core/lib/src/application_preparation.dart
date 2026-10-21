@@ -86,7 +86,9 @@ extension ApplicationPreparation on Application {
         final latest = store.meetingArtifacts(id, 'preparation').firstOrNull;
         final manifest = latest?['manifest'];
         if (latest?['edited'] == null && manifest is String) {
-          if ((jsonDecode(manifest) as Map)['fingerprint'] == fingerprint) {
+          final saved = jsonDecode(manifest) as Map;
+          if (saved['fingerprint'] == fingerprint &&
+              saved['degraded'] != true) {
             return;
           }
         }
