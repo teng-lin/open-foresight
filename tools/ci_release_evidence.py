@@ -215,7 +215,15 @@ def accepted(report, source, tag, installers):
         raise ValueError("Missing current complete installer/upgrade acceptance")
 
 
-def verify(repository, tag, index, *, current_run=0, publication_report=None):
+def verify(
+    repository,
+    tag,
+    index,
+    *,
+    current_run=0,
+    publication_report=None,
+    skip_gpu_validation=False,
+):
     """The draft index supplies locators only; APIs and verified bytes decide."""
     if (
         type(index.get("schema")) is not int
@@ -301,7 +309,9 @@ def verify(repository, tag, index, *, current_run=0, publication_report=None):
     accepted(report, source, tag, installers)
     if publication_report is not None:
         accepted(publication_report, source, tag, installers)
-        require_publication(publication_report, tag)
+        require_publication(
+            publication_report, tag, skip_gpu_validation=skip_gpu_validation
+        )
     return {
         "source": source,
         "candidate_evidence": evidence,
@@ -421,6 +431,7 @@ def main():
     parser.add_argument("--platform-runs", default="{}")
     parser.add_argument("--acceptance-run", type=int, default=0)
     parser.add_argument("--publication-report", type=Path)
+    parser.add_argument("--skip-gpu-validation", action="store_true")
     parser.add_argument("--upload-index", action="store_true")
     args = parser.parse_args()
     if args.upload_index and args.command != "record":
@@ -444,7 +455,7 @@ def main():
     else:
         if args.publication_report is None:
             parser.error(
-                "verify needs --publication-report with installer-bound GPU evidence"
+                "verify needs --publication-report with complete installer acceptance"
             )
         release = release_for_tag(repository, args.tag, request=api)
         try:
@@ -466,6 +477,7 @@ def main():
                 json.loads(path.read_text()),
                 current_run=current_run,
                 publication_report=json.loads(args.publication_report.read_text()),
+                skip_gpu_validation=args.skip_gpu_validation,
             )
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

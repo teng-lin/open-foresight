@@ -178,6 +178,8 @@ def select_gates(paths, force=False):
         selected["linux-test"] = True
     if selected["macos"] or selected["packaging"]:
         selected["dmg"] = True
+    if selected["dmg"]:
+        selected["macos"] = True
     return selected
 
 

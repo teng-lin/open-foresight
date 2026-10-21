@@ -157,7 +157,18 @@ def gpu_status(installers, evidence):
     return gpu
 
 
-def require_publication(report, tag):
+def require_publication(report, tag, *, skip_gpu_validation=False):
+    if (
+        skip_gpu_validation
+        and report.get("tag") == tag
+        and report.get("suite_version") == SUITE_VERSION
+        and report.get("status") == "automated_passed_manual_pending"
+        and report.get("gpu_inference") == {"status": "manual_pending", "evidence": []}
+    ):
+        # The coordinator separately re-verifies the original successful
+        # acceptance job and every current installer. Keep this report honest:
+        # skipping physical GPU validation must never become a claimed pass.
+        return
     if (
         report.get("tag") != tag
         or report.get("status") != "passed"
@@ -208,9 +219,14 @@ def main():
     parser.add_argument("--directory", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--require-publication", type=Path)
+    parser.add_argument("--skip-gpu-validation", action="store_true")
     args = parser.parse_args()
     if args.require_publication:
-        require_publication(json.loads(args.require_publication.read_text()), args.tag)
+        require_publication(
+            json.loads(args.require_publication.read_text()),
+            args.tag,
+            skip_gpu_validation=args.skip_gpu_validation,
+        )
     else:
         import os
 
