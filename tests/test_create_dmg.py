@@ -247,3 +247,32 @@ def test_verification_rejects_bytes_changed_during_successful_command(tmp_path):
         pytest.raises(ValueError, match="DMG bytes changed during verification"),
     ):
         create_dmg.verify_image(image)
+
+
+@pytest.mark.parametrize(
+    "failure", [None, OSError("missing lsof"), subprocess.TimeoutExpired("lsof", 10)]
+)
+def test_image_diagnostics_capture_lock_owners_without_hiding_failure(
+    tmp_path, capsys, failure
+):
+    image = tmp_path / "existing.dmg"
+    image.write_bytes(b"original image")
+
+    def run(command, **kwargs):
+        assert image.exists()
+        assert kwargs["timeout"] == 10
+        if failure:
+            raise failure
+        return subprocess.CompletedProcess(
+            command, 0, "diskimages-helper holds image", "diagnostic stderr"
+        )
+
+    with patch.object(create_dmg.subprocess, "run", side_effect=run) as diagnostic:
+        create_dmg.image_diagnostics(image)
+    assert diagnostic.call_args_list[0].args[0] == ["/usr/sbin/lsof", str(image)]
+    assert diagnostic.call_args_list[1].args[0] == ["hdiutil", "info"]
+    output = capsys.readouterr().err
+    assert (
+        "Diagnostic unavailable" if failure else "diskimages-helper holds image"
+    ) in output
+    assert image.read_bytes() == b"original image"

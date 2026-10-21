@@ -1,6 +1,8 @@
 """The release coordinator cannot skip required gates or rename untested bundles."""
 
 from pathlib import Path
+import json
+import os
 import subprocess
 
 import pytest
@@ -40,6 +42,42 @@ def test_gpu_waiver_is_explicit_and_propagates_to_both_publication_gates():
     assert publish["env"]["SKIP_GPU_VALIDATION"] == "${{ inputs.skip_gpu_validation }}"
     assert "physical GPU validation was not performed" in publish["run"]
     assert "require_coordinator" in publish["run"]
+
+
+@pytest.mark.parametrize("skip", ["true", "false"])
+@pytest.mark.parametrize("gpu_status", ["manual_pending", "manual_passed"])
+def test_published_waiver_notice_matches_the_actual_gpu_report(
+    tmp_path, skip, gpu_status
+):
+    script = workflow("release.yml")["jobs"]["publish"]["steps"][-1]["run"]
+    notice = script[
+        script.index("gpu_status=") : script.index('gh release edit "$TAG" --tag')
+    ]
+    summary = tmp_path / "acceptance-summary"
+    summary.mkdir()
+    (summary / "release-acceptance.json").write_text(
+        json.dumps({"gpu_inference": {"status": gpu_status}})
+    )
+    stub = 'gh() { if [[ "$1 $2" == "release view" ]]; then printf "Release notes\\n"; fi; }\n'
+    subprocess.run(
+        ["bash", "-e", "-c", stub + notice],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "SKIP_GPU_VALIDATION": skip,
+            "TAG": "v1.2.3",
+            "RUNNER_TEMP": str(tmp_path),
+        },
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    notes = tmp_path / "release-notes.md"
+    waived = skip == "true" and gpu_status == "manual_pending"
+    assert notes.exists() == waived
+    if waived:
+        assert "physical GPU validation was not performed" in notes.read_text()
 
 
 def test_release_preflight_precedes_all_producers_and_candidates_only_stops_before_draft():

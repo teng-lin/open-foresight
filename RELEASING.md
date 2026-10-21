@@ -174,7 +174,7 @@ to record setup, model workflows, persistence, microphone/system audio, recovery
 desktop integration, and upgrade results. The macOS DMG currently has an ad-hoc
 signature; record actual Gatekeeper behavior and the remaining signing limits.
 
-Publication requires one observed GPU result from Linux and one from macOS,
+Unless physical GPU validation is explicitly waived, publication requires one observed GPU result from Linux and one from macOS,
 each tied to an installer accepted by CI. Linux can use any one of the accepted
 DEB, RPM, or Arch installers. Software Vulkan CI does not replace physical GPU
 testing. Record the GPU, backend, model/decode or speech result, and locations of

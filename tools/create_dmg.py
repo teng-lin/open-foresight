@@ -26,6 +26,22 @@ def image_digest(destination):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def image_diagnostics(destination):
+    # Capture owners while the failed image still exists. Suite-level
+    # diagnostics run after TemporaryDirectory has removed fixture images.
+    for command in (["/usr/sbin/lsof", str(destination)], ["hdiutil", "info"]):
+        print(f"DMG failure diagnostic: {command!r}", file=sys.stderr, flush=True)
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+            print(
+                f"exit={result.returncode}\n{result.stdout[-20000:]}\n{result.stderr[-20000:]}",
+                file=sys.stderr,
+                flush=True,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            print(f"Diagnostic unavailable: {error}", file=sys.stderr, flush=True)
+
+
 def verify_image(destination):
     # DiskImages takes read/write locks on image files. A lock held after
     # creation can outlast the former four-second retry window. Give that lock
@@ -130,7 +146,11 @@ def create(app, manifest, name, output):
             check=True,
             timeout=300,
         )
-    verify_image(destination)
+    try:
+        verify_image(destination)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        image_diagnostics(destination)
+        raise
     with destination.open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
     Path(str(destination) + ".sha256").write_text(f"{digest}  {name}\n")
