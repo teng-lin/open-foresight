@@ -32,8 +32,10 @@ if options['system_message']:
  assert all(options['system_message'] not in argument for argument in sys.argv)
 assert sys.argv[sys.argv.index('--max-output-tokens')+1]==str(request['max_output_tokens'])
 if not tools:
- assert options['system_message']==('Safe web instructions' if prompt=='Web prompt' else '')
- assert prompt in ['Summary prompt','Note prompt','Web prompt']
+ assert options['system_message']==({'Web prompt':'Safe web instructions','Dedicated summary':'Summary system rules'}.get(prompt,''))
+ assert prompt in ['Summary prompt','Dedicated summary','Note prompt','Web prompt']
+ if prompt=='Dedicated summary':
+  assert request['max_output_tokens']==512
  if prompt=='Note prompt':
   assert options['stop_token_ids']==[[123,456],[789]]
   assert options['use_default_output_limit'] is True
@@ -110,6 +112,22 @@ print('answer '+json.dumps(answer),flush=True)
           await directory.delete(recursive: true);
         });
       });
+
+      test(
+        'dedicated summary keeps system rules separate and disables tools',
+        () async {
+          final events = await runtime
+              .generateSummary(
+                'summary-adapter',
+                'Dedicated summary',
+                systemPrompt: 'Summary system rules',
+                maxOutputTokens: 512,
+              )
+              .toList();
+          expect(events.last['status'], 'completed');
+          expect(events.where((event) => event['type'] == 'delta'), isNotEmpty);
+        },
+      );
 
       test(
         'closing during model load reports cancellation before adoption',

@@ -1,0 +1,64 @@
+{
+  "models": [
+    {
+      "name": "Gemma 4 12B",
+      "modelTypeEnum": 16,
+      "minDeviceMemoryInGb": 30,
+      "enableSpeculativeDecoding": true,
+      "supportsVision": true,
+      "supportsAudio": true,
+      "audioBackend": "gpu",
+      "visionBackend": "gpu",
+      "enableThinking": false,
+      "filterChannelContentFromKvCache": true,
+      "defaultConfig": {
+        "maxContextLength": 4096,
+        "temperature": 0.4,
+        "topK": 40,
+        "topP": 0.9,
+        "repetitionPenalty": 1.05
+      },
+      "visualTokenBudget": 560
+    },
+    {
+      "name": "Gemma 4 E4B",
+      "modelTypeEnum": 15,
+      "minDeviceMemoryInGb": 15,
+      "enableSpeculativeDecoding": true,
+      "supportsVision": true,
+      "supportsAudio": true,
+      "audioBackend": "cpu",
+      "visionBackend": "gpu",
+      "enableThinking": false,
+      "filterChannelContentFromKvCache": true,
+      "defaultConfig": {
+        "maxContextLength": 4096,
+        "temperature": 0.4,
+        "topK": 40,
+        "topP": 0.9,
+        "repetitionPenalty": 1.05
+      },
+      "visualTokenBudget": 280
+    },
+    {
+      "name": "Gemma 4 E2B",
+      "modelTypeEnum": 14,
+      "minDeviceMemoryInGb": 6,
+      "enableSpeculativeDecoding": true,
+      "supportsVision": true,
+      "supportsAudio": true,
+      "audioBackend": "cpu",
+      "visionBackend": "gpu",
+      "enableThinking": false,
+      "filterChannelContentFromKvCache": true,
+      "defaultConfig": {
+        "maxContextLength": 4096,
+        "temperature": 0.4,
+        "topK": 40,
+        "topP": 0.9,
+        "repetitionPenalty": 1.05
+      },
+      "visualTokenBudget": 280
+    }
+  ]
+}

@@ -1896,6 +1896,15 @@ class _MeetingsController extends _FeatureController {
     final title = actions ? 'Action items' : 'Summary';
     final versions = d.store.meetingArtifacts(id, kind);
     final artifact = versions.firstOrNull;
+    final summary = actions
+        ? null
+        : (d.capture['meeting_summaries'] as Map?)?['$id'] as Map?;
+    final active = summary?['active'] == true;
+    final preview = summary?['preview'] as String? ?? '';
+    final manifest = artifact?['manifest'] as String?;
+    final clipped =
+        manifest != null &&
+        (jsonDecode(manifest) as Map)['reduction_clipped'] == true;
     return Column(
       children: [
         Padding(
@@ -1910,11 +1919,25 @@ class _MeetingsController extends _FeatureController {
               ),
               IconButton(
                 tooltip: 'Generate $title',
-                onPressed: shell.busy || chatFeature.asking || meetingEnhancing
+                onPressed:
+                    active ||
+                        shell.busy ||
+                        chatFeature.asking ||
+                        meetingEnhancing
                     ? null
                     : () => shell.run(() => generateMeeting(kind, id: id)),
                 icon: const Icon(Icons.auto_awesome),
               ),
+              if (active)
+                IconButton(
+                  tooltip: 'Cancel summary',
+                  onPressed: () => unawaited(
+                    d
+                        .command(Operation.meetingsCancelSummary, {'id': id})
+                        .catchError(shell.reportAsyncError),
+                  ),
+                  icon: const Icon(Icons.stop_circle_outlined),
+                ),
               if (artifact != null)
                 IconButton(
                   tooltip: 'Copy $title',
@@ -1930,16 +1953,48 @@ class _MeetingsController extends _FeatureController {
               if (artifact != null)
                 IconButton(
                   tooltip: 'Edit $title',
-                  onPressed: () => unawaited(
-                    editArtifact(artifact).catchError(shell.reportAsyncError),
-                  ),
+                  onPressed: active
+                      ? null
+                      : () => unawaited(
+                          editArtifact(
+                            artifact,
+                          ).catchError(shell.reportAsyncError),
+                        ),
                   icon: const Icon(Icons.edit_outlined),
                 ),
             ],
           ),
         ),
+        if (active) ...[
+          LinearProgressIndicator(
+            value: (summary?['total'] as int? ?? 0) > 0
+                ? ((summary?['completed'] as int? ?? 0) /
+                          (summary!['total'] as int))
+                      .clamp(0.0, 1.0)
+                : null,
+          ),
+          Padding(
+            padding: const EdgeInsets.all(8),
+            child: Text(switch (summary?['phase']) {
+              'mapping' =>
+                'Summarizing transcript ${summary?['completed']}/${summary?['total']}',
+              'reducing' => 'Combining meeting topics…',
+              'updating' => 'Updating the meeting brief…',
+              'summarizing' => 'Writing the meeting brief…',
+              _ => 'Preparing the meeting summary…',
+            }),
+          ),
+        ],
         Expanded(
-          child: artifact == null
+          child: active && preview.isNotEmpty
+              ? SingleChildScrollView(
+                  padding: const EdgeInsets.all(20),
+                  child: GeneratedContent(
+                    preview,
+                    fontSize: chatFeature.answerFontSize,
+                  ),
+                )
+              : artifact == null
               ? Center(
                   child: Padding(
                     padding: const EdgeInsets.all(24),
@@ -1965,6 +2020,10 @@ class _MeetingsController extends _FeatureController {
                               ).first['revision']
                               as int))
                         const Text('Out of date — regenerate'),
+                      if (clipped)
+                        const Text(
+                          'This summary used shortened excerpts. Review the transcript for full context.',
+                        ),
                       GeneratedContent(
                         (artifact['edited'] ?? artifact['generated']) as String,
                         fontSize: chatFeature.answerFontSize,

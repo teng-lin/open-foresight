@@ -39,7 +39,7 @@ void requireEmbeddingBundle(String path) {
 class Store {
   final Database db;
   final String path;
-  static const schemaVersion = 13;
+  static const schemaVersion = 14;
 
   /// Names one workspace between clears. SQLite reuses INTEGER PRIMARY KEY
   /// values after a clear, so a caller holding an ID sends this back with it.
@@ -274,6 +274,15 @@ class Store {
       case 13:
         db.execute(
           'CREATE TABLE IF NOT EXISTS request_keys(key TEXT PRIMARY KEY,operation TEXT NOT NULL,arguments TEXT NOT NULL,result TEXT NOT NULL,created INTEGER NOT NULL)',
+        );
+      case 14:
+        if (!rows(
+          'PRAGMA table_info(artifacts)',
+        ).any((row) => row['name'] == 'manifest')) {
+          db.execute('ALTER TABLE artifacts ADD COLUMN manifest TEXT');
+        }
+        db.execute(
+          'CREATE TABLE IF NOT EXISTS meeting_summary_checkpoints(meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,artifact_id INTEGER NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,input_length INTEGER NOT NULL,input_digest TEXT NOT NULL,identity TEXT NOT NULL)',
         );
       default:
         throw StateError('Missing application database migration $version');
@@ -1036,6 +1045,8 @@ class Store {
     String generated,
     String model, {
     int? inputRevision,
+    String promptVersion = 'meeting-v1',
+    Map<String, Object?>? manifest,
   }) {
     final revision =
         inputRevision ??
@@ -1043,21 +1054,72 @@ class Store {
           meeting,
         ]).first['revision'];
     void insert() => db.execute(
-      'INSERT INTO artifacts(meeting_id,kind,generated,input_revision,model,prompt_version,created) VALUES(?,?,?,?,?,?,?)',
+      'INSERT INTO artifacts(meeting_id,kind,generated,input_revision,model,prompt_version,created,manifest) VALUES(?,?,?,?,?,?,?,?)',
       [
         meeting,
         kind,
         generated,
         revision,
         model,
-        'meeting-v1',
+        promptVersion,
         DateTime.now().millisecondsSinceEpoch,
+        manifest == null ? null : jsonEncode(manifest),
       ],
     );
     if (kind == 'enhanced_notes') {
       _writeEnhancedNote(meeting, insert, body: generated);
     } else {
       insert();
+    }
+  }
+
+  Map<String, Object?>? summaryCheckpoint(int meeting) => rows(
+    'SELECT c.*,a.generated FROM meeting_summary_checkpoints c JOIN artifacts a ON a.id=c.artifact_id '
+    'WHERE c.meeting_id=? AND a.edited IS NULL '
+    'AND NOT EXISTS(SELECT 1 FROM artifacts newer WHERE newer.meeting_id=c.meeting_id AND newer.kind=\'summary\' AND newer.id>a.id)',
+    [meeting],
+  ).firstOrNull;
+
+  String saveSummary(
+    int meeting,
+    String body,
+    String model, {
+    required int revision,
+    required int inputLength,
+    required String inputDigest,
+    required String identity,
+    required Map<String, Object?> manifest,
+  }) {
+    db.execute('SAVEPOINT save_summary');
+    try {
+      artifact(
+        meeting,
+        'summary',
+        body,
+        model,
+        inputRevision: revision,
+        promptVersion: 'summary-v1',
+        manifest: manifest,
+      );
+      db.execute(
+        'INSERT OR REPLACE INTO meeting_summary_checkpoints VALUES(?,?,?,?,?)',
+        [meeting, db.lastInsertRowId, inputLength, inputDigest, identity],
+      );
+      final source = importText(
+        'Meeting $meeting summary',
+        body,
+        'text/markdown',
+        'Generated summary of meeting:$meeting at transcript revision $revision; summary-v1',
+        id: 'meeting-summary-$meeting',
+      );
+      db.execute('RELEASE save_summary');
+      return source;
+    } catch (_) {
+      if (!db.autocommit) {
+        db.execute('ROLLBACK TO save_summary');
+        db.execute('RELEASE save_summary');
+      }
+      rethrow;
     }
   }
 

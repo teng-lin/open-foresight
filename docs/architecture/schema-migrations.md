@@ -36,6 +36,7 @@ the schema.
 | 11 | Structured local-edit flag with legacy provenance backfill |
 | 12 | Generation dates on meeting artifacts |
 | 13 | `request_keys` for idempotent creates and appends |
+| 14 | Artifact generation manifests and fingerprinted meeting-summary checkpoints |
 
 Historical builds used version 1 for multiple additive schemas. Versions 2–6
 therefore probe for columns only while adopting those profiles. New stored-data
