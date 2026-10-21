@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 from tests.test_integration_application import (
     producer as producer,
@@ -19,6 +20,29 @@ from tools import ci_artifacts as artifacts
 
 LABEL = "nightly.20261019.3"
 MONDAY = datetime(2026, 10, 19, tzinfo=timezone.utc)
+
+
+def test_audit_build_job_names_resolve_to_actual_reusable_workflow_graph():
+    root = Path(__file__).resolve().parents[1]
+    preview = yaml.safe_load((root / ".github/workflows/preview-packages.yml").read_text())
+
+    def names(workflow, prefix):
+        result = set()
+        for identifier, job in workflow["jobs"].items():
+            label = prefix + job.get("name", identifier)
+            if "uses" in job:
+                target = root / job["uses"].removeprefix("./")
+                result.update(names(yaml.safe_load(target.read_text()), label + " / "))
+            elif "${{ matrix.format }}" in label:
+                for row in job["strategy"]["matrix"]["include"]:
+                    result.add(label.replace("${{ matrix.format }}", row["format"]))
+            else:
+                result.add(label)
+        return result
+
+    build = preview["jobs"]["build"]
+    actual = names(yaml.safe_load((root / build["uses"].removeprefix("./")).read_text()), "build / ")
+    assert {name for name in audit.NIGHTLY_REQUIRED if name.startswith("build / ")} <= actual
 
 
 @pytest.fixture

@@ -37,6 +37,17 @@ def driver(tmp_path):
     ):
         shutil.copy2(ROOT / "tools" / name, tools / name)
     (tools / "pins.json").write_text('{"ubuntu_snapshot":"fixture"}')
+    write_script(
+        tools / "ci_tooling_image.py",
+        """
+        import json
+        from pathlib import Path
+        import sys
+        output = Path(sys.argv[sys.argv.index('--output') + 1])
+        output.mkdir(parents=True, exist_ok=True)
+        (output / 'inputs.json').write_text(json.dumps({'image': 'fixture-tooling'}))
+        """,
+    )
     write_script(tools / "build.sh", "set -eu\nprintf '%s\\n' \"$@\" > build-args\n")
     write_script(
         tools / "ci_app_dependency_seed.py",

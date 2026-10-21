@@ -31,11 +31,6 @@ EXPECTED = {
         ("pull_request", "push", "workflow_dispatch", "schedule"),
         {"": ("linux-build", "build / linux-build")},
     ),
-    "dependency-seed-current": (
-        ("macos.yml", "preview-packages.yml"),
-        ("push", "workflow_dispatch", "schedule"),
-        {"": ("publish-caches", "build / publish-caches")},
-    ),
     "dependency-sdk": (
         ("ci-dependencies.yml",),
         ("push", "workflow_dispatch", "schedule", "pull_request"),
@@ -104,6 +99,7 @@ EXPECTED["release-handoff"] = EXPECTED["release-inrun-application"]
 
 def test_exact_legacy_rows_have_no_tier_requirement_yet():
     assert set(PRODUCERS) == set(EXPECTED) | {
+        "linux-ci-tooling",
         "shadow-fork-sdk",
         "shadow-handoff",
         "weekly-preview-audit",

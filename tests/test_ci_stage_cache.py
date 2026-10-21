@@ -13,6 +13,7 @@ from unittest.mock import patch
 import zipfile
 
 from tools import ci_stage_cache as cache
+from tools import ci_native_cache as native_cache
 
 REPOSITORY = "teng-lin/open-foresight"
 ENVIRONMENT = {
@@ -202,7 +203,7 @@ class FingerprintTests(SourceTree):
     def test_missing_commit_is_fetched_by_sha_without_executing_source(self):
         with (
             patch.object(
-                cache,
+                cache.ci_git,
                 "git",
                 side_effect=[subprocess.CalledProcessError(1, ["git"]), b""],
             ),
@@ -340,7 +341,7 @@ class ProducerTests(SourceTree):
             patch.object(cache.artifacts, "dependency_jobs", side_effect=jobs_api),
             patch.object(cache.artifacts, "download_zip", side_effect=self.download),
             patch.object(
-                cache,
+                native_cache,
                 "native_work_candidates",
                 return_value=[(self.artifact, self.identity)]
                 if candidates is None
@@ -724,7 +725,7 @@ class ProducerTests(SourceTree):
         self.api, self.download = query, download
         # Establish that the older fourth candidate really contains compatible
         # verified work, even after unrelated/untrusted candidates were skipped.
-        with patch.object(cache, "MAX_NATIVE_WORK_DOWNLOADS", 4):
+        with patch.object(native_cache, "MAX_NATIVE_WORK_DOWNLOADS", 4):
             self.assertTrue(
                 self.find_work(candidates=candidates, environment=current)["hit"]
             )
@@ -1042,7 +1043,7 @@ class ProducerTests(SourceTree):
             self.find_work(own_pr=119)
         self.approval_routes["pulls/112"] = pull
         with patch.object(
-            cache,
+            native_cache,
             "ensure_commit",
             side_effect=subprocess.CalledProcessError(1, ["git", "fetch"]),
         ):
@@ -1066,7 +1067,7 @@ class ProducerTests(SourceTree):
         self.approved_other_pr()
         self.receipt["reusable"] = False
         with patch.object(
-            cache, "trusted_native_work_run", wraps=cache.trusted_native_work_run
+            native_cache, "trusted_native_work_run", wraps=native_cache.trusted_native_work_run
         ) as qualify:
             self.assertFalse(
                 self.find_work(

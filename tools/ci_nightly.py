@@ -56,7 +56,7 @@ def has_producer(rows, exercise=False, *, include_cancelled=False):
     )
 
 
-def previous_nightly(repository, commit, force, *, request=request):
+def previous_nightly(repository, commit, force, *, request=request, require_observation=False):
     """A retry retains original bytes and returns immediately, without polling."""
     if force:
         return None
@@ -92,6 +92,10 @@ def previous_nightly(repository, commit, force, *, request=request):
             job["name"] == "nightly-checks" and job["conclusion"] == "success"
             for job in run_jobs
         ):
+            if require_observation:
+                # A prior green preview proves its original execution. It cannot
+                # count as today's actual qualification observation.
+                return None
             return {
                 "summary": f"No changes since green nightly-checks for `{commit}` in run {run['id']}."
             }

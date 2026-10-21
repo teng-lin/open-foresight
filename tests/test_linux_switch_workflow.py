@@ -18,7 +18,7 @@ def workflow(name="macos.yml"):
 def test_required_build_test_and_acceptance_jobs_use_one_successful_producer():
     jobs = workflow()["jobs"]
     assert {"linux-build", "linux-test"}.issubset(jobs["platform-checks"]["needs"])
-    assert "linux-native" not in jobs["platform-checks"]["needs"]
+    assert "linux-native" in jobs["platform-checks"]["needs"]
     assert "linux-shadow-comparison" not in jobs
     assert jobs["linux-test"]["needs"] == "linux-build"
     for name in ("acceptance-cpu", "acceptance-audio", "acceptance-deb"):
@@ -240,7 +240,18 @@ def _selection_repository(tmp_path):
     git("commit", "-am", "Documentation change")
     tools = tmp_path / "tools"
     tools.mkdir()
-    shutil.copy2(ROOT / "tools/ci_changes.py", tools / "ci_changes.py")
+    shutil.copytree(ROOT / "tools", tools, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__"))
+    fixture_bin = tmp_path / "bin"
+    fixture_bin.mkdir()
+    fixture_gh = fixture_bin / "gh"
+    fixture_gh.write_text("#!/bin/sh\nprintf '%s\\n' '{\"artifacts\":[]}'\n")
+    fixture_gh.chmod(0o755)
+    workflow_dir = tmp_path / ".github/workflows"
+    workflow_dir.mkdir(parents=True)
+    shutil.copy2(ROOT / ".github/workflows/native-sanitizers.yml", workflow_dir / "native-sanitizers.yml")
+    shutil.copy2(
+        ROOT / "tools/platform_python_tests.py", tools / "platform_python_tests.py"
+    )
     return git, initial
 
 
@@ -259,6 +270,14 @@ def _run_actual_selection(tmp_path, event, base, push_base=""):
         cwd=tmp_path,
         env={
             **os.environ,
+            "PATH": str(tmp_path / "bin") + os.pathsep + os.environ["PATH"],
+            "GITHUB_REPOSITORY": "example/reviewed",
+            "GITHUB_REF": "refs/heads/main" if event != "pull_request" else "refs/pull/123/merge",
+            "GITHUB_EVENT_NAME": event,
+            "GH_TOKEN": "fixture-read-only",
+            "PR_NUMBER": "",
+            "SWEEP": "false",
+            "QUALIFICATION_MODE": "false",
             "BASE": base,
             "PUSH_BASE": push_base,
             "EVENT": event,
@@ -349,7 +368,23 @@ def test_document_flutter_consumer_is_restore_only_and_publisher_warms_same_cach
         step for step in publisher if step.get("id") == "document-flutter"
     )
     assert published_restore["uses"] == restore["uses"]
-    assert published_restore["with"] == restore["with"]
+    legacy_cache = {
+        "path": restore["with"]["path"],
+        "key": restore["with"]["restore-keys"],
+    }
+    assert published_restore["with"] == legacy_cache
+    dedicated = yaml.safe_load(
+        (ROOT / ".github/workflows/linux-cache-publish.yml").read_text()
+    )["jobs"]["publish-common-caches"]["steps"]
+    current_restore = next(step for step in dedicated if step.get("id") == "document-flutter")
+    assert current_restore["with"] == restore["with"]
+    current_save = next(
+        step for step in dedicated
+        if step.get("uses", "").startswith("actions/cache/save@")
+        and step["with"]["key"] == restore["with"]["key"]
+    )
+    assert current_save["with"]["path"] == restore["with"]["path"]
+    assert "steps.document-current.outputs.current == 'true'" in current_save["if"]
     warm = next(
         step
         for step in consumer
@@ -367,7 +402,7 @@ def test_document_flutter_consumer_is_restore_only_and_publisher_warms_same_cach
         step
         for step in publisher
         if "actions/cache/save@" in step.get("uses", "")
-        and step["with"] == restore["with"]
+        and step["with"] == legacy_cache
     )
     assert (
         save["if"]

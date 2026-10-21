@@ -1,12 +1,12 @@
 name: Platform candidates and checks
-run-name: ${{ inputs.request_id && format('Release candidate {0}', inputs.request_id) || format('Platform checks {0}', github.ref_name) }}
+run-name: ${{ inputs.sweep && format('Main sweep {0} [{1}]', inputs.source || github.sha, inputs.sweep_namespace) || (inputs.request_id && format('Release candidate {0}', inputs.request_id) || format('Platform checks {0}', github.ref_name)) }}
 permissions:
   contents: read
   actions: read
 env:
   RELEASE_SOURCE_FLOOR: ${{ vars.RELEASE_SOURCE_FLOOR }}
 concurrency:
-  group: platform-checks-${{ github.workflow }}-${{ inputs.request_id || (inputs.preview && format('preview-{0}', github.run_id) || (github.event_name == 'pull_request' && github.ref || inputs.source || github.sha)) }}
+  group: ${{ inputs.sweep && format('main-sweep-{0}', inputs.sweep_namespace) || format('platform-checks-{0}-{1}', github.workflow, inputs.request_id || (inputs.preview && format('preview-{0}', github.run_id) || (github.event_name == 'pull_request' && github.ref || inputs.source || github.sha))) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   macos:
@@ -173,7 +173,7 @@ jobs:
       consume_only: true
   linux-native:
     needs: changes
-    if: inputs.tier != 'release' && needs.changes.outputs.linux_build == 'true'
+    if: inputs.tier != 'release' && needs.changes.outputs.linux_build == 'true' && needs.changes.outputs.arch_retired != 'true'
     uses: ./.github/workflows/linux-platform-stages.yml
     with:
       source: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
@@ -198,7 +198,8 @@ jobs:
     - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
         path: ${{ runner.temp }}/foresight-document-flutter
-        key: flutter-linux-document-host-3.35.7-v1
+        key: flutter-linux-document-host-3.35.7-v2
+        restore-keys: flutter-linux-document-host-3.35.7-v1
     - name: Install pinned Dart through the reviewed Flutter SDK
       run: |
         task_document_flutter="$RUNNER_TEMP/foresight-document-flutter"
@@ -224,13 +225,22 @@ jobs:
   changes:
     timeout-minutes: 5
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
     outputs:
+      arch_retired: ${{ steps.changes.outputs.arch_retired }}
+      acceptance_cpu_models: ${{ steps.acceptance-plan.outputs.cpu_models }}
+      acceptance_software_gpu: ${{ steps.acceptance-plan.outputs.software_gpu }}
+      acceptance_virtual_audio: ${{ steps.acceptance-plan.outputs.virtual_audio }}
       selection: ${{ steps.changes.outputs.selection }}
       macos: ${{ steps.changes.outputs.macos }}
       linux_build: ${{ steps.changes.outputs.linux_build }}
       linux_test: ${{ steps.changes.outputs.linux_test }}
       linux_document_imports: ${{ steps.changes.outputs.linux_document_imports }}
       packaging: ${{ steps.changes.outputs.packaging }}
+      dmg: ${{ steps.changes.outputs.dmg }}
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
@@ -271,8 +281,18 @@ jobs:
         BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
         PUSH_BASE: ${{ github.event.before }}
         EVENT: ${{ github.event_name }}
+        SWEEP: ${{ inputs.sweep }}
+        SWEEP_NAMESPACE: ${{ inputs.sweep_namespace }}
+        SOURCE: ${{ inputs.source || github.sha }}
+        GH_TOKEN: ${{ github.token }}
+        PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+        QUALIFICATION_MODE: ${{ inputs.qualification_mode }}
         FORCE: ${{ (inputs.tier == 'release' || inputs.preview || github.event_name == 'workflow_dispatch') && '--force' || '' }}
       run: |-
+        if [[ "$SWEEP" == true ]]; then
+          python tools/ci_main_sweep.py guard --source "$SOURCE" --namespace "$SWEEP_NAMESPACE"
+          exit 0
+        fi
         if [[ "$EVENT" == pull_request ]]; then
           BASE=$(git merge-base "$BASE" HEAD)
         elif [[ "$EVENT" == push ]]; then
@@ -284,11 +304,24 @@ jobs:
             FORCE=--force
           fi
         fi
-        task_args=(--base "$BASE")
+        task_args=(--base "$BASE" --activate)
+        if [[ "$QUALIFICATION_MODE" == true ]]; then
+          task_args+=(--candidate)
+        fi
+        if [[ -n "$PR_NUMBER" ]]; then
+          task_args+=(--pull-request "$PR_NUMBER" --repository "$GITHUB_REPOSITORY")
+        fi
         if [[ "$FORCE" == --force ]]; then
           task_args+=(--force)
         fi
         python tools/ci_changes.py "${task_args[@]}"
+    - name: Select acceptance phases from independently qualified observations
+      id: acceptance-plan
+      env:
+        GH_TOKEN: ${{ github.token }}
+        BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+        EVENT: ${{ github.event_name }}
+      run: python3 tools/ci_acceptance_plan.py --activate --selection-report ci-selection.json --base "$BASE" --event "$EVENT" --output test-results/acceptance-selection.json
     - name: Retain platform selection
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
@@ -296,12 +329,6 @@ jobs:
         overwrite: true
         path: ci-selection.json
         if-no-files-found: error
-    - name: Observe acceptance dependencies without skipping phases
-      continue-on-error: true
-      env:
-        BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
-        EVENT: ${{ github.event_name }}
-      run: python3 tools/ci_acceptance_plan.py --base "$BASE" --event "$EVENT" --output test-results/acceptance-selection.json
     - name: Retain acceptance dependency observations
       if: always()
       continue-on-error: true
@@ -353,6 +380,12 @@ jobs:
         SOURCE: ${{ inputs.source || github.sha }}
       run: |
         python -m tools.candidate_identity --source "$SOURCE"
+  dmg:
+    needs: changes
+    if: needs.changes.outputs.dmg == 'true'
+    uses: ./.github/workflows/dmg-contracts.yml
+    with:
+      source: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
   packaging:
     needs: [changes, linux-build]
     if: "!cancelled() && needs.changes.outputs.packaging == 'true' && contains(fromJSON('[\"success\",\"skipped\"]'), needs.linux-build.result)"
@@ -671,7 +704,7 @@ jobs:
       run: echo 'complete=true' >> "$GITHUB_OUTPUT"
   publish-caches:
     needs: linux-build
-    if: "!cancelled() && inputs.tier != 'release' && github.ref == 'refs/heads/main' && contains(fromJSON('[\"push\",\"workflow_dispatch\",\"schedule\"]'), github.event_name) && needs.linux-build.result == 'success' && (inputs.source == '' || inputs.source == github.sha)"
+    if: "!cancelled() && !inputs.sweep && !inputs.qualification_mode && inputs.tier != 'release' && github.ref == 'refs/heads/main' && contains(fromJSON('[\"push\",\"workflow_dispatch\",\"schedule\"]'), github.event_name) && needs.linux-build.result == 'success' && (inputs.source == '' || inputs.source == github.sha)"
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -813,12 +846,16 @@ jobs:
     - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
         path: build/acceptance-models
-        key: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
+        key: main-integration-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
+        restore-keys: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
     - name: Run independent cpu acceptance against the restored bytes
       env:
         GH_TOKEN: ${{ github.token }}
         SDK_IMAGE: ${{ steps.consumer.outputs.image }}
         VERSION: ${{ steps.consumer.outputs.version }}
+        CPU_MODELS_SELECTED: ${{ needs.changes.outputs.acceptance_cpu_models != 'false' }}
+        SOFTWARE_GPU_SELECTED: ${{ needs.changes.outputs.acceptance_software_gpu != 'false' }}
+        VIRTUAL_AUDIO_SELECTED: ${{ needs.changes.outputs.acceptance_virtual_audio != 'false' }}
         ACCEPTANCE_FULL: ${{ inputs.tier == 'release' || inputs.acceptance == 'full' }}
         PACKAGING_SELECTED: ${{ needs.changes.outputs.packaging }}
       run: bash tools/linux_acceptance.sh cpu
@@ -885,12 +922,16 @@ jobs:
     - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
         path: build/acceptance-models
-        key: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
+        key: main-integration-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
+        restore-keys: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
     - name: Run independent audio acceptance against the restored bytes
       env:
         GH_TOKEN: ${{ github.token }}
         SDK_IMAGE: ${{ steps.consumer.outputs.image }}
         VERSION: ${{ steps.consumer.outputs.version }}
+        CPU_MODELS_SELECTED: ${{ needs.changes.outputs.acceptance_cpu_models != 'false' }}
+        SOFTWARE_GPU_SELECTED: ${{ needs.changes.outputs.acceptance_software_gpu != 'false' }}
+        VIRTUAL_AUDIO_SELECTED: ${{ needs.changes.outputs.acceptance_virtual_audio != 'false' }}
         ACCEPTANCE_FULL: ${{ inputs.tier == 'release' || inputs.acceptance == 'full' }}
         PACKAGING_SELECTED: ${{ needs.changes.outputs.packaging }}
       run: bash tools/linux_acceptance.sh audio
@@ -960,6 +1001,9 @@ jobs:
         GH_TOKEN: ${{ github.token }}
         SDK_IMAGE: ${{ steps.consumer.outputs.image }}
         VERSION: ${{ steps.consumer.outputs.version }}
+        CPU_MODELS_SELECTED: ${{ needs.changes.outputs.acceptance_cpu_models != 'false' }}
+        SOFTWARE_GPU_SELECTED: ${{ needs.changes.outputs.acceptance_software_gpu != 'false' }}
+        VIRTUAL_AUDIO_SELECTED: ${{ needs.changes.outputs.acceptance_virtual_audio != 'false' }}
         ACCEPTANCE_FULL: ${{ inputs.tier == 'release' || inputs.acceptance == 'full' }}
         PACKAGING_SELECTED: ${{ needs.changes.outputs.packaging }}
       run: bash tools/linux_acceptance.sh deb
@@ -1012,6 +1056,8 @@ jobs:
     needs:
     - changes
     - workflow-lint
+    - linux-native
+    - dmg
     - macos
     - linux-build
     - linux-test
@@ -1027,7 +1073,9 @@ jobs:
       env:
         NEEDS: ${{ toJSON(needs) }}
         SELECTION: ${{ needs.changes.outputs.selection }}
+        ARCH_RETIRED: ${{ needs.changes.outputs.arch_retired }}
         WORKFLOW_LINT: ${{ needs.workflow-lint.result }}
+        CI_TIER: ${{ inputs.tier }}
       run: |
         test "$WORKFLOW_LINT" = success
         python tools/ci_changes.py --check-gates
@@ -1038,6 +1086,19 @@ jobs:
   pull_request: null
   workflow_dispatch:
     inputs:
+      qualification_mode:
+        description: Execute prepared full candidate selector on reviewed main without changing ordinary routes
+        type: boolean
+        default: false
+      sweep:
+        description: Exercise the complete application tier on current reviewed main without stamping
+        type: boolean
+        default: false
+      sweep_namespace:
+        description: Isolated qualification or independently authorized production evidence
+        type: choice
+        options: [exercise, production]
+        default: exercise
       acceptance:
         description: Standard portable acceptance or full external and Debian 13 coverage
         type: choice
@@ -1081,6 +1142,10 @@ jobs:
         description: Original successful producer attempt
         value: ${{ jobs.linux-build.outputs.attempt }}
     inputs:
+      qualification_mode:
+        description: Execute the prepared full candidate selector on reviewed main
+        type: boolean
+        default: false
       macos_coverage:
         description: Collect non-gating nightly macOS coverage
         type: boolean

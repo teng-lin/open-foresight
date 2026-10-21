@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from tools import ci_stage_environment as environment
+from tools import ci_build_environment as environment
 from tools.ci_stage_cache import compilation_environment, fingerprint
 
 NOW = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)

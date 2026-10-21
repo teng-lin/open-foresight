@@ -31,17 +31,24 @@ task_repository=${GITHUB_REPOSITORY:-teng-lin/open-foresight}
 task_repository=$(printf '%s' "$task_repository" | tr '[:upper:]' '[:lower:]')
 task_image=foresight-ci:local
 task_builder=${FORESIGHT_BUILDER:-$(docker context show)}
+task_snapshot=$("$task_python" -c 'import json; print(json.load(open("tools/pins.json"))["ubuntu_snapshot"])')
+task_tooling_dir="$task_output/tooling"
+"$task_python" tools/ci_tooling_image.py --repository "$task_repository" \
+  --sdk-image "$task_sdk" --snapshot "$task_snapshot" --output "$task_tooling_dir"
+task_tooling=$("$task_python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["image"])' "$task_tooling_dir/inputs.json")
 docker buildx build --builder "$task_builder" --platform linux/amd64 --load \
   --file packaging/build.Dockerfile --target ci \
-  --build-context "appdeps_seed=$task_seed" --build-arg "SDK_IMAGE=$task_sdk" \
+  --build-context "appdeps_seed=$task_seed" --build-arg "TOOLING_IMAGE=$task_tooling" \
   --build-arg REQUIRE_DEPENDENCY_REUSE=1 \
+  --cache-from "type=registry,ref=ghcr.io/$task_repository/linux-sdk:qualified-v2-ci-tools-buildcache-v1" \
+  --cache-from "type=registry,ref=ghcr.io/$task_repository/linux-sdk:qualified-v2-app-deps-buildcache-v1" \
   --cache-from "type=registry,ref=ghcr.io/$task_repository/linux-sdk:ci-tools-buildcache-v1" \
   --cache-from "type=registry,ref=ghcr.io/$task_repository/linux-sdk:app-deps-buildcache-v1" \
   --cache-from "type=registry,ref=ghcr.io/$task_repository/linux-sdk:app-buildcache-x86-64" \
   --tag "$task_image" .
-task_snapshot=$("$task_python" -c 'import json; print(json.load(open("tools/pins.json"))["ubuntu_snapshot"])')
 "$task_python" tools/ci_linux_handoff.py identity --sdk-image "$task_sdk" \
   --qualification "$task_seed/qualification.json" --snapshot "$task_snapshot" \
+  --tooling "$task_tooling_dir/inputs.json" \
   --output "$task_output/ci-inputs.json"
 if [[ "$task_mode" == prepare-only ]]; then exit 0; fi
 export SOURCE_REVISION=${SOURCE_REVISION:-$(git rev-parse HEAD)}

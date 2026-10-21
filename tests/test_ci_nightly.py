@@ -470,3 +470,17 @@ def test_workflow_aggregate_exercise_and_permissions_are_explicit():
         for step in jobs[name]["steps"]:
             if "actions/upload-artifact@" in step.get("uses", ""):
                 assert step["with"]["overwrite"] is True
+
+
+def test_actual_qualification_observation_repeats_green_source_but_preserves_failed_job_retry(monkeypatch):
+    api, calls = transport(monkeypatch, [run()], [{"name": "nightly-checks", "conclusion": "success"}])
+    assert nightly.previous_nightly("owner/repo", SHA, False, request=api, require_observation=True) is None
+    assert not any(method != "GET" for _, method, _ in calls)
+    api, calls = transport(monkeypatch, [run(conclusion="failure")], [{"name": "plan", "conclusion": "success"}, {"name": "nightly-checks", "conclusion": "failure"}])
+    result = nightly.previous_nightly("owner/repo", SHA, False, request=api, require_observation=True)
+    assert "Retry requested" in result["summary"]
+    assert [(route, method) for route, method, _ in calls if method != "GET"] == [("actions/runs/50/rerun-failed-jobs", "POST")]
+    api, calls = transport(monkeypatch, [run(status="in_progress", conclusion=None)])
+    result = nightly.previous_nightly("owner/repo", SHA, False, request=api, require_observation=True)
+    assert "still active" in result["summary"]
+    assert not any(method != "GET" for _, method, _ in calls)

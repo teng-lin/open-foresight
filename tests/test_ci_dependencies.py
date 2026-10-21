@@ -516,8 +516,11 @@ class ProvenanceTests(unittest.TestCase):
 class SelectionTests(unittest.TestCase):
     def assert_selection(self, paths, expected):
         actual = changes.select_gates(paths)
+        expected = set(expected)
+        if "macos" in expected or "packaging" in expected:
+            expected.add("dmg")
         self.assertEqual(
-            {name for name, required in actual.items() if required}, set(expected)
+            {name for name, required in actual.items() if required}, expected
         )
 
     def test_docs_and_explicit_maintenance_skip_platforms(self):
@@ -538,14 +541,21 @@ class SelectionTests(unittest.TestCase):
             *changes.LINUX_FILES,
         ):
             with self.subTest(path=path):
-                self.assert_selection([path], changes.GATES[1:])
+                expected = changes.GATES[1:]
+                self.assert_selection([path], expected)
 
     def test_packaging_controls_require_contracts_and_their_exact_own_run_bundle(self):
         for path in (*changes.PACKAGING_FILES, "packaging/ci/test-debian.sh"):
             with self.subTest(path=path):
-                self.assert_selection(
-                    [path], ["packaging", "linux-build", "linux-test"]
-                )
+                from tools import platform_python_tests as contracts
+
+                owners = contracts.owner_gates(path)
+                expected = {"packaging", "linux-build", "linux-test"} | set(owners)
+                if "packaging" in expected:
+                    expected.update(("linux-build", "linux-test"))
+                if "linux-build" in expected:
+                    expected.add("linux-test")
+                self.assert_selection([path], expected)
 
     def test_shared_unknown_and_selector_changes_keep_full_validation(self):
         for path in (
@@ -597,6 +607,9 @@ class SelectionTests(unittest.TestCase):
                         name: {"result": "success" if required else "skipped"}
                         for name, required in selected.items()
                     },
+                }
+                jobs["linux-native"] = {
+                    "result": "success" if selected["linux-build"] else "skipped"
                 }
                 changes.check_gates(jobs, selected)
                 for name in jobs:

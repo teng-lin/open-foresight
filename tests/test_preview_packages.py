@@ -590,3 +590,28 @@ def test_retained_input_exception_requires_one_unambiguous_arch_installer(
         ValueError, match="Missing or duplicate preview installer: arch"
     ):
         preview.manifest(workflow_installer_tree, "0.1.2", 12, LABEL, SHA, "standard")
+
+
+@pytest.mark.parametrize("qualified", [False, True])
+def test_unchanged_scheduled_source_runs_real_observations_until_both_capabilities_qualify(qualified):
+    from tools import ci_qualification_index
+    def request(repo, route, **kwargs):
+        return {"sha": SHA} if route == "commits/main" else None
+    def previous(repository, source, force, *, request, require_observation):
+        assert force is False
+        assert require_observation is not qualified
+        return {"summary": "same qualified source"} if qualified else None
+    decisions = {name: {"active": qualified} for name in ("arch_retirement", "acceptance_narrowing")}
+    with patch.dict(os.environ, {"GITHUB_REF": "refs/heads/main", "GITHUB_EVENT_NAME": "schedule", "GITHUB_RUN_ID": "2"}), patch.object(preview, "request", side_effect=request), patch.object(preview.subprocess, "check_output", return_value=SHA), patch.object(ci_qualification_index, "resolve", return_value=decisions), patch.object(preview, "previous_nightly", side_effect=previous), patch.object(preview, "stale", return_value=[]), patch.object(preview, "read_version", return_value=("0.1.1", 2)), patch.object(preview, "allocate", return_value=12) as allocate:
+        result = preview.plan("owner/repo", False, "standard", qualification_observation=True)
+    assert result["build"] == str(not qualified).lower()
+    assert allocate.call_count == int(not qualified)
+    if not qualified:
+        assert result["qualification_observation"] == "true"
+
+
+def test_manual_dispatch_cannot_impersonate_scheduled_qualification():
+    with patch.dict(os.environ, {"GITHUB_REF": "refs/heads/main", "GITHUB_EVENT_NAME": "workflow_dispatch"}), patch.object(preview, "request", return_value={"sha": SHA}), patch.object(preview.subprocess, "check_output", return_value=SHA), patch.object(preview, "allocate") as allocate:
+        with pytest.raises(ValueError, match="actual scheduled"):
+            preview.plan("owner/repo", False, "standard", qualification_observation=True)
+    allocate.assert_not_called()

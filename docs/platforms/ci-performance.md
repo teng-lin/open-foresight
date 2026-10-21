@@ -1393,3 +1393,170 @@ Canonical original-job qualification and 30-row all-attempt pagination remain;
 API failures do not authorize partial evidence, alternate provenance or SDK
 compilation. Upgrade acceptance, preview lifecycle separation, and the immutable
 draft DMG preflight remain enforced.
+
+### Dedicated tooling and cache maintenance
+
+PR consumers restore immutable main-produced tooling receipts or build only the
+tool layer after a confirmed identity miss. They retain the SDK and dependency
+seed provenance and verify ABI compatibility. The tooling identity contains the
+SDK image identity, pinned snapshot and recipe bytes plus Git executable mode;
+application changes and checkout umask do not change it.
+
+Main push and half-hourly schedules run read-only cache reconciliation, then
+dispatch the dedicated main-only publisher when necessary. Language/model caches
+warm only missing exact keys. Registry maintenance runs after a new main source,
+a failed publisher, explicit consumer qualification or a 24-hour freshness miss;
+an active publisher suppresses duplicates for at most 30 minutes. This metadata
+only schedules maintenance and never establishes that restored bytes are valid.
+Scheduled reconciliation itself does not write shared caches. Legacy guarded
+writers and restore fallbacks remain until replacement qualification permits
+their retirement.
+
+Tooling receipt publication and dependency-cache export intentionally share one
+atomic publisher result. An export failure remains a visible maintenance failure
+and its tooling upload is unavailable for reuse until a successful original job
+qualifies it. This conservative boundary avoids duplicate SDK downloads in
+separate publisher jobs; consumers may still use an older qualified receipt with
+the same inputs, or prepare local tooling without rebuilding the SDK.
+
+Publisher qualification additionally requires an actual shared-tooling pull,
+its immutable image digest and original artifact receipt, and this qualification
+run's successful cache publication step. Local tooling fallback remains useful
+for ordinary checks but cannot establish publisher qualification. The fork
+transport exercise separately uses the production archive-forwarding path and
+verifies that the retained archive bytes, PR tier and original SDK provenance
+survive without another SDK save or compilation. These main-dispatch exercises
+do not impersonate a fork event or authorize PR bytes for main consumers.
+
+The unused `dependency-seed-current` producer allowlist row had no consumers
+and was removed. The legacy `dependency-seed` row,
+its attempt-1 qualification and existing guarded publication jobs remain.
+
+### Frozen reliability and runtime observations
+
+Collect read-only GitHub metadata into a new, immutable snapshot directory:
+
+```sh
+python tools/ci_stats_snapshot.py --repository teng-lin/open-foresight \
+  --since 2026-10-20T00:00:00Z --until 2026-10-20T23:59:59Z \
+  --output docs/platforms/ci-evidence/2026-10-20
+python tools/ci_stats.py docs/platforms/ci-evidence/2026-10-20 \
+  --report-output docs/platforms/ci-evidence/2026-10-20
+```
+
+The collector requests every API page and every job attempt. It writes normalized
+inputs, a checksum manifest, retrieval times and original attempt log links.
+Interrupted collection remains incomplete and cannot produce a verified report.
+GitHub's filtered 1,000-run limit causes an actionable failure; use narrower
+`--since`/`--until` windows and deduplicate run IDs when combining them. Existing
+legacy reporting directories remain readable but are explicitly marked unverified.
+
+The [live collector smoke snapshot](ci-evidence/2026-10-20-live-collector-smoke/manifest.json)
+freezes the October 20, 22:13–22:14 UTC window: two actual main workflows,
+25 jobs, both original attempts, and 122 pull requests collected across API pages.
+Its checksum manifest passed verification and the reporting loader. This verifies
+the read-only collector against GitHub; the narrow window does not measure a CI
+performance improvement. Queries use whole seconds while returned runs and PR
+merge membership are filtered against the exact requested boundaries recorded
+in the manifest.
+Membership uses the timestamp precision GitHub supplies, usually whole seconds;
+fractional request boundaries do not recover sub-second creation times. The
+manifest records every discovered run excluded by the requested window.
+
+Report schema 2 retains previous fields and adds first-attempt workflow, job and
+PR-commit denominators, cancellations, incomplete/unknown outcomes, actual job
+queue measurements when supplied by GitHub, workflow start latency, first green
+versus latest readiness, and independent SDK/release/nightly/maintenance spend.
+Each first-green observation records contributing workflow runs and attempts;
+the separate `push_to_first_attempt_green` distribution requires the earliest
+observed run of each required workflow and excludes reruns and replacement
+runs of the same head.
+Missing queue or cache metadata remains unknown. A failed first attempt stays
+failed after a successful rerun; copied successful jobs retain their original
+attempt and are counted once. Timeout and startup conclusions remain explicit.
+
+Use `--observations reviewed-observations.json` on collection for diagnostic and
+cache annotations indexed by decimal run/job IDs. The annotation file is frozen
+with the API inputs. Run annotations may supply configuration, scope, selection,
+qualification status, checked-out/bundle/workflow source and `cache_observations`.
+Each cache observation names its stage, status (`hit`, `miss`, `restore-failure`)
+and retained source; hits also require the resolved `input_identity`. Job failure
+evidence names its class (`package-network`, `test-assertion`, `provenance-abi`,
+`maintenance-publication`), actual command, diagnostic and retained source.
+Annotations cannot override job outcomes or API identities. A tag's existence or
+a generic Docker warning does not establish a hit or failure cause. Keep full
+logs in run artifacts and link them from the observations.
+
+Compare at least five ordinary observations with matching configuration, scope
+and cache state; retain cold misses and failures. Explicitly marked qualification
+runs have separate outcomes and never enter ordinary failure-rate denominators;
+all their runner spend and diagnostic failures remain visible. These tools
+measure observations and never authorize reuse, dispatch
+CI, establish producer trust or certify runtime improvements.
+Read-only cache reconciliation and actual cache publication have separate cost
+and first-attempt workflow cohorts. Aggregate workflow rates still include all
+ordinary workflow runs; PR-commit rates retain their independent PR denominator.
+Ordinary pull-request and push runs cannot be annotated as qualification-only.
+
+The split DMG owner retains the existing broad packaging selection during
+qualification, including Linux-only packaging changes. Narrowing that breadth
+belongs to the separately qualified P9 selector; this batch does not claim the
+associated macOS scheduling savings.
+
+### Qualification and one-PR activation
+
+The main-only `CI qualification index` workflow discovers retained hosted
+qualification descriptors and publishes an immutable `ci-qualification-index`
+artifact. Consumers verify its original successful uploading job and attempt,
+repository, workflow/event, reviewed-main reachability, upload window, archive
+digest and receipt, then independently reverify each capability's source proof.
+An artifact name or a manually supplied activation flag never authorizes routing.
+Missing, expired or incompatible evidence retains the broader production routes.
+CI control changes invalidate qualification; application-only changes retain a
+previously qualified Arch baseline while continuing to bind current application
+validation through per-job receipts.
+
+The existing platform push trigger remains as a guarded heartbeat. After the
+observer's four actual parity cases and real publisher consumer exercise qualify,
+its application selection delegates to the main-only coordinator. That coordinator
+writes a verified receipt or dispatches a full current-main sweep. Before proof,
+the ordinary direct push application checks continue. The force/full-validation
+path always runs fresh checks. Reviewed-main qualification mode never runs the
+legacy cache publication job.
+
+Path selection, Arch retirement and acceptance narrowing have independent gates.
+Arch stays required until the two consecutive real scheduled nightlies, actual
+Arch drift and real SDK transport/recipe exercises qualify. Acceptance narrowing
+additionally requires zero missed phases across actual acceptance failures since
+12 October 2026 and four green weeks of actual nightly observation. The reviewed
+baseline freezes 204 observations through 21 October 2026 00:04:53 UTC: 203 failed
+jobs and one API-proved workflow startup failure with no jobs. Original attempts,
+failed steps, tested source ranges and raw evidence checksums are retained; an
+unknown failed phase requires every phase, and an unproven PR range blocks proof.
+The zero-job startup failure remains an unavoidable workflow guard rather than
+being described as an executed test phase.
+
+After merge, dispatch `CI candidate qualification` on main with
+`exercise=acceptance-replay` once; its daily 10:43 UTC schedule refreshes the
+inventory after the nightly preview starts, until narrowing is qualified. Manual
+dispatch always refreshes proof. Once qualified, the daily job verifies the
+capability and skips collection. Every refresh enumerates the full
+original run history to detect reruns, while an authenticated prior main-only
+inventory avoids downloading unchanged jobs and logs again. Only a successful
+original qualification uploader with matching control closure, frozen baseline
+and inventory checksum can provide those observations. Missing retained evidence
+causes a fresh bounded read-only collection; exhausted API or history limits fail
+with diagnostics. No PR performs that history crawl.
+
+Before first activation, dispatch another `acceptance-replay` if the latest
+qualified nightly is newer than the inventory cutoff. The index requires replay
+coverage through the latest nightly in the four-week interval, so an old October
+replay cannot activate narrowing in November. Renewal requires no code or data
+PR. Once qualified, the original authenticated interval remains the baseline
+while unchanged controls preserve the capability; control changes invalidate it. Only ordinary PRs may omit qualified
+CPU/model, software GPU or virtual audio phases. Release, preview, dispatch and
+nightly runs retain all phases; package lifecycle acceptance always runs. A PR
+with a partial phase vector cannot promote a full main validation receipt and
+requires a fresh full main sweep. Physical deletion of the guarded legacy code
+can follow separately after the hosted qualification interval; this change does
+not describe that code as already removed.
