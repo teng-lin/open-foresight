@@ -381,8 +381,8 @@ jobs:
       run: |
         python -m tools.candidate_identity --source "$SOURCE"
   dmg:
-    needs: changes
-    if: needs.changes.outputs.dmg == 'true'
+    needs: [changes, macos]
+    if: "!cancelled() && needs.changes.outputs.dmg == 'true' && needs.macos.result == 'success'"
     uses: ./.github/workflows/dmg-contracts.yml
     with:
       source: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}

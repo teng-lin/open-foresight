@@ -62,9 +62,14 @@ def test_every_host_inventory_selects_its_real_owners_and_notice_selects_apple()
     }
 
 
-def test_dmg_is_independent_of_linux_bundle_and_required_for_apple_inputs():
+def test_dmg_follows_successful_macos_build_and_is_required_for_apple_inputs():
     jobs = yaml.safe_load((ROOT / ".github/workflows/macos.yml").read_text())["jobs"]
-    assert jobs["dmg"]["needs"] == "changes"
+    assert jobs["dmg"]["needs"] == ["changes", "macos"]
+    assert "needs.macos.result == 'success'" in jobs["dmg"]["if"]
+    assert "!cancelled()" in jobs["dmg"]["if"]
+    for path in ("tests/test_dmg_contract.py", "tools/create_dmg.py", ".github/workflows/release.yml"):
+        selected = changes.select_gates([path])
+        assert selected["dmg"] and selected["macos"]
     assert "dmg" in jobs["platform-checks"]["needs"]
     assert (
         jobs["platform-checks"]["steps"][-1]["env"]["CI_TIER"] == "${{ inputs.tier }}"

@@ -519,6 +519,8 @@ class SelectionTests(unittest.TestCase):
         expected = set(expected)
         if "macos" in expected or "packaging" in expected:
             expected.add("dmg")
+        if "dmg" in expected:
+            expected.add("macos")
         self.assertEqual(
             {name for name, required in actual.items() if required}, expected
         )
@@ -758,7 +760,7 @@ def test_zip_download_checks_github_digest_before_unpacking(tmp_path):
 def test_shared_dmg_packaging_selects_contracts_with_this_runs_linux_bundle():
     selected = changes.select_gates(["tools/create_dmg.py"])
     assert selected["packaging"]
-    assert not selected["macos"]
+    assert selected["macos"] and selected["dmg"]
     assert selected["linux-build"] and selected["linux-test"]
 
 
@@ -915,12 +917,12 @@ def test_macos_inflight_selection_rejects_fork_and_failed_producers(failed):
         )
 
 
-def test_shared_dmg_packaging_selects_own_bundle_without_macos_application_compile():
+def test_shared_dmg_packaging_selects_own_bundle_and_macos_build_prerequisite():
     selected = changes.select_gates(["tools/create_dmg.py"])
     assert selected["packaging"]
-    assert not selected["macos"]
+    assert selected["macos"]
     assert selected["linux-build"] and selected["linux-test"]
-    assert not selected["macos"]
+    assert selected["dmg"]
 
 
 def test_release_rejects_candidate_for_another_commit(producer, tmp_path):

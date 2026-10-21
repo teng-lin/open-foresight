@@ -1292,7 +1292,10 @@ model publishers. Invalid ref, event, checkout or metadata transport still fails
 It compiles no application or vendor library for this cache.
 
 Package contracts consume the same run's verified Linux bundle and keep native
-DEB/RPM/Arch lifecycle checks plus the separate signed DMG fixture. The single
+DEB/RPM/Arch lifecycle checks plus the separate signed DMG fixture. The DMG
+contract job waits for the `macos` build and tests to succeed; selecting DMG
+contracts also selects that prerequisite in both classifiers. It does not run
+concurrently with the macOS application job. The single
 `macos` job reuses the qualified SDK, runs fresh native,
 core, desktop and compiled service/MCP gates in one workspace, then assembles and
 smokes the application. Nightly callers explicitly request the Mac coverage
