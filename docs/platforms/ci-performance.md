@@ -1446,6 +1446,9 @@ the read-only collector against GitHub; the narrow window does not measure a CI
 performance improvement. Queries use whole seconds while returned runs and PR
 merge membership are filtered against the exact requested boundaries recorded
 in the manifest.
+Membership uses the timestamp precision GitHub supplies, usually whole seconds;
+fractional request boundaries do not recover sub-second creation times. The
+manifest records every discovered run excluded by the requested window.
 
 Report schema 2 retains previous fields and adds first-attempt workflow, job and
 PR-commit denominators, cancellations, incomplete/unknown outcomes, actual job
@@ -1477,6 +1480,9 @@ runs have separate outcomes and never enter ordinary failure-rate denominators;
 all their runner spend and diagnostic failures remain visible. These tools
 measure observations and never authorize reuse, dispatch
 CI, establish producer trust or certify runtime improvements.
+Read-only cache reconciliation and actual cache publication have separate cost
+and first-attempt workflow cohorts. Aggregate workflow rates still include all
+ordinary workflow runs; PR-commit rates retain their independent PR denominator.
 Ordinary pull-request and push runs cannot be annotated as qualification-only.
 
 The split DMG owner retains the existing broad packaging selection during

@@ -12,6 +12,10 @@ from typing import cast
 # Keep both existing signing/mount and upgrade/database contracts mandatory,
 # while deriving the expected execution count from the suite as it grows.
 MINIMUM_CONTRACTS = 2
+REQUIRED_CONTRACTS = {
+    "test_dmg_contract.DmgContractTest.test_signed_fixture_survives_dmg_creation_and_mount",
+    "test_dmg_contract.DmgContractTest.test_previous_signed_dmg_upgrades_owned_copy_without_losing_database",
+}
 
 
 class ContractResult(unittest.TextTestResult):
@@ -89,10 +93,11 @@ def run(suite, output):
         and result.wasSuccessful()
         and result.testsRun == expected
         and not result.skipped
+        and REQUIRED_CONTRACTS.issubset(result.cases)
     )
     if not successful:
         print(
-            f"DMG contracts failed: ran={result.testsRun}, expected={expected}, minimum={MINIMUM_CONTRACTS}, skipped={len(result.skipped)}, failures={len(result.failures)}, errors={len(result.errors)}",
+            f"DMG contracts failed: ran={result.testsRun}, expected={expected}, minimum={MINIMUM_CONTRACTS}, skipped={len(result.skipped)}, failures={len(result.failures)}, errors={len(result.errors)}, missing={sorted(REQUIRED_CONTRACTS - result.cases.keys())}",
             file=sys.stderr,
         )
     return 0 if successful else 1

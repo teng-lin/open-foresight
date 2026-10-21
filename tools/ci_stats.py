@@ -93,6 +93,19 @@ def failure_class(job):
 def run_category(run):
     path = run["path"]
     if "cache-publish" in path:
+        if Path(path).name == "linux-cache-publish.yml":
+            publishers = []
+            for job in run.get("jobs", []):
+                name = job.get("name", "").split(" / ")[-1].split(" (")[0]
+                if not name.startswith("publish-") or job.get("conclusion") == "skipped":
+                    continue
+                if name == "publish-linux-caches" and job.get("conclusion") == "success":
+                    publication = [step for step in job.get("steps", []) if step.get("name") == "Publish only isolated secret-free dependency and acceptance caches"]
+                    if publication and all(step.get("conclusion") == "skipped" for step in publication):
+                        continue
+                publishers.append(job)
+            if not publishers:
+                return "cache-reconcile"
         return "cache-publisher"
     if "dependencies" in path:
         return "sdk-producer"
@@ -115,6 +128,7 @@ def operational_report(runs):
         "tools.ci_stats_snapshot" if __package__ else "ci_stats_snapshot"
     )
     categories: dict[str, float] = defaultdict(float)
+    category_workflows: dict[str, list] = defaultdict(list)
     workflows, jobs, commits, failures, cohorts = (
         [],
         [],
@@ -131,6 +145,7 @@ def operational_report(runs):
         ordinary = run.get("qualification") is not True
         if ordinary:
             workflows.append(state)
+            category_workflows[category].append(state)
         if ordinary and run["event"] == "pull_request":
             commits[run["source"]].append(state)
         for job in run["jobs"]:
@@ -241,6 +256,10 @@ def operational_report(runs):
         "job_queue_minutes": summary(queue),
         "workflow_start_latency_minutes": summary(start_latency),
         "runner_minutes_by_category": dict(sorted(categories.items())),
+        "first_attempt_workflows_by_category": {
+            category: failure_rate(states)
+            for category, states in sorted(category_workflows.items())
+        },
         "failures": failures,
         "cohorts": [
             {"identity": json.loads(key), "observations": values}
@@ -744,6 +763,9 @@ def main():
             lines.append(
                 f"| {name} | {value.get('failed', 0)} | {value.get('eligible', 0)} | {rate} |"
             )
+        for category, value in rates.get("first_attempt_workflows_by_category", {}).items():
+            rate = f"{value['rate']:.1%}" if value.get("rate") is not None else "unknown"
+            lines.append(f"| workflows: {category} | {value['failed']} | {value['eligible']} | {rate} |")
         lines.extend(
             [
                 "",

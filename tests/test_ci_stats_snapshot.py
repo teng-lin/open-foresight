@@ -132,6 +132,11 @@ def test_precise_snapshot_window_controls_actual_workflow_job_and_spend_denomina
     expected = [2, 3] if bounded else [2, 3, 4]
     assert [value["id"] for value in runs] == expected
     assert requested_jobs == expected
+    manifest = snapshot.verify(root)
+    assert manifest["exclusions"] == [
+        {"run": record["id"], "created_at": record["created_at"], "reason": "outside requested window"}
+        for record in records if record["id"] not in expected
+    ]
     data = stats.operational_report(runs)
     assert data["first_attempt_workflows"]["eligible"] == len(expected)
     assert data["first_attempt_jobs"]["eligible"] == len(expected)
@@ -400,7 +405,28 @@ def test_first_attempt_failures_queue_and_classification_never_follow_later_gree
     ],
 )
 def test_independent_work_has_its_own_cost_category(path, event, category):
-    assert stats.run_category(run(event=event) | {"path": path}) == category
+    jobs = [job("publish-linux-caches")] if category == "cache-publisher" else [job()]
+    assert stats.run_category(run(event=event, jobs=jobs) | {"path": path}) == category
+
+
+def test_read_only_reconciliation_does_not_dilute_publisher_or_pr_error_rates():
+    publisher = run(identity=100, event="workflow_dispatch", jobs=[job("publish-linux-caches", "failure")])
+    publisher["path"] = ".github/workflows/linux-cache-publish.yml"
+    scheduled = []
+    for identity in range(1, 49):
+        record = run(identity=identity, event="schedule", jobs=[job("reconcile"), job("publish-linux-caches", "skipped")])
+        record["path"] = publisher["path"]
+        scheduled.append(record)
+    data = stats.operational_report([publisher, *scheduled, run(identity=101)])
+    categories = data["first_attempt_workflows_by_category"]
+    assert categories["cache-publisher"]["eligible"] == 1
+    assert categories["cache-publisher"]["rate"] == 1
+    assert categories["cache-reconcile"]["eligible"] == 48
+    assert categories["cache-reconcile"]["rate"] == 0
+    assert data["first_attempt_pr_commits"]["eligible"] == 1
+    assert data["first_attempt_workflows"]["eligible"] == 50
+    noop = job("publish-linux-caches") | {"steps": [{"name": "Publish only isolated secret-free dependency and acceptance caches", "conclusion": "skipped"}]}
+    assert stats.run_category(publisher | {"jobs": [noop]}) == "cache-reconcile"
 
 
 def test_first_green_survives_later_red_but_latest_readiness_does_not():

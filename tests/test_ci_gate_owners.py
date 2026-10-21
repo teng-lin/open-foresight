@@ -80,7 +80,7 @@ def test_dmg_is_independent_of_linux_bundle_and_required_for_apple_inputs():
 
 @pytest.mark.parametrize("outcome", ["success", "skip", "failure", "error", "missing"])
 def test_dmg_runner_retains_junit_and_rejects_skipped_missing_or_failed_contracts(
-    tmp_path, outcome
+    tmp_path, outcome, monkeypatch
 ):
     class Fixture(unittest.TestCase):
         def test_contract(self):
@@ -94,6 +94,7 @@ def test_dmg_runner_retains_junit_and_rejects_skipped_missing_or_failed_contract
     suite = unittest.TestSuite(
         Fixture("test_contract") for _ in range(1 if outcome == "missing" else 2)
     )
+    monkeypatch.setattr(dmg, "REQUIRED_CONTRACTS", {Fixture("test_contract").id()})
     if outcome == "missing":
         # Simulate a loader/executor mismatch, independently of suite size.
         suite.countTestCases = lambda: 2
@@ -168,17 +169,49 @@ def test_dmg_class_setup_errors_and_skips_still_produce_diagnostic_junit(
     assert "ran=0" in diagnostic and "expected=1" in diagnostic
 
 
-def test_dmg_suite_inventory_can_grow_but_cannot_lose_either_existing_contract(tmp_path):
+def test_dmg_suite_inventory_can_grow_but_cannot_lose_either_existing_contract(tmp_path, monkeypatch):
     class Fixture(unittest.TestCase):
         def test_contract(self):
             pass
 
+    monkeypatch.setattr(dmg, "REQUIRED_CONTRACTS", {Fixture("test_contract").id()})
     for count in (2, 3):
         suite = unittest.TestSuite(Fixture("test_contract") for _ in range(count))
         assert dmg.run(suite, tmp_path / f"contracts-{count}.xml") == 0
     for count in (0, 1):
         suite = unittest.TestSuite(Fixture("test_contract") for _ in range(count))
         assert dmg.run(suite, tmp_path / f"missing-{count}.xml") == 1
+
+
+def test_dmg_runner_rejects_replacing_an_owned_contract_with_an_unrelated_test(tmp_path, monkeypatch):
+    class Fixture(unittest.TestCase):
+        def test_signing(self):
+            pass
+
+        def test_upgrade(self):
+            pass
+
+        def test_unrelated(self):
+            pass
+
+    required = {Fixture(name).id() for name in ("test_signing", "test_upgrade")}
+    monkeypatch.setattr(dmg, "REQUIRED_CONTRACTS", required)
+    replaced = unittest.TestSuite(Fixture(name) for name in ("test_signing", "test_unrelated"))
+    assert dmg.run(replaced, tmp_path / "replaced.xml") == 1
+    complete = unittest.defaultTestLoader.loadTestsFromTestCase(Fixture)
+    assert dmg.run(complete, tmp_path / "complete.xml") == 0
+
+
+def test_dmg_required_ids_match_both_actual_owned_contracts():
+    suite = unittest.defaultTestLoader.discover(str(ROOT / "tests"), "test_dmg_contract.py")
+
+    def identities(node):
+        if isinstance(node, unittest.TestSuite):
+            return {name for child in node for name in identities(child)}
+        return {node.id()}
+
+    assert len(dmg.REQUIRED_CONTRACTS) == 2
+    assert dmg.REQUIRED_CONTRACTS <= identities(suite)
 
 
 def test_dmg_evidence_preserves_each_failed_attempt():

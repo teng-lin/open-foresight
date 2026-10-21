@@ -192,11 +192,16 @@ def collect(repository, since, directory, request=api, observations=None, until=
             raise ValueError(
                 "GitHub's filtered run limit may truncate this window; collect narrower windows instead"
             )
-        runs = [
-            run for run in discovered
-            if timestamp(run["created_at"]) >= beginning
-            and (end is None or timestamp(run["created_at"]) <= end)
-        ]
+        runs = []
+        for run in discovered:
+            created = timestamp(run["created_at"])
+            if created < beginning or (end is not None and created > end):
+                manifest["exclusions"].append({
+                    "run": run["id"], "created_at": run["created_at"],
+                    "reason": "outside requested window",
+                })
+            else:
+                runs.append(run)
         (directory / "runs.jsonl").write_text(
             "".join(json.dumps(run) + "\n" for run in runs)
         )

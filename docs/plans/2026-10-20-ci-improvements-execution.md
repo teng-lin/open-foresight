@@ -60,8 +60,6 @@ Implementation logs, frozen review inputs and original CLI results are under
 logs are under `/var/tmp/ofc1/` and `/var/tmp/ofc2/`; the private Python environment
 is `/var/tmp/ofci/venv`. No successful dependency cache has been deleted.
 
-## Review and qualification limits
-
 ## Current implementation checkpoints
 
 | Scope | Reviewed source | Validation |
