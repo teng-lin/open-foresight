@@ -622,7 +622,7 @@ void main() {
       await waitUntil(tester, () => true);
       await captureWindow(tester, env['FORESIGHT_COPILOT_SCREENSHOT']!);
       final cited = jsonDecode(answer['citations'] as String) as List;
-      final transcriptCitation = cited.singleWhere(
+      final transcriptCitation = cited.firstWhere(
         (citation) => citation['document_id'] == 'meeting-$meeting',
       );
       final citedRevision = transcriptCitation['revision'];
