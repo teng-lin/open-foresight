@@ -49,7 +49,7 @@ def application(tmp_path):
 
 
 def test_actual_report_adapter_binds_handoff_packages_and_fresh_complete_test_outputs(application):
-    report = exercise.application_record("publisher", SOURCE, application)
+    report = exercise.application_record("archive-sdk", SOURCE, application)
     assert report["junit"]["service"] == {"tests": 1, "skipped": 0}
     assert report["languages"]["core"] == {"cases": 1, "skipped": 0, "covered": 1, "lines": 1}
     assert report["portable"]["sha256"] == hashlib.sha256(b"original portable fixture").hexdigest()
@@ -78,7 +78,7 @@ def test_record_adapter_rejects_changed_bytes_missing_coverage_or_failed_tests(a
     else:
         (application / "packages/open-foresight-1.0-1-linux-x86_64.tar.gz").write_bytes(b"changed")
     with pytest.raises(ValueError):
-        exercise.application_record("publisher", SOURCE, application)
+        exercise.application_record("archive-sdk", SOURCE, application)
 
 
 def test_failed_real_command_output_is_preserved(tmp_path, monkeypatch):
@@ -118,10 +118,15 @@ def test_real_exercise_calls_actual_driver_and_preserves_original_sdk_provenance
     monkeypatch.setattr(exercise.sdk, "inspect", inspect)
     def save(source, image, envelope, **kwargs):
         envelope.mkdir(parents=True)
-        (envelope / "identity.json").write_text(json.dumps({"reused_from": {"original": "changed" if fault == "provenance" else "receipt"}}))
+        (envelope / "identity.json").write_text(json.dumps({"tier": "pr", "reused_from": {"original": "changed" if fault == "provenance" else "receipt"}}))
         (envelope / "payload.tar.gz").write_bytes(b"fixture original payload")
     monkeypatch.setattr(exercise.application, "save_sdk", save)
-    monkeypatch.setattr(exercise.artifacts, "unpack", lambda *args: None)
+    def unpack(component, identity, envelope, restored):
+        restored.mkdir(parents=True)
+        (restored / "image.tar").write_bytes(b"original verified archive")
+        (restored / "source-qualification.json").write_text('{"original":"receipt"}')
+    monkeypatch.setattr(exercise.artifacts, "unpack", unpack)
+    monkeypatch.setattr(exercise.sdk, "write_outputs", lambda image: None)
     monkeypatch.setattr(exercise.artifacts, "fingerprint", lambda *args: "identity")
     monkeypatch.setattr(exercise.artifacts, "digest", lambda path: "recipe-digest" if path.name.endswith(".py") else hashlib.sha256(path.read_bytes()).hexdigest())
     monkeypatch.setattr(exercise.sdk, "record", lambda *args: {"source_scope": "b" * 40 if fault == "scope" else SOURCE, "local_recipe_sha256": "recipe-digest"})
@@ -144,6 +149,10 @@ def test_real_exercise_calls_actual_driver_and_preserves_original_sdk_provenance
     result = exercise.exercise(kind, SOURCE, tmp_path / "output", root=source)
     assert result["original_sdk"] == {"original": "receipt"}
     assert result["application"] == {"actual": "application-report"}
+    if kind == "fork-sdk":
+        assert result["consumer"] == "shadow-fork-sdk"
+        assert result["reused_archive"] is True
+        assert not (tmp_path / "output/restored").exists()
     assert commands[0][:2] == ["bash", "tools/build_linux_container.sh"]
     assert recipe.read_bytes() == before
 
@@ -158,12 +167,90 @@ def test_exercise_never_starts_for_prs_or_unknown_modes(tmp_path, monkeypatch):
 
 def test_record_cli_only_reads_actual_application_outputs(tmp_path, application, monkeypatch):
     path = tmp_path / "report/publisher.json"
-    monkeypatch.setattr(sys, "argv", ["exercise", "--kind", "publisher", "--source", SOURCE, "--record-application", str(application), "--output", str(path)])
+    monkeypatch.setattr(sys, "argv", ["exercise", "--kind", "archive-sdk", "--source", SOURCE, "--record-application", str(application), "--output", str(path)])
     exercise.main()
-    assert json.loads(path.read_text())["kind"] == "publisher"
+    assert json.loads(path.read_text())["kind"] == "archive-sdk"
 
 
 def test_successful_command_output_is_retained(tmp_path, monkeypatch):
     monkeypatch.setattr(exercise.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "successful real command output"))
     exercise.run(["docker", "inspect", "fixture"], root=tmp_path, output=tmp_path)
     assert "successful real command output" in (tmp_path / "commands.log").read_text()
+
+
+@pytest.fixture
+def publisher_proof(monkeypatch):
+    repository = "owner/repo"
+    identity = {"identity": "c" * 64}
+    digest = "sha256:" + "d" * 64
+    run = {"id": 7, "head_sha": SOURCE, "head_branch": "main", "event": "workflow_dispatch", "path": ".github/workflows/linux-cache-publish.yml", "repository": {"full_name": repository}, "head_repository": {"full_name": repository}}
+    job = {"id": 70, "name": "publish-linux-caches", "run_id": 7, "run_attempt": 1, "conclusion": "success", "started_at": "2026-10-20T00:00:00Z", "completed_at": "2026-10-20T00:10:00Z", "steps": [{"name": exercise.PUBLISH_STEP, "status": "completed", "conclusion": "success"}]}
+    artifact = {"id": 9, "name": "ci-tooling-" + identity["identity"], "digest": "sha256:" + "e" * 64, "expired": False, "workflow_run": {"id": 7}, "created_at": "2026-10-20T00:05:00Z"}
+    receipt = {"schema": 1, "component": "linux-ci-tooling", "inputs": identity, "repository": repository, "tier": "tooling", "label": "", "source_commit": SOURCE, "source_run_id": 7, "source_run_attempt": 1, "source_job_id": 70, "image_digest": digest}
+    record = {"ci_inputs": {"tooling_identity": identity["identity"]}, "publisher": {"run_id": 7, "attempt": 1, "job_id": 70}, "tooling": {"artifact": artifact.copy(), "receipt": receipt, "resolution": {"reused": True, "inputs": identity, "image": exercise.tooling.image_reference(repository, digest)}}}
+    def api(repo, route):
+        assert repo == repository
+        if route == "actions/runs/7":
+            return run
+        if route == "actions/artifacts/9":
+            return artifact
+        if route == "actions/runs/7/attempts/1/jobs?per_page=100&page=1":
+            return {"jobs": [job]}
+        if route == f"compare/{SOURCE}...main":
+            return {"status": "identical"}
+        raise AssertionError(route)
+    monkeypatch.setattr(exercise.artifacts, "api", api)
+    return record, run, job, artifact, api
+
+
+def test_publisher_proof_requires_actual_verified_shared_pull_and_current_run_publication(publisher_proof):
+    record, _, _, _, api = publisher_proof
+    assert exercise.verify_publisher_proof(record, "owner/repo", SOURCE, 7, api=api) is record
+
+
+@pytest.mark.parametrize("fault", ["miss", "identity", "image", "receipt", "other-run", "failed", "skipped-publication", "main", "checksum", "attempt"])
+def test_publisher_proof_rejects_local_fallback_and_unrelated_or_failed_publishers(publisher_proof, fault):
+    record, run, job, artifact, api = publisher_proof
+    if fault == "miss":
+        record["tooling"]["resolution"]["reused"] = False
+    elif fault == "identity":
+        record["ci_inputs"]["tooling_identity"] = "wrong"
+    elif fault == "image":
+        record["tooling"]["resolution"]["image"] = "locally-built-image"
+    elif fault == "receipt":
+        record["tooling"]["receipt"]["source_job_id"] = 71
+    elif fault == "other-run":
+        record["publisher"]["run_id"] = 8
+    elif fault == "failed":
+        job["conclusion"] = "failure"
+    elif fault == "skipped-publication":
+        job["steps"][0]["conclusion"] = "skipped"
+    elif fault == "main":
+        run["head_branch"] = "other"
+    elif fault == "checksum":
+        artifact["digest"] = "sha256:" + "f" * 64
+    else:
+        job["run_attempt"] = 2
+    with pytest.raises(ValueError):
+        exercise.verify_publisher_proof(record, "owner/repo", SOURCE, 7, api=api)
+
+
+def test_publisher_application_record_retains_real_tooling_and_publisher_provenance(application, publisher_proof, monkeypatch):
+    proof, _, job, _, _ = publisher_proof
+    inputs = json.loads((application / "ci-inputs.json").read_text())
+    inputs["tooling_identity"] = "c" * 64
+    (application / "ci-inputs.json").write_text(json.dumps(inputs))
+    manifest = application / "handoff/source-build.json"
+    value = json.loads(manifest.read_text())
+    value["inputs"] = inputs
+    manifest.write_text(json.dumps(value))
+    directory = application / "tooling"
+    directory.mkdir()
+    (directory / "inputs.json").write_text(json.dumps(proof["tooling"]["resolution"]))
+    (directory / "producer.json").write_text(json.dumps({key: value for key, value in proof["tooling"].items() if key != "resolution"}))
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("GITHUB_RUN_ID", "7")
+    monkeypatch.setattr(exercise.artifacts, "dependency_jobs", lambda *args: [job])
+    result = exercise.application_record("publisher", SOURCE, application)
+    assert result["publisher"] == {"run_id": 7, "attempt": 1, "job_id": 70}
+    assert result["tooling"]["receipt"]["image_digest"] == "sha256:" + "d" * 64

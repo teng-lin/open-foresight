@@ -26,8 +26,76 @@ from tools import ci_linux_handoff as handoff  # noqa: E402
 from tools import compare_test_runs  # noqa: E402
 from tools import check_coverage  # noqa: E402
 from tools import platform_python_tests  # noqa: E402
+from tools import ci_tooling_image as tooling  # noqa: E402
+from tools.ci_cache_reconcile import PUBLISH_STEP  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def verify_publisher_proof(record, repository, source, run_id, *, api=None):
+    """Require an actual shared-image pull and this run's successful publisher."""
+    api = api or artifacts.api
+    published = record.get("publisher", {})
+    consumed = record.get("tooling", {})
+    resolution = consumed.get("resolution", {})
+    receipt = consumed.get("receipt", {})
+    saved_artifact = consumed.get("artifact", {})
+    if (published.get("run_id") != run_id or type(published.get("attempt")) is not int
+            or published["attempt"] < 1 or type(published.get("job_id")) is not int
+            or resolution.get("reused") is not True
+            or record.get("ci_inputs", {}).get("tooling_identity") != resolution.get("inputs", {}).get("identity")):
+        raise ValueError("Publisher qualification requires consumed shared tooling and its publication")
+    run = api(repository, f"actions/runs/{run_id}")
+    if (run.get("head_sha"), run.get("head_branch"), run.get("event"), run.get("path"),
+            run.get("repository", {}).get("full_name"), (run.get("head_repository") or {}).get("full_name")) != (
+            source, "main", "workflow_dispatch", ".github/workflows/linux-cache-publish.yml", repository, repository):
+        raise ValueError("Publication differs from the actual reviewed-main qualification run")
+    jobs = []
+    page = 1
+    while True:
+        batch = api(repository, f"actions/runs/{run_id}/attempts/{published['attempt']}/jobs?per_page=100&page={page}")["jobs"]
+        jobs.extend(batch)
+        if len(batch) < 100:
+            break
+        page += 1
+    matches = [job for job in jobs if job.get("id") == published["job_id"]
+               and job.get("name") == "publish-linux-caches"
+               and job.get("run_attempt") == published["attempt"]
+               and job.get("conclusion") == "success"
+               and any(step.get("name") == PUBLISH_STEP and step.get("status") == "completed"
+                       and step.get("conclusion") == "success" for step in job.get("steps", []))]
+    if len(matches) != 1:
+        raise ValueError("Qualification run lacks its actual successful cache publication step")
+    artifact = api(repository, f"actions/artifacts/{saved_artifact.get('id')}")
+    if artifact.get("digest") != saved_artifact.get("digest") or artifact.get("id") != saved_artifact.get("id"):
+        raise ValueError("Consumed tooling artifact metadata changed")
+    producer = api(repository, f"actions/runs/{receipt.get('source_run_id')}")
+    original_jobs = []
+    page = 1
+    while True:
+        batch = api(repository, f"actions/runs/{producer['id']}/attempts/{receipt.get('source_run_attempt')}/jobs?per_page=100&page={page}")["jobs"]
+        original_jobs.extend(batch)
+        if len(batch) < 100:
+            break
+        page += 1
+    image = tooling.verify_receipt(repository, resolution.get("inputs"), receipt, artifact, producer, original_jobs, fetch=api)
+    if resolution.get("image") != image:
+        raise ValueError("Application did not consume the published immutable tooling image")
+    return record
+
+
+def publisher_record(directory, inputs, source):
+    repository = os.environ["GITHUB_REPOSITORY"]
+    run_id = int(os.environ["GITHUB_RUN_ID"])
+    jobs = artifacts.dependency_jobs(repository, run_id)
+    candidates = [job for job in jobs if job.get("name") == "publish-linux-caches" and job.get("conclusion") == "success"]
+    if not candidates:
+        raise ValueError("No successful publisher exists for this qualification run")
+    job = max(candidates, key=lambda item: (item["run_attempt"], item["id"]))
+    producer = json.loads((directory / "tooling/producer.json").read_text())
+    record = {"ci_inputs": inputs, "publisher": {"run_id": run_id, "attempt": job["run_attempt"], "job_id": job["id"]},
+              "tooling": {**producer, "resolution": json.loads((directory / "tooling/inputs.json").read_text())}}
+    return verify_publisher_proof(record, repository, source, run_id)
 
 
 def run(command, *, root, output):
@@ -66,7 +134,10 @@ def application_record(kind, source, directory):
         if covered * 100 < total * 90:
             raise ValueError("Actual qualification coverage is below the existing 90% gate")
         languages[label] = {"cases": sum(outcomes.values()), "skipped": sum(count for (*_, skip), count in outcomes.items() if skip), "covered": covered, "lines": total}
-    return {"kind": kind, "source": source, "ci_inputs": inputs, "handoff_sha256": handoff.digest(manifest_path), "portable": handoff.portable_input(directory / "packages", source, required=True), "junit": junit, "languages": languages}
+    result = {"kind": kind, "source": source, "ci_inputs": inputs, "handoff_sha256": handoff.digest(manifest_path), "portable": handoff.portable_input(directory / "packages", source, required=True), "junit": junit, "languages": languages}
+    if kind == "publisher":
+        result.update(publisher_record(directory, inputs, source))
+    return result
 
 
 def exercise(kind, source, output, *, root=ROOT):
@@ -101,6 +172,21 @@ def exercise(kind, source, output, *, root=ROOT):
                 raise ValueError("Real source-scoped archive lost its source/recipe binding")
             if receipt.get("reused_from") != json.loads((prefix / ("source-qualification.json" if (prefix / "source-qualification.json").exists() else "approved-source.json")).read_text()):
                 raise ValueError("Transport export lost original SDK provenance")
+            if kind == "fork-sdk":
+                # Exercise the production fork forwarding route separately from
+                # archive loading. Its already verified archive must be linked,
+                # never saved/compiled again or relabelled as a main SDK build.
+                archive_sha256 = artifacts.digest(restored / "image.tar")
+                shadow.forward(restored, output / "fork", source, image, reuse_archive=True)
+                envelope = output / "fork/in-run"
+                receipt = json.loads((envelope / "identity.json").read_text())
+                if receipt.get("tier") != "pr" or receipt.get("reused_from") != json.loads((prefix / ("source-qualification.json" if (prefix / "source-qualification.json").exists() else "approved-source.json")).read_text()):
+                    raise ValueError("Fork forwarding lost its PR tier or original SDK provenance")
+                restored = output / "fork-consumer"
+                artifacts.unpack("linux-sdk", artifacts.fingerprint("linux-sdk"), envelope, restored)
+                if artifacts.digest(restored / "image.tar") != archive_sha256:
+                    raise ValueError("Fork forwarding changed the original verified archive bytes")
+                details.update(consumer="shadow-fork-sdk", reused_archive=True, archive_sha256=archive_sha256)
             image = sdk.load(restored, "linux-sdk", sdk.local_tag("linux-sdk"))
             if sdk.inspect(image) != original_image_id:
                 raise ValueError("Real archive load changed the SDK image")

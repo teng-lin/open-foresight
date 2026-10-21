@@ -168,6 +168,11 @@ def _qualified(entry, *, repository, expected, api, download, controls=False):
         raise ValueError("Nightly did not actually execute the prepared candidate selector")
     if kind in {"archive-sdk", "fork-sdk", "recipe-change", "publisher"} and result.get("exercise", {}).get("kind") != kind:
         raise ValueError("Qualification lacks its actual SDK transport/recipe exercise")
+    if kind == "publisher":
+        from tools.ci_transport_exercise import verify_publisher_proof
+        verify_publisher_proof(result["exercise"], repository, source, run["id"], api=api)
+    if kind == "fork-sdk" and (result["exercise"].get("consumer") != "shadow-fork-sdk" or result["exercise"].get("reused_archive") is not True):
+        raise ValueError("Qualification lacks the actual fork archive forwarding consumer")
     if kind == "selector-replay" and (result.get("selector_replay", {}).get("count", 0) < 50 or result.get("selector_replay", {}).get("known_escapes") != [102, 110, 112, 119, 137, 144]):
         raise ValueError("Qualification lacks its full historical selector replay")
     if kind == "acceptance-replay" and (result.get("acceptance_replay", {}).get("count", 0) < 50 or result.get("acceptance_replay", {}).get("known_escapes") != [102, 110, 112, 119, 137, 144]):

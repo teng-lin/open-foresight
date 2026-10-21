@@ -51,6 +51,20 @@ class Evidence:
         self.payloads[run_id] = rollout.descriptor(SOURCE, root=self.root, run_id=run_id, attempt=1, producer_job=gate)
         if kind in {"archive-sdk", "fork-sdk", "recipe-change", "publisher"}:
             self.payloads[run_id]["exercise"] = {"kind": kind}
+        if kind == "fork-sdk":
+            self.payloads[run_id]["exercise"].update(consumer="shadow-fork-sdk", reused_archive=True)
+        if kind == "publisher":
+            from tools.ci_cache_reconcile import PUBLISH_STEP
+            run["event"] = "workflow_dispatch"
+            publisher = {**self.jobs[run_id][0], "id": run_id * 100 + 99, "run_id": run_id, "name": "publish-linux-caches", "steps": [{"name": PUBLISH_STEP, "status": "completed", "conclusion": "success"}]}
+            self.jobs[run_id].append(publisher)
+            artifact_id = run_id + 100000
+            tooling_identity = {"identity": "c" * 64}
+            digest = "sha256:" + "d" * 64
+            artifact = {**self.artifacts[run_id], "id": artifact_id, "name": "ci-tooling-" + "c" * 64, "digest": "sha256:" + "e" * 64}
+            self.artifacts[artifact_id] = artifact
+            receipt = {"schema": 1, "component": "linux-ci-tooling", "inputs": tooling_identity, "repository": REPOSITORY, "tier": "tooling", "label": "", "source_commit": SOURCE, "source_run_id": run_id, "source_run_attempt": 1, "source_job_id": publisher["id"], "image_digest": digest}
+            self.payloads[run_id]["exercise"].update(ci_inputs={"tooling_identity": "c" * 64}, publisher={"run_id": run_id, "attempt": 1, "job_id": publisher["id"]}, tooling={"artifact": artifact.copy(), "receipt": receipt, "resolution": {"inputs": tooling_identity, "reused": True, "image": f"ghcr.io/{REPOSITORY}/linux-sdk@{digest}"}})
         if kind == "selector-replay":
             self.payloads[run_id]["selector_replay"] = {"count": 50, "known_escapes": [102, 110, 112, 119, 137, 144]}
         if kind == "acceptance-replay":
@@ -382,3 +396,25 @@ def test_active_writer_and_checkout_policy_revoke_controls(root, name):
     path.write_text("changed policy\n")
     with pytest.raises(ValueError, match="closure differs"):
         rollout.compare(original, rollout.control_closure(root))
+
+
+@pytest.mark.parametrize("fault", ["local-fallback", "publication-skipped", "missing-fork-consumer"])
+def test_qualification_cannot_omit_real_publisher_or_fork_transport_proof(root, fault):
+    evidence = retirement_evidence(root)
+    if fault == "missing-fork-consumer":
+        entry = next(row for row in evidence.index["evidence"] if row["kind"] == "fork-sdk")
+        evidence.payloads[entry["run_id"]]["exercise"].pop("consumer")
+        with pytest.raises(ValueError, match="fork archive forwarding"):
+            evidence.verify("arch_retirement")
+    else:
+        evidence.add("publisher")
+        for case in ("identical", "divergent", "partially-selected", "failed-rerun"):
+            entry = evidence.add("observer")
+            evidence.payloads[entry["run_id"]]["observer_case"] = case
+        entry = next(row for row in evidence.index["evidence"] if row["kind"] == "publisher")
+        if fault == "local-fallback":
+            evidence.payloads[entry["run_id"]]["exercise"]["tooling"]["resolution"]["reused"] = False
+        else:
+            evidence.jobs[entry["run_id"]][-1]["steps"][0]["conclusion"] = "skipped"
+        with pytest.raises(ValueError, match="publication|shared tooling"):
+            evidence.verify("main_receipts")
