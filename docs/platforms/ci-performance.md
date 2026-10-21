@@ -1419,6 +1419,19 @@ qualifies it. This conservative boundary avoids duplicate SDK downloads in
 separate publisher jobs; consumers may still use an older qualified receipt with
 the same inputs, or prepare local tooling without rebuilding the SDK.
 
+Publisher qualification additionally requires an actual shared-tooling pull,
+its immutable image digest and original artifact receipt, and this qualification
+run's successful cache publication step. Local tooling fallback remains useful
+for ordinary checks but cannot establish publisher qualification. The fork
+transport exercise separately uses the production archive-forwarding path and
+verifies that the retained archive bytes, PR tier and original SDK provenance
+survive without another SDK save or compilation. These main-dispatch exercises
+do not impersonate a fork event or authorize PR bytes for main consumers.
+
+The unused `dependency-seed-current` producer allowlist row was removed after
+its callers moved to dedicated publication. The legacy `dependency-seed` row,
+its attempt-1 qualification and existing guarded publication jobs remain.
+
 ### Frozen reliability and runtime observations
 
 Collect read-only GitHub metadata into a new, immutable snapshot directory:
