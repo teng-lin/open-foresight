@@ -15,14 +15,37 @@ void main() {
     path = '${root.path}/application.db';
     addTearDown(() => root.deleteSync(recursive: true));
   });
-  String snapshot() => jsonEncode({
-    for (final file in root.listSync().whereType<File>())
-      file.path: [
-        file.statSync().size,
-        file.statSync().modified.toString(),
-        sha256.convert(file.readAsBytesSync()).toString(),
-      ],
-  });
+  final python = Platform.environment['FORESIGHT_PYTHON'] ?? 'python3';
+  String snapshot() {
+    // Independent nanosecond metadata catches root-only SQLite fchown effects
+    // that Dart FileStat's changed timestamp can round away.
+    final result = Process.runSync(python, [
+      '-c',
+      '''
+import hashlib, json, pathlib, sys
+result = {}
+for path in pathlib.Path(sys.argv[1]).iterdir():
+    if not path.is_file():
+        continue
+    info = path.stat()
+    result[path.name] = {
+        'device': info.st_dev, 'inode': info.st_ino, 'size': info.st_size,
+        'mode': info.st_mode, 'uid': info.st_uid, 'gid': info.st_gid,
+        'mtime_ns': info.st_mtime_ns, 'ctime_ns': info.st_ctime_ns,
+        'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+    }
+print(json.dumps(result, sort_keys=True))
+''',
+      root.path,
+    ]);
+    expect(
+      result.exitCode,
+      0,
+      reason: 'Metadata snapshot failed: ${result.stdout}\n${result.stderr}',
+    );
+    return result.stdout as String;
+  }
+
   Future<void> crash(String mode, int version) async {
     final result = await Process.run(Platform.resolvedExecutable, [
       'run',
@@ -64,6 +87,14 @@ void main() {
     newer.execute('PRAGMA user_version=16');
     newer.dispose();
     qualify(succeeds: false);
+  });
+  test('empty rollback journal preserves nanosecond source metadata', () {
+    final db = sqlite3.open(path);
+    db.execute('PRAGMA user_version=15');
+    db.dispose();
+    File('$path-journal').writeAsBytesSync([]);
+    qualify();
+    expect(File('$path-journal').existsSync(), isTrue);
   });
   test(
     'committed WAL-only future version refuses with or without SHM',
@@ -139,5 +170,37 @@ void main() {
     db.execute('PRAGMA user_version=16');
     expect(check.verifyUnchanged, throwsStateError);
     db.dispose();
+  });
+  test('metadata-only source change still rejects writable admission', () {
+    final db = sqlite3.open(path);
+    db.execute('PRAGMA user_version=15');
+    db.dispose();
+    final check = SqlitePreflight(path, supportedVersion: 15)..qualify();
+    final before = Map<String, dynamic>.from(
+      (jsonDecode(snapshot()) as Map)['application.db'] as Map,
+    );
+    final changed = File(path).statSync().changed;
+    final elapsed = Stopwatch()..start();
+    while (true) {
+      final result = Process.runSync(python, [
+        '-c',
+        'import os,sys; p=sys.argv[1]; s=os.stat(p); '
+            'os.utime(p, ns=(s.st_atime_ns, s.st_mtime_ns))',
+        path,
+      ]);
+      expect(result.exitCode, 0, reason: '${result.stderr}');
+      // Observe a timestamp change at the production API's resolution; do not
+      // assume a fixed sleep or silently rewrite mtime through Dart FileStat.
+      if (File(path).statSync().changed != changed) break;
+      if (elapsed.elapsed > const Duration(seconds: 5)) {
+        fail('Filesystem did not report a metadata rewrite');
+      }
+    }
+    final after = Map<String, dynamic>.from(
+      (jsonDecode(snapshot()) as Map)['application.db'] as Map,
+    );
+    expect(after.remove('ctime_ns'), isNot(before.remove('ctime_ns')));
+    expect(after, before, reason: 'Mutation must affect only ctime');
+    expect(check.verifyUnchanged, throwsStateError);
   });
 }

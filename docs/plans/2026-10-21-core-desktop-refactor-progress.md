@@ -374,3 +374,55 @@ entries per SDK. Their exact-source matrices remain held for the next candidate.
 All four pinned Linux distro images are now available; container/package/model/
 virtual-audio/installer gates remain locally executable obligations. Desktop
 feature extraction, PR publication and merge have not started.
+
+## Core candidate 21469 and root journal qualification
+
+`21469a994a80e1eb2304511f3d0eeba9e7e565bb` exports all 1,321 tracked files and
+modes without Git metadata. Native Debug passes 30/30. The full desktop gate
+passes 286 tests, 17 expected skips, 91.33% coverage and Release compilation.
+An initial core run overlapping desktop work reports two startup failures;
+both unchanged files pass 37/37 serially, and phase diagnostics confirm launch,
+cleanup and eight-host startup within the original deadlines. The standalone
+canonical core rerun passes 1,823 tests, 12 expected skips and 92.04% coverage.
+Both source-compiler hook configurations and fresh service/MCP AOT compilation
+pass. No deadline or fixture change was made for those startup failures.
+
+The complete compiled service/MCP gate passes 32/32, including actual isolated
+desktop integration; fast integration passes 2/2 with no skips. The real-model
+responsiveness measurement passes the 50ms p95 target: warmed idle 0.921ms,
+native generation 1.364ms and PCM capture 1.469ms. Each workload has 100 raw
+samples; all streaming samples overlap native loading, and all capture samples
+overlap capturing with advancing PCM counters. Independent review verifies
+source/native/AOT digests and the calculations. Historical baseline measurements
+have weaker overlap qualification, so these results make no statistical
+equivalence claim. Claude implementation round 4 converges on the 21469 fixture
+and native-close documentation delta.
+
+The full container gate fails two of 30 native targets: `helper_contract` and
+`helper_schema_preflight`. Build, portable manifest and ABI checks pass, but
+these do not make the failed container gate pass. A preserved syscall diagnostic
+shows SQLite 3.45.1 calling successful `fchown(fd, 0, 0)` on original hot journals
+when running as root, advancing ctime while bytes, inode, size, ownership, mode
+and mtime stay unchanged. The original checker passes the same case unprivileged.
+The source-identity refusal is correct and remains strict.
+
+The related correction probes a private database/journal copy whenever a
+rollback journal exists, including an empty journal, in C++, Dart and Python.
+No-journal probes retain their existing fast path. Raw original page-1, journal
+checksum/version and superjournal checks remain; only SQLite performs actual
+recovery after qualification. Copy-time and final source-identity checks remain.
+Regression snapshots independently include nanosecond ctime, ownership, mode
+and content hashes, with explicit metadata-only source-change rejection. Narrow
+root-container diagnostics pass both failed CTest targets and all 18 preflight
+cases; Dart preflight passes 10/10 and Python preflight 21/21 as root. All final
+live hashes match these diagnostic snapshots. Native cross-review converges on
+all three implementations. These are diagnostic worktree proofs, not acceptance
+for 21469 or a new candidate. Independent Claude delta review and every full
+checkpoint gate remain required at the next frozen commit.
+
+Main remains `3fb259243a99137e3cba1d5e795c44100f42e688`. No
+`core_acceptance_sha` is recorded yet; desktop extraction remains unstarted.
+The remaining full Python, sanitizer, container, packaged model/audio and
+four-distro installer gates remain local obligations. HanSolo discovery found
+the pinned Flutter/Dart installation and a Python 3.13 environment; full Xcode
+license acceptance remains an owner prerequisite for final Mac acceptance.

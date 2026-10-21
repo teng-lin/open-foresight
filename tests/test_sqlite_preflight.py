@@ -4,10 +4,12 @@ import base64
 import gzip
 import hashlib
 import json
+import os
 from pathlib import Path
 import sqlite3
 import subprocess
 import sys
+import time
 import pytest
 from tools import sqlite_preflight as preflight
 
@@ -30,9 +32,22 @@ def profile(tmp_path):
 
 
 def snapshot(root):
+    def metadata(path):
+        value = path.stat()
+        return (
+            value.st_dev,
+            value.st_ino,
+            value.st_size,
+            value.st_mode,
+            value.st_uid,
+            value.st_gid,
+            value.st_mtime_ns,
+            value.st_ctime_ns,
+        )
+
     return {
         str(path.relative_to(root)): (
-            preflight.identity(path),
+            metadata(path),
             hashlib.sha256(path.read_bytes()).hexdigest(),
         )
         for path in root.rglob("*")
@@ -58,6 +73,98 @@ def test_healthy_missing_members_are_not_created(profile):
     gate = preflight.qualify_profile(profile)
     preflight.verify_profile_unchanged(profile, gate)
     assert snapshot(profile) == before
+
+
+def test_empty_rollback_journals_preserve_nanosecond_metadata(profile):
+    for member in MEMBERS:
+        Path(str(profile / member) + "-journal").write_bytes(b"")
+    before = snapshot(profile)
+    gate = preflight.qualify_profile(profile)
+    preflight.verify_profile_unchanged(profile, gate)
+    assert snapshot(profile) == before
+
+
+def test_real_hot_journal_is_qualified_without_recovery_or_metadata_changes(profile):
+    path = profile / "helper/agent_metadata.db"
+    with sqlite3.connect(path) as db:
+        db.execute("INSERT INTO payload VALUES ('committed')")
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import os,sqlite3,sys
+db=sqlite3.connect(sys.argv[1])
+db.execute('PRAGMA cache_size=1')
+db.execute('PRAGMA cache_spill=ON')
+db.execute('BEGIN IMMEDIATE')
+db.execute('UPDATE payload SET body=?', ['uncommitted ' * 50000])
+os._exit(0)
+""",
+            str(path),
+        ],
+        check=True,
+        timeout=10,
+    )
+    journal = Path(str(path) + "-journal")
+    assert journal.read_bytes()[:8] == bytes.fromhex("d9d505f920a163d7")
+    before = snapshot(profile)
+    gate = preflight.qualify_profile(profile)
+    preflight.verify_profile_unchanged(profile, gate)
+    assert snapshot(profile) == before
+    # SQLite, rather than qualification, still performs the original recovery.
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT body FROM payload").fetchall() == [("committed",)]
+    assert not journal.exists()
+
+
+def metadata_only_change(path):
+    before, digest = snapshot(path.parent)[path.name]
+    info = path.stat()
+    deadline = time.monotonic() + 5
+    while True:
+        os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns))
+        if path.stat().st_ctime_ns != before[7]:
+            break
+        if time.monotonic() >= deadline:
+            pytest.fail("Filesystem did not report a metadata rewrite")
+        time.sleep(0.01)
+    after, current_digest = snapshot(path.parent)[path.name]
+    assert after[7] != before[7]
+    assert after[:7] + after[8:] == before[:7] + before[8:]
+    assert current_digest == digest
+
+
+def test_journal_copy_rejects_metadata_only_source_change(profile, monkeypatch):
+    path = profile / "application.db"
+    Path(str(path) + "-journal").write_bytes(b"")
+    original_content = path.read_bytes()
+    copyfile = preflight.shutil.copyfile
+
+    def changing_copy(source, destination):
+        result = copyfile(source, destination)
+        if source == path:
+            metadata_only_change(path)
+        return result
+
+    def unexpected_probe(_):
+        pytest.fail("SQLite must not probe a source set changed during copying")
+
+    monkeypatch.setattr(preflight.shutil, "copyfile", changing_copy)
+    monkeypatch.setattr(preflight, "readonly_version", unexpected_probe)
+    with pytest.raises(RuntimeError, match="changed during"):
+        preflight.qualify_profile(profile)
+    assert path.read_bytes() == original_content
+
+
+def test_final_gate_rejects_metadata_only_source_change(profile):
+    gate = preflight.qualify_profile(profile)
+    path = profile / "helper/linux_state.db"
+    original_content = path.read_bytes()
+    metadata_only_change(path)
+    assert path.read_bytes() == original_content
+    with pytest.raises(RuntimeError, match="changed during"):
+        preflight.verify_profile_unchanged(profile, gate)
 
 
 def wal(path, version):

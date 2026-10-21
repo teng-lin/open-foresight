@@ -246,8 +246,28 @@ class SqlitePreflight {
         scratch.deleteSync(recursive: true);
       }
     } else {
+      Directory? scratch;
       try {
-        _supported(_readonlyVersion(path));
+        var candidate = path;
+        if (journal.existsSync()) {
+          // SQLite can fchown even an empty journal during a read-only open
+          // when running as root. Keep that metadata write on private copies.
+          // READONLY_ROLLBACK precedes playback/superjournal lookup; never
+          // recover the copy or rewrite its original absolute master footer.
+          final before = _identity(path);
+          final beforeJournal = _identity(journal.path);
+          scratch = Directory.systemTemp.createTempSync('of-schema-');
+          candidate = '${scratch.path}/qualification.db';
+          original.copySync(candidate);
+          protectPrivateFile(candidate);
+          journal.copySync('$candidate-journal');
+          protectPrivateFile('$candidate-journal');
+          if (before != _identity(path) ||
+              beforeJournal != _identity(journal.path)) {
+            _refuse('rollback source changed while copying; retry offline');
+          }
+        }
+        _supported(_readonlyVersion(candidate));
       } on SqliteException catch (error) {
         // SQLITE_READONLY_ROLLBACK: inspect recognized original page-1 states,
         // then let SQLite perform its real recovery on the original files.
@@ -257,6 +277,8 @@ class SqlitePreflight {
           );
         }
         _journalVersions();
+      } finally {
+        scratch?.deleteSync(recursive: true);
       }
     }
     verifyUnchanged();

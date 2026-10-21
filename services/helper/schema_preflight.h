@@ -313,7 +313,23 @@ inline void qualify_member(const fs::path &path, int maximum) {
     return;
   }
   int failure = SQLITE_OK;
-  const int version = readonly_version(path, &failure);
+  int version;
+  if (journal.exists) {
+    // Even a read-only journal open may fchown it when SQLite runs as root.
+    // Keep that metadata write private, including for an empty journal. Never
+    // recover this copy: READONLY_ROLLBACK precedes playback and superjournal
+    // lookup, so an unchanged absolute footer cannot reach the original master.
+    Scratch scratch;
+    const auto copy = scratch.path() / "qualification.db";
+    private_copy(path, copy);
+    private_copy(path.string() + "-journal", copy.string() + "-journal");
+    if (info != identity(path) ||
+        journal != identity(path.string() + "-journal"))
+      refuse(path, "rollback source changed while copying; retry when offline");
+    version = readonly_version(copy, &failure);
+  } else {
+    version = readonly_version(path, &failure);
+  }
   if (failure == SQLITE_OK) {
     if (version < 0)
       refuse(path, "invalid negative schema version");

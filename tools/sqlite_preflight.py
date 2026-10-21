@@ -26,6 +26,8 @@ def identity(path):
         value.st_mtime_ns,
         value.st_ctime_ns,
         value.st_mode,
+        value.st_uid,
+        value.st_gid,
     )
 
 
@@ -157,6 +159,15 @@ def readonly_version(path):
         return db.execute("PRAGMA user_version").fetchone()[0]
 
 
+def qualify_rollback(probe, journal, maximum):
+    try:
+        supported(readonly_version(probe), maximum)
+    except sqlite3.DatabaseError as error:
+        if getattr(error, "sqlite_errorcode", None) != sqlite3.SQLITE_READONLY_ROLLBACK:
+            raise
+        journal_versions(journal, maximum)
+
+
 def qualify_member(path, maximum, source, originals):
     if not path.exists() or path.stat().st_size == 0:
         return
@@ -180,16 +191,23 @@ def qualify_member(path, maximum, source, originals):
                 sidecar.chmod(0o600)
             verify_profile_unchanged(source, originals)
             supported(readonly_version(copy), maximum)
+    elif journal.exists():
+        # Even a read-only SQLite open can fchown a rollback journal when root.
+        # Keep that metadata write private, including for an empty journal. The
+        # absolute superjournal footer is unchanged and is never recovered here.
+        with tempfile.TemporaryDirectory(prefix="of-schema-") as temporary:
+            scratch = Path(temporary)
+            scratch.chmod(0o700)
+            copy = scratch / "qualification.db"
+            shutil.copyfile(path, copy)
+            copy.chmod(0o600)
+            sidecar = Path(str(copy) + "-journal")
+            shutil.copyfile(journal, sidecar)
+            sidecar.chmod(0o600)
+            verify_profile_unchanged(source, originals)
+            qualify_rollback(copy, journal, maximum)
     else:
-        try:
-            supported(readonly_version(path), maximum)
-        except sqlite3.DatabaseError as error:
-            if (
-                getattr(error, "sqlite_errorcode", None)
-                != sqlite3.SQLITE_READONLY_ROLLBACK
-            ):
-                raise
-            journal_versions(journal, maximum)
+        qualify_rollback(path, journal, maximum)
 
 
 def qualify_profile(source):

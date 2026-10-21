@@ -30,16 +30,23 @@ class SchemaPreflight(legacy_schema.LegacyHelperDatabases):
         self.scratch_root.chmod(0o700)
 
     def snapshot(self):
-        return {
-            path.name: (
-                path.stat().st_ino,
-                path.stat().st_size,
-                path.stat().st_mtime_ns,
-                hashlib.sha256(path.read_bytes()).hexdigest(),
-            )
-            for path in self.root.iterdir()
-            if path.is_file()
-        }
+        result = {}
+        for path in self.root.iterdir():
+            if not path.is_file():
+                continue
+            info = path.stat()
+            result[path.name] = {
+                "device": info.st_dev,
+                "inode": info.st_ino,
+                "size": info.st_size,
+                "mode": info.st_mode,
+                "uid": info.st_uid,
+                "gid": info.st_gid,
+                "mtime_ns": info.st_mtime_ns,
+                "ctime_ns": info.st_ctime_ns,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+        return result
 
     def qualify(self, *, succeeds=True):
         before = self.snapshot()
@@ -88,6 +95,11 @@ class SchemaPreflight(legacy_schema.LegacyHelperDatabases):
         (self.root / "rag_vector.db").unlink()
         self.qualify()
         self.assertFalse((self.root / "rag_vector.db").exists())
+
+    def test_empty_rollback_journals_preserve_all_source_metadata(self):
+        for name in MEMBERS:
+            (self.root / (name + "-journal")).write_bytes(b"")
+        self.qualify()
 
     def test_future_member_each_position_refuses_without_any_live_change(self):
         for name in MEMBERS:
@@ -267,7 +279,7 @@ os._exit(0)
         journal.write_bytes(original)
         self.qualify()
 
-    def test_source_change_after_whole_set_qualification_is_rejected(self):
+    def reject_source_change(self, change):
         log = self.root / "qualification.log"
         with log.open("w") as output:
             process = subprocess.Popen(
@@ -276,6 +288,7 @@ os._exit(0)
                 stdout=output,
                 stderr=subprocess.STDOUT,
                 text=True,
+                env={**os.environ, "TMPDIR": str(self.scratch_root)},
             )
             try:
                 deadline = time.monotonic() + 15
@@ -284,8 +297,7 @@ os._exit(0)
                     if time.monotonic() >= deadline:
                         self.fail("qualification wait timed out: " + log.read_text())
                     time.sleep(0.01)
-                with sqlite3.connect(self.root / "linux_state.db") as db:
-                    db.execute("PRAGMA user_version=2")
+                change()
                 process.communicate("continue\n", timeout=5)
                 self.assertNotEqual(process.returncode, 0, log.read_text())
                 self.assertIn("changed during qualification", log.read_text())
@@ -293,6 +305,34 @@ os._exit(0)
                 if process.poll() is None:
                     process.kill()
                     process.communicate(timeout=5)
+
+    def test_source_change_after_whole_set_qualification_is_rejected(self):
+        def change():
+            with sqlite3.connect(self.root / "linux_state.db") as db:
+                db.execute("PRAGMA user_version=2")
+
+        self.reject_source_change(change)
+
+    def test_ctime_only_change_after_qualification_is_rejected(self):
+        def change():
+            path = self.root / "linux_state.db"
+            before = self.snapshot()[path.name]
+            info = path.stat()
+            deadline = time.monotonic() + 5
+            # Observe the filesystem's actual timestamp resolution instead of
+            # assuming that one operation or a fixed sleep advances ctime.
+            while True:
+                os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns))
+                if path.stat().st_ctime_ns != before["ctime_ns"]:
+                    break
+                if time.monotonic() >= deadline:
+                    self.fail("Filesystem did not report a metadata rewrite")
+                time.sleep(0.01)
+            after = self.snapshot()[path.name]
+            self.assertNotEqual(after.pop("ctime_ns"), before.pop("ctime_ns"))
+            self.assertEqual(after, before, "Mutation must affect only ctime")
+
+        self.reject_source_change(change)
 
 
 if __name__ == "__main__":
