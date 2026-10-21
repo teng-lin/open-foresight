@@ -41,7 +41,13 @@ extension ApplicationSummary on Application {
     bool refresh = true,
   }) async {
     if (_closed) throw RpcError(RpcErrorCode.unavailable, 'Application closed');
+    if (proactive.running) await proactive.yieldToForeground();
+    if (_noteEnhancements.values.any((run) => run.active && run.isLive)) {
+      await _yieldLiveEnhancements();
+    }
+    if (_closed) throw RpcError(RpcErrorCode.unavailable, 'Application closed');
     if (modelBusy ||
+        _workflowBusy ||
         _summarizing ||
         _activeEnhancements > 0 ||
         domain.generator?.generating == true) {

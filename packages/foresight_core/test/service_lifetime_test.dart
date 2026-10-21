@@ -38,12 +38,14 @@ class ResumeRag extends HeldPing {
 }
 
 class ProactiveRag extends DelayedIndexService {
+  ServiceCall? retrievalCall;
   final retrieving = Completer<void>(), retrieved = Completer<void>();
   @override
   Future<RetrieveResponse> retrieveContext(
     ServiceCall call,
     RetrieveRequest request,
   ) async {
+    retrievalCall = call;
     if (!retrieving.isCompleted) retrieving.complete();
     await retrieved.future;
     return RetrieveResponse();
@@ -946,7 +948,7 @@ void main() {
     },
   );
   test(
-    'cancelled proactive answer remains busy after its coordinator has stopped',
+    'cancelled proactive retrieval drains without waiting for its server response',
     () async {
       final rag = ProactiveRag()..release.complete();
       final server = Server.create(services: [rag]);
@@ -986,12 +988,72 @@ void main() {
       await queue.close();
       await work;
       expect(service.application.proactive.running, false);
+      // Cancellation now interrupts the client RPC. Its server may still be
+      // blocked, but no answer producer remains to pin the application owner.
+      await eventually(() => rag.retrievalCall!.isCanceled);
+      await eventually(() => service.application.proactiveWork == 0);
+      expect(rag.retrieved.isCompleted, false);
+      now = now.add(const Duration(minutes: 30));
+      await tick();
+      await exited();
+    },
+  );
+  test(
+    'cancelled proactive generation stays busy until native cleanup settles',
+    () async {
+      final rag = StreamRag()..release.complete();
+      final server = Server.create(services: [rag]);
+      await server.serve(
+        address: InternetAddress(
+          service.domain.helper.socket,
+          type: InternetAddressType.unix,
+        ),
+        port: 0,
+      );
+      addTearDown(server.shutdown);
+      final generator = CleanupRuntime();
+      addTearDown(() {
+        if (!generator.bodyRelease.isCompleted) {
+          generator.bodyRelease.complete();
+        }
+        if (!generator.cleanupRelease.isCompleted) {
+          generator.cleanupRelease.complete();
+        }
+      });
+      final id = service.domain.store.meeting('Proactive generation cleanup');
+      service.domain.store.transcript(
+        id,
+        'Mira owns the draft.',
+        true,
+        0,
+        20,
+        'imported',
+      );
+      rag.document = 'meeting-$id';
+      service.domain.generator = generator;
+      final queue = service.application.proactive;
+      queue.begin(id);
+      service.domain.store.db.execute(
+        'INSERT INTO meeting_questions(meeting_id,question,normalized,created) '
+        'VALUES(?,?,?,?)',
+        [id, 'Who owns it?', 'who owns it', 0],
+      );
+      queue.notify(id);
+      final work = queue.process();
+      await generator.bodyEntered.future;
+      await backgroundRefusal();
+      await queue.close();
+      await work;
+      expect(queue.running, false);
+      generator.bodyRelease.complete();
+      await generator.cleanupEntered.future;
       expect(service.application.proactiveWork, 1);
       now = now.add(const Duration(minutes: 30));
       expect((await lifetime())['exit_after'], null);
       await backgroundRefusal();
-      rag.retrieved.complete();
+      generator.cleanupRelease.complete();
       await exited();
+      expect(service.application.proactiveWork, 0);
     },
   );
   test(

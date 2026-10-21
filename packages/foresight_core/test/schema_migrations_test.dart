@@ -18,6 +18,30 @@ void main() {
     addTearDown(() => directory.deleteSync(recursive: true));
   });
 
+  test('v15 migrates legacy action aliases without losing manual edits', () {
+    var store = Store(path);
+    final meeting = store.meeting('Legacy actions');
+    store.artifact(meeting, 'action_items', 'Generated checklist', 'old-model');
+    final artifact =
+        store.meetingArtifacts(meeting, 'action_items').single['id'] as int;
+    store.editArtifact(artifact, 'Human correction');
+    store.db.execute('DROP TABLE meeting_tasks');
+    store.db.execute('DROP TABLE document_summary_cache');
+    store.db.execute('PRAGMA user_version=14');
+    store.close();
+    store = Store(path);
+    try {
+      final row = store.meetingArtifacts(meeting, 'actions').single;
+      expect(row['generated'], 'Generated checklist');
+      expect(row['edited'], 'Human correction');
+      expect(store.rows('SELECT * FROM meeting_tasks'), isEmpty);
+      expect(store.rows('SELECT * FROM document_summary_cache'), isEmpty);
+      expect(store.rows('PRAGMA foreign_key_check'), isEmpty);
+    } finally {
+      store.close();
+    }
+  });
+
   test('v14 preserves old summaries without inventing checkpoints', () {
     var store = Store(path);
     final meeting = store.meeting('Kept meeting');
@@ -35,7 +59,10 @@ void main() {
       expect(artifact['manifest'], isNull);
       expect(store.summaryCheckpoint(meeting), isNull);
       expect(store.rows('PRAGMA foreign_key_check'), isEmpty);
-      expect(store.rows('PRAGMA user_version').single.values.single, 14);
+      expect(
+        store.rows('PRAGMA user_version').single.values.single,
+        Store.schemaVersion,
+      );
     } finally {
       store.close();
     }

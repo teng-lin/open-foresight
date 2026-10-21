@@ -191,39 +191,31 @@ void main() {
       expect((meeting['meeting'] as Map)['revision'], 1);
     },
   );
-  test(
-    'enhancement completion preserves newer raw edits and accepts its output',
-    () async {
-      final id = domain.store.meeting('Planning');
-      domain.store.transcript(
-        id,
-        'Mira sends draft Tuesday.',
-        true,
-        0,
-        20,
-        'imported',
-      );
-      domain.store.saveMeetingNotes(id, 'Mira draft');
-      final generator = DelayedGenerator();
-      domain.generator = generator;
-      final work = domain.application.enhanceNotes(id);
-      await generator.entered.future;
-      domain.store.saveMeetingNotes(id, 'Mira revised draft');
-      generator.release.complete();
-      await work;
-      expect(
-        domain.store
-            .rows('SELECT generated FROM artifacts')
-            .single['generated'],
-        '- Grounded enhancement',
-      );
-      expect(domain.store.meetingEnhancedNotes(id), '- Grounded enhancement');
-      expect(
-        domain.store.rows('SELECT body FROM meeting_notes').single['body'],
-        'Mira revised draft',
-      );
-    },
-  );
+  test('enhancement rejects stale output after newer raw edits', () async {
+    final id = domain.store.meeting('Planning');
+    domain.store.transcript(
+      id,
+      'Mira sends draft Tuesday.',
+      true,
+      0,
+      20,
+      'imported',
+    );
+    domain.store.saveMeetingNotes(id, 'Mira draft');
+    final generator = DelayedGenerator();
+    domain.generator = generator;
+    final work = domain.application.enhanceNotes(id);
+    await generator.entered.future;
+    domain.store.saveMeetingNotes(id, 'Mira revised draft');
+    generator.release.complete();
+    await work;
+    expect(domain.store.rows('SELECT generated FROM artifacts'), isEmpty);
+    expect(domain.store.meetingEnhancedNotes(id), isEmpty);
+    expect(
+      domain.store.rows('SELECT body FROM meeting_notes').single['body'],
+      'Mira revised draft',
+    );
+  });
   test(
     'accepted enhancement removes original line markers before persistence',
     () async {

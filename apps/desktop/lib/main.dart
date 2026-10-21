@@ -2,7 +2,7 @@ import 'system_audio_setup_dialog.dart';
 import 'onboarding_view.dart';
 import 'model_terms_dialog.dart';
 import 'package:foresight_core/foresight_core.dart'
-    show dedicatedQueryTermsKey, dedicatedQueryTermsUri;
+    show dedicatedQueryTermsKey, dedicatedQueryTermsUri, MeetingWorkflowStore;
 import 'background_store.dart';
 import 'store.dart' show outputWeekStart;
 import 'service_edit_dialog.dart';
@@ -75,6 +75,7 @@ part 'workspace_visuals.dart';
 part 'sources_controller.dart';
 part 'chat_controller.dart';
 part 'meetings_controller.dart';
+part 'meeting_ai_views.dart';
 part 'settings_controller.dart';
 part 'integrations_controller.dart';
 

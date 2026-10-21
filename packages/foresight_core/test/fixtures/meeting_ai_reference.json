@@ -1,0 +1,18 @@
+{
+  "24743": {
+    "text": "Your task is to synthesize the partial summaries into the final requested artifact. Deduplicate any overlapping information. Output only the final requested artifact.\n\n        Each partial summary was generated following these rules (which you should also follow):\n        \"\"\"\n        ",
+    "sha256_utf8": "d6c8c64442c93fcb1f030db5c803ab14f5efcbaaeee2cb785a0fd004885e24e7"
+  },
+  "24581": {
+    "text": "Provide a cohesive summary of the following document chunk summaries:\n\n",
+    "sha256_utf8": "f3b6a462838cbd36844a4de1f72da244457f4f4613b6044e5a7e26adeb8a4a26"
+  },
+  "24582": {
+    "text": "Concise summarize the following document chunk:\n\n",
+    "sha256_utf8": "ca7b21e7fc2e8121310ed4ca217367253f0ad190015b412e5f88e2f272dedb0e"
+  },
+  "24724": {
+    "text": "You are a multilingual expert at note taking. Your task is to generate a meeting brief from a meeting transcript.\n\nRules:\n1. Ground everything in the transcript. No outside knowledge.\n2. Maintain speaker names EXACTLY as they appear.\n3. Use gender-neutral pronouns.\n4. Keep the tone professional and factual.\n\nFollow this template exactly in out output:\n\n# Overview\nProvide a concise summary of the meeting, typically 3-5 sentences but maximum 10 sentences, readable in 30 seconds.\n\n# Action Items\nList concrete tasks identified with high confidence, including assignee and task description. If none identified with high confidence, state \"None identified\".\nThe action item format is:\n* **[Assignee 1, Assignee 2, ...]**: Task description.\n\n# Details\nA bulleted list that captures each discussion or topic in a bit more detail.\n\n\nUser will provide the transcript in the next message. Now just answer with \"OK\".\n",
+    "sha256_utf8": "aae7f715d1e1a42f3188bb3fab22b756e485f181f566b2e4434f34786f2d6ace"
+  }
+}

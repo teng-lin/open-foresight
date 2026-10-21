@@ -336,7 +336,7 @@ void main() {
       expect(queued.prompts.last, isNot(contains('First raw')));
       expect(
         domain.store.meetingEnhancedNotes(id),
-        '- First accepted\n\nSecond raw\n\n- Third updated',
+        'First raw\n\nSecond raw\n\n- Third updated',
       );
     },
   );
@@ -563,7 +563,7 @@ void main() {
       await emit(' next');
       generator.events.add({'type': 'done', 'status': 'completed'});
       await work;
-      expect(domain.store.meetingEnhancedNotes(id), '- Partial next');
+      expect(domain.store.meetingEnhancedNotes(id), '- Manual');
       expect(
         domain.store
             .rows('SELECT last_manual_edit FROM meeting_notes')

@@ -38,3 +38,7 @@ export 'src/reference_chat_history.dart';
 export 'src/reference_tokenizer.dart';
 export 'src/desktop_connection.dart';
 export 'src/operations.dart' show Operation;
+
+export 'src/meeting_actions.dart';
+export 'src/meeting_workflow_store.dart';
+export 'src/dedicated_query_runtime.dart' show portableQueryBackend;

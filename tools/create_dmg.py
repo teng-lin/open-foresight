@@ -27,24 +27,37 @@ def image_digest(destination):
 
 
 def verify_image(destination):
-    # DiskImages can report EAGAIN immediately after successfully creating the
-    # image. Retry verification of those same bytes, never image creation.
+    # DiskImages takes read/write locks on image files. A lock held after
+    # creation can outlast the former four-second retry window. Give that lock
+    # a bounded recovery window; verify the same bytes, never recreate them.
     original_digest = image_digest(destination) if destination.exists() else None
-    for attempt in range(3):
+    deadline = time.monotonic() + 30
+    last_failure = None
+    while True:
         if original_digest is not None and image_digest(destination) != original_digest:
             raise ValueError("DMG bytes changed during verification retries")
+        timeout: float = 300
+        if last_failure is not None:
+            timeout = deadline - time.monotonic()
+            if timeout <= 0:
+                last_failure.check_returncode()
         try:
             result = subprocess.run(
                 ["hdiutil", "verify", str(destination)],
                 capture_output=True,
                 text=True,
-                timeout=300,
+                timeout=timeout,
             )
         except subprocess.TimeoutExpired as error:
             print_output(error.stdout, error.stderr)
             raise
         print_output(result.stdout, result.stderr)
         if result.returncode == 0:
+            if (
+                original_digest is not None
+                and image_digest(destination) != original_digest
+            ):
+                raise ValueError("DMG bytes changed during verification")
             return
         print(
             f"DMG verification failed: exit={result.returncode} sha256={original_digest}",
@@ -52,18 +65,25 @@ def verify_image(destination):
             flush=True,
         )
         if (
-            attempt == 2
-            or result.returncode != 1
+            result.returncode != 1
             or "hdiutil: verify failed - Resource temporarily unavailable"
             not in result.stderr.splitlines()
         ):
             result.check_returncode()
+        last_failure = result
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            result.check_returncode()
+        delay = min(2, remaining)
         print(
-            "Disk image verification temporarily unavailable; retrying in 2s",
+            f"Disk image verification temporarily unavailable; retrying in {delay:g}s "
+            f"({remaining:.1f}s recovery window remaining)",
             file=sys.stderr,
             flush=True,
         )
-        time.sleep(2)
+        time.sleep(delay)
+        if time.monotonic() >= deadline:
+            result.check_returncode()
 
 
 def create(app, manifest, name, output):

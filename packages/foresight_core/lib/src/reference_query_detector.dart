@@ -47,8 +47,9 @@ List<String> parseReferenceQueryOutput(String output) {
 /// Protocol adapter for the reference's dedicated completion model. A backend
 /// must supply raw text completion; the generic chat/JSON path is not equivalent.
 class ReferenceQueryDetector {
-  const ReferenceQueryDetector(this.complete);
+  const ReferenceQueryDetector(this.complete, {this.preserveUnicode = false});
   final Future<String> Function(String prompt, String requestId) complete;
+  final bool preserveUnicode;
 
   Future<List<String>> detect(
     String preparedTranscript,
@@ -58,6 +59,37 @@ class ReferenceQueryDetector {
       referenceQueryPrompt(preparedTranscript),
       requestId,
     );
-    return parseReferenceQueryOutput(output);
+    return preserveUnicode
+        ? parseUnicodeQueryOutput(output)
+        : parseReferenceQueryOutput(output);
   }
+}
+
+/// Product parser v2: retain source-language questions. The original ASCII
+/// sanitizer remains explicitly selectable for compatibility evaluations.
+List<String> parseUnicodeQueryOutput(String output) {
+  final repaired = output.replaceAll(
+    RegExp(
+      r'<(?:ctrl1|eos|end_of_turn)>|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ufffd]',
+    ),
+    '',
+  );
+  final result = <String>[], seen = <String>{};
+  var start = 0;
+  for (var i = 0; i < repaired.length; i++) {
+    if ('?？؟'.contains(repaired[i])) {
+      final question = repaired.substring(start, i + 1).trim();
+      if (question.isNotEmpty &&
+          !question.startsWith('>>') &&
+          seen.add(question)) {
+        result.add(question);
+      }
+      start = i + 1;
+    }
+  }
+  final tail = repaired.substring(start).trim();
+  if (tail.isNotEmpty && !tail.startsWith('>>') && seen.add(tail)) {
+    result.add(tail);
+  }
+  return result.reversed.toList();
 }

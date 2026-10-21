@@ -682,7 +682,7 @@ void main() {
     for (var i = 0; i < 8; i++) {
       store.answer(
         'Old question $i',
-        'Fact $i',
+        'Fact $i ${'detailed fact. ' * 10}',
         'completed',
         [],
         'legacy',
@@ -716,7 +716,7 @@ void main() {
     'web memory compresses the oldest half and commits a memo with the answer',
     () async {
       seedMemory();
-      runtime.contextLimit = 170;
+      runtime.contextLimit = 2300;
       runtime.answer = (_) async => 'New answer';
       await domain
           .askWithWebInConversation('Next?', 'history', requestId: 'same-owner')
@@ -752,7 +752,7 @@ void main() {
     'failed compression uses FIFO and cancelled compression saves no checkpoint or answer',
     () async {
       seedMemory();
-      runtime.contextLimit = 100;
+      runtime.contextLimit = 1800;
       runtime.summarize = (_) async => throw StateError('Unavailable');
       runtime.answer = (_) async => 'Recovered answer';
       await domain.askWithWebInConversation('Next?', 'history').toList();
@@ -764,7 +764,7 @@ void main() {
       final before = store.rows('SELECT * FROM conversation_memory').single;
       final count = store.rows('SELECT * FROM answers').length;
       var current = true;
-      runtime.contextLimit = 30;
+      runtime.contextLimit = 1200;
       runtime.summarize = (_) async {
         current = false;
         return 'Late memo';
@@ -811,7 +811,7 @@ void main() {
           jsonDecode(
                 store
                         .rows(
-                          "SELECT messages FROM conversation_memory WHERE conversation='web-only-v1:history'",
+                          "SELECT messages FROM conversation_memory WHERE conversation LIKE 'web-memory-v2:%:history'",
                         )
                         .single['messages']
                     as String,
@@ -870,10 +870,9 @@ void main() {
     },
   );
   test(
-    'ready helper tokenizes non-Latin history and cached counts avoid re-encoding',
+    'web memory uses conservative UTF-8 counts and invalidates on context changes',
     () async {
-      final tokenizer = LocalRetrieval()
-        ..tokenCount = (text) => text.contains('字') ? text.runes.length : 1;
+      final tokenizer = LocalRetrieval()..tokenCount = (_) => 1;
       final server = Server.create(services: [tokenizer]);
       await server.serve(
         address: InternetAddress(helper.socket, type: InternetAddressType.unix),
@@ -891,46 +890,46 @@ void main() {
         );
         store.setPreference('webAnswer.v1.${store.db.lastInsertRowId}', 'true');
       }
-      runtime.contextLimit = 100;
+      runtime.contextLimit = 1800;
       runtime.answer = (_) async => 'New answer';
       try {
         await domain.askWithWebInConversation('Next?', 'history').toList();
         expect(runtime.summaries, hasLength(1));
-        expect(tokenizer.encoded, contains('字' * 40));
-        expect(tokenizer.encoded, contains('Next?'));
         expect(
-          tokenizer.encoded.any(
-            (text) => text.startsWith(referenceMemoryPrefix),
-          ),
-          isTrue,
+          tokenizer.encoded,
+          isEmpty,
+          reason:
+              'Embedding tokenizer IDs do not identify the generation tokenizer',
         );
-        final first = store
-            .rows(
-              "SELECT token_counts FROM conversation_memory WHERE conversation='web-only-v1:history'",
-            )
-            .single;
-        expect(jsonDecode(first['token_counts'] as String), [1, 40, 1, 1]);
-        tokenizer.encoded.clear();
+        final first = store.rows('SELECT * FROM conversation_memory').single;
+        final counts = jsonDecode(first['token_counts'] as String) as List;
+        expect(counts, contains(120));
         await domain.askWithWebInConversation('Again?', 'history').toList();
-        expect(tokenizer.encoded, hasLength(3));
-        expect(tokenizer.encoded, isNot(contains('字' * 40)));
-        expect(runtime.summaries, hasLength(1));
-        helper.snapshot = control.State(tokenizerReady: false);
+        expect(store.rows('SELECT * FROM conversation_memory'), hasLength(1));
         runtime.contextLimit = 4096;
-        tokenizer.encoded.clear();
-        await domain.askWithWebInConversation('Fallback?', 'history').toList();
-        expect(tokenizer.encoded, isEmpty);
-        final weights =
-            jsonDecode(
-                  store
-                          .rows(
-                            "SELECT token_counts FROM conversation_memory WHERE conversation='web-only-v1:history'",
-                          )
-                          .single['token_counts']
-                      as String,
+        await domain
+            .askWithWebInConversation('New context?', 'history')
+            .toList();
+        final checkpoints = store.rows('SELECT * FROM conversation_memory');
+        expect(checkpoints, hasLength(2));
+        expect(
+          checkpoints.map((row) => row['conversation']).toSet(),
+          hasLength(2),
+        );
+        for (final row in checkpoints) {
+          final messages = (jsonDecode(row['messages'] as String) as List)
+              .cast<Map<String, dynamic>>();
+          expect(
+            jsonDecode(row['token_counts'] as String),
+            messages
+                .map(
+                  (message) =>
+                      utf8.encode(referenceHistoryText(message)).length,
                 )
-                as List;
-        expect(weights.take(6), [1, 40, 1, 1, 1, 1]);
+                .toList(),
+          );
+        }
+        expect(tokenizer.encoded, isEmpty);
       } finally {
         await server.shutdown();
       }

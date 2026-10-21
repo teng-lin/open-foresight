@@ -423,13 +423,16 @@ def test_onboarding_import_waits_for_model_and_indexes_after_configuration(runni
             "SELECT content,revision,state,error FROM sources WHERE id=?", [imported]
         ).fetchone()
     assert before == (document.read_text(), 1, "pending", "")
-    peer.call("models.embedding", {"path": str(running["root"] / "fixtures/model.litertlm")})
+    peer.call(
+        "models.embedding", {"path": str(running["root"] / "fixtures/model.litertlm")}
+    )
     assert peer.call("status")["models_busy"] is False
     deadline = time.monotonic() + 5
     with sqlite3.connect(running["root"] / "data/application.db") as db:
         while True:
             after = db.execute(
-                "SELECT content,revision,state,error FROM sources WHERE id=?", [imported]
+                "SELECT content,revision,state,error FROM sources WHERE id=?",
+                [imported],
             ).fetchone()
             if after[2] == "indexed":
                 break
@@ -573,6 +576,133 @@ def test_summary_commits_checkpoint_and_retains_edited_history(running):
         assert db.execute(
             "SELECT count(*) FROM artifacts WHERE meeting_id=?", [meeting]
         ).fetchone() == (2,)
+
+
+def test_actions_and_preparation_through_compiled_service_and_mcp(running):
+    import sqlite3
+
+    runner = running["runner"]
+    runner.write_text(
+        "#!/usr/bin/env python3\nimport sys,json\n"
+        'if "--probe" in sys.argv: print(json.dumps({"native_stop_token_sequences":True})); sys.exit(0)\n'
+        "request=json.loads(sys.stdin.readline())\n"
+        'assert request["tools"]["tools"]==[]\n'
+        'prompt=request["prompt"]\n'
+        'if "Extract explicit meeting commitments" in request["tools"]["system_message"]:\n'
+        ' text=json.dumps({"tasks":[{"task":"Send the draft","state":"open","owner":"Mira","due":"Tuesday","evidence":[{"id":"transcript:1","quote":"Mira sends the draft Tuesday."}]}]})\n'
+        'elif "<raw_notes>" in prompt or "<notes>" in prompt: text="- Mira sends the draft Tuesday."\n'
+        'else: text="# Preparation brief\\nReview the draft before Tuesday."\n'
+        'answer={"role":"assistant","content":[{"type":"text","text":text}]}\n'
+        'print("model "+json.dumps(answer),flush=True)\n'
+        'assert json.loads(sys.stdin.readline())=={"finish":True}\n'
+        'print("answer "+json.dumps(answer),flush=True)\n'
+    )
+    peer = running["peer"]
+    peer.call("preferences.set", {"key": "liveEnhance", "value": "false"})
+    peer.call(
+        "models.generation", {"path": str(running["asset"]), "runtime": str(runner)}
+    )
+    meeting = peer.call("meetings.create", {"title": "Workflow contracts"})["id"]
+    peer.call(
+        "meetings.transcript", {"id": meeting, "text": "Mira sends the draft Tuesday."}
+    )
+    peer.call("meetings.generate", {"id": meeting, "kind": "action_items"})
+    task = peer.call("meetings.tasks", {"id": meeting})[0]
+    assert task["owner"] == "Mira" and task["due"] == "Tuesday"
+    document = peer.call(
+        "sources.import", {"title": "Draft", "text": "Review the draft."}
+    )["id"]
+    mcp = McpPeer(running["env"])
+    try:
+        mcp.initialize()
+        for name, arguments in [
+            ("edit_meeting_task", {"id": task["id"], "status": "completed"}),
+            ("prepare_meeting", {"id": meeting, "source_ids": [document]}),
+            ("get_meeting_tasks", {"id": meeting}),
+        ]:
+            result = mcp.tool(name, arguments)
+            assert not result.get("isError", False), result
+    finally:
+        mcp.close()
+    with sqlite3.connect(running["root"] / "data/application.db") as db:
+        assert db.execute("SELECT status,manual FROM meeting_tasks").fetchone() == (
+            "completed",
+            1,
+        )
+        actions = db.execute(
+            "SELECT edited FROM artifacts WHERE kind='actions'"
+        ).fetchone()[0]
+        assert "[x]" in actions
+        assert db.execute(
+            "SELECT content FROM sources WHERE id=?", [f"meeting-actions-{meeting}"]
+        ).fetchone() == (actions,)
+        manifest = json.loads(
+            db.execute(
+                "SELECT manifest FROM artifacts WHERE kind='preparation'"
+            ).fetchone()[0]
+        )
+        assert manifest["sources"][0]["id"] == document
+        assert db.execute("SELECT count(*) FROM document_summary_cache").fetchone() == (
+            1,
+        )
+        assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+@pytest.mark.parametrize("disconnect_owner", [False, True])
+def test_stalled_notes_batch_is_cancelled_by_its_service_lease(
+    running, disconnect_owner
+):
+    import sqlite3
+
+    marker = running["root"] / "notes-child-pid"
+    running["runner"].write_text(
+        "#!/usr/bin/env python3\nimport sys,json,os,pathlib,time\n"
+        'if "--probe" in sys.argv: print(json.dumps({"native_stop_token_sequences":True})); sys.exit(0)\n'
+        "request=json.loads(sys.stdin.readline())\n"
+        'assert "<shorthand_notes>" in request["prompt"]\n'
+        f"pathlib.Path({str(marker)!r}).write_text(str(os.getpid()))\n"
+        "time.sleep(60)\n"
+    )
+    owner = running["peer"]
+    observer = Peer(running["path"])
+    running["peers"].append(observer)
+    owner.call("preferences.set", {"key": "liveEnhance", "value": "false"})
+    owner.call(
+        "models.generation",
+        {"path": str(running["asset"]), "runtime": str(running["runner"])},
+    )
+    meeting = owner.call("meetings.create", {"title": "Notes cancellation"})["id"]
+    owner.call(
+        "meetings.transcript", {"id": meeting, "text": "Mira sends the draft Tuesday."}
+    )
+    owner.call("meetings.notes", {"id": meeting, "body": "Mira draft"})
+    request = owner.send("meetings.enhance", {"id": meeting})
+    deadline = time.monotonic() + 10
+    while not marker.exists():
+        assert time.monotonic() < deadline, "Notes did not enter native batch"
+        poll_delay(deadline)
+    pid = int(marker.read_text())
+    observer.socket.sendall((json.dumps({"cancel": request}) + "\n").encode())
+    assert observer.call("status")["generation"]["generating"]
+    if disconnect_owner:
+        owner.close()
+        running["peers"].remove(owner)
+    else:
+        owner.socket.sendall((json.dumps({"cancel": request}) + "\n").encode())
+    deadline = time.monotonic() + 5
+    while observer.call("status")["generation"]["generating"]:
+        assert time.monotonic() < deadline, "Notes cancellation did not reach child"
+        poll_delay(deadline)
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+    with sqlite3.connect(running["root"] / "data/application.db") as db:
+        assert db.execute(
+            "SELECT count(*) FROM artifacts WHERE kind='enhanced_notes'"
+        ).fetchone() == (0,)
+        assert db.execute(
+            "SELECT body FROM meeting_notes WHERE meeting_id=?", [meeting]
+        ).fetchone() == ("Mira draft",)
+    assert running["process"].poll() is None
 
 
 def test_capture_survives_client_disconnect_and_other_client_cannot_start_second(
@@ -750,7 +880,9 @@ def test_keyed_retry_commits_once_and_stale_ids_fail_after_restart(running):
 
 
 @pytest.mark.parametrize("running", ["without_embedding"], indirect=True)
-def test_granola_manual_return_requires_active_matching_attempt_without_network(running):
+def test_granola_manual_return_requires_active_matching_attempt_without_network(
+    running,
+):
     from urllib.parse import parse_qs, urlparse
 
     peer = running["peer"]
@@ -773,7 +905,9 @@ def test_granola_manual_return_requires_active_matching_attempt_without_network(
         for return_url in [callback, bridge]:
             for manual in [False, True]:
                 with pytest.raises(RuntimeError) as error:
-                    other.call("google.complete_sign_in", {"url": return_url, "manual": manual})
+                    other.call(
+                        "google.complete_sign_in", {"url": return_url, "manual": manual}
+                    )
                 assert "private-return-fixture" not in str(error.value)
         assert other.call("google.status")["signingIn"]
         other.call("google.cancel_sign_in")

@@ -5,11 +5,16 @@ import 'dart:io';
 
 const dedicatedQueryModelKind = 'query-detection';
 const dedicatedQueryBackend = 'legacy_query_cpu';
+const portableQueryBackend = 'raw_query_jsonl_v1';
 
 abstract interface class QueryCompletionRuntime {
   Future<String> complete(String prompt, String requestId);
   void cancel(String requestId);
   Future<void> close();
+}
+
+abstract interface class QueryRuntimeReadiness {
+  bool get ready;
 }
 
 class _QueryRequest {
@@ -23,7 +28,8 @@ class _QueryRequest {
 
 /// The reconstructed CPU detector has its own process and fresh per-call cache.
 /// Killing this process cancels only its owned detection, including model load.
-class DedicatedQueryRuntime implements QueryCompletionRuntime {
+class DedicatedQueryRuntime
+    implements QueryCompletionRuntime, QueryRuntimeReadiness {
   DedicatedQueryRuntime({
     required this.python,
     required this.worker,
@@ -45,6 +51,8 @@ class DedicatedQueryRuntime implements QueryCompletionRuntime {
   int _epoch = 0;
   bool _closed = false;
   String _stderr = '';
+  @override
+  bool get ready => _process != null && _ready?.isCompleted == true;
 
   void _fail(Object error) {
     final ready = _ready;

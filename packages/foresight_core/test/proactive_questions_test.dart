@@ -99,6 +99,59 @@ void main() {
   }
 
   test(
+    'foreground preemption retains a queued answer and drains it once',
+    () async {
+      await queue.close();
+      final entered = Completer<void>(), release = Completer<void>();
+      var preempted = false, answers = 0;
+      queue = ProactiveQuestions(
+        store: store,
+        delay: const Duration(days: 1),
+        busy: () => busy,
+        changed: () {},
+        detect: (_, __) async => ['Who owns release?'],
+        cancel: (_) {
+          preempted = true;
+          if (!release.isCompleted) release.complete();
+        },
+        answer: (id, question, request) async {
+          if (!entered.isCompleted) {
+            entered.complete();
+            await release.future;
+            if (preempted) throw StateError('cancelled owned worker');
+          }
+          answers++;
+          store.answer(
+            question,
+            'Owner is Alice',
+            'completed',
+            [],
+            'fixture',
+            conversation: 'meeting:$id',
+            requestId: request,
+          );
+          return store.db.lastInsertRowId;
+        },
+      );
+      queue.begin(meeting);
+      append('Who owns release?');
+      await queue.process();
+      final work = queue.process();
+      await entered.future;
+      await Future.wait([queue.yieldToForeground(), queue.yieldToForeground()]);
+      await work;
+      expect(store.meetingQuestions(meeting).single['state'], 'queued');
+      busy = true;
+      await queue.process();
+      expect(answers, 0);
+      busy = false;
+      await queue.process();
+      expect(answers, 1);
+      expect(store.meetingQuestions(meeting).single['state'], 'completed');
+    },
+  );
+
+  test(
     'window normalization uses the recovered timestamp and punctuation rules',
     () {
       expect(

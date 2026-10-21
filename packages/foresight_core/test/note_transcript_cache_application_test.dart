@@ -430,6 +430,8 @@ void main() {
             isTrue,
           );
           expect(runtime.prompts, isEmpty);
+          await enhancement.timeout(const Duration(seconds: 2));
+          expect(store.meetingEnhancedNotes(id), '- Prior accepted');
         } finally {
           gate.complete();
           await enhancement;
@@ -445,7 +447,7 @@ void main() {
         );
         expect(
           embeddings.texts.where((text) => text == 'Raw note'),
-          hasLength(2),
+          hasLength(1),
         );
         expect(store.meetingEnhancedNotes(id), '- Enhanced plan');
       });

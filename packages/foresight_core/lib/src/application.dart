@@ -41,6 +41,11 @@ import 'reference_note_enhancement_chunking.dart';
 import 'native_note_enhancement.dart';
 import 'summary_generator.dart';
 import 'summary_output.dart';
+import 'meeting_actions.dart';
+import 'meeting_workflow_store.dart';
+import 'meeting_preparation.dart';
+import 'portable_query_setup.dart';
+import 'answer_source_scope.dart';
 import 'google_auth.dart';
 import 'google_connections.dart';
 import 'generated/rag_service.pb.dart';
@@ -48,6 +53,8 @@ import 'package:crypto/crypto.dart';
 import 'package:grpc/grpc.dart';
 
 part 'application_summary.dart';
+part 'application_workflows.dart';
+part 'application_preparation.dart';
 
 /// Identifies the arguments an idempotency key was first used with. Fields the
 /// transport adds, the key, the epoch and null values are left out, and map keys
@@ -83,7 +90,7 @@ typedef _MeetingIndexKey = ({
 
 /// Application operations shared by the desktop and external clients.
 /// This object, its database, and its capture/model handles belong to one owner.
-class Application implements ModelGate {
+class Application implements ModelGate, GenerationReservationGate {
   /// User content erased atomically by workspace.clear.
   static const workspaceContentTables = [
     'google_sources',
@@ -95,6 +102,8 @@ class Application implements ModelGate {
     'meeting_note_events',
     'meeting_notes',
     'meeting_summary_checkpoints',
+    'meeting_tasks',
+    'document_summary_cache',
     'artifacts',
     'transcript',
     'meeting_details',
@@ -134,6 +143,8 @@ class Application implements ModelGate {
   final _noteEnhancements = <int, _NoteEnhancement>{};
   final _summaries = <int, _SummaryRun>{};
   bool get _summarizing => _summaries.values.any((run) => run.active);
+  final _workflows = <String, _MeetingWorkflowRun>{};
+  bool get _workflowBusy => _workflows.values.any((run) => run.active);
   final _noteEditMappings = <int, ReferenceNoteEditMapping>{};
   final _pendingNoteTargets = <int, Set<int>>{};
   final _meetingIndexes = <_MeetingIndexKey, Future<void>>{};
@@ -149,6 +160,7 @@ class Application implements ModelGate {
     if (domain.helper.snapshot?.pipeline != 'ready') return [];
     final response = await domain.helper.client.computeEmbedding(
       ComputeEmbeddingRequest(text: text),
+      options: CallOptions(timeout: const Duration(seconds: 5)),
     );
     return response.embedding.toList();
   }
@@ -194,7 +206,27 @@ class Application implements ModelGate {
     int id,
     String transcript, {
     required bool isLive,
+    void Function()? checkCurrent,
   }) async {
+    // Final enhancement covers the complete saved transcript. The live cache
+    // retains its reference latest-50 behavior and is reused by exact text.
+    if (!isLive) {
+      final cached = await _noteTranscriptCache.getEmbeddedChunks(id);
+      final vectors = {for (final chunk in cached) chunk.text: chunk.embedding};
+      final complete = <EmbeddedNoteTranscriptChunk>[];
+      for (final text in chunkNoteEnhancementTranscript(
+        transcript,
+        maxChunks: null,
+      )) {
+        checkCurrent?.call();
+        if (_closed) throw RpcError(RpcErrorCode.cancelled, 'Notes closed');
+        complete.add((
+          text: text,
+          embedding: vectors[text] ?? await _computeNoteEmbedding(text),
+        ));
+      }
+      return complete;
+    }
     if (isLive && recordingMeeting == id && recording != null) {
       final text = formatLiveNoteTranscript(_liveNoteTranscriptSegments(id));
       if (text.isNotEmpty) {
@@ -278,11 +310,16 @@ class Application implements ModelGate {
   final _proactivePreparation = <String, Completer<void>>{};
   @override
   bool get modelBusy => _modelBusy || domain.restoring;
+  @override
+  bool get generationReserved =>
+      _workflowBusy || _summarizing || _activeEnhancements > 0;
   late final ProactiveQuestions proactive = ProactiveQuestions(
     store: store,
     busy: () =>
         modelBusy ||
         _summarizing ||
+        _workflowBusy ||
+        _activeEnhancements > 0 ||
         domain.generator == null ||
         domain.generator!.generating ||
         domain.sourcesPaused,
@@ -430,17 +467,45 @@ class Application implements ModelGate {
     bool Function()? current,
     bool useWeb = false,
   }) async* {
-    if (_summarizing) {
+    if (proactive.running && !proactive.ownsRequest(requestId ?? '')) {
+      await proactive.yieldToForeground();
+    }
+    if (!proactive.ownsRequest(requestId ?? '') &&
+        _noteEnhancements.values.any((run) => run.active && run.isLive)) {
+      await _yieldLiveEnhancements();
+    }
+    if (_closed) throw RpcError(RpcErrorCode.unavailable, 'Application closed');
+    if (_summarizing || _workflowBusy) {
       throw RpcError(RpcErrorCode.busy, 'Meeting summary in progress');
     }
+    final scopeConversation = meetingId == null
+        ? conversation
+        : 'meeting:$meetingId';
+    final automatic = proactive.ownsRequest(requestId ?? '');
+    final sourceScope = AnswerSourceScope.read(
+      store,
+      scopeConversation,
+      meeting: meetingId,
+      automatic: automatic,
+    );
+    bool scopeCurrent() =>
+        (current?.call() ?? true) &&
+        sourceScope.identity ==
+            AnswerSourceScope.read(
+              store,
+              scopeConversation,
+              meeting: meetingId,
+              automatic: automatic,
+            ).identity;
     yield* ConversationAnswer(
       domain,
       question,
       conversation,
       requestId: requestId,
       meetingId: meetingId,
-      current: current,
+      current: scopeCurrent,
       useWeb: useWeb,
+      sourceScope: sourceScope,
     ).run();
   }
 
@@ -485,10 +550,13 @@ class Application implements ModelGate {
         await discoverDedicatedQueryModel(store, current: () => !_closed);
       }
       final model = store.model(dedicatedQueryModelKind);
-      final worker = runtimeConfiguration['FORESIGHT_QUERY_WORKER'];
+      final worker = model?['backend'] == portableQueryBackend
+          ? (model?['runtime'] as String?)
+          : runtimeConfiguration['FORESIGHT_QUERY_WORKER'];
       if (model == null ||
           worker == null ||
           (model['backend'] != dedicatedQueryBackend &&
+              model['backend'] != portableQueryBackend &&
               model['backend'] != dedicatedEncryptedQueryBackend)) {
         await _queryRuntime?.close();
         _queryRuntime = null;
@@ -529,6 +597,8 @@ class Application implements ModelGate {
     }
     return ReferenceQueryDetector(
       _queryRuntime!.complete,
+      preserveUnicode:
+          store.preference('queryOutputPolicy', 'unicode-v2') == 'unicode-v2',
     ).detect(text, request);
   }
 
@@ -625,6 +695,7 @@ class Application implements ModelGate {
       domain.initializationPending ||
       _activeEnhancements > 0 ||
       _summarizing ||
+      _workflowBusy ||
       proactive.running ||
       _proactiveWork > 0 ||
       _noteTranscriptCache.computing > 0 ||
@@ -643,6 +714,18 @@ class Application implements ModelGate {
           'generating': domain.generator!.generating,
         };
   Map<String, Object?> get captureState => {
+    'question_detector': {
+      'configured':
+          store.model(dedicatedQueryModelKind) != null || _providedQueryRuntime,
+      'ready': _queryRuntime is QueryRuntimeReadiness
+          ? (_queryRuntime as QueryRuntimeReadiness).ready
+          : _queryRuntime != null,
+      'backend': store.model(dedicatedQueryModelKind)?['backend'],
+      'output_policy': store.preference('queryOutputPolicy', 'unicode-v2'),
+    },
+    'meeting_workflows': {
+      for (final entry in _workflows.entries) entry.key: entry.value.state,
+    },
     'meeting_summaries': {
       for (final entry in _summaries.entries) '${entry.key}': entry.value.state,
     },
@@ -714,21 +797,30 @@ class Application implements ModelGate {
           write,
           arguments: key == null ? '' : requestArgumentsDigest(a),
         );
-    if (method.startsWith('models.') &&
-        method != Operation.modelsCancelQueryAcquisition.wire &&
+    final modelOperation =
+        method.startsWith('models.') &&
+        method != Operation.modelsCancelQueryAcquisition.wire;
+    if (modelOperation && proactive.running) {
+      await proactive.yieldToForeground();
+      if (_closed) {
+        throw RpcError(RpcErrorCode.unavailable, 'Application closed');
+      }
+      if (!current()) {
+        throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+      }
+    }
+    if (modelOperation &&
         (modelBusy ||
             domain.generator?.generating == true ||
             _noteEnhancements.values.any((state) => state.active) ||
             _summarizing ||
+            _workflowBusy ||
             recording != null)) {
       throw RpcError(
         RpcErrorCode.busy,
         'Model configuration is busy while generation or recording is active',
       );
     }
-    final modelOperation =
-        method.startsWith('models.') &&
-        method != Operation.modelsCancelQueryAcquisition.wire;
     if (modelOperation) _modelBusy = true;
     try {
       switch (Operation.parse(method)) {
@@ -1059,6 +1151,10 @@ class Application implements ModelGate {
             run.cancel();
           }
           _summaries.clear();
+          for (final run in _workflows.values) {
+            run.cancel();
+          }
+          _workflows.clear();
           _clearingWorkspace = true;
           final sourceIds = [
             for (final source in store.rows('SELECT id FROM sources'))
@@ -1079,7 +1175,7 @@ class Application implements ModelGate {
                 store.db.execute('DELETE FROM $table');
               }
               store.db.execute(
-                "DELETE FROM preferences WHERE key GLOB 'webAnswer.v1.*'",
+                "DELETE FROM preferences WHERE key GLOB 'webAnswer.v1.*' OR key GLOB 'answerScope.*' OR key GLOB 'answerSources.*' OR key GLOB 'answerSourcesSelection.*' OR key GLOB 'proactiveScope.*' OR key GLOB 'preparationSources.*'",
               );
               store.renewWorkspaceEpoch();
               store.markPrivacyMaintenancePending();
@@ -1180,6 +1276,55 @@ class Application implements ModelGate {
           _summaries[a['id']]?.cancel();
           changed();
           return null;
+        case Operation.meetingsCancelGeneration:
+          _meeting(a['id'] as int);
+          _workflows['${a['id']}:${a['kind']}']?.cancel();
+          changed();
+          return null;
+        case Operation.meetingsTasks:
+          _meeting(a['id'] as int);
+          return store.meetingTasks(a['id'] as int);
+        case Operation.meetingsEditTask:
+          final row = store.rows('SELECT * FROM meeting_tasks WHERE id=?', [
+            a['id'],
+          ]).firstOrNull;
+          if (row == null) {
+            throw RpcError(RpcErrorCode.notFound, 'Task no longer exists');
+          }
+          final editedSource = store.workflowTransaction<String?>(() {
+            store.editMeetingTask(
+              a['id'] as int,
+              task: (a['task'] ?? row['task']) as String?,
+              owner:
+                  (a.containsKey('owner') ? a['owner'] : row['owner'])
+                      as String?,
+              due: (a.containsKey('due') ? a['due'] : row['due']) as String?,
+              status: a['status'] as String?,
+              editDetails: ['task', 'owner', 'due'].any(a.containsKey),
+            );
+            final meeting = row['meeting_id'] as int;
+            final artifact = store
+                .meetingArtifacts(meeting, 'actions')
+                .firstOrNull;
+            if (artifact != null) {
+              store.editArtifact(
+                artifact['id'] as int,
+                renderMeetingActions(store.meetingTasks(meeting)),
+              );
+              return store.refreshArtifactSource(artifact['id'] as int);
+            }
+            return null;
+          });
+          if (editedSource != null) _indexWorkflowSource(editedSource);
+          return null;
+        case Operation.meetingsPrepare:
+          await prepareMeeting(
+            a['id'] as int,
+            (a['source_ids'] as List).cast<String>(),
+            requestId: a['requestId'] as String?,
+            current: current,
+          );
+          return null;
         case Operation.meetingsEnhance:
           _meeting(a['id'] as int);
           await enhanceNotes(
@@ -1197,6 +1342,9 @@ class Application implements ModelGate {
             return false;
           }
           enhancement.cancelRequested = true;
+          if (enhancement.child case final id?) {
+            enhancement.runtime?.cancel(requestId: id);
+          }
           changed();
           return true;
         case Operation.meetingsStart:
@@ -1212,6 +1360,16 @@ class Application implements ModelGate {
           resumeRecording(a['id'] as int?);
           return captureState;
         case Operation.artifactsEdit:
+          final taskArtifact = store.rows(
+            "SELECT a.meeting_id FROM artifacts a WHERE a.id=? AND a.kind='actions' AND EXISTS(SELECT 1 FROM meeting_tasks t WHERE t.meeting_id=a.meeting_id) AND NOT EXISTS(SELECT 1 FROM artifacts newer WHERE newer.meeting_id=a.meeting_id AND newer.kind='actions' AND newer.id>a.id)",
+            [a['id']],
+          ).firstOrNull;
+          if (taskArtifact != null) {
+            throw RpcError(
+              RpcErrorCode.invalidArgument,
+              'Use meetings.edit_task to edit structured action items',
+            );
+          }
           final selectedBeforeEdit = store.rows(
             "SELECT selected.meeting_id,selected.edited,selected.generated FROM artifacts AS selected WHERE selected.id=? AND selected.kind='enhanced_notes' AND NOT EXISTS (SELECT 1 FROM artifacts AS newer WHERE newer.meeting_id=selected.meeting_id AND newer.kind=selected.kind AND newer.id>selected.id)",
             [a['id']],
@@ -1219,11 +1377,15 @@ class Application implements ModelGate {
           if (selectedBeforeEdit != null) {
             _noteEditMapping(selectedBeforeEdit['meeting_id'] as int);
           }
-          store.editArtifact(
-            a['id'] as int,
-            a['text'] as String,
-            lastManualEdit: a['last_manual_edit'] as int?,
-          );
+          final editedSource = store.workflowTransaction(() {
+            store.editArtifact(
+              a['id'] as int,
+              a['text'] as String,
+              lastManualEdit: a['last_manual_edit'] as int?,
+            );
+            return store.refreshArtifactSource(a['id'] as int);
+          });
+          if (editedSource != null) _indexWorkflowSource(editedSource);
           final editedEnhancement = store.rows(
             "SELECT selected.meeting_id FROM artifacts AS selected WHERE selected.id=? AND selected.kind='enhanced_notes' AND NOT EXISTS (SELECT 1 FROM artifacts AS newer WHERE newer.meeting_id=selected.meeting_id AND newer.kind=selected.kind AND newer.id>selected.id)",
             [a['id']],
@@ -1247,6 +1409,13 @@ class Application implements ModelGate {
               );
             }
             if (enhancement != null) {
+              if (enhancement.active) {
+                enhancement.cancelRequested = true;
+                enhancement.restoreBody = a['text'] as String;
+                if (enhancement.child case final id?) {
+                  enhancement.runtime?.cancel(requestId: id);
+                }
+              }
               enhancement.saveTimer?.cancel();
               enhancement.body = a['text'] as String;
               if (!enhancement.active) _noteEnhancements.remove(meeting);
@@ -1297,6 +1466,20 @@ class Application implements ModelGate {
           return null;
         case Operation.modelsRegister:
           if (a['kind'] == dedicatedQueryModelKind) {
+            if (a['backend'] == portableQueryBackend) {
+              await configurePortableQuery(
+                store,
+                a['path'] as String,
+                a['runtime'] as String,
+                a['digest'] as String,
+                current: () => !_closed && (current?.call() ?? true),
+              );
+              await _queryRuntime?.close();
+              _queryRuntime = null;
+              _queryRegistration = null;
+              proactive.wake();
+              return null;
+            }
             if (a['backend'] != null && a['backend'] != dedicatedQueryBackend) {
               throw StateError('Unsupported dedicated question model backend');
             }
@@ -1802,6 +1985,10 @@ class Application implements ModelGate {
       await generateSummary(id, requestId: requestId, current: current);
       return;
     }
+    if (kind == 'actions' || kind == 'action_items') {
+      await generateActions(id, requestId: requestId, current: current);
+      return;
+    }
     final meeting = _meeting(id);
     final text = store
         .rows(
@@ -1868,7 +2055,7 @@ class Application implements ModelGate {
     if (modelBusy) {
       throw RpcError(RpcErrorCode.busy, 'Model configuration is busy');
     }
-    if (_summarizing) {
+    if (_summarizing || _workflowBusy) {
       throw RpcError(RpcErrorCode.busy, 'Meeting summary in progress');
     }
     final generator = domain.generator;
@@ -1950,6 +2137,18 @@ class Application implements ModelGate {
     });
   }
 
+  Future<void> _yieldLiveEnhancements() async {
+    final runs = _noteEnhancements.values
+        .where((run) => run.active && run.isLive)
+        .toList();
+    for (final run in runs) {
+      run.foregroundYielded = true;
+      run.cancelRequested = true;
+      if (run.child case final child?) run.runtime?.cancel(requestId: child);
+    }
+    await Future.wait(runs.map((run) => run.finished.future));
+  }
+
   Future<void> enhanceNotes(
     int id, {
     bool deferWhenBusy = false,
@@ -1962,8 +2161,16 @@ class Application implements ModelGate {
     if (current != null && !current()) {
       throw RpcError(RpcErrorCode.cancelled, 'Generation cancelled');
     }
+    if (!isLive) {
+      if (proactive.running) await proactive.yieldToForeground();
+      if (_noteEnhancements.values.any((run) => run.active && run.isLive)) {
+        await _yieldLiveEnhancements();
+      }
+    }
     if (_closed) throw RpcError(RpcErrorCode.unavailable, 'Application closed');
     if (_summarizing ||
+        _workflowBusy ||
+        proactive.running ||
         domain.generator?.generating == true ||
         _noteEnhancements.values.any((state) => state.active)) {
       if (deferWhenBusy) {
@@ -2010,6 +2217,7 @@ class Application implements ModelGate {
           'notes-${domain.clock.now().microsecondsSinceEpoch}-${++_noteEnhancementSerial}',
       notes['body'] as String,
       current: current,
+      isLive: isLive,
     );
     final previous =
         previousState != null &&
@@ -2018,6 +2226,35 @@ class Application implements ModelGate {
         ? previousState.body
         : store.meetingEnhancedNotes(id);
     enhancement.restoreBody = previous;
+    final failedBatches = <List<int>>[];
+    bool noteCurrent() {
+      if (_closed ||
+          enhancement.cancelRequested ||
+          !(current?.call() ?? true) ||
+          !identical(_noteEnhancements[id], enhancement)) {
+        return false;
+      }
+      final latest = store.rows(
+        'SELECT revision FROM meeting_notes WHERE meeting_id=?',
+        [id],
+      ).firstOrNull;
+      if (latest?['revision'] != notes['revision'] ||
+          (!isLive && _meeting(id)['revision'] != revision)) {
+        enhancement.cancelRequested = true;
+        return false;
+      }
+      return true;
+    }
+
+    void checkNote() {
+      if (!noteCurrent()) {
+        throw RpcError(
+          RpcErrorCode.cancelled,
+          'Notes changed or generation cancelled',
+        );
+      }
+    }
+
     final mapping = _noteEditMapping(id);
     _noteEnhancements[id] = enhancement;
     _scheduleEnhancedDraft(id, enhancement);
@@ -2031,6 +2268,10 @@ class Application implements ModelGate {
           : Map<int, String>.of(mapping.accepted);
       if (forceRegenerate) mapping.accepted.clear();
       final producer = ReferenceNoteEnhancer(
+        checkCurrent: checkNote,
+        onBatchFailure: (indices, error) {
+          failedBatches.add(indices);
+        },
         ensureReady: () async {
           if (modelBusy) {
             throw RpcError(RpcErrorCode.busy, 'Model configuration is busy');
@@ -2062,25 +2303,30 @@ class Application implements ModelGate {
             throw RpcError(RpcErrorCode.cancelled, 'Generation cancelled');
           }
         },
-        loadEmbeddedTranscript: () =>
-            _embeddedNoteTranscript(id, transcript, isLive: isLive),
+        loadEmbeddedTranscript: () => _embeddedNoteTranscript(
+          id,
+          transcript,
+          isLive: isLive,
+          checkCurrent: checkNote,
+        ),
         computeEmbedding: domain.helper.snapshot?.pipeline == 'ready'
             ? _computeNoteEmbedding
             : null,
-        encodeStopTokens: domain.helper.snapshot?.tokenizerReady == true
-            ? (text) async {
-                final response = await domain.helper.client.encode(
-                  EncodeRequest(text: text),
-                );
-                return response.tokens.toList();
-              }
-            : null,
-        createConversation: (settings) async =>
-            NativeNoteEnhancementConversation.create(
-              runtime: generator,
-              requestId: '${enhancement.requestId}-batch-${++batch}',
-              settings: settings,
-            ),
+        // Embedding token IDs are not generation stop IDs. The producer's
+        // textual stop markers remain active until generation-bound encoding
+        // is available.
+        encodeStopTokens: null,
+        createConversation: (settings) async {
+          checkNote();
+          enhancement.runtime = generator;
+          enhancement.child = '${enhancement.requestId}-batch-${++batch}';
+          return NativeNoteEnhancementConversation.create(
+            runtime: generator,
+            requestId: enhancement.child!,
+            settings: settings,
+            current: noteCurrent,
+          );
+        },
         logBatchError: (error, stack) {
           stderr.writeln('Note enhancement batch: $error');
         },
@@ -2119,13 +2365,30 @@ class Application implements ModelGate {
         throw RpcError(RpcErrorCode.cancelled, 'Generation cancelled');
       }
       enhancement.saveTimer?.cancel();
-      store.artifact(
-        id,
-        'enhanced_notes',
-        enhancement.body,
-        _digest,
-        inputRevision: revision,
-      );
+      checkNote();
+      final source = store.workflowTransaction(() {
+        store.artifact(
+          id,
+          'enhanced_notes',
+          enhancement.body,
+          _digest,
+          inputRevision: revision,
+          manifest: {
+            'version': 'notes-v2',
+            'degraded': failedBatches.isNotEmpty,
+            'failed_batches': failedBatches,
+            'input_revision': revision,
+            'notes_revision': notes['revision'],
+            'transcript_scope': isLive
+                ? 'recent-50-chunks'
+                : 'complete-candidate-history',
+            'stop_policy': 'text-markers-v1',
+          },
+        );
+        final accepted = store.meetingArtifacts(id, 'enhanced_notes').first;
+        return store.refreshArtifactSource(accepted['id'] as int);
+      });
+      if (source != null) _indexWorkflowSource(source);
       mapping.captureSuccess(
         notes:
             store.rows('SELECT body FROM meeting_notes WHERE meeting_id=?', [
@@ -2146,7 +2409,7 @@ class Application implements ModelGate {
       if (_closed ||
           !(current?.call() ?? true) ||
           enhancement.cancelRequested) {
-        enhancement.body = previous;
+        enhancement.body = enhancement.restoreBody ?? previous;
         enhancement.status = '';
         _restoreNoteMapping(
           id,
@@ -2168,7 +2431,7 @@ class Application implements ModelGate {
         return;
       }
       enhancement.saveTimer?.cancel();
-      enhancement.body = previous;
+      enhancement.body = enhancement.restoreBody ?? previous;
       store.restoreMeetingEnhancedDraft(id, enhancement.body);
       _restoreNoteMapping(
         id,
@@ -2183,7 +2446,15 @@ class Application implements ModelGate {
       changed();
       rethrow;
     } finally {
-      if (isLive &&
+      if (enhancement.foregroundYielded &&
+          !_closed &&
+          store.preference('liveEnhance', 'true') == 'true') {
+        _scheduleEnhaseRetry(
+          id,
+          isLive: true,
+          targetBulletIndices: _pendingNoteTargets.remove(id),
+        );
+      } else if (isLive &&
           !_closed &&
           identical(_noteEditMappings[id], mapping) &&
           store.preference('liveEnhance', 'true') == 'true') {
@@ -2205,6 +2476,7 @@ class Application implements ModelGate {
         }
       }
       _activeEnhancements--;
+      if (!enhancement.finished.isCompleted) enhancement.finished.complete();
       changed();
     }
   }
@@ -2457,6 +2729,9 @@ class Application implements ModelGate {
     for (final run in _summaries.values) {
       run.cancel();
     }
+    for (final run in _workflows.values) {
+      run.cancel();
+    }
     _googleTimer?.cancel();
     google.close();
     _liveIndex?.cancel();
@@ -2508,7 +2783,15 @@ class Application implements ModelGate {
 }
 
 class _NoteEnhancement {
-  _NoteEnhancement(this.requestId, this.body, {this.current});
+  _NoteEnhancement(
+    this.requestId,
+    this.body, {
+    this.current,
+    this.isLive = false,
+  });
+  final bool isLive;
+  bool foregroundYielded = false;
+  final finished = Completer<void>();
   final bool Function()? current;
   final String requestId;
   String body, status = '';
@@ -2516,6 +2799,8 @@ class _NoteEnhancement {
   bool active = true, cancelRequested = false;
   int? activeIndex;
   Timer? saveTimer;
+  String? child;
+  NativeRuntime? runtime;
   Map<String, Object?> get state => {
     'request_id': requestId,
     'body': body,
