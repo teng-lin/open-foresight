@@ -270,6 +270,12 @@ original_release_run=REPLACE_WITH_ORIGINAL_RELEASE_COORDINATOR_RUN
 gh run rerun "$original_release_run" --failed
 ```
 
+For a newly created DMG, the packager can recover a transient verification lock
+by normally detaching its own exact image attachment once, within the bounded
+recovery window. It requires the current owner and an unambiguous outer GUID
+device, then verifies the original SHA256-identical bytes. It never detaches
+unrelated images or treats cleanup as successful checksum verification.
+
 A retry uses the original workflow and tooling commit. It can recover transient
 external failures when no conflicting or partial upload exists for the failed
 format; it cannot apply a subsequently merged tooling fix. If that

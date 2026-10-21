@@ -4,7 +4,9 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
+import plistlib
 import re
 import shutil
 import subprocess
@@ -42,13 +44,78 @@ def image_diagnostics(destination):
             print(f"Diagnostic unavailable: {error}", file=sys.stderr, flush=True)
 
 
-def verify_image(destination):
+def detach_created_image(destination, *, deadline=None):
+    """Recover only the unique attachment of this invocation's new output."""
+    timeout = 10 if deadline is None else min(10, deadline - time.monotonic())
+    if timeout <= 0:
+        return False
+    try:
+        result = subprocess.run(
+            ["hdiutil", "info", "-plist"], capture_output=True, timeout=timeout
+        )
+    except subprocess.TimeoutExpired as error:
+        print_output(error.stdout, error.stderr)
+        raise
+    print_output(None, result.stderr)
+    if result.returncode:
+        print_output(result.stdout, None)
+    result.check_returncode()
+    info = plistlib.loads(result.stdout)
+    if not isinstance(info, dict) or not isinstance(info.get("images"), list):
+        raise ValueError("Invalid disk image attachment inventory")
+    matches = [
+        image
+        for image in info["images"]
+        if Path(image["image-path"]).resolve() == destination
+    ]
+    if not matches:
+        return False
+    devices = [
+        entity["dev-entry"]
+        for entity in matches[0]["system-entities"]
+        if entity.get("content-hint") == "GUID_partition_scheme"
+        and re.fullmatch(r"/dev/disk[0-9]+", entity.get("dev-entry", ""))
+    ]
+    # APFS also lists a synthesized whole disk. Select only its outer GUID
+    # partition scheme, never a partition, APFS container, or guessed disk.
+    if (
+        len(matches) != 1
+        or len(devices) != 1
+        or matches[0].get("owner-uid") != os.getuid()
+    ):
+        raise ValueError("Ambiguous attachment for newly created DMG")
+    timeout = 10 if deadline is None else min(10, deadline - time.monotonic())
+    if timeout <= 0:
+        return False
+    print(
+        f"Detaching newly created DMG {destination}: {devices[0]}",
+        file=sys.stderr,
+        flush=True,
+    )
+    try:
+        detached = subprocess.run(
+            ["hdiutil", "detach", devices[0]],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as error:
+        print_output(error.stdout, error.stderr)
+        raise
+    print_output(detached.stdout, detached.stderr)
+    detached.check_returncode()
+    return True
+
+
+def verify_image(destination, *, created_image=False):
     # DiskImages takes read/write locks on image files. A lock held after
     # creation can outlast the former four-second retry window. Give that lock
     # a bounded recovery window; verify the same bytes, never recreate them.
+    destination = destination.resolve()
     original_digest = image_digest(destination) if destination.exists() else None
     deadline = time.monotonic() + 30
     last_failure = None
+    detached = False
     while True:
         if original_digest is not None and image_digest(destination) != original_digest:
             raise ValueError("DMG bytes changed during verification retries")
@@ -87,6 +154,13 @@ def verify_image(destination):
         ):
             result.check_returncode()
         last_failure = result
+        if (
+            created_image
+            and not detached
+            and detach_created_image(destination, deadline=deadline)
+        ):
+            detached = True
+            continue
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             result.check_returncode()
@@ -147,8 +221,8 @@ def create(app, manifest, name, output):
             timeout=300,
         )
     try:
-        verify_image(destination)
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        verify_image(destination, created_image=True)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
         image_diagnostics(destination)
         raise
     with destination.open("rb") as stream:

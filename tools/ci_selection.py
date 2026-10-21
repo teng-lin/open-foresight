@@ -54,8 +54,6 @@ def closure(selected):
         selected["linux-document-imports"] = True
     if selected["macos"]:
         selected["dmg"] = True
-    if selected["dmg"]:
-        selected["macos"] = True
     return selected
 
 

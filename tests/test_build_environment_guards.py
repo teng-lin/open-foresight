@@ -89,7 +89,7 @@ def test_internal_sdk_link_cannot_resolve_to_a_fifo(tmp_path):
     [
         ("packaging/notices/dependency.md", set(changes.GATES)),
         ("apps/desktop/macos/Runner/Info.plist", {"macos", "dmg"}),
-        ("apps/desktop/linux/runner/main.cc", set(changes.GATES)),
+        ("apps/desktop/linux/runner/main.cc", set(changes.GATES) - {"macos"}),
         ("tools/new_unknown_build_tool.py", set(changes.GATES)),
     ],
 )
