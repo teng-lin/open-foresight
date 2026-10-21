@@ -3,7 +3,7 @@
 Publish Linux and macOS packages through the `Prepare and publish release`
 workflow. First package verified application candidates and automatically test a
 draft release, then test those
-exact installers on real GPU hardware and publish the same bytes. The examples
+exact installers on real GPU hardware (unless explicitly waived) and publish the same bytes. The examples
 below use release `v0.1.2` and release PR `129`; change both for future releases.
 
 ## Prerequisites
@@ -15,7 +15,7 @@ below use release `v0.1.2` and release PR `129`; change both for future releases
 - Working distribution configuration in repository secrets, including
   `FORESIGHT_GOOGLE_CLIENT_JSON`. Optional web mode uses the search and web-content
   API secrets together. Keep credentials out of commands, logs, and Git.
-- Linux and Apple Silicon macOS hardware for the release-day GPU checks.
+- Linux and Apple Silicon macOS hardware when release-day GPU checks are required.
 
 Run the commands from a repository checkout. They do not require changing your
 current branch or discarding local edits:
@@ -120,10 +120,23 @@ The coordinator:
 5. Downloads the draft installers and runs installed-package acceptance on
    Ubuntu, Debian, Fedora, Arch, and macOS.
 
-The release stays a draft until physical GPU evidence is supplied. The final
+By default, the release stays a draft until physical GPU evidence is supplied. The final
 publication job can fail with a manual-evidence requirement even when automated
 acceptance succeeds. Confirm the earlier build and acceptance jobs passed before
 continuing; another failure still needs investigation.
+
+Physical GPU validation can be explicitly waived for an individual release with
+`-f skip_gpu_validation=true`. This option defaults to `false` and applies to
+both the initial coordinator run and publication-only runs. It preserves all
+automated installer, upgrade, checksum, provenance, and attestation gates. The
+acceptance report retains its manual-pending status, and the published release
+notes record that physical Linux and macOS GPU validation was waived. To prepare
+and publish without physical GPU validation:
+
+```sh
+gh workflow run release.yml --ref main -f tag="$release_tag" \
+  -f skip_gpu_validation=true
+```
 
 Inspect the draft and its assets:
 

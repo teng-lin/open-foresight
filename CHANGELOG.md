@@ -17,6 +17,7 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Changed
 
+- Physical GPU validation can be explicitly waived per release; automated installer acceptance and provenance verification remain required, and release notes record the waiver.
 - Release candidates are produced on demand, and publication verifies retained installer evidence. CI reuses verified dependencies and build outputs while keeping preview and release artifacts separate.
 - Expanded recovery, persistence, desktop, and compiled-service checks strengthen application validation and measured test coverage.
 

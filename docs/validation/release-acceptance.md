@@ -16,6 +16,10 @@ Acceptance requires all four installers plus checksum and provenance sidecars.
 Missing assets, failed tests, and skipped gates fail publication. Only a completely
 successful installed-package matrix publishes the draft and marks it Latest only when its stable semantic version is the highest published version.
 Public releases cannot be rebuilt or overwritten; increment the app version.
+Physical GPU validation is required by default. The coordinator's explicit
+`skip_gpu_validation=true` option waives that manual gate for one invocation;
+automated acceptance and byte/provenance verification remain mandatory. Reports
+retain the pending GPU status, and published release notes record the waiver.
 
 Retry transient external failures with `gh run rerun ORIGINAL_RELEASE_RUN --failed`.
 This retains successful sibling formats and their original receipt/upload attempts.

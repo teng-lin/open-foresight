@@ -19,6 +19,29 @@ def workflow(name):
     return result
 
 
+def test_gpu_waiver_is_explicit_and_propagates_to_both_publication_gates():
+    release = workflow("release.yml")
+    option = release["on"]["workflow_dispatch"]["inputs"]["skip_gpu_validation"]
+    assert option["type"] == "boolean"
+    assert option["default"] is False
+    steps = release["jobs"]["publish"]["steps"]
+    gates = [
+        step
+        for step in steps
+        if "--publication" in step.get("run", "")
+        or "--require-publication" in step.get("run", "")
+    ]
+    assert len(gates) == 2
+    for step in gates:
+        assert step["env"]["SKIP_GPU_VALIDATION"] == "${{ inputs.skip_gpu_validation }}"
+        assert 'if [[ "$SKIP_GPU_VALIDATION" == true ]]' in step["run"]
+        assert "--skip-gpu-validation" in step["run"]
+    publish = steps[-1]
+    assert publish["env"]["SKIP_GPU_VALIDATION"] == "${{ inputs.skip_gpu_validation }}"
+    assert "physical GPU validation was not performed" in publish["run"]
+    assert "require_coordinator" in publish["run"]
+
+
 def test_release_preflight_precedes_all_producers_and_candidates_only_stops_before_draft():
     release = workflow("release.yml")
     assert release["on"]["workflow_dispatch"]["inputs"]["tag"]["required"] is False

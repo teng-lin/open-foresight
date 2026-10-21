@@ -76,6 +76,41 @@ def test_automated_success_still_blocks_publication_until_manual_gpu(tmp_path):
         require_publication(report, "v9.9.9")
 
 
+def test_gpu_waiver_requires_automated_success_and_keeps_pending_report(tmp_path):
+    receipts(tmp_path)
+    report = aggregate(tmp_path, "v1.2.3", "")
+    require_publication(report, "v1.2.3", skip_gpu_validation=True)
+    assert report["status"] == "automated_passed_manual_pending"
+    assert report["gpu_inference"] == {"status": "manual_pending", "evidence": []}
+    for field, value in (
+        ("tag", "v9.9.9"),
+        ("suite_version", "obsolete"),
+        ("status", "failed"),
+        ("gpu_inference", {"status": "manual_failed", "evidence": []}),
+        ("gpu_inference", {"status": "manual_pending", "evidence": [{}]}),
+    ):
+        with pytest.raises(ValueError):
+            require_publication(
+                {**report, field: value}, "v1.2.3", skip_gpu_validation=True
+            )
+
+
+def test_publication_cli_requires_explicit_gpu_waiver(tmp_path, monkeypatch):
+    import sys
+    from tools import release_acceptance_report as reports
+
+    receipts(tmp_path)
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps(aggregate(tmp_path, "v1.2.3", "")))
+    args = ["acceptance", "--tag", "v1.2.3", "--require-publication", str(path)]
+    monkeypatch.setattr(sys, "argv", args)
+    with pytest.raises(ValueError, match="release-day GPU"):
+        reports.main()
+    monkeypatch.setattr(sys, "argv", [*args, "--skip-gpu-validation"])
+    reports.main()
+    assert json.loads(path.read_text())["gpu_inference"]["status"] == "manual_pending"
+
+
 @pytest.mark.parametrize(
     "change", ["wrong_digest", "missing_platform", "empty_evidence", "invalid_time"]
 )

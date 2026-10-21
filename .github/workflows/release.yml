@@ -24,7 +24,7 @@ on:
         type: string
         default: '0'
       publish_only:
-        description: Publish existing tested draft bytes after release-day GPU checks; do not rebuild installers
+        description: Publish existing tested draft bytes using the selected GPU validation policy; do not rebuild installers
         type: boolean
         required: false
         default: false
@@ -32,6 +32,10 @@ on:
         description: JSON array of release-day Linux and macOS GPU evidence bound to installer SHA256
         type: string
         required: false
+      skip_gpu_validation:
+        description: Waive physical GPU validation; automated installer acceptance remains required
+        type: boolean
+        default: false
 permissions:
   contents: read
   actions: read
@@ -254,15 +258,23 @@ jobs:
         with:
           name: release-acceptance-summary-${{ needs.acceptance.outputs.summary_attempt }}
           path: acceptance-summary
-      - name: Require installer-bound manual GPU evidence
+      - name: Require manual GPU evidence unless explicitly waived
         env:
           TAG: ${{ inputs.tag }}
-        run: python3 tools/release_acceptance_report.py --tag "$TAG" --require-publication acceptance-summary/release-acceptance.json
+          SKIP_GPU_VALIDATION: ${{ inputs.skip_gpu_validation }}
+        run: |
+          task_args=()
+          if [[ "$SKIP_GPU_VALIDATION" == true ]]; then task_args+=(--skip-gpu-validation); fi
+          python3 tools/release_acceptance_report.py --tag "$TAG" --require-publication acceptance-summary/release-acceptance.json "${task_args[@]}"
       - name: Re-verify original candidate, packaging, attestation and acceptance evidence
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
-        run: python -m tools.ci_release_evidence verify --tag "$TAG" --publication-report acceptance-summary/release-acceptance.json
+          SKIP_GPU_VALIDATION: ${{ inputs.skip_gpu_validation }}
+        run: |
+          task_args=()
+          if [[ "$SKIP_GPU_VALIDATION" == true ]]; then task_args+=(--skip-gpu-validation); fi
+          python -m tools.ci_release_evidence verify --tag "$TAG" --publication-report acceptance-summary/release-acceptance.json "${task_args[@]}"
       - name: Require complete acceptance and publish the draft
         env:
           GH_TOKEN: ${{ github.token }}
@@ -271,6 +283,7 @@ jobs:
           RESULTS: ${{ toJSON(needs) }}
           PUBLISH_ONLY: ${{ inputs.publish_only }}
           CANDIDATE_REUSE: ${{ needs.preflight.outputs.reuse }}
+          SKIP_GPU_VALIDATION: ${{ inputs.skip_gpu_validation }}
         run: |
           python3 - <<'PY'
           import json, os, sys
@@ -285,4 +298,9 @@ jobs:
           test "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = true
           gh api --paginate --slurp "repos/$GH_REPO/releases?per_page=100" > "$RUNNER_TEMP/published-releases.json"
           latest=$(python3 tools/release_latest.py --tag "$TAG" --releases "$RUNNER_TEMP/published-releases.json")
+          if [[ "$SKIP_GPU_VALIDATION" == true ]]; then
+            gh release view "$TAG" --json body --jq '.body' > "$RUNNER_TEMP/release-notes.md"
+            printf '\nPhysical Linux and macOS GPU validation was explicitly waived for this release. Automated installer acceptance passed; physical GPU validation was not performed.\n' >> "$RUNNER_TEMP/release-notes.md"
+            gh release edit "$TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
+          fi
           gh release edit "$TAG" --tag "$TAG" --verify-tag --draft=false --latest="$latest"

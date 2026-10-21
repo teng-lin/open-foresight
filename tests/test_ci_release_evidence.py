@@ -423,6 +423,51 @@ def add_draft_index(state, record):
     state.asset_bytes[900] = raw
 
 
+@pytest.mark.parametrize(
+    "invalid", [None, "source", "status", "installers", "job", "bytes"]
+)
+def test_explicit_gpu_waiver_retains_automated_and_byte_verification(
+    state, tmp_path, monkeypatch, invalid
+):
+    record = index(state)
+    add_draft_index(state, record)
+    report = copy.deepcopy(state.report)
+    report["status"] = "automated_passed_manual_pending"
+    report["gpu_inference"] = {"status": "manual_pending", "evidence": []}
+    if invalid == "source":
+        report["source_commit"] = "e" * 40
+    elif invalid == "status":
+        report["status"] = "failed"
+    elif invalid == "installers":
+        report["installers"].pop()
+    elif invalid == "job":
+        state.jobs[0]["conclusion"] = "failure"
+    elif invalid == "bytes":
+        state.asset_bytes[state.assets[0]["id"]] = b"changed installer"
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps(report))
+    monkeypatch.setenv("GITHUB_REPOSITORY", REPO)
+    monkeypatch.setenv("GITHUB_RUN_ID", "99")
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "evidence",
+            "verify",
+            "--tag",
+            TAG,
+            "--publication-report",
+            str(path),
+            "--skip-gpu-validation",
+        ],
+    )
+    if invalid:
+        with pytest.raises(ValueError):
+            evidence.main()
+    else:
+        evidence.main()
+        assert report["gpu_inference"]["status"] == "manual_pending"
+
+
 def test_existing_index_is_reverified_and_retained_without_package_or_build_mutation(
     state,
 ):
