@@ -622,9 +622,16 @@ void main() {
       await waitUntil(tester, () => true);
       await captureWindow(tester, env['FORESIGHT_COPILOT_SCREENSHOT']!);
       final cited = jsonDecode(answer['citations'] as String) as List;
-      expect(cited.single['document_id'], 'meeting-$meeting');
-      final citedRevision = cited.single['revision'];
-      await openMeetingCitation(tester, meeting, citedRevision);
+      final transcriptCitation = cited.firstWhere(
+        (citation) => citation['document_id'] == 'meeting-$meeting',
+      );
+      final citedRevision = transcriptCitation['revision'];
+      await openMeetingCitation(
+        tester,
+        meeting,
+        citedRevision,
+        citationLabel: transcriptCitation['citation'] as String,
+      );
       expect(
         find.text('${source['title']} · revision $citedRevision'),
         findsOneWidget,

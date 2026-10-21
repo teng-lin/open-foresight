@@ -18,6 +18,29 @@ void main() {
     addTearDown(() => directory.deleteSync(recursive: true));
   });
 
+  test('v14 preserves old summaries without inventing checkpoints', () {
+    var store = Store(path);
+    final meeting = store.meeting('Kept meeting');
+    store.artifact(meeting, 'summary', 'Accepted brief', 'old-model');
+    store.editArtifact(1, 'Reviewed brief');
+    store.db.execute('DROP TABLE meeting_summary_checkpoints');
+    store.db.execute('ALTER TABLE artifacts DROP COLUMN manifest');
+    store.db.execute('PRAGMA user_version=13');
+    store.close();
+    store = Store(path);
+    try {
+      final artifact = store.meetingArtifacts(meeting, 'summary').single;
+      expect(artifact['generated'], 'Accepted brief');
+      expect(artifact['edited'], 'Reviewed brief');
+      expect(artifact['manifest'], isNull);
+      expect(store.summaryCheckpoint(meeting), isNull);
+      expect(store.rows('PRAGMA foreign_key_check'), isEmpty);
+      expect(store.rows('PRAGMA user_version').single.values.single, 14);
+    } finally {
+      store.close();
+    }
+  });
+
   test('v13 adds request keys and keeps one workspace epoch', () {
     var store = Store(path);
     store.saveNote(null, 'Kept', 'Body');

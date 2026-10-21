@@ -297,6 +297,32 @@ class NativeRuntime implements GenerationStatus {
     maxOutputTokens: maxOutputTokens,
   );
 
+  /// Local meeting brief with distinct system/user messages on LiteRT. Legacy
+  /// text backends keep their existing framing; no model-directed tools exist.
+  Stream<Map<String, dynamic>> generateSummary(
+    String id,
+    String prompt, {
+    required String systemPrompt,
+    int maxOutputTokens = 1024,
+  }) => effectiveState['tools'] == true
+      ? _generate(
+          id,
+          prompt,
+          systemPrompt: systemPrompt,
+          tools: const [],
+          toolDispatcher: ReferenceToolDispatcher({}),
+          plainConversation: true,
+          maxOutputTokens: maxOutputTokens,
+          timeout: const Duration(seconds: 120),
+        )
+      : generate(
+          id,
+          prompt,
+          systemPrompt: systemPrompt,
+          maxOutputTokens: maxOutputTokens,
+          timeout: const Duration(seconds: 120),
+        );
+
   Stream<Map<String, dynamic>> generateWithTools(
     String id,
     String prompt, {

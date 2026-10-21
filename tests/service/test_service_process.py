@@ -280,6 +280,14 @@ def running(tmp_path, request):
         "#!/usr/bin/env python3\nimport json,sys,time,os,pathlib\n"
         'if "-n" in sys.argv and sys.argv[sys.argv.index("-n")+1]=="0": sys.exit(0)\n'
         'if "-f" in sys.argv: print("Mira sends the draft Tuesday."); sys.exit(0)\n'
+        'if "--probe" in sys.argv: print(json.dumps({"native_stop_token_sequences":True})); sys.exit(0)\n'
+        'request=json.loads(sys.stdin.readline()) if "--model" in sys.argv else {}\n'
+        'if "tools" in request:\n'
+        ' assert request["tools"]["tools"]==[]\n'
+        ' answer={"role":"assistant","content":[{"type":"text","text":"# Overview\\nMira sends the draft Tuesday.\\n# Details\\n* **Draft delivery plan**: Mira owns the draft."}]}\n'
+        ' print("model "+json.dumps(answer),flush=True)\n'
+        ' assert json.loads(sys.stdin.readline())=={"finish":True}\n'
+        ' print("answer "+json.dumps(answer),flush=True); sys.exit(0)\n'
         'marker=pathlib.Path(os.environ["FORESIGHT_DELAY_GENERATION"])\n'
         "if marker.exists(): time.sleep(15)\n"
         'print(json.dumps({"answer":"Mira sends the draft Tuesday. [S1]","citations":["S1"]}))\n'
@@ -503,6 +511,68 @@ def test_shared_owner_concurrent_writes_search_and_mcp(running):
     )
     a.call("sources.delete", {"id": results[0]["id"]})
     assert len(b.call("sources.search", {"query": "draft"})) == 1
+
+
+def test_summary_commits_checkpoint_and_retains_edited_history(running):
+    import sqlite3
+
+    prompt_file = running["root"] / "summary-prompt"
+    runner = running["runner"]
+    runner.write_text(
+        "#!/usr/bin/env python3\nimport sys,pathlib,json\n"
+        'if "--probe" in sys.argv: print(json.dumps({"native_stop_token_sequences":True})); sys.exit(0)\n'
+        "request=json.loads(sys.stdin.readline())\n"
+        'assert request["tools"]["tools"]==[]\n'
+        f'pathlib.Path({str(prompt_file)!r}).write_text(request["prompt"]+"\\n"+request["tools"]["system_message"])\n'
+        'answer={"role":"assistant","content":[{"type":"text","text":"# Overview\\nThe draft ships Tuesday.\\n# Details\\n* **Draft release date**: Mira sends the draft Tuesday."}]}\n'
+        'print("model "+json.dumps(answer),flush=True)\n'
+        'assert json.loads(sys.stdin.readline())=={"finish":True}\n'
+        'print("answer "+json.dumps(answer),flush=True)\n'
+    )
+    peer = running["peer"]
+    peer.call(
+        "models.generation",
+        {"path": str(running["asset"]), "runtime": str(runner)},
+    )
+    meeting = peer.call("meetings.create", {"title": "Summary contract"})["id"]
+    peer.call(
+        "meetings.transcript",
+        {"id": meeting, "text": "Mira sends the draft Tuesday."},
+    )
+    peer.call("meetings.generate", {"id": meeting, "kind": "summary"})
+    with sqlite3.connect(running["root"] / "data/application.db") as db:
+        first, body, manifest = db.execute(
+            "SELECT id,generated,manifest FROM artifacts WHERE meeting_id=?",
+            [meeting],
+        ).fetchone()
+        assert json.loads(manifest)["mode"] == "full"
+        assert db.execute(
+            "SELECT artifact_id FROM meeting_summary_checkpoints WHERE meeting_id=?",
+            [meeting],
+        ).fetchone() == (first,)
+        assert db.execute(
+            "SELECT content FROM sources WHERE id=?", [f"meeting-summary-{meeting}"]
+        ).fetchone() == (body,)
+    prompt = prompt_file.read_text()
+    assert "<meeting_transcript>\nMira sends the draft Tuesday." in prompt
+    assert "untrusted source data" in prompt
+    peer.call("artifacts.edit", {"id": first, "text": "Reviewed brief"})
+    mcp = McpPeer(running["env"])
+    try:
+        mcp.initialize()
+        generated = mcp.tool(
+            "generate_meeting_artifact", {"id": meeting, "kind": "summary"}
+        )
+        assert not generated.get("isError", False), generated
+    finally:
+        mcp.close()
+    with sqlite3.connect(running["root"] / "data/application.db") as db:
+        assert db.execute(
+            "SELECT edited FROM artifacts WHERE id=?", [first]
+        ).fetchone() == ("Reviewed brief",)
+        assert db.execute(
+            "SELECT count(*) FROM artifacts WHERE meeting_id=?", [meeting]
+        ).fetchone() == (2,)
 
 
 def test_capture_survives_client_disconnect_and_other_client_cannot_start_second(

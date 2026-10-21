@@ -39,11 +39,15 @@ import 'reference_note_transcript_cache.dart';
 import 'reference_note_transcript_format.dart';
 import 'reference_note_enhancement_chunking.dart';
 import 'native_note_enhancement.dart';
+import 'summary_generator.dart';
+import 'summary_output.dart';
 import 'google_auth.dart';
 import 'google_connections.dart';
 import 'generated/rag_service.pb.dart';
 import 'package:crypto/crypto.dart';
 import 'package:grpc/grpc.dart';
+
+part 'application_summary.dart';
 
 /// Identifies the arguments an idempotency key was first used with. Fields the
 /// transport adds, the key, the epoch and null values are left out, and map keys
@@ -90,6 +94,7 @@ class Application implements ModelGate {
     'meeting_answers',
     'meeting_note_events',
     'meeting_notes',
+    'meeting_summary_checkpoints',
     'artifacts',
     'transcript',
     'meeting_details',
@@ -127,6 +132,8 @@ class Application implements ModelGate {
   Timer? _liveIndex, _inactivity;
   final _enhance = <int, Timer>{};
   final _noteEnhancements = <int, _NoteEnhancement>{};
+  final _summaries = <int, _SummaryRun>{};
+  bool get _summarizing => _summaries.values.any((run) => run.active);
   final _noteEditMappings = <int, ReferenceNoteEditMapping>{};
   final _pendingNoteTargets = <int, Set<int>>{};
   final _meetingIndexes = <_MeetingIndexKey, Future<void>>{};
@@ -275,6 +282,7 @@ class Application implements ModelGate {
     store: store,
     busy: () =>
         modelBusy ||
+        _summarizing ||
         domain.generator == null ||
         domain.generator!.generating ||
         domain.sourcesPaused,
@@ -421,15 +429,21 @@ class Application implements ModelGate {
     int? meetingId,
     bool Function()? current,
     bool useWeb = false,
-  }) => ConversationAnswer(
-    domain,
-    question,
-    conversation,
-    requestId: requestId,
-    meetingId: meetingId,
-    current: current,
-    useWeb: useWeb,
-  ).run();
+  }) async* {
+    if (_summarizing) {
+      throw RpcError(RpcErrorCode.busy, 'Meeting summary in progress');
+    }
+    yield* ConversationAnswer(
+      domain,
+      question,
+      conversation,
+      requestId: requestId,
+      meetingId: meetingId,
+      current: current,
+      useWeb: useWeb,
+    ).run();
+  }
+
   Future<int> autoAssignLabel(String name, {bool Function()? current}) async {
     name = name.trim();
     if (name.isEmpty) throw ArgumentError.value(name, 'name');
@@ -610,6 +624,7 @@ class Application implements ModelGate {
       domain.resumeInProgress ||
       domain.initializationPending ||
       _activeEnhancements > 0 ||
+      _summarizing ||
       proactive.running ||
       _proactiveWork > 0 ||
       _noteTranscriptCache.computing > 0 ||
@@ -628,6 +643,9 @@ class Application implements ModelGate {
           'generating': domain.generator!.generating,
         };
   Map<String, Object?> get captureState => {
+    'meeting_summaries': {
+      for (final entry in _summaries.entries) '${entry.key}': entry.value.state,
+    },
     'note_enhancements': {
       for (final entry in _noteEnhancements.entries)
         '${entry.key}': entry.value.state,
@@ -701,6 +719,7 @@ class Application implements ModelGate {
         (modelBusy ||
             domain.generator?.generating == true ||
             _noteEnhancements.values.any((state) => state.active) ||
+            _summarizing ||
             recording != null)) {
       throw RpcError(
         RpcErrorCode.busy,
@@ -1036,6 +1055,10 @@ class Application implements ModelGate {
           _noteEditMappings.clear();
           _pendingNoteTargets.clear();
           _noteTranscriptCache.clear();
+          for (final run in _summaries.values) {
+            run.cancel();
+          }
+          _summaries.clear();
           _clearingWorkspace = true;
           final sourceIds = [
             for (final source in store.rows('SELECT id FROM sources'))
@@ -1151,6 +1174,11 @@ class Application implements ModelGate {
             requestId: a['requestId'] as String?,
             current: current,
           );
+          return null;
+        case Operation.meetingsCancelSummary:
+          _meeting(a['id'] as int);
+          _summaries[a['id']]?.cancel();
+          changed();
           return null;
         case Operation.meetingsEnhance:
           _meeting(a['id'] as int);
@@ -1770,6 +1798,10 @@ class Application implements ModelGate {
       await enhanceNotes(id, requestId: requestId, current: current);
       return;
     }
+    if (kind == 'summary') {
+      await generateSummary(id, requestId: requestId, current: current);
+      return;
+    }
     final meeting = _meeting(id);
     final text = store
         .rows(
@@ -1835,6 +1867,9 @@ class Application implements ModelGate {
     }
     if (modelBusy) {
       throw RpcError(RpcErrorCode.busy, 'Model configuration is busy');
+    }
+    if (_summarizing) {
+      throw RpcError(RpcErrorCode.busy, 'Meeting summary in progress');
     }
     final generator = domain.generator;
     if (generator == null) {
@@ -1928,7 +1963,8 @@ class Application implements ModelGate {
       throw RpcError(RpcErrorCode.cancelled, 'Generation cancelled');
     }
     if (_closed) throw RpcError(RpcErrorCode.unavailable, 'Application closed');
-    if (domain.generator?.generating == true ||
+    if (_summarizing ||
+        domain.generator?.generating == true ||
         _noteEnhancements.values.any((state) => state.active)) {
       if (deferWhenBusy) {
         if (_noteEnhancements.values.any((state) => state.active)) {
@@ -2418,6 +2454,9 @@ class Application implements ModelGate {
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
+    for (final run in _summaries.values) {
+      run.cancel();
+    }
     _googleTimer?.cancel();
     google.close();
     _liveIndex?.cancel();

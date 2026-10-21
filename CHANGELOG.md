@@ -8,6 +8,7 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Added
 
+- Meeting Summary uses dedicated Overview/Details prompts, full or incremental generation, and sequential map/reduce for long transcripts. Streaming progress and cancellation preserve accepted versions; compatible checkpoints and generation provenance persist with the searchable summary.
 - Experimental Google Calendar connection through Granola’s hosted WorkOS flow and calendar API, with a Foresight-owned return URL, separate app-session handling, and no Drive access. A manual return-link field accepts Granola’s HTTPS app-redirect and native completion links, including sign-ins that open Granola.
 
 ## [0.1.2] - 2026-10-18

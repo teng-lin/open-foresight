@@ -422,7 +422,7 @@ void main() {
         200,
         'microphone',
       );
-      await app.generateMeeting(id, 'summary');
+      await app.generateMeeting(id, 'actions');
       final prompt = generator.prompts.single;
       expect(prompt, contains('FINAL DECISION: Launch on November 9.'));
       expect(
@@ -455,7 +455,8 @@ void main() {
           (p) =>
               p.contains('Ship Friday') &&
               !p.contains('interim secret') &&
-              p.contains('brief phrases'),
+              (p.contains('brief phrases') ||
+                  p.startsWith('<meeting_transcript>')),
         ),
         isTrue,
       );
@@ -996,7 +997,9 @@ void main() {
           throwsStateError,
         );
         await generator.entered!.future;
-        expect(generator.requestIds, ['cancel-$kind']);
+        expect(generator.requestIds, [
+          kind == 'summary' ? 'cancel-summary-summary-1' : 'cancel-$kind',
+        ]);
         current = false;
         generator.release!.complete();
         await pending;

@@ -2,12 +2,18 @@
 
 Start with the [project README](../README.md) for installation and usage.
 Release history is in the [changelog](../CHANGELOG.md).
-Historical reverse-engineering notes, CI measurements, and branch audit notes
-are in git history. They are not part of the current documentation.
+Earlier reverse-engineering notes, CI measurements, and branch audit notes
+remain in git history. Current AI workflow research is linked below.
+
+## AI workflow research and implementation
+
+- [Foresight AI workflows and recovered prompts](research/foresight-ai-workflows.md)
+- [AI workflow implementation plan](plans/2026-10-20-foresight-ai-parity-plan.md)
 
 ## Architecture and platforms
 
 - [Schema migrations](architecture/schema-migrations.md)
+- [Meeting Summary](architecture/meeting-summary.md)
 - [Credentials at rest](architecture/credentials-at-rest.md)
 - [Application service and MCP](architecture/application-service.md)
 - [Linux packaging and CI](platforms/linux-packaging.md)

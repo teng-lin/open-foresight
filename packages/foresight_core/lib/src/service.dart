@@ -1923,7 +1923,9 @@ class ApplicationService {
           lease.method == Operation.googleAddAccount.wire) {
         application.cancelSignIn(lease.id);
       }
-      domain.generator?.cancel(requestId: lease.id);
+      if (!application.cancelSummaryRequest(lease.id)) {
+        domain.generator?.cancel(requestId: lease.id);
+      }
     }
     final subscription = _subscriptions[client]?.remove(id);
     if (subscription != null) {

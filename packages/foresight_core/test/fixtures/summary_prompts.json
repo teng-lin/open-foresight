@@ -1,0 +1,218 @@
+{
+  "37749": {
+    "pp": "37749",
+    "x27_byte_displacement": "0x49ba8",
+    "label": "incremental summary existing brief opening",
+    "group": "summary",
+    "evidence_type": "direct matching-snapshot String UTF-16 unit recovery",
+    "binding": {
+      "status": "fresh IDA static call-site bound",
+      "function_address": "0x100a45940",
+      "source": "../summary-generate-tail.txt",
+      "role": "summary request framing or telemetry",
+      "runtime_observed": false
+    },
+    "utf8_bytes": 25,
+    "utf16_units": 25,
+    "sha256_utf8": "cc7a4a83064c4225377fed3036c3a60f9586f14cbbdf8a535fae5cc72ed9f2f6",
+    "text": "<existing_meeting_brief>\n"
+  },
+  "37750": {
+    "pp": "37750",
+    "x27_byte_displacement": "0x49bb0",
+    "label": "incremental summary existing brief closing / new transcript opening",
+    "group": "summary",
+    "evidence_type": "direct matching-snapshot String UTF-16 unit recovery",
+    "binding": {
+      "status": "fresh IDA static call-site bound",
+      "function_address": "0x100a45940",
+      "source": "../summary-generate-tail.txt",
+      "role": "summary request framing or telemetry",
+      "runtime_observed": false
+    },
+    "utf8_bytes": 53,
+    "utf16_units": 53,
+    "sha256_utf8": "bca19c0f6a74d2dc4b503398fb0b647888084a57595e689db3242dacadab5f8a",
+    "text": "\n</existing_meeting_brief>\n\n<new_transcript_section>\n"
+  },
+  "37751": {
+    "pp": "37751",
+    "x27_byte_displacement": "0x49bb8",
+    "label": "incremental summary new transcript closing",
+    "group": "summary",
+    "evidence_type": "direct matching-snapshot String UTF-16 unit recovery",
+    "binding": {
+      "status": "fresh IDA static call-site bound",
+      "function_address": "0x100a45940",
+      "source": "../summary-generate-tail.txt",
+      "role": "summary request framing or telemetry",
+      "runtime_observed": false
+    },
+    "utf8_bytes": 27,
+    "utf16_units": 27,
+    "sha256_utf8": "8caab75379ccdb285fc46e042748f56e06649d4991cbb008906c783fc057cb6b",
+    "text": "\n</new_transcript_section>\n"
+  },
+  "37752": {
+    "pp": "37752",
+    "x27_byte_displacement": "0x49bc0",
+    "label": "incremental meeting brief update prompt",
+    "group": "summary",
+    "evidence_type": "direct matching-snapshot String UTF-16 unit recovery",
+    "binding": {
+      "status": "fresh IDA static call-site bound",
+      "function_address": "0x100a45940",
+      "source": "../summary-generate-tail.txt",
+      "role": "incremental branch",
+      "runtime_observed": false
+    },
+    "utf8_bytes": 1905,
+    "utf16_units": 1905,
+    "sha256_utf8": "31b0451fb52cb503806166e6f6d5f18d2a1a2f15da1f7ed0f30a8d2b873984de",
+    "text": "You are an expert at note taking. Your task is to update an existing meeting brief with new discussion recorded later in the meeting.\n\nRules:\n1. Ground everything strictly in the existing brief and the new transcript section. No outside knowledge or assumptions.\n2. Speaker attribution:\n   - \"Microphone\", \"Remote\", and generic audio channel labels are device audio sources, NOT people or speaker names. NEVER mention, refer to, or attribute statements to \"Microphone\", \"Remote\", or device channel labels (e.g., do NOT say \"Microphone asked...\", \"Remote noted...\", \"Microphone and Remote discussed...\").\n   - ONLY attribute statements or actions to specific people if real human names are clearly identified in the transcript (e.g., \"Alice\", \"Bob\").\n   - If real speaker names are not clearly identified, describe the discussion in the abstract (e.g., \"The discussion focused on XYZ\", \"Questions were raised regarding...\", \"Concerns were expressed that...\", \"It was explained that...\", \"The team discussed...\", \"XYZ was identified as a potential risk\").\n3. Use gender-neutral pronouns (they/them).\n4. Keep the tone professional, objective, and factual.\n5. Do not include any greeting, preamble, conversational filler, or commentary. Output markdown directly following the template.\n6. Do NOT include square brackets in your output.\n\nFollow this template exactly in your output:\n\n# Overview\nProvide a concise, updated summary of the meeting, incorporating any major new outcomes from the new discussion while keeping it to 3-5 sentences (maximum 10 sentences), readable in 30 seconds.\n\n# Details\nA bulleted list that captures each discussion or topic in a bit more detail. Keep existing key talking points and add or update talking points for newly discussed topics. Each bullet must have a \"header\" (3-5 words) and a \"body\" (exactly one or two sentences less than 30 words). Format as:\n* **Header**: Body\n"
+  },
+  "37753": {
+    "pp": "37753",
+    "x27_byte_displacement": "0x49bc8",
+    "label": "main summary transcript opening",
+    "group": "summary",
+    "evidence_type": "direct matching-snapshot String UTF-16 unit recovery",
+    "binding": {
+      "status": "fresh IDA static call-site bound",
+      "function_address": "0x100a45940",
+      "source": "../summary-generate-tail.txt",
+      "role": "summary request framing or telemetry",
+      "runtime_observed": false
+    },
+    "utf8_bytes": 21,
+    "utf16_units": 21,
+    "sha256_utf8": "3f675aa314a82ef87a693007427d81b1ecc7e74dd3b7f4bbd71d617b35ebbf1a",
+    "text": "<meeting_transcript>\n"
+  },
+  "37754": {
+    "pp": "37754",
+    "x27_byte_displacement": "0x49bd0",
+    "label": "main summary transcript closing",
+    "group": "summary",
+    "evidence_type": "direct matching-snapshot String UTF-16 unit recovery",
+    "binding": {
+      "status": "fresh IDA static call-site bound",
+      "function_address": "0x100a45940",
+      "source": "../summary-generate-tail.txt",
+      "role": "summary request framing or telemetry",
+      "runtime_observed": false
+    },
+    "utf8_bytes": 23,
+    "utf16_units": 23,
+    "sha256_utf8": "270e31afe2d0dad5d3fc6ffddf55cc521d94744cc0a2b07c2e17f2025146f9a2",
+    "text": "\n</meeting_transcript>\n"
+  },
+  "37755": {
+    "pp": "37755",
+    "x27_byte_displacement": "0x49bd8",
+    "label": "meeting brief main summary prompt",
+    "group": "summary",
+    "evidence_type": "direct matching-snapshot String UTF-16 unit recovery",
+    "binding": {
+      "status": "fresh IDA static call-site bound",
+      "function_address": "0x100a45940",
+      "source": "../summary-generate-tail.txt",
+      "role": "main branch; also reduce callback 0x100a47e70",
+      "runtime_observed": false
+    },
+    "utf8_bytes": 2166,
+    "utf16_units": 2164,
+    "sha256_utf8": "de8145a6d5e3c14d665a161c19fe14dfd1b0ac53112888315d993520373dc533",
+    "text": "You are an expert at note taking. Your task is to generate a meeting brief from a meeting transcript that covers the key talking points in a concise manner. This is a place to include major outcomes, such as decisions made, the future state of a project/team, areas that require more work, topics that had disagreements. Do not include minor topics that an executive wouldn’t care about. A talking point is a meaningful discussion relevant to the meeting. A talking point is not small talk or pleasantries shared between meeting participants. One key talking point should map to one meeting section.\n\nRules:\n1. Ground everything strictly in the transcript. No outside knowledge or assumptions.\n2. Speaker attribution:\n   - \"Microphone\", \"Remote\", and generic audio channel labels are device audio sources, NOT people or speaker names. NEVER mention, refer to, or attribute statements to \"Microphone\", \"Remote\", or device channel labels (e.g., do NOT say \"Microphone asked...\", \"Remote noted...\", \"Microphone and Remote discussed...\").\n   - ONLY attribute statements or actions to specific people if real human names are clearly identified in the transcript (e.g., \"Alice\", \"Bob\").\n   - If real speaker names are not clearly identified, describe the discussion in the abstract (e.g., \"The discussion focused on XYZ\", \"Questions were raised regarding...\", \"Concerns were expressed that...\", \"It was explained that...\", \"The team discussed...\", \"XYZ was identified as a potential risk\").\n3. Use gender-neutral pronouns (they/them).\n4. Keep the tone professional, objective, and factual.\n5. Do not include any greeting, preamble, conversational filler, or commentary. Output markdown directly following the template.\n6. Do NOT include square brackets in your output.\n\nFollow this template exactly in your output:\n\n# Overview\nProvide a concise summary of the meeting, typically 3-5 sentences but maximum 10 sentences, readable in 30 seconds.\n\n# Details\nA bulleted list that captures each discussion or topic in a bit more detail. Each bullet must have a \"header\" (3-5 words) and a \"body\" (exactly one or two sentences less than 30 words). Format as:\n* **Header**: Body\n"
+  },
+  "37765": {
+    "pp": "37765",
+    "x27_byte_displacement": "0x49c28",
+    "label": "summary reduce-stage key points opening",
+    "group": "summary",
+    "evidence_type": "direct matching-snapshot String UTF-16 unit recovery",
+    "binding": {
+      "status": "fresh IDA static call-site bound",
+      "function_address": "0x100a47e70",
+      "source": "../summary-map-callback.txt",
+      "role": "reduce callback; file label reversed",
+      "runtime_observed": false
+    },
+    "utf8_bytes": 80,
+    "utf16_units": 80,
+    "sha256_utf8": "0437c4405b2d98948a0fc3052fc2c706d7cd02f29356254ffa1bb9523a68d044",
+    "text": "Below are the key points extracted from the meeting transcript:\n<meeting_notes>\n"
+  },
+  "37766": {
+    "pp": "37766",
+    "x27_byte_displacement": "0x49c30",
+    "label": "summary reduce-stage key points closing",
+    "group": "summary",
+    "evidence_type": "direct matching-snapshot String UTF-16 unit recovery",
+    "binding": {
+      "status": "fresh IDA static call-site bound",
+      "function_address": "0x100a47e70",
+      "source": "../summary-map-callback.txt",
+      "role": "reduce callback; file label reversed",
+      "runtime_observed": false
+    },
+    "utf8_bytes": 18,
+    "utf16_units": 18,
+    "sha256_utf8": "74e1ddc35d0db1d0d90fd6b9855f59b8a2700c545b72f1d28ce43f18e2a0aa06",
+    "text": "\n</meeting_notes>\n"
+  },
+  "37770": {
+    "pp": "37770",
+    "x27_byte_displacement": "0x49c50",
+    "label": "summary map-stage transcript chunk opening",
+    "group": "summary",
+    "evidence_type": "direct matching-snapshot String UTF-16 unit recovery",
+    "binding": {
+      "status": "fresh IDA static call-site bound",
+      "function_address": "0x100a4860c",
+      "source": "../summary-reduce-callback.txt",
+      "role": "map callback; file label reversed",
+      "runtime_observed": false
+    },
+    "utf8_bytes": 19,
+    "utf16_units": 19,
+    "sha256_utf8": "6abdfc36a5ab3202d0b9997988a6764511c38f60439c8794f40ce5e2b18a04da",
+    "text": "<transcript_chunk>\n"
+  },
+  "37771": {
+    "pp": "37771",
+    "x27_byte_displacement": "0x49c58",
+    "label": "summary map-stage transcript chunk closing",
+    "group": "summary",
+    "evidence_type": "direct matching-snapshot String UTF-16 unit recovery",
+    "binding": {
+      "status": "fresh IDA static call-site bound",
+      "function_address": "0x100a4860c",
+      "source": "../summary-reduce-callback.txt",
+      "role": "map callback; file label reversed",
+      "runtime_observed": false
+    },
+    "utf8_bytes": 21,
+    "utf16_units": 21,
+    "sha256_utf8": "4143474a1e94aa32eab13fc476bc13f285079873249ff5e8b799dfc8c7a5dd84",
+    "text": "\n</transcript_chunk>\n"
+  },
+  "37772": {
+    "pp": "37772",
+    "x27_byte_displacement": "0x49c60",
+    "label": "meeting transcript map-stage chunk prompt",
+    "group": "summary",
+    "evidence_type": "direct matching-snapshot String UTF-16 unit recovery",
+    "binding": {
+      "status": "fresh IDA static call-site bound",
+      "function_address": "0x100a4860c",
+      "source": "../summary-reduce-callback.txt",
+      "role": "map callback; file label reversed",
+      "runtime_observed": false
+    },
+    "utf8_bytes": 486,
+    "utf16_units": 486,
+    "sha256_utf8": "fd6842d02aa8b5b41b49ade8f0d61bd568440536be3c3d97065b7b285647928c",
+    "text": "You are an expert note taker. Extract the key talking points and decisions from this transcript chunk as concise bullet points. Focus on outcomes, decisions, future state, areas requiring work, and disagreements. Ignore pleasantries and small talk.\nDo NOT attribute points to \"Microphone\" or \"Remote\". Only attribute speakers if clearly identified by real names; otherwise describe the points in the abstract (e.g., \"The discussion focused on...\", \"Concerns were raised regarding...\").\n"
+  }
+}
