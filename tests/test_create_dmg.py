@@ -2,6 +2,8 @@
 
 import hashlib
 import json
+import os
+import plistlib
 from pathlib import Path
 import subprocess
 from unittest.mock import patch
@@ -11,7 +13,10 @@ import pytest
 from tools import create_dmg
 
 
-def test_shared_dmg_sidecar_binds_bytes_source_version_architecture_and_build(tmp_path):
+@pytest.mark.parametrize("leaked_attachment", [False, True])
+def test_shared_dmg_sidecar_binds_bytes_source_version_architecture_and_build(
+    tmp_path, leaked_attachment
+):
     app = tmp_path / "Open Foresight.app"
     app.mkdir()
     manifest = tmp_path / "app.manifest.json"
@@ -23,7 +28,21 @@ def test_shared_dmg_sidecar_binds_bytes_source_version_architecture_and_build(tm
     }
     manifest.write_text(json.dumps(identity))
 
+    commands = []
+
     def run(arguments, **kwargs):
+        commands.append(arguments)
+        if arguments == ["hdiutil", "info", "-plist"]:
+            image = tmp_path / "dist/Open-Foresight-0.1.2-macos-arm64.dmg"
+            return subprocess.CompletedProcess(
+                arguments, 0, plistlib.dumps({"images": [attachment(image)]}), b""
+            )
+        if (
+            leaked_attachment
+            and arguments[:2] == ["hdiutil", "verify"]
+            and not any(cmd[:2] == ["hdiutil", "detach"] for cmd in commands)
+        ):
+            return subprocess.CompletedProcess(arguments, 1, "", BUSY)
         if arguments[:2] == ["hdiutil", "create"]:
             Path(arguments[-1]).write_bytes(b"verified disk image")
         return subprocess.CompletedProcess(arguments, 0, "verified\n", "")
@@ -32,6 +51,9 @@ def test_shared_dmg_sidecar_binds_bytes_source_version_architecture_and_build(tm
         image = create_dmg.create(
             app, manifest, "Open-Foresight-0.1.2-macos-arm64.dmg", tmp_path / "dist"
         )
+    assert [cmd for cmd in commands if cmd[:2] == ["hdiutil", "detach"]] == (
+        [["hdiutil", "detach", "/dev/disk5"]] if leaked_attachment else []
+    )
     metadata = json.loads(Path(str(image) + ".build.json").read_text())
     assert metadata == {
         "sha256": hashlib.sha256(image.read_bytes()).hexdigest(),
@@ -184,6 +206,10 @@ def test_failed_verification_never_recreates_image_or_writes_sidecars(
         commands.append(arguments)
         if arguments[:2] == ["hdiutil", "create"]:
             Path(arguments[-1]).write_bytes(b"original image")
+        if arguments == ["hdiutil", "info", "-plist"]:
+            return subprocess.CompletedProcess(
+                arguments, 0, plistlib.dumps({"images": []}), b""
+            )
         if arguments[:2] == ["hdiutil", "verify"]:
             return subprocess.CompletedProcess(
                 arguments, returncode, "failed output\n", diagnostic
@@ -276,3 +302,171 @@ def test_image_diagnostics_capture_lock_owners_without_hiding_failure(
         "Diagnostic unavailable" if failure else "diskimages-helper holds image"
     ) in output
     assert image.read_bytes() == b"original image"
+
+
+def attachment(image, disk="/dev/disk5"):
+    return {
+        "image-path": str(image),
+        "owner-uid": os.getuid(),
+        "system-entities": [
+            {"dev-entry": disk, "content-hint": "GUID_partition_scheme"},
+            {"dev-entry": disk + "s1", "content-hint": "Apple_APFS"},
+            {
+                "dev-entry": "/dev/disk6",
+                "content-hint": "EF57347C-0000-11AA-AA11-00306543ECAC",
+            },
+        ],
+    }
+
+
+@pytest.mark.parametrize("change_bytes", [False, True])
+def test_new_image_recovery_detaches_only_owned_outer_device(tmp_path, change_bytes):
+    image = tmp_path / "new.dmg"
+    image.write_bytes(b"created image")
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append(command)
+        if command[1] == "verify":
+            busy = len(commands) == 1
+            return subprocess.CompletedProcess(
+                command, int(busy), "", BUSY if busy else ""
+            )
+        if command[1] == "info":
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                plistlib.dumps(
+                    {
+                        "images": [
+                            attachment(tmp_path / "unrelated.dmg", "/dev/disk9"),
+                            attachment(image),
+                        ]
+                    }
+                ),
+                b"",
+            )
+        assert command == ["hdiutil", "detach", "/dev/disk5"]
+        if change_bytes:
+            image.write_bytes(b"changed during detach")
+        return subprocess.CompletedProcess(command, 0, "detached\n", "")
+
+    with patch.object(create_dmg.subprocess, "run", side_effect=run):
+        if change_bytes:
+            with pytest.raises(ValueError, match="DMG bytes changed"):
+                create_dmg.verify_image(image, created_image=True)
+        else:
+            create_dmg.verify_image(image, created_image=True)
+    assert [cmd for cmd in commands if cmd[1] == "detach"] == [
+        ["hdiutil", "detach", "/dev/disk5"]
+    ]
+    assert sum(cmd[1] == "verify" for cmd in commands) == (1 if change_bytes else 2)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "duplicate",
+        "partition",
+        "synthesized",
+        "foreign-owner",
+        "duplicate-guid",
+        "detach-fails",
+        "info-fails",
+        "malformed",
+    ],
+)
+def test_recovery_fails_closed_on_ambiguous_or_failed_cleanup(tmp_path, case, capsys):
+    image = tmp_path / "new.dmg"
+    image.write_bytes(b"created image")
+    entry = attachment(image)
+    entries = [entry]
+    if case == "duplicate":
+        entries.append(attachment(image))
+    if case == "partition":
+        entry["system-entities"][0]["dev-entry"] = "/dev/disk5s1"
+    if case == "synthesized":
+        entry["system-entities"].pop(0)
+    if case == "duplicate-guid":
+        entry["system-entities"].append(
+            {"dev-entry": "/dev/disk8", "content-hint": "GUID_partition_scheme"}
+        )
+    if case == "foreign-owner":
+        entry["owner-uid"] = os.getuid() + 1
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append(command)
+        if command[1] == "verify":
+            return subprocess.CompletedProcess(command, 1, "", BUSY)
+        if command[1] == "info":
+            return subprocess.CompletedProcess(
+                command,
+                int(case == "info-fails"),
+                b"broken"
+                if case == "malformed"
+                else plistlib.dumps({"images": entries}),
+                b"info diagnostic\n",
+            )
+        return subprocess.CompletedProcess(
+            command, 1, "detach output\n", "detach failed\n"
+        )
+
+    with patch.object(create_dmg.subprocess, "run", side_effect=run):
+        with pytest.raises(
+            (ValueError, subprocess.CalledProcessError, plistlib.InvalidFileException)
+        ):
+            create_dmg.verify_image(image, created_image=True)
+    assert sum(cmd[1] == "detach" for cmd in commands) == int(case == "detach-fails")
+    assert sum(cmd[1] == "verify" for cmd in commands) == 1
+    assert image.read_bytes() == b"created image"
+    assert "info diagnostic" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("elapsed", [30, 29])
+def test_attachment_discovery_and_detach_share_recovery_deadline(
+    tmp_path, clock, elapsed
+):
+    image = tmp_path / "new.dmg"
+    image.write_bytes(b"created image")
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append(command)
+        if command[1] == "verify":
+            clock.advance(elapsed)
+            return subprocess.CompletedProcess(command, 1, "", BUSY)
+        assert command == ["hdiutil", "info", "-plist"]
+        assert kwargs["timeout"] == 1
+        clock.advance(1)
+        return subprocess.CompletedProcess(
+            command, 0, plistlib.dumps({"images": [attachment(image)]}), b""
+        )
+
+    with patch.object(create_dmg.subprocess, "run", side_effect=run):
+        with pytest.raises(subprocess.CalledProcessError):
+            create_dmg.verify_image(image, created_image=True)
+    assert sum(cmd[1] == "info" for cmd in commands) == int(elapsed == 29)
+    assert not any(cmd[1] == "detach" for cmd in commands)
+
+
+@pytest.mark.parametrize("phase", ["info", "detach"])
+def test_attachment_timeout_preserves_partial_failure_output(tmp_path, phase, capsys):
+    image = tmp_path / "new.dmg"
+    image.write_bytes(b"created image")
+
+    def run(command, **kwargs):
+        if command[1] == phase:
+            raise subprocess.TimeoutExpired(
+                command, 10, output=b"partial output\n", stderr=b"partial error\n"
+            )
+        return subprocess.CompletedProcess(
+            command, 0, plistlib.dumps({"images": [attachment(image)]}), b""
+        )
+
+    with patch.object(create_dmg.subprocess, "run", side_effect=run):
+        with pytest.raises(subprocess.TimeoutExpired):
+            create_dmg.detach_created_image(image)
+    output = capsys.readouterr()
+    assert "partial output" in output.out
+    assert "partial error" in output.err

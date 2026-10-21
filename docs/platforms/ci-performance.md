@@ -1293,9 +1293,10 @@ It compiles no application or vendor library for this cache.
 
 Package contracts consume the same run's verified Linux bundle and keep native
 DEB/RPM/Arch lifecycle checks plus the separate signed DMG fixture. The DMG
-contract job waits for the `macos` build and tests to succeed; selecting DMG
-contracts also selects that prerequisite in both classifiers. It does not run
-concurrently with the macOS application job. The single
+contract job builds its own signed fixture and can run concurrently with the
+macOS application job. Selecting DMG contracts alone does not require a full
+macOS application build. Actual release packaging still consumes its verified
+application artifact. The single
 `macos` job reuses the qualified SDK, runs fresh native,
 core, desktop and compiled service/MCP gates in one workspace, then assembles and
 smokes the application. Nightly callers explicitly request the Mac coverage

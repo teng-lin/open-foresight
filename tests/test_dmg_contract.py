@@ -89,6 +89,87 @@ class DmgContractTest(unittest.TestCase):
                 sorted(path.name for path in root.iterdir()), ["locked.dmg", "source"]
             )
 
+    def test_owned_attachment_cleanup_preserves_unrelated_image_and_verification(self):
+        """Real writable EAGAIN and compressed-image cleanup, without SDK builds."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            source = root / "source"
+            source.mkdir()
+            (source / "evidence").write_text("owned attachment fixture\n")
+            images = []
+            devices = {}
+
+            def inventory():
+                return plistlib.loads(
+                    subprocess.check_output(["hdiutil", "info", "-plist"], timeout=30)
+                )["images"]
+
+            try:
+                for name, format_name in (
+                    ("unrelated", "UDRW"),
+                    ("writable", "UDRW"),
+                    ("compressed", "UDZO"),
+                ):
+                    image = root / (name + ".dmg")
+                    subprocess.run(
+                        [
+                            "hdiutil",
+                            "create",
+                            "-srcfolder",
+                            str(source),
+                            "-format",
+                            format_name,
+                            str(image),
+                        ],
+                        check=True,
+                        timeout=60,
+                    )
+                    attached = plistlib.loads(
+                        subprocess.check_output(
+                            [
+                                "hdiutil",
+                                "attach",
+                                "-nomount",
+                                "-plist",
+                                str(image),
+                            ],
+                            timeout=60,
+                        )
+                    )
+                    devices[image] = next(
+                        entity["dev-entry"]
+                        for entity in attached["system-entities"]
+                        if entity["content-hint"] == "GUID_partition_scheme"
+                    )
+                    images.append(image)
+                unrelated, writable, compressed = images
+                digests = {image: packager.image_digest(image) for image in images}
+                # A real writable attachment holds the EAGAIN-producing lock.
+                # Cleanup must expose the genuine missing-checksum error rather
+                # than treating a successful detach as successful verification.
+                with self.assertRaises(subprocess.CalledProcessError) as failure:
+                    packager.verify_image(writable, created_image=True)
+                self.assertIn("has no checksum", failure.exception.stderr)
+                self.assertNotIn(
+                    str(writable), [entry["image-path"] for entry in inventory()]
+                )
+                # A normally attached UDZO is readonly. Exercise real cleanup
+                # independently, then require its actual checksum verification.
+                self.assertTrue(packager.detach_created_image(compressed))
+                packager.verify_image(compressed)
+                paths = [entry["image-path"] for entry in inventory()]
+                self.assertIn(str(unrelated), paths)
+                self.assertNotIn(str(compressed), paths)
+                for image in images:
+                    self.assertEqual(packager.image_digest(image), digests[image])
+            finally:
+                paths = [entry["image-path"] for entry in inventory()]
+                for image, device in devices.items():
+                    if str(image) in paths:
+                        subprocess.run(
+                            ["hdiutil", "detach", device], check=True, timeout=60
+                        )
+
     def test_signed_fixture_survives_dmg_creation_and_mount(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

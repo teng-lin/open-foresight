@@ -170,16 +170,14 @@ def select_gates(paths, force=False):
                 selected[gate] = True
         else:
             selected = dict.fromkeys(GATES, True)
-    # Every installer contract consumes this run's bundle. Its build also
-    # selects its test consumer.
+    # Linux installer contracts consume this run's bundle. The independent
+    # DMG contracts build their own signed fixture.
     if selected["packaging"]:
         selected["linux-build"] = True
     if selected["linux-build"]:
         selected["linux-test"] = True
     if selected["macos"] or selected["packaging"]:
         selected["dmg"] = True
-    if selected["dmg"]:
-        selected["macos"] = True
     return selected
 
 
