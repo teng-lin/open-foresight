@@ -20,6 +20,75 @@ spec.loader.exec_module(packager)
 
 @unittest.skipUnless(sys.platform == "darwin", "Apple codesign and hdiutil required")
 class DmgContractTest(unittest.TestCase):
+    def test_verification_waits_for_owned_image_lock_without_changing_bytes(self):
+        """Exercise real DiskImages EAGAIN beyond the former retry window."""
+        import contextlib
+        import fcntl
+        import io
+        import threading
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            source.mkdir()
+            (source / "evidence").write_text("same-byte verification fixture\n")
+            image = root / "locked.dmg"
+            subprocess.run(
+                [
+                    "hdiutil",
+                    "create",
+                    "-srcfolder",
+                    str(source),
+                    "-format",
+                    "UDZO",
+                    str(image),
+                ],
+                check=True,
+                timeout=60,
+            )
+            digest = packager.image_digest(image)
+            released = threading.Event()
+            with image.open("r+b") as stream:
+                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked = subprocess.run(
+                    ["hdiutil", "verify", str(image)],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                self.assertEqual(locked.returncode, 1, locked.stdout + locked.stderr)
+                self.assertIn(
+                    "hdiutil: verify failed - Resource temporarily unavailable",
+                    locked.stderr.splitlines(),
+                )
+
+                def unlock():
+                    fcntl.flock(stream, fcntl.LOCK_UN)
+                    released.set()
+
+                release = threading.Timer(6, unlock)
+                diagnostics = io.StringIO()
+                release.start()
+                try:
+                    with contextlib.redirect_stderr(diagnostics):
+                        packager.verify_image(image)
+                finally:
+                    release.cancel()
+                    release.join()
+                    fcntl.flock(stream, fcntl.LOCK_UN)
+                    print(diagnostics.getvalue(), file=sys.stderr, end="")
+            self.assertTrue(released.is_set(), "Verification must wait for the lock")
+            self.assertGreaterEqual(
+                diagnostics.getvalue().count(
+                    "hdiutil: verify failed - Resource temporarily unavailable"
+                ),
+                3,
+            )
+            self.assertEqual(packager.image_digest(image), digest)
+            self.assertEqual(
+                sorted(path.name for path in root.iterdir()), ["locked.dmg", "source"]
+            )
+
     def test_signed_fixture_survives_dmg_creation_and_mount(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -130,7 +199,7 @@ class DmgContractTest(unittest.TestCase):
                 executable.parent.mkdir(parents=True)
                 source = build / "fixture.c"
                 source.write_text(
-                    '#include <stdio.h>\n'
+                    "#include <stdio.h>\n"
                     f'int main(void) {{ puts("{version}"); return 0; }}\n'
                 )
                 subprocess.run(

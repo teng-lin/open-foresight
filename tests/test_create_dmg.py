@@ -70,6 +70,19 @@ def test_invalid_dmg_application_identity_is_rejected_before_building(tmp_path):
 BUSY = "hdiutil: verify failed - Resource temporarily unavailable\n"
 
 
+@pytest.fixture
+def clock():
+    class Clock:
+        now = 0
+
+        def advance(self, seconds):
+            self.now += seconds
+
+    clock = Clock()
+    with patch.object(create_dmg.time, "monotonic", side_effect=lambda: clock.now):
+        yield clock
+
+
 def test_retry_rejects_changed_disk_image_bytes(tmp_path):
     image = tmp_path / "fixture.dmg"
     image.write_bytes(b"original")
@@ -108,9 +121,9 @@ def test_verification_timeout_preserves_partial_output_without_retry(
     assert captured.err == (expected or "")
 
 
-@pytest.mark.parametrize("failures", [0, 1, 2])
+@pytest.mark.parametrize("failures", [0, 1, 2, 3, 4, 14])
 def test_verification_retries_only_transient_busy_and_preserves_output(
-    tmp_path, capsys, failures
+    tmp_path, capsys, failures, clock
 ):
     image = tmp_path / "existing.dmg"
     image.write_bytes(b"same image bytes")
@@ -121,13 +134,17 @@ def test_verification_retries_only_transient_busy_and_preserves_output(
     results.append(subprocess.CompletedProcess(command, 0, "verified image\n", ""))
     with (
         patch.object(create_dmg.subprocess, "run", side_effect=results) as run,
-        patch.object(create_dmg.time, "sleep") as sleep,
+        patch.object(create_dmg.time, "sleep", side_effect=clock.advance) as sleep,
     ):
         create_dmg.verify_image(image)
     assert run.call_count == failures + 1
-    for call in run.call_args_list:
+    for attempt, call in enumerate(run.call_args_list):
         assert call.args == (command,)
-        assert call.kwargs == {"capture_output": True, "text": True, "timeout": 300}
+        assert call.kwargs == {
+            "capture_output": True,
+            "text": True,
+            "timeout": 300 if attempt == 0 else 30 - 2 * attempt,
+        }
     assert sleep.call_args_list == [((2,),)] * failures
     output = capsys.readouterr()
     assert output.out == "busy attempt\n" * failures + "verified image\n"
@@ -138,7 +155,7 @@ def test_verification_retries_only_transient_busy_and_preserves_output(
 @pytest.mark.parametrize(
     ("diagnostic", "returncode", "attempts"),
     [
-        (BUSY, 1, 3),
+        (BUSY, 1, 15),
         (BUSY, -9, 1),
         ("hdiutil: verify failed - checksum mismatch\n", 1, 1),
         ("hdiutil: verify failed - image not recognized\n", 1, 1),
@@ -146,7 +163,7 @@ def test_verification_retries_only_transient_busy_and_preserves_output(
     ],
 )
 def test_failed_verification_never_recreates_image_or_writes_sidecars(
-    tmp_path, capsys, diagnostic, returncode, attempts
+    tmp_path, capsys, diagnostic, returncode, attempts, clock
 ):
     app = tmp_path / "Open Foresight.app"
     app.mkdir()
@@ -175,7 +192,7 @@ def test_failed_verification_never_recreates_image_or_writes_sidecars(
 
     with (
         patch.object(create_dmg.subprocess, "run", side_effect=run),
-        patch.object(create_dmg.time, "sleep") as sleep,
+        patch.object(create_dmg.time, "sleep", side_effect=clock.advance) as sleep,
         pytest.raises(subprocess.CalledProcessError) as error,
     ):
         create_dmg.create(
@@ -183,7 +200,9 @@ def test_failed_verification_never_recreates_image_or_writes_sidecars(
         )
     assert sum(cmd[:2] == ["hdiutil", "create"] for cmd in commands) == 1
     assert sum(cmd[:2] == ["hdiutil", "verify"] for cmd in commands) == attempts
-    assert sleep.call_args_list == [((2,),)] * (attempts - 1)
+    assert sleep.call_args_list == [((2,),)] * (
+        15 if diagnostic == BUSY and returncode == 1 else 0
+    )
     image = tmp_path / "dist/Open-Foresight-0.1.2-macos-arm64.dmg"
     assert image.read_bytes() == b"original image"
     assert sorted(path.name for path in image.parent.iterdir()) == [image.name]
@@ -192,3 +211,39 @@ def test_failed_verification_never_recreates_image_or_writes_sidecars(
     output = capsys.readouterr()
     assert output.out == "failed output\n" * attempts
     assert output.err.count(diagnostic) == attempts
+
+
+def test_verification_bounds_recovery_including_command_time(tmp_path, clock):
+    image = tmp_path / "fixture.dmg"
+    image.write_bytes(b"original image")
+
+    def run(command, **kwargs):
+        clock.advance(29.5)
+        return subprocess.CompletedProcess(command, 1, "locked image\n", BUSY)
+
+    with (
+        patch.object(create_dmg.subprocess, "run", side_effect=run) as verify,
+        patch.object(create_dmg.time, "sleep", side_effect=clock.advance) as sleep,
+        pytest.raises(subprocess.CalledProcessError) as error,
+    ):
+        create_dmg.verify_image(image)
+    verify.assert_called_once()
+    sleep.assert_called_once_with(0.5)
+    assert clock.now == 30
+    assert error.value.stdout == "locked image\n"
+    assert error.value.stderr == BUSY
+
+
+def test_verification_rejects_bytes_changed_during_successful_command(tmp_path):
+    image = tmp_path / "fixture.dmg"
+    image.write_bytes(b"original image")
+
+    def run(command, **kwargs):
+        image.write_bytes(b"changed image")
+        return subprocess.CompletedProcess(command, 0, "verified image\n", "")
+
+    with (
+        patch.object(create_dmg.subprocess, "run", side_effect=run),
+        pytest.raises(ValueError, match="DMG bytes changed during verification"),
+    ):
+        create_dmg.verify_image(image)
