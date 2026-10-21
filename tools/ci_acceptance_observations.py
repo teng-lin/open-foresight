@@ -10,6 +10,7 @@ import hashlib
 import json
 from pathlib import Path
 import stat
+import sys
 import tempfile
 import zipfile
 
@@ -19,6 +20,12 @@ ROOT = Path(__file__).resolve().parents[1]
 NAME = "ci-acceptance-history"
 MEMBER = "acceptance-failures.json"
 MAX_BYTES = 64 * 1024 * 1024
+MAX_REQUESTS = 256
+MAX_DISCOVERY_PAGES = 4
+
+
+class LookupBudgetExceeded(Exception):
+    """Optional observation lookup exhausted its bounded scheduling budget."""
 
 
 def payload(repository, artifact, member, download):
@@ -40,11 +47,37 @@ def load(repository, baseline_sha256, baseline, until, *, root=ROOT, api=None, d
     """Return only a successful main producer's same-control, checked inventory."""
     api = api or artifacts.api
     download = download or artifacts.download_zip
+    requests = 0
+    def consume():
+        nonlocal requests
+        if requests >= MAX_REQUESTS:
+            raise LookupBudgetExceeded
+        requests += 1
+    def read(repository, route):
+        consume()
+        return api(repository, route)
+    def fetch(repository, artifact, path):
+        consume()
+        return download(repository, artifact, path)
+    try:
+        return _load(repository, baseline_sha256, baseline, until, root=root, api=read, download=fetch)
+    except LookupBudgetExceeded:
+        print("History observation lookup budget exhausted; rediscover jobs from the reviewed frozen inventory", file=sys.stderr)
+        return None
+
+
+def _load(repository, baseline_sha256, baseline, until, *, root, api, download):
     boundary = datetime.fromisoformat(until.replace("Z", "+00:00")) if until else datetime.now(timezone.utc)
     if boundary.tzinfo is None:
         raise ValueError("Observation cutoff needs an explicit timezone")
     controls = rollout.control_closure(root)
-    candidates = sorted(index.rows(repository, "actions/artifacts?name=ci-rollout-qualification", "artifacts", api), key=lambda row: row["id"], reverse=True)
+    candidates = []
+    for page in range(1, MAX_DISCOVERY_PAGES + 1):
+        batch = api(repository, f"actions/artifacts?name=ci-rollout-qualification&per_page=100&page={page}")["artifacts"]
+        candidates.extend(batch)
+        if len(batch) < 100:
+            break
+    candidates.sort(key=lambda row: row["id"], reverse=True)
     for artifact in candidates:
         if artifact.get("name") != "ci-rollout-qualification" or artifact.get("expired") is not False:
             continue

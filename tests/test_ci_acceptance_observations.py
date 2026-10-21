@@ -36,7 +36,7 @@ def proof(tmp_path):
     run = {"id": 11, "head_sha": SOURCE, "head_branch": "main", "event": "workflow_dispatch", "path": ".github/workflows/ci-qualification.yml", "repository": {"full_name": REPOSITORY}, "head_repository": {"full_name": REPOSITORY}, "status": "completed", "conclusion": "success", "created_at": "2026-10-21T00:10:00Z"}
     job = {"id": 110, "run_id": 11, "name": "qualification-acceptance-replay", "run_attempt": 1, "conclusion": "success", "started_at": "2026-10-21T00:10:00Z", "completed_at": "2026-10-21T00:20:00Z"}
     descriptor = rollout.descriptor(SOURCE, root=tmp_path, run_id=11, attempt=1, producer_job=job["name"])
-    descriptor["acceptance_replay"] = {"schema": 2, "baseline_sha256": baseline_sha256, "baseline_count": len(baseline["failures"]), "inventory_sha256": hashlib.sha256(inventory_raw).hexdigest(), "count": len(baseline["failures"]), "miss_count": 0, "unresolved_count": 0, "coverage": {"since": baseline["since"], "until": UNTIL, "complete": True}, "sha256": "c" * 64, "known_escapes": [102, 110, 112, 119, 137, 144]}
+    descriptor["acceptance_replay"] = {"schema": 2, "baseline_sha256": baseline_sha256, "baseline_count": len(baseline["failures"]), "inventory_sha256": hashlib.sha256(inventory_raw).hexdigest(), "count": len(baseline["failures"]), "outer_guard_count": 1, "phase_failure_count": len(baseline["failures"]) - 1, "miss_count": 0, "unresolved_count": 0, "coverage": {"since": baseline["since"], "until": UNTIL, "complete": True}, "sha256": "c" * 64}
     payloads = {1: archive("qualification.json", descriptor), 2: archive(observations.MEMBER, inventory)}
     artifacts = {identity: {"id": identity, "name": "ci-rollout-qualification" if identity == 1 else observations.NAME, "digest": "sha256:" + hashlib.sha256(raw).hexdigest(), "expired": False, "workflow_run": {"id": 11}, "created_at": "2026-10-21T00:18:00Z"} for identity, raw in payloads.items()}
     calls = []
@@ -127,3 +127,21 @@ def test_transport_errors_remain_visible_in_qualification(proof):
 def test_cutoff_requires_timezone(proof):
     with pytest.raises(ValueError, match="timezone"):
         proof["load"]("2026-10-21T00:18:00")
+
+
+@pytest.mark.parametrize("limit", [1, 2])
+def test_lookup_budget_includes_api_and_artifact_downloads_and_falls_back_to_fresh_inspection(proof, monkeypatch, capsys, limit):
+    monkeypatch.setattr(observations, "MAX_REQUESTS", limit)
+    assert proof["load"]() is None
+    assert len(proof["calls"]) <= limit
+    assert "rediscover jobs" in capsys.readouterr().err
+
+
+def test_artifact_discovery_has_an_explicit_page_budget(proof, monkeypatch):
+    monkeypatch.setattr(observations, "MAX_DISCOVERY_PAGES", 2)
+    routes = []
+    def api(repository, route):
+        routes.append(route)
+        return {"artifacts": [dict(proof["artifacts"][1], id=number + len(routes) * 100, expired=True) for number in range(100)]}
+    assert observations.load(REPOSITORY, proof["baseline_sha256"], proof["baseline"], UNTIL, root=proof["root"], api=api) is None
+    assert len(routes) == 2
