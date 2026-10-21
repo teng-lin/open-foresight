@@ -37,3 +37,11 @@ Compiled regressions verify Actions/MCP edits/preparation persistence, plus both
 The isolated desktop/service integration requires a configured platform/display runner. This host has no isolated macOS display session configured; widget tests and synthetic approval hosts do not establish that boundary. Docker's daemon is unavailable. Linux process/UI, Docker and applicable Apple/package checks remain hosted gates before merge. Native C++ source is unchanged, so no new libc++/libstdc++ stream-shutdown policy is introduced.
 
 No real generation/detector weights were selected for this work. Controlled subprocesses establish ownership, protocol, rollback and persistence only. The portable detector requires a separately supplied compatible raw-completion model/worker and model digest. Real-model semantic acceptance and original-versus-port feature runtime comparisons remain release evaluation gates; no detection recall or output-quality claim is made.
+
+## CI repair validation, 2026-10-21
+
+The real-model web history fixture now reads the generation/scope-versioned `web-memory-v2` checkpoint. Its historical turns still exceed the conservative UTF-8 pruning budget, while the recent turns leave room for the compressed memo. The real-model assertions still require the memo and final answer to retain the early color preference.
+
+The branch also includes the prerequisite Summary CI repairs. Combined checks from a complete Git-free source export passed: 61 core/workflow/Summary tests, five desktop widgets including streamed Summary cancellation, and 31 compiled current service/MCP subprocess tests. The subprocess suite's isolated desktop test was run separately on an owned headless desktop and passed with the current service, MCP, helper and native binaries. Native/helper inputs are unchanged from the verified prerequisite builds and were reused. Dependencies resolved offline with enforced lockfiles; logs are retained under `/var/tmp/ofs-fix-166` on the repair host.
+
+No real model weights are installed on this repair host, and Docker access and Apple execution are unavailable. Their hosted checks, including CPU and audio acceptance, must pass before merge. The local byte-budget exercise verifies memo retention for 64–1,024-byte simulated summaries; it does not establish real-model output quality.
