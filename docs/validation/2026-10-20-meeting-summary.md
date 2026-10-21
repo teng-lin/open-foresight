@@ -39,6 +39,7 @@ The follow-up fixes the Summary widget fixture's fake-clock refresh, the shared 
 Validation used Flutter 3.35.7 / Dart 3.9.2, a task-private disk-backed temporary directory, and newly compiled native, helper, service, MCP, and inference application binaries. No SDK/toolchain inputs changed.
 
 - Native and helper suites: 16 and seven passed. All six omitted Linux root/inference entries also passed, including probe failures and native process identity: 29 applicable entries total.
+- Complete core suite: 1,428 passed, 12 explicit platform/model skips; 93.02% line coverage, enforcing 90%.
 - Complete desktop suite: 281 passed, 17 explicit platform/model skips; 92.24% line coverage, enforcing 90%. Core and desktop analyzers passed.
 - Compiled service/MCP subprocess suite: 28 passed, one native UI skip. The real native desktop/service/MCP integration was then run separately on an isolated desktop and passed, including capture ownership, restart, Summary persistence, and cancellation.
 - Complete source export without `.git`: all 46 Summary generator/application/schema migration tests passed with offline locked dependency resolution.
