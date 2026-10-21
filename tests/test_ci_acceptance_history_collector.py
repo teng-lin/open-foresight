@@ -798,3 +798,71 @@ def test_incomplete_authenticated_run_metadata_cannot_skip_job_inspection():
     fixture.calls.clear()
     collect(fixture, verified_observation=observed)
     assert any("/jobs?" in route for route in fixture.calls)
+
+
+def test_persisted_run_headers_retain_identity_and_freshness_with_raw_api_evidence(
+    tmp_path,
+):
+    fixture = API()
+    fixture.runs[0].update(
+        updated_at="2026-10-12T00:03:00Z",
+        run_started_at="2026-10-12T00:01:30Z",
+        actor={"account_payload": "raw-evidence-marker"},
+    )
+    result = collect(fixture, evidence=tmp_path)
+    header = result["runs"][0]
+    assert header == {
+        "id": 1,
+        "path": ".github/workflows/integration-acceptance.yml",
+        "event": "pull_request",
+        "head_sha": HEAD,
+        "head_branch": "topic",
+        "created_at": "2026-10-12T00:01:00Z",
+        "run_attempt": 1,
+        "status": "completed",
+        "conclusion": "failure",
+        "updated_at": "2026-10-12T00:03:00Z",
+        "run_started_at": "2026-10-12T00:01:30Z",
+    }
+    assert result["failures"][0]["range"]["base"] == BASE
+    discovery = next(
+        item
+        for item in result["diagnostics"]["evidence"]
+        if item["identity"].startswith("actions/runs?")
+    )
+    raw = (tmp_path / discovery["file"]).read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == discovery["sha256"]
+    assert b"raw-evidence-marker" in raw
+    assert fixture.runs[0]["repository"]["full_name"] == REPOSITORY
+
+
+def test_compact_observations_still_detect_live_metadata_changes():
+    fixture = API()
+    fixture.runs[0]["updated_at"] = "2026-10-12T00:03:00Z"
+    observed = collect(fixture)
+    observed["until"] = "2026-10-12T00:40:00Z"
+    fixture.calls.clear()
+    collect(fixture, verified_observation=observed)
+    assert not any("/jobs?" in route for route in fixture.calls)
+    fixture.runs[0]["updated_at"] = "2026-10-12T00:45:00Z"
+    collect(fixture, verified_observation=observed)
+    assert any("/jobs?" in route for route in fixture.calls)
+    fixture.runs[0]["head_branch"] = "different-original-event"
+    with pytest.raises(ValueError, match="identity changed"):
+        collect(fixture, verified_observation=observed)
+
+
+@pytest.mark.parametrize("days", [1, 7, 28])
+def test_daily_compact_observation_size_stays_within_consumer_contract(days):
+    fixture = API()
+    # Real collected raw metadata averaged ~14.7KB/run. Account and action URLs
+    # are diagnostic data; they must not multiply the persisted daily inventory.
+    fixture.runs[0]["actor"] = {"api_payload": "x" * 14700}
+    observation = collect(fixture)
+    header = observation["runs"][0]
+    observation["runs"] = [dict(header, id=identity) for identity in range(days * 500)]
+    encoded = json.dumps(observation, sort_keys=True).encode()
+    assert len(encoded) < 64 * 1024 * 1024  # Authenticated loader MAX_BYTES.
+    assert (
+        len(encoded) < len(json.dumps(fixture.runs[0])) * len(observation["runs"]) / 10
+    )

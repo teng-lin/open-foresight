@@ -41,6 +41,22 @@ MAX_RUNS = 30000
 MAX_LOG_BYTES = 32 * 1024 * 1024
 MAX_TOTAL_LOG_BYTES = 256 * 1024 * 1024
 SHA = re.compile(r"[a-f0-9]{40}")
+# Live records stay complete for repository and original-event proof checks.
+# Persist only identity/freshness headers: account/URL payloads grow by ~15KB
+# per run and would exhaust the authenticated inventory's 64MiB size contract.
+RUN_FIELDS = (
+    "id",
+    "path",
+    "event",
+    "head_sha",
+    "head_branch",
+    "created_at",
+    "run_attempt",
+    "status",
+    "conclusion",
+    "updated_at",
+    "run_started_at",
+)
 
 
 def stamp(value):
@@ -540,7 +556,10 @@ def collect(
         "complete": True,
         "baseline_sha256": baseline_sha256,
         "baseline_count": len(baseline["failures"]),
-        "runs": list(sorted(runs.values(), key=lambda run: run["id"])),
+        "runs": [
+            {key: run[key] for key in RUN_FIELDS if key in run}
+            for run in sorted(runs.values(), key=lambda run: run["id"])
+        ],
         "failures": list(sorted(failures.values(), key=lambda row: row["id"])),
         "diagnostics": {
             "requests": reader.requests,
