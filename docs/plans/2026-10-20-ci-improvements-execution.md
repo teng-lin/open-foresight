@@ -65,9 +65,9 @@ is `/var/tmp/ofci/venv`. No successful dependency cache has been deleted.
 | Scope | Reviewed source | Validation |
 | --- | --- | --- |
 | Tooling and dedicated cache ownership | `14e3dcad` | Native review converged; full source and complete archive each 4,624 passed, 29 skipped, 95.78% coverage; HanSolo 380 tests plus 843 subtests; archive PR/main/unset contexts also passed |
-| Gates, metrics and DMG follow-up | `fbf83ef1` | Native review verified the precision predecessor `0d873105`; final source focused suite 567 tests plus 97 subtests passed; final CLI/Mac checks pending |
+| Gates, metrics and DMG follow-up | `fbf83ef1` | Native review verified the precision predecessor `0d873105`; final source focused suite 567 tests plus 97 subtests passed; Claude review converged; complete-export PR/main/unset checks each 567 tests plus 97 subtests; HanSolo both actual Apple contracts and 567 tests plus 97 subtests passed |
 | Main evidence and receipt owners | `c7ffa7d0` | Native review converged; frozen export 57 tests plus 44 subtests passed; integrated authorization reviewed with the activation batch |
-| Dynamic qualification and production activation | `be2d1b62` | Native review converged; frozen export 236 tests plus 44 subtests passed; full source/archive, final Mac and CLI checks pending |
+| Dynamic qualification and production activation | `be2d1b62` | Native review converged; full source and complete archive each 4,710 passed, 29 skipped, 95.69% coverage; HanSolo 779 tests plus 139 subtests; archive PR/main/unset contexts each 448 tests plus 139 subtests passed; Claude findings require follow-up |
 
 The reliability `33e20c2e` full source/archive checks reached 95.68% coverage
 but failed one retry-safety structural assertion. That assertion was corrected
@@ -101,22 +101,51 @@ and executable without another activation code PR. Net CI code deletion is not
 an achieved target. Matched runtime/error-rate improvements are also unmeasured
 until at least five comparable ordinary hosted observations exist.
 
-## Review and qualification limits
+## Integrated review and validation
 
-Claude's first implementation review found actionable owner-selection, metrics,
-snapshot-integrity and DMG error-reporting issues; fixes require another review
-on the corrected source. Native cross-review also found stale readiness and
-qualification-namespace issues. Passing unrelated checks do not verify fixes.
+All three batches are locally merged into `codex/ci-improvements`; no separate
+GitHub batch PRs were created. Integrated head `aa46f12b` additionally includes:
 
-The final reliability snapshot and tooling snapshot have fresh immutable Claude
-review inputs. Agy has been retried on the final reliability snapshot. An earlier
-Claude process ended without a saved verdict and is incomplete; its replacement
-review must produce an actual result. No missing review counts as convergence.
+- A post-queue publisher readiness check before Docker or SDK work. Successful
+  no-op jobs do not renew cache freshness; actual publication must succeed.
+- Structural checks against the composed command modules, preserving every
+  prerequisite that standalone batch review could not verify.
+- Explicit required identities for both existing Apple DMG contracts, timestamp
+  exclusion evidence, and separate reconciliation/publication metrics cohorts.
 
-Agy's first implementation review exhausted its account quota and returned an
-error with no review verdict. This is an incomplete review, not agreement. Its
-stdout, stderr and reset diagnostic are preserved. No billing or account
-settings were changed.
+Native review converged on these integrated follow-ups. HanSolo passed both
+actual Apple contracts at `aa46f12b`, with zero skips, in 30.184 seconds. The
+Linux and Mac complete exports had the same SHA256,
+`1b299834a9178f49e7be6ce3d77dae900b3c87081cdb08be2b38ddf023d3d6d8`.
+All seven SDK component identities matched reviewed main `02d572fb`; no SDK
+recompilation or toolchain input change was necessary.
+
+The `aa46f12b` full source and archive runs each had 4,865 passing tests,
+29 skips and 95.81% coverage, but failed the same stale selector expectation.
+Mac and all three inherited-ref export contexts exposed the same assertion.
+The production selection correctly retained broader transitional checks;
+these runs are failures, not passing gates.
+
+Activation follow-up `0ba60865` (integrated as `285a3b36`) corrects that assertion,
+expands optional API outages to broader checks, resolves qualification decisions
+once per changes job, recovers broad sweeps after retirement proof expires, and
+documents proof renewal. Independent native review converged; its initial focused
+suite passed 259 tests plus 141 subtests. Full combined verification is pending.
+
+Claude's component reviews found real defects in dependency composition,
+readiness, metrics, selector ownership, DMG inventory and acceptance replay.
+Fixed component findings require review of the composed source. The acceptance
+replay follow-up must use original historical failed-step evidence and exact
+source ranges; a zero-miss selector replay alone is insufficient. Its frozen
+baseline and bounded hosted refresh remain under implementation and review.
+The final integrated Claude review is still running. No missing verdict counts
+as convergence.
+
+Agy implementation review was attempted repeatedly but returned an account quota
+error and no verdict. The latest reset diagnostic was approximately 70 hours;
+original stdout, stderr and immutable inputs are retained. Its implementation
+review remains incomplete. No account, billing, model or permission settings
+were changed.
 
 The Linux account cannot access the Docker daemon, and non-interactive sudo is
 unavailable. Mocked transport tests cannot establish real Docker execution;
@@ -128,5 +157,5 @@ for new producer paths. Existing checks and guarded publishers stay in place
 until actual replacement qualification passes. New activation paths must fail
 closed; isolated qualification cannot become production validation or release
 bytes. Two real nightlies, Arch drift and the four-green-week acceptance-narrowing
-gate remain requirements. Implementation, final combined verification, GitHub
-PR creation, hosted qualification, activation and merge are not yet complete.
+gate remain requirements. Final combined verification, GitHub PR creation, hosted qualification, activation
+and merge are not yet complete.
