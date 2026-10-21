@@ -943,6 +943,7 @@ def test_desktop_facade_reads_changes_and_reconnects_without_replaying_mutations
     assert result.returncode == 0, result.stdout + "\n" + result.stderr
     report = json.loads(result.stdout)
     assert report["read_only"] and report["changes"] and report["reconnected"]
+    assert report["no_mutation_replay"]
     assert report["browser_invitation_received"] and report["oauth_cancelled_cleanly"]
 
 

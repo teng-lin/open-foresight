@@ -1,14 +1,24 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'package:foresight_core/remote.dart';
-import 'package:foresight_core/foresight_core.dart' show ProfilePaths;
+import 'package:foresight_core/desktop.dart';
+import 'package:foresight_core/desktop_bootstrap.dart';
+
+String noteSnapshot(StoreReader reader) => jsonEncode([
+  for (final note in reader.noteSummaries)
+    {
+      'id': note.id,
+      'title': note.title,
+      'revision': note.revision,
+      'body': reader.noteBody(note.id),
+    },
+]);
 
 Future<void> main() async {
-  final domain = await RemoteDomain.connect(
-    ProfilePaths.resolve(Platform.environment),
-  );
+  final profile = ProfilePaths.resolve(Platform.environment);
+  final domain = await connectDesktop(profile);
   int? replacementPid;
+  StreamSubscription<void>? changes;
   try {
     final status = await domain.command(Operation.status) as Map;
     final firstPid = status['pid'] as int;
@@ -18,22 +28,23 @@ Future<void> main() async {
               'body': 'service-owned',
             })
             as Map;
-    if (domain.store.rows('SELECT body FROM notes WHERE id=?', [
-          note['id'],
-        ]).single['body'] !=
-        'service-owned')
+    final noteId = note['id'] as int;
+    if (domain.store.noteBody(noteId) != 'service-owned')
       throw StateError('UI read snapshot missed service write');
+    final beforeForbiddenWrite = noteSnapshot(domain.store);
     var rejected = false;
     try {
-      domain.store.saveNote(null, 'forbidden', '');
-    } catch (_) {
+      // Deliberately probe the runtime capability boundary. The public reader
+      // must not retain a hidden writer method after the facade migration.
+      (domain.store as dynamic).saveNote(null, 'forbidden', '');
+    } on NoSuchMethodError {
       rejected = true;
     }
     if (!rejected) throw StateError('Desktop connection can write');
-    final auth = RemoteGoogleAuth(domain);
-    final configuration = File(
-      '${File(domain.store.path).parent.path}/oauth-fixture.json',
-    );
+    if (noteSnapshot(domain.store) != beforeForbiddenWrite)
+      throw StateError('Forbidden desktop write changed persisted notes');
+    final auth = domain.googleAuth;
+    final configuration = File('${profile.data}/oauth-fixture.json');
     await configuration.writeAsString(
       jsonEncode({
         'installed': {
@@ -56,9 +67,11 @@ Future<void> main() async {
     if (!browserInvited || !oauthCancelled)
       throw StateError('Desktop did not receive/cancel the OAuth invitation');
     final update = Completer<void>();
-    domain.helper.changed = () {
-      if (!update.isCompleted) update.complete();
-    };
+    final beforeChange = noteSnapshot(domain.store);
+    changes = domain.changes.listen((_) {
+      if (!update.isCompleted && noteSnapshot(domain.store) != beforeChange)
+        update.complete();
+    });
     // Unchanged service heartbeats no longer rebuild the desktop. Observe an
     // actual committed mutation after subscribing to the change callback.
     await domain.command(Operation.notesSave, {
@@ -67,6 +80,7 @@ Future<void> main() async {
       'body': 'service-owned',
     });
     await update.future.timeout(const Duration(seconds: 5));
+    final beforeRestart = noteSnapshot(domain.store);
     Process.killPid(firstPid, ProcessSignal.sigterm);
     final deadline = DateTime.now().add(const Duration(seconds: 20));
     while (DateTime.now().isBefore(deadline)) {
@@ -82,11 +96,10 @@ Future<void> main() async {
       await Future<void>.delayed(const Duration(milliseconds: 100));
     }
     if (replacementPid == null) throw StateError('Desktop did not reconnect');
-    if (domain.store.rows('SELECT body FROM notes WHERE id=?', [
-          note['id'],
-        ]).single['body'] !=
-        'service-owned')
+    if (domain.store.noteBody(noteId) != 'service-owned')
       throw StateError('Data lost after service restart');
+    if (noteSnapshot(domain.store) != beforeRestart)
+      throw StateError('Reconnect replayed or changed a persisted mutation');
     print(
       jsonEncode({
         'browser_invitation_received': browserInvited,
@@ -94,14 +107,15 @@ Future<void> main() async {
         'read_only': true,
         'changes': true,
         'reconnected': true,
+        'no_mutation_replay': true,
         'original_pid': firstPid,
         'replacement_pid': replacementPid,
       }),
     );
   } finally {
+    await changes?.cancel();
     domain.close();
-    await domain.helper.close();
-    domain.store.close();
+    await domain.closed;
     if (replacementPid != null)
       Process.killPid(replacementPid, ProcessSignal.sigterm);
   }

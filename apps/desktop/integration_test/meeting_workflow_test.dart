@@ -1,6 +1,5 @@
 import 'package:foresight_test_support/macos_integration_runtime.dart';
 import 'package:foresight_test_support/test_paths.dart';
-import 'package:foresight_core/src/operations.dart';
 import 'package:foresight_core/remote.dart' show RemoteDomain;
 import 'dart:convert';
 import 'dart:io';
@@ -11,15 +10,21 @@ import 'package:integration_test/integration_test.dart';
 import 'package:foresight_test_support/capture_poll.dart';
 import 'package:foresight_test_support/capture_process.dart';
 import 'package:open_foresight/main.dart' as app;
-import 'package:foresight_core/src/store.dart';
-import 'package:foresight_core/src/graph_layout.dart';
+import 'package:foresight_core/desktop.dart';
+import '../test_support/integration_persistence.dart';
 import 'package:open_foresight/graph_rendering.dart';
 import 'package:open_foresight/cluster_rendering.dart';
-import 'package:foresight_core/src/graph_persistence.dart';
-import 'package:foresight_core/src/model_setup.dart';
+
 import '../test_support/meeting_panel.dart';
 import '../test_support/file_manager_fixture.dart';
 import '../test_support/onboarding.dart';
+
+StoreReader readerFor(dynamic workspace) =>
+    (workspace.d as DesktopConnection).store;
+List<Map<String, Object?>> sourceRows(StoreReader reader) => [
+  for (final source in reader.sourceSummaries)
+    {...source.toRow(), ...reader.sourceById(source.id)!.toRow()},
+];
 
 Future<void> waitUntil(
   WidgetTester tester,
@@ -46,9 +51,18 @@ Future<void> waitUntil(
       // request runs, making a post-failure database artifact look successful.
       final observedAt = DateTime.now().toUtc().toIso8601String();
       final waitedMs = elapsed.elapsedMilliseconds;
-      final sources = workspace.d.store.rows(
-        'SELECT id,state,error,revision FROM sources WHERE deleted=0 ORDER BY id',
-      );
+      final sources =
+          (readerFor(workspace).sourceSummaries.toList()
+                ..sort((a, b) => a.id.compareTo(b.id)))
+              .map(
+                (source) => <String, Object?>{
+                  'id': source.id,
+                  'state': source.state,
+                  'error': source.error,
+                  'revision': source.revision,
+                },
+              )
+              .toList();
       final status = await workspace.d.command(Operation.status);
       fail(
         '$reason: busy=${workspace.busy}, error=${workspace.error}, '
@@ -307,6 +321,8 @@ void main() {
       final sink = env['FORESIGHT_PLAYBACK_TARGET']!;
       final fixture = env['FORESIGHT_AUDIO_FIXTURE']!;
       final dynamic workspace = await startedWorkspace(tester);
+      final receipts = IntegrationPersistenceReceipts(env['FORESIGHT_DATA']!);
+      addTearDown(receipts.close);
       await waitUntil(
         tester,
         () =>
@@ -341,13 +357,15 @@ void main() {
       await tester.pumpAndSettle();
       final meeting = workspace.meetingFeature.meetingId as int;
       final title =
-          workspace.d.store.rows('SELECT title FROM meetings WHERE id=?', [
-                meeting,
-              ]).single['title']
+          [
+                if (readerFor(workspace).meetingWorkspace(meeting)
+                    case final value?)
+                  value.toRow(),
+              ].single['title']
               as String;
       await waitUntil(
         tester,
-        () => speechSetupProblem(workspace.d.store) == null,
+        () => readerSpeechSetupProblem(readerFor(workspace)) == null,
         reason: 'Speech model and runner were not ready for recording',
       );
       await tester.tap(find.text('Start transcribing'));
@@ -365,9 +383,10 @@ void main() {
             ),
       );
       expect(
-        workspace.d.store.rows('SELECT state FROM meetings WHERE id=?', [
-          meeting,
-        ]).single['state'],
+        [
+          if (readerFor(workspace).meetingWorkspace(meeting) case final value?)
+            value.toRow(),
+        ].single['state'],
         'recording',
       );
       final player = await Process.start('pw-play', [
@@ -393,11 +412,10 @@ void main() {
             (workspace.meetingFeature.provisionalTranscript.values.any(
                   (text) => (text as String).toLowerCase().contains('country'),
                 ) ||
-                workspace.d.store
-                    .rows(
-                      'SELECT text FROM transcript WHERE meeting_id=? AND final=1',
-                      [meeting],
-                    )
+                readerFor(workspace)
+                    .meetingTranscript(meeting, finalOnly: true)
+                    .map((row) => row.toRow())
+                    .toList()
                     .any(
                       (row) => (row['text'] as String).toLowerCase().contains(
                         'country',
@@ -407,10 +425,17 @@ void main() {
       final liveBeforeStop = Map<String, String>.from(
         workspace.meetingFeature.provisionalTranscript,
       );
-      final finalizedBeforeStop = workspace.d.store.rows(
-        'SELECT text,source,start_ms,end_ms FROM transcript WHERE meeting_id=? AND final=1',
-        [meeting],
-      );
+      final finalizedBeforeStop = readerFor(workspace)
+          .meetingTranscript(meeting, finalOnly: true)
+          .map(
+            (row) => <String, Object?>{
+              'text': row.text,
+              'source': row.source,
+              'start_ms': row.startMs,
+              'end_ms': row.endMs,
+            },
+          )
+          .toList();
       expect(workspace.meetingFeature.recording, isNotNull);
       await tester.pumpAndSettle();
       await captureWindow(
@@ -442,9 +467,10 @@ void main() {
       expect(workspace.error, isEmpty);
       expect(workspace.d.sourcesPaused, true);
       expect(
-        workspace.d.store.rows('SELECT state FROM meetings WHERE id=?', [
-          meeting,
-        ]).single['state'],
+        [
+          if (readerFor(workspace).meetingWorkspace(meeting) case final value?)
+            value.toRow(),
+        ].single['state'],
         'completed',
       );
       await tester.tap(find.text('Sources'));
@@ -453,36 +479,40 @@ void main() {
       await waitUntil(
         tester,
         () =>
-            workspace.d.store.rows('SELECT state FROM sources WHERE id=?', [
-              'meeting-$meeting',
-            ]).single['state'] ==
+            [
+              if (readerFor(workspace).sourceById('meeting-$meeting')
+                  case final value?)
+                value.toRow(),
+            ].single['state'] ==
             'indexed',
       );
       await tester.tap(find.text('Meetings').first);
       await tester.pumpAndSettle();
       final transcripts =
-          workspace.d.store.rows(
-                'SELECT * FROM transcript WHERE meeting_id=? AND final=1',
-                [meeting],
-              )
+          readerFor(workspace)
+                  .meetingTranscript(meeting, finalOnly: true)
+                  .map((row) => row.toRow())
+                  .toList()
               as List;
       expect(transcripts, isNotEmpty);
       final text = transcripts.map((t) => t['text']).join('\n').toLowerCase();
       expect(text, contains('country'));
       expect(text, contains('ask not'));
-      final source = workspace.d.store.rows(
-        'SELECT * FROM sources WHERE id=?',
-        ['meeting-$meeting'],
-      ).single;
+      final source = [
+        if (readerFor(workspace).sourceById('meeting-$meeting')
+            case final value?)
+          value.toRow(),
+      ].single;
       expect(source['state'], 'indexed');
       await selectMeetingPanel(tester, 'Summary');
       await tester.tap(find.byTooltip('Generate Summary'));
       await waitUntil(tester, () => workspace.busy == false);
       expect(workspace.error, isEmpty);
-      final summary = workspace.d.store.rows(
-        'SELECT * FROM artifacts WHERE meeting_id=?',
-        [meeting],
-      ).single;
+      final summary = receipts
+          .artifacts(meeting: meeting)
+          .map((row) => row.toRow())
+          .toList()
+          .single;
       expect(
         (summary['generated'] as String).toLowerCase(),
         contains('country'),
@@ -501,15 +531,19 @@ void main() {
       await waitUntil(tester, () => workspace.busy == false);
       expect(workspace.error, isEmpty);
       expect(
-        workspace.d.store.rows('SELECT * FROM artifacts WHERE meeting_id=?', [
-          meeting,
-        ]).length,
+        receipts
+            .artifacts(meeting: meeting)
+            .map((row) => row.toRow())
+            .toList()
+            .length,
         2,
       );
       expect(
-        workspace.d.store.rows('SELECT edited FROM artifacts WHERE id=?', [
-          summary['id'],
-        ]).single['edited'],
+        receipts
+            .artifactById(summary['id'] as int)
+            .map((row) => row.toRow())
+            .toList()
+            .single['edited'],
         'My meeting review: preserve this edit.',
       );
       await workspace.d.command(Operation.preferencesSet, {
@@ -537,16 +571,18 @@ void main() {
         tester,
         () =>
             workspace.meetingFeature.meetingEnhancing == false &&
-            workspace.d.store
-                .rows("SELECT * FROM artifacts WHERE kind='enhanced_notes'")
+            receipts
+                .artifacts(kind: 'enhanced_notes')
+                .map((row) => row.toRow())
+                .toList()
                 .isNotEmpty,
       );
       expect(workspace.meetingFeature.meetingEnhanceStatus, isEmpty);
       final enhanced =
-          workspace.d.store
-                  .rows(
-                    "SELECT generated FROM artifacts WHERE kind='enhanced_notes'",
-                  )
+          receipts
+                  .artifacts(kind: 'enhanced_notes')
+                  .map((row) => row.toRow())
+                  .toList()
                   .last['generated']
               as String;
       expect(enhanced.toLowerCase(), contains('country'));
@@ -560,16 +596,19 @@ void main() {
             reopened.d.helper.snapshot?.pipeline == 'ready',
       );
       expect(
-        reopened.d.store.rows(
-          'SELECT * FROM transcript WHERE meeting_id=? AND final=1',
-          [meeting],
-        ).length,
+        readerFor(reopened)
+            .meetingTranscript(meeting, finalOnly: true)
+            .map((row) => row.toRow())
+            .toList()
+            .length,
         transcripts.length,
       );
       expect(
-        reopened.d.store.rows('SELECT edited FROM artifacts WHERE id=?', [
-          summary['id'],
-        ]).single['edited'],
+        receipts
+            .artifactById(summary['id'] as int)
+            .map((row) => row.toRow())
+            .toList()
+            .single['edited'],
         'My meeting review: preserve this edit.',
       );
       await tester.tap(find.text('Meetings').first);
@@ -579,10 +618,10 @@ void main() {
       await tester.tap(find.byTooltip('Expand meeting'));
       await tester.pumpAndSettle();
       expect(
-        reopened.d.store.rows(
-          'SELECT body FROM meeting_notes WHERE meeting_id=?',
-          [meeting],
-        ).single['body'],
+        [
+          if (readerFor(reopened).meetingNote(meeting) case final value?)
+            value.toRow(),
+        ].single['body'],
         'Ask what you can do for your country.',
       );
       await selectMeetingPanel(tester, 'Summary');
@@ -604,12 +643,12 @@ void main() {
         tester,
         () =>
             reopened.busy == false &&
-            reopened.d.store.preference('answerScope.meeting:$meeting') ==
+            readerFor(reopened).preference('answerScope.meeting:$meeting') ==
                 'selected',
       );
       expect(
         jsonDecode(
-          reopened.d.store.preference('answerSources.meeting:$meeting'),
+          readerFor(reopened).preference('answerSources.meeting:$meeting'),
         ),
         ['meeting-$meeting'],
       );
@@ -623,12 +662,10 @@ void main() {
         tester,
         () =>
             reopened.busy == false &&
-            reopened.d.store.rows('SELECT * FROM answers').isNotEmpty,
+            receipts.answers.map((row) => row.toRow()).toList().isNotEmpty,
       );
       expect(reopened.error, isEmpty);
-      final answer = reopened.d.store
-          .rows('SELECT * FROM answers ORDER BY id DESC')
-          .first;
+      final answer = receipts.answers.map((row) => row.toRow()).toList().first;
       expect(answer['status'], 'completed', reason: answer['body'] as String);
       expect((answer['body'] as String).toLowerCase(), contains('country'));
       expect((answer['body'] as String).toLowerCase(), isNot(contains('king')));
@@ -655,17 +692,19 @@ void main() {
       // Close the desktop while a native speech result is pending.
       // The service must finish transcription and survive reconnection.
       final savedSpeech =
-          reopened.d.store
-                  .rows("SELECT runtime FROM models WHERE kind='speech'")
-                  .single['runtime']
+          [
+                if (readerFor(reopened).model('speech') case final value?)
+                  value.toRow(),
+              ].single['runtime']
               as String;
       final slowSpeech = File(
         '${env['FORESIGHT_DATA']}/speech-cancellation-runner',
       )..writeAsStringSync('#!/bin/sh\nsleep 2\nexec "$savedSpeech" "\$@"\n');
       await Process.run('chmod', ['700', slowSpeech.path]);
-      final speechAsset = reopened.d.store
-          .rows("SELECT path FROM models WHERE kind='speech'")
-          .single['path'];
+      final speechAsset = [
+        if (readerFor(reopened).model('speech') case final value?)
+          value.toRow(),
+      ].single['path'];
       await reopened.d.command(Operation.modelsRegister, {
         'kind': 'speech',
         'path': speechAsset,
@@ -716,10 +755,11 @@ void main() {
         () => afterCancellation.meetingFeature.recording == null,
       );
       expect(
-        afterCancellation.d.store.rows(
-          'SELECT state FROM meetings WHERE id=?',
-          [meeting],
-        ).single['state'],
+        [
+          if (readerFor(afterCancellation).meetingWorkspace(meeting)
+              case final value?)
+            value.toRow(),
+        ].single['state'],
         'completed',
       );
       await afterCancellation.d.command(Operation.modelsRegister, {
@@ -728,8 +768,9 @@ void main() {
         'runtime': savedSpeech,
       });
       final realInactivity = env['FORESIGHT_REAL_INACTIVITY'] == '1';
-      final inactivitySetting =
-          afterCancellation.d.store.preference('inactivity', '15') as String;
+      final inactivitySetting = readerFor(
+        afterCancellation,
+      ).preference('inactivity', '15');
       final inactivityObservations = <Map<String, Object?>>[];
       await afterCancellation.d.command(Operation.preferencesSet, {
         'key': 'inactivity',
@@ -794,10 +835,11 @@ void main() {
       }
       expect(afterCancellation.error, isEmpty);
       expect(
-        afterCancellation.d.store.rows(
-          'SELECT state FROM meetings WHERE id=?',
-          [silentMeeting],
-        ).single['state'],
+        [
+          if (readerFor(afterCancellation).meetingWorkspace(silentMeeting)
+              case final value?)
+            value.toRow(),
+        ].single['state'],
         'empty',
       );
       await afterCancellation.d.command(Operation.preferencesSet, {
@@ -824,13 +866,18 @@ void main() {
       await tester.tap(find.byTooltip('Pause source imports and indexing'));
       await tester.pumpAndSettle();
       expect(afterCancellation.d.sourcesPaused, true);
-      final beforePauseImports = afterCancellation.d.store.sources.length;
+      final beforePauseImports = sourceRows(
+        readerFor(afterCancellation),
+      ).length;
       final pausedImport = afterCancellation.run(() async {
         await afterCancellation.sourceFeature.importFolderPath(fixtures.path);
       });
       await tester.pump();
       expect(afterCancellation.busy, true);
-      expect(afterCancellation.d.store.sources.length, beforePauseImports);
+      expect(
+        sourceRows(readerFor(afterCancellation)).length,
+        beforePauseImports,
+      );
       await captureWindow(
         tester,
         '$screenshotDirectory/10-source-import-paused.png',
@@ -840,9 +887,9 @@ void main() {
       await tester.pumpAndSettle();
       expect(afterCancellation.d.sourcesPaused, false);
       expect(afterCancellation.error, isEmpty);
-      final firstImported = afterCancellation.d.store.sources
-          .where((s) => s['title'] == 'Apollo planning.md')
-          .single;
+      final firstImported = sourceRows(
+        readerFor(afterCancellation),
+      ).where((s) => s['title'] == 'Apollo planning.md').single;
       expect(firstImported['state'], 'indexed');
       File(
         '${fixtures.path}/Apollo planning.md',
@@ -850,9 +897,9 @@ void main() {
       await afterCancellation.run(
         afterCancellation.sourceFeature.refreshSources,
       );
-      final revised = afterCancellation.d.store.sources
-          .where((s) => s['id'] == firstImported['id'])
-          .single;
+      final revised = sourceRows(
+        readerFor(afterCancellation),
+      ).where((s) => s['id'] == firstImported['id']).single;
       expect(revised['revision'], 2);
       expect(revised['content'], contains('Monday'));
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -881,9 +928,9 @@ void main() {
             'allow_private_network': true,
           });
         });
-        final imported = afterCancellation.d.store.sources
-            .where((s) => s['provenance'] == 'url:$address')
-            .single;
+        final imported = sourceRows(
+          readerFor(afterCancellation),
+        ).where((s) => s['provenance'] == 'url:$address').single;
         expect(imported['revision'], 2);
         expect(imported['content'], contains('Wednesday'));
         expect(imported['content'], isNot(contains('hidden script')));
@@ -929,19 +976,20 @@ void main() {
       await finding;
       await tester.pumpAndSettle();
       expect(afterCancellation.error, isEmpty);
-      final discovered = afterCancellation.d.store.sources
-          .where((source) => source['title'] == 'Discovered review.md')
-          .single;
+      final discovered = sourceRows(
+        readerFor(afterCancellation),
+      ).where((source) => source['title'] == 'Discovered review.md').single;
       expect(discovered['state'], 'indexed');
       expect(discovered['content'], contains('Thursday'));
       expect(
-        afterCancellation.d.store.sources.where(
-          (source) => source['title'] == 'Unselected budget.txt',
-        ),
+        sourceRows(
+          readerFor(afterCancellation),
+        ).where((source) => source['title'] == 'Unselected budget.txt'),
         isEmpty,
       );
-      final exportedNotes =
-          afterCancellation.d.store.meetingEnhancedNotes(meeting) as String;
+      final exportedNotes = readerFor(
+        afterCancellation,
+      ).meetingEnhancedNotes(meeting);
       expect(exportedNotes, isNotEmpty);
       expect(
         afterCancellation.meetingFeature.exportMeetingMarkdown(),
@@ -966,17 +1014,11 @@ void main() {
       // A pending source is automatically indexed when the desktop reconnects.
       // Seed a failed source in this disposable fixture profile so the graph
       // restoration check retains a text node without an embedding.
-      final fixtureStore = Store(afterCancellation.d.store.path as String);
-      try {
-        fixtureStore.state(
-          unindexedGraphSource,
-          'failed',
-          'Missing-vector fixture',
-        );
-      } finally {
-        fixtureStore.close();
-      }
-      final labelledSources = afterCancellation.d.store.sources;
+      seedMissingGraphVector(
+        env['FORESIGHT_DATA']!,
+        unindexedGraphSource as String,
+      );
+      final labelledSources = sourceRows(readerFor(afterCancellation));
       await afterCancellation.d.command(Operation.labelsSet, {
         'id': labelledSources[0]['id'],
         'labels': ['Planning'],
@@ -1039,8 +1081,13 @@ void main() {
       expect(unselectedLinks.edges, isEmpty);
       final persistedLayoutIdentity =
           jsonDecode(
-                afterCancellation.d.store
-                        .rows('SELECT model_identity FROM graph_layouts')
+                receipts.graphModelIdentities
+                        .map(
+                          (identity) => <String, Object?>{
+                            'model_identity': identity,
+                          },
+                        )
+                        .toList()
                         .single['model_identity']
                     as String,
               )
@@ -1109,7 +1156,7 @@ void main() {
         );
         final id = afterCancellation.sourceFeature.graphSelectedDocument;
         if (id == null) continue;
-        final rows = afterCancellation.d.store.sources as List;
+        final rows = sourceRows(readerFor(afterCancellation)) as List;
         selectedUri =
             rows.singleWhere((row) => row['id'] == id)['source_uri'] as String;
         if (Uri.tryParse(selectedUri)?.scheme == 'file' &&
@@ -1212,10 +1259,9 @@ void main() {
         tester,
         () =>
             !afterCancellation.busy &&
-            afterCancellation.d.store.rows(
-              "SELECT * FROM document_labels WHERE document_id=? AND label_name='Inspector fixture'",
-              [selectedDocument],
-            ).isNotEmpty,
+            receipts
+                .labels(document: selectedDocument, name: 'Inspector fixture')
+                .isNotEmpty,
       );
       await tester.pumpAndSettle();
       expect(afterCancellation.error, isEmpty);
@@ -1234,35 +1280,25 @@ void main() {
         reason:
             'Inline add must run force organization, not only recolor nodes',
       );
-      final beforeLocalRemoval = afterCancellation.d.store.rows(
-        'SELECT document_id,proj_x,proj_y,proj_z FROM graph_documents',
-      );
-      final propagatedInline = afterCancellation.d.store.rows(
-        "SELECT * FROM document_labels WHERE label_name='Inspector fixture' AND document_id<>?",
-        [selectedDocument],
+      final beforeLocalRemoval = receipts.graphPositions;
+      final propagatedInline = receipts.labels(
+        excludingDocument: selectedDocument,
+        name: 'Inspector fixture',
       );
       expect(propagatedInline, isNotEmpty);
       await tester.tap(
         find.byKey(const ValueKey('inspector-remove-Inspector fixture')),
       );
       await tester.pumpAndSettle();
+      expect(receipts.graphPositions, beforeLocalRemoval);
       expect(
-        afterCancellation.d.store.rows(
-          'SELECT document_id,proj_x,proj_y,proj_z FROM graph_documents',
-        ),
-        beforeLocalRemoval,
-      );
-      expect(
-        afterCancellation.d.store.rows(
-          "SELECT * FROM document_labels WHERE document_id=? AND label_name='Inspector fixture'",
-          [selectedDocument],
-        ),
+        receipts.labels(document: selectedDocument, name: 'Inspector fixture'),
         isEmpty,
       );
       expect(
-        afterCancellation.d.store.rows(
-          "SELECT * FROM document_labels WHERE label_name='Inspector fixture' AND document_id<>?",
-          [selectedDocument],
+        receipts.labels(
+          excludingDocument: selectedDocument,
+          name: 'Inspector fixture',
         ),
         propagatedInline,
       );
@@ -1285,19 +1321,11 @@ void main() {
       await tester.tap(find.text('Create & Auto-Assign'));
       await waitUntil(
         tester,
-        () =>
-            !afterCancellation.busy &&
-            afterCancellation.d.store
-                .rows("SELECT * FROM document_clusters WHERE label='Apollo'")
-                .isNotEmpty,
+        () => !afterCancellation.busy && receipts.clusters('Apollo').isNotEmpty,
       );
       await tester.pumpAndSettle();
       expect(afterCancellation.error, isEmpty);
-      final organizationRows =
-          afterCancellation.d.store.rows(
-                "SELECT * FROM document_labels WHERE label_name='Apollo'",
-              )
-              as List;
+      final organizationRows = receipts.labels(name: 'Apollo') as List;
       expect(organizationRows, isNotEmpty);
       expect(
         organizationRows.any((row) => row['label_source'] == 'user_defined'),
@@ -1312,9 +1340,7 @@ void main() {
         true,
       );
       expect(
-        afterCancellation.d.store
-            .rows("SELECT * FROM document_clusters WHERE label='Apollo'")
-            .single['radius'],
+        receipts.clusters('Apollo').single['radius'],
         greaterThanOrEqualTo(90),
       );
       await tester.tap(find.text('Add source'));
@@ -1326,17 +1352,9 @@ void main() {
       );
       await tester.tapAt(const Offset(200, 100));
       await tester.pumpAndSettle();
-      final expectedClusters = afterCancellation.d.store.rows(
-        'SELECT * FROM document_clusters',
-      );
-      final expectedLabels = afterCancellation.d.store.rows(
-        'SELECT * FROM document_labels',
-      );
-      final savedGraphRows =
-          afterCancellation.d.store.rows(
-                'SELECT document_id,proj_x,proj_y,proj_z,length(embedding) AS bytes FROM graph_documents',
-              )
-              as List;
+      final expectedClusters = receipts.clusters();
+      final expectedLabels = receipts.labels();
+      final savedGraphRows = receipts.graphEmbeddingReceipts as List;
       expect(savedGraphRows.length, semanticGraphPointCount);
       expect(
         savedGraphRows.every(
@@ -1348,29 +1366,33 @@ void main() {
       );
       // Distinguish restoration from a coincidentally identical fresh PCA result.
       // This changes coordinates only inside the disposable acceptance profile.
-      final snapshotStore = afterCancellation.d.store as Store;
-      final snapshot = snapshotStore.loadRegisteredGraphLayout(
-        snapshotStore.sources,
-        labelSet: snapshotStore.graphLabelSet(),
+      final snapshotReader = readerFor(afterCancellation);
+      final snapshotSources = sourceRows(snapshotReader);
+      final snapshotResult = await snapshotReader.read(
+        StoreReadQueries.graphLayout(
+          sources: snapshotReader.sourceSummaries,
+          labelSet: snapshotReader.graphLabelSet(),
+          helperIdentity: 'integration-registered-receipt',
+        ),
       );
+      expect(snapshotResult.error, isNull);
+      final snapshot = snapshotResult.value!;
       final adjusted = snapshot.points.map(
         (k, v) => MapEntry(k, GraphPoint(v.x * .75, v.y, v.z)),
       );
       expect(
         await afterCancellation.d.command(Operation.graphSave, {
           'identity': snapshot.identity,
-          'sources': graphSceneSources(snapshotStore.sources, snapshot.vectors),
+          'sources': graphSceneSources(snapshotSources, snapshot.vectors),
           'vectors': snapshot.vectors,
           'points': adjusted.map((k, v) => MapEntry(k, [v.x, v.y, v.z])),
-          'labelSet': snapshotStore.graphLabelSet(),
-          'clusters': snapshotStore.rows('SELECT * FROM document_clusters'),
+          'labelSet': snapshotReader.graphLabelSet(),
+          'clusters': receipts.clusters(),
         }),
         true,
       );
       final expectedGraph = {
-        for (final row in afterCancellation.d.store.rows(
-          'SELECT document_id,proj_x,proj_y,proj_z FROM graph_documents',
-        ))
+        for (final row in receipts.graphPositions)
           row['document_id']: [row['proj_x'], row['proj_y'], row['proj_z']],
       };
       await closeWorkspace(tester, afterCancellation);
@@ -1395,14 +1417,8 @@ void main() {
                 expectedGraph.length,
       );
       expect(afterCancellation.sourceFeature.graphLayoutError, isEmpty);
-      expect(
-        afterCancellation.d.store.rows('SELECT * FROM document_labels'),
-        expectedLabels,
-      );
-      expect(
-        afterCancellation.d.store.rows('SELECT * FROM document_clusters'),
-        expectedClusters,
-      );
+      expect(receipts.labels(), expectedLabels);
+      expect(receipts.clusters(), expectedClusters);
       for (final entry in expectedGraph.entries) {
         final point = afterCancellation.sourceFeature.graphPoints[entry.key];
         expect([point.x, point.y, point.z], entry.value);
@@ -1505,36 +1521,21 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
-      expect(afterCancellation.d.store.sources, isNotEmpty);
+      expect(sourceRows(readerFor(afterCancellation)), isNotEmpty);
       await tester.tap(find.text('Clear workspace data'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Delete workspace'));
       await waitUntil(tester, () => afterCancellation.busy == false);
       expect(afterCancellation.error, isEmpty);
-      expect(afterCancellation.d.store.sources, isEmpty);
-      expect(
-        afterCancellation.d.store.rows('SELECT * FROM graph_documents'),
-        isEmpty,
-      );
-      expect(
-        afterCancellation.d.store.rows('SELECT * FROM graph_layouts'),
-        isEmpty,
-      );
-      expect(
-        afterCancellation.d.store.rows('SELECT * FROM document_labels'),
-        isEmpty,
-      );
-      expect(
-        afterCancellation.d.store.rows('SELECT * FROM graph_force_state'),
-        isEmpty,
-      );
-      expect(
-        afterCancellation.d.store.rows('SELECT * FROM document_clusters'),
-        isEmpty,
-      );
-      expect(afterCancellation.d.store.rows('SELECT * FROM meetings'), isEmpty);
-      expect(afterCancellation.d.store.rows('SELECT * FROM answers'), isEmpty);
-      expect(afterCancellation.d.store.rows('SELECT * FROM models').length, 3);
+      expect(sourceRows(readerFor(afterCancellation)), isEmpty);
+      expect(receipts.graphDocuments, isEmpty);
+      expect(receipts.graphLayouts, isEmpty);
+      expect(receipts.labels(), isEmpty);
+      expect(receipts.graphForceState, isEmpty);
+      expect(receipts.clusters(), isEmpty);
+      expect(readerFor(afterCancellation).meetingCollection, isEmpty);
+      expect(receipts.answers.map((row) => row.toRow()).toList(), isEmpty);
+      expect(readerFor(afterCancellation).models.length, 3);
       final report = env['FORESIGHT_MEETING_REPORT'];
       if (report != null) {
         File(report).writeAsStringSync(

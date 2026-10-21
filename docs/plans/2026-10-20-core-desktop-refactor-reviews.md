@@ -636,3 +636,51 @@ format/analyzer/AST size checks pass; ApplicationService remains923 lines. The
 archive timeout fixtures/quality gates pass13 tests, and its checkout CLI passes.
 A new frozen source candidate will now run the complete Linux checkpoint; f225's
 failed complete gates are preserved and are not acceptance evidence.
+
+
+## Core implementation delta review round 3 and external fixtures
+
+Claude CLI converged on the complete post-f225 correction set at
+`405e13f7fddca2369e35162c98ecf13b81416a89`. Its verbatim independent static
+review is retained in `/var/tmp/foresight-core-implementation-review-r3/claude.md`.
+It confirmed schema-read retirement, error mapping, real readiness joins,
+between-child ownership tests, desktop readiness and archive inventory behavior.
+It ran no tests and did not approve the remaining full Linux checkpoint.
+Its optional architecture-document clarification is now incorporated.
+
+The complete 405e core gate passes 1,823 tests with 12 expected skips and 92.06%
+coverage; Python Quality passes 5,172 tests with 31 expected skips and 95.87%.
+Both source-hook modes and fresh service/MCP compilation pass. An independent
+Debug-cache-ON to actual Release build keeps the cached option ON, passes the
+helper hook scan and all 30 root CTest targets. Those results remain bound to 405e.
+
+The real compiled process gate then found two external fixture migrations missed
+by the author: the service facade probe still used removed raw/writer/lifetime
+APIs, and the actual desktop integration fixture dynamically called reader.rows.
+Its complete result is 30 passed/two failed, with no full process acceptance.
+A repository-wide inventory of 26 external Dart consumers also located 47 stale
+raw-row accesses in the meeting workflow integration target.
+
+The correction batch uses curated typed readers and connection-owned cleanup.
+The service probe now explicitly rejects missing writer capability without side
+effects, observes an actual persisted change, and compares note IDs/content/
+revision across reconnect; Python retains all OAuth/reconnect assertions and
+requires the new no-mutation-replay result. Its targeted real subprocess passes.
+Desktop integration retains all 59 observed service/MCP/approval/capture/restart
+expectations in a passing real UI run. Meeting receipts use a narrowly named
+private read-only inspector against the explicit disposable profile, preserving
+whole-table/orphan cardinality and exact graph/label/artifact assertions. Its
+controlled fixture writer owns one short transaction and closes immediately.
+
+Independent native cross-review caught source metadata loss in the initial
+summary-to-document projection. The final fixture merges summary metadata with
+full document fields; the reviewer verified the saved fix and converged on the
+batch. Integration analysis, actual meeting target compilation and eight real
+SQLite diagnostic assertions pass. These live-fixture diagnostics explicitly
+reuse 405e binaries; a new frozen-source full checkpoint remains required.
+
+The [native teardown follow-up](2026-10-21-native-close-follow-up.md) records the
+measured pre-existing P2-4 residual, rather than claiming it repaired. Independent
+verification checked raw timings, active native state, source/blob equality,
+binary/harness digests and limitations; its review converged. It does not replace
+warm RPC comparisons, native cleanup tests or final Linux/HanSolo acceptance.

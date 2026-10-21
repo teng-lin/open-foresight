@@ -237,7 +237,7 @@ corrected60-case file plus guard/CI ownership batch153 pass. The full command wi
 be rerun from the frozen candidate; the failed full run is not reported as passing.
 
 The exact existing TSan SDK was restored through the common provenance verifier
-in a private compiler/package-matched container; all1632 files retain original
+in a private compiler/package-matched container; all 1,632 files retain original
 provenance and byte/mode/link identity. Only a private thread-instrumented
 SentencePiece variant needed compilation from verified pinned source because its
 instrumentation inputs differ. Baseline c28 full root TSan passes29/29, zero skips,
@@ -260,7 +260,7 @@ SHA256 and file modes. The source archive SHA256 is
 Main was fetched again and remains3fb25924; the reviewed plan revision11 is
 unchanged. This candidate is not `core_acceptance_sha`.
 
-Fresh root native compilation reused verified dependency bytes and passes30/30
+Fresh root native compilation reused verified dependency bytes and passes 30/30
 CTest targets, including inference and helper schema-preflight coverage. The
 complete Python coverage command passes5164 tests,31 skips and95.86% coverage.
 Artifact/provenance fixtures also pass under explicit unrelated PR998, main and
@@ -342,3 +342,35 @@ format/analyzer/AST size checks pass; ApplicationService remains923 lines. The
 archive timeout fixtures/quality gates pass13 tests, and its checkout CLI passes.
 A new frozen source candidate will now run the complete Linux checkpoint; f225's
 failed complete gates are preserved and are not acceptance evidence.
+
+
+## Core candidate 405e and external integration correction
+
+`405e13f7fddca2369e35162c98ecf13b81416a89` is a complete source export with 1,319 files.
+Native Debug passes 30/30. The full canonical core gate passes 1,823 tests,
+12 expected skips and 92.06% coverage, including both previously failing cases.
+Both explicit source-hook configurations and current service/MCP compilation
+pass. Full Python passes 5,172 tests,31 expected skips and 95.87%; exact pinned
+format/lint/static gates pass. A separate actual Release build after cached Debug
+hooks=ON retains the cached ON option, contains no production helper hooks and
+passes all 30 root CTest targets. Verified dependencies were reused throughout.
+
+The full compiled service/UI gate reports 30 passed/two failed: external Dart
+fixtures still called reader APIs removed by 6E. The author missed these consumers
+in the initial migration. A complete 26-file external-consumer audit found the
+service probe and both desktop integration fixtures. Their corrected live batch
+passes the targeted real facade subprocess and actual service/MCP UI with 59
+recorded expectations; meeting target compilation, integration analysis and eight
+actual SQLite receipt/ownership assertions pass. Independent review converged
+after fixing source-summary metadata retention. Production core files remain
+byte-identical to 405e. These diagnostics do not turn the failed complete process
+gate into a pass; the next frozen candidate reruns its full checkpoint.
+
+Claude implementation delta review round 3 converges at 405e. The measured native
+teardown residual and separate follow-up are recorded in the linked review note;
+no native join repair or full P2-4 resolution is claimed. ASan and TSan original
+SDK provenance/bytes are independently reverified, including all 1,632 installed
+entries per SDK. Their exact-source matrices remain held for the next candidate.
+All four pinned Linux distro images are now available; container/package/model/
+virtual-audio/installer gates remain locally executable obligations. Desktop
+feature extraction, PR publication and merge have not started.

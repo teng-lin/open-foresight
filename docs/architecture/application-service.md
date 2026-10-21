@@ -56,6 +56,9 @@ The desktop connection owns its read worker and read-only connection. A worker
 checks supported schema inside each read transaction; the authority checks again
 before publication. Synchronous compatibility reads use the same short guarded
 snapshots. Desktop readers never migrate a profile or own the service writer.
+If a service read encounters a future schema, it retires heartbeat and change
+snapshots for that owner's lifetime and returns actionable unavailable errors.
+Its existing lifetime decisions retain the last verified idle policy.
 
 ## Build
 
