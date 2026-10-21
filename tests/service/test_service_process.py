@@ -280,6 +280,14 @@ def running(tmp_path, request):
         "#!/usr/bin/env python3\nimport json,sys,time,os,pathlib\n"
         'if "-n" in sys.argv and sys.argv[sys.argv.index("-n")+1]=="0": sys.exit(0)\n'
         'if "-f" in sys.argv: print("Mira sends the draft Tuesday."); sys.exit(0)\n'
+        'if "--probe" in sys.argv: print(json.dumps({"native_stop_token_sequences":True})); sys.exit(0)\n'
+        'request=json.loads(sys.stdin.readline()) if "--model" in sys.argv else {}\n'
+        'if "tools" in request:\n'
+        ' assert request["tools"]["tools"]==[]\n'
+        ' answer={"role":"assistant","content":[{"type":"text","text":"# Overview\\nMira sends the draft Tuesday.\\n# Details\\n* **Draft delivery plan**: Mira owns the draft."}]}\n'
+        ' print("model "+json.dumps(answer),flush=True)\n'
+        ' assert json.loads(sys.stdin.readline())=={"finish":True}\n'
+        ' print("answer "+json.dumps(answer),flush=True); sys.exit(0)\n'
         'marker=pathlib.Path(os.environ["FORESIGHT_DELAY_GENERATION"])\n'
         "if marker.exists(): time.sleep(15)\n"
         'print(json.dumps({"answer":"Mira sends the draft Tuesday. [S1]","citations":["S1"]}))\n'

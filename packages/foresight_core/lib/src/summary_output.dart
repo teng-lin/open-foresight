@@ -21,8 +21,7 @@ String sanitizeSummary(String text) {
   return result
       .replaceAllMapped(
         RegExp(
-          r'(\*\s*\*\*[^*]+\*\*\s*:\s*)(?:Microphone|Remote)\s+',
-          caseSensitive: false,
+          r'(\*\s*\*\*[^*]+\*\*\s*:\s*)(?:Microphone|Remote)\s+(?=(?:approved|confirmed|decided|reported|requested)\b)',
         ),
         (match) => match[1]!,
       )

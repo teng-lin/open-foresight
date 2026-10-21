@@ -86,6 +86,8 @@ void main() {
         work = domain.application.generateSummary(id).catchError((Object _) {});
       });
       await pumpUntil(tester, () => runtime.entered.isCompleted);
+      // Service events coalesce through a 100 ms UI timer on the fake clock.
+      await tester.pump(const Duration(milliseconds: 100));
       await pumpUntil(
         tester,
         () => find.byTooltip('Cancel summary').evaluate().isNotEmpty,

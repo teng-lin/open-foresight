@@ -29,12 +29,16 @@ Future<void> selectMeetingPanel(WidgetTester tester, String panel) async {
 Future<void> openMeetingCitation(
   WidgetTester tester,
   int meeting,
-  Object revision,
-) async {
+  Object revision, {
+  String citationLabel = 'S1',
+}) async {
   final history = find.byKey(ValueKey('chat-history:meeting:$meeting'));
   final citation = find.descendant(
     of: history,
-    matching: find.widgetWithText(TextButton, '[S1] source revision $revision'),
+    matching: find.widgetWithText(
+      TextButton,
+      '[$citationLabel] source revision $revision',
+    ),
   );
   await tester.scrollUntilVisible(
     citation,

@@ -1,6 +1,6 @@
 # Foresight AI workflows and recovered prompts
 
-Foresight implements several distinct AI pipelines. Enhanced Notes retrieves transcript excerpts for individual shorthand notes; Live Q&A detects questions with a dedicated small model and then answers them; AI Summary chooses between full, incremental, and sequential map/reduce generation. Open Foresight already reconstructs much of the first two pipelines. Summary is the largest verified implementation gap.
+Foresight implements several distinct AI pipelines. Enhanced Notes retrieves transcript excerpts for individual shorthand notes; Live Q&A detects questions with a dedicated small model and then answers them; AI Summary chooses between full, incremental, and sequential map/reduce generation. Open Foresight already reconstructs much of the first two pipelines. At the investigated baseline `02d572fbd66022bb125d188dfa296ba7f2bf85bc`, Summary was the largest verified implementation gap. The dedicated implementation is now described in [Meeting Summary](../architecture/meeting-summary.md).
 
 The [implementation plan](../plans/2026-10-20-foresight-ai-parity-plan.md) prioritizes completing these contracts while retaining the current service, native workers, storage, and desktop. Exact original prompt text, wrappers, regular expressions, stop markers, and decoded constants are in the [prompt catalog](foresight-ai/prompts.json). These are original recovered literals; current production prompts include additional Open Foresight instructions.
 
@@ -31,7 +31,7 @@ Raw responses, complete paginated summaries, reader source, UTF-16 units, failed
 | --- | --- | --- | --- |
 | Enhanced Notes | Per-note retrieval, greedy batches, separate conversations, streamed merge, native stop tokens | Substantial implementation already exists | Audit integration, cancellation, fallback provenance, and long meetings |
 | Live Q&A | Dedicated raw-completion detector, rolling window, deduplication, dispatch, answering | Dedicated detector protocol plus durable queue and grounded answers | Portable detector deployment and real end-to-end evaluation |
-| AI Summary | Full, incremental, tokenizer-aware map/reduce; preview, sanitation, checkpoints, embedding | Generic prompt over sampled transcript sections | Highest implementation priority |
+| AI Summary | Full, incremental, tokenizer-aware map/reduce; preview, sanitation, checkpoints, embedding | Generic prompt over sampled transcript sections | Implemented here; see [Meeting Summary](../architecture/meeting-summary.md) |
 | Calendar-page summary | A separate summary implementation includes Action Items | Separate generic Actions output exists | Preserve the distinction; establish runtime selection before claiming parity |
 | Attachment brief | Document summaries followed by event-level synthesis | Imports/retrieval exist; equivalent meeting-preparation orchestration needs work | Recover and implement as a distinct feature |
 | Chat and Ask | Context/date prompts, citations, structured history, memory compression, optional web tools | Extensive local grounding; deliberate web-policy differences | Version prompts and preserve explicit source/network scope |
@@ -80,7 +80,7 @@ The earliest seed is accepted even if oversized. Earlier rejected candidates are
 | PP34609 / PP34603 | Optional missed-topic instructions for Standard / Concise |
 | PP34604–PP34607 | Relevant excerpts, shorthand notes, and output framing |
 | PP34530–PP34546 | Excerpt IDs, item IDs, previous enhancement, and per-item reference framing |
-| PP34554 | `</output>`, `<turn|>`, `<eos>`, `<end_of_turn>` |
+| PP34554 | `</output>`, `<turn\|>`, `<eos>`, `<end_of_turn>` |
 
 The prompt links each note's `<excerpt_refs>` to deduplicated `<excerpt id="E0">` blocks. It preserves the user's spelling, acronyms, product names, and technical terms over ASR spellings; keeps non-scribbles substantially unchanged; preserves prior facts; and requests only Markdown followed by `</output>`. Previous accepted output is supplied in `<previous_enhanced>`. Unmatched notes receive a cleaned original bullet.
 
@@ -164,7 +164,7 @@ Per-event generation counters reject stale preview/progress callbacks. Cancellat
 
 Completion trims and applies an ordered attribution sanitizer at `0x10092fe0c`; the catalog includes its regex/replacement strings. It caches the summary and cleaned transcript's **UTF-16 length**, writes `transcript_summary_{eventId}` and `transcript_summary_len_{eventId}`, persists the event-transcript summary, and queues the summary for embedding. A generated summary therefore becomes input to later knowledge retrieval.
 
-The current [Open Foresight generation method](../../packages/foresight_core/lib/src/application.dart) instead sends `Produce $kind from this transcript only`, samples bounded beginning/middle/end evidence, and sets 1024 output tokens. It retains artifact history and revisions, but lacks the recovered Summary planner, incremental checkpoint, sequential map/reduce, summary-specific streaming, and ordered sanitation.
+At the investigated baseline, the Open Foresight generation method sent `Produce $kind from this transcript only`, sampled bounded beginning/middle/end evidence, and set 1024 output tokens. It retained artifact history and revisions, but lacked the recovered Summary planner, incremental checkpoint, sequential map/reduce, summary-specific streaming, and ordered sanitation.
 
 ## Action Items and the second summary implementation
 

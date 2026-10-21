@@ -179,6 +179,12 @@ class SummaryGenerator {
         1,
       );
     }
+    // Reject impossible final framing before spending any map requests.
+    if (!await _fits(summaryReducePrompt(''), summaryFullInstructions)) {
+      throw StateError(
+        'Summary reduction instructions exceed the model context. Increase model context.',
+      );
+    }
     final chunks = await _chunks(transcript);
     final partials = <String>[];
     for (var i = 0; i < chunks.length; i++) {
@@ -199,26 +205,51 @@ class SummaryGenerator {
     }
     checkCurrent();
     if (partials.isEmpty) throw StateError('No transcript chunks to summarize');
-    if (partials.length == 1) {
-      return SummaryResult(sanitizeSummary(partials.single), 'map_reduce', 1);
+    final reduced = await _reducePartials(partials, chunks.length);
+    return SummaryResult(
+      sanitizeSummary(reduced.text),
+      'map_reduce',
+      chunks.length,
+      joinClipped: reduced.clipped,
+    );
+  }
+
+  Future<({String text, bool clipped})> _reducePartials(
+    List<String> partials,
+    int chunks,
+  ) async {
+    var joined = await _reductionInput(partials);
+    var clipped = false;
+    if (joined == null) {
+      // Too many topics to retain even a prefix of each in one request.
+      // Reduce balanced subtrees first, keeping every map result represented.
+      if (partials.length == 1) {
+        throw StateError(
+          'Summary reduction exceeds the model context. Increase model context.',
+        );
+      }
+      final middle = partials.length ~/ 2;
+      final left = await _reducePartials(partials.sublist(0, middle), chunks);
+      final right = await _reducePartials(partials.sublist(middle), chunks);
+      clipped = left.clipped || right.clipped;
+      joined = await _reductionInput([left.text, right.text]);
+      if (joined == null) {
+        throw StateError(
+          'Summary reduction exceeds the model context. Increase model context.',
+        );
+      }
     }
-    final joined = await _reductionInput(partials);
     final body = await _request(
       summaryReducePrompt(joined.text),
       summaryFullInstructions,
       'reducing',
-      completed: chunks.length,
-      total: chunks.length,
+      completed: chunks,
+      total: chunks,
     );
-    return SummaryResult(
-      sanitizeSummary(body),
-      'map_reduce',
-      chunks.length,
-      joinClipped: joined.clipped,
-    );
+    return (text: body, clipped: clipped || joined.clipped);
   }
 
-  Future<({String text, bool clipped})> _reductionInput(
+  Future<({String text, bool clipped})?> _reductionInput(
     List<String> partials,
   ) async {
     final original = joinSummaryPartials(partials, contextTokens);
@@ -228,10 +259,9 @@ class SummaryGenerator {
     )) {
       return original;
     }
-    // The reference character cap is only an upper bound. Fit the complete
-    // reduction request, preserving a prefix of every MAP result rather than
-    // dropping the final topics to make room for system/output framing.
-    var low = 20, high = partials.map((text) => text.length).reduce(math.max);
+    // Fit the complete request, preserving a prefix of every map result.
+    // Short results are valid too; there is no twenty-character minimum.
+    var low = 1, high = partials.map((text) => text.length).reduce(math.max);
     ({String text, bool clipped})? best;
     while (low <= high) {
       checkCurrent();
@@ -250,11 +280,6 @@ class SummaryGenerator {
       } else {
         high = quota - 1;
       }
-    }
-    if (best == null) {
-      throw StateError(
-        'Summary reduction exceeds the model context even with shortened topic excerpts. Use a model with a larger context or summarize shorter meetings.',
-      );
     }
     return best;
   }
@@ -326,11 +351,16 @@ class SummaryGenerator {
   var joined = partials.join(separator);
   if (joined.length > cap) {
     clipped = true;
-    final quota = math.max(20, cap ~/ partials.length - separator.length);
+    final quota = math.max(
+      20,
+      (cap - separator.length * (partials.length - 1) - 3 * partials.length) ~/
+          partials.length,
+    );
     joined = partials
         .map((s) => s.length > quota ? '${_prefix(s, quota)}...' : s)
         .join(separator);
-    if (joined.length > cap) joined = _prefix(joined, cap);
+    // Never cut off trailing topics. If separators and minimum prefixes still
+    // exceed the cap, request admission routes the list through subtrees.
   }
   return (text: joined, clipped: clipped);
 }

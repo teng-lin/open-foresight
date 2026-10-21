@@ -228,6 +228,55 @@ void main() {
     },
   );
 
+  test('a single map result still receives final brief formatting', () async {
+    final single = SummaryGenerator(
+      countTokens: (text) async =>
+          text.contains(summaryFullStart) ? 5000 : summaryWordCount(text),
+      checkCurrent: () {},
+      onProgress: (_) {},
+      complete: (prompt, system, preview) async {
+        calls.add((prompt: prompt, system: system));
+        return prompt.startsWith(summaryChunkStart)
+            ? '* Launch Friday.'
+            : '# Overview\nLaunch Friday.\n# Details\n* **Launch date**: Friday.';
+      },
+    );
+    final result = await single.generate(
+      'Alice: launch Friday.',
+      identity: 'm',
+    );
+    expect(result.chunks, 1);
+    expect(calls, hasLength(2));
+    expect(calls.last.system, endsWith(summaryFullInstructions));
+    expect(result.body, contains('# Overview'));
+    expect(result.body, contains('# Details'));
+  });
+
+  test('many topics reduce in bounded sequential subtrees', () async {
+    var maps = 0, reductions = 0;
+    final hierarchical = SummaryGenerator(
+      countTokens: (text) async =>
+          summaryWordCount(text) + '\n\n---\n\n'.allMatches(text).length * 1000,
+      checkCurrent: () {},
+      onProgress: (_) {},
+      complete: (prompt, system, preview) async {
+        if (prompt.startsWith(summaryChunkStart)) return 'Topic${++maps}';
+        reductions++;
+        return RegExp(
+          r'Topic\d+',
+        ).allMatches(prompt).map((m) => m[0]).join(' ');
+      },
+    );
+    final result = await hierarchical.generate('word ' * 24000, identity: 'm');
+    expect(maps, greaterThan(10));
+    expect(reductions, greaterThan(1));
+    expect(result.chunks, maps);
+    for (var i = 1; i <= maps; i++) {
+      expect(RegExp('Topic$i\\b').hasMatch(result.body), isTrue);
+    }
+    expect(result.joinClipped, isFalse);
+  });
+
   test(
     'reduction budgets every topic with system and output overhead',
     () async {
@@ -263,29 +312,30 @@ void main() {
     },
   );
 
-  test(
-    'reduction refuses a context too small for all topic prefixes',
-    () async {
-      var reductions = 0;
-      final constrained = SummaryGenerator(
-        contextTokens: 2800,
-        outputTokens: 512,
-        countTokens: (text) async => utf8.encode(text).length,
-        checkCurrent: () {},
-        onProgress: (_) {},
-        complete: (prompt, system, preview) async {
-          if (prompt.startsWith(summaryChunkStart)) return 'topic detail ' * 50;
-          reductions++;
-          return 'must not accept';
-        },
-      );
-      await expectLater(
-        constrained.generate('discussion ' * 1200, identity: 'm'),
-        throwsStateError,
-      );
-      expect(reductions, 0);
-    },
-  );
+  test('impossible reduction framing fails before any map work', () async {
+    var reductions = 0, maps = 0;
+    final constrained = SummaryGenerator(
+      contextTokens: 2800,
+      outputTokens: 512,
+      countTokens: (text) async => utf8.encode(text).length,
+      checkCurrent: () {},
+      onProgress: (_) {},
+      complete: (prompt, system, preview) async {
+        if (prompt.startsWith(summaryChunkStart)) {
+          maps++;
+          return 'topic detail ' * 50;
+        }
+        reductions++;
+        return 'must not accept';
+      },
+    );
+    await expectLater(
+      constrained.generate('discussion ' * 1200, identity: 'm'),
+      throwsStateError,
+    );
+    expect(reductions, 0);
+    expect(maps, 0);
+  });
 
   test('cancellation prevents another map or final reduction', () async {
     final cancelled = SummaryGenerator(
@@ -338,25 +388,29 @@ void main() {
     },
   );
 
-  test(
-    'safe joining caps length, distributes prefixes, and preserves Unicode pairs',
-    () {
-      expect(joinSummaryPartials(['one', 'two'], 4096), (
-        text: 'one\n\n---\n\ntwo',
-        clipped: false,
-      ));
-      final result = joinSummaryPartials([
-        'A' * 15000,
-        'B' * 15000,
-        '😀' * 8000,
-      ], 4096);
-      expect(result.clipped, isTrue);
-      expect(result.text.length, lessThanOrEqualTo(10384));
-      expect(result.text, contains('A'));
-      expect(result.text, contains('B'));
-      expect(utf8.decode(utf8.encode(result.text)), result.text);
-    },
-  );
+  test('safe joining retains every topic and preserves Unicode pairs', () {
+    expect(joinSummaryPartials(['one', 'two'], 4096), (
+      text: 'one\n\n---\n\ntwo',
+      clipped: false,
+    ));
+    final result = joinSummaryPartials([
+      'A' * 15000,
+      'B' * 15000,
+      '😀' * 8000,
+    ], 4096);
+    expect(result.clipped, isTrue);
+    expect(result.text.length, lessThanOrEqualTo(10384));
+    expect(result.text, contains('A'));
+    expect(result.text, contains('B'));
+    expect(utf8.decode(utf8.encode(result.text)), result.text);
+    final many = joinSummaryPartials(
+      List.generate(2000, (i) => 'Topic $i: ${'detail ' * 10}'),
+      4096,
+    );
+    for (var i = 0; i < 2000; i++) {
+      expect(many.text, contains('Topic $i:'));
+    }
+  });
 
   test('input cleanup and ordered attribution rules preserve real names', () {
     expect(
@@ -373,6 +427,17 @@ void main() {
       sanitizeSummary('* **Decision**: Remote approved Alice’s plan.'),
       '* **Decision**: approved Alice’s plan.',
     );
+    for (final body in [
+      'Remote engineers may relocate.',
+      'remote engineers may relocate.',
+      'Remote work is supported.',
+      'Microphone quality needs improvement.',
+    ]) {
+      expect(
+        sanitizeSummary('* **Hiring policy**: $body'),
+        '* **Hiring policy**: $body',
+      );
+    }
     expect(
       sanitizeSummary('Alice noted that the remote server works.'),
       'Alice noted that the remote server works.',
