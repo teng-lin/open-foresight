@@ -42,12 +42,12 @@ def test_smoke_rejects_incomplete_lifecycle_and_cleans_up(
     original_status = smoke.service_command
     status_calls = []
 
-    def command(service, env, action):
+    def command(service, env, action, **kwargs):
         if action == "--status":
             status_calls.append(action)
             if failure == "desktop-status":
                 raise subprocess.CalledProcessError(1, "status")
-            result = original_status(service, env, action)
+            result = original_status(service, env, action, **kwargs)
             if failure == "desktop-mismatch" and len(status_calls) == 1:
                 return {"pid": 999}
             if (
@@ -58,12 +58,9 @@ def test_smoke_rejects_incomplete_lifecycle_and_cleans_up(
             ):
                 return {"pid": 999}
             return result
-        return original_status(service, env, action)
+        return original_status(service, env, action, **kwargs)
 
     monkeypatch.setattr(smoke, "service_command", command)
-    ticks = iter(range(0, 1000, 31))
-    monkeypatch.setattr(smoke.time, "monotonic", lambda: next(ticks))
-    monkeypatch.setattr(smoke.time, "sleep", lambda _: None)
     if failure == "racing-db":
         original_run = smoke.subprocess.run
 

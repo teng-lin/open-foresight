@@ -239,6 +239,22 @@
       ],
       "gate": "core-native",
       "reason": "The core CI gate supplies both FORESIGHT_NATIVE_LIBRARY and FORESIGHT_HELPER; these tests run native process ownership and runtime reacquisition without downloaded models."
+    },
+    {
+      "path": "packages/foresight_core/test/background_instrumentation_test.dart",
+      "conditions": [
+        "Platform.isMacOS ? false : 'Production acquisition factory requires macOS'"
+      ],
+      "gate": "platform",
+      "reason": "The regular macOS core gate runs production query acquisition cancellation through its native factory with held metadata transport and no model download. Linux skips this macOS-only factory contract."
+    },
+    {
+      "path": "packages/foresight_core/test/service_lifetime_test.dart",
+      "conditions": [
+        "Platform.isMacOS ? false : 'Production acquisition factory requires macOS'"
+      ],
+      "gate": "platform",
+      "reason": "The regular macOS core gate runs production query acquisition cancellation through its native factory with held metadata transport and no model download. Linux skips this macOS-only factory contract."
     }
   ]
 }

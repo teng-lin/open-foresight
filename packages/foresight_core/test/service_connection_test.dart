@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:ffi/ffi.dart';
 import 'package:foresight_core/src/platform_services.dart';
 import 'package:foresight_core/src/profile_paths.dart';
 import 'package:foresight_core/src/rpc_error.dart';
@@ -43,21 +45,74 @@ void main() {
     () async {
       final directory = createTestTempDirectorySync('of-connect-');
       final path = '${directory.path}/application.sock';
-      final listener = await ServerSocket.bind(
-        InternetAddress(path, type: InternetAddressType.unix),
-        0,
-      );
+      final libc = DynamicLibrary.process();
+      final socket = libc
+          .lookupFunction<
+            Int32 Function(Int32, Int32, Int32),
+            int Function(int, int, int)
+          >('socket');
+      final bind = libc
+          .lookupFunction<
+            Int32 Function(Int32, Pointer<Void>, Uint32),
+            int Function(int, Pointer<Void>, int)
+          >('bind');
+      final listen = libc
+          .lookupFunction<Int32 Function(Int32, Int32), int Function(int, int)>(
+            'listen',
+          );
+      final poll = libc
+          .lookupFunction<
+            Int32 Function(Pointer<Void>, UintPtr, Int32),
+            int Function(Pointer<Void>, int, int)
+          >('poll');
+      final shutdown = libc
+          .lookupFunction<Int32 Function(Int32, Int32), int Function(int, int)>(
+            'shutdown',
+          );
+      final close = libc
+          .lookupFunction<Int32 Function(Int32), int Function(int)>('close');
+      // Linux AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC. Own the listener directly:
+      // ServerSocket.close queues its native close on the I/O event thread,
+      // where the client's write-ready event can win the race.
+      final descriptor = socket(1, 1 | 0x80000, 0);
+      expect(descriptor, greaterThanOrEqualTo(0));
+      final address = calloc<Uint8>(110);
+      final pollfd = calloc<Int16>(4);
+      var listenerClosed = false;
+      ServiceClient? unexpectedClient;
       try {
-        listener.listen((socket) => socket.destroy());
-        final connecting = ServiceClient.connect(path);
-        // Let the connect reach the backlog; nothing has accepted it yet,
-        // since this isolate has not returned to its event loop.
-        for (var hop = 0; hop < 20; hop++) {
+        final bytes = utf8.encode(path);
+        expect(bytes.length, lessThan(108));
+        address.cast<Uint16>().value = 1;
+        address.asTypedList(110).setRange(2, 2 + bytes.length, bytes);
+        expect(bind(descriptor, address.cast(), 2 + bytes.length + 1), 0);
+        expect(listen(descriptor, 1), 0);
+        final connecting = ServiceClient.connect(path).then((client) {
+          unexpectedClient = client;
+          return client;
+        });
+        connecting.ignore();
+        pollfd.cast<Int32>().value = descriptor;
+        pollfd[2] = 1; // POLLIN: a connection is queued for accept.
+        final waited = Stopwatch()..start();
+        var queued = poll(pollfd.cast(), 1, 0);
+        while (queued == 0) {
+          if (waited.elapsed > const Duration(seconds: 5)) {
+            fail('The client did not reach the listener backlog');
+          }
+          // Drain only microtasks until the kernel confirms the connect.
+          // Delivering I/O events here could complete it before shutdown.
           await Future<void>.microtask(() {});
+          queued = poll(pollfd.cast(), 1, 0);
         }
-        final closed = listener.close();
-        // Hold this isolate while the closed listener resets that connect.
-        sleep(const Duration(milliseconds: 50));
+        expect(queued, 1);
+        expect(pollfd[3] & 1, 1);
+        // Shut down and close the listener before its write-ready callback runs.
+        // A forked child can retain a CLOEXEC copy until it execs.
+        expect(shutdown(descriptor, 2), 0); // SHUT_RDWR.
+        final closed = close(descriptor);
+        listenerClosed = true;
+        expect(closed, 0);
         // Only the reset path; a plain refused or missing socket would be a
         // SocketException too.
         await expectLater(
@@ -70,9 +125,11 @@ void main() {
             ),
           ),
         );
-        await closed;
       } finally {
-        await listener.close();
+        if (!listenerClosed) close(descriptor);
+        await unexpectedClient?.close();
+        calloc.free(address);
+        calloc.free(pollfd);
         directory.deleteSync(recursive: true);
       }
     },

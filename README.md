@@ -62,7 +62,7 @@ The repository has a fresh history. Reference screenshots, reverse-engineering r
 - **Notes.** Write personal notes, and start a new one with Ctrl+N (⌘N on the Mac).
 - **Stats.** A dashboard of sources added, meetings transcribed, answers given, and weekly local output tokens.
 - **MCP server.** Agents can import, search, ask, take notes, and record through the same application service the desktop uses.
-- **Desktop integration.** A global shortcut to quick-start a meeting, desktop notifications, a monitor for the local helper, and a background service that keeps running and keeps models loaded after the window closes. Recording requires the visible desktop.
+- **Desktop integration.** A global shortcut to quick-start a meeting, desktop notifications, a monitor for the local helper, and a background service that stays warm while the window is open and, after recent agent use, until one idle period has passed. Recording requires the visible desktop.
 
 ## Beyond the original
 
@@ -125,7 +125,7 @@ flowchart LR
   Service --> Capture[PipeWire or Core Audio capture]
 ```
 
-There is one application service per profile. It owns every database write, the loaded models, imports, Google sync, and the recording session. The desktop and MCP clients attach to the service over a private Unix socket, and closing the MCP client does not unload a model. Desktop recording controls start capture directly; external recording requests require desktop confirmation. The on-screen recording controls show capture status and Stop; closing or hiding the desktop stops capture. See [Application service and MCP](docs/architecture/application-service.md).
+There is one application service per profile. It owns every database write, the loaded models, imports, Google sync, and the recording session. The desktop and MCP clients attach to the service over a private Unix socket, and the desktop keeps the service running; after it leaves, desktop-only use keeps the one-second shutdown grace, and recent agent use follows the busy-aware idle rule, so models are released one idle period after the last agent request whether or not the agent is still connected. Desktop recording controls start capture directly; external recording requests require desktop confirmation. The on-screen recording controls show capture status and Stop; closing or hiding the desktop stops capture. See [Application service and MCP](docs/architecture/application-service.md).
 
 | Path | Contents |
 | --- | --- |

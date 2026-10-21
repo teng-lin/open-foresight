@@ -88,6 +88,8 @@ RagServiceClient helperClient(grpc_api.ClientChannel channel) =>
       options: CallOptions(timeout: const Duration(seconds: 45)),
     );
 
+enum AdoptedIdentity { notAdopted, gone, matches, unknown }
+
 class Helper {
   final String socket, storage;
   late final grpc_api.ClientChannel channel;
@@ -100,6 +102,10 @@ class Helper {
   bool incompatible = false;
   bool shutdownVerified = true;
   bool _adopted = false;
+  bool get adopted => _adopted;
+  bool _probing = false, _launchingNow = false;
+  bool get starting => _probing || _launchingNow;
+  final Duration startupProbeTimeout;
   final HelperRestartBudget restartBudget = HelperRestartBudget();
   int get restarts => restartBudget.attempts;
   set restarts(int value) {
@@ -112,7 +118,12 @@ class Helper {
   void Function()? changed;
   Future<void> Function()? onReady;
   final bool manageProcess;
-  Helper(this.socket, this.storage, {this.manageProcess = true}) {
+  Helper(
+    this.socket,
+    this.storage, {
+    this.manageProcess = true,
+    this.startupProbeTimeout = const Duration(milliseconds: 400),
+  }) {
     channel = helperChannel(socket);
     client = helperClient(channel);
   }
@@ -185,12 +196,16 @@ class Helper {
       }
       bool live = false;
       PingResponse? existing;
+      _probing = true;
       try {
         existing = await (_startupProbe = client.ping(
           PingRequest(),
-          options: CallOptions(timeout: const Duration(milliseconds: 400)),
+          options: CallOptions(timeout: startupProbeTimeout),
         ));
-      } catch (_) {}
+      } catch (_) {
+      } finally {
+        _probing = false;
+      }
       if (stopping) return;
       if (existing != null) {
         _adopted = true;
@@ -214,10 +229,15 @@ class Helper {
         live = true;
       }
       if (!live) {
-        process = await (_launching = Process.start(executable, [
-          socket,
-          storage,
-        ], environment: runtimeConfiguration.environment));
+        _launchingNow = true;
+        try {
+          process = await (_launching = Process.start(executable, [
+            socket,
+            storage,
+          ], environment: runtimeConfiguration.environment));
+        } finally {
+          _launchingNow = false;
+        }
         unawaited(
           process!.stdout.drain<void>().catchError((Object error) {
             stderr.writeln('Helper stdout drain: $error');
@@ -302,6 +322,43 @@ class Helper {
     changed?.call();
   }
 
+  Future<AdoptedIdentity> verifyAdoptedIdentity() async {
+    if (!_adopted && snapshot == null) return AdoptedIdentity.notAdopted;
+    final instance = snapshot?.instanceId ?? '';
+    if (!RegExp(r'^[1-9][0-9]*-[1-9][0-9]*$').hasMatch(instance)) {
+      return AdoptedIdentity.unknown;
+    }
+    try {
+      final library = DynamicLibrary.open(runtimeConfiguration.nativeLibrary);
+      final matches = library
+          .lookupFunction<
+            Int32 Function(Int64, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>),
+            int Function(int, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>)
+          >('fs_process_matches');
+      final a = socket.toNativeUtf8(),
+          b = storage.toNativeUtf8(),
+          identity = instance.toNativeUtf8();
+      try {
+        return switch (matches(
+          int.parse(instance.split('-').first),
+          a,
+          b,
+          identity,
+        )) {
+          0 => AdoptedIdentity.gone,
+          1 => AdoptedIdentity.matches,
+          _ => AdoptedIdentity.unknown,
+        };
+      } finally {
+        calloc.free(a);
+        calloc.free(b);
+        calloc.free(identity);
+      }
+    } catch (_) {
+      return AdoptedIdentity.unknown;
+    }
+  }
+
   Future<void> close() => _closing ??= _close();
 
   Future<void> _close() async {
@@ -332,53 +389,22 @@ class Helper {
         // A service restart can adopt its predecessor's surviving helper.
         // Verify the private profile arguments before releasing that owner.
         if (_adopted || snapshot != null) shutdownVerified = false;
-        final instance = snapshot?.instanceId ?? '';
-        final pid = int.tryParse(instance.split('-').first);
-        if (pid != null &&
-            pid > 0 &&
-            RegExp(r'^[1-9][0-9]*-[1-9][0-9]*$').hasMatch(instance)) {
-          shutdownVerified = false;
-          try {
-            final library = DynamicLibrary.open(
-              runtimeConfiguration.nativeLibrary,
-            );
-            final matches = library
-                .lookupFunction<
-                  Int32 Function(
-                    Int64,
-                    Pointer<Utf8>,
-                    Pointer<Utf8>,
-                    Pointer<Utf8>,
-                  ),
-                  int Function(int, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>)
-                >('fs_process_matches');
-            final a = socket.toNativeUtf8(), b = storage.toNativeUtf8();
-            final identity = snapshot!.instanceId.toNativeUtf8();
-            try {
-              final match = matches(pid, a, b, identity);
-              if (match == 0) {
-                // The adopted identity is positively gone or replaced. Never
-                // signal a mismatching PID; unknown inspection remains unsafe.
-                shutdownVerified = true;
-              } else if (match == 1) {
-                Process.killPid(pid, ProcessSignal.sigterm);
-                for (var attempt = 0; attempt < 50; attempt++) {
-                  if (matches(pid, a, b, identity) == 0) {
-                    shutdownVerified = true;
-                    break;
-                  }
-                  await Future<void>.delayed(const Duration(milliseconds: 100));
-                }
-              }
-            } finally {
-              calloc.free(a);
-              calloc.free(b);
-              calloc.free(identity);
+        final identity = await verifyAdoptedIdentity();
+        if (identity == AdoptedIdentity.gone) {
+          shutdownVerified = true;
+        } else if (identity == AdoptedIdentity.unknown) {
+          stderr.writeln(
+            'Could not verify adopted helper ownership; leaving it running',
+          );
+        } else if (identity == AdoptedIdentity.matches) {
+          final pid = int.parse(snapshot!.instanceId.split('-').first);
+          Process.killPid(pid, ProcessSignal.sigterm);
+          for (var attempt = 0; attempt < 50; attempt++) {
+            if (await verifyAdoptedIdentity() == AdoptedIdentity.gone) {
+              shutdownVerified = true;
+              break;
             }
-          } catch (error) {
-            stderr.writeln(
-              'Could not verify adopted helper ownership; leaving it running: $error',
-            );
+            await Future<void>.delayed(const Duration(milliseconds: 100));
           }
         }
       }

@@ -24,7 +24,8 @@ class LostReplyDomain extends CommandFixtureDomain {
 
   /// Indexing is not under test here; it succeeds without a helper.
   @override
-  Future<void> index(String id) async => store.state(id, 'indexed');
+  Future<void> index(String id, {bool Function()? current}) async =>
+      store.state(id, 'indexed');
   @override
   Future<Object?> command(
     Operation operation, [

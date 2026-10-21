@@ -24,6 +24,10 @@ enum RpcErrorReason {
 
   /// Client-local: the request never reached a live socket. Retrying is safe.
   notSent,
+
+  /// The request needs a desktop approval host and none is attached.
+  /// Retrying is safe once the desktop is open.
+  needsDesktop,
 }
 
 /// What a closing owner refuses with. Clients released before

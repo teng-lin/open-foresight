@@ -416,14 +416,14 @@ def verify_source_graph_restart(mcp, database, evidence):
         raise RuntimeError("Verification failed")
 
 
-def service_command(service, env, action):
+def service_command(service, env, action, *, timeout=60):
     result = subprocess.run(
         [str(service), action],
         cwd="/",
         env=env,
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=timeout,
         check=True,
     )
     return json.loads(result.stdout) if action == "--status" else None
@@ -646,10 +646,10 @@ def smoke(bundle, output, desktop=False, expected_revision=None):
                 report["gates"]["desktop"] = (
                     "passed_desktop_first_mcp_attach_and_desktop_process_exit"
                 )
-            # This authenticated desktop peer owns the graph writes. Closing it
-            # schedules the production desktop-close shutdown after one second.
-            # Keep it attached through both live-upgrade deferral and explicit
-            # idle shutdown, so installer checks cannot race that timer.
+            # The MCP save_note/list_notes calls are recent agent activity, so
+            # the owner survives the test desktop closing above. This
+            # authenticated desktop peer owns the graph writes and keeps the
+            # service pinned through live-upgrade deferral and idle shutdown.
             graph_peer = connections.enter_context(
                 closing(ApplicationPeer(runtime / "application.sock"))
             )
@@ -671,6 +671,23 @@ def smoke(bundle, output, desktop=False, expected_revision=None):
                 pass
             if not (service_command(service, env, "--status")["pid"] == owner):
                 raise RuntimeError("Deferred upgrade stopped its service owner")
+            # The graph probe can leave source indexing executing after its
+            # reply. The installer correctly defers until that work settles.
+            deadline = time.monotonic() + 60
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeError(
+                        "Background model work did not settle before idle upgrade"
+                    )
+                state = service_command(service, env, "--status", timeout=remaining)
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(
+                        "Background model work did not settle before idle upgrade"
+                    )
+                if not state["lifetime"]["busy"]:
+                    break
+                time.sleep(min(0.1, max(0, deadline - time.monotonic())))
             report["idle_upgrade"] = install(
                 upgrade_source,
                 app,

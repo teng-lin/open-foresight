@@ -135,6 +135,7 @@ class Application implements ModelGate {
         computeEmbedding: _computeNoteEmbedding,
         currentIsLive: (id) => recordingMeeting == id && recording != null,
         loadSavedTranscript: (id) async => _noteTranscriptText(id),
+        onSettled: changed,
       );
 
   Future<List<double>> _computeNoteEmbedding(String text) async {
@@ -305,16 +306,23 @@ class Application implements ModelGate {
         if (cancelled.isCompleted) {
           throw RpcError(RpcErrorCode.cancelled, 'Automatic answer cancelled');
         }
+        _proactiveWork++;
+        final answerWork = domain
+            .askInConversation(
+              question,
+              'meeting:$id',
+              meetingId: id,
+              requestId: request,
+              current: () => !cancelled.isCompleted,
+            )
+            .drain<void>()
+            .whenComplete(() {
+              _proactiveWork--;
+              changed();
+            });
+        answerWork.ignore();
         await Future.any<void>([
-          domain
-              .askInConversation(
-                question,
-                'meeting:$id',
-                meetingId: id,
-                requestId: request,
-                current: () => !cancelled.isCompleted,
-              )
-              .drain<void>(),
+          answerWork,
           cancelled.future.then(
             (_) => throw RpcError(
               RpcErrorCode.cancelled,
@@ -351,6 +359,7 @@ class Application implements ModelGate {
        _queryRuntime = queryRuntime,
        _providedQueryRuntime = queryRuntime != null {
     domain.modelGate = this;
+    domain.onBackgroundSettled = changed;
     _applications[domain] = this;
   }
 
@@ -583,8 +592,30 @@ class Application implements ModelGate {
       stderr.writeln('Google maintenance: $e');
     } finally {
       _googleBusy = false;
+      changed();
     }
   }
+
+  int _activeEnhancements = 0;
+  int _proactiveWork = 0;
+
+  /// Test-only background-work observations, including orphaned producers.
+  bool get queryAcquiring => _queryAcquisition != null;
+  bool get configuringModel => _modelBusy;
+  int get activeEnhancements => _activeEnhancements;
+  int get proactiveWork => _proactiveWork;
+  int get transcriptComputing => _noteTranscriptCache.computing;
+  bool get backgroundBusy =>
+      _modelBusy ||
+      domain.resumeInProgress ||
+      domain.initializationPending ||
+      _activeEnhancements > 0 ||
+      proactive.running ||
+      _proactiveWork > 0 ||
+      _noteTranscriptCache.computing > 0 ||
+      domain.mutating > 0 ||
+      _queryAcquisition != null ||
+      (domain.generator?.generating ?? false);
 
   void changed() {
     if (!_closed) changes.add(null);
@@ -746,7 +777,7 @@ class Application implements ModelGate {
             // A replay does not index again; startup resumes pending sources.
             if (a['index'] != false) _reportFailedIndex(source);
           } else if (a['index'] != false) {
-            await domain.index(source);
+            await domain.index(source, current: current);
           }
           return imported.result;
         case Operation.sourcesImportUrl:
@@ -772,7 +803,7 @@ class Application implements ModelGate {
           };
         case Operation.sourcesIndex:
           store.requireSource(a['id'] as String);
-          await domain.index(a['id'] as String);
+          await domain.index(a['id'] as String, current: current);
           return null;
         case Operation.sourcesDelete:
           await domain.delete(a['id'] as String);
@@ -873,23 +904,23 @@ class Application implements ModelGate {
                 : DateTime.parse(a['modifiedAfter'] as String),
           );
         case Operation.googleImportFile:
-          await google.importDriveFile(a['id'] as String);
+          await google.importDriveFile(a['id'] as String, current: current);
           return null;
         case Operation.googleImportFolder:
-          await google.importDriveFolder(a['id'] as String);
+          await google.importDriveFolder(a['id'] as String, current: current);
           return null;
         case Operation.googleImportYear:
-          await google.importLastYear();
+          await google.importLastYear(current: current);
           return null;
         case Operation.googleRefresh:
-          await google.refresh();
+          await google.refresh(current: current);
           return googleState;
         case Operation.googleCalendar:
           await google.syncCalendar();
           return null;
         case Operation.googleAttachments:
           _meeting(a['id'] as int);
-          await google.importAttachments(a['id'] as int);
+          await google.importAttachments(a['id'] as int, current: current);
           return null;
         case Operation.notesList:
           return store.rows('SELECT * FROM notes ORDER BY id');
@@ -1107,10 +1138,10 @@ class Application implements ModelGate {
           } else {
             _noteTranscriptCache.invalidate(id);
           }
-          await indexMeeting(id);
+          await indexMeeting(id, current: current);
           return null;
         case Operation.meetingsIndex:
-          await indexMeeting(a['id'] as int);
+          await indexMeeting(a['id'] as int, current: current);
           return null;
         case Operation.meetingsGenerate:
           _meeting(a['id'] as int);
@@ -1144,7 +1175,7 @@ class Application implements ModelGate {
           await startRecording(a['id'] as int);
           return captureState;
         case Operation.meetingsStop:
-          await stopRecording();
+          await domain.awaitCurrent(stopRecording(), current);
           return captureState;
         case Operation.meetingsPause:
           pauseRecording(a['id'] as int?);
@@ -1459,10 +1490,14 @@ class Application implements ModelGate {
     return rows.single;
   }
 
-  Future<String> importFile(String path, {bool Function()? current}) async {
+  Future<String> importFile(
+    String path, {
+    bool Function()? current,
+    bool Function()? indexing,
+  }) async {
     final generation = domain.workspaceGeneration;
 
-    await domain.waitForSourceWork();
+    await domain.waitForSourceWork(current: current);
     domain.checkWorkspace(generation);
     final file = File(importPolicy?.validate(path) ?? path).absolute;
     if (FileSystemEntity.typeSync(file.path) != FileSystemEntityType.file ||
@@ -1492,7 +1527,7 @@ class Application implements ModelGate {
       modifiedAtMs: modified,
       sourceUri: uri,
     );
-    await domain.index(id);
+    await domain.index(id, current: indexing ?? current);
     return id;
   }
 
@@ -1500,9 +1535,10 @@ class Application implements ModelGate {
     String value, {
     bool Function()? current,
     bool allowPrivateNetwork = false,
+    bool Function()? indexing,
   }) async {
     final generation = domain.workspaceGeneration;
-    await domain.waitForSourceWork();
+    await domain.waitForSourceWork(current: current);
     domain.checkWorkspace(generation);
     final uri = webImportUri(value);
     final text = await WebPageImporter().fetch(
@@ -1529,7 +1565,7 @@ class Application implements ModelGate {
       id: existing?['id'] as String?,
       sourceUri: uri.toString(),
     );
-    await domain.index(id);
+    await domain.index(id, current: indexing ?? current);
     return id;
   }
 
@@ -1556,6 +1592,9 @@ class Application implements ModelGate {
       try {
         await importFile(file.path, current: current);
       } catch (e) {
+        if (current != null && !current()) {
+          throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+        }
         failures.add('${file.path.split('/').last}: $e');
       }
     }
@@ -1593,6 +1632,7 @@ class Application implements ModelGate {
           await importUrl(
             sourceUri.toString(),
             current: sourceCurrent,
+            indexing: () => current?.call() ?? true,
             allowPrivateNetwork: allowPrivateNetwork,
           );
         } else if (sourceUri != null && sourceUri.scheme == 'file') {
@@ -1603,25 +1643,35 @@ class Application implements ModelGate {
               'Imported file is missing: $path',
             );
           }
-          await importFile(path, current: sourceCurrent);
+          await importFile(
+            path,
+            current: sourceCurrent,
+            indexing: () => current?.call() ?? true,
+          );
         } else {
-          await domain.index(s['id'] as String);
+          await domain.index(s['id'] as String, current: current);
         }
       } catch (e) {
+        if (current != null && !current()) {
+          throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+        }
         failures.add('${s['title']}: $e');
       }
     }
     if (googleAuth.connected) {
       try {
-        await google.refresh();
+        await google.refresh(current: current);
       } catch (e) {
+        if (current != null && !current()) {
+          throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+        }
         failures.add(e.toString());
       }
     }
     if (failures.isNotEmpty) throw StateError(failures.join('\n'));
   }
 
-  Future<void> indexMeeting(int id) async {
+  Future<void> indexMeeting(int id, {bool Function()? current}) async {
     _meeting(id);
     final text = store
         .rows(
@@ -1682,7 +1732,7 @@ class Application implements ModelGate {
         }),
       );
     } else {
-      await indexing;
+      await domain.awaitCurrent(indexing, current);
     }
   }
 
@@ -1936,6 +1986,7 @@ class Application implements ModelGate {
     _noteEnhancements[id] = enhancement;
     _scheduleEnhancedDraft(id, enhancement);
     changed();
+    _activeEnhancements++;
     try {
       late NativeRuntime generator;
       var batch = 0;
@@ -2117,6 +2168,8 @@ class Application implements ModelGate {
           }
         }
       }
+      _activeEnhancements--;
+      changed();
     }
   }
 

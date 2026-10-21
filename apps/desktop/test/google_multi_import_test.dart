@@ -43,6 +43,7 @@ class BatchDrive extends PendingDrive {
     String fileId, {
     Map<String, dynamic>? metadata,
     bool preserveDeleted = false,
+    bool Function()? current,
   }) async {
     imported.add(fileId);
     if (rejectSecond && fileId == 'Second') {
@@ -61,9 +62,10 @@ class BatchDrive extends PendingDrive {
   Future<void> importDriveFolder(
     String folderId, {
     bool refreshing = false,
+    bool Function()? current,
   }) async {
     importedFolders.add(folderId);
-    await importDriveFile(folderId);
+    await importDriveFile(folderId, current: current);
   }
 }
 

@@ -35,13 +35,12 @@ void main() {
         );
         await tester.tap(find.text('Settings'));
         await tester.pumpAndSettle();
-        Finder select(String value) => find.byWidgetPredicate(
-          (w) => w is DesktopSettingSelect<String> && w.value == value,
-        );
-        await tester.ensureVisible(select('15'));
+        final inactivity = find.byKey(const Key('inactivity'));
+        final serviceIdle = find.byKey(const Key('serviceIdleMinutes'));
+        await tester.ensureVisible(inactivity);
         await tester.tap(
           find.descendant(
-            of: select('15'),
+            of: inactivity,
             matching: find.byType(DropdownButton<String>),
           ),
         );
@@ -51,7 +50,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(store.preference('inactivity'), '30');
         final label = find
-            .descendant(of: select('30'), matching: find.text('30 minutes'))
+            .descendant(of: inactivity, matching: find.text('30 minutes'))
             .first;
         Focus.of(tester.element(label)).requestFocus();
         await tester.pump();
@@ -61,6 +60,50 @@ void main() {
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
         await tester.pumpAndSettle();
         expect(store.preference('inactivity'), '30');
+        expect(
+          find.text('Stop the background service after agent inactivity'),
+          findsOneWidget,
+        );
+        expect(
+          find.text(
+            'With the window closed, the service and its models exit this long after the last agent request.',
+          ),
+          findsOneWidget,
+        );
+        final serviceSelect = tester.widget<DesktopSettingSelect<String>>(
+          serviceIdle,
+        );
+        expect(serviceSelect.value, '30');
+        expect(serviceSelect.items.map((item) => item.value), [
+          '0',
+          '15',
+          '30',
+          '60',
+          '120',
+        ]);
+        expect(serviceSelect.items.map((item) => (item.child as Text).data), [
+          'Never',
+          '15 minutes',
+          '30 minutes (Default)',
+          '60 minutes',
+          '120 minutes',
+        ]);
+        await tester.ensureVisible(serviceIdle);
+        await tester.tap(
+          find.descendant(
+            of: serviceIdle,
+            matching: find.byType(DropdownButton<String>),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('60 minutes').last);
+        await tester.pumpAndSettle();
+        expect(store.preference('serviceIdleMinutes'), '60');
+        expect(store.preference('inactivity'), '30');
+        expect(
+          tester.widget<DesktopSettingSelect<String>>(serviceIdle).value,
+          '60',
+        );
         expect(tester.takeException(), isNull);
         await tester.pumpWidget(
           MaterialApp(
@@ -94,6 +137,70 @@ void main() {
       }
     },
   );
+
+  testWidgets('Settings preserves a custom service idle period', (
+    tester,
+  ) async {
+    final root = createTestTempDirectorySync('desktop-service-idle-');
+    addTearDown(() {
+      if (root.existsSync()) root.deleteSync(recursive: true);
+    });
+    final store = Store('${root.path}/app.db');
+    store.setPreference('serviceIdleMinutes', '0.05');
+    final helper = OfflineHelper('${root.path}/socket', '${root.path}/helper');
+    try {
+      await tester.pumpWidget(
+        Foresight(
+          TestDesktopConnection(Domain(store, helper)),
+          deviceLoader: () async => [],
+        ),
+      );
+      await tester.tap(find.text('Settings'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      final serviceIdle = find.byKey(const Key('serviceIdleMinutes'));
+      final select = tester.widget<DesktopSettingSelect<String>>(serviceIdle);
+      expect(select.value, '0.05');
+      expect(select.items.map((item) => item.value), [
+        '0',
+        '15',
+        '30',
+        '60',
+        '120',
+        '0.05',
+      ]);
+      expect(
+        (select.items.singleWhere((item) => item.value == '0.05').child as Text)
+            .data,
+        '0.05 minutes',
+      );
+      await tester.ensureVisible(serviceIdle);
+      await tester.tap(
+        find.descendant(
+          of: serviceIdle,
+          matching: find.byType(DropdownButton<String>),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('0.05 minutes'), findsWidgets);
+      await tester.tap(find.text('Never').last);
+      await tester.pumpAndSettle();
+      expect(store.preference('serviceIdleMinutes'), '0');
+      final updated = tester.widget<DesktopSettingSelect<String>>(serviceIdle);
+      expect(updated.value, '0');
+      expect(updated.items.map((item) => item.value), [
+        '0',
+        '15',
+        '30',
+        '60',
+        '120',
+      ]);
+      expect(tester.takeException(), isNull);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await helper.close();
+    }
+  });
 
   testWidgets(
     'desktop audit screens, menu and URL dialog fit normal and scaled narrow layouts',

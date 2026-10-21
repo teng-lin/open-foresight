@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/helper_adoption.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 
@@ -9,40 +10,6 @@ import 'package:foresight_core/src/generated/helper_control.pbgrpc.dart'
     as control;
 import 'package:grpc/grpc.dart';
 import 'package:test/test.dart';
-
-class AdoptionRag extends RagServiceBase {
-  String version = '1.0.3';
-  @override
-  Future<PingResponse> ping(ServiceCall call, PingRequest request) async =>
-      PingResponse(success: true, version: version);
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
-}
-
-class AdoptionControl extends control.HelperControlServiceBase {
-  final control.State state;
-  bool unavailableOnce = false;
-  AdoptionControl(this.state);
-  @override
-  Future<control.State> getState(
-    ServiceCall call,
-    control.Empty request,
-  ) async {
-    if (unavailableOnce) {
-      unavailableOnce = false;
-      throw GrpcError.unavailable('Temporary adoption lookup failure');
-    }
-    return state;
-  }
-
-  @override
-  Stream<control.State> watchState(
-    ServiceCall call,
-    control.WatchRequest request,
-  ) async* {
-    yield state;
-  }
-}
 
 void main() {
   late Directory root;
