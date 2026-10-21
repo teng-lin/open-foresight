@@ -17,7 +17,7 @@
   "complete": true,
   "evidence_archive": {
     "path": "ci-acceptance-failures-20261020.evidence.tar.gz",
-    "sha256": "7a17cbea6d3a8cac43636b92850e0a4b79f8d658d8b21d34d7f01b291d47cab6"
+    "sha256": "39e70f101711a070518c821343b951d53e89b10af7553fdbf4b9efe66a85c650"
   },
   "failures": [
     {
@@ -17491,7 +17491,7 @@
     {
       "attempt": 2,
       "branch": "fix/142-functional-parity",
-      "classification": "conservative-prerequisite-or-aggregate",
+      "classification": "workflow-startup-no-jobs",
       "conclusion": "startup_failure",
       "event": "pull_request",
       "evidence": [
@@ -17500,12 +17500,12 @@
           "sha256": "301afc8c7bd2e0994f433017e425b59dd21c04f584d183c91e7ee113205871b3"
         },
         {
-          "path": "compares/482e7c57f07ffc31b554e0013b670b60a30a1429-50f34e37679c0ff61e30f268719d573a43bd0054.json",
-          "sha256": "7eae22bea5a3d419af906f0d9c416ef49906426333b67b8854545246ca8d408d"
+          "path": "startup/run.json",
+          "sha256": "2984229562599c37b93c1fdab5a1f22fbfcc2b19af0e400954de3029c2a7f05e"
         },
         {
-          "path": "logs/118141542155.txt",
-          "sha256": "8c61857c67d2f2497068c2e4c0020507356fbb8bd16bcf5d4c4d8f67d91045f1"
+          "path": "startup/jobs.json",
+          "sha256": "b3dab5870ff3a8209160335de7c1077b89e461d875d9041ac9d8b8ed7c1666f6"
         }
       ],
       "failed_steps": [],
@@ -17514,56 +17514,21 @@
       "id": "39275848117:2:0",
       "job": 0,
       "job_name": "workflow startup",
-      "paths": [
-        "apps/desktop/lib/background_store.dart",
-        "apps/desktop/lib/chat_controller.dart",
-        "apps/desktop/lib/file_discovery_sheet.dart",
-        "apps/desktop/lib/integrations_controller.dart",
-        "apps/desktop/lib/main.dart",
-        "apps/desktop/lib/settings_controller.dart",
-        "apps/desktop/lib/sources_controller.dart",
-        "apps/desktop/lib/workspace_visuals.dart",
-        "apps/desktop/test/background_store_test.dart",
-        "apps/desktop/test/chat_navigation_workflow_test.dart",
-        "apps/desktop/test/desktop_buffer_workflow_test.dart",
-        "apps/desktop/test/folder_import_review_test.dart",
-        "apps/desktop/test/google_multi_import_test.dart",
-        "apps/desktop/test/google_real_helper_test.dart",
-        "apps/desktop/test/note_enhancement_completion_test.dart",
-        "apps/desktop/test/output_calendar_stats_test.dart",
-        "apps/desktop/test/saved_answer_native_test.dart",
-        "apps/desktop/test/screenshot_ui_test.dart",
-        "apps/desktop/test/source_edit_workflow_test.dart",
-        "docs/validation/issue-142-functional-followups.md",
-        "packages/foresight_core/lib/src/answer_retrieval.dart",
-        "packages/foresight_core/lib/src/conversation_answer.dart",
-        "packages/foresight_core/lib/src/store.dart",
-        "packages/foresight_core/lib/src/text_budget.dart",
-        "packages/foresight_core/test/answer_retrieval_test.dart",
-        "packages/foresight_core/test/helper_adoption_test.dart",
-        "packages/foresight_core/test/schema_migrations_test.dart",
-        "packages/foresight_core/test/store_desktop_queries_test.dart",
-        "packages/foresight_core/test/text_budget_test.dart"
-      ],
-      "pull_requests": [
-        146
-      ],
+      "paths": [],
       "range": {
-        "base": "482e7c57f07ffc31b554e0013b670b60a30a1429",
-        "file_count": 29,
-        "head": "50f34e37679c0ff61e30f268719d573a43bd0054",
-        "kind": "original-changes-environment",
-        "merge_base": "482e7c57f07ffc31b554e0013b670b60a30a1429",
-        "proof_attempt": 1,
-        "proof_job": 118141542155
+        "kind": "workflow-startup-no-jobs"
       },
-      "required_phases": [
-        "cpu-models",
-        "software-gpu",
-        "virtual-audio"
-      ],
+      "required_phases": [],
       "run": 39275848117,
-      "source": "50f34e37679c0ff61e30f268719d573a43bd0054"
+      "source": "50f34e37679c0ff61e30f268719d573a43bd0054",
+      "startup_proof": {
+        "attempt": 2,
+        "conclusion": "startup_failure",
+        "job_count": 0,
+        "run": 39275848117,
+        "status": "completed",
+        "workflow": ".github/workflows/integration-acceptance.yml"
+      }
     },
     {
       "attempt": 1,

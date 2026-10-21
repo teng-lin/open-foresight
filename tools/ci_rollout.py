@@ -175,12 +175,14 @@ def _qualified(entry, *, repository, expected, api, download, controls=False):
         raise ValueError("Qualification lacks the actual fork archive forwarding consumer")
     if kind == "selector-replay" and (result.get("selector_replay", {}).get("count", 0) < 50 or result.get("selector_replay", {}).get("known_escapes") != [102, 110, 112, 119, 137, 144]):
         raise ValueError("Qualification lacks its full historical selector replay")
-    if kind == "acceptance-replay" and (result.get("acceptance_replay", {}).get("count", 0) < 50 or result.get("acceptance_replay", {}).get("known_escapes") != [102, 110, 112, 119, 137, 144]):
-        raise ValueError("Qualification lacks its full acceptance dependency replay")
+    if kind == "acceptance-replay":
+        from tools.ci_acceptance_plan import verify_replay_summary
+
+        verify_replay_summary(result.get("acceptance_replay"), run_started=run["created_at"], uploaded=uploaders[0]["completed_at"])
     if kind == "observer" and result.get("observer_case") not in {"identical", "divergent", "partially-selected", "failed-rerun"}:
         raise ValueError("Observation lacks its actual parity case")
     compare(result["control_closure" if controls else "closure"], expected)
-    return {"kind": kind, "run_id": run["id"], "source": source, "created_at": run["created_at"], "observer_case": result.get("observer_case")}
+    return {"kind": kind, "run_id": run["id"], "source": source, "created_at": run["created_at"], "observer_case": result.get("observer_case"), "acceptance_coverage": result.get("acceptance_replay", {}).get("coverage")}
 
 
 def authorize(index, *, root=ROOT, source, capabilities, repository="teng-lin/open-foresight", api=None, download=None, ongoing=False):
@@ -254,6 +256,9 @@ def authorize(index, *, root=ROOT, source, capabilities, repository="teng-lin/op
     if "acceptance_narrowing" in requested:
         if len({row["run_id"] for row in nights}) < 28 or datetime.fromisoformat(nights[-1]["created_at"].replace("Z", "+00:00")) - datetime.fromisoformat(nights[0]["created_at"].replace("Z", "+00:00")) < timedelta(weeks=4):
             raise ValueError("Acceptance narrowing needs four green weeks of actual observation")
+        cutoff = max(datetime.fromisoformat(row["acceptance_coverage"]["until"].replace("Z", "+00:00")) for row in qualified if row["kind"] == "acceptance-replay")
+        if cutoff < datetime.fromisoformat(nights[-1]["created_at"].replace("Z", "+00:00")):
+            raise ValueError("Acceptance failure replay must cover the latest qualified nightly; dispatch a fresh main acceptance-replay qualification")
     return {"source": source, "qualified_source": index["source"], "closure_sha256": expected["sha256"], "capabilities": sorted(requested), "qualified": qualified}
 
 
@@ -285,10 +290,27 @@ def main():
             parser.error("Incomplete actual selector replay")
         value["selector_replay"] = {"count": report["count"], "known_escapes": [102, 110, 112, 119, 137, 144], "sha256": digest(args.selector_report)}
     if args.acceptance_report:
+        from tools.ci_acceptance_plan import verify_replay_summary
+
         report = json.loads(args.acceptance_report.read_text())
-        if report.get("count", 0) < 50 or report.get("known_escapes") != [102, 110, 112, 119, 137, 144]:
-            parser.error("Incomplete actual acceptance dependency replay")
-        value["acceptance_replay"] = {"count": report["count"], "known_escapes": report["known_escapes"], "sha256": digest(args.acceptance_report)}
+        summary = {
+            key: report.get(key)
+            for key in (
+                "schema",
+                "baseline_sha256",
+                "baseline_count",
+                "outer_guard_count",
+                "phase_failure_count",
+                "inventory_sha256",
+                "count",
+                "miss_count",
+                "unresolved_count",
+                "coverage",
+            )
+        }
+        summary["sha256"] = digest(args.acceptance_report)
+        verify_replay_summary(summary)
+        value["acceptance_replay"] = summary
     args.output.write_text(json.dumps(value, sort_keys=True, indent=2) + "\n")
 
 

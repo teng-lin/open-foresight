@@ -229,7 +229,15 @@ def test_qualified_plan_controls_phase_steps_but_preserves_acceptance_jobs():
     assert '"${PACKAGING_SELECTED:-false}" == true' in commands
 
 
-@pytest.mark.parametrize("event,force", [("schedule", False), ("push", False), ("workflow_dispatch", False), ("pull_request", True)])
+@pytest.mark.parametrize(
+    "event,force",
+    [
+        ("schedule", False),
+        ("push", False),
+        ("workflow_dispatch", False),
+        ("pull_request", True),
+    ],
+)
 def test_non_pr_and_forced_acceptance_never_narrows(event, force):
     def must_not_authorize(*args, **kwargs):
         raise AssertionError("Full backstop must not depend on index availability")
@@ -252,15 +260,34 @@ def test_phase_narrowing_needs_independent_four_week_capability():
     assert all(result["executed"].values())
 
 
-def test_complete_acceptance_replay_uses_reviewed_frozen_inventory():
-    inventory = json.loads((ROOT / "tests/fixtures/ci-selector-50-prs.json").read_text())
-    result = selection.replay(inventory)
-    assert result["count"] == 50
-    assert result["known_escapes"] == [102, 110, 112, 119, 137, 144]
-    assert all(all(row["plan"]["proposed"].values()) for row in result["prs"] if row["number"] in result["known_escapes"])
+def test_complete_acceptance_replay_uses_original_failures():
+    import hashlib
+
+    baseline, checksum = selection.failure_baseline()
+    inventory = {
+        **baseline,
+        "baseline_sha256": checksum,
+        "baseline_count": len(baseline["failures"]),
+    }
+    result = selection.replay(
+        inventory,
+        inventory_sha256=hashlib.sha256(json.dumps(inventory).encode()).hexdigest(),
+    )
+    assert result["count"] == len(baseline["failures"])
+    assert result["miss_count"] == result["unresolved_count"] == 0
+    assert all(not row["misses"] for row in result["failures"])
 
 
-@pytest.mark.parametrize("suite,env", [("cpu", {"CPU_MODELS_SELECTED": "false"}), ("audio", {"SOFTWARE_GPU_SELECTED": "false", "VIRTUAL_AUDIO_SELECTED": "false"})])
+@pytest.mark.parametrize(
+    "suite,env",
+    [
+        ("cpu", {"CPU_MODELS_SELECTED": "false"}),
+        (
+            "audio",
+            {"SOFTWARE_GPU_SELECTED": "false", "VIRTUAL_AUDIO_SELECTED": "false"},
+        ),
+    ],
+)
 def test_qualified_empty_phase_set_avoids_all_docker_work(tmp_path, suite, env):
     result = subprocess.run(["bash", str(ROOT / "tools/linux_acceptance.sh"), suite], cwd=tmp_path, env={**os.environ, **env, "VERSION": "1.0"}, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr

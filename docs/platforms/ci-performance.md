@@ -1527,8 +1527,33 @@ legacy cache publication job.
 Path selection, Arch retirement and acceptance narrowing have independent gates.
 Arch stays required until the two consecutive real scheduled nightlies, actual
 Arch drift and real SDK transport/recipe exercises qualify. Acceptance narrowing
-additionally requires the frozen complete acceptance dependency replay and four
-green weeks of actual nightly observation. Only ordinary PRs may omit qualified
+additionally requires zero missed phases across actual acceptance failures since
+12 October 2026 and four green weeks of actual nightly observation. The reviewed
+baseline freezes 204 observations through 21 October 2026 00:04:53 UTC: 203 failed
+jobs and one API-proved workflow startup failure with no jobs. Original attempts,
+failed steps, tested source ranges and raw evidence checksums are retained; an
+unknown failed phase requires every phase, and an unproven PR range blocks proof.
+The zero-job startup failure remains an unavoidable workflow guard rather than
+being described as an executed test phase.
+
+After merge, dispatch `CI candidate qualification` on main with
+`exercise=acceptance-replay` once; its daily 10:43 UTC schedule refreshes the
+inventory after the nightly preview starts, until narrowing is qualified. Manual
+dispatch always refreshes proof. Once qualified, the daily job verifies the
+capability and skips collection. Every refresh enumerates the full
+original run history to detect reruns, while an authenticated prior main-only
+inventory avoids downloading unchanged jobs and logs again. Only a successful
+original qualification uploader with matching control closure, frozen baseline
+and inventory checksum can provide those observations. Missing retained evidence
+causes a fresh bounded read-only collection; exhausted API or history limits fail
+with diagnostics. No PR performs that history crawl.
+
+Before first activation, dispatch another `acceptance-replay` if the latest
+qualified nightly is newer than the inventory cutoff. The index requires replay
+coverage through the latest nightly in the four-week interval, so an old October
+replay cannot activate narrowing in November. Renewal requires no code or data
+PR. Once qualified, the original authenticated interval remains the baseline
+while unchanged controls preserve the capability; control changes invalidate it. Only ordinary PRs may omit qualified
 CPU/model, software GPU or virtual audio phases. Release, preview, dispatch and
 nightly runs retain all phases; package lifecycle acceptance always runs. A PR
 with a partial phase vector cannot promote a full main validation receipt and

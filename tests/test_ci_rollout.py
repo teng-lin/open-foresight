@@ -68,7 +68,30 @@ class Evidence:
         if kind == "selector-replay":
             self.payloads[run_id]["selector_replay"] = {"count": 50, "known_escapes": [102, 110, 112, 119, 137, 144]}
         if kind == "acceptance-replay":
-            self.payloads[run_id]["acceptance_replay"] = {"count": 50, "known_escapes": [102, 110, 112, 119, 137, 144]}
+            from tools.ci_acceptance_plan import failure_baseline
+
+            baseline, checksum = failure_baseline()
+            run["created_at"] = "2026-10-30T00:00:00Z"
+            self.jobs[run_id][0].update(
+                started_at="2026-10-30T00:00:00Z", completed_at="2026-10-30T00:10:00Z"
+            )
+            self.artifacts[run_id]["created_at"] = "2026-10-30T00:06:00Z"
+            self.payloads[run_id]["acceptance_replay"] = {
+                "schema": 2,
+                "baseline_sha256": checksum,
+                "baseline_count": len(baseline["failures"]),
+                "outer_guard_count": 1, "phase_failure_count": len(baseline["failures"]) - 1,
+                "inventory_sha256": "b" * 64,
+                "sha256": "c" * 64,
+                "count": len(baseline["failures"]),
+                "miss_count": 0,
+                "unresolved_count": 0,
+                "coverage": {
+                    "since": baseline["since"],
+                    "until": "2026-10-30T00:05:00Z",
+                    "complete": True,
+                },
+            }
         if kind == "nightly":
             self.payloads[run_id]["qualification_selection"] = {"qualification_mode": True, "superseded": False, "selection": dict.fromkeys(rollout.GATES, True)}
         if kind == "observer":
@@ -155,7 +178,27 @@ def test_path_selection_and_main_receipts_have_separate_qualification_from_phase
         evidence.verify("acceptance_narrowing")
 
 
-@pytest.mark.parametrize("fault", ["foreign", "workflow", "ref", "event", "source", "reachability", "attempt", "gate", "window", "artifact", "expired", "marker", "producer", "closure", "id", "kind"])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "foreign",
+        "workflow",
+        "ref",
+        "event",
+        "source",
+        "reachability",
+        "attempt",
+        "gate",
+        "window",
+        "artifact",
+        "expired",
+        "marker",
+        "producer",
+        "closure",
+        "id",
+        "kind",
+    ],
+)
 def test_invalid_original_producer_never_authorizes_a_cutover(root, fault):
     evidence = Evidence(root)
     entry = evidence.add("selector-replay")
@@ -327,7 +370,15 @@ def test_toolchain_lock_and_selector_changes_revoke_controls(root):
     assert original["schema"] != rollout.closure(root)["schema"]
 
 
-@pytest.mark.parametrize("kind,key", [("archive-sdk", "exercise"), ("selector-replay", "selector_replay"), ("observer", "observer_case"), ("nightly", "qualification_selection")])
+@pytest.mark.parametrize(
+    "kind,key",
+    [
+        ("archive-sdk", "exercise"),
+        ("selector-replay", "selector_replay"),
+        ("observer", "observer_case"),
+        ("nightly", "qualification_selection"),
+    ],
+)
 def test_case_metadata_must_be_emitted_by_the_actual_candidate_producer(root, kind, key):
     evidence = Evidence(root)
     entry = evidence.add(kind)
@@ -418,3 +469,30 @@ def test_qualification_cannot_omit_real_publisher_or_fork_transport_proof(root, 
             evidence.jobs[entry["run_id"]][-1]["steps"][0]["conclusion"] = "skipped"
         with pytest.raises(ValueError, match="publication|shared tooling"):
             evidence.verify("main_receipts")
+
+
+def test_initial_narrowing_cannot_use_failure_replay_older_than_qualification_window(
+    root,
+):
+    evidence = retirement_evidence(root)
+    for day in range(2, 29):
+        evidence.add("nightly", day)
+    entry = evidence.add("acceptance-replay")
+    run_id = entry["run_id"]
+    evidence.runs[run_id]["created_at"] = "2026-10-21T00:00:00Z"
+    evidence.jobs[run_id][0].update(
+        started_at="2026-10-21T00:00:00Z", completed_at="2026-10-21T00:10:00Z"
+    )
+    evidence.artifacts[run_id]["created_at"] = "2026-10-21T00:06:00Z"
+    evidence.payloads[run_id]["acceptance_replay"]["coverage"]["until"] = (
+        "2026-10-21T00:05:00Z"
+    )
+    with pytest.raises(ValueError, match="latest qualified nightly"):
+        evidence.verify("acceptance_narrowing")
+    # A newly dispatched reviewed-main replay renews observations without a
+    # code/data commit or resetting the already observed control interval.
+    evidence.index["evidence"].remove(entry)
+    evidence.add("acceptance-replay")
+    assert evidence.verify("acceptance_narrowing")["capabilities"] == [
+        "acceptance_narrowing"
+    ]
