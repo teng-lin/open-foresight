@@ -6,10 +6,25 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-10-21
+
 ### Added
 
+- Meeting tasks, Enhanced Notes, Live Q&A, meeting preparation, and scoped Chat bring more meeting workflows into the desktop app.
+- First-run onboarding guides desktop setup. Google account avatars and account switching make connected accounts easier to manage.
 - Meeting Summary uses dedicated Overview/Details prompts, full or incremental generation, and sequential map/reduce for long transcripts. Streaming progress and cancellation preserve accepted versions; compatible checkpoints and generation provenance persist with the searchable summary.
 - Experimental Google Calendar connection through Granola’s hosted WorkOS flow and calendar API, with a Foresight-owned return URL, separate app-session handling, and no Drive access. A manual return-link field accepts Granola’s HTTPS app-redirect and native completion links, including sign-ins that open Granola.
+
+### Changed
+
+- Release candidates are produced on demand, and publication verifies retained installer evidence. CI reuses verified dependencies and build outputs while keeping preview and release artifacts separate.
+- Expanded recovery, persistence, desktop, and compiled-service checks strengthen application validation and measured test coverage.
+
+### Fixed
+
+- Application service shutdown, reconnect, and handoff preserve active agent work and shut down after idle. Connections recover when a listener closes during connection setup.
+- Local edits survive service failures, and meeting and model restarts recover more reliably.
+- Retrieval context and desktop behavior remain consistent across meeting workflows.
 
 ## [0.1.2] - 2026-10-18
 
@@ -112,7 +127,8 @@ The macOS disk image in this release is ad-hoc signed and is not notarized.
 Physical-device recovery and echo-cancellation quality were not validated across
 hardware. Model weights are downloaded after install and are not inside the packages.
 
-[Unreleased]: https://github.com/teng-lin/open-foresight/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/teng-lin/open-foresight/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/teng-lin/open-foresight/releases/tag/v0.1.3
 [0.1.2]: https://github.com/teng-lin/open-foresight/releases/tag/v0.1.2
 [0.1.1]: https://github.com/teng-lin/open-foresight/releases/tag/v0.1.1
 [0.1.0]: https://github.com/teng-lin/open-foresight/releases/tag/v0.1.0
