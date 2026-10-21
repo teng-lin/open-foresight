@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/application.dart';
 import 'dart:async';
@@ -95,6 +96,7 @@ class FixtureDomain extends Domain {
 }
 
 void main() {
+  late Application app;
   late Directory directory;
   late Store store;
   late Helper helper;
@@ -119,11 +121,12 @@ void main() {
     store = Store('${directory.path}/app.db');
     helper = Helper('${directory.path}/sock', '${directory.path}/helper');
     domain = FixtureDomain(store, helper);
+    app = Application(domain);
   });
 
   setUp(() {
     addTearDown(() async {
-      await domain.application.close();
+      await app.close();
       domain.close();
       domain.generator?.close();
       await helper.close();
@@ -210,7 +213,16 @@ void main() {
       final pending = domain.noteEnhancementService();
       await runtime.loadStarted.future;
       domain.close();
-      final rejected = expectLater(pending, throwsStateError);
+      final rejected = expectLater(
+        pending,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.cancelled,
+          ),
+        ),
+      );
       gate.complete();
       await rejected;
       expect(runtime.closes, greaterThanOrEqualTo(1));
@@ -226,7 +238,7 @@ void main() {
       final first = FixtureRuntime(readyAfterLoad: false);
       final second = FixtureRuntime();
       domain.candidates.addAll([first, second]);
-      await domain.application.enhanceNotes(id);
+      await app.enhanceNotes(id);
       expect(domain.acquisitions, 2);
       expect(domain.resets, 1);
       expect(domain.created, 2);
@@ -241,7 +253,7 @@ void main() {
     () async {
       final id = seedNote();
       await expectLater(
-        domain.application.enhanceNotes(id),
+        app.enhanceNotes(id),
         throwsA(
           predicate<Object>(
             (error) => error.toString().contains(
@@ -267,7 +279,7 @@ void main() {
         FixtureRuntime(readyAfterLoad: false),
       ]);
       await expectLater(
-        domain.application.enhanceNotes(id),
+        app.enhanceNotes(id),
         throwsA(
           predicate<Object>(
             (error) => error.toString().contains(

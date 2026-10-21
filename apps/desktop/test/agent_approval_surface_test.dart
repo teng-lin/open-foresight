@@ -87,7 +87,10 @@ void main() {
     fixture.sockets.last.destroy();
     await pumpUntil(tester, () => dialog.evaluate().isEmpty);
     await pumpUntil(tester, () => attachments() == 2);
-    await tester.runAsync(fixture.remote.helper.close);
+    await tester.runAsync(() async {
+      fixture.remote.close();
+      await fixture.remote.closed;
+    });
     await tester.pumpWidget(const SizedBox.shrink());
   });
 

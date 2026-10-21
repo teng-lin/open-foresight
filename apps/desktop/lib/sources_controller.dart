@@ -99,7 +99,7 @@ class _SourcesController extends _FeatureController {
         mounted &&
         shell.tab == 0 &&
         graphView &&
-        d.store.sourceSummaries.isNotEmpty &&
+        readRows(d.store.sourceSummaries).isNotEmpty &&
         !graphAnimationPaused &&
         graphMousePointer == null &&
         !graphModalOpen &&
@@ -159,8 +159,8 @@ class _SourcesController extends _FeatureController {
   Future<void> source(Map<String, Object?> s) async {
     if (!s.containsKey('content')) {
       final current = d.store.sourceById(s['id'] as String);
-      if (current.isEmpty) return;
-      s = {...s, ...current.single};
+      if (current == null) return;
+      s = {...s, ...current.toRow()};
     }
     await showDialog<void>(
       context: context,
@@ -241,8 +241,7 @@ class _SourcesController extends _FeatureController {
             ),
             Expanded(
               child: ListView(
-                children: d.store
-                    .noteSummaries()
+                children: readRows(d.store.noteSummaries)
                     .map(
                       (n) => ListTile(
                         title: Text(n['title'] as String),
@@ -351,7 +350,7 @@ class _SourcesController extends _FeatureController {
 
   Future<void> findFilesOnComputer({List<String>? roots}) async {
     final excluded = <String>{};
-    for (final row in d.store.sourceSummaries) {
+    for (final row in readRows(d.store.sourceSummaries)) {
       final uri = Uri.tryParse(row['source_uri'] as String? ?? '');
       if (uri == null || uri.scheme != 'file' || !allowedSourceUri(uri))
         continue;
@@ -542,9 +541,9 @@ class _SourcesController extends _FeatureController {
   }
 
   Future<void> removeSelectedGraphLabel(String id, String name) async {
-    final source = d.store.sourceSummaries
-        .where((row) => row['id'] == id)
-        .single;
+    final source = readRows(
+      d.store.sourceSummaries,
+    ).where((row) => row['id'] == id).single;
     await d.command(Operation.labelsSet, {
       'id': id,
       'labels': sourceLabels(source).where((label) => label != name).toList(),
@@ -685,10 +684,7 @@ class _SourcesController extends _FeatureController {
     if (mounted) shell.update(() {});
   }
 
-  Map<String, String> driveSourceMimes() => {
-    for (final row in d.store.googleSourceMimes())
-      row['source_id'] as String: row['mime'] as String,
-  };
+  Map<String, String> driveSourceMimes() => d.store.googleSourceMimes;
 
   SourceType typeOf(
     Map<String, Object?> source,
@@ -730,16 +726,16 @@ class _SourcesController extends _FeatureController {
       if (key != sourceSearchCacheKey) {
         sourceSearchCacheKey = key;
         sourceSearchMatches = {
-          for (final source in collection ?? d.store.sourceSummaries)
+          for (final source in collection ?? readRows(d.store.sourceSummaries))
             if ((source['title'] as String).toLowerCase().contains(
               sourceQuery.toLowerCase(),
             ))
               source['id'] as String,
         };
-        final databasePath = d.store.path;
+        final reader = d.store;
         final query = sourceQuery.toLowerCase();
         unawaited(
-          searchSourceIds(databasePath, query).then(
+          searchSourceIds(reader, query).then(
             (matches) {
               if (mounted && sourceSearchCacheKey == key)
                 update(() => sourceSearchMatches = matches);
@@ -753,7 +749,7 @@ class _SourcesController extends _FeatureController {
       }
       searchMatches = sourceSearchMatches;
     }
-    final rows = (collection ?? d.store.sourceSummaries)
+    final rows = (collection ?? readRows(d.store.sourceSummaries))
         .where(
           (s) =>
               (searchMatches == null || searchMatches.contains(s['id'])) &&
@@ -783,14 +779,13 @@ class _SourcesController extends _FeatureController {
       typeIcon(sourceType(source, originalMime: originalMime));
 
   Widget sources() {
-    final all = d.store.sourceSummaries;
+    final all = readRows(d.store.sourceSummaries);
     final originals = driveSourceMimes();
     final rows = filteredSources(all, originals);
     final labelRecords = d.store.documentLabels;
-    final clusters = d.store
-        .documentClusters()
-        .map(GraphCluster.fromRow)
-        .toList();
+    final clusters = readRows(
+      d.store.documentClusters,
+    ).map(GraphCluster.fromRow).toList();
     final fallbackLabelColor = Theme.of(context).colorScheme.primary;
     final documentLabelRecords = <String, List<DocumentLabel>>{};
     final documentLabelColors = <String, List<Color>>{};
@@ -826,7 +821,7 @@ class _SourcesController extends _FeatureController {
     }
     final labels = {
       ...all.expand(sourceLabels),
-      ...d.store.documentClusterNames().map((row) => row['label'] as String),
+      ...d.store.documentClusterNames,
       if (labelFilter.isNotEmpty) labelFilter,
     }.toList()..sort();
     return Column(
@@ -1464,7 +1459,9 @@ class _SourcesController extends _FeatureController {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted &&
             graphSelectedDocument == selected &&
-            !d.store.sourceSummaries.any((row) => row['id'] == selected)) {
+            !readRows(
+              d.store.sourceSummaries,
+            ).any((row) => row['id'] == selected)) {
           selectGraphDocument(null);
         }
       });
@@ -1508,12 +1505,15 @@ class _SourcesController extends _FeatureController {
       graphLayoutKey = key;
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (!mounted || graphLayoutKey != key) return;
-        var saved = d.store.loadRegisteredGraphLayout(
+        var saved = await d.store.loadRegisteredGraphLayout(
           sources,
           labelSet: labelSet,
         );
         sources = graphSceneSources(sources, saved.vectors);
-        saved = d.store.loadRegisteredGraphLayout(sources, labelSet: labelSet);
+        saved = await d.store.loadRegisteredGraphLayout(
+          sources,
+          labelSet: labelSet,
+        );
         shell.update(() {
           graphPoints = saved.points;
           graphEdges = [];
@@ -1614,7 +1614,7 @@ class _SourcesController extends _FeatureController {
             current.activeGeneration.toString() != generation;
       }
 
-      final saved = d.store.loadGraphLayout(
+      final saved = await d.store.loadGraphLayout(
         persistentIdentity,
         sources,
         snapshot.model.dimensions,

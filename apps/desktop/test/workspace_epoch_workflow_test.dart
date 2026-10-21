@@ -1,11 +1,12 @@
+import 'package:foresight_core/src/application.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/remote.dart';
 import 'package:foresight_test_support/remote_service.dart';
 import 'package:foresight_test_support/test_paths.dart';
-import 'package:open_foresight/domain.dart';
+import 'package:foresight_core/src/domain.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/store.dart';
 import 'desktop_connection_fixture.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 import 'controller_fixture.dart';
@@ -48,7 +49,10 @@ void main() {
       fixture.requests.last['args'],
       containsPair('workspace_epoch', cleared),
     );
-    await tester.runAsync(fixture.remote.helper.close);
+    await tester.runAsync(() async {
+      fixture.remote.close();
+      await fixture.remote.closed;
+    });
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pumpAndSettle();
   });
@@ -163,9 +167,11 @@ void main() {
     final root = createTestTempDirectorySync('startup-epoch-');
     final store = Store('${root.path}/app.db');
     final connection = TestDesktopConnection(
-      Domain(
-        store,
-        OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+      Application(
+        Domain(
+          store,
+          OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+        ),
       ),
     );
     store.renewWorkspaceEpoch();

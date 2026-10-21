@@ -745,7 +745,16 @@ void main() {
           'url': 'http://127.0.0.1:${server.port}/',
           'allow_private_network': true,
         });
-        final rejected = expectLater(pending, throwsStateError);
+        final rejected = expectLater(
+          pending,
+          throwsA(
+            isA<RpcError>().having(
+              (error) => error.code,
+              'code',
+              RpcErrorCode.internal,
+            ),
+          ),
+        );
         await sent.future;
         final elapsed = Stopwatch()..start();
         final status = await client

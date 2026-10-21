@@ -1,12 +1,13 @@
+import 'package:foresight_core/src/application.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/remote.dart';
 import 'package:foresight_test_support/test_paths.dart';
-import 'package:open_foresight/domain.dart';
-import 'package:open_foresight/audio_devices.dart';
+import 'package:foresight_core/src/domain.dart';
+import 'package:foresight_core/src/audio_devices.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/store.dart';
 import 'desktop_connection_fixture.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
@@ -41,7 +42,7 @@ class ControllerConnection extends TestDesktopConnection {
   Map<String, dynamic> captureState = {};
   int resumes = 0;
   int closes = 0;
-  ControllerConnection(super.domain);
+  ControllerConnection(super.application);
   @override
   ConnectedSources get google => connectedSources ?? super.google;
   @override
@@ -93,7 +94,7 @@ class ControllerConnection extends TestDesktopConnection {
   @override
   Future<void> delete(String id) async {
     deleted.add(id);
-    store.tombstone(id);
+    domain.store.tombstone(id);
   }
 
   @override
@@ -150,9 +151,11 @@ class ControllerFixture {
     final root = createTestTempDirectorySync('desktop-controls-');
     final store = Store('${root.path}/app.db');
     final connection = ControllerConnection(
-      Domain(
-        store,
-        OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+      Application(
+        Domain(
+          store,
+          OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+        ),
       ),
     );
     await tester.binding.setSurfaceSize(const Size(1400, 1000));

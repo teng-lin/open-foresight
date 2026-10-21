@@ -64,6 +64,7 @@ class _Generator extends NativeRuntime {
 }
 
 void main() {
+  late Application app;
   late Store store;
   late Domain domain;
   late _Retrieval retrieval;
@@ -89,6 +90,7 @@ void main() {
     addTearDown(helper.close);
     domain = Domain(store, helper);
     addTearDown(domain.close);
+    app = Application(domain);
   });
 
   void source(String title, String content) {
@@ -105,14 +107,14 @@ void main() {
     'missing meeting and busy model reject answers before persistence',
     () async {
       await expectLater(
-        domain.askInConversation('Question', 'chat', meetingId: 999).toList(),
+        app.askInConversation('Question', 'chat', meetingId: 999).toList(),
         throwsA(
           isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.notFound),
         ),
       );
       domain.modelGate = _Busy();
       await expectLater(
-        domain.askInConversation('Question', 'chat').toList(),
+        app.askInConversation('Question', 'chat').toList(),
         throwsA(
           isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.busy),
         ),
@@ -126,7 +128,7 @@ void main() {
     () async {
       source('Unrelated', 'Bananas and oranges.');
       retrieval.document = null;
-      final answer = await domain
+      final answer = await app
           .askInConversation('Who leads Atlas?', 'chat')
           .last;
       expect(answer, contains('no current source excerpts'));
@@ -136,7 +138,7 @@ void main() {
       );
       source('Atlas', 'Mira leads Atlas.');
       await expectLater(
-        domain.askInConversation('Who leads Atlas?', 'chat').toList(),
+        app.askInConversation('Who leads Atlas?', 'chat').toList(),
         throwsA(
           isA<RpcError>().having(
             (e) => e.code,
@@ -157,7 +159,7 @@ void main() {
           '${List.generate(10, (i) => '## Step ${i + 1} — Task ${i + 1}\n${'Relevant instructions and expected output. ' * 15}\n').join('\n')}';
       source('How to Write a Target Product Profile', guide);
       final meeting = store.meeting('Planning');
-      final answer = await domain
+      final answer = await app
           .askInConversation(
             'How to write a Target Product Profile. I need step by step instruction',
             'chat',
@@ -188,7 +190,7 @@ void main() {
       'ABC Examples.md',
       '# ABC Examples\n${example('1. Alpha', '12–24 months')}${example('2. Beta', '2019')}',
     );
-    final answer = await domain
+    final answer = await app
         .askInConversation('Show me two examples of ABC in detail', 'examples')
         .last;
     expect(answer, contains('12–24 months'));
@@ -205,13 +207,13 @@ void main() {
       final runtime = _Generator();
       addTearDown(runtime.close);
       domain.generator = runtime;
-      await domain.askInConversation('Who leads Atlas?', 'chat').last;
-      await domain.askInConversation('And who leads it?', 'chat').last;
+      await app.askInConversation('Who leads Atlas?', 'chat').last;
+      await app.askInConversation('And who leads it?', 'chat').last;
       final grounded = runtime.schema!['x-foresight-grounded-request'] as Map;
       expect(grounded['previous_question'], 'Who leads Atlas?');
       expect((grounded['sources'] as List).single['excerpt'], contains('Mira'));
       runtime.fail = true;
-      final visible = await domain
+      final visible = await app
           .askInConversation('Who leads Atlas?', 'chat')
           .toList();
       expect(visible, contains('Answer generation failed: worker disappeared'));

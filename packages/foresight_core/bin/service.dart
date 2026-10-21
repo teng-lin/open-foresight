@@ -5,6 +5,8 @@ import 'dart:convert';
 import 'package:foresight_core/src/profile_paths.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/service.dart';
+import 'package:foresight_core/src/operations.dart';
+import 'package:foresight_core/src/service_compatibility.dart';
 import 'package:foresight_core/src/service_socket.dart' show probeSocketPath;
 
 Future<void> main(List<String> args) async {
@@ -67,7 +69,9 @@ Future<void> main(List<String> args) async {
           // A stalled owner must not hold an administrator forever (L1).
           state =
               await client
-                      .call('status')
+                      .call(Operation.status.wire, {
+                        applicationClientVersionField: applicationApiVersion,
+                      })
                       .timeout(
                         _statusProbeLimit,
                         onTimeout: () => throw TimeoutException(
@@ -104,10 +108,14 @@ Future<void> main(List<String> args) async {
             ),
           );
         }
+        validateApplicationApiVersion(
+          Map<String, dynamic>.from(state),
+          endpoint: client.endpoint,
+        );
         if (mode == '--stop-if-idle') {
           final result =
               await client
-                      .call('service.stop_if_idle', {
+                      .call(Operation.serviceStopIfIdle.wire, {
                         if (expectedPid != null) 'expected_pid': expectedPid,
                         if (configuredInstallationRoot != null)
                           'installation_root': configuredInstallationRoot,

@@ -1124,13 +1124,12 @@ void main() {
     final domain = await connecting;
     addTearDown(() async {
       domain.close();
-      domain.store.close();
-      await domain.helper.close();
+      await domain.closed;
     });
     return domain;
   }
 
-  test('the desktop names the helper beside the endpoint it connected to, '
+  test('the desktop retains the endpoint it connected to, '
       'not one the record names afterwards (L9)', () async {
     final directory = createServiceTestDirectorySync('of-helper-');
     final data = '${directory.path}/data';
@@ -1153,13 +1152,13 @@ void main() {
     record.renameSync('${record.path}.held');
     probed.release();
     final domain = await desktop(connecting);
-    expect(domain.helper.socket, '${directory.path}/own/helper.sock');
+    expect(domain.client.endpoint, '${directory.path}/own/application.sock');
     File('${record.path}.held').renameSync(record.path);
     expect(await owner.stop(), 0, reason: owner.output);
   }, timeout: const Timeout(Duration(minutes: 3)));
 
   test('a desktop reconnecting to an owner in another runtime names that '
-      'owner\'s helper (L9)', () async {
+      'owner\'s endpoint (L9)', () async {
     final directory = createServiceTestDirectorySync('of-moved-');
     final data = '${directory.path}/data';
     final first = await HookedServiceProcess.start(
@@ -1172,11 +1171,11 @@ void main() {
     // The replacement starts in the desktop's own runtime.
     final profile = ProfilePaths(data, '${directory.path}/run');
     final domain = await desktop(RemoteDomain.connect(profile));
-    expect(domain.helper.socket, '${directory.path}/own/helper.sock');
+    expect(domain.client.endpoint, '${directory.path}/own/application.sock');
     expect(await first.stop(), 0, reason: first.output);
     // The request waits for the reconnect, which launches the replacement.
     final status = await domain.command(Operation.status) as Map;
     expect(status['pid'], launcher.launched.single);
-    expect(domain.helper.socket, '${profile.runtime}/helper.sock');
+    expect(domain.client.endpoint, '${profile.runtime}/application.sock');
   }, timeout: const Timeout(Duration(minutes: 3)));
 }

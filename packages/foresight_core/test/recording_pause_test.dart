@@ -427,7 +427,16 @@ void main() {
         expect(recording.currentVolumes, [0, 0]);
         expect(emit(0, 999), 0);
         expect(emit(1, 999), 0);
-        expect(() => recording.start('/usr/bin/true', model), throwsStateError);
+        expect(
+          () => recording.start('/usr/bin/true', model),
+          throwsA(
+            isA<RpcError>().having(
+              (error) => error.code,
+              'code',
+              RpcErrorCode.busy,
+            ),
+          ),
+        );
         recording.pause(); // Idempotent pause preserves pending work.
         recording.resume();
         expect(recording.paused, false);
@@ -518,7 +527,7 @@ void main() {
         Helper('${directory.path}/unused.sock', '${directory.path}/unused'),
         clock: Clock(() => now),
       );
-      final app = domain.application;
+      final app = Application(domain);
       final id = store.meeting('Pause fixture');
       final recording = Recording(
         library,
@@ -531,12 +540,18 @@ void main() {
         app.recordingMeeting = id;
         app.recordingBegan = now;
         await expectLater(
-          domain.command(Operation.meetingsPause, {'id': id + 1}),
-          throwsStateError,
+          app.call(Operation.meetingsPause.wire, {'id': id + 1}),
+          throwsA(
+            isA<RpcError>().having(
+              (error) => error.code,
+              'code',
+              RpcErrorCode.notFound,
+            ),
+          ),
         );
         expect(recording.paused, false);
         final paused =
-            await domain.command(Operation.meetingsPause, {'id': id}) as Map;
+            await app.call(Operation.meetingsPause.wire, {'id': id}) as Map;
         expect(paused['active'], true);
         expect(paused['paused'], true);
         now = now.add(const Duration(seconds: 20));
@@ -555,14 +570,21 @@ void main() {
           'paused',
         );
         await expectLater(
-          domain.command(Operation.modelsSpeech, {
+          app.call(Operation.modelsSpeech.wire, {
             'path': 'unused',
             'runtime': 'unused',
+            'digest': 'unused',
           }),
-          throwsStateError,
+          throwsA(
+            isA<RpcError>().having(
+              (error) => error.code,
+              'code',
+              RpcErrorCode.busy,
+            ),
+          ),
         );
         final resumed =
-            await domain.command(Operation.meetingsResume, {'id': id}) as Map;
+            await app.call(Operation.meetingsResume.wire, {'id': id}) as Map;
         expect(resumed['paused'], false);
         expect(
           store.rows('SELECT state FROM meetings WHERE id=?', [
@@ -570,8 +592,9 @@ void main() {
           ]).single['state'],
           'recording',
         );
-        await domain.command(Operation.meetingsPause);
-        final stopped = await domain.command(Operation.meetingsStop) as Map;
+        await app.call(Operation.meetingsPause.wire, const {});
+        final stopped =
+            await app.call(Operation.meetingsStop.wire, const {}) as Map;
         expect(stopped['active'], false);
         expect(stopped['meeting_id'], isNull);
         expect(stopped['began'], isNull);
@@ -585,8 +608,14 @@ void main() {
           'empty',
         );
         await expectLater(
-          domain.command(Operation.meetingsResume),
-          throwsStateError,
+          app.call(Operation.meetingsResume.wire, const {}),
+          throwsA(
+            isA<RpcError>().having(
+              (error) => error.code,
+              'code',
+              RpcErrorCode.notFound,
+            ),
+          ),
         );
       } finally {
         await app.close();

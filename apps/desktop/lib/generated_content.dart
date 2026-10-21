@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
-import 'package:foresight_core/foresight_core.dart' show openPlatformUri;
+import 'package:foresight_core/desktop.dart' show openPlatformUri;
 
 /// A formatted, selectable view of generated Markdown. Persisted content and
 /// copy/edit actions continue to use the original Markdown source.

@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/application.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -100,7 +101,10 @@ void main() {
         if (root.existsSync()) root.deleteSync(recursive: true);
       });
       await tester.pumpWidget(
-        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+        Foresight(
+          TestDesktopConnection(Application(domain)),
+          deviceLoader: () async => [],
+        ),
       );
       final dynamic state = tester.state(find.byType(Workspace));
       state.update(() {

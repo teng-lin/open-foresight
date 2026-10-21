@@ -11,6 +11,8 @@ from unittest.mock import Mock
 
 import pytest
 
+from tools.helper_protocol import HELPER_PROTOCOL_VERSION
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import evaluate_models as models
 import evaluate_pipeline as pipeline
@@ -29,7 +31,7 @@ class EvaluationChannel:
             self.requests.append((method, request, timeout))
             if method == "Ping":
                 return SimpleNamespace(
-                    version="wrong" if self.failure == "ping" else "1.0.3"
+                    version="wrong" if self.failure == "ping" else HELPER_PROTOCOL_VERSION
                 )
             if method == "UpdateModelPaths":
                 return SimpleNamespace(

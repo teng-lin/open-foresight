@@ -9,7 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/desktop_settings.dart';
 import 'package:open_foresight/global_shortcuts.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/store.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 class PermissionDomain extends CommandFixtureDomain {
@@ -149,12 +149,13 @@ void main() {
         store,
         OfflineHelper('${tmp.path}/socket', '${tmp.path}/helper'),
       );
+      final app = Application(domain);
       messenger.setMockMethodCallHandler(
         channel,
         (call) async => call.method == 'login.get' ? false : null,
       );
       await tester.pumpWidget(
-        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+        Foresight(TestDesktopConnection(app), deviceLoader: () async => []),
       );
       await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
       await tester.sendKeyEvent(LogicalKeyboardKey.keyN);
@@ -185,7 +186,7 @@ void main() {
       expect(domain.requests, contains('notifications.request_permission'));
       expect(store.preference('googleReminders'), isNot('true'));
       expect(store.preference('notifications'), isNot('true'));
-      expect(domain.application.recording, isNull);
+      expect(app.recording, isNull);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
       tmp.deleteSync(recursive: true);

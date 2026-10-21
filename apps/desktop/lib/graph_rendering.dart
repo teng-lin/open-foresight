@@ -1,7 +1,7 @@
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'graph_layout.dart';
+import 'package:foresight_core/desktop.dart';
 
 // The reference removes all '#' characters, prefixes six-digit RGB with FF,
 // and falls back only for absent/empty values or integer parsing failure.

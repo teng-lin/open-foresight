@@ -186,7 +186,16 @@ void main() {
       final pending = connection.stream('notes.save', {
         'title': 'uncertain',
       }).toList();
-      final failed = expectLater(pending, throwsStateError);
+      final failed = expectLater(
+        pending,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.unavailable,
+          ),
+        ),
+      );
       await eventually(
         () => f.requests.any((r) => r['method'] == 'notes.save'),
       );
@@ -528,7 +537,11 @@ void main() {
                 socket.writeln(
                   jsonEncode({
                     'id': request['id'],
-                    'result': {'pid': pid, 'profile_id': profile.identity},
+                    'result': {
+                      'pid': pid,
+                      'profile_id': profile.identity,
+                      'application_api_version': 1,
+                    },
                     'done': true,
                   }),
                 );

@@ -1,8 +1,10 @@
 #include "build_identity.h"
 #include "helper_control.grpc.pb.h"
+#include "helper_protocol_version.h"
 #include "model.h"
 #include "rag_service.grpc.pb.h"
 #include "reconfig_wait.h"
+#include "schema_migrations.h"
 #include "vector_index.h"
 #include <algorithm>
 #include <atomic>
@@ -368,97 +370,76 @@ class Service : public rpc::RagService::Service,
   }
 
 public:
-  Service(const std::string &root, bool allow)
+  Service(const std::string &root, bool allow,
+          const foresight::schema::SourceSet &preflight)
       : allow_test(allow), storage_root(root) {
-    if (sqlite3_open((root + "/agent_metadata.db").c_str(), &db) != SQLITE_OK) {
-      throw std::runtime_error("Cannot open metadata");
-    }
-    sqlite3_busy_timeout(db, 5000);
-    sql("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA "
-        "secure_delete=ON");
-    sql("CREATE TABLE IF NOT EXISTS documents(id TEXT PRIMARY KEY,content "
-        "TEXT,userId TEXT,maxTokensPerChunk INTEGER,chunkOverlap "
-        "INTEGER,mimeType TEXT,imageBytes BLOB); CREATE TABLE IF NOT EXISTS "
-        "settings(key TEXT PRIMARY KEY,value TEXT)");
-    {
-      Statement a(db, "ATTACH DATABASE ? AS linux");
-      a.text(1, root + "/linux_state.db");
-      a.row();
-    }
-    sql("PRAGMA linux.journal_mode=DELETE; PRAGMA linux.synchronous=FULL; "
-        "PRAGMA linux.secure_delete=ON; "
-        "CREATE TABLE IF NOT EXISTS linux.source_revisions(id TEXT PRIMARY "
-        "KEY,revision INTEGER NOT NULL,tombstone INTEGER NOT NULL); CREATE "
-        "TABLE IF NOT EXISTS linux.journal(sequence INTEGER PRIMARY "
-        "KEY,operation TEXT,document_id TEXT,revision INTEGER,generation "
-        "INTEGER,status TEXT)");
-    {
-      Statement a(db, "ATTACH DATABASE ? AS vectors");
-      a.text(1, root + "/rag_vector.db");
-      a.row();
-    }
-    sql("PRAGMA vectors.journal_mode=DELETE; PRAGMA vectors.synchronous=FULL; "
-        "PRAGMA vectors.secure_delete=ON; "
-        "CREATE TABLE IF NOT EXISTS vectors.chunks(generation "
-        "INTEGER,document_id TEXT,revision INTEGER,ordinal INTEGER,text "
-        "TEXT,mime TEXT,embedding BLOB,PRIMARY "
-        "KEY(generation,document_id,revision,ordinal)); CREATE TABLE IF NOT "
-        "EXISTS vectors.generations(id INTEGER PRIMARY KEY,model_digest "
-        "TEXT,status TEXT)");
-    // Migrate legacy JSON once at startup; requests only consume binary
-    // snapshots.
-    {
-      Tx tx(*this);
-      Statement rows(db, "SELECT rowid,embedding FROM vectors.chunks WHERE "
-                         "typeof(embedding)='text'");
-      while (rows.row()) {
-        auto bytes = foresight::vector_blob(
-            json::parse(rows.str(1)).get<std::vector<double>>());
-        Statement update(db,
-                         "UPDATE vectors.chunks SET embedding=? WHERE rowid=?");
-        update.blob(1, bytes);
-        update.num(2, rows.integer(0));
-        update.row();
+    try {
+      preflight.verify_unchanged();
+      if (sqlite3_open((root + "/agent_metadata.db").c_str(), &db) != SQLITE_OK)
+        throw std::runtime_error("Cannot open metadata");
+      sqlite3_busy_timeout(db, 5000);
+      {
+        Statement attach(db, "ATTACH DATABASE ? AS linux");
+        attach.text(1, root + "/linux_state.db");
+        attach.row();
       }
-      tx.commit();
+      {
+        Statement attach(db, "ATTACH DATABASE ? AS vectors");
+        attach.text(1, root + "/rag_vector.db");
+        attach.row();
+      }
+      sql("PRAGMA main.journal_mode=DELETE; PRAGMA main.synchronous=FULL; "
+          "PRAGMA main.secure_delete=ON; PRAGMA linux.journal_mode=DELETE; "
+          "PRAGMA linux.synchronous=FULL; PRAGMA linux.secure_delete=ON; "
+          "PRAGMA vectors.journal_mode=DELETE; PRAGMA "
+          "vectors.synchronous=FULL; "
+          "PRAGMA vectors.secure_delete=ON");
+      foresight::schema::migrate_helpers(db);
+      sql("INSERT OR IGNORE INTO linux.source_revisions SELECT id,1,0 FROM "
+          "documents; DELETE FROM vectors.chunks WHERE NOT EXISTS (SELECT 1 "
+          "FROM "
+          "linux.source_revisions r WHERE r.id=chunks.document_id AND "
+          "r.revision=chunks.revision AND r.tombstone=0); DELETE FROM "
+          "vectors.chunks WHERE generation IN(SELECT id FROM "
+          "vectors.generations "
+          "WHERE status!='active'); DELETE FROM vectors.generations WHERE "
+          "status!='active'");
+      state.set_build_id(foresight_helper_build_id());
+      state.set_reference_version(helperProtocolVersion);
+      state.set_instance_id(
+          std::to_string(getpid()) + "-" +
+          std::to_string(
+              std::chrono::system_clock::now().time_since_epoch().count()));
+      state.set_pipeline("unconfigured");
+      state.set_index("empty");
+      state.set_revision(1);
+      state.set_totals_known(true);
+      Statement q(
+          db, "SELECT value FROM settings WHERE key='embedding_model_path'");
+      if (q.row())
+        path = q.str(0);
+      {
+        Statement c(db, "SELECT value FROM settings WHERE key='cache_dir'");
+        if (c.row())
+          cache = c.str(0);
+      }
+      {
+        Statement g(db, "SELECT value FROM settings WHERE key='use_gpu'");
+        if (g.row())
+          use_gpu = g.str(0) == "true";
+      }
+      Statement g(db,
+                  "SELECT id FROM vectors.generations WHERE status='active'");
+      if (g.row()) {
+        state.set_active_generation(g.integer(0));
+        state.set_index("degraded");
+      }
+      changed();
+    } catch (...) {
+      sqlite3_close(db);
+      db = nullptr;
+      throw;
     }
-    sql("INSERT OR IGNORE INTO linux.source_revisions SELECT id,1,0 FROM "
-        "documents; DELETE FROM vectors.chunks WHERE NOT EXISTS (SELECT 1 FROM "
-        "linux.source_revisions r WHERE r.id=chunks.document_id AND "
-        "r.revision=chunks.revision AND r.tombstone=0); DELETE FROM "
-        "vectors.chunks WHERE generation IN(SELECT id FROM vectors.generations "
-        "WHERE status!='active'); DELETE FROM vectors.generations WHERE "
-        "status!='active'");
-    state.set_build_id(foresight_helper_build_id());
-    state.set_reference_version("1.0.3");
-    state.set_instance_id(
-        std::to_string(getpid()) + "-" +
-        std::to_string(
-            std::chrono::system_clock::now().time_since_epoch().count()));
-    state.set_pipeline("unconfigured");
-    state.set_index("empty");
-    state.set_revision(1);
-    state.set_totals_known(true);
-    Statement q(db,
-                "SELECT value FROM settings WHERE key='embedding_model_path'");
-    if (q.row())
-      path = q.str(0);
-    {
-      Statement c(db, "SELECT value FROM settings WHERE key='cache_dir'");
-      if (c.row())
-        cache = c.str(0);
-    }
-    {
-      Statement g(db, "SELECT value FROM settings WHERE key='use_gpu'");
-      if (g.row())
-        use_gpu = g.str(0) == "true";
-    }
-    Statement g(db, "SELECT id FROM vectors.generations WHERE status='active'");
-    if (g.row()) {
-      state.set_active_generation(g.integer(0));
-      state.set_index("degraded");
-    }
-    changed();
   }
   ~Service() {
     sqlite3_close(db);
@@ -466,7 +447,7 @@ public:
   Status Ping(grpc::ServerContext *, const rpc::PingRequest *,
               rpc::PingResponse *r) override {
     r->set_success(true);
-    r->set_version("1.0.3");
+    r->set_version(helperProtocolVersion);
     return Status::OK;
   }
   Status UpdateModelPaths(grpc::ServerContext *context,
@@ -957,6 +938,7 @@ int main(int argc, char **argv) {
         (root_info.st_mode & 0077))
       throw std::runtime_error(
           "Storage requires a private user-owned directory");
+    const auto preflight = foresight::schema::qualify_helpers(root);
     int lock = open((root + "/.helper.lock").c_str(),
                     O_CREAT | O_RDWR | O_CLOEXEC, 0600);
     if (lock < 0 || flock(lock, LOCK_EX | LOCK_NB))
@@ -979,7 +961,7 @@ int main(int argc, char **argv) {
         throw std::runtime_error("Socket already serving");
       fs::remove(socket);
     }
-    Service service(root, test);
+    Service service(root, test, preflight);
     grpc::ServerBuilder b;
     b.AddListeningPort("unix:" + socket, grpc::InsecureServerCredentials());
     b.RegisterService(static_cast<rpc::RagService::Service *>(&service));

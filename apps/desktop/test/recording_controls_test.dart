@@ -6,10 +6,10 @@ import 'package:foresight_core/src/application.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/domain.dart';
+import 'package:foresight_core/src/domain.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/recording.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/recording.dart';
+import 'package:foresight_core/src/store.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 class _Recording implements Recording {
@@ -54,7 +54,7 @@ class _Recording implements Recording {
 
 class _LevelConnection extends TestDesktopConnection
     implements CaptureLevelEvents {
-  _LevelConnection(super.domain);
+  _LevelConnection(super.application);
   final levels = StreamController<List<double>>.broadcast();
   @override
   Stream<List<double>> get captureLevels => levels.stream;
@@ -75,9 +75,10 @@ void main() {
         store,
         OfflineHelper('${directory.path}/socket', '${directory.path}/helper'),
       );
-      final connection = _LevelConnection(domain);
+      final app = Application(domain);
+      final connection = _LevelConnection(app);
       final id = store.meeting('Meter fixture');
-      domain.application
+      app
         ..recording = _Recording()
         ..recordingMeeting = id
         ..recordingBegan = DateTime.now();
@@ -106,13 +107,13 @@ void main() {
           tester.widget(find.byKey(const ValueKey('recording-pill'))),
           same(header),
         );
-        await domain.application.stopRecording();
-        await domain.application.close();
+        await app.stopRecording();
+        await app.close();
         await tester.pumpWidget(const SizedBox());
         await tester.pumpAndSettle();
         await connection.levels.close();
       } finally {
-        await domain.application.close();
+        await app.close();
         await domain.helper.close();
         store.close();
         directory.deleteSync(recursive: true);
@@ -135,18 +136,16 @@ void main() {
         store,
         OfflineHelper('${directory.path}/socket', '${directory.path}/helper'),
       );
+      final app = Application(domain);
       final recording = _Recording();
       final id = store.meeting('Control fixture');
-      domain.application
+      app
         ..recording = recording
         ..recordingMeeting = id
         ..recordingBegan = DateTime.now();
       try {
         await tester.pumpWidget(
-          Foresight(
-            TestDesktopConnection(domain),
-            deviceLoader: () async => [],
-          ),
+          Foresight(TestDesktopConnection(app), deviceLoader: () async => []),
         );
         await tester.pumpAndSettle();
         expect(
@@ -203,7 +202,7 @@ void main() {
         await tester.tap(find.text('Exit Immersive View'));
         await tester.pumpAndSettle();
         expect(find.text('Exit Immersive View'), findsNothing);
-        expect(domain.application.recording, same(recording));
+        expect(app.recording, same(recording));
         expect(find.byTooltip('Full screen'), findsNothing);
         await tester.tap(clock);
         await tester.pump(const Duration(milliseconds: 250));
@@ -213,15 +212,15 @@ void main() {
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
         await tester.pumpAndSettle();
         expect(find.text('Exit Immersive View'), findsNothing);
-        expect(domain.application.recording, same(recording));
+        expect(app.recording, same(recording));
         await tester.tap(find.byTooltip('Stop transcribing'));
         await tester.pump(const Duration(milliseconds: 300));
         await tester.pumpAndSettle();
-        expect(domain.application.recording, isNull);
+        expect(app.recording, isNull);
         expect(find.byKey(const ValueKey('recording-pill')), findsNothing);
         expect(tester.takeException(), isNull);
       } finally {
-        domain.application.recording = null;
+        app.recording = null;
         await tester.pumpWidget(const SizedBox.shrink());
         directory.deleteSync(recursive: true);
       }

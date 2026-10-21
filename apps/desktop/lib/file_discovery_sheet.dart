@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'file_discovery.dart';
+import 'package:foresight_core/desktop.dart';
 
 class FileDiscoverySheet extends StatefulWidget {
   final List<String> initialFolders;

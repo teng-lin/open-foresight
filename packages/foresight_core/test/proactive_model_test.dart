@@ -20,10 +20,11 @@ void main() {
         '${directory.path}/unused',
       );
       final domain = Domain(store, helper);
+      final app = Application(domain);
       try {
         await configureDedicatedQuery(store, env['FORESIGHT_QUERY_MODEL']!);
         final id = store.meeting('Controlled bilingual fixture');
-        domain.application.proactive.begin(id);
+        app.proactive.begin(id);
         store.transcript(
           id,
           'Mira will send the draft on Tuesday. What is the release date? 谁负责测试？ We agreed to review the draft tomorrow.',
@@ -32,15 +33,15 @@ void main() {
           10000,
           'controlled fixture',
         );
-        domain.application.proactive.notify(id);
+        app.proactive.notify(id);
         // Detection only: this test never invokes retrieval, audio capture or web search.
-        await domain.application.proactive.process();
+        await app.proactive.process();
         final questions = store.rows(
           'SELECT question,state FROM meeting_questions ORDER BY id',
         );
         final report = {
           'questions': questions,
-          'errors': domain.application.proactive.errors.map(
+          'errors': app.proactive.errors.map(
             (key, value) => MapEntry('$key', value),
           ),
           'backend': store.model('query-detection')?['backend'],
@@ -54,7 +55,7 @@ void main() {
             const JsonEncoder.withIndent('  ').convert(report),
           );
         }
-        expect(domain.application.proactive.errors, isEmpty, reason: '$report');
+        expect(app.proactive.errors, isEmpty, reason: '$report');
         expect(
           questions.map((row) => row['question']),
           unorderedEquals(['What is the release date?', '谁负责测试？']),
@@ -62,9 +63,9 @@ void main() {
         expect(store.rows('SELECT * FROM answers'), isEmpty);
         expect(domain.generator, isNull);
         expect(store.model('generation'), isNull);
-        await domain.application.proactive.reset();
+        await app.proactive.reset();
         final quiet = store.meeting('Statement-only fixture');
-        domain.application.proactive.begin(quiet);
+        app.proactive.begin(quiet);
         store.transcript(
           quiet,
           'Good morning, everyone. Thank you, Mira. The release is on Tuesday and the draft is ready.',
@@ -73,9 +74,9 @@ void main() {
           10000,
           'controlled fixture',
         );
-        domain.application.proactive.notify(quiet);
-        await domain.application.proactive.process();
-        expect(domain.application.proactive.errors, isEmpty);
+        app.proactive.notify(quiet);
+        await app.proactive.process();
+        expect(app.proactive.errors, isEmpty);
         expect(
           store.rows('SELECT * FROM meeting_questions WHERE meeting_id=?', [
             quiet,
@@ -83,7 +84,7 @@ void main() {
           isEmpty,
         );
       } finally {
-        await domain.application.close();
+        await app.close();
         domain.close();
         await helper.close();
         store.close();

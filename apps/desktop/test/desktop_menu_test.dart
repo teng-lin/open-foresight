@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/application.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -5,7 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/desktop_menu.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/store.dart';
 import 'desktop_connection_fixture.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 import 'quick_start_test.dart' show QuickStartDomain;
@@ -72,7 +73,10 @@ void main() {
       await tester.binding.setSurfaceSize(const Size(1280, 900));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       await tester.pumpWidget(
-        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+        Foresight(
+          TestDesktopConnection(Application(domain)),
+          deviceLoader: () async => [],
+        ),
       );
       await tester.pumpAndSettle();
       final dynamic state = tester.state(find.byType(Workspace));

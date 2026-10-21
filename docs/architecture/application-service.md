@@ -12,7 +12,7 @@ flowchart LR
   Service --> Workers[Native generation and speech workers]
 ```
 
-The Flutter-independent package is `packages/foresight_core`. Desktop files such as `domain.dart` and `store.dart` remain compatibility exports for existing callers. Application operations, imports, source recovery, Google sync, model configuration, capture persistence, inactivity shutdown, the idle exit, and note enhancement live in the core. The desktop retains dialogs, browser interaction entrypoints, shortcuts, presentation, and graph layout/rendering; graph publications are validated and committed by the service.
+The Flutter-independent package is `packages/foresight_core`. Desktop features use its curated `desktop.dart` API; only application startup imports `desktop_bootstrap.dart`. The former desktop exports of write-capable core implementations have been removed. Read-only typed projections, immutable status and explicit connection lifecycle replace direct Store/helper access; see [the desktop core boundary](desktop-core-boundary.md). Application operations, imports, source recovery, Google sync, model configuration, capture persistence, inactivity shutdown, the idle exit, and note enhancement live in the core. The desktop retains dialogs, browser interaction entrypoints, shortcuts, presentation, and graph layout/rendering; graph publications are validated and committed by the service.
 
 ## Desktop and core boundaries
 
@@ -20,7 +20,42 @@ The desktop accepts `DesktopConnection`; production connects `RemoteDomain` to t
 
 `_WorkspaceState` coordinates navigation, lifecycle, and the shared update boundary. Sources and graph, chat, meetings, settings and models, and integrations each have a controller that owns their mutable state and screen widgets. SQL lives behind named core `Store` queries. Saved output statistics cache their text scan by database revision and are labelled as words because historical records do not contain tokenizer usage.
 
-`labels.auto_assign` acquires any missing embeddings, validates the source snapshot, then plans propagation and publishes all associations, the label cluster, and graph invalidation in one write transaction. A failed label write rolls back the entire publication. `Application` owns answer orchestration and delegates retrieval, conversation memory, generation, and persistence to a per-request `ConversationAnswer`. `Domain` owns lower-level source and model services and receives a `ModelGate`; it never constructs an `Application`.
+`labels.auto_assign` acquires any missing embeddings, validates the source snapshot, then plans propagation and publishes all associations, the label cluster, and graph invalidation in one write transaction. A failed label write rolls back the entire publication. `Application` composes explicit business-service owners and the application operation registry. `AnswerCoordinator` admits answers, and each `ConversationAnswer` passes immutable retrieval, prompt and generation results between phases. Conversation queries own the atomic answer, memory checkpoint and meeting-link transaction. `Domain` owns lower-level source and model services and receives a `ModelGate`; it never constructs or looks up an `Application`. Callers, including fixtures, bind their application explicitly.
+
+## Ownership inside the service
+
+The relay process remains a forwarding owner; its worker owns the single profile
+writer, application, helper and native runtimes. `ApplicationService` retains
+request cancellation, dispatched activity, the idle timer and the one ordered
+close path. Socket framing/writes, frontend forwarding, startup handoff,
+connection state, admission and diagnostic storage have separate modules without
+introducing another timer, lease ledger or profile lock owner. The existing
+[lifecycle matrix](service-lifecycle-tests.md) remains the acceptance contract.
+
+Application composition passes explicit dependencies to WorkspaceAdmin,
+ModelRegistry, SourceOperations, GoogleMaintenance, SummaryCoordinator,
+MeetingWorkflowCoordinator, NoteEnhancementCoordinator and RecordingController.
+MeetingIndexer coalesces identical work while Domain retains the source queue.
+The plain transcript-window Questions path preserves its own artifact format;
+it shares generation admission without gaining Summary checkpoints or manifests.
+Feature families dispatch typed requests and invoke named persistence operations;
+SQL remains in query, writer and migration modules.
+
+GenerationCoordinator owns the single configuration/generation reservation.
+Cancelling, clearing presentation state or acknowledging a native cancellation
+never releases that reservation; the producer settles it after stream cleanup
+and acceptance. Application shutdown stops scheduling synchronously and joins
+actual producer completion before the service closes its writer/helper. Automatic
+answers keep retrieval preemptible for foreground work: their queue may finish
+cancellation before a retrieval finishes, but AutomaticAnswerCoordinator retains
+its actual producer accounting and joins it during shutdown. Foreground answers
+reserve before their first nonterminal retrieval await; an empty-context terminal
+answer does not reserve a native resource.
+
+The desktop connection owns its read worker and read-only connection. A worker
+checks supported schema inside each read transaction; the authority checks again
+before publication. Synchronous compatibility reads use the same short guarded
+snapshots. Desktop readers never migrate a profile or own the service writer.
 
 ## Build
 
@@ -108,7 +143,7 @@ The capability file is not a sandbox against arbitrary malicious programs runnin
 
 Tool failures return `isError: true` with a useful message and a structured `error` containing a stable `code` and `message`. Codes distinguish invalid arguments, missing resources, busy workers, cancellation, unavailable services, denied access, and internal failures. An `unavailable` error may also carry a `reason`: `closing` (the service refused the request before running it, so retrying is safe), `outcomeUnknown` (the request was sent and may have committed), or `notSent` (it never reached the service). A `denied` error may carry `reason: needsDesktop` when the operation needs the desktop's approval and no desktop is attached. Invalid protocol requests are handled by the SDK. Tools expose their input schemas and effect annotations. Clients may supply a progress token for started/ongoing/completed notifications. `ask` returns the final checked answer; provisional generation remains internal to the service/desktop stream.
 
-The operation identities, tool schemas, descriptions, annotations, and helper readiness policy live in `packages/foresight_core/lib/src/operations.dart`. Application dispatch switches exhaustively over that enum; desktop command interfaces and remote facades accept those identities and convert them to wire names at the transport. The RPC contracts CI job checks dispatch coverage, rejects raw desktop operation names, and invokes every MCP tool over stdio against a controlled service socket.
+The operation identities live in `packages/foresight_core/lib/src/operations.dart`. Required descriptors define argument shape, access, helper readiness, model admission, activity and MCP projection. The wire adapter decodes one immutable typed request before access checks, leases, activity stamps or dispatch. The application and service registries own 75 and eight handlers respectively; runtime tests assert their disjoint, exhaustive union. Desktop command interfaces and remote facades accept operation identities and convert them to wire names at the transport. The RPC contracts check the frozen 32 MCP schemas, reject raw operation names outside approved declarations, and invoke every MCP tool over stdio against a controlled service socket. Request fingerprints retain the original argument field presence and JSON number representations.
 
 The owned helper API is `foresight.helper.v1.RagService`; all failures use non-OK gRPC statuses. Legacy success acknowledgement fields retain their wire tags, but carry no error channel. The immutable recovered descriptor preserves historical message presence and edition features. `tools/generate_bindings.py` versions its package and source name for production. To regenerate Dart bindings, activate `protoc_plugin 24.0.0` and run `python tools/check_dart_bindings.py --write`. CI regenerates all three schemas and rejects drift; descriptor snapshots also check the control and web-content RPC shapes, defaults, and reserved tags.
 

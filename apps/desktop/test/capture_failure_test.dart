@@ -1,7 +1,7 @@
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/recording.dart';
+import 'package:foresight_core/src/recording.dart';
 
 void main() {
   test(

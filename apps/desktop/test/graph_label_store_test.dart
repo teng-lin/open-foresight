@@ -1,10 +1,11 @@
+import 'package:foresight_test_support/persistence_fixtures.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/graph_labels.dart';
+import 'package:foresight_core/src/graph_labels.dart';
 import 'package:open_foresight/graph_rendering.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/store.dart';
 import 'package:sqlite3/sqlite3.dart';
 
 void main() {
@@ -65,11 +66,17 @@ void main() {
       final original = store.sources.first;
       store.labels(a, ['Planning', 'Local AI']);
       store.labels(b, ['planning']);
-      expect(store.documentLabels.map((r) => r.colorHex), [
-        '#0EBC5F',
-        '#60D5F3',
-        '#0EBC5F',
-      ]);
+      expect(
+        {
+          for (final label in store.documentLabels)
+            (label.documentId, label.name): label.colorHex,
+        },
+        {
+          (a, 'Planning'): '#0EBC5F',
+          (a, 'Local AI'): '#60D5F3',
+          (b, 'planning'): '#0EBC5F',
+        },
+      );
       expect(
         store.documentLabels.every(
           (r) => r.source == 'user_defined' && r.rationale == null,
@@ -122,12 +129,14 @@ void main() {
         'UPDATE document_labels SET color_hex=? WHERE document_id=?',
         ['#123456', id],
       );
+      final before = Map<String, Object?>.from(store.sources.single);
+      legacyLabelFixture(store.db);
       store.db.execute('UPDATE source_details SET labels=? WHERE source_id=?', [
         jsonEncode(['Existing', 'New']),
         id,
       ]);
       store.db.execute('PRAGMA user_version=8');
-      final before = store.sources.single;
+      before['labels'] = jsonEncode(['Existing', 'New']);
       store.close();
       store = Store('${dir.path}/app.db');
       expect(store.sources.single, before);
@@ -179,13 +188,15 @@ void main() {
         'fixture',
         sourceUri: 'https://example.test/document',
       );
+      final before = Map<String, Object?>.from(store.sources.single);
+      legacyLabelFixture(store.db);
       store.db.execute('UPDATE source_details SET labels=? WHERE source_id=?', [
         jsonEncode(['First', 'Second']),
         id,
       ]);
       store.db.execute('DROP TABLE document_labels');
       store.db.execute('PRAGMA user_version=1');
-      final before = store.sources.single;
+      before['labels'] = jsonEncode(['First', 'Second']);
       store.close();
       store = Store('${dir.path}/app.db');
       expect(store.sources.single, before);

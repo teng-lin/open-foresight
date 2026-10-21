@@ -107,7 +107,16 @@ with open(sys.argv[-1] + '.exit', 'w') as output: output.write('eof')
         },
       );
       final pending = runtime.complete(' <ctrl1>question', 'native');
-      final failure = expectLater(pending, throwsStateError);
+      final failure = expectLater(
+        pending,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.cancelled,
+          ),
+        ),
+      );
       await process.requested.future;
       runtime.cancel('native');
       await failure;
@@ -373,7 +382,16 @@ with open(sys.argv[-1] + '.exit', 'w') as output: output.write('eof')
         startProcess: (_, _) async => process,
       );
       final pending = runtime.complete('wait', 'owned');
-      final failed = expectLater(pending, throwsStateError);
+      final failed = expectLater(
+        pending,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.cancelled,
+          ),
+        ),
+      );
       await process.requested.future;
       runtime.cancel('owned');
       await failed;

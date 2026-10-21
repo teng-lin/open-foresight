@@ -166,7 +166,7 @@ class _MeetingsController extends _FeatureController {
           (value) => (value as Map)['active'] == true,
         );
     recording = state['active'] == true
-        ? RemoteRecording(Map<String, dynamic>.from(state))
+        ? RecordingSnapshot(Map<String, dynamic>.from(state))
         : null;
     recordingMeeting = state['meeting_id'] as int?;
     recordingState = state['state'] as String? ?? 'idle';
@@ -392,8 +392,7 @@ class _MeetingsController extends _FeatureController {
   );
 
   Widget meetingList({bool showHeading = true}) {
-    final rows = d.store
-        .meetingCollection()
+    final rows = readRows(d.store.meetingCollection)
         .where(
           (m) => (m['title'] as String).toLowerCase().contains(
             meetingQuery.toLowerCase(),
@@ -1594,7 +1593,7 @@ class _MeetingsController extends _FeatureController {
 
   Widget meetingQuestionsPanel(int id) {
     final automatic = d.store.preference('proactiveAnswers', 'true') == 'true';
-    final detected = d.store.meetingQuestions(id);
+    final detected = readRows(d.store.meetingQuestions(id));
     final manual = d.store
         .finalTranscript(id)
         .where(
@@ -1766,7 +1765,7 @@ class _MeetingsController extends _FeatureController {
   }
 
   Widget meetingTranscriptPanel(int id, {bool questions = false}) {
-    final rows = d.store.meetingTranscript(id);
+    final rows = readRows(d.store.meetingTranscript(id));
     final displayed = questions
         ? rows.where((t) => (t['text'] as String).contains('?')).toList()
         : rows;
@@ -1919,7 +1918,7 @@ class _MeetingsController extends _FeatureController {
     if (actions) return meetingActionsPanel(id);
     final kind = actions ? 'actions' : 'summary';
     final title = actions ? 'Action items' : 'Summary';
-    final versions = d.store.meetingArtifacts(id, kind);
+    final versions = readRows(d.store.meetingArtifacts(id, kind));
     final artifact = versions.firstOrNull;
     final summary = actions
         ? null
@@ -2039,11 +2038,7 @@ class _MeetingsController extends _FeatureController {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       if ((artifact['input_revision'] as int? ?? 0) <
-                          (d.store.rows(
-                                'SELECT revision FROM meetings WHERE id=?',
-                                [id],
-                              ).first['revision']
-                              as int))
+                          (d.store.meetingRevision(id) ?? 0))
                         const Text('Out of date — regenerate'),
                       if (clipped)
                         const Text(

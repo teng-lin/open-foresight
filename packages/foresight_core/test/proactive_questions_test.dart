@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/persistence_fixtures.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
 import 'dart:io';
@@ -526,6 +527,7 @@ void main() {
             123,
           ],
         );
+        legacyLabelFixture(store.db);
         store.db.execute('PRAGMA user_version=6');
         final before = store.rows('SELECT * FROM meeting_questions').single;
         await queue.close();
@@ -788,6 +790,7 @@ void main() {
         'legacy',
       );
       await queue.close();
+      legacyLabelFixture(store.db);
       store.db.execute(
         'DROP TABLE meeting_questions; DROP TABLE meeting_question_cursors; DROP INDEX answer_request_id; ALTER TABLE answers DROP COLUMN request_id; PRAGMA user_version=1;',
       );

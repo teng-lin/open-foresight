@@ -103,7 +103,13 @@ void main() {
           'url': 'https://example.test',
           'allow_private_network': true,
         }, current: () => true),
-        throwsStateError,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.busy,
+          ),
+        ),
       );
       now = now.add(const Duration(minutes: 1));
       final next = gate.authorize(client, 'sources.import_url', {
@@ -171,7 +177,16 @@ void main() {
           'id': 'source',
         }, current: () => true);
         gate.decide(host, ids.last as String, false);
-        await expectLater(work, throwsStateError);
+        await expectLater(
+          work,
+          throwsA(
+            isA<RpcError>().having(
+              (error) => error.code,
+              'code',
+              RpcErrorCode.denied,
+            ),
+          ),
+        );
       }
       expect(ids, everyElement(matches(RegExp(r'^approval-[0-9a-f]{16}$'))));
       expect(ids.toSet(), hasLength(2));
@@ -213,10 +228,25 @@ void main() {
         ]) {
           await expectLater(
             gate.authorize(agent, method, {}, current: () => true),
-            throwsStateError,
+            throwsA(
+              isA<RpcError>().having(
+                (error) => error.code,
+                'code',
+                RpcErrorCode.denied,
+              ),
+            ),
           );
         }
-        expect(() => gate.attach(agent, 'guessed-token'), throwsStateError);
+        expect(
+          () => gate.attach(agent, 'guessed-token'),
+          throwsA(
+            isA<RpcError>().having(
+              (error) => error.code,
+              'code',
+              RpcErrorCode.denied,
+            ),
+          ),
+        );
       },
     );
     test('approval is per operation and only desktop can decide', () async {
@@ -229,13 +259,28 @@ void main() {
       );
       expect(events.single['method'], 'workspace.clear');
       final id = events.single['approval_id'] as String;
-      expect(() => gate.decide(stranger, id, true), throwsStateError);
+      expect(
+        () => gate.decide(stranger, id, true),
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.denied,
+          ),
+        ),
+      );
       gate.decide(desktop, id, true);
       await pending;
       expect(events.last['event'], 'approval_closed');
       await expectLater(
         gate.authorize(agent, 'workspace.clear', {}, current: () => true),
-        throwsStateError,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.denied,
+          ),
+        ),
       );
     });
     test(
@@ -251,7 +296,16 @@ void main() {
         }, current: () => true);
         expect(events.single['method'], 'meetings.start');
         gate.detach(desktop);
-        await expectLater(pending, throwsStateError);
+        await expectLater(
+          pending,
+          throwsA(
+            isA<RpcError>().having(
+              (error) => error.code,
+              'code',
+              RpcErrorCode.denied,
+            ),
+          ),
+        );
         expect(gate.hasHost, false);
       },
     );
@@ -259,15 +313,39 @@ void main() {
       'denial, cancellation, timeout and connection replacement fail closed',
       () async {
         gate.attach(desktop, 'private-token');
-        expect(() => gate.attach(stranger, 'private-token'), throwsStateError);
+        expect(
+          () => gate.attach(stranger, 'private-token'),
+          throwsA(
+            isA<RpcError>().having(
+              (error) => error.code,
+              'code',
+              RpcErrorCode.busy,
+            ),
+          ),
+        );
         final pending = gate.authorize(agent, 'sources.import_file', {
           'path': '/secret',
         }, current: () => false);
         gate.decide(desktop, events.single['approval_id'] as String, true);
-        await expectLater(pending, throwsStateError);
+        await expectLater(
+          pending,
+          throwsA(
+            isA<RpcError>().having(
+              (error) => error.code,
+              'code',
+              RpcErrorCode.cancelled,
+            ),
+          ),
+        );
         await expectLater(
           gate.authorize(agent, 'meetings.start', {}, current: () => true),
-          throwsStateError,
+          throwsA(
+            isA<RpcError>().having(
+              (error) => error.code,
+              'code',
+              RpcErrorCode.denied,
+            ),
+          ),
         );
         final denied = gate.authorize(
           agent,
@@ -276,7 +354,16 @@ void main() {
           current: () => true,
         );
         gate.decide(desktop, events.last['approval_id'] as String, false);
-        await expectLater(denied, throwsStateError);
+        await expectLater(
+          denied,
+          throwsA(
+            isA<RpcError>().having(
+              (error) => error.code,
+              'code',
+              RpcErrorCode.denied,
+            ),
+          ),
+        );
       },
     );
     test('private URL opt-in still requires visible agent approval', () async {
@@ -288,14 +375,29 @@ void main() {
       expect(events.single['method'], 'sources.import_url');
       expect((events.single['args'] as Map)['allow_private_network'], isTrue);
       gate.decide(desktop, events.single['approval_id'] as String, false);
-      await expectLater(pending, throwsStateError);
+      await expectLater(
+        pending,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.denied,
+          ),
+        ),
+      );
     });
     test('network augmented answers require approval', () async {
       await expectLater(
         gate.authorize(agent, 'answer.stream', {
           'web_search': true,
         }, current: () => true),
-        throwsStateError,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.denied,
+          ),
+        ),
       );
       await gate.authorize(agent, 'answer.stream', {}, current: () => true);
     });

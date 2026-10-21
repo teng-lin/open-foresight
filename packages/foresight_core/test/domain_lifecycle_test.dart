@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
 import 'dart:io';
@@ -120,11 +121,9 @@ void main() {
         final waiting = expectLater(
           domain.index(later),
           throwsA(
-            isA<StateError>().having(
-              (e) => e.message,
-              'message',
-              'Workspace closed',
-            ),
+            isA<RpcError>()
+                .having((error) => error.code, 'code', RpcErrorCode.cancelled)
+                .having((e) => e.message, 'message', 'Workspace closed'),
           ),
         );
         domain.close();
@@ -170,21 +169,17 @@ void main() {
         final firstResult = expectLater(
           first,
           throwsA(
-            isA<StateError>().having(
-              (e) => e.message,
-              'message',
-              'Workspace closed',
-            ),
+            isA<RpcError>()
+                .having((error) => error.code, 'code', RpcErrorCode.cancelled)
+                .having((e) => e.message, 'message', 'Workspace closed'),
           ),
         );
         final queuedResult = expectLater(
           queued,
           throwsA(
-            isA<StateError>().having(
-              (e) => e.message,
-              'message',
-              'Workspace closed',
-            ),
+            isA<RpcError>()
+                .having((error) => error.code, 'code', RpcErrorCode.cancelled)
+                .having((e) => e.message, 'message', 'Workspace closed'),
           ),
         );
         await service.started.future.timeout(const Duration(seconds: 5));

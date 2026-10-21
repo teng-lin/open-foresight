@@ -1,13 +1,15 @@
+import 'package:foresight_core/src/application.dart';
+import 'store_reader_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/domain.dart';
-import 'package:open_foresight/helper.dart';
+import 'package:foresight_core/src/domain.dart';
+import 'package:foresight_core/src/helper.dart';
 import 'package:open_foresight/main.dart';
 import 'package:open_foresight/model_setup.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/store.dart';
 import 'package:open_foresight/speech_setup_view.dart';
 import '../test_support/meeting_panel.dart';
 
@@ -35,7 +37,7 @@ void main() {
     final helper = OfflineHelper('${root.path}/sock', '${root.path}/helper');
     await tester.pumpWidget(
       Foresight(
-        TestDesktopConnection(Domain(store, helper)),
+        TestDesktopConnection(Application(Domain(store, helper))),
         deviceLoader: () async => [],
       ),
     );
@@ -68,7 +70,7 @@ void main() {
       );
       await tester.pumpWidget(
         Foresight(
-          TestDesktopConnection(Domain(store, helper)),
+          TestDesktopConnection(Application(Domain(store, helper))),
           deviceLoader: () async => [],
         ),
       );
@@ -149,7 +151,7 @@ void main() {
       );
       await tester.pumpWidget(
         Foresight(
-          TestDesktopConnection(Domain(store, helper)),
+          TestDesktopConnection(Application(Domain(store, helper))),
           deviceLoader: () async => [],
         ),
       );
@@ -196,7 +198,10 @@ void main() {
         model.path,
         '${directory.path}/missing-runner',
       );
-      expect(speechSetupProblem(store), contains('runner is missing'));
+      expect(
+        speechSetupProblem(fixtureReader(store)),
+        contains('runner is missing'),
+      );
       store.close();
       directory.deleteSync(recursive: true);
     },

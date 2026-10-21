@@ -16,14 +16,8 @@ import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
 
 class _Domain extends Domain {
-  _Domain(super.store, super.helper, this.detector) {
-    application;
-  }
+  _Domain(super.store, super.helper, this.detector);
   final QueryCompletionRuntime detector;
-  late final Application application = Application(
-    this,
-    queryRuntime: detector,
-  );
   Completer<void>? indexGate, indexEntered, indexParked;
   bool productionIndex = false;
   @override
@@ -136,6 +130,7 @@ void main() {
   late Store store;
   late Server server;
   late _Domain domain;
+  late Application app;
   late _Runtime runtime;
   late _Detector detector;
   late _Rag rag;
@@ -156,10 +151,11 @@ void main() {
       Helper(socket, '${directory.path}/helper'),
       detector,
     )..generator = runtime;
+    app = Application(domain, queryRuntime: detector);
   });
   setUp(() {
     addTearDown(() async {
-      await domain.application.close();
+      await app.close();
       domain.close();
       runtime.close();
       await domain.helper.close();
@@ -172,7 +168,8 @@ void main() {
   test(
     'missing dedicated model reports not ready without chat substitution',
     () async {
-      final app = Application(domain);
+      await app.close();
+      app = Application(domain);
       try {
         final id = store.meeting('Detector unavailable');
         final queue = app.proactive;
@@ -209,7 +206,7 @@ void main() {
     'service pipeline detects, indexes, grounds, cites and links an automatic answer by request ownership',
     () async {
       final id = store.meeting('Automatic meeting');
-      final queue = domain.application.proactive;
+      final queue = app.proactive;
       queue.begin(id);
       store.transcript(
         id,
@@ -242,11 +239,10 @@ void main() {
       });
       expect(store.sources.single['id'], 'meeting-$id');
       final details =
-          await domain.command(Operation.meetingsGet, {'id': id}) as Map;
+          await app.call(Operation.meetingsGet.wire, {'id': id}) as Map;
       expect(details['questions'], hasLength(1));
       expect(
-        (domain.application.captureState['proactive']
-            as Map)['pending_meetings'],
+        (app.captureState['proactive'] as Map)['pending_meetings'],
         isEmpty,
       );
     },
@@ -256,7 +252,7 @@ void main() {
     'dedicated detector failure is visible and leaves transcript and processing boundary intact',
     () async {
       final id = store.meeting('Invalid detection');
-      final queue = domain.application.proactive;
+      final queue = app.proactive;
       queue.begin(id);
       store.transcript(id, 'Who owns the draft?', true, 0, 1000, 'microphone');
       queue.notify(id);
@@ -276,11 +272,11 @@ void main() {
         0,
       );
       detector.failure = null;
-      await domain.command(Operation.meetingsRetryDetection, {'id': id});
+      await app.call(Operation.meetingsRetryDetection.wire, {'id': id});
       await queue.process();
       expect(store.rows('SELECT * FROM meeting_questions'), hasLength(1));
       await queue.reset();
-      await domain.command(Operation.workspaceClear);
+      await app.call(Operation.workspaceClear.wire, const {});
       expect(store.rows('SELECT * FROM meeting_questions'), isEmpty);
       expect(store.rows('SELECT * FROM meeting_question_cursors'), isEmpty);
       expect(store.rows('SELECT * FROM transcript'), isEmpty);
@@ -291,7 +287,7 @@ void main() {
     'closing automatic work stops its queued preparation without cancelling shared indexing',
     () async {
       final id = store.meeting('Delayed indexing');
-      final queue = domain.application.proactive;
+      final queue = app.proactive;
       queue.begin(id);
       store.transcript(
         id,
@@ -313,8 +309,8 @@ void main() {
         'queued',
       );
       expect(domain.indexGate!.isCompleted, false);
-      expect(domain.application.proactiveWork, 0);
-      expect(domain.application.backgroundBusy, false);
+      expect(app.proactiveWork, 0);
+      expect(app.backgroundBusy, false);
       domain.indexGate!.complete();
       await Future<void>.delayed(Duration.zero);
       expect(store.rows('SELECT * FROM answers'), isEmpty);
@@ -325,7 +321,7 @@ void main() {
     'cancellation during retrieval cannot start a later generation or save an orphan answer',
     () async {
       final id = store.meeting('Delayed retrieval');
-      final queue = domain.application.proactive;
+      final queue = app.proactive;
       queue.begin(id);
       store.transcript(
         id,
@@ -344,11 +340,11 @@ void main() {
       await work;
       expect(runtime.requests, isEmpty);
       expect(queue.running, false);
-      expect(domain.application.proactiveWork, 1);
-      expect(domain.application.backgroundBusy, true);
+      expect(app.proactiveWork, 1);
+      expect(app.backgroundBusy, true);
       rag.gate!.complete();
-      await eventually(() => domain.application.proactiveWork == 0);
-      expect(domain.application.backgroundBusy, false);
+      await eventually(() => app.proactiveWork == 0);
+      expect(app.backgroundBusy, false);
       await Future<void>(() {});
       expect(runtime.requests, isEmpty);
       expect(store.rows('SELECT * FROM answers'), isEmpty);
@@ -364,7 +360,7 @@ void main() {
       'model configuration yields retrieval and preserves queued answer (cancel caller: $cancelCaller)',
       () async {
         final id = store.meeting('Model configuration during retrieval');
-        final queue = domain.application.proactive;
+        final queue = app.proactive;
         queue.begin(id);
         store.transcript(
           id,
@@ -380,7 +376,7 @@ void main() {
         final work = queue.process();
         await rag.entered.future.timeout(const Duration(seconds: 2));
         var current = true;
-        final configure = domain.application.call(
+        final configure = app.call(
           Operation.modelsAcquireQuery.wire,
           {},
           current: () => current,
@@ -404,7 +400,7 @@ void main() {
         expect(store.meetingQuestions(id).single['state'], 'queued');
         expect(runtime.requests, isEmpty);
         rag.gate!.complete();
-        await eventually(() => domain.application.proactiveWork == 0);
+        await eventually(() => app.proactiveWork == 0);
         await queue.process();
         expect(store.meetingQuestions(id).single['state'], 'completed');
         expect(runtime.requests, hasLength(1));
@@ -416,7 +412,7 @@ void main() {
     'cancelled proactive preparation leaves a real paused shared index durable and not busy',
     () async {
       final id = store.meeting('Paused preparation');
-      final queue = domain.application.proactive;
+      final queue = app.proactive;
       queue.begin(id);
       store.transcript(
         id,
@@ -440,14 +436,14 @@ void main() {
       await queue.close();
       await work;
       expect(queue.running, false);
-      expect(domain.application.proactiveWork, 0);
+      expect(app.proactiveWork, 0);
       expect(domain.mutating, 0);
-      expect(domain.application.backgroundBusy, false);
+      expect(app.backgroundBusy, false);
       expect(store.sources.single['state'], 'pending');
       expect(domain.cancellationWatchCount, 0);
       domain.resumeSources();
       await eventually(() => store.sources.single['state'] == 'indexed');
-      expect(domain.application.backgroundBusy, false);
+      expect(app.backgroundBusy, false);
     },
   );
 
@@ -480,7 +476,7 @@ void main() {
             ..writeAsStringSync('Fixture');
           await store.register('speech', model.path, '/usr/bin/true');
           final id = store.meeting('Capture fixture');
-          await domain.command(Operation.meetingsStart, {'id': id});
+          await app.call(Operation.meetingsStart.wire, {'id': id});
           final bytes = ByteData(interim ? 12000 : 4000);
           final event = jsonEncode({
             'type': 'pcm',
@@ -497,11 +493,11 @@ void main() {
           );
           calloc.free(event);
           if (!interim) {
-            await domain.command(Operation.meetingsPause, {'id': id});
+            await app.call(Operation.meetingsPause.wire, {'id': id});
           }
           final deadline = DateTime.now().add(const Duration(seconds: 3));
           while ((interim
-                  ? domain.application.provisionalTranscript.values.every(
+                  ? app.provisionalTranscript.values.every(
                       (text) => text.isEmpty,
                     )
                   : store.rows('SELECT * FROM transcript').isEmpty) &&
@@ -511,7 +507,7 @@ void main() {
           if (interim) {
             expect(store.rows('SELECT * FROM transcript'), isEmpty);
             expect(
-              domain.application.provisionalTranscript['microphone'],
+              app.provisionalTranscript['microphone'],
               'Mira owns the draft. Who owns the draft? one two three four five',
             );
             // Interim speech has no durable transcript to retrieve yet; supply
@@ -532,7 +528,7 @@ void main() {
               'Mira owns the draft. Who owns the draft?',
             );
           }
-          final queue = domain.application.proactive;
+          final queue = app.proactive;
           // The capture callback, not this test, called notify().
           await queue.process();
           await queue.process();
@@ -546,7 +542,7 @@ void main() {
             store.rows('SELECT body FROM answers').single['body'],
             'Mira owns the draft. [S1]',
           );
-          await domain.command(Operation.meetingsStop);
+          await app.call(Operation.meetingsStop.wire, const {});
         } finally {
           if (prior == null) {
             runtimeConfiguration.environment.remove('FORESIGHT_NATIVE');

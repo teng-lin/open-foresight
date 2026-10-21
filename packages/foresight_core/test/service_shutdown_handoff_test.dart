@@ -531,7 +531,7 @@ void main() {
         );
       } finally {
         domain?.close();
-        domain?.store.close();
+        await domain?.closed;
         await f.close();
       }
     },
@@ -618,7 +618,7 @@ void main() {
       expect(File('${f.profile.data}/old-connections').readAsStringSync(), '1');
     } finally {
       domain?.close();
-      domain?.store.close();
+      await domain?.closed;
       await f.close();
     }
   });
@@ -723,7 +723,7 @@ void main() {
         ]);
       } finally {
         domain?.close();
-        domain?.store.close();
+        await domain?.closed;
         await f.close();
       }
     },

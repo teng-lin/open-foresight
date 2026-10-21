@@ -106,7 +106,10 @@ final int Function(Pointer<Utf8>, Pointer<Uint8>)? _lstat = Platform.isMacOS
 /// dead one can carry its old inode. A socket's modification time is set when
 /// it is bound; linking, renaming and chmod leave it alone. APFS never reuses
 /// inode numbers.
-Future<String?> fileIdentity(String path) async {
+Future<String?> fileIdentity(String path) async => fileIdentitySync(path);
+
+/// The same filesystem identity for synchronous database qualification.
+String? fileIdentitySync(String path) {
   if (path.contains('\u0000')) {
     throw ArgumentError.value(path, 'path', 'Path contains a NUL character');
   }

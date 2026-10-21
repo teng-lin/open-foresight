@@ -67,6 +67,27 @@ class ProfileMigrationTest(unittest.TestCase):
             self.old, self.new, self.backup, "/old/bundle", "/new/bundle", True
         )
 
+    def test_future_helper_refuses_before_move_backup_or_lock_creation(self):
+        with sqlite3.connect(self.old / "helper/agent_metadata.db") as db:
+            db.execute("PRAGMA user_version=2")
+        before = {
+            str(path.relative_to(self.old)): path.read_bytes()
+            for path in self.old.rglob("*")
+            if path.is_file()
+        }
+        with self.assertRaisesRegex(RuntimeError, "Unsupported newer"):
+            self.migrate()
+        self.assertFalse(self.new.exists())
+        self.assertFalse(self.backup.exists())
+        self.assertEqual(
+            before,
+            {
+                str(path.relative_to(self.old)): path.read_bytes()
+                for path in self.old.rglob("*")
+                if path.is_file()
+            },
+        )
+
     def test_preserves_data_models_and_private_backup(self):
         self.migrate()
         self.assertFalse(self.old.exists())

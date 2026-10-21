@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:foresight_core/remote.dart';
+import 'package:foresight_core/desktop.dart';
 
 /// The service can authorize agent operations only while this surface is alive.
 class AgentApprovalSurface extends StatefulWidget {

@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -411,7 +412,16 @@ void main() {
       identityBarrier = Completer<void>();
       final count = identityRequests;
       final pending = auth.addAccount(fixture.consent);
-      final cancelled = expectLater(pending, throwsStateError);
+      final cancelled = expectLater(
+        pending,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.cancelled,
+          ),
+        ),
+      );
       while (identityRequests == count) {
         await Future<void>.delayed(Duration.zero);
       }

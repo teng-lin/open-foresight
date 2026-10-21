@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'graph_labels.dart';
+import 'package:foresight_core/desktop.dart';
 import 'graph_rendering.dart';
 
 class GraphLabelControls extends StatefulWidget {

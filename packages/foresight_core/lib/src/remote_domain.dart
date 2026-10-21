@@ -1,19 +1,21 @@
+import 'cancellation.dart';
+export 'recording_status.dart' show RemoteRecording;
 import 'rpc_error.dart';
 import 'operations.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'dart:math' show min;
-import 'google_auth.dart';
+import 'remote_google.dart';
+export 'remote_google.dart' show RemoteGoogleAuth, RemoteGoogleConnections;
 import 'desktop_connection.dart';
-import 'helper.dart';
+import 'helper_status.dart';
+import 'sqlite_store_reader.dart';
+import 'store_reader.dart';
+import 'persistence/read_schema_guard.dart';
 import 'profile_paths.dart';
 import 'service.dart';
 import 'service_socket.dart' show probeSocketPath;
-import 'store.dart';
-import 'generated/helper_control.pb.dart' as control;
-import 'generated/rag_service.pbgrpc.dart' show RagServiceClient;
-import 'package:grpc/service_api.dart' as grpc_api;
 
 /// Whether a failed request never took effect, so it may be sent once more
 /// after a handoff: a closing owner refused it, or it was never sent.
@@ -22,11 +24,36 @@ bool _resendable(RpcError error) =>
 
 /// Desktop facade: reads use SQLite WAL snapshots; all writes and workers are
 /// delegated to the single application service. No migrations run in this client.
-class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
+class RemoteDomain
+    implements DesktopConnection, CaptureLevelEvents, RemoteGoogleOwner {
   @override
-  final Store store;
+  StoreReader get store => _reader;
+  final SqliteStoreReader _reader;
   @override
-  final RemoteHelper helper;
+  HelperStatus get helper => _helper.value;
+  final _helper = _RemoteHelperState();
+  final _changes = StreamController<void>.broadcast(sync: true);
+  Future<void>? _closed;
+  final _closedSignal = Completer<void>();
+  @override
+  Stream<void> get changes => _changes.stream;
+  @override
+  Future<void> initialize() async {
+    if (_disposed) throw RpcError(RpcErrorCode.cancelled, 'Workspace closed');
+    _notifyChanges();
+  }
+
+  void _notifyChanges() {
+    if (_disposed) return;
+    _reader.invalidate();
+    _changes.add(null);
+  }
+
+  @override
+  DesktopModelAssets get modelAssets => DesktopModelAssets(
+    generation: Directory('${_profile.data}/models/gemma4'),
+    speech: Directory('${_profile.data}/models/whisper'),
+  );
   @override
   GenerationStatus? generator;
   @override
@@ -39,7 +66,7 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
   ServiceClient client;
   @override
   final RemoteRuntime runtime;
-  final ProfilePaths profile;
+  final ProfilePaths _profile;
   void Function(Map<String, dynamic>)? _approvalEvents;
   // The connection the desktop approval host is attached on.
   ServiceClient? _attached;
@@ -64,7 +91,7 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
 
   Future<void> _attachDesktop(ServiceClient connection) async {
     await connection.call(Operation.securityAttachDesktop.wire, {
-      'token': File('${profile.data}/.desktop-capability').readAsStringSync(),
+      'token': File('${_profile.data}/.desktop-capability').readAsStringSync(),
     });
     _attached = connection;
   }
@@ -93,6 +120,7 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
   @override
   bool get webSearchAvailable => _webSearchAvailable;
   StreamSubscription<Map<String, dynamic>>? _events;
+  StreamSubscription<void>? _readEvents;
   String? _workspaceEpoch, _serviceEpoch;
 
   /// An event or status names an epoch other than the current one. It can
@@ -108,6 +136,8 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
   String _storedEpoch() {
     try {
       return store.workspaceEpoch;
+    } on IncompatibleReadSchema {
+      rethrow;
     } catch (_) {
       // A store that cannot be read, or is closed, leaves the service's word.
       return '';
@@ -121,13 +151,13 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
       _serviceEpoch != null && _serviceEpoch != _workspaceEpoch;
   @override
   void adoptWorkspace() => _workspaceEpoch = _serviceEpoch;
-  RemoteDomain._(
-    this.store,
-    this.helper,
-    this.client,
-    this.runtime,
-    this.profile,
-  ) {
+  RemoteDomain._(this._reader, this.client, this.runtime, this._profile) {
+    _closedSignal.future.ignore();
+    _readEvents = _reader.activityChanges.listen((_) {
+      if (_disposed || _reader.failure == null) return;
+      _helper.state = _reader.failure!.message;
+      _notifyChanges();
+    });
     runtime.onCancel = (requestId) =>
         _cancellations[requestId] = ++_cancellationSequence;
     _listen();
@@ -159,6 +189,7 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
       _approvalEvents?.call(event);
       return;
     }
+    _reader.validateSchema();
     final signature = jsonEncode(event);
     if (_eventSignature == signature) return;
     _eventSignature = signature;
@@ -178,13 +209,13 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
       event['generation'] as Map? ?? {},
     );
     generator = runtime.state.isEmpty ? null : runtime;
-    helper.snapshot = event['helper'] == null
+    _helper.snapshot = event['helper'] == null
         ? null
-        : (control.State()..mergeFromProto3Json(event['helper']));
-    helper.state =
+        : HelperStatus.fromEvent(event).snapshot;
+    _helper.state =
         event['helper_state'] as String? ??
-        (helper.snapshot == null ? 'disconnected' : 'live (service)');
-    helper.changed?.call();
+        (_helper.snapshot == null ? 'disconnected' : 'live (service)');
+    _notifyChanges();
   }
 
   /// Events a connection sends before it is listened to are lost, and its
@@ -195,7 +226,7 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
     if (stored.isEmpty || stored == _serviceEpoch) return;
     _serviceEpoch = stored;
     _workspaceEpoch ??= stored;
-    helper.changed?.call();
+    _notifyChanges();
   }
 
   // Approvals shown for the current connection that have not closed yet.
@@ -212,7 +243,14 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
   void _listen() {
     final connection = client;
     _events = connection.events.stream.listen(
-      _apply,
+      (event) {
+        try {
+          _apply(event);
+        } on IncompatibleReadSchema catch (error) {
+          _helper.state = error.rpcError.message;
+          _notifyChanges();
+        }
+      },
       onDone: () {
         _closeOpenApprovals();
         // A connection already replaced needs no second reconnect.
@@ -262,11 +300,11 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
     // first attempt is immediate and a success starts over.
     var failures = 0;
     while (!_disposed) {
-      helper.state = 'application service disconnected; reconnecting';
-      helper.changed?.call();
+      _helper.state = 'application service disconnected; reconnecting';
+      _notifyChanges();
       ServiceClient? next;
       try {
-        final startup = await ensureServiceSnapshot(profile);
+        final startup = await ensureServiceSnapshot(_profile);
         next = startup.client;
         if (_disposed) {
           await next.close();
@@ -282,7 +320,7 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
         client = next;
         runtime.client = next;
         // The next owner may serve from another runtime.
-        helper.retarget(_helperSocket(next));
+        _reader.retarget(next.endpoint);
         _listen();
         _apply(startup.status);
         _recheckWorkspace();
@@ -305,8 +343,8 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
         // Requests may already have gone to [next], for example while its
         // attach timed out; the owner may still answer them.
         if (next != null) _retire(next);
-        helper.state = 'application service reconnect failed: $error';
-        helper.changed?.call();
+        _helper.state = 'application service reconnect failed: $error';
+        _notifyChanges();
         attempt.completeError(error, stack);
         attempt = _attempt = Completer<void>()..future.ignore();
         _sinceAttempt
@@ -372,7 +410,7 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
   /// Whether a service accepts connections at this profile's endpoint now.
   Future<bool> _endpointAccepts() async {
     try {
-      return (await probeSocketPath(serviceEndpoint(profile)))?.live ?? false;
+      return (await probeSocketPath(serviceEndpoint(_profile)))?.live ?? false;
     } catch (_) {
       return false;
     }
@@ -451,16 +489,11 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
         if (attempt > 0 || received || !_resendable(error)) rethrow;
         await _awaitReconnect(current, error);
         if (cancelledSince()) {
-          throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+          throw operationCancelled();
         }
       }
     }
   }
-
-  /// The helper beside the endpoint [client] reached. Reading the endpoint
-  /// record again could name another runtime by now (L9).
-  static String _helperSocket(ServiceClient client) =>
-      '${File(client.endpoint).parent.path}/helper.sock';
 
   /// [createdForTesting] sees the domain once it is built, including one
   /// a failed connect disposes of.
@@ -473,13 +506,16 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
       profile,
       startupTimeout: startupTimeout,
     );
-    Store? store;
+    SqliteStoreReader? store;
     RemoteDomain? domain;
     try {
-      store = Store.readOnly('${profile.data}/application.db');
+      store = SqliteStoreReader.open(
+        '${profile.data}/application.db',
+        profile: profile.identity,
+        connection: startup.client.endpoint,
+      );
       domain = RemoteDomain._(
         store,
-        RemoteHelper(_helperSocket(startup.client), '${profile.data}/helper'),
         startup.client,
         RemoteRuntime(startup.client),
         profile,
@@ -492,8 +528,8 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
       // No caller holds this domain: end its connection, any reconnect,
       // its helper and its read-only store, whichever exist.
       domain?.close();
-      await domain?.helper.close();
-      store?.close();
+      await domain?.closed;
+      await store?.close();
       await startup.client.close();
       rethrow;
     }
@@ -581,8 +617,7 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
       unawaited(controller.close());
     }
 
-    void cancelled() =>
-        end(RpcError(RpcErrorCode.cancelled, 'Operation cancelled'));
+    void cancelled() => end(operationCancelled());
 
     late Map<String, dynamic> scoped;
     late bool Function() cancelledSince;
@@ -680,6 +715,10 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
   }
 
   @override
+  Stream<Object?> googleSignIn(Operation operation) =>
+      client.stream(operation.wire);
+
+  @override
   Future<void> resume() async {
     await command(Operation.applicationResume);
   }
@@ -704,8 +743,8 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
       command(operation).catchError((Object error) {
         if (!_disposed) {
           if (revision == _sourceControlRevision) _paused = previous;
-          helper.state = 'Source control failed: $error';
-          helper.changed?.call();
+          _helper.state = 'Source control failed: $error';
+          _notifyChanges();
         }
         return null;
       }),
@@ -731,7 +770,7 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
     bool Function()? current,
   }) async* {
     if (current != null && !current()) {
-      throw RpcError(RpcErrorCode.cancelled, 'Answer cancelled');
+      throw operationCancelled('Answer cancelled');
     }
     await for (final value in _streamCurrent(Operation.answerStream, {
       'question': question,
@@ -740,7 +779,7 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
       if (meetingId != null) 'meeting_id': meetingId,
     }, current)) {
       if (current != null && !current()) {
-        throw RpcError(RpcErrorCode.cancelled, 'Answer cancelled');
+        throw operationCancelled('Answer cancelled');
       }
       yield value as String;
     }
@@ -755,7 +794,7 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
     bool Function()? current,
   }) async* {
     if (current != null && !current()) {
-      throw RpcError(RpcErrorCode.cancelled, 'Answer cancelled');
+      throw operationCancelled('Answer cancelled');
     }
     await for (final value in _streamCurrent(Operation.answerStream, {
       'question': question,
@@ -765,7 +804,7 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
       if (meetingId != null) 'meeting_id': meetingId,
     }, current)) {
       if (current != null && !current()) {
-        throw RpcError(RpcErrorCode.cancelled, 'Answer cancelled');
+        throw operationCancelled('Answer cancelled');
       }
       yield value as String;
     }
@@ -787,56 +826,44 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
 
   @override
   void close() {
+    if (_closed != null) return;
     _disposed = true;
-    // A reconnect pausing after failures ends now, with its timers.
     final pause = _pause;
     if (pause != null && !pause.isCompleted) pause.complete();
-    unawaited(_captureLevels.close());
-    unawaited(_events?.cancel());
-    for (final retired in _retired.toList()) {
-      unawaited(retired.close());
-    }
-    unawaited(client.close());
+    _closed = _closeResources();
+    unawaited(
+      _closed!.then(
+        _closedSignal.complete,
+        onError: _closedSignal.completeError,
+      ),
+    );
+  }
+
+  @override
+  Future<void> get closed => _closedSignal.future;
+
+  Future<void> _closeResources() async {
+    final sockets = Future.wait([
+      for (final retired in _retired.toList()) retired.close(),
+      client.close(),
+    ]);
+    await _events?.cancel();
+    await _readEvents?.cancel();
+    await sockets;
+    await _reconnection;
+    await _reader.close();
+    await _changes.close();
+    await _captureLevels.close();
   }
 }
 
-/// The desktop's view of the helper its service owns. Service events are
-/// authoritative; the desktop never starts a second watcher against the
-/// runtime directory from its own launch environment. Nothing connects
-/// through this helper, but its socket names the connected owner's helper
-/// and moves with that owner to another runtime after a reconnect (L9).
-class RemoteHelper extends Helper {
-  RemoteHelper(super.socket, super.storage)
-    : _socket = socket,
-      super(manageProcess: false);
-  String _socket;
-  // Until a retarget, the channel and client the Helper built for the first
-  // socket. Lazy, because the Helper constructor reads them through these
-  // overrides.
-  late grpc_api.ClientChannel _channel = super.channel;
-  late RagServiceClient _client = super.client;
-  @override
-  String get socket => _socket;
-  @override
-  grpc_api.ClientChannel get channel => _channel;
-  @override
-  RagServiceClient get client => _client;
-
-  /// Name the helper at [socket], beside the endpoint a reconnect reached.
-  void retarget(String socket) {
-    if (socket == _socket || stopping) return;
-    final previous = _channel;
-    _socket = socket;
-    _channel = helperChannel(socket);
-    _client = helperClient(_channel);
-    unawaited(previous.terminate());
-  }
-
-  @override
-  Future<void> start() async {
-    changed?.call();
-    await onReady?.call();
-  }
+final class _RemoteHelperState {
+  HelperStatus value = const HelperStatus();
+  HelperSnapshot? get snapshot => value.snapshot;
+  set snapshot(HelperSnapshot? snapshot) =>
+      value = HelperStatus(state: value.state, snapshot: snapshot);
+  set state(String state) =>
+      value = HelperStatus(state: state, snapshot: value.snapshot);
 }
 
 class RemoteRuntime implements GenerationStatus {
@@ -857,197 +884,4 @@ class RemoteRuntime implements GenerationStatus {
 
   @override
   void close() {} // The service owns this worker.
-}
-
-class RemoteRecording implements RecordingStatus {
-  final Map<String, dynamic> snapshot;
-  RemoteRecording(this.snapshot);
-  @override
-  bool get finishing => snapshot['finishing'] == true;
-  @override
-  bool get paused => snapshot['paused'] == true;
-  @override
-  Map<String, dynamic> get echoCancellationState => Map<String, dynamic>.from(
-    snapshot['echo_cancellation'] as Map? ??
-        {'requested': false, 'active': false},
-  );
-  @override
-  List<int> get sampleCounts =>
-      (snapshot['samples'] as List? ?? []).cast<int>();
-  @override
-  List<double> get peakVolumes => (snapshot['peaks'] as List? ?? [])
-      .map((v) => (v as num).toDouble())
-      .toList();
-  @override
-  DateTime get lastAudioActivity => DateTime.fromMillisecondsSinceEpoch(
-    snapshot['last_audio'] as int? ?? DateTime.now().millisecondsSinceEpoch,
-  );
-  @override
-  List<double> get currentVolumes => (snapshot['volumes'] as List? ?? [])
-      .map((v) => (v as num).toDouble())
-      .toList();
-  @override
-  void dispose() {}
-}
-
-class RemoteGoogleAuth implements GoogleAccount {
-  final RemoteDomain domain;
-  RemoteGoogleAuth(this.domain);
-  @override
-  bool get connected => domain.googleStatus['connected'] == true;
-  @override
-  String get email => domain.googleStatus['email'] as String? ?? '';
-  @override
-  String get displayName => domain.googleStatus['displayName'] as String? ?? '';
-  @override
-  String get photoUrl => domain.googleStatus['photoUrl'] as String? ?? '';
-  @override
-  String get account => domain.googleStatus['account'] as String? ?? '';
-  @override
-  String get loadError => domain.googleStatus['loadError'] as String? ?? '';
-  @override
-  bool get signingIn => domain.googleStatus['signingIn'] == true;
-  @override
-  GoogleClient? get client =>
-      domain.googleStatus['configured'] == true ? GoogleClient('', '') : null;
-  Future<void> _call(
-    Operation operation, [
-    Map<String, dynamic> a = const {},
-  ]) async {
-    domain.googleStatus = Map<String, dynamic>.from(
-      await domain.command(operation, a) as Map,
-    );
-  }
-
-  @override
-  Future<void> configure(File file) =>
-      _call(Operation.googleConfigure, {'path': file.path});
-  @override
-  Future<void> signIn(Future<void> Function(Uri) openBrowser) =>
-      _signIn(openBrowser, Operation.googleSignIn);
-  @override
-  Future<void> addAccount(Future<void> Function(Uri) openBrowser) =>
-      _signIn(openBrowser, Operation.googleAddAccount);
-  @override
-  List<Map<String, Object?>> get accounts =>
-      (domain.googleStatus['accounts'] as List? ?? [])
-          .map((value) => Map<String, Object?>.from(value as Map))
-          .toList();
-  @override
-  Future<void> switchAccount(String id) =>
-      _call(Operation.googleSwitchAccount, {'id': id});
-  @override
-  Future<void> signOutAccount(String id) =>
-      _call(Operation.googleSignOutAccount, {'id': id});
-
-  Future<void> _signIn(
-    Future<void> Function(Uri) openBrowser,
-    Operation operation,
-  ) async {
-    try {
-      await for (final value in domain.client.stream(operation.wire)) {
-        final state = Map<String, dynamic>.from(value as Map);
-        if (state['authorization_url'] is String) {
-          await openBrowser(Uri.parse(state['authorization_url'] as String));
-        } else {
-          domain.googleStatus = state;
-        }
-      }
-    } catch (_) {
-      await _call(Operation.googleCancelSignIn);
-      rethrow;
-    }
-  }
-
-  @override
-  void cancelSignIn() {
-    unawaited(_call(Operation.googleCancelSignIn));
-  }
-
-  @override
-  Future<void> disconnect() => _call(Operation.googleDisconnect);
-  @override
-  Future<void> close() async {}
-}
-
-class RemoteGoogleConnections implements ConnectedSources {
-  final RemoteDomain domain;
-  final GoogleAccount auth;
-  RemoteGoogleConnections(this.domain, this.auth);
-  @override
-  int get lastCompletedRefreshMs =>
-      domain.googleStatus['lastRefresh'] as int? ?? 0;
-  @override
-  Future<List<Map<String, dynamic>>> driveFiles({
-    String? parent,
-    String query = '',
-    DateTime? modifiedAfter,
-  }) async =>
-      (await domain.command(Operation.googleDriveFiles, {
-                'parent': parent,
-                'query': query,
-                'modifiedAfter': modifiedAfter?.toIso8601String(),
-              })
-              as List)
-          .map((v) => Map<String, dynamic>.from(v as Map))
-          .toList();
-  @override
-  Future<void> importDriveFile(
-    String fileId, {
-    Map<String, dynamic>? metadata,
-    bool preserveDeleted = false,
-  }) async {
-    await domain.command(Operation.googleImportFile, {'id': fileId});
-  }
-
-  @override
-  Future<void> importDriveFolder(
-    String folderId, {
-    bool refreshing = false,
-  }) async {
-    await domain.command(Operation.googleImportFolder, {'id': folderId});
-  }
-
-  @override
-  Future<void> importLastYear() async {
-    await domain.command(Operation.googleImportYear);
-  }
-
-  @override
-  Future<void> syncCalendar({
-    String calendarId = 'primary',
-    DateTime? now,
-  }) async {
-    await domain.command(Operation.googleCalendar);
-  }
-
-  @override
-  Future<void> refresh() async {
-    await domain.command(Operation.googleRefresh);
-  }
-
-  @override
-  Future<void> importAttachments(int meeting) async {
-    await domain.command(Operation.googleAttachments, {'id': meeting});
-  }
-
-  @override
-  List<Map<String, dynamic>> attachments(int meeting) {
-    final row = domain.store.rows(
-      'SELECT metadata FROM calendar_events WHERE meeting_id=?',
-      [meeting],
-    ).firstOrNull;
-    if (row == null) return [];
-    return ((jsonDecode(row['metadata'] as String) as Map)['attachments']
-                as List? ??
-            [])
-        .map((v) => Map<String, dynamic>.from(v as Map))
-        .toList();
-  }
-
-  Future<void> reminders(
-    DateTime now,
-    Future<void> Function(String) deliver,
-  ) async {} // Service timer owns delivery.
-  void close() {}
 }

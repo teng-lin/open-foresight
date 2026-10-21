@@ -1,3 +1,7 @@
+import 'dart:io';
+import 'store_reader_fixture.dart';
+import 'package:foresight_core/remote.dart'
+    show StoreReader, HelperStatus, DesktopModelAssets;
 import 'dart:async';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/application.dart';
@@ -6,12 +10,40 @@ import 'package:foresight_core/src/application.dart';
 /// constructs RemoteDomain; widget fixtures can control core services directly.
 class TestDesktopConnection implements DesktopConnection {
   final Domain domain;
-  late final Application application = domain.application;
+  final Application application;
   StreamSubscription<void>? _changes;
+  final _events = StreamController<void>.broadcast(sync: true);
+  Future<void>? _closing;
+  bool _helperReady = false;
+  @override
+  Stream<void> get changes => _events.stream;
+  @override
+  Future<void> get closed => _closing ?? Future<void>.value();
+  @override
+  Future<void> initialize() => domain.helper.start();
+  @override
+  DesktopModelAssets get modelAssets => DesktopModelAssets(
+    generation: Directory(
+      "${File(domain.store.path).parent.path}/models/gemma4",
+    ),
+    speech: Directory("${File(domain.store.path).parent.path}/models/whisper"),
+  );
   String? _workspaceEpoch;
-  TestDesktopConnection(this.domain) {
+  TestDesktopConnection(this.application) : domain = application.domain {
+    domain.helper.onReady = () async {
+      _helperReady = true;
+    };
+    if (domain is CommandFixtureDomain) {
+      (domain as CommandFixtureDomain).application = application;
+    }
+    if (domain is AnswerFixtureDomain) {
+      (domain as AnswerFixtureDomain).application = application;
+    }
     _workspaceEpoch = _serviceEpoch;
-    _changes = application.changes.stream.listen((_) => helper.changed?.call());
+    domain.helper.changed = () => _events.add(null);
+    _changes = application.changes.stream.listen(
+      (_) => domain.helper.changed?.call(),
+    );
   }
   String? get _serviceEpoch {
     final epoch = store.workspaceEpoch;
@@ -26,9 +58,12 @@ class TestDesktopConnection implements DesktopConnection {
   @override
   void adoptWorkspace() => _workspaceEpoch = _serviceEpoch;
   @override
-  Store get store => domain.store;
+  StoreReader get store => fixtureReader(domain.store);
   @override
-  Helper get helper => domain.helper;
+  HelperStatus get helper => HelperStatus.fromEvent({
+    'helper': domain.helper.snapshot?.toProto3Json(),
+    'helper_state': domain.helper.state,
+  });
   @override
   GenerationStatus? get generator => domain.generator;
   @override
@@ -74,7 +109,11 @@ class TestDesktopConnection implements DesktopConnection {
   @override
   Future<void> delete(String id) => domain.delete(id);
   @override
-  Future<void> resume() => domain.resume();
+  // The former widget lifecycle resumed only from Helper.onReady. Offline
+  // helpers finish start() without readiness and must not start discovery I/O
+  // under the widget clock merely because initialize() completed.
+  Future<void> resume() =>
+      _helperReady ? domain.resume() : Future<void>.value();
   @override
   void pauseSources() => domain.pauseSources();
   @override
@@ -137,14 +176,26 @@ class TestDesktopConnection implements DesktopConnection {
   Future<void> disableDesktopApprovals() async {}
   @override
   void close() {
-    unawaited(_changes?.cancel());
+    if (_closing != null) return;
+    domain.helper.changed = null;
+    domain.helper.onReady = null;
     application.google.close();
-    unawaited(application.close());
+    // Cancel owned application timers before the first asynchronous join, as
+    // the production service does when closing its application owner.
+    final applicationClosing = application.close();
     domain.close();
+    _closing = () async {
+      await _changes?.cancel();
+      await applicationClosing;
+      await domain.helper.close();
+      domain.store.close();
+      await _events.close();
+    }();
   }
 }
 
 class CommandFixtureDomain extends Domain {
+  late final Application application;
   CommandFixtureDomain(super.store, super.helper);
   Future<Object?> command(
     Operation operation, [
@@ -153,6 +204,7 @@ class CommandFixtureDomain extends Domain {
 }
 
 class AnswerFixtureDomain extends Domain {
+  late final Application application;
   AnswerFixtureDomain(super.store, super.helper);
   Stream<String> askInConversation(
     String question,

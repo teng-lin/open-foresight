@@ -1,3 +1,7 @@
+import 'cancellation.dart';
+export 'cancellation.dart' show CancellationWatch;
+import 'text_budget.dart' show boundUtf8;
+export 'text_budget.dart' show boundUtf8;
 import 'rpc_error.dart';
 import 'package:clock/clock.dart';
 import 'model_setup.dart';
@@ -10,32 +14,17 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:grpc/grpc.dart';
 import 'store.dart';
+import 'persistence/domain_queries.dart';
 import 'helper.dart';
 import 'native.dart';
 import 'web_search.dart';
 import 'web_content.dart';
 import 'generated/rag_service.pbgrpc.dart';
 
-/// An independently disposable waiter on shared, uncancelled work.
-class CancellationWatch {
-  final bool Function() current;
-  final _signal = Completer<void>();
-  final void Function(CancellationWatch) _remove;
-  CancellationWatch(this.current, this._remove);
-  Future<void> get future => _signal.future;
-  void dispose() => _remove(this);
-  void check() {
-    if (!current() && !_signal.isCompleted) {
-      _signal.completeError(
-        RpcError(RpcErrorCode.cancelled, 'Operation cancelled'),
-      );
-    }
-  }
-}
-
 class Domain {
   final Store store;
   final Helper helper;
+  late final _queries = DomainQueries(store);
   NativeRuntime? generator;
   final Clock clock;
   final Timer Function(Duration, void Function()) createTimer;
@@ -132,20 +121,14 @@ class Domain {
 
   /// Durable deletes survive helper downtime and are retried on reconnect.
   Future<void> retryPendingHelperDeletes() => _serialize(() async {
-    for (final row in store.rows(
-      'SELECT document_id FROM pending_helper_deletes',
-    )) {
-      final id = row['document_id'] as String;
+    for (final id in _queries.pendingHelperDeletes()) {
       try {
         final result = await helper.client.deleteDocument(
           DeleteRequest(documentId: id, userId: helperUserId),
           options: CallOptions(timeout: const Duration(seconds: 5)),
         );
         if (result.success) {
-          store.db.execute(
-            'DELETE FROM pending_helper_deletes WHERE document_id=?',
-            [id],
-          );
+          _queries.acknowledgeHelperDelete(id);
         }
       } on GrpcError catch (error) {
         // Keep unacknowledged rows. A transport failure affects the entire
@@ -191,7 +174,7 @@ class Domain {
     void check() {
       _checkOpen();
       if (current != null && !current()) {
-        throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+        throw operationCancelled();
       }
     }
 
@@ -249,11 +232,7 @@ class Domain {
         ComputeEmbeddingRequest(
           text:
               source['content'] as String? ??
-              store.rows(
-                    'SELECT content FROM sources WHERE id=? AND deleted=0',
-                    [source['id']],
-                  ).single['content']
-                  as String,
+              _queries.graphSourceContent(source['id']),
         ),
       );
       _checkOpen();
@@ -283,44 +262,34 @@ class Domain {
 
   Future<void> _index(String id) async {
     final generation = workspaceGeneration;
-    final current = store.rows(
-      'SELECT * FROM sources WHERE id=? AND deleted=0',
-      [id],
-    );
-    if (current.isEmpty) return;
-    final source = current.first;
+    final source = _queries.activeSource(id);
+    if (source == null) return;
     // Imports can arrive during first-run setup.
     // Keep their content durable until a model is configured instead of sending
     // an IndexDocument request to an explicitly unconfigured helper.
-    if (store.model('embedding') == null &&
+    if (!_queries.hasModel('embedding') &&
         helper.snapshot?.pipeline == 'unconfigured') {
-      store.state(id, 'pending');
+      _queries.sourceState(id, 'pending');
       return;
     }
     // A deterministic Calendar/meeting ID can be reused after clear. Delete the
     // old helper copy before indexing its replacement, within the mutation queue.
-    if (store.rows(
-      'SELECT document_id FROM pending_helper_deletes WHERE document_id=?',
-      [id],
-    ).isNotEmpty) {
+    if (_queries.helperDeletePending(id)) {
       final deleted = await helper.client.deleteDocument(
         DeleteRequest(documentId: id, userId: helperUserId),
         options: CallOptions(timeout: const Duration(seconds: 5)),
       );
       checkWorkspace(generation);
       if (!deleted.success) throw StateError('Helper purge has not completed');
-      store.db.execute(
-        'DELETE FROM pending_helper_deletes WHERE document_id=?',
-        [id],
-      );
+      _queries.acknowledgeHelperDelete(id);
     }
-    store.state(id, 'indexing');
+    _queries.sourceState(id, 'indexing');
     try {
       final r = await helper.client.indexDocument(
         IndexRequest(
           documentId: id,
-          content: source['content'] as String,
-          mimeType: source['mime'] as String,
+          content: source.content,
+          mimeType: source.mime,
           userId: helperUserId,
           maxTokensPerChunk: 480,
           chunkOverlap: 5,
@@ -329,28 +298,19 @@ class Domain {
       );
       checkWorkspace(generation);
       if (!r.success) throw StateError(r.errorMessage);
-      store.db.execute(
-        "UPDATE sources SET state='indexed',error='' WHERE id=? AND revision=? AND deleted=0",
-        [id, source['revision']],
-      );
+      _queries.sourceRevisionState(id, source.revision, 'indexed');
     } catch (e) {
       checkWorkspace(generation);
       // Cover the race before the first helper state event arrives. Other
       // preconditions and configured-model failures retain their normal errors.
-      if (store.model('embedding') == null &&
+      if (!_queries.hasModel('embedding') &&
           e is GrpcError &&
           e.code == StatusCode.failedPrecondition &&
           e.message == 'Pipeline not initialized') {
-        store.db.execute(
-          "UPDATE sources SET state='pending',error='' WHERE id=? AND revision=? AND deleted=0",
-          [id, source['revision']],
-        );
+        _queries.sourceRevisionState(id, source.revision, 'pending');
         return;
       }
-      store.db.execute(
-        "UPDATE sources SET state='failed',error=? WHERE id=? AND revision=? AND deleted=0",
-        [e.toString(), id, source['revision']],
-      );
+      _queries.sourceRevisionState(id, source.revision, 'failed', e.toString());
       rethrow;
     }
   }
@@ -369,19 +329,17 @@ class Domain {
       );
       checkWorkspace(generation);
       if (!r.success) throw StateError(r.errorMessage);
-      store.state(id, 'deleted');
+      _queries.sourceState(id, 'deleted');
     } catch (e) {
       checkWorkspace(generation);
-      store.state(id, 'delete_failed', e.toString());
+      _queries.sourceState(id, 'delete_failed', e.toString());
       rethrow;
     }
   }
 
   Future<void> reconcile() async {
-    for (final s in store.rows(
-      'SELECT id FROM sources WHERE deleted=1 AND state!=\'deleted\'',
-    )) {
-      await delete(s['id'] as String);
+    for (final id in _queries.unreconciledDeletes()) {
+      await delete(id);
     }
   }
 
@@ -420,7 +378,7 @@ class Domain {
       NativeRuntime(runtimeConfiguration.nativeLibrary);
 
   Future<void> _initializeNoteEnhancementService() async {
-    final model = store.model('generation');
+    final model = _queries.generationRegistration();
     if (model == null) {
       final candidate = await discoverGenerationRuntime(
         store,
@@ -436,15 +394,14 @@ class Domain {
     }
     final candidate = createNoteEnhancementRuntime();
     candidate.modelType =
-        model['model_type'] as int? ??
-        referenceGenerationModelType(model['digest'] as String);
+        model.modelType ?? referenceGenerationModelType(model.digest);
     generator?.close();
     generator = candidate;
     try {
       await candidate.load(
-        model['runtime'] as String,
-        model['path'] as String,
-        backend: model['backend'] as String? ?? 'llama_cpp',
+        model.runtime,
+        model.path,
+        backend: model.backend ?? 'llama_cpp',
       );
       if (_closed || !identical(generator, candidate)) {
         candidate.close();
@@ -497,22 +454,20 @@ class Domain {
       }
     }
     _checkOpen();
-    final embedding = store
-        .rows("SELECT * FROM models WHERE kind='embedding'")
-        .firstOrNull;
+    final embedding = _queries.embeddingRegistration();
     if (embedding != null) {
       final ready = await helper.hasActiveModel(
-        embedding['path'] as String,
-        embedding['digest'] as String,
-        embedding['backend'] == 'litert_lm_embedding_gpu',
+        embedding.path,
+        embedding.digest,
+        embedding.backend == 'litert_lm_embedding_gpu',
       );
       _checkOpen();
       if (!ready) {
         final result = await helper.client.updateModelPaths(
           UpdateModelPathsRequest(
-            embeddingModelPath: embedding['path'] as String,
-            sentencePieceModelPath: embedding['runtime'] as String,
-            useGpu: embedding['backend'] == 'litert_lm_embedding_gpu',
+            embeddingModelPath: embedding.path,
+            sentencePieceModelPath: embedding.runtime,
+            useGpu: embedding.backend == 'litert_lm_embedding_gpu',
           ),
           options: CallOptions(timeout: const Duration(minutes: 30)),
         );
@@ -520,7 +475,7 @@ class Domain {
         if (!result.success) throw StateError(result.errorMessage);
       }
     }
-    if (generator == null && store.model('generation') == null) {
+    if (generator == null && !_queries.hasModel('generation')) {
       generator = await discoverGenerationRuntime(
         store,
         runtimeConfiguration.nativeLibrary,
@@ -528,16 +483,15 @@ class Domain {
       );
     }
     if (generator == null) {
-      final gen = store.model('generation');
+      final gen = _queries.generationRegistration();
       if (gen != null) {
         generator = NativeRuntime(runtimeConfiguration.nativeLibrary);
         generator!.modelType =
-            gen['model_type'] as int? ??
-            referenceGenerationModelType(gen['digest'] as String);
+            gen.modelType ?? referenceGenerationModelType(gen.digest);
         await generator!.load(
-          gen['runtime'] as String,
-          gen['path'] as String,
-          backend: gen['backend'] as String? ?? 'llama_cpp',
+          gen.runtime,
+          gen.path,
+          backend: gen.backend ?? 'llama_cpp',
         );
       }
     }
@@ -565,48 +519,23 @@ class Domain {
   Future<void> _drainPendingSources() async {
     _checkOpen();
     final generation = workspaceGeneration;
-    store.db.execute(
-      "UPDATE sources SET state='pending',error='' WHERE deleted=0 AND state='failed' AND error LIKE 'gRPC Error%Pipeline not initialized%'",
-    );
+    _queries.retryUnconfiguredSources();
     // Snapshot identifiers only; a large library's document bodies must not be
     // materialized on the startup/model-registration path.
-    for (final source in store.rows(
-      "SELECT id FROM sources WHERE deleted=0 AND state IN ('indexing','pending') ORDER BY title",
-    )) {
+    for (final id in _queries.pendingSources()) {
       if (closed || generation != workspaceGeneration) break;
       try {
-        await index(source['id'] as String);
+        await index(id);
       } catch (error) {
         if (closed || generation != workspaceGeneration) break;
         // index() persists document failures. Keep processing unrelated imports.
-        developer.log('Queued source ${source['id']}', error: error);
+        developer.log('Queued source $id', error: error);
       }
     }
   }
 
-  bool citationCurrent(Map<String, Object?> citation) {
-    final source = store.rows(
-      'SELECT revision,deleted FROM sources WHERE id=?',
-      [citation['document_id']],
-    );
-    return source.isNotEmpty &&
-        source.first['deleted'] == 0 &&
-        source.first['revision'] == citation['revision'];
-  }
-}
-
-/// UTF-8 byte limit is conservative for byte-level model tokenizers; no silent Unicode corruption.
-String boundUtf8(String text, int budget) {
-  final output = StringBuffer();
-  var used = 0;
-  for (final rune in text.runes) {
-    final part = String.fromCharCode(rune);
-    final size = utf8.encode(part).length;
-    if (used + size > budget) break;
-    output.write(part);
-    used += size;
-  }
-  return output.toString();
+  bool citationCurrent(Map<String, Object?> citation) =>
+      _queries.citationCurrent(citation['document_id'], citation['revision']);
 }
 
 /// UTF-8 bytes conservatively bound tokenizer input. Select the beginning,

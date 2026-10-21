@@ -113,8 +113,8 @@ extension _MeetingAiViews on _MeetingsController {
   }
 
   Widget meetingActionsPanel(int id) {
-    final tasks = d.store.meetingTasks(id);
-    final versions = d.store.meetingArtifacts(id, 'actions');
+    final tasks = readRows(d.store.meetingTasks(id));
+    final versions = readRows(d.store.meetingArtifacts(id, 'actions'));
     final active = _workflow(id, 'actions')?['active'] == true;
     return Column(
       children: [
@@ -319,7 +319,7 @@ extension _MeetingAiViews on _MeetingsController {
   }
 
   Future<List<String>?> selectMeetingSources(int id, String preference) async {
-    final all = d.store.sourceSummaries
+    final all = readRows(d.store.sourceSummaries)
         .where(
           (source) =>
               !(source['id'] as String).startsWith('meeting-preparation-'),
@@ -390,7 +390,7 @@ extension _MeetingAiViews on _MeetingsController {
   }
 
   Widget meetingPreparationPanel(int id) {
-    final versions = d.store.meetingArtifacts(id, 'preparation');
+    final versions = readRows(d.store.meetingArtifacts(id, 'preparation'));
     final active = _workflow(id, 'preparation')?['active'] == true;
     final preview = _workflow(id, 'preparation')?['preview'] as String? ?? '';
     final artifact = versions.firstOrNull;

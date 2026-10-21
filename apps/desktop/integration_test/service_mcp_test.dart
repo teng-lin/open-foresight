@@ -111,10 +111,8 @@ Future<void> closeDesktop(WidgetTester tester, dynamic workspace) async {
     try {
       await saves.close().timeout(const Duration(seconds: 30));
     } finally {
-      await Future.wait<void>([
-        client.close(),
-        connection.helper.close(),
-      ]).timeout(const Duration(seconds: 30));
+      connection.close();
+      await connection.closed.timeout(const Duration(seconds: 30));
     }
   });
   await waitFor(

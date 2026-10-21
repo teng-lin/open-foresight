@@ -1,7 +1,7 @@
 import 'operations.dart';
 import 'dart:io';
-import 'helper.dart';
-import 'store.dart';
+import 'helper_status.dart';
+import 'store_reader.dart';
 import 'google_auth.dart';
 
 /// Capabilities exposed to a desktop. Worker mutation and credentials stay in
@@ -70,8 +70,15 @@ abstract interface class CaptureLevelEvents {
 }
 
 abstract interface class DesktopConnection {
-  Store get store;
-  Helper get helper;
+  StoreReader get store;
+  HelperStatus get helper;
+  DesktopModelAssets get modelAssets;
+  Stream<void> get changes;
+
+  /// Prepare connection presentation/lifecycle. Completion does not certify
+  /// helper readiness, which remains part of [helper]'s reported state.
+  Future<void> initialize();
+  Future<void> get closed;
   GenerationStatus? get generator;
   GenerationStatus get runtime;
   GoogleAccount get googleAuth;
@@ -129,4 +136,10 @@ abstract interface class DesktopConnection {
   );
   Future<void> disableDesktopApprovals();
   void close();
+}
+
+/// Only actual model download destinations, never database/profile identities.
+final class DesktopModelAssets {
+  final Directory generation, speech;
+  const DesktopModelAssets({required this.generation, required this.speech});
 }

@@ -123,7 +123,13 @@ void main() {
       store.labels(source, ['Planning']);
       store.saveLabelCluster('Planning');
       final before = store.documentLabels.map((label) => label.name).toList();
-      reject('source_details', operation: 'UPDATE');
+      // Fail after an earlier removal: canonical labels no longer update the
+      // redundant source_details JSON. Deleting a cluster must roll back its
+      // already-deleted document associations in the same transaction.
+      reject(
+        operation == 'labels' ? 'document_labels' : 'document_clusters',
+        operation: operation == 'labels' ? 'INSERT' : 'DELETE',
+      );
       expect(
         () => operation == 'labels'
             ? store.labels(source, ['Changed'])

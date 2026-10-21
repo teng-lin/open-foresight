@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
-import 'store.dart';
+import 'package:foresight_core/desktop.dart' show StoreReader;
 import 'generated_content.dart';
 
 enum MeetingExportPeriod {
@@ -56,7 +56,10 @@ class MeetingExportContent {
   final int count;
 }
 
-MeetingExportContent composeMeetingExport(Store store, {DateTimeRange? range}) {
+MeetingExportContent composeMeetingExport(
+  StoreReader store, {
+  DateTimeRange? range,
+}) {
   final start = range?.start;
   final end = range?.end;
   final lower = start?.millisecondsSinceEpoch;
@@ -66,7 +69,7 @@ MeetingExportContent composeMeetingExport(Store store, {DateTimeRange? range}) {
   final output = <String>[];
   // Acquire the original global note limit before excluding empty bodies or
   // applying date filters. Legacy NULL save times retain SQLite's DESC order.
-  final notesToExport = store.exportNotes();
+  final notesToExport = store.exportNotes.map((note) => note.toRow());
   for (final meeting in notesToExport) {
     final date = meeting['export_date'] as int;
     if (lower != null && (date < lower || date >= upper!)) continue;
@@ -116,7 +119,7 @@ class MeetingExportDialog extends StatefulWidget {
     required this.save,
     this.now,
   });
-  final Store store;
+  final StoreReader store;
   final Future<bool> Function(String) save;
   final DateTime? now;
 

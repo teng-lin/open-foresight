@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:test/test.dart';
@@ -150,7 +151,16 @@ void main() {
         if (!domain.resumeInProgress) notified = true;
       };
       domain.close();
-      await expectLater(domain.resume(), throwsA(isA<StateError>()));
+      await expectLater(
+        domain.resume(),
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.cancelled,
+          ),
+        ),
+      );
       expect(domain.resumeInProgress, false);
       expect(notified, true);
       expect(app.backgroundBusy, false);

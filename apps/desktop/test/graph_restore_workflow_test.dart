@@ -1,11 +1,12 @@
+import 'package:foresight_core/src/application.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/store.dart';
-import 'package:open_foresight/graph_labels.dart';
-import 'package:open_foresight/generated/helper_control.pb.dart' as control;
+import 'package:foresight_core/src/store.dart';
+import 'package:foresight_core/src/graph_labels.dart';
+import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
 import 'graph_workflow_test.dart' show GraphDomain;
 import 'meeting_setup_test.dart' show OfflineHelper;
 
@@ -85,7 +86,10 @@ void main() {
 
       Future<void> showGraph(RestoringGraphDomain d) async {
         await tester.pumpWidget(
-          Foresight(TestDesktopConnection(d), deviceLoader: () async => []),
+          Foresight(
+            TestDesktopConnection(Application(d)),
+            deviceLoader: () async => [],
+          ),
         );
         await tester.tap(find.text('Sources'));
         await tester.pumpAndSettle();

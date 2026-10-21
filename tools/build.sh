@@ -30,9 +30,8 @@ if [[ -z "$task_platform" ]]; then
 fi
 case "$task_platform" in
   macos)
-    [[ "$(uname -s)" == Darwin ]] || { echo 'macOS builds require a Mac host' >&2; exit 2; }
-    task_native="$task_build/native/libforesight_native.dylib" ;;
-  linux) task_native="$task_build/native/libforesight_native.so" ;;
+    [[ "$(uname -s)" == Darwin ]] || { echo 'macOS builds require a Mac host' >&2; exit 2; } ;;
+  linux) ;;
   *) echo 'Platform must be linux or macos' >&2; exit 2 ;;
 esac
 # Missing language SDKs must fail before an expensive native build in CI.
@@ -63,6 +62,7 @@ if [[ "$task_stage" == all || "$task_stage" == native ]]; then
     "$task_python" "$task_root/tools/verify_application_no_build.py" --build "$task_build"
   else
     "$task_python" "$task_root/tools/check_build_cache.py" "$task_build/CMakeCache.txt"
+    "$task_python" "$task_root/tools/verify_toolchain_pins.py" protoc
     "$task_python" "$task_root/tools/verify_descriptor.py"
     ci_timed "native configure" cmake -S "$task_root" -B "$task_build" -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$task_python" ${task_cmake_platform[@]+"${task_cmake_platform[@]}"} "$@"
     if [[ "${FORESIGHT_REQUIRE_APP_DEPENDENCY_REUSE:-0}" == 1 ]]; then

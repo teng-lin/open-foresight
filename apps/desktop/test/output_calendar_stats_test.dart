@@ -1,7 +1,8 @@
+import 'store_reader_fixture.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/background_store.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/store.dart';
 
 void main() {
   test(
@@ -50,7 +51,7 @@ void main() {
           store.db.lastInsertRowId,
         ]);
         final stats = await localOutputStats(
-          store.path,
+          fixtureReader(store),
           nowMs: now.millisecondsSinceEpoch,
         );
         expect(stats.words, 16);
@@ -58,7 +59,7 @@ void main() {
         expect(stats.weekly, store.weeklyOutputWords(now));
         expect(stats.words, store.localOutputWords);
         final nextWeek = await localOutputStats(
-          store.path,
+          fixtureReader(store),
           nowMs: DateTime(2026, 11, 9, 12).millisecondsSinceEpoch,
         );
         expect(nextWeek.weekly.last, 0);

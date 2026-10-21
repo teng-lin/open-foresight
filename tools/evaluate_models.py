@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+from helper_protocol import HELPER_PROTOCOL_VERSION
 import subprocess
 import tempfile
 import time
@@ -166,7 +167,7 @@ def main():
                     )
                     return rpc(classes[request](**fields), timeout=300)
 
-                if not (call("Ping", "PingRequest", "PingResponse").version == "1.0.3"):
+                if not (call("Ping", "PingRequest", "PingResponse").version == HELPER_PROTOCOL_VERSION):
                     raise RuntimeError("Verification failed")
                 started = time.perf_counter()
                 configured = call(

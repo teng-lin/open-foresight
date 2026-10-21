@@ -141,6 +141,7 @@ Map<String, dynamic> canonicalAssistant(String text) => referenceTextMessage(
 );
 
 void main() {
+  late Application app;
   late Directory directory;
   late Store store;
   late Helper helper;
@@ -157,9 +158,11 @@ void main() {
     runtime = ToolRuntime();
     domain = Domain(store, helper, webSearch: fixtureSearch())
       ..generator = runtime;
+    app = Application(domain);
   });
   setUp(() {
     addTearDown(() async {
+      await app.close();
       domain.close();
       runtime.close();
       await helper.close();
@@ -171,7 +174,7 @@ void main() {
     'empty date completion uses request date without rewriting model memory',
     () async {
       runtime.answer = (_) async => '';
-      final visible = await domain
+      final visible = await app
           .askWithWebInConversation('What day is today?', 'desktop')
           .last;
       final promptDate = RegExp(
@@ -196,7 +199,7 @@ void main() {
       expect(messages.last, canonicalAssistant(''));
 
       expect(
-        await domain
+        await app
             .askWithWebInConversation('Unrelated empty response', 'other')
             .last,
         '',
@@ -210,7 +213,7 @@ void main() {
       runtime.answer = (_) async =>
           '{"analysis":{"intent":"answer","reasoning":"private"},"text":"Visible."}';
       expect(
-        await domain.askWithWebInConversation('First?', 'envelope').last,
+        await app.askWithWebInConversation('First?', 'envelope').last,
         'Visible.',
       );
       final expected = referenceTextMessage(
@@ -226,7 +229,7 @@ void main() {
       runtime.answer = (_) async =>
           r'{"text":"Old","text":"Recovered\n中文","intent":"answer","reasoning":"why"';
       expect(
-        await domain.askWithWebInConversation('Next?', 'envelope').last,
+        await app.askWithWebInConversation('Next?', 'envelope').last,
         'Recovered\n中文',
       );
       expect(runtime.histories.last.last, expected);
@@ -258,7 +261,7 @@ void main() {
         expect(runtime.prompts.last, isNot(contains('model-injected-query')));
         return 'Latest [Source:2], earlier [Source:1,2,999].';
       };
-      final text = await domain
+      final text = await app
           .askWithWebInConversation(
             'Current facts?',
             'desktop',
@@ -287,7 +290,7 @@ void main() {
       ]);
       runtime.answer = (_) async => 'Final reply.';
       final emitted = <String>[];
-      await for (final body in domain.askWithWebInConversation(
+      await for (final body in app.askWithWebInConversation(
         'Stream a reply',
         'desktop',
         requestId: 'web-preview',
@@ -312,7 +315,7 @@ void main() {
     () async {
       runtime.answer = (_) async => 'Known answer [Source:99].';
       expect(
-        await domain.askWithWebInConversation('Known fact?', 'desktop').last,
+        await app.askWithWebInConversation('Known fact?', 'desktop').last,
         'Known answer.',
       );
       expect(
@@ -328,19 +331,21 @@ void main() {
     'cancelled search cannot publish an answer or attach it to a meeting',
     () async {
       final gate = Completer<void>(), entered = Completer<void>();
+      await app.close();
       domain.close();
       domain = Domain(
         store,
         helper,
         webSearch: fixtureSearch(gate: gate, entered: entered),
       )..generator = runtime;
+      app = Application(domain);
       runtime.answer = (dispatcher) async {
         await dispatcher.handle([searchCall('first')]);
         return 'Late answer [Source:1]';
       };
       final meeting = store.meeting('Meeting');
       var current = true;
-      final pending = domain
+      final pending = app
           .askWithWebInConversation(
             'Current facts?',
             'ignored',
@@ -351,7 +356,16 @@ void main() {
       await entered.future;
       current = false;
       gate.complete();
-      await expectLater(pending, throwsStateError);
+      await expectLater(
+        pending,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.cancelled,
+          ),
+        ),
+      );
       expect(store.rows('SELECT * FROM answers'), isEmpty);
       expect(store.rows('SELECT * FROM meeting_answers'), isEmpty);
     },
@@ -427,6 +441,7 @@ void main() {
     );
     store.state(document, 'indexed');
     final queries = <String>[];
+    await app.close();
     domain.close();
     domain = Domain(
       store,
@@ -445,6 +460,7 @@ void main() {
         summarize: (_, _) async => '',
       ),
     )..generator = runtime;
+    app = Application(domain);
     runtime.answer = (dispatcher) async {
       expect(runtime.prompts.last, isNot(contains('LOCAL_SECRET')));
       expect(runtime.prompts.last, isNot(contains('Private calendar invite')));
@@ -455,7 +471,7 @@ void main() {
       return 'Public answer [Source:1].';
     };
     expect(
-      await domain
+      await app
           .askWithWebInConversation('User selected web query', 'desktop')
           .last,
       'Public answer [Source:1].',
@@ -494,7 +510,7 @@ void main() {
         runtime.answer = (_) async =>
             'There are 123 widgets. The invoice total is 876 [Source:1].';
         expect(
-          await domain
+          await app
               .askWithWebInConversation('What are the figures?', 'numbers')
               .last,
           'There are 123 widgets. The invoice total is 876 [Source:1].',
@@ -519,7 +535,7 @@ void main() {
         return 'May11,202026 at 10:000 AM [Source:2].';
       };
       expect(
-        await domain.askWithWebInConversation('When?', 'time-repair').last,
+        await app.askWithWebInConversation('When?', 'time-repair').last,
         'May 11, 2026 at 10:00 AM [Source:1].',
       );
       final row = store.rows('SELECT * FROM answers').single;
@@ -528,7 +544,7 @@ void main() {
         canonicalAssistant('May 11, 2026 at 10:00 AM [Source:2].'),
       );
       runtime.answer = (_) async => 'Next answer';
-      await domain.askWithWebInConversation('Again?', 'time-repair').last;
+      await app.askWithWebInConversation('Again?', 'time-repair').last;
       expect(
         runtime.histories.last.last,
         canonicalAssistant('May 11, 2026 at 10:00 AM [Source:2].'),
@@ -542,9 +558,7 @@ void main() {
         await dispatcher.handle([searchCall('first')]);
         return 'Second result [Source:2].';
       };
-      await domain
-          .askWithWebInConversation('First question', 'history')
-          .toList();
+      await app.askWithWebInConversation('First question', 'history').toList();
       final first = store.rows('SELECT * FROM answers').single;
       expect(first['body'], 'Second result [Source:1].');
       expect(
@@ -552,7 +566,7 @@ void main() {
         canonicalAssistant('Second result [Source:2].'),
       );
       runtime.answer = (_) async => 'Follow-up answer';
-      await domain
+      await app
           .askWithWebInConversation('Follow-up question', 'history')
           .toList();
       expect(runtime.histories.last, [
@@ -561,7 +575,7 @@ void main() {
       ]);
       expect(runtime.prompts.last, isNot(contains('Conversation:')));
       expect(runtime.prompts.last, isNot(contains('First question')));
-      await domain
+      await app
           .askWithWebInConversation('Another conversation', 'separate')
           .toList();
       expect(runtime.histories.last, isEmpty);
@@ -589,9 +603,7 @@ void main() {
         conversation: 'history',
       );
       runtime.answer = (_) async => 'New answer';
-      await domain
-          .askWithWebInConversation('Next question', 'history')
-          .toList();
+      await app.askWithWebInConversation('Next question', 'history').toList();
       expect(runtime.histories.last, isEmpty);
     },
   );
@@ -632,6 +644,7 @@ void main() {
         ],
       );
       final queries = <String>[];
+      await app.close();
       domain.close();
       domain = Domain(
         store,
@@ -650,12 +663,13 @@ void main() {
           summarize: (_, _) async => '',
         ),
       )..generator = runtime;
+      app = Application(domain);
       runtime.answer = (_) async {
         expect(jsonEncode(runtime.histories.last), isNot(contains('LOCAL_')));
         expect(runtime.prompts.last, isNot(contains('LOCAL_')));
         return 'Safe first answer';
       };
-      await domain
+      await app
           .askWithWebInConversation('Exact first user query', 'mixed')
           .last;
       expect(runtime.histories.last, isEmpty);
@@ -667,7 +681,7 @@ void main() {
         'local',
         conversation: 'mixed',
       );
-      await domain
+      await app
           .askWithWebInConversation('Exact second user query', 'mixed')
           .last;
       expect(runtime.histories.last, [
@@ -697,13 +711,15 @@ void main() {
     () async {
       seedMemory();
       runtime.answer = (_) async => 'New answer';
-      await domain.askWithWebInConversation('Next?', 'history').toList();
+      await app.askWithWebInConversation('Next?', 'history').toList();
       expect(runtime.histories.last, hasLength(16));
       expect(runtime.summaries, isEmpty);
+      await app.close();
       domain.close();
       domain = Domain(store, helper, webSearch: fixtureSearch())
         ..generator = runtime;
-      await domain.askWithWebInConversation('Another?', 'history').toList();
+      app = Application(domain);
+      await app.askWithWebInConversation('Another?', 'history').toList();
       expect(runtime.histories.last, hasLength(18));
       expect(
         referenceHistoryText(runtime.histories.last.first),
@@ -718,7 +734,7 @@ void main() {
       seedMemory();
       runtime.contextLimit = 2300;
       runtime.answer = (_) async => 'New answer';
-      await domain
+      await app
           .askWithWebInConversation('Next?', 'history', requestId: 'same-owner')
           .toList();
       expect(runtime.summaries, hasLength(1));
@@ -755,7 +771,7 @@ void main() {
       runtime.contextLimit = 1800;
       runtime.summarize = (_) async => throw StateError('Unavailable');
       runtime.answer = (_) async => 'Recovered answer';
-      await domain.askWithWebInConversation('Next?', 'history').toList();
+      await app.askWithWebInConversation('Next?', 'history').toList();
       expect(runtime.histories.last.length, lessThan(16));
       expect(
         referenceHistoryText(runtime.histories.last.first),
@@ -770,14 +786,20 @@ void main() {
         return 'Late memo';
       };
       await expectLater(
-        domain
+        app
             .askWithWebInConversation(
               'Next again?',
               'history',
               current: () => current,
             )
             .toList(),
-        throwsStateError,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.cancelled,
+          ),
+        ),
       );
       expect(store.rows('SELECT * FROM answers'), hasLength(count));
       expect(store.rows('SELECT * FROM conversation_memory').single, before);
@@ -806,7 +828,7 @@ void main() {
         );
         return 'Own answer';
       };
-      await domain.askWithWebInConversation('Own query', 'history').toList();
+      await app.askWithWebInConversation('Own query', 'history').toList();
       final saved =
           jsonDecode(
                 store
@@ -833,7 +855,7 @@ void main() {
       }
       final meeting = store.meeting('Checkpoint fixture');
       runtime.answer = (_) async => 'Meeting answer';
-      await domain
+      await app
           .askWithWebInConversation('Question', 'ignored', meetingId: meeting)
           .toList();
       final answerId = store
@@ -855,7 +877,7 @@ void main() {
         "CREATE TRIGGER reject_memory_link BEFORE INSERT ON meeting_answers BEGIN SELECT RAISE(ABORT,'controlled fixture'); END",
       );
       await expectLater(
-        domain
+        app
             .askWithWebInConversation(
               'Rejected question',
               'ignored',
@@ -893,7 +915,7 @@ void main() {
       runtime.contextLimit = 1800;
       runtime.answer = (_) async => 'New answer';
       try {
-        await domain.askWithWebInConversation('Next?', 'history').toList();
+        await app.askWithWebInConversation('Next?', 'history').toList();
         expect(runtime.summaries, hasLength(1));
         expect(
           tokenizer.encoded,
@@ -904,12 +926,10 @@ void main() {
         final first = store.rows('SELECT * FROM conversation_memory').single;
         final counts = jsonDecode(first['token_counts'] as String) as List;
         expect(counts, contains(120));
-        await domain.askWithWebInConversation('Again?', 'history').toList();
+        await app.askWithWebInConversation('Again?', 'history').toList();
         expect(store.rows('SELECT * FROM conversation_memory'), hasLength(1));
         runtime.contextLimit = 4096;
-        await domain
-            .askWithWebInConversation('New context?', 'history')
-            .toList();
+        await app.askWithWebInConversation('New context?', 'history').toList();
         final checkpoints = store.rows('SELECT * FROM conversation_memory');
         expect(checkpoints, hasLength(2));
         expect(

@@ -52,6 +52,7 @@ class McpFixture {
                   // A current service names its profile.
                   'result': {
                     'ready': true,
+                    'application_api_version': 1,
                     'profile_id': ProfilePaths(root.path, root.path).identity,
                   },
                   'done': true,

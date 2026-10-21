@@ -61,6 +61,8 @@ def gate(tmp_path):
         "coverage_core.sh",
         "check_coverage.py",
         "compare_test_runs.py",
+        "verify_toolchain_pins.py",
+        "pins.json",
     ):
         shutil.copy2(ROOT / "tools" / name, root / "tools" / name)
     binary = tmp_path / "bin"
@@ -75,6 +77,14 @@ with open(os.environ['COMMANDS'], 'a') as stream:
                              'helper': os.getenv('FORESIGHT_HELPER')}) + '\\n')
 if args[0] == 'analyze':
     sys.exit(int(os.getenv('ANALYSIS_EXIT', '0')))
+if args == ['--version']:
+    print('Dart SDK version: 3.9.2 (stable)')
+    sys.exit(0)
+if args == ['--version', '--machine']:
+    print(json.dumps({'frameworkVersion': '3.35.7',
+                      'frameworkRevision': 'adc901062556672b4138e18a4dc62a4be8f4b3c2',
+                      'dartSdkVersion': '3.9.2'}))
+    sys.exit(0)
 if args[0] == 'test':
     coverage = any(arg.startswith('--coverage=') for arg in args)
     code = int(os.getenv('COVERED_EXIT' if coverage else 'PLAIN_EXIT', '0'))
@@ -330,3 +340,14 @@ def test_benchmark_rejects_zero_attempts_before_running_tests(gate, attempt):
     assert result.returncode == 2
     assert "GITHUB_RUN_ATTEMPT must be positive" in result.stderr
     assert all(command["args"][0] not in {"test", "compile"} for command in commands)
+
+
+def test_overridden_dart_must_match_pins_before_any_stage_work(gate):
+    root, _ = gate
+    override = root / "wrong dart"
+    override.write_text("#!/bin/sh\necho 'Dart SDK version: 0.0.1'\n")
+    override.chmod(0o700)
+    result, commands = run(gate, FORESIGHT_DART=str(override))
+    assert result.returncode != 0
+    assert "tools/pins.json requires" in result.stderr
+    assert all(command["args"] == ["--version"] for command in commands)

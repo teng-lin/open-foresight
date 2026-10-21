@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/application.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/operations.dart';
 import 'package:foresight_core/src/agent_access.dart';
@@ -8,7 +9,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/store.dart';
 import 'package:open_foresight/speech_setup_view.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
@@ -70,7 +71,7 @@ class QuickStartDomain extends CommandFixtureDomain {
 /// Exercise the same authenticated-connection gate as the service, without
 /// opening devices or running a speech model in a widget test.
 class ConsentDesktopConnection extends TestDesktopConnection {
-  ConsentDesktopConnection(super.domain);
+  ConsentDesktopConnection(super.application);
   void Function(Map<String, dynamic>)? events;
   late final gate = AgentAccessGate('fixture-token', (_, event) {
     events?.call(Map<String, dynamic>.from(event));
@@ -127,7 +128,10 @@ void main() {
 
   Future<void> show(WidgetTester tester) async {
     await tester.pumpWidget(
-      Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+      Foresight(
+        TestDesktopConnection(Application(domain)),
+        deviceLoader: () async => [],
+      ),
     );
     await tester.pumpAndSettle();
   }
@@ -139,7 +143,7 @@ void main() {
     'direct Start transcribing authorizes once without a second dialog',
     (tester) async {
       await tester.runAsync(registerSpeech);
-      final connection = ConsentDesktopConnection(domain);
+      final connection = ConsentDesktopConnection(Application(domain));
       await tester.pumpWidget(
         Foresight(connection, deviceLoader: () async => []),
       );

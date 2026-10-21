@@ -773,7 +773,7 @@ void main() {
         expect(lists(toClosingOwner: false), hasLength(2));
       } finally {
         remote?.close();
-        remote?.store.close();
+        await remote?.closed;
         await connection.close();
         await proxy.close();
         await launcher.stopAll();
@@ -868,7 +868,7 @@ void main() {
       gates.releaseAll();
       await previous?.close();
       remote?.close();
-      remote?.store.close();
+      await remote?.closed;
       await proxy.close();
       await service.close();
       await launcher.stopAll();

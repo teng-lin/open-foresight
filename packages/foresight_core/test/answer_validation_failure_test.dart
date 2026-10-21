@@ -74,14 +74,15 @@ void main() {
     final runtime = FailedWebRuntime();
     final domain = Domain(store, helper, webSearch: fixtureSearch())
       ..generator = runtime;
+    final app = Application(domain);
     try {
-      await domain.askWithWebInConversation('Question', 'fixture').last;
+      await app.askWithWebInConversation('Question', 'fixture').last;
       final row = store.rows('SELECT * FROM answers').single;
       expect(row['status'], 'failed');
       expect(row['body'], 'Answer generation failed. Please retry.');
       expect(jsonDecode(row['citations'] as String), isEmpty);
     } finally {
-      await domain.application.close();
+      await app.close();
       domain.close();
       runtime.close();
       await helper.close();
@@ -122,8 +123,9 @@ void main() {
         'completed',
       );
       final domain = Domain(store, helper)..generator = runtime;
+      final app = Application(domain);
       try {
-        final answer = await domain
+        final answer = await app
             .askInConversation('Who is Unlisted Person90210?', 'fixture')
             .last;
         expect(answer, 'Insufficient context');
@@ -132,6 +134,7 @@ void main() {
         expect(row['body'], 'Insufficient context');
         expect(jsonDecode(row['citations'] as String), isEmpty);
       } finally {
+        await app.close();
         domain.close();
         runtime.close();
         await helper.close();
@@ -180,9 +183,10 @@ void main() {
         );
         final runtime = DraftRuntime(payload.$1, payload.$2);
         final domain = Domain(store, helper)..generator = runtime;
+        final app = Application(domain);
         try {
           final visible = <String>[];
-          final answer = domain
+          final answer = app
               .askInConversation('Who leads Atlas?', 'fixture')
               .forEach(visible.add);
           if (payload.$2 == 'completed') {
@@ -201,6 +205,7 @@ void main() {
           expect(row['body'], 'Answer generation failed. Please retry.');
           expect(jsonDecode(row['citations'] as String), isEmpty);
         } finally {
+          await app.close();
           domain.close();
           await helper.close();
           await server.shutdown();

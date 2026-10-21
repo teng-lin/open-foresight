@@ -62,6 +62,7 @@ void main() {
       manageProcess: false,
     );
     final domain = Domain(store, helper);
+    final app = Application(domain);
     try {
       store.importText(
         'Deleted secret',
@@ -73,7 +74,7 @@ void main() {
       store.db.execute(
         "UPDATE sources SET deleted=1,state='delete_failed' WHERE id='old-document'",
       );
-      await domain.application.call('workspace.clear', {});
+      await app.call('workspace.clear', {});
       await domain.retryPendingHelperDeletes();
       expect(store.rows('SELECT * FROM pending_helper_deletes'), hasLength(1));
       service.fail = false;
@@ -98,7 +99,7 @@ void main() {
       final indexing = domain.index('old-document');
       final cancelled = expectLater(indexing, throwsA(isA<RpcError>()));
       await service.deleteEntered!.future;
-      await domain.application.call('workspace.clear', {});
+      await app.call('workspace.clear', {});
       service.deleteGate!.complete();
       await cancelled;
       await domain.retryPendingHelperDeletes();
@@ -110,6 +111,7 @@ void main() {
       );
       expect(store.sources, isEmpty);
     } finally {
+      await app.close();
       domain.close();
       await helper.close();
       await server.shutdown();
@@ -136,6 +138,7 @@ void main() {
           manageProcess: false,
         );
         final domain = Domain(store, helper);
+        final app = Application(domain);
         try {
           for (final id in ['first', 'second', 'third']) {
             store.db.execute('INSERT INTO pending_helper_deletes VALUES(?,?)', [
@@ -169,6 +172,7 @@ void main() {
           await domain.retryPendingHelperDeletes();
           expect(store.rows('SELECT * FROM pending_helper_deletes'), isEmpty);
         } finally {
+          await app.close();
           domain.close();
           await helper.close();
           await server.shutdown();

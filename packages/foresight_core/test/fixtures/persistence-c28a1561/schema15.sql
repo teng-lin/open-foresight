@@ -1,0 +1,34 @@
+-- Frozen schema 15 from reviewed main c28a1561b5091645718462169bc6c0cfd0040943.
+-- No application data, epoch, timestamps or local Git history required.
+CREATE TABLE sources(id TEXT PRIMARY KEY,title TEXT NOT NULL,content TEXT NOT NULL,mime TEXT NOT NULL,revision INTEGER NOT NULL,state TEXT NOT NULL,error TEXT NOT NULL DEFAULT '',deleted INTEGER NOT NULL DEFAULT 0,provenance TEXT NOT NULL, locally_edited INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE notes(id INTEGER PRIMARY KEY,title TEXT NOT NULL,body TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 1,timestamp INTEGER);
+CREATE TABLE answers(id INTEGER PRIMARY KEY,question TEXT NOT NULL,body TEXT NOT NULL,status TEXT NOT NULL,citations TEXT NOT NULL,model TEXT NOT NULL,created INTEGER NOT NULL, conversation TEXT NOT NULL DEFAULT 'desktop', request_id TEXT, model_response TEXT);
+CREATE TABLE models(kind TEXT PRIMARY KEY,path TEXT NOT NULL,digest TEXT NOT NULL,runtime TEXT NOT NULL, backend TEXT NOT NULL DEFAULT 'llama_cpp', model_type INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE meetings(id INTEGER PRIMARY KEY,title TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL);
+CREATE TABLE transcript(id INTEGER PRIMARY KEY,meeting_id INTEGER NOT NULL REFERENCES meetings(id),text TEXT NOT NULL,final INTEGER NOT NULL,start_ms INTEGER NOT NULL,end_ms INTEGER NOT NULL,source TEXT NOT NULL);
+CREATE TABLE artifacts(id INTEGER PRIMARY KEY,meeting_id INTEGER NOT NULL REFERENCES meetings(id),kind TEXT NOT NULL,generated TEXT NOT NULL,edited TEXT,input_revision INTEGER NOT NULL,model TEXT NOT NULL,prompt_version TEXT NOT NULL, created INTEGER, manifest TEXT);
+CREATE TABLE preferences(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+CREATE TABLE conversation_memory(conversation TEXT PRIMARY KEY,through_answer_id INTEGER NOT NULL,messages TEXT NOT NULL,token_counts TEXT);
+CREATE TABLE source_details(source_id TEXT PRIMARY KEY REFERENCES sources(id),imported INTEGER NOT NULL,changed INTEGER NOT NULL,labels TEXT NOT NULL DEFAULT '[]', source_uri TEXT NOT NULL DEFAULT '');
+CREATE TABLE document_labels(document_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,label_name TEXT NOT NULL,label_source TEXT NOT NULL,color_hex TEXT,rationale TEXT,PRIMARY KEY(document_id,label_name));
+CREATE TABLE document_clusters(cluster_id INTEGER PRIMARY KEY AUTOINCREMENT,label TEXT UNIQUE NOT NULL,summary TEXT,centroid_embedding BLOB,center_proj_x REAL NOT NULL DEFAULT 0,center_proj_y REAL NOT NULL DEFAULT 0,radius REAL NOT NULL DEFAULT 100);
+CREATE TABLE graph_documents(model_identity TEXT NOT NULL,document_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,source_revision INTEGER NOT NULL,embedding BLOB NOT NULL,proj_x REAL NOT NULL,proj_y REAL NOT NULL,proj_z REAL NOT NULL,updated INTEGER NOT NULL,PRIMARY KEY(model_identity,document_id));
+CREATE TABLE graph_layouts(model_identity TEXT PRIMARY KEY,document_set TEXT NOT NULL);
+CREATE TABLE graph_force_state(model_identity TEXT PRIMARY KEY REFERENCES graph_layouts(model_identity) ON DELETE CASCADE,label_set TEXT NOT NULL);
+CREATE TABLE meeting_details(meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id),created INTEGER NOT NULL,reminder INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE meeting_notes(meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,body TEXT NOT NULL DEFAULT '',revision INTEGER NOT NULL DEFAULT 0,timestamp INTEGER, last_enhanced INTEGER, last_manual_edit INTEGER, enhanced_body TEXT);
+CREATE TABLE meeting_note_events(id INTEGER PRIMARY KEY,meeting_id INTEGER NOT NULL REFERENCES meeting_notes(meeting_id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,event_key TEXT NOT NULL,title TEXT NOT NULL);
+CREATE TABLE meeting_answers(meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,answer_id INTEGER NOT NULL REFERENCES answers(id) ON DELETE CASCADE,PRIMARY KEY(meeting_id,answer_id));
+CREATE TABLE meeting_question_cursors(meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,transcript_id INTEGER NOT NULL);
+CREATE TABLE meeting_questions(id INTEGER PRIMARY KEY,meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,transcript_id INTEGER REFERENCES transcript(id) ON DELETE CASCADE,question TEXT NOT NULL,normalized TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'queued',answer_id INTEGER REFERENCES answers(id) ON DELETE SET NULL,error TEXT NOT NULL DEFAULT '',created INTEGER NOT NULL);
+CREATE INDEX answer_request_id ON answers(request_id);
+CREATE INDEX answer_conversation_id ON answers(conversation,id);
+CREATE TABLE google_sources(source_id TEXT PRIMARY KEY REFERENCES sources(id),account TEXT NOT NULL,file_id TEXT NOT NULL,modified TEXT NOT NULL,mime TEXT NOT NULL);
+CREATE TABLE calendar_events(event_key TEXT PRIMARY KEY,account TEXT NOT NULL,calendar_id TEXT NOT NULL,google_id TEXT NOT NULL,meeting_id INTEGER NOT NULL REFERENCES meetings(id),source_id TEXT NOT NULL,starts INTEGER NOT NULL,ends INTEGER NOT NULL,status TEXT NOT NULL,metadata TEXT NOT NULL,synced INTEGER NOT NULL);
+CREATE TABLE google_folders(account TEXT NOT NULL,folder_id TEXT NOT NULL,PRIMARY KEY(account,folder_id));
+CREATE TABLE pending_helper_deletes(document_id TEXT PRIMARY KEY, queued_at INTEGER NOT NULL);
+CREATE TABLE request_keys(key TEXT PRIMARY KEY,operation TEXT NOT NULL,arguments TEXT NOT NULL,result TEXT NOT NULL,created INTEGER NOT NULL);
+CREATE TABLE meeting_summary_checkpoints(meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,artifact_id INTEGER NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,input_length INTEGER NOT NULL,input_digest TEXT NOT NULL,identity TEXT NOT NULL);
+CREATE TABLE meeting_tasks(id INTEGER PRIMARY KEY,meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,task_key TEXT NOT NULL,task TEXT NOT NULL,owner TEXT,due TEXT,status TEXT NOT NULL,evidence TEXT NOT NULL,input_revision INTEGER NOT NULL,stale INTEGER NOT NULL DEFAULT 0,manual INTEGER NOT NULL DEFAULT 0,UNIQUE(meeting_id,task_key));
+CREATE TABLE document_summary_cache(cache_key TEXT PRIMARY KEY,source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,source_revision INTEGER NOT NULL,body TEXT NOT NULL,identity TEXT NOT NULL,clipped INTEGER NOT NULL DEFAULT 0);
+PRAGMA user_version=15;

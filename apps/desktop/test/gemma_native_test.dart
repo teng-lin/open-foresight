@@ -3,10 +3,10 @@ import 'package:foresight_core/src/application.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/domain.dart';
-import 'package:open_foresight/helper.dart';
-import 'package:open_foresight/model_setup.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/domain.dart';
+import 'package:foresight_core/src/helper.dart';
+import 'package:foresight_core/foresight_core.dart' show configureGeneration;
+import 'package:foresight_core/src/store.dart';
 
 void main() {
   test(
@@ -21,6 +21,7 @@ void main() {
       final store = Store('${dir.path}/app.db');
       final helper = Helper('${dir.path}/helper.sock', '${dir.path}/helper');
       final domain = Domain(store, helper);
+      final app = Application(domain);
       var passed = false;
       try {
         domain.generator = await configureGeneration(
@@ -64,9 +65,7 @@ void main() {
         );
         await domain.index(id);
         final answer =
-            (await domain
-                    .ask('When is the planning meeting? Cite [S1].')
-                    .toList())
+            (await app.ask('When is the planning meeting? Cite [S1].').toList())
                 .last;
         expect(answer.toLowerCase(), contains('friday'));
         expect(answer, contains('[S1]'));
@@ -94,7 +93,7 @@ void main() {
         );
         await domain.index(guide);
         final procedure =
-            (await domain
+            (await app
                     .ask(
                       'How should I write a Target Product Profile? Explain the steps and outputs.',
                     )
@@ -127,7 +126,7 @@ void main() {
         );
         await domain.index(numeric);
         final numericAnswer =
-            (await domain
+            (await app
                     .ask(
                       'Describe the Orion development profile, including its publication date, '
                       'dose target, planning horizon and evidence limitations.',
@@ -145,7 +144,7 @@ void main() {
           isNot('source-fallback'),
         );
         final missing =
-            (await domain.ask('Who is Unlisted Person90210?').toList()).last;
+            (await app.ask('Who is Unlisted Person90210?').toList()).last;
         expect(missing, 'Insufficient context');
         expect(
           store
@@ -153,7 +152,7 @@ void main() {
               .single['status'],
           'insufficient_context',
         );
-        final cancelledAnswer = domain
+        final cancelledAnswer = app
             .ask(
               'Describe the Orion development profile and its evidence limitations.',
             )
@@ -173,7 +172,7 @@ void main() {
           'cancelled',
         );
         final reusedAnswer =
-            (await domain.ask('When is the planning meeting?').toList()).last;
+            (await app.ask('When is the planning meeting?').toList()).last;
         expect(reusedAnswer.toLowerCase(), contains('friday'));
         var delta = false;
         var cancelled = false;
@@ -238,6 +237,7 @@ void main() {
             }),
           );
         }
+        await app.close();
         domain.close();
         domain.generator?.close();
         await helper.close();

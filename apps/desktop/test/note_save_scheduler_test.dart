@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/application.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/operations.dart';
 import 'desktop_connection_fixture.dart';
@@ -6,8 +7,8 @@ import 'package:fake_async/fake_async.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/domain.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/domain.dart';
+import 'package:foresight_core/src/store.dart';
 import 'package:open_foresight/note_save_scheduler.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
@@ -114,7 +115,10 @@ void main() {
         OfflineHelper('${directory.path}/sock', '${directory.path}/helper'),
       );
       await tester.pumpWidget(
-        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+        Foresight(
+          TestDesktopConnection(Application(domain)),
+          deviceLoader: () async => [],
+        ),
       );
       final dynamic state = tester.state(find.byType(Workspace));
       state.update(() => state.meetingFeature.meetingId = id);
@@ -174,7 +178,10 @@ void main() {
         OfflineHelper('${directory.path}/sock', '${directory.path}/helper'),
       );
       await tester.pumpWidget(
-        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+        Foresight(
+          TestDesktopConnection(Application(domain)),
+          deviceLoader: () async => [],
+        ),
       );
       final dynamic state = tester.state(find.byType(Workspace));
       state.update(() => state.meetingFeature.meetingId = id);
@@ -234,7 +241,10 @@ void main() {
         OfflineHelper('${directory.path}/sock', '${directory.path}/helper'),
       );
       await tester.pumpWidget(
-        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+        Foresight(
+          TestDesktopConnection(Application(domain)),
+          deviceLoader: () async => [],
+        ),
       );
       final dynamic state = tester.state(find.byType(Workspace));
       state.update(() => state.meetingFeature.meetingId = id);
@@ -305,7 +315,10 @@ void main() {
         OfflineHelper('${directory.path}/sock', '${directory.path}/helper'),
       );
       await tester.pumpWidget(
-        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+        Foresight(
+          TestDesktopConnection(Application(domain)),
+          deviceLoader: () async => [],
+        ),
       );
       final dynamic state = tester.state(find.byType(Workspace));
       state.update(() => state.meetingFeature.meetingId = id);
@@ -464,7 +477,10 @@ void main() {
       OfflineHelper('${directory.path}/sock', '${directory.path}/helper'),
     );
     await tester.pumpWidget(
-      Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+      Foresight(
+        TestDesktopConnection(Application(domain)),
+        deviceLoader: () async => [],
+      ),
     );
     final dynamic state = tester.state(find.byType(Workspace));
     state.update(() => state.meetingFeature.meetingId = first);

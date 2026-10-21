@@ -1,26 +1,12 @@
 import 'system_audio_setup_dialog.dart';
 import 'onboarding_view.dart';
 import 'model_terms_dialog.dart';
-import 'package:foresight_core/foresight_core.dart'
-    show dedicatedQueryTermsKey, dedicatedQueryTermsUri, MeetingWorkflowStore;
+
 import 'background_store.dart';
-import 'store.dart' show outputWeekStart;
+import 'desktop_reader_adapters.dart';
 import 'service_edit_dialog.dart';
 import 'failure_text.dart';
-import 'package:foresight_core/foresight_core.dart'
-    show
-        runtimeConfiguration,
-        privateDirectory,
-        privateRuntime,
-        writePrivateTextFile,
-        configureProfileRuntime,
-        openPlatformUri,
-        allowedSourceUri,
-        openForesightBuildNumber,
-        openForesightBuildLabel,
-        openForesightVersion,
-        MeetingSpeaker,
-        platformNotification;
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -32,12 +18,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/semantics.dart' show SemanticsProperties;
 import 'package:intl/intl.dart' show NumberFormat;
-import 'package:foresight_core/remote.dart';
-import 'graph_labels.dart';
+import 'package:foresight_core/desktop.dart';
 import 'graph_label_controls.dart';
-import 'graph_clusters.dart';
 import 'cluster_rendering.dart';
-import 'force_layout.dart';
 import 'model_setup.dart';
 import 'app_theme.dart';
 import 'meeting_visuals.dart';
@@ -51,18 +34,11 @@ import 'hypr_shortcuts.dart';
 import 'google_picker.dart';
 import 'google_sign_in_dialog.dart';
 import 'account_button.dart';
-import 'audio_devices.dart';
 import 'gemma_setup_view.dart';
 import 'speech_setup_view.dart';
-import 'speech_models.dart';
-import 'profile_paths.dart';
-import 'gemma_download.dart';
-import 'source_type.dart';
-import 'file_discovery.dart';
+import 'package:foresight_core/desktop_bootstrap.dart';
 import 'file_discovery_sheet.dart';
-import 'graph_layout.dart';
 import 'graph_rendering.dart';
-import 'graph_persistence.dart';
 import 'meeting_export.dart';
 import 'note_save_scheduler.dart';
 import 'meeting_note_state.dart';
@@ -85,7 +61,7 @@ Future<void> main([List<String> arguments = const []]) async {
 }
 
 Future<DesktopConnection> connectDesktopDomain(ProfilePaths profile) =>
-    RemoteDomain.connect(profile);
+    connectDesktop(profile);
 void quitDesktop() => exit(0);
 
 /// Mount before connecting so service/profile failures remain visible and can
@@ -324,6 +300,7 @@ class _WorkspaceState extends State<Workspace>
   final serviceUiRevision = ValueNotifier<int>(0);
   final captureVolumes = ValueNotifier<List<double>>(const []);
   StreamSubscription<List<double>>? captureLevels;
+  StreamSubscription<void>? connectionChanges;
   late final DesktopMenu desktopMenu;
 
   Timer? serviceUiTimer;
@@ -332,6 +309,10 @@ class _WorkspaceState extends State<Workspace>
   bool clearingWorkspace = false;
 
   void serviceChanged() {
+    if (d.store.failure case final failure?) {
+      if (mounted) setState(() => error = failure.message);
+      return;
+    }
     // Another client cleared the workspace: views must not keep editing IDs
     // that the service may hand to new items.
     if (mounted && d.workspaceReplaced) {
@@ -387,8 +368,7 @@ class _WorkspaceState extends State<Workspace>
       }
     });
     settingsFeature.embeddingGpu =
-        d.store.registeredEmbedding().firstOrNull?['backend'] ==
-        'litert_lm_embedding_gpu';
+        d.store.model('embedding')?.backend == 'litert_lm_embedding_gpu';
     meetingFeature.systemAudioSetupReviewed =
         d.store.preference('audio.systemSetupReviewed') == 'true';
     integrationFeature.commands = widget.commands;
@@ -450,8 +430,9 @@ class _WorkspaceState extends State<Workspace>
         if (mounted) captureVolumes.value = volumes;
       });
     }
-    d.helper.changed = serviceChanged;
-    d.helper.onReady = () async {
+    connectionChanges = d.changes.listen((_) => serviceChanged());
+    Future<void> initializeConnection() async {
+      await d.initialize();
       try {
         await d.resume();
       } finally {
@@ -469,9 +450,10 @@ class _WorkspaceState extends State<Workspace>
           if (mounted) setState(() {});
         }
       }
-    };
+    }
+
     unawaited(
-      d.helper.start().catchError((Object e) {
+      initializeConnection().catchError((Object e) {
         if (mounted)
           setState(
             () => error = e is StateError ? e.message.toString() : e.toString(),
@@ -509,13 +491,11 @@ class _WorkspaceState extends State<Workspace>
     serviceUiTimer?.cancel();
     serviceUiRevision.dispose();
     unawaited(captureLevels?.cancel());
+    unawaited(connectionChanges?.cancel());
     captureVolumes.dispose();
     unawaited(meetingFeature.noteEnhancementChanges?.cancel());
     void releaseDomain() {
       d.close();
-      d.generator?.close();
-      unawaited(d.helper.close());
-      d.store.close();
     }
 
     void closeDomain() => releaseDomain();
@@ -568,6 +548,7 @@ class _WorkspaceState extends State<Workspace>
   /// then a row on screen may name an ID that the new workspace reuses, so
   /// a dialog that edits one is not opened.
   bool rowsAreCurrent() {
+    if (d.store.failure != null) return false;
     final stored = d.store.workspaceEpoch;
     if (stored.isEmpty || stored == d.workspaceEpoch) return true;
     update(
@@ -659,6 +640,16 @@ class _WorkspaceState extends State<Workspace>
 
   @override
   Widget build(BuildContext context) {
+    if (d.store.failure case final failure?) {
+      return Scaffold(
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: SelectableText(failure.message),
+          ),
+        ),
+      );
+    }
     sourceFeature.syncGraphMotion();
     final onboarding = onboardingFeature.active;
     final workspace = onboarding

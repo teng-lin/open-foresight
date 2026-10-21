@@ -739,7 +739,7 @@ void main() {
                     'body': 'old',
                   })
                   as Map)['id'];
-          final owner = service.domain.application;
+          final owner = service.application;
           await owner.call(Operation.workspaceClear.wire, {});
           final fresh =
               (await owner.call(Operation.notesSave.wire, {
@@ -761,9 +761,7 @@ void main() {
           });
         } finally {
           desktop?.close();
-          await desktop?.client.close();
-          await desktop?.helper.close();
-          desktop?.store.close();
+          await desktop?.closed;
           await service.close();
         }
       },

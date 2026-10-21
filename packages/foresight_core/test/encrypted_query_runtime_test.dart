@@ -298,7 +298,16 @@ void main() {
       worker.failClose = true;
       await expectLater(runtime.close(), throwsStateError);
       expect(File(worker.model).existsSync(), isTrue);
-      await expectLater(runtime.complete('closed', '2'), throwsStateError);
+      await expectLater(
+        runtime.complete('closed', '2'),
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.unavailable,
+          ),
+        ),
+      );
       worker.failClose = false;
       await runtime.close();
       expect(File(worker.model).existsSync(), isFalse);

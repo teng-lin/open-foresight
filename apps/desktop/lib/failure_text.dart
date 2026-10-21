@@ -1,4 +1,4 @@
-import 'package:foresight_core/remote.dart';
+import 'package:foresight_core/desktop.dart';
 
 /// Shown when a request was sent but its reply was lost: it may have
 /// committed, so the desktop never reports it as a plain disconnect.

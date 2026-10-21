@@ -1,3 +1,4 @@
+#include "../../services/helper/helper_protocol_version.h"
 #include "helper_control.grpc.pb.h"
 #include "rag_service.grpc.pb.h"
 #include <filesystem>
@@ -66,12 +67,25 @@ int main(int argc, char **argv) {
       return p::RagService::NewStub(channel);
     };
     auto stub = start();
+    for (const auto *member :
+         {"agent_metadata.db", "linux_state.db", "rag_vector.db"}) {
+      sqlite3 *database = nullptr;
+      REQUIRE(sqlite3_open_v2((dir + "/" + member).c_str(), &database,
+                              SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK);
+      sqlite3_stmt *query = nullptr;
+      REQUIRE(sqlite3_prepare_v2(database, "PRAGMA user_version", -1, &query,
+                                 nullptr) == SQLITE_OK);
+      REQUIRE(sqlite3_step(query) == SQLITE_ROW &&
+              sqlite3_column_int(query, 0) == 1);
+      sqlite3_finalize(query);
+      sqlite3_close(database);
+    }
     p::PingRequest ping;
     p::PingResponse pong;
     REQUIRE(call(ping, pong, [&](auto *ctx, auto &q, auto *r) {
               return stub->Ping(ctx, q, r);
             }).ok());
-    REQUIRE(pong.success() && pong.version() == "1.0.3");
+    REQUIRE(pong.success() && pong.version() == helperProtocolVersion);
     p::ComputeImageEmbeddingRequest img;
     p::ComputeEmbeddingResponse vec;
     REQUIRE(call(img, vec, [&](auto *ctx, auto &q, auto *r) {

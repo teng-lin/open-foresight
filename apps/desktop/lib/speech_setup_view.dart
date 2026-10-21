@@ -3,15 +3,13 @@ import 'dart:io';
 import 'dart:async';
 import 'model_terms_dialog.dart';
 import 'package:flutter/material.dart';
-import 'gemma_download.dart';
-import 'speech_models.dart';
-import 'store.dart';
+import 'package:foresight_core/desktop.dart';
 
 class SpeechSetupDialog extends StatefulWidget {
   final VoidCallback? onDone;
   bool get embedded => onDone != null;
-  final Store store;
-  final ModelPreferenceWriter? savePreference;
+  final StoreReader store;
+  final ModelPreferenceWriter savePreference;
   final GemmaDownload Function()? createDownload;
   final LocalModelFinder findLocalModel;
   final Future<void> Function(File, String, String, bool Function())?
@@ -23,7 +21,7 @@ class SpeechSetupDialog extends StatefulWidget {
     super.key,
     this.onDone,
     required this.store,
-    this.savePreference,
+    required this.savePreference,
     this.createDownload,
     this.findLocalModel = localModelFile,
     this.installSpeech,
@@ -49,9 +47,8 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
   @override
   void initState() {
     super.initState();
-    currentDigest =
-        widget.store.registeredSpeech().firstOrNull?['digest'] as String?;
-    registration = widget.store.model('speech');
+    currentDigest = widget.store.model('speech')?.digest;
+    registration = widget.store.model('speech')?.toRow();
     currentPath = registration?['path'] as String?;
     currentRunner = registration?['runtime'] as String?;
     selected =
@@ -158,26 +155,15 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
         status = 'Loading ${model.name} on the configured device...';
         progress = null;
       });
-      if (widget.installSpeech != null) {
-        await widget.installSpeech!(
-          asset,
-          widget.runner,
-          model.digest,
-          () => mounted && !cancelled,
-        );
-      } else {
-        await configureSpeech(
-          widget.store,
-          asset,
-          widget.runner,
-          model.digest,
-          current: () => mounted && !cancelled,
-          onProcess: (process) {
-            probe = process;
-            if (cancelled) process.kill();
-          },
-        );
-      }
+      final install = widget.installSpeech;
+      if (install == null)
+        throw StateError('Speech installation service is unavailable');
+      await install(
+        asset,
+        widget.runner,
+        model.digest,
+        () => mounted && !cancelled,
+      );
       if (!mounted || cancelled) return;
       widget.installed();
       if (mounted) finish();

@@ -1,6 +1,6 @@
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/native.dart';
+import 'package:foresight_core/src/native.dart';
 
 void main() {
   test(

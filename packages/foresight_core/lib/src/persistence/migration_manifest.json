@@ -1,0 +1,137 @@
+{
+  "schema": 1,
+  "canonical_format": "dart-token-v1",
+  "bootstrap_source_commit": "c28a1561b5091645718462169bc6c0cfd0040943",
+  "migrations": {
+    "1": {
+      "sha256": "6f4c861565029fce080db72e037c671f67a162d96ca5297009039c03ae847334",
+      "symbols": [
+        "_createLegacyTables"
+      ]
+    },
+    "2": {
+      "sha256": "6f4c861565029fce080db72e037c671f67a162d96ca5297009039c03ae847334",
+      "symbols": [
+        "_createLegacyTables"
+      ]
+    },
+    "3": {
+      "sha256": "6a795e177e9af37cc7ef236a0b281866971265d10a27d9d6d342d5561efced8d",
+      "symbols": [
+        "_migrateNoteHistory"
+      ]
+    },
+    "4": {
+      "sha256": "c14c60481b3ef13c5a2852c0449e67d9ea7d3407582e3f73f9b5857999d61844",
+      "symbols": [
+        "_migrateModelMetadata"
+      ]
+    },
+    "5": {
+      "sha256": "be47a86886307b285e3d7838cf57db8e062fc328d07b471a38392721b87a8611",
+      "symbols": [
+        "_legacySourceUri",
+        "_migrateSourceUris",
+        "rows"
+      ]
+    },
+    "6": {
+      "sha256": "c09b9ebe7106ce9464e811980455ccf472cec65fa25663642e4e7056259aa42b",
+      "symbols": [
+        "_migrateAnswerHistory"
+      ]
+    },
+    "7": {
+      "sha256": "2fd80b2081256140483cb90bb8df9d38ac323dbb80932551cc81a1703956897b",
+      "symbols": [
+        "_migrateMeetingQuestions"
+      ]
+    },
+    "8": {
+      "sha256": "b7923f3b7dbafa79003e2f6cc8ccb9ae7a17d3990261888230f6b0d99470a5fc",
+      "symbols": [
+        "_migrateGoogleTables"
+      ]
+    },
+    "9": {
+      "sha256": "9e419139a68b261aa9d56315fdf66bdcb9c060bc7f98f4ebf1cbcd5e7eb38e8c",
+      "symbols": [
+        "DocumentLabel",
+        "_reconcileLabelRecords",
+        "_storedLabelNames",
+        "_writeLabelRecords",
+        "allocateGraphLabelColor",
+        "documentLabels",
+        "graphLabelPalette",
+        "rows"
+      ]
+    },
+    "10": {
+      "sha256": "79174450c1df61f3eeece10b358a8b75ef87bb24ce0b09d710cf66ad0eb6768f",
+      "symbols": []
+    },
+    "11": {
+      "sha256": "e5b3168a529cb061dc09fea2e4e6fb3a427a23ab272edfbae6fb743d0e4b0e22",
+      "symbols": [
+        "rows"
+      ]
+    },
+    "12": {
+      "sha256": "6f4947e72e577d4b430afc523a7435c307d64d359a6a94980c9828c2b9a224db",
+      "symbols": [
+        "rows"
+      ]
+    },
+    "13": {
+      "sha256": "a0f653573362bf66871b6db8cc0c32f50ffa8bec2966ee2343ab48410333f16d",
+      "symbols": []
+    },
+    "14": {
+      "sha256": "bde0d1f5215b84d194823d010b095e9f61116ca1d99930c6256d44b2a67cd5c5",
+      "symbols": [
+        "rows"
+      ]
+    },
+    "15": {
+      "sha256": "fa59c1ee84363150f8b6a41a5233cb5a9cb764caa80ec03da021e948028a39f0",
+      "symbols": []
+    },
+    "16": {
+      "sha256": "bfa0dc07f576e98b147eb34ac2c715101b2bb16436299bf744c1f8833cbf3610",
+      "symbols": [
+        "_restoreGoogleModificationTimes",
+        "rows"
+      ]
+    },
+    "17": {
+      "sha256": "3dbc4651643f4c5257c51183c111adcb660ff686f15c101c83cb6125b5a5fc0d",
+      "symbols": [
+        "DocumentLabel",
+        "_canonicalizeLabels",
+        "allocateGraphLabelColor",
+        "documentLabels",
+        "graphLabelPalette",
+        "rows"
+      ]
+    }
+  },
+  "fixtures": {
+    "README.md": "69e03dd33f1973735848d9c89cc708e219461541e9a549d2f290e69821dd3672",
+    "graph_labels.dart.txt": "86a433df7cd6f4c6e33ea98f6f13df06940ecbcd6c7a63957eb73fd78dab278d",
+    "schema15.sql": "b4a5ce62eccffb8b641f1322d0da180d044deeb6b90f5d03161f55c893c16fd0",
+    "schema8.sql": "c3f20a247d0599659907a0bd60c859bc833a618e77e7f0a3a1b1039df6564a12",
+    "source-manifest.json": "29bbf935b3413700b3378847bd41d48090cd1ae132f2e6f27fbeb1dcfc67238d",
+    "store.dart.txt": "5dec3dcce912e3f48f8913de233dfa7d81346461f071dfbea2a7115e7efd26ed"
+  },
+  "binding_map": {
+    "_documentLabels": "documentLabels",
+    "_HistoricalDocumentLabel": "DocumentLabel",
+    "_historicalGraphLabelPalette": "graphLabelPalette",
+    "_historicalAllocateGraphLabelColor": "allocateGraphLabelColor"
+  },
+  "locations": {
+    "registry": "packages/foresight_core/lib/src/persistence/schema_migrations.dart:ApplicationMigrations.run",
+    "historical_owner": "packages/foresight_core/lib/src/store.dart:Store",
+    "historical_graph": "packages/foresight_core/lib/src/graph_labels.dart"
+  }
+}

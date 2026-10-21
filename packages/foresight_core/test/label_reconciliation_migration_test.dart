@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/persistence_fixtures.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:convert';
 import 'package:foresight_core/foresight_core.dart';
@@ -14,6 +15,7 @@ void main() {
     store.labels(id, ['Keep me']);
     store.close();
     final legacy = sqlite3.open(path);
+    legacyLabelFixture(legacy);
     legacy.execute('PRAGMA user_version=1');
     legacy.execute(
       "UPDATE source_details SET labels='broken' WHERE source_id=?",
@@ -28,7 +30,7 @@ void main() {
     expect(store.documentLabels.single.name, 'Keep me');
     expect(jsonDecode(store.sources.single['labels'] as String), ['Keep me']);
     store.db.execute(
-      "CREATE TRIGGER no_reconciliation BEFORE UPDATE OF labels ON source_details BEGIN SELECT RAISE(FAIL,'labels must not reconcile on reopen'); END",
+      "CREATE TRIGGER no_reconciliation BEFORE UPDATE ON document_labels BEGIN SELECT RAISE(FAIL,'labels must not reconcile on reopen'); END",
     );
     store.close();
     store = Store(path);

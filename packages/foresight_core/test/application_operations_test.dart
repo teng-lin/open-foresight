@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/application_services/answer_coordinator.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
@@ -143,30 +144,18 @@ class ArtifactGenerator extends NativeRuntime {
   }
 }
 
-class OperationsApplication extends Application {
-  OperationsApplication(super.domain, {super.auth});
+class OperationsAnswers extends AnswerGateway {
+  OperationsAnswers(this.domain);
+  final OperationsDomain domain;
   @override
-  Stream<String> askInConversation(
+  Stream<String> ask(
     String question,
     String conversation, {
     String? requestId,
     int? meetingId,
     bool Function()? current,
-  }) => (domain as OperationsDomain).askInConversation(
-    question,
-    conversation,
-    requestId: requestId,
-    meetingId: meetingId,
-    current: current,
-  );
-  @override
-  Stream<String> askWithWebInConversation(
-    String question,
-    String conversation, {
-    String? requestId,
-    int? meetingId,
-    bool Function()? current,
-  }) => (domain as OperationsDomain).askWithWebInConversation(
+    bool useWeb = false,
+  }) => (useWeb ? domain.askWithWebInConversation : domain.askInConversation)(
     question,
     conversation,
     requestId: requestId,
@@ -204,7 +193,7 @@ void main() {
       secretStore: const UnavailableSecretStore(),
       endpoints: google.endpoints,
     );
-    app = OperationsApplication(domain, auth: auth);
+    app = Application(domain, auth: auth, answers: OperationsAnswers(domain));
   });
   setUp(() {
     addTearDown(() async {
@@ -277,7 +266,13 @@ void main() {
       for (final limit in [0, 101]) {
         await expectLater(
           app.call('sources.search', {'query': 'q', 'limit': limit}),
-          throwsArgumentError,
+          throwsA(
+            isA<RpcError>().having(
+              (error) => error.code,
+              'code',
+              RpcErrorCode.invalidArgument,
+            ),
+          ),
         );
       }
       await app.call('sources.index', {'id': hidden['id']});
@@ -372,7 +367,13 @@ void main() {
       });
       await expectLater(
         app.call('meetings.get', {'id': 999}),
-        throwsStateError,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.notFound,
+          ),
+        ),
       );
       await expectLater(
         app.call('unsupported', {}),
@@ -385,7 +386,10 @@ void main() {
         ),
       );
       await expectLater(
-        app.call('notes.save', {}, current: () => false),
+        app.call('notes.save', {
+          'title': 'Cancelled note',
+          'body': 'Not saved',
+        }, current: () => false),
         throwsA(
           isA<RpcError>().having(
             (error) => error.code,
@@ -543,7 +547,13 @@ void main() {
           current: () => false,
           allowPrivateNetwork: true,
         ),
-        throwsStateError,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.cancelled,
+          ),
+        ),
       );
       expect(domain.store.sources, hasLength(1));
       await app.call('sources.refresh', {'allow_private_network': true});
@@ -578,7 +588,13 @@ void main() {
       );
       await expectLater(
         app.importDirectory(directory.path, current: () => false),
-        throwsStateError,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.cancelled,
+          ),
+        ),
       );
       file.deleteSync();
       await expectLater(
@@ -591,7 +607,16 @@ void main() {
           ),
         ),
       );
-      await expectLater(app.reimport(current: () => false), throwsStateError);
+      await expectLater(
+        app.reimport(current: () => false),
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.cancelled,
+          ),
+        ),
+      );
     },
   );
 
@@ -879,7 +904,16 @@ void main() {
       expect(state['pid'], pid);
       expect(state['models_busy'], isFalse);
       await app.close();
-      await expectLater(app.call('status', {}), throwsStateError);
+      await expectLater(
+        app.call('status', {}),
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.unavailable,
+          ),
+        ),
+      );
     },
   );
   test(
@@ -1004,7 +1038,13 @@ void main() {
             'kind': kind,
             'requestId': 'cancel-$kind',
           }, current: () => current),
-          throwsStateError,
+          throwsA(
+            isA<RpcError>().having(
+              (error) => error.code,
+              'code',
+              RpcErrorCode.cancelled,
+            ),
+          ),
         );
         await generator.entered!.future;
         expect(generator.requestIds, [

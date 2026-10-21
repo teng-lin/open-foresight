@@ -4,12 +4,13 @@ import 'package:foresight_test_support/poll.dart';
 import 'dart:io';
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/store.dart';
-import 'package:open_foresight/domain.dart';
-import 'package:open_foresight/helper.dart';
-import 'package:open_foresight/native.dart';
-import 'package:open_foresight/generated/rag_service.pbgrpc.dart';
-import 'package:open_foresight/generated/helper_control.pbgrpc.dart' as control;
+import 'package:foresight_core/src/store.dart';
+import 'package:foresight_core/src/domain.dart';
+import 'package:foresight_core/src/helper.dart';
+import 'package:foresight_core/src/native.dart';
+import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
+import 'package:foresight_core/src/generated/helper_control.pbgrpc.dart'
+    as control;
 
 void main() {
   test(
@@ -23,6 +24,7 @@ void main() {
       final store = Store('${tmp.path}/app.db');
       final helper = Helper('${tmp.path}/helper.sock', '${tmp.path}/helper');
       final d = Domain(store, helper);
+      final app = Application(d);
       final elapsed = Stopwatch()..start();
       try {
         await helper.start();
@@ -62,7 +64,7 @@ void main() {
         );
         await d.index(id);
         expect(store.sources.single['state'], 'indexed');
-        await d
+        await app
             .ask('What is the Apollo project launch date? Cite the source.')
             .drain<void>();
         final answer = store.rows('SELECT * FROM answers').single;

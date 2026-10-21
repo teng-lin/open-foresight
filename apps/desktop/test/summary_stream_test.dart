@@ -64,9 +64,10 @@ void main() {
         '${directory.path}/helper',
       );
       final domain = Domain(store, helper);
+      final app = Application(domain);
       final runtime = SummaryWidgetRuntime();
       await tester.pumpWidget(
-        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+        Foresight(TestDesktopConnection(app), deviceLoader: () async => []),
       );
       final dynamic state = tester.state(find.byType(Workspace));
       state.update(() {
@@ -83,7 +84,7 @@ void main() {
       domain.generator = runtime;
       late Future<void> work;
       await tester.runAsync(() async {
-        work = domain.application.generateSummary(id).catchError((Object _) {});
+        work = app.generateSummary(id).catchError((Object _) {});
       });
       await pumpUntil(tester, () => runtime.entered.isCompleted);
       // Service events coalesce through a 100 ms UI timer on the fake clock.

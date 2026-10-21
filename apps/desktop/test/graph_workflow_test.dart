@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/application.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:async';
@@ -6,11 +7,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/domain.dart';
+import 'package:foresight_core/src/domain.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/store.dart';
 import 'package:open_foresight/graph_rendering.dart';
-import 'package:open_foresight/generated/helper_control.pb.dart' as control;
+import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 class SourceReadCountingStore extends Store {
@@ -57,7 +58,7 @@ void main() {
     final helper = OfflineHelper('${temp.path}/socket', '${temp.path}/helper');
     await tester.pumpWidget(
       Foresight(
-        TestDesktopConnection(Domain(store, helper)),
+        TestDesktopConnection(Application(Domain(store, helper))),
         deviceLoader: () async => [],
       ),
     );
@@ -110,7 +111,7 @@ void main() {
     final helper = OfflineHelper('${temp.path}/socket', '${temp.path}/helper');
     await tester.pumpWidget(
       Foresight(
-        TestDesktopConnection(Domain(store, helper)),
+        TestDesktopConnection(Application(Domain(store, helper))),
         deviceLoader: () async => [],
       ),
     );
@@ -180,7 +181,10 @@ void main() {
       );
       final domain = Domain(store, helper);
       await tester.pumpWidget(
-        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+        Foresight(
+          TestDesktopConnection(Application(domain)),
+          deviceLoader: () async => [],
+        ),
       );
       await tester.tap(find.text('Sources'));
       await tester.pumpAndSettle();
@@ -330,7 +334,10 @@ void main() {
       );
       final domain = GraphDomain(store, helper);
       await tester.pumpWidget(
-        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+        Foresight(
+          TestDesktopConnection(Application(domain)),
+          deviceLoader: () async => [],
+        ),
       );
       await tester.tap(find.text('Sources'));
       await tester.pumpAndSettle();

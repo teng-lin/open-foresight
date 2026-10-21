@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 /// Unicode scalar budgets never cut a UTF-16 surrogate pair in half.
 String runePrefix(String text, int limit) =>
     String.fromCharCodes(text.runes.take(limit));
@@ -92,4 +94,18 @@ String proactiveTranscriptWindow(String history, {required bool isFinal}) {
   return String.fromCharCodes(
     scalars.skip(scalars.length > 1000 ? scalars.length - 1000 : 0),
   );
+}
+
+/// UTF-8 byte limit is conservative for byte-level model tokenizers; no silent Unicode corruption.
+String boundUtf8(String text, int budget) {
+  final output = StringBuffer();
+  var used = 0;
+  for (final rune in text.runes) {
+    final part = String.fromCharCode(rune);
+    final size = utf8.encode(part).length;
+    if (used + size > budget) break;
+    output.write(part);
+    used += size;
+  }
+  return output.toString();
 }

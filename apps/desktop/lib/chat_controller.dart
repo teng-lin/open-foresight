@@ -45,9 +45,7 @@ class _ChatController extends _FeatureController {
       c['document_id'] as String,
       includeDeleted: true,
     );
-    if (s.isEmpty ||
-        s.first['deleted'] == 1 ||
-        s.first['revision'] != c['revision']) {
+    if (s == null || s.deleted || s.revision != c['revision']) {
       // The callback intentionally schedules work owned by its controller.
       // ignore: discarded_futures
       showDialog<void>(
@@ -66,7 +64,7 @@ class _ChatController extends _FeatureController {
     } else {
       // The callback intentionally schedules work owned by its controller.
       // ignore: discarded_futures
-      sourceFeature.source(s.first);
+      sourceFeature.source(s.toRow());
     }
   }
 
@@ -117,10 +115,9 @@ class _ChatController extends _FeatureController {
     final searchWeb = webSearchScopes.contains(scope);
     final scopeAsking = asking && askingScope == scope;
     final question = questionFor(meetingScope);
-    final history = d.store
-        .conversationAnswers(meetingScope)
-        .where((a) => !hiddenAnswers.contains(a['id']))
-        .toList();
+    final history = readRows(
+      d.store.conversationAnswers(meetingScope),
+    ).where((a) => !hiddenAnswers.contains(a['id'])).toList();
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,

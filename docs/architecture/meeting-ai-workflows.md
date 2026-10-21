@@ -61,7 +61,7 @@ Meeting Chat and Live Q&A expose Meeting, Selected sources and Workspace scopes.
 
 Web memory checkpoints use `web-memory-v2` keys including generation registration, context length, byte-count policy and source scope. The reference 55-percent compression/FIFO policy remains; production text counts use UTF-8 byte upper bounds rather than the unrelated embedding tokenizer. The original history/token-estimation fixtures remain. This change does not claim exact generation-token admission for the complete web/system framing.
 
-Accepted summary, enhanced-note, task and preparation artifacts have stable derived source IDs with provenance. Edits to the latest accepted artifact refresh that source; edits to old versions cannot replace current searchable text. Indexing remains asynchronous and resumable through existing source handling, so acceptance and embedding completion are separate states. Source deletion clears its document-summary cache; workspace clear removes tasks, caches, scope preferences and memory markers. Graph similarity/layout algorithms are unchanged.
+Accepted summary, enhanced-note, task and preparation artifacts have stable derived source IDs with provenance. Edits to the latest accepted artifact refresh that source; edits to old versions cannot replace current searchable text. Indexing remains asynchronous and resumable through existing source handling, so acceptance and embedding completion are separate states. A source soft delete retains document-summary cache rows physically; revision/content keys and deleted/revision revalidation make them unreachable. Workspace clear removes tasks, caches, scope preferences and memory markers. Graph similarity/layout algorithms are unchanged.
 
 ## Validation boundaries
 

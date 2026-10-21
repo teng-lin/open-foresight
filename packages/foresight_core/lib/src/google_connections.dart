@@ -1,5 +1,3 @@
-import 'dart:typed_data';
-import 'web_import.dart';
 import 'rpc_error.dart';
 import 'desktop_connection.dart';
 import 'dart:convert';
@@ -7,7 +5,12 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'domain.dart';
 import 'google_auth.dart';
-import 'store.dart';
+import 'store.dart' hide Parser;
+import 'document_parser.dart';
+import 'persistence/google_connection_queries.dart';
+import 'google_calendar_event.dart';
+import 'desktop_google_sources.dart';
+export 'google_calendar_event.dart' show calendarDescriptionText;
 
 class GoogleConnections implements ConnectedSources {
   final Domain domain;
@@ -16,50 +19,18 @@ class GoogleConnections implements ConnectedSources {
   Future<void>? _refreshing;
   bool get syncing => _refreshing != null;
   Store get store => domain.store;
+  late final _queries = GoogleConnectionQueries(store);
 
   /// A different account must refresh immediately and cannot inherit a status.
   @override
-  int get lastCompletedRefreshMs {
-    if (!auth.connected ||
-        store.preference('googleLastSyncAccount') != auth.account) {
-      return 0;
-    }
-    final timestamp =
-        int.tryParse(store.preference('googleLastSync', '0')) ?? 0;
-    return timestamp > 0 && timestamp <= DateTime.now().millisecondsSinceEpoch
-        ? timestamp
-        : 0;
-  }
+  int get lastCompletedRefreshMs =>
+      _queries.lastCompletedRefreshMs(auth.connected ? auth.account : null);
 
-  GoogleConnections(this.domain, this.auth) {
-    _restoreModificationTimes();
-  }
-
-  void _setSourceUri(String source, Object? uri) {
-    if (uri is String && uri.isNotEmpty) {
-      store.db.execute(
-        'UPDATE source_details SET source_uri=? WHERE source_id=?',
-        [uri, source],
-      );
-    }
-  }
+  GoogleConnections(this.domain, this.auth);
 
   static int _modifiedTime(Object? value) => value is String
       ? DateTime.tryParse(value)?.millisecondsSinceEpoch ?? 0
       : 0;
-
-  void _restoreModificationTimes() {
-    // Older profiles recorded local import time. Restore cached metadata only
-    // for unedited external sources; source content/revisions stay unchanged.
-    for (final row in store.rows(
-      "SELECT sources.id,google_sources.modified FROM google_sources JOIN sources ON sources.id=google_sources.source_id WHERE sources.deleted=0 AND sources.locally_edited=0 AND sources.provenance NOT LIKE 'user edit; %'",
-    )) {
-      store.db.execute(
-        'UPDATE source_details SET changed=? WHERE source_id=?',
-        [_modifiedTime(row['modified']), row['id']],
-      );
-    }
-  }
 
   void _check(String account) {
     if (_closed || !auth.connected || auth.account != account) {
@@ -137,17 +108,9 @@ class GoogleConnections implements ConnectedSources {
     return files;
   }
 
-  static bool supported(String mime) =>
-      mime.startsWith('text/') ||
-      [
-        'application/pdf',
-        'application/rtf',
-        'application/vnd.google-apps.document',
-        'application/vnd.google-apps.spreadsheet',
-        'application/vnd.google-apps.presentation',
-      ].contains(mime);
+  static bool supported(String mime) => supportsGoogleDriveMime(mime);
   static bool canDownload(Map<String, dynamic> file) =>
-      (file['capabilities'] as Map?)?['canDownload'] != false;
+      canDownloadGoogleDriveFile(file);
 
   Future<void> _publish(
     String id,
@@ -162,25 +125,18 @@ class GoogleConnections implements ConnectedSources {
   }) async {
     await _checkpoint(auth.account, current: current);
     if (text.trim().isEmpty) throw StateError('No readable text in $title.');
-    final old = store.rows('SELECT * FROM sources WHERE id=?', [
-      id,
-    ]).firstOrNull;
+    final old = _queries.source(id);
     if (preserveDeleted &&
-        (old?['deleted'] == 1 ||
-            (old?['locally_edited'] == 1 ||
-                (old?['provenance'] as String? ?? '').startsWith(
-                  'user edit; ',
-                )))) {
+        (old?.deleted == true ||
+            (old?.locallyEdited == true ||
+                (old?.provenance ?? '').startsWith('user edit; ')))) {
       return;
     }
     final contentChanged =
-        old == null ||
-        old['deleted'] == 1 ||
-        old['content'] != text ||
-        old['title'] != title;
+        old == null || old.deleted || old.content != text || old.title != title;
     final locallyEdited =
-        old?['locally_edited'] == 1 ||
-        (old?['provenance'] as String? ?? '').startsWith('user edit; ');
+        old?.locallyEdited == true ||
+        (old?.provenance ?? '').startsWith('user edit; ');
     if (contentChanged) {
       store.importText(
         title,
@@ -192,14 +148,11 @@ class GoogleConnections implements ConnectedSources {
         sourceUri: sourceUri,
       );
     }
-    _setSourceUri(id, sourceUri);
+    _queries.setSourceUri(id, sourceUri);
     if (contentChanged || !locallyEdited) {
-      store.db.execute(
-        'UPDATE source_details SET changed=? WHERE source_id=?',
-        [modifiedAtMs, id],
-      );
+      _queries.setSourceModified(id, modifiedAtMs);
     }
-    if (contentChanged || old['state'] != 'indexed') {
+    if (contentChanged || old.state != 'indexed') {
       await domain.index(id, current: current);
     }
   }
@@ -249,6 +202,10 @@ class GoogleConnections implements ConnectedSources {
               : {'alt': 'media', 'supportsAllDrives': 'true'},
         ),
       );
+    } on RpcError catch (error) {
+      // Preserve the filename and internal-error contract when RpcError no
+      // longer inherits StateError.
+      throw StateError('$name: ${error.message}');
     } on StateError catch (error) {
       throw StateError('$name: ${error.message}');
     }
@@ -287,19 +244,13 @@ class GoogleConnections implements ConnectedSources {
       sourceUri: file['webViewLink'] as String?,
     );
     _check(account);
-    store.db.execute(
-      'INSERT INTO google_sources VALUES(?,?,?,?,?) ON CONFLICT(source_id) DO UPDATE SET modified=excluded.modified,mime=excluded.mime',
-      [id, account, fileId, file['modifiedTime'] as String? ?? '', mime],
+    _queries.recordDriveSource(
+      id,
+      account,
+      fileId,
+      file['modifiedTime'] as String? ?? '',
+      mime,
     );
-  }
-
-  String _importFailure(String name, Object error) {
-    final message = error is StateError
-        ? error.message.toString()
-        : error.toString();
-    return message.startsWith('$name:') || message.startsWith('$name ')
-        ? message
-        : '$name: $message';
   }
 
   @override
@@ -321,10 +272,7 @@ class GoogleConnections implements ConnectedSources {
       _check(account);
       // Keep the selected root subscribed even if an individual export fails.
       if (folder == folderId) {
-        store.db.execute('INSERT OR IGNORE INTO google_folders VALUES(?,?)', [
-          account,
-          folderId,
-        ]);
+        _queries.subscribeFolder(account, folderId);
       }
       for (final file in files) {
         if (file['mimeType'] == 'application/vnd.google-apps.folder') {
@@ -334,19 +282,16 @@ class GoogleConnections implements ConnectedSources {
           if (examined.length > 10000) {
             throw StateError('Choose a smaller Drive folder.');
           }
-          final existing = store.rows(
-            'SELECT sources.*,google_sources.modified FROM sources JOIN google_sources ON google_sources.source_id=sources.id WHERE google_sources.account=? AND google_sources.file_id=?',
-            [account, file['id']],
-          ).firstOrNull;
+          final existing = _queries.driveSource(account, file['id'] as String);
           // A user deletion stays deleted during automatic folder refresh.
-          if (refreshing && existing?['deleted'] == 1) continue;
+          if (refreshing && existing?.source.deleted == true) continue;
           if (existing != null) {
-            _setSourceUri(existing['id'] as String, file['webViewLink']);
+            _queries.setSourceUri(existing.source.id, file['webViewLink']);
           }
-          if (existing?['state'] == 'indexed' &&
-              existing?['deleted'] == 0 &&
-              existing?['modified'] == file['modifiedTime'] &&
-              existing?['title'] == file['name']) {
+          if (existing?.source.state == 'indexed' &&
+              existing?.source.deleted == false &&
+              existing?.modified == file['modifiedTime'] &&
+              existing?.source.title == file['name']) {
             continue;
           }
           try {
@@ -361,7 +306,7 @@ class GoogleConnections implements ConnectedSources {
             if (current != null && !current()) {
               throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
             }
-            failures.add(_importFailure('${file['name']}', error));
+            failures.add(googleImportFailure('${file['name']}', error));
           }
         }
       }
@@ -393,69 +338,37 @@ class GoogleConnections implements ConnectedSources {
         if (current != null && !current()) {
           throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
         }
-        failures.add(_importFailure('${file['name']}', error));
+        failures.add(googleImportFailure('${file['name']}', error));
       }
     }
     if (failures.isNotEmpty) throw StateError(failures.join('\n'));
   }
 
-  static DateTime? eventTime(Object? value) {
-    if (value is! Map) return null;
-    return DateTime.tryParse(
-      (value['dateTime'] ?? value['date'])?.toString() ?? '',
-    );
-  }
+  static DateTime? eventTime(Object? value) => googleCalendarEventTime(value);
+
+  GoogleCalendarUpdate _calendarUpdate(
+    String account,
+    String calendarId,
+    Map<String, dynamic> event,
+  ) => GoogleCalendarUpdate.fromEvent(
+    _id('google-calendar', '$calendarId:${event['id']}'),
+    account,
+    calendarId,
+    event,
+  );
 
   void _storeCalendarEvent(
     String account,
     String calendarId,
     Map<String, dynamic> event,
   ) {
-    final key = _id('google-calendar', '$calendarId:${event['id']}');
-    final old = store.rows('SELECT * FROM calendar_events WHERE event_key=?', [
-      key,
-    ]).firstOrNull;
-    final cancelled = event['status'] == 'cancelled';
-    if (cancelled) {
-      if (old != null) {
-        store.db.execute(
-          "UPDATE calendar_events SET status='cancelled',synced=? WHERE event_key=?",
-          [DateTime.now().millisecondsSinceEpoch, key],
-        );
-      }
-      return;
+    final update = _calendarUpdate(account, calendarId, event);
+    _queries.storeCalendarEvent(update);
+    if (update.status != 'cancelled' &&
+        update.starts != null &&
+        update.ends != null) {
+      _check(account);
     }
-    final start = eventTime(event['start']), end = eventTime(event['end']);
-    if (start == null || end == null) return;
-    final title = event['summary'] as String? ?? '[Untitled meeting]';
-    final meeting = old?['meeting_id'] as int? ?? store.meeting(title);
-    if (old != null && old['starts'] != start.millisecondsSinceEpoch) {
-      store.db.execute(
-        'UPDATE meeting_details SET reminder=0 WHERE meeting_id=?',
-        [meeting],
-      );
-    }
-    store.db.execute('UPDATE meetings SET title=? WHERE id=?', [
-      title,
-      meeting,
-    ]);
-    store.db.execute(
-      'INSERT INTO calendar_events VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(event_key) DO UPDATE SET starts=excluded.starts,ends=excluded.ends,status=excluded.status,metadata=excluded.metadata,synced=excluded.synced',
-      [
-        key,
-        account,
-        calendarId,
-        event['id'],
-        meeting,
-        '', // Calendar events are meeting metadata, not knowledge sources.
-        start.millisecondsSinceEpoch,
-        end.millisecondsSinceEpoch,
-        event['status'] as String? ?? 'confirmed',
-        jsonEncode(event),
-        DateTime.now().millisecondsSinceEpoch,
-      ],
-    );
-    _check(account);
   }
 
   @override
@@ -541,32 +454,15 @@ class GoogleConnections implements ConnectedSources {
       keys.add(_id('google-calendar', '$calendar:${event['id']}'));
       events.add((calendar, event));
     }
-    store.db.execute('BEGIN');
-    try {
-      for (final (calendar, event) in events) {
-        _storeCalendarEvent(account, calendar, event);
-      }
-      for (final row in store.rows(
-        "SELECT event_key FROM calendar_events WHERE account=? AND event_key LIKE 'google-calendar-%'",
-        [account],
-      )) {
-        if (!keys.contains(row['event_key'])) {
-          store.db.execute(
-            "UPDATE calendar_events SET status='cancelled',synced=? WHERE event_key=?",
-            [DateTime.now().millisecondsSinceEpoch, row['event_key']],
-          );
-        }
-      }
-      _check(account);
-      store.setPreference(
-        'googleCalendarLastSync',
-        DateTime.now().millisecondsSinceEpoch.toString(),
-      );
-      store.db.execute('COMMIT');
-    } catch (_) {
-      store.db.execute('ROLLBACK');
-      rethrow;
-    }
+    _queries.replaceCalendarSnapshot(
+      account,
+      [
+        for (final (calendar, event) in events)
+          _calendarUpdate(account, calendar, event),
+      ],
+      keys,
+      () => _check(account),
+    );
   }
 
   @override
@@ -590,37 +486,29 @@ class GoogleConnections implements ConnectedSources {
       store.setPreference('googleLastSyncAccount', account);
       return;
     }
-    for (final source in store.rows(
-      'SELECT google_sources.*,sources.revision AS source_revision FROM google_sources JOIN sources ON sources.id=google_sources.source_id WHERE account=? AND deleted=0',
-      [account],
-    )) {
+    for (final source in _queries.refreshSources(account)) {
       try {
         await _checkpoint(account);
-        if (store.rows('SELECT id FROM sources WHERE id=? AND deleted=0', [
-          source['source_id'],
-        ]).isEmpty) {
+        if (!_queries.sourceExists(source.id)) {
           continue;
         }
         final file = await auth.apiJson(
-          _drive('files/${Uri.encodeComponent(source['file_id'] as String)}', {
+          _drive('files/${Uri.encodeComponent(source.fileId)}', {
             'fields':
                 'id,name,mimeType,modifiedTime,trashed,webViewLink,capabilities(canDownload)',
             'supportsAllDrives': 'true',
           }),
         );
         _check(account);
-        if (store.rows(
-          "SELECT id FROM sources WHERE id=? AND revision=? AND deleted=0 AND locally_edited=0 AND provenance NOT LIKE 'user edit; %'",
-          [source['source_id'], source['source_revision']],
-        ).isEmpty) {
+        if (!_queries.refreshStillCurrent(source.id, source.revision)) {
           continue;
         }
-        _setSourceUri(source['source_id'] as String, file['webViewLink']);
+        _queries.setSourceUri(source.id, file['webViewLink']);
         if (file['trashed'] == true) {
-          await domain.delete(source['source_id'] as String);
-        } else if (file['modifiedTime'] != source['modified']) {
+          await domain.delete(source.id);
+        } else if (file['modifiedTime'] != source.modified) {
           await importDriveFile(
-            source['file_id'] as String,
+            source.fileId,
             metadata: file,
             preserveDeleted: true,
           );
@@ -629,15 +517,9 @@ class GoogleConnections implements ConnectedSources {
         failures.add('Drive refresh: $error');
       }
     }
-    for (final folder in store.rows(
-      'SELECT folder_id FROM google_folders WHERE account=?',
-      [account],
-    )) {
+    for (final folder in _queries.folders(account)) {
       try {
-        await importDriveFolder(
-          folder['folder_id'] as String,
-          refreshing: true,
-        );
+        await importDriveFolder(folder, refreshing: true);
       } catch (error) {
         failures.add('Drive folder refresh: $error');
       }
@@ -657,17 +539,8 @@ class GoogleConnections implements ConnectedSources {
   }
 
   @override
-  List<Map<String, dynamic>> attachments(int meeting) {
-    final row = store.rows(
-      'SELECT metadata FROM calendar_events WHERE meeting_id=?',
-      [meeting],
-    ).firstOrNull;
-    if (row == null) return [];
-    return ((jsonDecode(row['metadata'] as String) as Map)['attachments']
-                as List? ??
-            [])
-        .cast<Map<String, dynamic>>();
-  }
+  List<Map<String, dynamic>> attachments(int meeting) =>
+      _queries.attachments(meeting);
 
   @override
   Future<void> importAttachments(
@@ -687,7 +560,7 @@ class GoogleConnections implements ConnectedSources {
         if (current != null && !current()) {
           throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
         }
-        failures.add(_importFailure('${attachment['title']}', error));
+        failures.add(googleImportFailure('${attachment['title']}', error));
       }
     }
     if (failures.isNotEmpty) throw StateError(failures.join('\n'));
@@ -702,62 +575,20 @@ class GoogleConnections implements ConnectedSources {
     }
     final account = auth.account;
     _check(account);
-    final events = store.rows(
-      "SELECT calendar_events.*,meeting_details.reminder FROM calendar_events JOIN meeting_details ON meeting_details.meeting_id=calendar_events.meeting_id WHERE account=? AND status!='cancelled' AND starts>? AND starts<=? AND reminder=0",
-      [
-        account,
-        now.millisecondsSinceEpoch,
-        now.add(const Duration(minutes: 5)).millisecondsSinceEpoch,
-      ],
-    );
+    final events = _queries.reminders(account, now);
     for (final row in events) {
       _check(account);
-      final event = jsonDecode(row['metadata'] as String) as Map;
+      final event = jsonDecode(row.metadata) as Map;
       if ((event['start'] as Map)['date'] != null) continue;
       await deliver(
         'Upcoming meeting: ${event['summary'] ?? 'Untitled meeting'}',
       );
       _check(account);
-      store.db.execute(
-        'UPDATE meeting_details SET reminder=1 WHERE meeting_id=?',
-        [row['meeting_id']],
-      );
+      _queries.markReminderDelivered(row.meeting);
     }
   }
 
   void close() {
     _closed = true;
   }
-}
-
-/// A bounded linear scan avoids regex backtracking on untrusted invitations.
-Future<String> calendarDescriptionText(String description) async {
-  final text = description.length > 256 * 1024
-      ? description.substring(0, 256 * 1024)
-      : description;
-  try {
-    // A stricter invitation cap rejects pathological markup before parser startup.
-    if ('<'.allMatches(text).length > 4096) {
-      throw StateError('Too much invitation markup');
-    }
-    return await parseWebPage(
-      Uint8List.fromList(utf8.encode(text)),
-      mimeType: 'text/html',
-    );
-  } catch (_) {
-    // Fall back to a bounded linear scan, never an unbounded regular expression.
-  }
-  final output = StringBuffer();
-  var inTag = false;
-  for (final unit in text.codeUnits) {
-    if (unit == 60) {
-      if (!inTag) output.write(' ');
-      inTag = true;
-    } else if (unit == 62 && inTag) {
-      inTag = false;
-    } else if (!inTag) {
-      output.writeCharCode(unit);
-    }
-  }
-  return output.toString();
 }

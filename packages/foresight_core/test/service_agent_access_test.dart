@@ -6,7 +6,6 @@ import 'dart:io';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/service.dart';
 import 'package:foresight_core/src/rpc_error.dart';
-import 'package:foresight_core/src/application.dart';
 import 'package:test/test.dart';
 import 'package:clock/clock.dart';
 
@@ -410,7 +409,7 @@ void main() {
     'desktop detach observes a failing stop and leaves service responsive',
     () async {
       await attach();
-      final app = service.domain.application;
+      final app = service.application;
       final id = service.domain.store.meeting('Recording');
       app.recording = FailingDetachRecording();
       app.recordingMeeting = id;
@@ -425,7 +424,7 @@ void main() {
     'an oversized reply fails its request without dropping the desktop or its recording',
     () async {
       await attach();
-      final app = service.domain.application;
+      final app = service.application;
       final recording = CountingRecording();
       app.recording = recording;
       app.recordingMeeting = service.domain.store.meeting('Recording');
@@ -526,7 +525,7 @@ void main() {
           'method': 'sources.import',
           'args': {
             'title': 'Large',
-            'content': 'x' * (maxServiceMessage - 1024 * 1024),
+            'text': 'x' * (maxServiceMessage - 1024 * 1024),
           },
         }),
       );
@@ -578,7 +577,7 @@ void main() {
   });
   test('frames JSON cannot encode fail alone, not the desktop', () async {
     await attach();
-    final app = service.domain.application;
+    final app = service.application;
     final recording = CountingRecording();
     app.recording = recording;
     app.recordingMeeting = service.domain.store.meeting('Recording');
@@ -611,7 +610,7 @@ void main() {
     'an oversized request is refused locally without dropping the desktop',
     () async {
       await attach();
-      final app = service.domain.application;
+      final app = service.application;
       final recording = CountingRecording();
       app.recording = recording;
       app.recordingMeeting = service.domain.store.meeting('Recording');
@@ -649,7 +648,7 @@ void main() {
   );
   test('an oversized event is dropped without dropping the desktop', () async {
     await attach();
-    final app = service.domain.application;
+    final app = service.application;
     final recording = CountingRecording();
     app.recording = recording;
     app.recordingMeeting = service.domain.store.meeting('Recording');
@@ -699,17 +698,38 @@ void main() {
         'sources.import_file',
       ]) {
         await expectLater(
-          agent.call(method, {'path': '/dev/zero', 'id': 1}),
-          throwsStateError,
+          agent.call(method, {
+            'path': '/dev/zero',
+            'id': method.startsWith('google.') ? 'account' : 1,
+          }),
+          throwsA(
+            isA<RpcError>().having(
+              (error) => error.code,
+              'code',
+              RpcErrorCode.denied,
+            ),
+          ),
         );
       }
       await expectLater(
         agent.call('security.attach_desktop', {'token': 'forged'}),
-        throwsStateError,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.denied,
+          ),
+        ),
       );
       await expectLater(
         agent.call('security.allow_import_root', {'path': '/'}),
-        throwsStateError,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.denied,
+          ),
+        ),
       );
       expect(await agent.call('notes.list'), hasLength(1));
     },
@@ -722,14 +742,29 @@ void main() {
         (e) => e['event'] == 'approval',
       );
       final pending = agent.call('workspace.clear');
-      final denied = expectLater(pending, throwsStateError);
+      final denied = expectLater(
+        pending,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.denied,
+          ),
+        ),
+      );
       final event = await approval;
       await expectLater(
         agent.call('security.decide', {
           'approval_id': event['approval_id'],
           'allow': true,
         }),
-        throwsStateError,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.denied,
+          ),
+        ),
       );
       await desktop.call('security.decide', {
         'approval_id': event['approval_id'],
@@ -741,7 +776,13 @@ void main() {
       );
       final cancelled = expectLater(
         agent.call('google.sign_in'),
-        throwsStateError,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.denied,
+          ),
+        ),
       );
       await next;
       await desktop.close();
@@ -767,18 +808,36 @@ void main() {
         ..writeAsStringSync('secret');
       await expectLater(
         agent.call('sources.import_file', {'path': outside.path}),
-        throwsStateError,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.internal,
+          ),
+        ),
       );
       await desktop.call('security.allow_import_root', {'path': temp.path});
       await expectLater(
         agent.call('sources.import_file', {
           'path': '${temp.path}/profile/.desktop-capability',
         }),
-        throwsStateError,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.internal,
+          ),
+        ),
       );
       await expectLater(
         agent.call('sources.import_file', {'path': '/dev/zero'}),
-        throwsStateError,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.internal,
+          ),
+        ),
       );
       expect(service.domain.store.sources, isEmpty);
     },

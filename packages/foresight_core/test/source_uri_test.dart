@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/persistence_fixtures.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:foresight_core/src/helper.dart';
@@ -128,6 +129,7 @@ void main() {
       'url:https://example.test/item?q=a%20b',
     );
     store.db.execute('UPDATE sources SET revision=9');
+    legacyLabelFixture(store.db);
     store.db.execute(
       "UPDATE source_details SET imported=123,changed=456,labels='[\"Team\"]'",
     );

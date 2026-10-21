@@ -14,6 +14,10 @@ case "$task_platform" in
   linux) task_native="$task_build/native/libforesight_native.so" ;;
   *) echo 'Platform must be linux or macos' >&2; exit 2 ;;
 esac
+"$task_python" "$task_root/tools/verify_toolchain_pins.py" "$task_gate"
+if [[ "$task_gate" == core && -n "${FORESIGHT_DART:-}" && "$FORESIGHT_DART" != dart ]]; then
+  "$task_python" "$task_root/tools/verify_toolchain_pins.py" core --dart "$FORESIGHT_DART"
+fi
 case "$task_gate" in
   core)
   (

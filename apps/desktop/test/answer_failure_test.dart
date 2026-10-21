@@ -4,11 +4,11 @@ import 'dart:io';
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:grpc/grpc.dart';
-import 'package:open_foresight/domain.dart';
-import 'package:open_foresight/helper.dart';
-import 'package:open_foresight/native.dart';
-import 'package:open_foresight/store.dart';
-import 'package:open_foresight/generated/rag_service.pbgrpc.dart';
+import 'package:foresight_core/src/domain.dart';
+import 'package:foresight_core/src/helper.dart';
+import 'package:foresight_core/src/native.dart';
+import 'package:foresight_core/src/store.dart';
+import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
 import 'package:foresight_test_support/delayed_index_service.dart'
     show DelayedIndexService;
 
@@ -75,8 +75,9 @@ void main() {
       );
       final helper = Helper(socket, '${tmp.path}/helper');
       final domain = Domain(store, helper)..generator = FailedAnswerRuntime();
+      final app = Application(domain);
       try {
-        final answer = (await domain.ask('Who is Mira Shah?').toList()).last;
+        final answer = (await app.ask('Who is Mira Shah?').toList()).last;
         expect(answer, 'Answer generation failed. Please retry.');
         expect(answer, isNot(contains('Insufficient')));
         final saved = store.rows('SELECT * FROM answers').single;
@@ -85,6 +86,7 @@ void main() {
         expect(saved['body'], isNot(contains('Insufficient')));
         expect(jsonDecode(saved['citations'] as String), isEmpty);
       } finally {
+        await app.close();
         domain.close();
         domain.generator?.close();
         await helper.close();

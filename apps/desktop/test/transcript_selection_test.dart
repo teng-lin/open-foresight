@@ -1,11 +1,12 @@
+import 'package:foresight_core/src/application.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/domain.dart';
+import 'package:foresight_core/src/domain.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/store.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 void main() {
@@ -58,9 +59,11 @@ void main() {
         await tester.pumpWidget(
           Foresight(
             TestDesktopConnection(
-              Domain(
-                store,
-                OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+              Application(
+                Domain(
+                  store,
+                  OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+                ),
               ),
             ),
             deviceLoader: () async => [],

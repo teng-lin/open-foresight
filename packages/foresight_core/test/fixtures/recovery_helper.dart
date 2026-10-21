@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/helper_protocol_version.dart';
 // A separate gRPC process: lifecycle tests exercise actual EOF, signals and
 // reconnects while keeping inference and downloaded models out of the fixture.
 import 'dart:async';
@@ -11,7 +12,7 @@ import 'package:grpc/grpc.dart';
 class _Rag extends RagServiceBase {
   @override
   Future<PingResponse> ping(ServiceCall call, PingRequest request) async =>
-      PingResponse(success: true, version: '1.0.3');
+      PingResponse(success: true, version: helperProtocolVersion);
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

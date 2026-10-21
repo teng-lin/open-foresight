@@ -28,6 +28,7 @@ class RemoteFixture {
   final ended = <Socket>{};
   final requests = <Map<String, dynamic>>[];
   Map<String, dynamic> status = {
+    'application_api_version': 1,
     'capture': <String, dynamic>{},
     'google': <String, dynamic>{},
     'sources_paused': false,
@@ -133,7 +134,10 @@ class RemoteFixture {
     final cleanup = <FutureOr<void> Function()>[];
     if (_hasRemote) {
       _hasRemote = false;
-      cleanup.addAll([remote.close, remote.store.close, remote.helper.close]);
+      cleanup.add(() async {
+        remote.close();
+        await remote.closed;
+      });
     }
     cleanup.add(() {
       for (final socket in sockets) {

@@ -7,10 +7,10 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/domain.dart';
+import 'package:foresight_core/src/domain.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/native.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/native.dart';
+import 'package:foresight_core/src/store.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 class NotesRuntime extends NativeRuntime {
@@ -81,8 +81,9 @@ void main() {
       );
       final generator = NotesRuntime();
       final domain = Domain(store, helper);
+      final app = Application(domain);
       await tester.pumpWidget(
-        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+        Foresight(TestDesktopConnection(app), deviceLoader: () async => []),
       );
       final dynamic state = tester.state(find.byType(Workspace));
       state.update(() => state.meetingFeature.meetingId = id);
@@ -101,8 +102,9 @@ void main() {
         tester,
         () =>
             generator.prompt.isNotEmpty &&
-            (domain.application.captureState['note_enhancements'] as Map).values
-                .every((value) => (value as Map)['active'] != true),
+            (app.captureState['note_enhancements'] as Map).values.every(
+              (value) => (value as Map)['active'] != true,
+            ),
       );
       await tester.pumpAndSettle();
       expect(
@@ -137,7 +139,7 @@ void main() {
         findsOneWidget,
       );
       final snapshot =
-          await domain.command(Operation.meetingsGet, {'id': id}) as Map;
+          await app.call(Operation.meetingsGet.wire, {'id': id}) as Map;
       final transcript = snapshot['transcript'] as List;
       expect(transcript.map((t) => t['speaker_id']), [0, 1, null]);
       expect(transcript.map((t) => t['speaker_label']), [
@@ -199,7 +201,7 @@ void main() {
         RepaintBoundary(
           key: boundary,
           child: Foresight(
-            TestDesktopConnection(Domain(store, helper)),
+            TestDesktopConnection(Application(Domain(store, helper))),
             deviceLoader: () async => [],
           ),
         ),
@@ -270,9 +272,11 @@ void main() {
         await tester.pumpWidget(
           Foresight(
             TestDesktopConnection(
-              Domain(
-                store,
-                OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+              Application(
+                Domain(
+                  store,
+                  OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+                ),
               ),
             ),
             deviceLoader: () async => [],
@@ -356,9 +360,11 @@ void main() {
           await tester.pumpWidget(
             Foresight(
               TestDesktopConnection(
-                Domain(
-                  store,
-                  OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+                Application(
+                  Domain(
+                    store,
+                    OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+                  ),
                 ),
               ),
               deviceLoader: () async => [],

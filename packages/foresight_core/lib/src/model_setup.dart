@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
 import 'store.dart';
+import 'persistence/domain_queries.dart';
+import 'store_reader.dart';
 import 'model_asset_lifecycle.dart';
 import 'model_acquisition.dart' show ForesightSharedConfig;
 import 'native.dart';
@@ -279,8 +281,11 @@ Future<String> _prepareDedicatedQuery(
   }
 }
 
-String? dedicatedQuerySetupProblem(Store store) {
-  final model = store.model(dedicatedQueryModelKind);
+String? dedicatedQuerySetupProblem(Store store) =>
+    _dedicatedQuerySetupProblem(store.model(dedicatedQueryModelKind));
+String? readerDedicatedQuerySetupProblem(StoreReader store) =>
+    _dedicatedQuerySetupProblem(store.model(dedicatedQueryModelKind)?.toRow());
+String? _dedicatedQuerySetupProblem(Map<String, Object?>? model) {
   if (model == null) {
     return 'Import the supported dedicated question model to enable automatic questions.';
   }
@@ -323,7 +328,7 @@ Future<int> registerInstalledModels(Store store, String manifestPath) async {
     'embedding',
     dedicatedQueryModelKind,
   ]) {
-    if (store.rows('SELECT kind FROM models WHERE kind=?', [kind]).isNotEmpty) {
+    if (DomainQueries(store).hasModel(kind)) {
       continue;
     }
     final entry = manifest[kind] as Map<String, dynamic>?;
@@ -371,8 +376,11 @@ Future<int> registerInstalledModels(Store store, String manifestPath) async {
   return registered;
 }
 
-String? speechSetupProblem(Store store) {
-  final model = store.model('speech');
+String? speechSetupProblem(Store store) =>
+    _speechSetupProblem(store.model('speech'));
+String? readerSpeechSetupProblem(StoreReader store) =>
+    _speechSetupProblem(store.model('speech')?.toRow());
+String? _speechSetupProblem(Map<String, Object?>? model) {
   if (model == null) {
     return 'Set up a speech model and runner before recording.';
   }
@@ -392,7 +400,15 @@ bool needsModel(Store store, String kind) {
   if (kind == dedicatedQueryModelKind) {
     return dedicatedQuerySetupProblem(store) != null;
   }
-  final model = store.model(kind);
+  return _needsModel(store.model(kind), kind);
+}
+
+bool readerNeedsModel(StoreReader store, String kind) =>
+    kind == dedicatedQueryModelKind
+    ? readerDedicatedQuerySetupProblem(store) != null
+    : _needsModel(store.model(kind)?.toRow(), kind);
+
+bool _needsModel(Map<String, Object?>? model, String kind) {
   if (model == null) return true;
   final path = model['path'] as String;
   if (kind == 'embedding' &&

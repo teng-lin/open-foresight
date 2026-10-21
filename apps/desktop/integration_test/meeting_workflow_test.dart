@@ -11,11 +11,11 @@ import 'package:integration_test/integration_test.dart';
 import 'package:foresight_test_support/capture_poll.dart';
 import 'package:foresight_test_support/capture_process.dart';
 import 'package:open_foresight/main.dart' as app;
-import 'package:open_foresight/store.dart';
-import 'package:open_foresight/graph_layout.dart';
+import 'package:foresight_core/src/store.dart';
+import 'package:foresight_core/src/graph_layout.dart';
 import 'package:open_foresight/graph_rendering.dart';
 import 'package:open_foresight/cluster_rendering.dart';
-import 'package:open_foresight/graph_persistence.dart';
+import 'package:foresight_core/src/graph_persistence.dart';
 import 'package:foresight_core/src/model_setup.dart';
 import '../test_support/meeting_panel.dart';
 import '../test_support/file_manager_fixture.dart';
@@ -96,17 +96,14 @@ Future<void> closeWorkspace(WidgetTester tester, dynamic workspace) async {
   final saves = workspace.meetingFeature.meetingNoteSaves;
   final connection = workspace.d as RemoteDomain;
   final client = connection.client;
-  final helper = connection.helper;
   final commands = workspace.integrationFeature.commands;
   await tester.pumpWidget(const SizedBox.shrink());
   await tester.runAsync(() async {
     try {
       await saves.close().timeout(const Duration(seconds: 30));
     } finally {
-      await Future.wait<void>([
-        client.close(),
-        helper.close(),
-      ]).timeout(const Duration(seconds: 30));
+      connection.close();
+      await connection.closed.timeout(const Duration(seconds: 30));
     }
   });
   await waitUntil(

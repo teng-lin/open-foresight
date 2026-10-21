@@ -3,7 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/remote.dart';
 import 'package:foresight_test_support/remote_service.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/store.dart';
 import 'controller_fixture.dart';
 import 'pump_until.dart';
 
@@ -63,7 +63,10 @@ void main() {
       fixture.sockets.last.destroy();
       await pumpUntil(tester, () => state.meetingFeature.noteId == null);
       expect(state.meetingFeature.noteTitle.text, isEmpty);
-      await tester.runAsync(fixture.remote.helper.close);
+      await tester.runAsync(() async {
+        fixture.remote.close();
+        await fixture.remote.closed;
+      });
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pumpAndSettle();
     },
