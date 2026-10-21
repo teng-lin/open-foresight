@@ -126,20 +126,55 @@ Mac and all three inherited-ref export contexts exposed the same assertion.
 The production selection correctly retained broader transitional checks;
 these runs are failures, not passing gates.
 
-Activation follow-up `0ba60865` (integrated as `285a3b36`) corrects that assertion,
-expands optional API outages to broader checks, resolves qualification decisions
-once per changes job, recovers broad sweeps after retirement proof expires, and
-documents proof renewal. Independent native review converged; its initial focused
-suite passed 259 tests plus 141 subtests. Full combined verification is pending.
+Activation follow-up `0ba60865` (integrated as `285a3b36`) corrected that
+assertion, expands optional API outages to broader checks, resolves qualification
+decisions once per changes job, recovers broad sweeps after retirement proof
+expires, and documents proof renewal. Native review converged. Its complete
+archive passed 4,882 tests with 29 skips; source/ref checks exposed a fixture ZIP
+wall-clock timestamp flake, subsequently fixed with frozen ZIP entry metadata.
+No checksum or provenance assertion was removed.
 
-Claude's component reviews found real defects in dependency composition,
-readiness, metrics, selector ownership, DMG inventory and acceptance replay.
-Fixed component findings require review of the composed source. The acceptance
-replay follow-up must use original historical failed-step evidence and exact
-source ranges; a zero-miss selector replay alone is insufficient. Its frozen
-baseline and bounded hosted refresh remain under implementation and review.
-The final integrated Claude review is still running. No missing verdict counts
-as convergence.
+The integrated follow-ups through `bd3823c7` additionally implement:
+
+- Distinct actual fork archive forwarding, retaining original SDK bytes,
+  provenance and PR tier without another SDK save or compilation.
+- Publisher qualification that requires a verified shared-tooling pull and this
+  qualification run's successful publication. Compatible older tooling keeps its
+  original producer; no local fallback can establish publication qualification.
+- The actual recording step's GitHub credentials, positive nested producer IDs,
+  clean invalidation of deleted proof rows, and retained failure/retry tracking.
+- Active writer and checkout-policy control closure. The unused
+  `dependency-seed-current` allowlist row is removed; the legacy dependency-seed
+  contract and guarded writers remain.
+- Fresh scheduled nightly checks on unchanged source until both retirement and
+  acceptance narrowing qualify. A skipped nightly never counts as real proof.
+- Real historical replay: 203 original failed jobs plus one independently proven
+  workflow startup with no executed job. Original attempts, event bases, source
+  ranges, raw job logs and API windows are frozen with checksums. The final
+  baseline SHA256 is
+  `658962e771567b870030bc87c04f5a9b6fee278fb5213d7f0c2fa3fc8e93e9b5`.
+- Zero missed phases and zero unresolved evidence, with replay coverage through
+  the actual final qualification nightly's successful uploader completion.
+  The no-job startup is an outer workflow guard, never fabricated phase evidence.
+- Daily main-only history refresh until qualified. Only authenticated, unchanged
+  historical metadata avoids repeat API reads; every refresh enumerates live run
+  metadata again to detect old reruns. Compact headers, bounded lookup and read
+  budgets keep observation artifacts practical. This does not cache current test
+  results or authorize PR receipt reuse.
+
+Native cross-review converged on these follow-ups. HanSolo `9dffc95b` passed
+2,499 affected Python tests plus 1,148 subtests, with zero skips. The later
+`560952b4` complete-export full run reached 95.79% coverage with 4,901 passing
+and 29 skipped tests, but failed three evaluation fixtures because its temporary
+root was under `.cache`. All 23 tests in that affected file passed after moving
+the temporary root to private `/var/tmp`; the original full run remains recorded
+as a failure. Final combined full gates use private `/var/tmp` roots.
+
+Claude's full integrated `aa46f12b` review and follow-up `a840ea2b` review found
+real composition, qualification, credentials and recovery defects. Their fixes
+are integrated and natively reviewed; the final combined historical-replay and
+workflow changes still need a saved Claude verdict. An interrupted review with
+no saved result remains incomplete. No missing verdict counts as convergence.
 
 Agy implementation review was attempted repeatedly but returned an account quota
 error and no verdict. The latest reset diagnostic was approximately 70 hours;
@@ -157,5 +192,5 @@ for new producer paths. Existing checks and guarded publishers stay in place
 until actual replacement qualification passes. New activation paths must fail
 closed; isolated qualification cannot become production validation or release
 bytes. Two real nightlies, Arch drift and the four-green-week acceptance-narrowing
-gate remain requirements. Final combined verification, GitHub PR creation, hosted qualification, activation
-and merge are not yet complete.
+gate remain requirements. The implementation is locally integrated. Final combined verification, GitHub PR
+creation, hosted qualification, activation and merge are not yet complete.
