@@ -170,11 +170,36 @@ root was under `.cache`. All 23 tests in that affected file passed after moving
 the temporary root to private `/var/tmp`; the original full run remains recorded
 as a failure. Final combined full gates use private `/var/tmp` roots.
 
-Claude's full integrated `aa46f12b` review and follow-up `a840ea2b` review found
-real composition, qualification, credentials and recovery defects. Their fixes
-are integrated and natively reviewed; the final combined historical-replay and
-workflow changes still need a saved Claude verdict. An interrupted review with
-no saved result remains incomplete. No missing verdict counts as convergence.
+## Final local verification
+
+Frozen implementation `e6a39716dd6e5673f78ac5a2f31d16f960fbd486`, tree
+`e28eb32711bdd1d956cf527b879d259892cc5616`, passed the complete local matrix:
+
+| Check | Result |
+| --- | --- |
+| Full source Python coverage gate | 5,098 passed, 29 expected platform/opt-in skips; 96.04% coverage |
+| Complete source export without `.git` | Same 5,098 passed, 29 skips and 96.04%; independent exit 0 |
+| Unrelated PR, main and unset inherited refs | Each 82 affected modules: 3,348 passed, 1 opt-in Docker skip, 1,197 subtests |
+| HanSolo affected Python suites | 64 modules: 2,693 passed plus 1,166 subtests; zero skips |
+| Both actual Apple DMG contracts | 2/2 passed in 28.901 seconds |
+| Static checks | Ruff, mypy (159 files), timeout checker, actionlint 1.7.7 with ShellCheck 0.11.0, plain `git diff --check` |
+
+Linux and Mac complete archives match SHA256
+`d8df2b4cf179135fd1213ccabfd67fe704748be96028dad76cc30e528ae7744b`.
+The source/export/ref result record is
+`/home/blackmyth/.cache/open-foresight/ci-activation-followup-checks/validation-e6a39716.json`;
+individual logs use the same head suffix. Mac logs, JUnit and status files are
+under `/var/tmp/ofci-final/log/*-e6a39716.*`. Subsequent edits to this execution
+record are documentation only; they do not extend these results to changed code.
+
+Native implementation and cross-component reviews converged. Claude's full
+integrated `aa46f12b` review and follow-up `a840ea2b` review found real composition,
+qualification, credentials and recovery defects; their fixes are integrated,
+natively reviewed and covered by the final matrix. The final `e6a39716` Claude
+pass returned an account weekly-limit error without a verdict, with reset shown
+as 11 p.m. America/New_York. Its original result is retained under
+`integration-review3/`; this review is incomplete. An earlier interrupted pass
+also has no verdict. No unavailable review counts as convergence.
 
 Agy implementation review was attempted repeatedly but returned an account quota
 error and no verdict. The latest reset diagnostic was approximately 70 hours;
@@ -192,5 +217,7 @@ for new producer paths. Existing checks and guarded publishers stay in place
 until actual replacement qualification passes. New activation paths must fail
 closed; isolated qualification cannot become production validation or release
 bytes. Two real nightlies, Arch drift and the four-green-week acceptance-narrowing
-gate remain requirements. The implementation is locally integrated. Final combined verification, GitHub PR
-creation, hosted qualification, activation and merge are not yet complete.
+gate remain requirements. The implementation and local combined verification are complete. GitHub PR
+creation, hosted checks, main-only qualification, activation and merge remain
+pending. Main-only qualification follows merge; missing proofs preserve broader
+checks throughout that interval.

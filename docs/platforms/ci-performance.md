@@ -1428,8 +1428,8 @@ verifies that the retained archive bytes, PR tier and original SDK provenance
 survive without another SDK save or compilation. These main-dispatch exercises
 do not impersonate a fork event or authorize PR bytes for main consumers.
 
-The unused `dependency-seed-current` producer allowlist row was removed after
-its callers moved to dedicated publication. The legacy `dependency-seed` row,
+The unused `dependency-seed-current` producer allowlist row had no consumers
+and was removed. The legacy `dependency-seed` row,
 its attempt-1 qualification and existing guarded publication jobs remain.
 
 ### Frozen reliability and runtime observations
