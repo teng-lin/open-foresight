@@ -39,7 +39,7 @@ void requireEmbeddingBundle(String path) {
 class Store {
   final Database db;
   final String path;
-  static const schemaVersion = 14;
+  static const schemaVersion = 15;
 
   /// Names one workspace between clears. SQLite reuses INTEGER PRIMARY KEY
   /// values after a clear, so a caller holding an ID sends this back with it.
@@ -283,6 +283,16 @@ class Store {
         }
         db.execute(
           'CREATE TABLE IF NOT EXISTS meeting_summary_checkpoints(meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,artifact_id INTEGER NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,input_length INTEGER NOT NULL,input_digest TEXT NOT NULL,identity TEXT NOT NULL)',
+        );
+      case 15:
+        db.execute(
+          "UPDATE artifacts SET kind='actions' WHERE kind='action_items'",
+        );
+        db.execute(
+          'CREATE TABLE IF NOT EXISTS meeting_tasks(id INTEGER PRIMARY KEY,meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,task_key TEXT NOT NULL,task TEXT NOT NULL,owner TEXT,due TEXT,status TEXT NOT NULL,evidence TEXT NOT NULL,input_revision INTEGER NOT NULL,stale INTEGER NOT NULL DEFAULT 0,manual INTEGER NOT NULL DEFAULT 0,UNIQUE(meeting_id,task_key))',
+        );
+        db.execute(
+          'CREATE TABLE IF NOT EXISTS document_summary_cache(cache_key TEXT PRIMARY KEY,source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,source_revision INTEGER NOT NULL,body TEXT NOT NULL,identity TEXT NOT NULL,clipped INTEGER NOT NULL DEFAULT 0)',
         );
       default:
         throw StateError('Missing application database migration $version');
@@ -885,6 +895,7 @@ class Store {
       if (kind == 'query-detection') ...[
         'legacy_query_cpu',
         'legacy_query_cpu_encrypted',
+        'raw_query_jsonl_v1',
       ],
       if (kind == 'embedding') ...[
         'litert_lm_embedding_cpu',

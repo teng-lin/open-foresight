@@ -1,4 +1,5 @@
 import 'rpc_error.dart';
+import 'package:grpc/grpc.dart' show CallOptions;
 import 'dart:async';
 import 'text_budget.dart';
 import 'domain.dart';
@@ -14,7 +15,9 @@ import 'chat_sources.dart';
 import 'reference_chat_prompt.dart';
 import 'reference_chat_history.dart';
 import 'reference_chat_response.dart';
-import 'reference_tokenizer.dart';
+import 'answer_source_scope.dart';
+import 'summary_generator.dart';
+import 'model_gate.dart';
 import 'generated/rag_service.pbgrpc.dart';
 
 /// One answer lifecycle, separate from workspace indexing and worker ownership.
@@ -26,6 +29,12 @@ class ConversationAnswer {
   final int? meetingId;
   final bool Function()? current;
   final bool useWeb;
+  final AnswerSourceScope? sourceScope;
+  String get scopeIdentity =>
+      sourceScope?.identity ?? AnswerSourceScope('workspace', null).identity;
+  bool get privateScope => sourceScope?.ids != null;
+  String get memoryKey =>
+      'web-memory-v2:${summaryDigest(jsonEncode([store.model('generation'), generator?.effectiveState['context_length'], 'utf8-byte-history-v1', scopeIdentity]))}:$conversation';
   late final int generation = domain.workspaceGeneration;
   ConversationAnswer(
     this.domain,
@@ -35,6 +44,7 @@ class ConversationAnswer {
     this.meetingId,
     this.current,
     this.useWeb = false,
+    this.sourceScope,
   });
   Store get store => domain.store;
   Helper get helper => domain.helper;
@@ -42,10 +52,19 @@ class ConversationAnswer {
   bool get webSearchAvailable => domain.webSearchAvailable;
   int get workspaceGeneration => domain.workspaceGeneration;
   bool get _closed => domain.closed;
-  bool get modelBusy => domain.modelGate.modelBusy;
+  bool get modelBusy =>
+      domain.modelGate.modelBusy ||
+      (domain.modelGate is GenerationReservationGate &&
+          (domain.modelGate as GenerationReservationGate).generationReserved);
   SearchCallbacks _searchCallbacks() => domain.searchCallbacks();
   void ensureCurrent() {
     domain.checkWorkspace(generation);
+    if (modelBusy) {
+      throw RpcError(
+        RpcErrorCode.busy,
+        'Another workflow owns the generation model',
+      );
+    }
     if (current != null && !current!()) {
       throw RpcError(RpcErrorCode.cancelled, 'Answer cancelled');
     }
@@ -78,6 +97,7 @@ class ConversationAnswer {
       );
       // Capture before checkpoint writes can change lastInsertRowId.
       final answerId = store.db.lastInsertRowId;
+      store.setPreference('answerScope.v1.$answerId', scopeIdentity);
       if (memoryMessages != null) {
         store.setPreference('webAnswer.v1.$answerId', 'true');
         // A completed turn may have arrived while this request was generating.
@@ -85,8 +105,13 @@ class ConversationAnswer {
         final intervening = referenceChatHistory(
           store.rows(
             "SELECT question,body,model_response FROM answers WHERE conversation=? AND status='completed' AND id>? AND id<? "
-            "AND EXISTS(SELECT 1 FROM preferences WHERE key='webAnswer.v1.'||answers.id AND value='true') ORDER BY id",
-            [conversation, historyThroughAnswerId!, answerId],
+            "AND EXISTS(SELECT 1 FROM preferences WHERE key='webAnswer.v1.'||answers.id AND value='true') ${privateScope ? "AND EXISTS(SELECT 1 FROM preferences WHERE key='answerScope.v1.'||answers.id AND value=?)" : ''} ORDER BY id",
+            [
+              conversation,
+              historyThroughAnswerId!,
+              answerId,
+              if (privateScope) scopeIdentity,
+            ],
           ),
         );
         final committedMessages = [
@@ -98,7 +123,7 @@ class ConversationAnswer {
           'INSERT INTO conversation_memory(conversation,through_answer_id,messages,token_counts) VALUES(?,?,?,?) '
           'ON CONFLICT(conversation) DO UPDATE SET through_answer_id=excluded.through_answer_id,messages=excluded.messages,token_counts=excluded.token_counts',
           [
-            'web-only-v1:$conversation',
+            memoryKey,
             answerId,
             jsonEncode(committedMessages),
             jsonEncode([
@@ -140,14 +165,9 @@ class ConversationAnswer {
 
   Future<int> estimateMessage(Map<String, dynamic> message) async {
     ensureCurrent();
-    final tokenizer = helper.snapshot?.tokenizerReady == true
-        ? ReferenceRemoteTokenizer(helper.client)
-        : null;
     final count = await estimateReferenceHistoryTokens(
       message,
-      tokenize: tokenizer == null
-          ? null
-          : (text) => tokenizer.count(text, checkCurrent: ensureCurrent),
+      tokenize: (text) async => utf8.encode(text).length,
     );
     ensureCurrent();
     return count;
@@ -179,9 +199,42 @@ class ConversationAnswer {
     yield* generate();
   }
 
+  Future<RetrieveResponse> _retrieveCurrent(RetrieveRequest request) async {
+    ensureCurrent();
+    final call = helper.client.retrieveContext(
+      request,
+      options: CallOptions(timeout: const Duration(seconds: 15)),
+    );
+    final interrupted = Completer<RetrieveResponse>();
+    final monitor = Timer.periodic(const Duration(milliseconds: 20), (_) {
+      if (interrupted.isCompleted) return;
+      try {
+        ensureCurrent();
+      } catch (error, stack) {
+        interrupted.completeError(error, stack);
+        unawaited(call.cancel());
+      }
+    });
+    try {
+      final response = await Future.any([call, interrupted.future]);
+      ensureCurrent();
+      return response;
+    } catch (_) {
+      ensureCurrent();
+      rethrow;
+    } finally {
+      monitor.cancel();
+    }
+  }
+
   Stream<String> retrieve() async* {
     final scope = store.sourceSummaries
-        .where((s) => !useWeb && s['state'] == 'indexed')
+        .where(
+          (s) =>
+              !useWeb &&
+              s['state'] == 'indexed' &&
+              (sourceScope?.ids?.contains(s['id']) ?? true),
+        )
         .toList();
     if (scope.isEmpty && !useWeb) {
       const text = 'Insufficient context: import and index a source first.';
@@ -199,8 +252,8 @@ class ConversationAnswer {
     }
     previousQuestion =
         store.rows(
-              'SELECT question FROM answers WHERE conversation=? ORDER BY id DESC LIMIT 1',
-              [conversation],
+              "SELECT question FROM answers WHERE conversation=? ${privateScope ? "AND EXISTS(SELECT 1 FROM preferences WHERE key='answerScope.v1.'||answers.id AND value=?)" : ''} ORDER BY id DESC LIMIT 1",
+              [conversation, if (privateScope) scopeIdentity],
             ).firstOrNull?['question']
             as String?;
     followUp = isContextualFollowUp(
@@ -213,7 +266,7 @@ class ConversationAnswer {
     final revisions = {for (final s in scope) s['id']: s['revision']};
     final r = scope.isEmpty
         ? RetrieveResponse()
-        : await helper.client.retrieveContext(
+        : await _retrieveCurrent(
             RetrieveRequest(
               query: Query(textQuery: retrievalQuestion),
               maxResults: 24,
@@ -394,7 +447,7 @@ class ConversationAnswer {
             "SELECT through_answer_id,messages,token_counts FROM conversation_memory WHERE conversation=? "
             "AND EXISTS(SELECT 1 FROM answers WHERE id=through_answer_id AND conversation=? "
             "AND EXISTS(SELECT 1 FROM preferences WHERE key='webAnswer.v1.'||answers.id AND value='true'))",
-            ['web-only-v1:$conversation', conversation],
+            [memoryKey, conversation],
           )
         : <Map<String, Object?>>[];
     through = memoryRows.isEmpty
@@ -403,13 +456,13 @@ class ConversationAnswer {
     historyRows = useWeb
         ? store.rows(
             "SELECT id,question,body,model_response FROM answers WHERE conversation=? AND status='completed' AND id>? "
-            "AND EXISTS(SELECT 1 FROM preferences WHERE key='webAnswer.v1.'||answers.id AND value='true') ORDER BY id",
-            [conversation, through],
+            "AND EXISTS(SELECT 1 FROM preferences WHERE key='webAnswer.v1.'||answers.id AND value='true') ${privateScope ? "AND EXISTS(SELECT 1 FROM preferences WHERE key='answerScope.v1.'||answers.id AND value=?)" : ''} ORDER BY id",
+            [conversation, through, if (privateScope) scopeIdentity],
           )
         : store
               .rows(
-                "SELECT question,body,model_response FROM answers WHERE conversation=? AND status='completed' ORDER BY id DESC LIMIT 4",
-                [conversation],
+                "SELECT question,body,model_response FROM answers WHERE conversation=? AND status='completed' ${privateScope ? "AND EXISTS(SELECT 1 FROM preferences WHERE key='answerScope.v1.'||answers.id AND value=?)" : ''} ORDER BY id DESC LIMIT 4",
+                [conversation, if (privateScope) scopeIdentity],
               )
               .reversed
               .toList();

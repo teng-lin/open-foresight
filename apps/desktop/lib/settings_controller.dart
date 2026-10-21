@@ -6,6 +6,8 @@ class _SettingsController extends _FeatureController {
   bool gemmaExplanation = true;
 
   bool queryModelDownloading = false;
+  bool portableQuery = false;
+  String queryDigest = '';
 
   String modelState = '';
 
@@ -163,6 +165,34 @@ class _SettingsController extends _FeatureController {
           decoration: const InputDecoration(labelText: 'Model file'),
         ),
         if (modelKind == 'query-detection')
+          SwitchListTile(
+            title: const Text('Use a portable local detector'),
+            subtitle: const Text(
+              'Import a dedicated model and an executable raw-completion worker on macOS or Linux.',
+            ),
+            value: portableQuery,
+            onChanged: shell.busy
+                ? null
+                : (value) => setState(() => portableQuery = value),
+          ),
+        if (modelKind == 'query-detection' && portableQuery) ...[
+          TextField(
+            controller: runtimePath,
+            decoration: const InputDecoration(
+              labelText: 'Dedicated raw-completion worker executable',
+            ),
+          ),
+          TextField(
+            onChanged: (value) => queryDigest = value,
+            decoration: const InputDecoration(
+              labelText: 'Expected model SHA-256',
+            ),
+          ),
+          const Text(
+            'The worker must implement the Open Foresight dedicated question JSONL protocol. Chat runners are not compatible.',
+          ),
+        ],
+        if (modelKind == 'query-detection')
           const Text(
             'Download the dedicated question model using this distribution, or import an already-decrypted copy. Its identity and bundled runtime are verified before replacing the current model.',
           ),
@@ -266,11 +296,16 @@ class _SettingsController extends _FeatureController {
                     {
                       'kind': modelKind,
                       'path': modelPath.text,
-                      'runtime': modelKind == 'query-detection'
+                      'runtime':
+                          modelKind == 'query-detection' && !portableQuery
                           ? ''
                           : runtimePath.text,
                       if (modelKind == 'query-detection')
-                        'backend': 'legacy_query_cpu',
+                        'backend': portableQuery
+                            ? 'raw_query_jsonl_v1'
+                            : 'legacy_query_cpu',
+                      if (modelKind == 'query-detection' && portableQuery)
+                        'digest': queryDigest.trim(),
                       'gpu': embeddingGpu,
                     },
                   );

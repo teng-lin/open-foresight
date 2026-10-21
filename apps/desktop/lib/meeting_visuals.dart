@@ -101,6 +101,7 @@ class MeetingAssistantHeader extends StatelessWidget {
     'Summary',
     'Transcript',
     'Action items',
+    'Preparation',
   ];
 
   @override

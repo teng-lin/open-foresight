@@ -34,6 +34,8 @@ class ReferenceNoteEnhancer {
     this.computeEmbedding,
     this.encodeStopTokens,
     this.logBatchError,
+    this.checkCurrent,
+    this.onBatchFailure,
   });
 
   final Future<void> Function() ensureReady;
@@ -46,6 +48,26 @@ class ReferenceNoteEnhancer {
   final Future<List<double>> Function(String text)? computeEmbedding;
   final Future<List<int>?> Function(String text)? encodeStopTokens;
   final void Function(Object error, StackTrace stack)? logBatchError;
+  final void Function()? checkCurrent;
+  final void Function(List<int> noteIndices, Object error)? onBatchFailure;
+
+  Future<T> _whileCurrent<T>(Future<T> pending) async {
+    if (checkCurrent == null) return pending;
+    final interrupted = Completer<T>();
+    final monitor = Timer.periodic(const Duration(milliseconds: 20), (_) {
+      if (interrupted.isCompleted) return;
+      try {
+        checkCurrent!();
+      } catch (error, stack) {
+        interrupted.completeError(error, stack);
+      }
+    });
+    try {
+      return await Future.any([pending, interrupted.future]);
+    } finally {
+      monitor.cancel();
+    }
+  }
 
   Stream<String> enhance({
     required String notes,
@@ -56,6 +78,7 @@ class ReferenceNoteEnhancer {
     bool concise = false,
     void Function(int? index)? onActiveIndexChanged,
   }) async* {
+    checkCurrent?.call();
     yield 'Evaluating notes...';
     final plan = planNoteEnhancement(
       notes: notes,
@@ -83,14 +106,18 @@ class ReferenceNoteEnhancer {
     }
     yield 'Scanning the transcripts...';
     await ensureReady();
-    final embeddedChunks = await loadEmbeddedTranscript();
+    checkCurrent?.call();
+    final embeddedChunks = await _whileCurrent(loadEmbeddedTranscript());
+    checkCurrent?.call();
     final chunks = embeddedChunks.map((chunk) => chunk.text).toList();
     final embed = computeEmbedding;
     final vectors = embed == null
         ? [for (final _ in plan.pendingNotes) <double>[]]
-        : await Future.wait([
-            for (final note in plan.pendingNotes) embed(note.text),
-          ]);
+        : await _whileCurrent(
+            Future.wait([
+              for (final note in plan.pendingNotes) embed(note.text),
+            ]),
+          );
     final refs = selectNoteEnhancementExcerptRefs(
       noteEmbeddings: vectors,
       chunkEmbeddings: embeddedChunks.map((chunk) => chunk.embedding).toList(),
@@ -112,6 +139,7 @@ class ReferenceNoteEnhancer {
     );
     yield 'Structuring notes...';
     for (var batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+      checkCurrent?.call();
       final batch = batches[batchIndex];
       onActiveIndexChanged?.call(plan.pendingNotes[batch.first].originalIndex);
       final context = buildNoteEnhancementBatchContext(
@@ -145,6 +173,7 @@ class ReferenceNoteEnhancer {
           final active = StreamIterator(conversation.sendMessageStream(prompt));
           iterator = active;
           while (await active.moveNext()) {
+            checkCurrent?.call();
             final delta = active.current;
             if (delta.isEmpty) continue;
             response.write(delta);
@@ -163,11 +192,22 @@ class ReferenceNoteEnhancer {
         } finally {
           await cancelIterator();
         }
-        merge.acceptCleaned(
-          cleanNoteEnhancementModelOutput(response.toString()).trim(),
-          batch,
-        );
+        final cleaned = cleanNoteEnhancementModelOutput(
+          response.toString(),
+        ).trim();
+        final parsed = parseNoteEnhancementBatchOutput(cleaned, batch.length);
+        if (parsed.notes.length < batch.length) {
+          onBatchFailure?.call([
+            for (final index in batch.skip(parsed.notes.length))
+              plan.pendingNotes[index].originalIndex,
+          ], StateError('Model omitted requested note enhancements'));
+        }
+        merge.acceptCleaned(cleaned, batch);
       } catch (error, stack) {
+        checkCurrent?.call();
+        onBatchFailure?.call([
+          for (final index in batch) plan.pendingNotes[index].originalIndex,
+        ], error);
         logBatchError?.call(error, stack);
         merge.failBatch(batch);
       } finally {

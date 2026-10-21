@@ -1277,6 +1277,16 @@ class _MeetingsController extends _FeatureController {
                     ],
                   ),
                 ),
+                if (enhanced?['manifest'] != null &&
+                    (jsonDecode(enhanced!['manifest'] as String)
+                            as Map)['degraded'] ==
+                        true)
+                  const Padding(
+                    padding: EdgeInsets.all(12),
+                    child: Text(
+                      'Some notes were preserved without successful enhancement. Review or regenerate these notes.',
+                    ),
+                  ),
                 if (progress?['active'] == true) ...[
                   const LinearProgressIndicator(),
                   TextButton(
@@ -1563,6 +1573,8 @@ class _MeetingsController extends _FeatureController {
           ),
           onClose: () => shell.update(() => meetingSidecarVisible = false),
         ),
+        if (meetingPanel == 'Chat' || meetingPanel == 'Live Q&A')
+          meetingAnswerScope(id, automatic: meetingPanel == 'Live Q&A'),
         Expanded(
           child: IndexedStack(
             index: MeetingAssistantHeader.panels.indexOf(meetingPanel),
@@ -1572,6 +1584,7 @@ class _MeetingsController extends _FeatureController {
               meetingSummaryPanel(id),
               meetingTranscriptPanel(id),
               meetingSummaryPanel(id, actions: true),
+              meetingPreparationPanel(id),
             ],
           ),
         ),
@@ -1594,6 +1607,17 @@ class _MeetingsController extends _FeatureController {
     final detectionError = (pipeline['errors'] as Map?)?['$id'] as String?;
     return Column(
       children: [
+        if ((d.capture['question_detector'] as Map?)?['configured'] != true)
+          const Padding(
+            padding: EdgeInsets.all(12),
+            child: Text(
+              'Set up a dedicated question detector in Settings → Local models. Automatic answers retain queued work while setup is unavailable.',
+            ),
+          ),
+        if ((pipeline['queued_answers'] as int? ?? 0) > 0)
+          Text(
+            '${pipeline['queued_answers']} queued · oldest waiting ${((pipeline['oldest_queue_age_ms'] as int? ?? 0) / 1000).floor()}s',
+          ),
         SwitchListTile(
           dense: true,
           title: const Text('Automatic answers'),
@@ -1892,6 +1916,7 @@ class _MeetingsController extends _FeatureController {
   }
 
   Widget meetingSummaryPanel(int id, {bool actions = false}) {
+    if (actions) return meetingActionsPanel(id);
     final kind = actions ? 'actions' : 'summary';
     final title = actions ? 'Action items' : 'Summary';
     final versions = d.store.meetingArtifacts(id, kind);

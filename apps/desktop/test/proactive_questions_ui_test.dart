@@ -93,6 +93,11 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.text('Automatic · Answered'), findsOneWidget);
         expect(find.text('Automatic · Could not answer'), findsOneWidget);
+        await tester.scrollUntilVisible(
+          find.text('Automatic · Replaced by an updated question'),
+          150,
+          scrollable: find.byType(Scrollable).last,
+        );
         expect(
           find.text('Automatic · Replaced by an updated question'),
           findsOneWidget,
@@ -100,6 +105,11 @@ void main() {
         expect(
           find.text('Other meeting answer', findRichText: true),
           findsNothing,
+        );
+        await tester.scrollUntilVisible(
+          find.byTooltip('Copy automatic answer'),
+          -150,
+          scrollable: find.byType(Scrollable).last,
         );
         await tester.tap(find.byTooltip('Copy automatic answer'));
         await tester.pump();

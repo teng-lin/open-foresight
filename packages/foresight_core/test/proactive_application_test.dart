@@ -461,7 +461,8 @@ void main() {
               'Mira owns the draft. Who owns the draft? one two three four five',
             );
             // Interim speech has no durable transcript to retrieve yet; supply
-            // independently imported context for the existing grounding path.
+            // independently imported context under an explicit workspace scope.
+            store.setPreference('proactiveScope.$id', 'workspace');
             store.importText(
               'Ownership',
               'Mira owns the draft.',

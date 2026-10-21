@@ -46,6 +46,7 @@ class ProactiveQuestions {
   String? _request;
   int? _activeMeeting;
   bool _closed = false, _suspended = false;
+  bool _yielded = false;
   bool get enabled => store.preference('proactiveAnswers', 'true') == 'true';
   bool get running => _inFlight != null;
   bool ownsRequest(String request) => _allowed && _request == request;
@@ -55,6 +56,28 @@ class ProactiveQuestions {
     'active_meeting': _activeMeeting,
     'pending_meetings': _pending.toList(),
     'errors': {for (final entry in errors.entries) '${entry.key}': entry.value},
+    'queued_answers': store
+        .rows(
+          "SELECT COUNT(*) AS n FROM meeting_questions WHERE state='queued'",
+        )
+        .single['n'],
+    'oldest_queue_age_ms': (() {
+      final oldest =
+          store
+                  .rows(
+                    "SELECT MIN(created) AS oldest FROM meeting_questions WHERE state='queued'",
+                  )
+                  .single['oldest']
+              as int?;
+      return oldest == null
+          ? 0
+          : (_nowMilliseconds() - oldest).clamp(0, 1 << 53);
+    })(),
+    'stage': _request == null
+        ? 'idle'
+        : _request!.startsWith('proactive-answer-')
+        ? 'answering'
+        : 'detecting',
   };
 
   /// Start at the existing history boundary on a meeting's first recording.
@@ -180,7 +203,33 @@ class ProactiveQuestions {
     ).isNotEmpty;
   }
 
-  bool get _allowed => !_closed && !_suspended && enabled;
+  bool get _allowed => !_closed && !_suspended && !_yielded && enabled;
+  bool _linkCommittedAnswer(int question, [int? answer]) {
+    final saved = store.rows(
+      "SELECT id,status FROM answers WHERE status='completed' AND ${answer == null ? 'request_id=?' : 'id=?'} ORDER BY id DESC LIMIT 1",
+      [answer ?? _request],
+    ).firstOrNull;
+    if (saved == null) return false;
+    store.db.execute(
+      "UPDATE meeting_questions SET state='completed',answer_id=?,error='' WHERE id=?",
+      [saved['id'], question],
+    );
+    return true;
+  }
+
+  Future<void> yieldToForeground() async {
+    _yielded = true;
+    _timer?.cancel();
+    _timer = null;
+    if (_request != null) cancel(_request!);
+    try {
+      await _inFlight;
+    } finally {
+      _yielded = false;
+      wake();
+    }
+  }
+
   Future<void> _processOne() async {
     if (!_allowed || _pending.isEmpty || busy()) return;
     final meetingId = _pending.first;
@@ -210,6 +259,7 @@ class ProactiveQuestions {
           _request!,
         );
         if (!_allowed) {
+          if (_linkCommittedAnswer(questionId, answerId)) return;
           store.db.execute(
             "UPDATE meeting_questions SET state='queued' WHERE id=?",
             [questionId],
@@ -348,6 +398,7 @@ class ProactiveQuestions {
     } catch (error) {
       if (!_allowed) {
         if (questionId != null) {
+          if (_linkCommittedAnswer(questionId)) return;
           store.db.execute(
             "UPDATE meeting_questions SET state='queued' WHERE id=?",
             [questionId],

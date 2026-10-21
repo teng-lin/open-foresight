@@ -5,6 +5,7 @@ import 'dart:math' as math;
 List<String> chunkNoteEnhancementTranscript(
   String text, {
   bool isLive = false,
+  int? maxChunks = 50,
 }) {
   text = text.trim();
   if (text.isEmpty) return [];
@@ -35,7 +36,9 @@ List<String> chunkNoteEnhancementTranscript(
     if (end >= words.length) break;
     start = end - overlap > start ? end - overlap : end;
   }
-  return chunks.length > 50 ? chunks.sublist(chunks.length - 50) : chunks;
+  return maxChunks != null && chunks.length > maxChunks
+      ? chunks.sublist(chunks.length - maxChunks)
+      : chunks;
 }
 
 final _sentenceEndPattern = RegExp(r'[\.\?\!\;]["\x27\)]?$');

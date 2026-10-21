@@ -157,9 +157,10 @@ void main() {
           }
         }
       }
-      expect(find.byTooltip('More meeting panels'), findsNothing);
+      await tester.tap(find.byTooltip('More meeting panels'));
+      await tester.pumpAndSettle();
       for (final panel in MeetingAssistantHeader.panels) {
-        expect(find.widgetWithText(TextButton, panel), findsOneWidget);
+        expect(find.text(panel), findsOneWidget);
       }
     },
   );

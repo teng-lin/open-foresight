@@ -199,6 +199,7 @@ void main() {
               : switch (schema['type']) {
                   'integer' => schema['minimum'] ?? 7,
                   'boolean' => true,
+                  'array' => ['fixture-source'],
                   _ => 'fixture-${entry.key}',
                 };
         }

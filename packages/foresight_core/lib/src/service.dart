@@ -541,6 +541,7 @@ Map<String, dynamic>? _decodeFrame(Uint8List frame) {
 
 /// The operations [ServiceClient.cancelAnswers] cancels.
 final cancellableAnswers = {
+  Operation.meetingsPrepare.wire,
   Operation.answerStream.wire,
   Operation.answer.wire,
   Operation.meetingsGenerate.wire,
@@ -1923,7 +1924,8 @@ class ApplicationService {
           lease.method == Operation.googleAddAccount.wire) {
         application.cancelSignIn(lease.id);
       }
-      if (!application.cancelSummaryRequest(lease.id)) {
+      if (!application.cancelMeetingWorkflowRequest(lease.id) &&
+          !application.cancelSummaryRequest(lease.id)) {
         domain.generator?.cancel(requestId: lease.id);
       }
     }

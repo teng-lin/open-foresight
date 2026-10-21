@@ -11,12 +11,14 @@ import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
 class _Retrieval extends RagServiceBase {
   String document = '';
   final queries = <String>[];
+  final allowed = <List<String>>[];
   @override
   Future<RetrieveResponse> retrieveContext(
     ServiceCall call,
     RetrieveRequest request,
   ) async {
     queries.add(request.query.textQuery);
+    allowed.add(request.allowedDocumentIds.toList());
     return RetrieveResponse(
       chunks: [
         RetrievedChunk(
@@ -129,6 +131,26 @@ void main() {
         expect(saved['conversation'], 'meeting:$first');
         expect(saved['meeting_id'], first);
         expect(saved['status'], 'insufficient_context');
+        // Narrowing a conversation must not replay broader workspace answers.
+        store.setPreference('answerScope.meeting:$first', 'selected');
+        store.setPreference(
+          'answerSources.meeting:$first',
+          '["${retrieval.document}"]',
+        );
+        await domain
+            .askInConversation('What about it?', 'ignored', meetingId: first)
+            .drain<void>();
+        expect(retrieval.allowed.last, [retrieval.document]);
+        expect(retrieval.queries.last, 'What about it?');
+        expect(runtime.prompts.last, isNot(contains('ALPHA_ONLY')));
+        expect(runtime.prompts.last, isNot(contains('GENERAL_ONLY')));
+        // A selected empty scope stays empty rather than widening to workspace.
+        store.setPreference('answerSources.meeting:$first', '[]');
+        final before = retrieval.queries.length;
+        await domain
+            .askInConversation('Private empty', 'ignored', meetingId: first)
+            .drain<void>();
+        expect(retrieval.queries, hasLength(before));
         await expectLater(
           domain
               .askInConversation('Invalid meeting', 'desktop', meetingId: 999)

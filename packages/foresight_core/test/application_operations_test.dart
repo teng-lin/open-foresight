@@ -130,7 +130,16 @@ class ArtifactGenerator extends NativeRuntime {
     requestIds.add(id);
     entered?.complete();
     await release?.future;
-    yield* Stream.fromIterable(events);
+    final output =
+        systemPrompt.contains('Extract explicit meeting commitments') &&
+            events.length == 3 &&
+            events.first['text'] == 'Grounded'
+        ? <Map<String, dynamic>>[
+            {'type': 'delta', 'text': '{"tasks":[]}'},
+            {'type': 'done', 'status': 'completed'},
+          ]
+        : events;
+    yield* Stream.fromIterable(output);
   }
 }
 
@@ -422,7 +431,7 @@ void main() {
         200,
         'microphone',
       );
-      await app.generateMeeting(id, 'actions');
+      await app.generateMeeting(id, 'questions');
       final prompt = generator.prompts.single;
       expect(prompt, contains('FINAL DECISION: Launch on November 9.'));
       expect(
@@ -456,7 +465,8 @@ void main() {
               p.contains('Ship Friday') &&
               !p.contains('interim secret') &&
               (p.contains('brief phrases') ||
-                  p.startsWith('<meeting_transcript>')),
+                  p.startsWith('<meeting_transcript>') ||
+                  p.startsWith('{"evidence"')),
         ),
         isTrue,
       );
@@ -998,7 +1008,9 @@ void main() {
         );
         await generator.entered!.future;
         expect(generator.requestIds, [
-          kind == 'summary' ? 'cancel-summary-summary-1' : 'cancel-$kind',
+          ['summary', 'actions', 'action_items'].contains(kind)
+              ? 'cancel-$kind-${kind == 'summary' ? 'summary' : 'actions'}-1'
+              : 'cancel-$kind',
         ]);
         current = false;
         generator.release!.complete();
