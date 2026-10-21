@@ -788,3 +788,13 @@ def test_startup_proof_requires_matching_original_attempt_metadata():
     fixture.api = api
     with pytest.raises(ValueError, match="Original startup attempt"):
         collect(fixture)
+
+
+def test_incomplete_authenticated_run_metadata_cannot_skip_job_inspection():
+    fixture = API()
+    observed = deepcopy(collect(fixture))
+    observed["until"] = "2026-10-12T00:40:00Z"
+    observed["runs"][0].pop("run_attempt")
+    fixture.calls.clear()
+    collect(fixture, verified_observation=observed)
+    assert any("/jobs?" in route for route in fixture.calls)

@@ -509,13 +509,11 @@ def collect(
             and run.get("status") == "completed"
             and all(
                 run.get(key) == old.get(key)
-                for key in (
-                    "run_attempt",
-                    "status",
-                    "conclusion",
-                    "updated_at",
-                    "run_started_at",
-                )
+                for key in ("run_attempt", "status", "conclusion")
+            )
+            and all(
+                run.get(key) == old.get(key)
+                for key in ("updated_at", "run_started_at")
                 if key in old
             )
         ):
