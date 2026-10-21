@@ -25,6 +25,35 @@ Future<void> selectMeetingPanel(WidgetTester tester, String panel) async {
   await tester.pumpAndSettle();
 }
 
+/// Choose a document through the meeting Chat source selector.
+Future<void> selectMeetingAnswerSource(
+  WidgetTester tester,
+  String title,
+) async {
+  final scopeRow = find
+      .ancestor(of: find.text('Answer sources: '), matching: find.byType(Row))
+      .first;
+  await tester.tap(
+    find.descendant(
+      of: scopeRow,
+      matching: find.byType(DropdownButton<String>),
+    ),
+  );
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('Selected local documents').last);
+  // The scope command remains busy while this dialog is open, so its progress
+  // indicator keeps animating. Advance the dialog transition without settling.
+  await tester.pump(const Duration(milliseconds: 400));
+  final source = find.widgetWithText(CheckboxListTile, title);
+  await tester.ensureVisible(source);
+  if (!tester.widget<CheckboxListTile>(source).value!) {
+    await tester.tap(source);
+    await tester.pump(const Duration(milliseconds: 400));
+  }
+  await tester.tap(find.text('Use selected documents'));
+  await tester.pumpAndSettle();
+}
+
 /// Reveal a citation in the answer history before opening its source.
 Future<void> openMeetingCitation(
   WidgetTester tester,

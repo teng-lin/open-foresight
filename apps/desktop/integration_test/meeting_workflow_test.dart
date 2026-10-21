@@ -599,6 +599,23 @@ void main() {
       await waitUntil(tester, () => true);
       await captureWindow(tester, env['FORESIGHT_MEETING_SCREENSHOT']!);
       await selectMeetingPanel(tester, 'Chat');
+      // This acceptance checks the recorded transcript's exact revision. Other
+      // meeting outputs are valid Chat sources, so select the transcript through
+      // the same source controls a user would use before asking about it.
+      await selectMeetingAnswerSource(tester, source['title'] as String);
+      await waitUntil(
+        tester,
+        () =>
+            reopened.busy == false &&
+            reopened.d.store.preference('answerScope.meeting:$meeting') ==
+                'selected',
+      );
+      expect(
+        jsonDecode(
+          reopened.d.store.preference('answerSources.meeting:$meeting'),
+        ),
+        ['meeting-$meeting'],
+      );
       await tester.enterText(
         find.byKey(ValueKey('chat-input:meeting:$meeting')),
         'What does the speaker ask Americans to do? Cite [S1].',

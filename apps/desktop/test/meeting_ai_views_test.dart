@@ -9,6 +9,7 @@ import 'package:open_foresight/main.dart';
 import 'desktop_connection_fixture.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 import 'pump_until.dart';
+import '../test_support/meeting_panel.dart';
 
 class _WorkflowViewRuntime extends NativeRuntime {
   _WorkflowViewRuntime()
@@ -82,6 +83,14 @@ void main() {
         'text/plain',
         'fixture',
       );
+      final transcript = store.importText(
+        'Launch transcript',
+        'Alice will ship Friday.',
+        'text/plain',
+        'meeting:$meeting',
+        id: 'meeting-$meeting',
+      );
+      store.state(transcript, 'indexed');
       final helper = OfflineHelper('${root.path}/sock', '${root.path}/helper');
       final domain = _WorkflowViewDomain(store, helper);
       addTearDown(() {
@@ -136,6 +145,18 @@ void main() {
         ),
         findsOneWidget,
       );
+      state.update(() {
+        state.meetingFeature.meetingPanel = 'Chat';
+      });
+      await tester.pumpAndSettle();
+      await selectMeetingAnswerSource(tester, 'Launch transcript');
+      await pumpUntil(
+        tester,
+        () => store.preference('answerScope.meeting:$meeting') == 'selected',
+      );
+      expect(jsonDecode(store.preference('answerSources.meeting:$meeting')), [
+        transcript,
+      ]);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pumpAndSettle();
