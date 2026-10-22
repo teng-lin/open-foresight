@@ -742,6 +742,104 @@ class InstallerTemporaryNamespaceTests(unittest.TestCase):
         )
 
 
+def _compiled_service_environment(root: Path, work: Path, service: Path):
+    env = installer.minimal_environment(work, work / "data")
+    env.update(
+        FORESIGHT_RUNTIME=str(work / "run"),
+        FORESIGHT_SERVICE=str(service),
+        FORESIGHT_HELPER="",
+    )
+    # Bundled components select code from their signed runtime.json. Standalone
+    # AOT components instead need the application-owned SQLite build explicitly.
+    if ".app/Contents/" not in str(service.resolve()):
+        sqlite = Path(
+            os.environ.get(
+                "FORESIGHT_SQLITE_LIBRARY",
+                root / "build/macos/libforesight_sqlite3.dylib",
+            )
+        )
+        if not sqlite.is_file():
+            raise RuntimeError(
+                f"Application SQLite runtime not found: {sqlite}. "
+                "Build foresight_sqlite3 or set FORESIGHT_SQLITE_LIBRARY "
+                "to the application-owned dylib."
+            )
+        env["FORESIGHT_SQLITE_LIBRARY"] = str(sqlite.resolve())
+    return env
+
+
+class CompiledServiceEnvironmentTests(unittest.TestCase):
+    def test_standalone_uses_owned_build_sqlite_in_minimal_environment(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sqlite = root / "build/macos/libforesight_sqlite3.dylib"
+            sqlite.parent.mkdir(parents=True)
+            sqlite.write_bytes(b"owned build fixture")
+            with patch.dict(
+                os.environ,
+                {
+                    "FORESIGHT_NATIVE": "/foreign/native",
+                    "DYLD_LIBRARY_PATH": "/foreign",
+                },
+                clear=True,
+            ):
+                env = _compiled_service_environment(
+                    root, root / "work", root / "build/application/foresight-service"
+                )
+            self.assertEqual(env["FORESIGHT_SQLITE_LIBRARY"], str(sqlite.resolve()))
+            self.assertEqual(env["FORESIGHT_HELPER"], "")
+            self.assertEqual(env["FORESIGHT_RUNTIME"], str(root / "work/run"))
+            self.assertEqual(env["FORESIGHT_DATA"], str((root / "work/data").resolve()))
+            self.assertNotIn("FORESIGHT_NATIVE", env)
+            self.assertNotIn("DYLD_LIBRARY_PATH", env)
+
+    def test_explicit_owned_sqlite_is_resolved_without_requiring_default(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sqlite = root / "qualified dylib"
+            sqlite.write_bytes(b"explicit owned fixture")
+            with patch.dict(os.environ, {"FORESIGHT_SQLITE_LIBRARY": str(sqlite)}):
+                env = _compiled_service_environment(
+                    root, root / "work", root / "service"
+                )
+            self.assertEqual(env["FORESIGHT_SQLITE_LIBRARY"], str(sqlite.resolve()))
+
+    def test_missing_sqlite_fails_before_subprocess_launch_without_fallback(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            default = root / "build/macos/libforesight_sqlite3.dylib"
+            default.parent.mkdir(parents=True)
+            for explicit in (None, str(root / "missing explicit dylib")):
+                with self.subTest(explicit=explicit):
+                    if explicit is not None:
+                        default.write_bytes(b"must not replace missing explicit input")
+                    values = (
+                        {}
+                        if explicit is None
+                        else {"FORESIGHT_SQLITE_LIBRARY": explicit}
+                    )
+                    with (
+                        patch.dict(os.environ, values, clear=True),
+                        patch("subprocess.Popen") as launch,
+                        self.assertRaisesRegex(RuntimeError, "Build foresight_sqlite3"),
+                    ):
+                        _compiled_service_environment(
+                            root, root / "work", root / "service"
+                        )
+                    launch.assert_not_called()
+
+    def test_bundled_service_keeps_signed_runtime_authority(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            service = root / "Probe.app/Contents/MacOS/foresight-service"
+            with patch.dict(
+                os.environ,
+                {"FORESIGHT_SQLITE_LIBRARY": "/foreign/missing.dylib"},
+            ):
+                env = _compiled_service_environment(root, root / "work", service)
+            self.assertNotIn("FORESIGHT_SQLITE_LIBRARY", env)
+
+
 class CompiledMacComponentTests(unittest.TestCase):
     """Actual executable probes when built components are supplied; no bundle claim."""
 
@@ -817,12 +915,7 @@ class CompiledMacComponentTests(unittest.TestCase):
             ExitStack() as connections,
         ):
             work = Path(temporary)
-            env = installer.minimal_environment(work, work / "data")
-            env.update(
-                FORESIGHT_RUNTIME=str(work / "run"),
-                FORESIGHT_SERVICE=str(service),
-                FORESIGHT_HELPER="",
-            )
+            env = _compiled_service_environment(root, work, service)
             peer = None
             owner = None
             try:
