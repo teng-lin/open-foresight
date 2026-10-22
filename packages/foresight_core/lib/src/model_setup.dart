@@ -5,7 +5,7 @@ import 'dart:io';
 import 'store.dart';
 import 'persistence/domain_queries.dart';
 import 'store_reader.dart';
-import 'desktop_read_models.dart';
+import 'read_models.dart';
 import 'model_asset_lifecycle.dart';
 import 'model_acquisition.dart' show ForesightSharedConfig;
 import 'native.dart';
