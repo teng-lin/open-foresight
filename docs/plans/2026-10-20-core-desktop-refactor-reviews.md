@@ -795,3 +795,24 @@ then the complete exact-source Linux checkpoint before7A. No core acceptance SHA
 feature extraction, final Linux/HanSolo acceptance, combined implementation review,
 PR or merge is complete. Earlier failed full gates and all scoped diagnostic
 results retain their original source/producer identities.
+
+
+## Core consumer-seam delta: independent native reviews
+
+After revision13 convergence, the client-session and Stats seams land before the
+core freeze as required. Independent verification review converges on the session
+delta; the session author independently cross-reviews and converges on Stats.
+Exact source SHA manifests, assertions, command output and limitations are in
+`/var/tmp/foresight-core-desktop/core-contracts/session-seam-implementation/`
+and `stats-seam-implementation/`. Session real-socket13, unchanged RemoteDomain54,
+desktop fixture9 and Stats57 pass with no skips; the public calendar import change
+passes its affected1 case and the strengthened public namespace guard passes2.
+The reviewer did not rerun tests or upgrade focused evidence to full acceptance.
+
+Schema/status decode failure during client adoption is covered by source reasoning
+through the existing retire/notify catch, not a newly injected adoption failure
+test. Stats calendar capture is exercised in real TZ/DST subprocesses; actual
+feature timers, awake timezone monitoring and replacement publication remain7A/B.
+Source fakes/test harnesses do not establish completed feature migration.
+The new frozen-source Claude review, complete Linux checkpoint and final combined
+implementation review remain required.

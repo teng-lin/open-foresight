@@ -54,6 +54,27 @@ abstract final class StoreReadQueries {
         decode: (value) => value as OutputStats,
       );
 
+  /// A long-lived Stats watch: one scheduling entry, a fresh exact cutoff for
+  /// every actual dispatch. Replace the query when its calendar/zone changes.
+  static ReadQuery<OutputStats> outputStatsForPeriod({
+    required OutputStatsPeriod period,
+    DateTime Function()? clock,
+  }) => ReadQuery(
+    projection: 'output_stats',
+    arguments: {'period': period.toArguments()},
+    dispatchArguments: () {
+      final now = (clock ?? DateTime.now)();
+      if (OutputStatsPeriod.capture(now).key != period.key) {
+        throw StateError('Stats calendar period changed; replace the query');
+      }
+      return {
+        'period': period.toArguments(),
+        'now': now.millisecondsSinceEpoch,
+      };
+    },
+    decode: (value) => value as OutputStats,
+  );
+
   static ReadQuery<ModelRegistration?> model(String kind) => ReadQuery(
     projection: 'model',
     arguments: {'kind': kind},

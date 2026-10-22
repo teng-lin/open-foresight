@@ -41,6 +41,7 @@ void main() {
         ),
       );
       final connection = TestDesktopConnection(Application(domain));
+      final initialSession = connection.clientSessionGeneration;
       try {
         final initialization = connection.initialize();
         expect(connection.initialize(), same(initialization));
@@ -56,6 +57,20 @@ void main() {
         await initialization;
         await connection.resume();
         expect(domain.resumes, 1);
+        expect(connection.clientSessionGeneration, same(initialSession));
+        final observed = <Object>[];
+        final changes = connection.changes.listen((_) {
+          observed.add(connection.clientSessionGeneration);
+        });
+        domain.helper.changed?.call();
+        expect(observed, [same(initialSession)]);
+        connection.replaceClientSessionForTesting();
+        final replacement = connection.clientSessionGeneration;
+        expect(replacement, isNot(same(initialSession)));
+        expect(observed, [same(initialSession), same(replacement)]);
+        domain.helper.changed?.call();
+        expect(observed.last, same(replacement));
+        await changes.cancel();
       } finally {
         connection.close();
         await connection.closed;

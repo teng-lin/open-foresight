@@ -20,7 +20,7 @@ Original runtime baseline/compiled outputs remain labeled c28a1561; no 3fb full 
 | 6B Application/services/answer phases | Implemented, full gates pending | Explicit domain owners, phased answers and typed persistence boundaries are complete; real held-producer/RPC joins and child-gap regressions are retained. Scoped implementation reviews converge. No full current-source acceptance. |
 | 6C relay/service split/read coordination/responsiveness | Implemented, full gates pending | One service lifetime authority; persistent guarded read workers, schema retirement and conservative previews. Exact214 real-model RPC passed100 samples/workload below50ms p95; native-close residual documented separately. Current-source process/RPC/sanitizer gates remain pending. |
 | 6D migrations/Store/helper schema | Implemented, full gates pending | Frozen1–15, appended16/17, typed reads/label ordering and whole-helper-set preflight. Existing rollback journals use private readonly probes in all3 implementations; exact4bd root native30/30 passes. Full schema/runtime/platform matrix remains required. |
-| 6E narrow APIs/core hygiene | Focused consumer seams and full gates pending | Curated APIs/external consumers are migrated; The current plan requires opaque client-session generation and Stats stable-key/fresh-dispatch seams before the checkpoint. Exact4bd namespace guard still times out in the complete container. |
+| 6E narrow APIs/core hygiene | Implemented, full gates pending | Curated APIs/external consumers and both pre-freeze seams are implemented; focused source tests and independent native reviews pass. Exact4bd container remains failed; next frozen source needs its complete matrix. |
 | 7A composition/contracts/invalidation | Pending | |
 | 7B independent feature modules/read models | Pending | |
 | 7C public boundary/platform/disposal | Pending | |
@@ -532,3 +532,54 @@ native verification review converges. Evidence:
 `2ae1a49619f78f819c38f97055508b4876d882f6e05a26f28a65c8709e48f3c7`.
 This is an uncommitted live fixture proof against the preserved4bd environment,
 not a new frozen-source acceptance or a passed complete container.
+
+
+## Pre-checkpoint consumer seams and canonical-run preparation
+
+The revision13 prerequisites are now implemented in the live worktree after
+`a5e1553c5d4c0a0e5793f2b9ee733df80e8bdc6f`. Client-session generation uses
+an opaque identity per facade/actual adoption and forces a change notification
+even for byte-equal replacement status. It remains independent of retained
+SQLite read identity. Ordinary command replay, late owner settlement and error
+semantics remain unchanged. Thirteen real-socket session tests and 54 unchanged
+RemoteDomain regressions pass; desktop fixture/approval tests pass9/9, zero
+skips. Independent native verification converges on source and actual assertions.
+Late-publication harness tests establish the seam, not feature conversion.
+
+Stats now separates immutable scheduling arguments from deeply frozen
+actual-dispatch arguments. Existing fixed queries remain compatible. The new
+calendar-period query retains absolute Monday boundaries and label dates, samples
+a fresh exact clock cutoff per dispatch and refuses a changed period without
+starting a worker. Real SQLite, held/coalesced/cancelled reads, actual close
+settlement, schema admission/factory errors and calendar tests pass57/57 with
+zero skips. A subsequent import-only fixture change exercises the curated
+`desktop.dart` API; the affected real TZ/DST child test passes1/1, analyzer/format
+clean. Native cross-review converges. Feature timers, awake timezone rechecks
+and period-watch replacement still belong to7A/B and are not claimed delivered.
+Evidence/hashes: `core-contracts/session-seam-implementation/` and
+`core-contracts/stats-seam-implementation/`.
+
+The narrower namespace fixture passes complete-set parity with both public
+entry points, forbidden transitive canaries, show/hide and both conditional
+branches:196 assertions across12 independent collections, all disposed. Its
+actual two cases pass on host and as UID0 with coverage/default30s unchanged.
+New public Stats DTOs are required exports; the updated public guard passes2/2.
+Initial no-write formatter failure and corrected formatted retry remain logged.
+These are diagnostic/static proofs, not a fix declared verified under full load.
+
+A reusable external canonical adapter now selects existing schedule1 and records
+safe resource/cgroup/CPU/concurrency observations for the exact test container.
+Both generated shells pass bash syntax and pinned ShellCheck; eleven synthetic
+fixtures pass, preserving early failure status and joining the owned monitor.
+A preserved startup signal race was fixed with a durable stopfile/ready handshake
+and bounded cleanup. Actual Docker/CID/signal behavior remains unproven until the
+next real attempt. No source runner, deadline, coverage or resource limit changed.
+Evidence: `profile-adapter-preflight-xt5qvl6b/PREFLIGHT-RESULT.md`.
+Two completed old task-owned diagnostic containers were retired after evidence
+capture; original handoffs, images, logs, SDKs and shared caches remain.
+
+No core acceptance SHA exists. The next complete source freeze still requires
+independent Claude implementation delta review and the entire applicable local
+Linux matrix. Native dependencies/protocol/SDK inputs have not changed. Desktop
+feature extraction, final Linux/HanSolo matrices, combined implementation review,
+PR checks and merge remain pending.

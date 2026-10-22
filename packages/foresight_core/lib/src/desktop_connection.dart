@@ -75,6 +75,14 @@ abstract interface class DesktopConnection {
   DesktopModelAssets get modelAssets;
   Stream<void> get changes;
 
+  /// Opaque identity of the currently adopted application-client session.
+  /// Compare captured tokens with identical(). Every actual client adoption
+  /// changes this token, even at the same endpoint and workspace epoch, and
+  /// notifies [changes]. Ordinary data/status changes retain it. This is not a
+  /// SQLite revision, connectivity guarantee or mutation authorization; callers
+  /// also retain their own lifetime, workspace and request checks.
+  Object get clientSessionGeneration;
+
   /// Prepare connection presentation/lifecycle. Completion does not certify
   /// helper readiness, which remains part of [helper]'s reported state.
   Future<void> initialize();

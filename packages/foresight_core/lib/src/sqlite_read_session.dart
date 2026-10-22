@@ -114,11 +114,20 @@ final class SqliteReadSession {
       case 'source_search':
         return sources.search(args['query'] as String);
       case 'output_stats':
+        final period = args['period'] == null
+            ? null
+            : OutputStatsPeriod.fromArguments(
+                Map<String, Object?>.from(args['period'] as Map),
+              );
         return OutputStats(
           words: _store.localOutputWords,
           weekly: _store.weeklyOutputWords(
             DateTime.fromMillisecondsSinceEpoch(args['now'] as int),
+            weekStarts: period?.weeks
+                .map((week) => week.startMilliseconds)
+                .toList(),
           ),
+          period: period,
           recordedMeetings: meetings.recordedMeetingCount(),
           sources: sources.summaries().length,
           completedAnswers: meetings.completedAnswerCount(),

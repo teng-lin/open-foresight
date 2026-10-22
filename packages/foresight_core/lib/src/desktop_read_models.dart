@@ -1,6 +1,9 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'output_stats_period.dart';
+export 'output_stats_period.dart';
+
 /// Immutable persistence projections shared by core queries and desktop views.
 ///
 /// SQL adapters alone construct these values. [toRow] preserves the existing
@@ -257,11 +260,13 @@ final class DocumentCluster extends ReadProjection {
 final class OutputStats {
   final int words, recordedMeetings, sources, completedAnswers;
   final List<int> weekly;
+  final OutputStatsPeriod? period;
   OutputStats({
     required this.words,
     required Iterable<int> weekly,
     required this.recordedMeetings,
     required this.sources,
     required this.completedAnswers,
+    this.period,
   }) : weekly = List.unmodifiable(weekly);
 }

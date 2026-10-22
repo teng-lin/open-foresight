@@ -58,18 +58,30 @@ class OutputStatistics {
     return _localOutputWords;
   }
 
-  List<int> weeklyOutputWords(DateTime now) {
+  List<int> weeklyOutputWords(DateTime now, {List<int>? weekStarts}) {
+    final starts =
+        weekStarts ??
+        [
+          for (var i = 0; i < 5; i++)
+            outputWeekStart(now, weeksAgo: 4 - i).millisecondsSinceEpoch,
+        ];
+    return weeklyOutputWordsAt(
+      cutoffMilliseconds: now.millisecondsSinceEpoch,
+      weekStarts: starts,
+    );
+  }
+
+  List<int> weeklyOutputWordsAt({
+    required int cutoffMilliseconds,
+    required List<int> weekStarts,
+  }) {
     _refreshOutputStats();
-    final weekly = List<int>.filled(5, 0);
-    final starts = [
-      for (var i = 0; i < 5; i++)
-        outputWeekStart(now, weeksAgo: 4 - i).millisecondsSinceEpoch,
-    ];
+    final weekly = List<int>.filled(weekStarts.length, 0);
     for (final row in _outputWordCounts) {
       final created = row.created;
-      if (created == null || created > now.millisecondsSinceEpoch) continue;
-      for (var i = 4; i >= 0; i--) {
-        if (created >= starts[i]) {
+      if (created == null || created > cutoffMilliseconds) continue;
+      for (var i = weekStarts.length - 1; i >= 0; i--) {
+        if (created >= weekStarts[i]) {
           weekly[i] += row.words;
           break;
         }

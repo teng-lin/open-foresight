@@ -96,6 +96,8 @@ void main() {
               'SourceSummary',
               'ReadQuery',
               'ReadResult',
+              'OutputStatsPeriod',
+              'OutputStatsWeek',
               'Operation',
             ]),
           );

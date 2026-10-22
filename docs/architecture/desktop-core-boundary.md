@@ -26,11 +26,34 @@ adapters remain during the core-to-feature transition; search, statistics and
 graph loads already use the core read worker. Work package 7 replaces remaining
 render-time queries and temporary `toRow()` adapters with owned view models.
 
+`clientSessionGeneration` is an opaque identity token for the adopted RPC client.
+Every actual client adoption changes it and emits `changes`, including replacement
+at an unchanged socket path, epoch and status. Ordinary data/capture changes retain
+it. Feature publications capture it alongside their own lifetime, epoch and request
+identity. It does not authorize a mutation or cancel already dispatched work;
+ordinary RPC settlement and replay rules are unchanged. The authoritative SQLite
+reader identity and worker remain separate and may survive a client replacement.
+
+`ReadQuery` keeps immutable scheduling arguments separate from an optional
+dispatch-argument factory. The existing coordinator calls that factory only when
+starting an actual read and deeply freezes its result. Default queries keep their
+fixed arguments. `outputStats(now:)` remains a fixed snapshot query;
+`outputStatsForPeriod(period:, clock:)` keeps one calendar/zone scheduling entry
+while sampling an exact cutoff at each dispatch. `OutputStatsPeriod` captures the
+five Monday boundaries, label dates, effective zone and next Monday; the worker
+uses those absolute boundaries rather than reinterpreting the caller's timezone.
+A changed calendar period refuses dispatch, so its owner must retire the old watch
+and replace it. The later feature migration owns timers, awake timezone detection
+and label publication; this core seam does not provide those UI lifecycle hooks.
+
 The source-boundary and resolved-export checks in
 `packages/foresight_core/test/desktop_boundary_test.dart` run in the ordinary core
 suite. They inspect production imports/exports and resolve both curated public
 namespaces, preventing a proxy export from silently restoring implementation
-capabilities. The bootstrap entry point is admitted only in `main.dart`.
+capabilities. Only the two entry files are direct analyzer roots; referenced
+libraries still participate in complete transitive export linking. The separate
+recursive desktop import scan and every capability assertion remain. The bootstrap
+entry point is admitted only in `main.dart`.
 
 ## Pinned helper transport workaround
 

@@ -487,8 +487,8 @@ class Store {
     dataRevision: () => dataRevision,
   );
   int get localOutputWords => _outputStatistics.localOutputWords;
-  List<int> weeklyOutputWords(DateTime now) =>
-      _outputStatistics.weeklyOutputWords(now);
+  List<int> weeklyOutputWords(DateTime now, {List<int>? weekStarts}) =>
+      _outputStatistics.weeklyOutputWords(now, weekStarts: weekStarts);
   List<int> weeklyAnswerWords(DateTime now) => weeklyOutputWords(now);
 
   // Typed desktop queries keep SQL and snapshot policy in core.

@@ -37,6 +37,9 @@ class RemoteDomain
   final _closedSignal = Completer<void>();
   @override
   Stream<void> get changes => _changes.stream;
+  Object _clientSessionGeneration = Object();
+  @override
+  Object get clientSessionGeneration => _clientSessionGeneration;
   @override
   Future<void> initialize() async {
     if (_disposed) throw RpcError(RpcErrorCode.cancelled, 'Workspace closed');
@@ -170,7 +173,7 @@ class RemoteDomain
   @override
   Stream<List<double>> get captureLevels => _captureLevels.stream;
   String? _eventSignature;
-  void _apply(Map<String, dynamic> event) {
+  void _apply(Map<String, dynamic> event, {bool forceNotify = false}) {
     if (event['event'] == 'capture_levels') {
       final volumes = (event['volumes'] as List)
           .map((n) => (n as num).toDouble())
@@ -191,7 +194,7 @@ class RemoteDomain
     }
     _reader.validateSchema();
     final signature = jsonEncode(event);
-    if (_eventSignature == signature) return;
+    if (_eventSignature == signature && !forceNotify) return;
     _eventSignature = signature;
     final epoch = event['workspace_epoch'];
     if (epoch is String) {
@@ -317,12 +320,16 @@ class RemoteDomain
           await next.close();
           break;
         }
+        // Retire feature publications before exposing any replacement state or
+        // admitting work on this client, independently of SQLite read identity.
+        _clientSessionGeneration = Object();
         client = next;
         runtime.client = next;
         // The next owner may serve from another runtime.
         _reader.retarget(next.endpoint);
         _listen();
-        _apply(startup.status);
+        // Replacement is observable even when its status is byte-identical.
+        _apply(startup.status, forceNotify: true);
         _recheckWorkspace();
         if (_approvalEvents != null) {
           // An owner that answers status but never the attach must not hold

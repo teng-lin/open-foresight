@@ -19,6 +19,17 @@ class TestDesktopConnection implements DesktopConnection {
   Future<void>? _initializing;
   @override
   Stream<void> get changes => _events.stream;
+  Object _clientSessionGeneration = Object();
+  @override
+  Object get clientSessionGeneration => _clientSessionGeneration;
+
+  /// Simulates actual connection replacement, not an ordinary helper event.
+  void replaceClientSessionForTesting() {
+    if (_closing != null) return;
+    _clientSessionGeneration = Object();
+    _events.add(null);
+  }
+
   @override
   Future<void> get closed => _closing ?? Future<void>.value();
   @override

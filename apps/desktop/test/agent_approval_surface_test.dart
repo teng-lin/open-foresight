@@ -23,6 +23,8 @@ class ApprovalClient implements ServiceClient {
 
 class ApprovalDomain implements RemoteDomain {
   @override
+  final Object clientSessionGeneration = Object();
+  @override
   final ApprovalClient client = ApprovalClient();
   @override
   final capture = <String, dynamic>{};

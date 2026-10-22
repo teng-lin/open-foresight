@@ -30,12 +30,21 @@ final class ReadQuery<T> {
   final String projection, scope;
   final Map<String, Object?> arguments;
   final T Function(Object?) decode;
+  final Map<String, Object?> Function()? _dispatchArguments;
   ReadQuery({
     required this.projection,
     required this.decode,
     Map<String, Object?> arguments = const {},
     this.scope = '',
-  }) : arguments = immutableReadMap(arguments);
+    Map<String, Object?> Function()? dispatchArguments,
+  }) : arguments = immutableReadMap(arguments),
+       _dispatchArguments = dispatchArguments;
+
+  /// Sample only when the coordinator actually starts work, never on invalidation.
+  /// The key always uses [arguments]; factory results are deeply frozen.
+  Map<String, Object?> argumentsForDispatch() => _dispatchArguments == null
+      ? arguments
+      : immutableReadMap(_dispatchArguments());
 
   String get key => jsonEncode([projection, scope, _ordered(arguments)]);
 }
@@ -285,7 +294,7 @@ final class ReadCoordinator {
       final reply = await _worker.read(
         ReadWorkerRequest(
           projection: entry.query.projection,
-          arguments: entry.query.arguments,
+          arguments: entry.query.argumentsForDispatch(),
           identity: before,
           sequence: sequence,
         ),
