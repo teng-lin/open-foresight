@@ -15,6 +15,34 @@ class _ChatController extends _FeatureController {
 
   String? askingScope;
 
+  int _answerGeneration = 0;
+  bool Function()? _answerCurrent;
+
+  AnswerScopeSnapshot _sourceScope(int? meeting) {
+    final conversation = meeting == null ? 'desktop' : 'meeting:$meeting';
+    return AnswerScopeSnapshot.fromPreferences(
+      mode: d.store.preference('answerScope.$conversation', 'workspace'),
+      selectedJson: d.store.preference('answerSources.$conversation', '[]'),
+      meeting: meeting,
+    );
+  }
+
+  /// A feature session is distinct from a retained SQLite reader or pathname.
+  bool retireChangedAnswer() {
+    final current = _answerCurrent;
+    if (current == null || current()) return false;
+    retireAnswer();
+    return true;
+  }
+
+  void retireAnswer() {
+    _answerGeneration++;
+    _answerCurrent = null;
+    answer = '';
+    asking = false;
+    askingScope = null;
+  }
+
   final questionDrafts = <String, TextEditingController>{};
 
   TextEditingController questionFor(int? meetingScope) =>
@@ -45,9 +73,7 @@ class _ChatController extends _FeatureController {
       c['document_id'] as String,
       includeDeleted: true,
     );
-    if (s.isEmpty ||
-        s.first['deleted'] == 1 ||
-        s.first['revision'] != c['revision']) {
+    if (s == null || s.deleted || s.revision != c['revision']) {
       // The callback intentionally schedules work owned by its controller.
       // ignore: discarded_futures
       showDialog<void>(
@@ -66,7 +92,7 @@ class _ChatController extends _FeatureController {
     } else {
       // The callback intentionally schedules work owned by its controller.
       // ignore: discarded_futures
-      sourceFeature.source(s.first);
+      sourceFeature.source(s.toRow());
     }
   }
 
@@ -77,6 +103,23 @@ class _ChatController extends _FeatureController {
     final prompt = draft.text;
     if (prompt.trim().isEmpty) throw StateError('Enter a question.');
     final scope = meetingScope == null ? 'desktop' : 'meeting:$meetingScope';
+    final sourceScope = _sourceScope(meetingScope);
+    final identity = FeatureRequestIdentity.capture(d);
+    final generation = ++_answerGeneration;
+    bool current() {
+      if (generation != _answerGeneration ||
+          !identity.isCurrent(d, alive: mounted)) {
+        return false;
+      }
+      try {
+        return sourceScope.identity == _sourceScope(meetingScope).identity;
+      } catch (_) {
+        // An invalid or retired read boundary cannot authorize publication.
+        return false;
+      }
+    }
+
+    _answerCurrent = current;
     shell.update(() {
       answer = '';
       asking = true;
@@ -93,7 +136,13 @@ class _ChatController extends _FeatureController {
       final ask = webSearchScopes.contains(scope)
           ? d.askWithWebInConversation
           : d.askInConversation;
-      await for (final text in ask(prompt, scope, meetingId: meetingScope)) {
+      await for (final text in ask(
+        prompt,
+        scope,
+        meetingId: meetingScope,
+        current: current,
+      )) {
+        if (!current()) break;
         if (mounted)
           shell.update(() {
             // The first accepted response acknowledges submission. Preserve a
@@ -102,12 +151,15 @@ class _ChatController extends _FeatureController {
             answer = text;
           });
       }
-      if (mounted) shell.update(acknowledge);
+      if (current()) shell.update(acknowledge);
+    } catch (_) {
+      if (current()) rethrow;
     } finally {
-      if (mounted)
+      if (mounted && generation == _answerGeneration)
         shell.update(() {
           asking = false;
           askingScope = null;
+          _answerCurrent = null;
         });
     }
   });
@@ -117,9 +169,20 @@ class _ChatController extends _FeatureController {
     final searchWeb = webSearchScopes.contains(scope);
     final scopeAsking = asking && askingScope == scope;
     final question = questionFor(meetingScope);
-    final history = d.store
-        .conversationAnswers(meetingScope)
-        .where((a) => !hiddenAnswers.contains(a['id']))
+    AnswerScopeSnapshot sourceScope;
+    try {
+      sourceScope = _sourceScope(meetingScope);
+    } catch (error) {
+      return SelectableText(failureText(error));
+    }
+    final history = readRows(d.store.conversationAnswers(meetingScope))
+        .where(
+          (a) =>
+              !hiddenAnswers.contains(a['id']) &&
+              (sourceScope.mode == 'workspace' ||
+                  d.store.preference('answerScope.v1.${a['id']}') ==
+                      sourceScope.identity),
+        )
         .toList();
     return Container(
       decoration: BoxDecoration(

@@ -25,11 +25,8 @@ Future<void> selectMeetingPanel(WidgetTester tester, String panel) async {
   await tester.pumpAndSettle();
 }
 
-/// Choose a document through the meeting Chat source selector.
-Future<void> selectMeetingAnswerSource(
-  WidgetTester tester,
-  String title,
-) async {
+/// Open the real scope selector without submitting or settling a held command.
+Future<void> openMeetingAnswerSources(WidgetTester tester) async {
   final scopeRow = find
       .ancestor(of: find.text('Answer sources: '), matching: find.byType(Row))
       .first;
@@ -44,6 +41,14 @@ Future<void> selectMeetingAnswerSource(
   // The scope command remains busy while this dialog is open, so its progress
   // indicator keeps animating. Advance the dialog transition without settling.
   await tester.pump(const Duration(milliseconds: 400));
+}
+
+/// Choose a document through the meeting Chat source selector.
+Future<void> selectMeetingAnswerSource(
+  WidgetTester tester,
+  String title,
+) async {
+  await openMeetingAnswerSources(tester);
   final source = find.widgetWithText(CheckboxListTile, title);
   await tester.ensureVisible(source);
   if (!tester.widget<CheckboxListTile>(source).value!) {

@@ -3,6 +3,7 @@ import 'package:foresight_core/src/operations.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:foresight_core/desktop.dart' show StoreReader;
 import 'package:foresight_core/remote.dart' show RemoteDomain;
 import 'package:foresight_test_support/observed_expectations.dart';
 import 'package:flutter/material.dart';
@@ -111,10 +112,8 @@ Future<void> closeDesktop(WidgetTester tester, dynamic workspace) async {
     try {
       await saves.close().timeout(const Duration(seconds: 30));
     } finally {
-      await Future.wait<void>([
-        client.close(),
-        connection.helper.close(),
-      ]).timeout(const Duration(seconds: 30));
+      connection.close();
+      await connection.closed.timeout(const Duration(seconds: 30));
     }
   });
   await waitFor(
@@ -171,19 +170,11 @@ void main() {
         'title': 'MCP note',
         'body': 'Visible through the desktop reader',
       });
-      await waitFor(
-        tester,
-        () => workspace.d.store
-            .rows("SELECT * FROM notes WHERE title='MCP note'")
-            .isNotEmpty,
-      );
-      observed.expect(
-        'mcp_changes_visible',
-        workspace.d.store
-            .rows("SELECT * FROM notes WHERE title='MCP note'")
-            .isNotEmpty,
-        true,
-      );
+      final StoreReader reader = (workspace.d as RemoteDomain).store;
+      bool mcpNoteVisible() =>
+          reader.noteSummaries.any((note) => note.title == 'MCP note');
+      await waitFor(tester, mcpNoteVisible);
+      observed.expect('mcp_changes_visible', mcpNoteVisible(), true);
       // Exercise denial through the visible desktop and the real MCP/service
       // boundary before allowing a fresh request. A previous denial must not
       // create capture handles, transcripts, or an implicit future grant.
@@ -288,8 +279,14 @@ void main() {
       );
       observed.expect(
         'desktop_database_read_only',
-        () => workspace.d.store.saveNote(null, 'forbidden', ''),
-        throwsA(anything),
+        // The public reader has no writer capability; exercise the actual
+        // connected facade, without granting it an inspection/write escape.
+        () => ((workspace.d as RemoteDomain).store as dynamic).saveNote(
+          null,
+          'forbidden',
+          '',
+        ),
+        throwsA(isA<NoSuchMethodError>()),
       );
       // The Python driver owns this executable. Simulate an OS capture denial
       // across the real native/service boundary without touching host devices.

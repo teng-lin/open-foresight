@@ -1,8 +1,8 @@
+import 'package:foresight_core/src/helper_protocol_version.dart';
 import 'package:foresight_test_support/test_recording.dart';
 import 'package:foresight_test_support/helper_adoption.dart';
 import 'package:grpc/grpc.dart';
 import 'package:foresight_core/src/rpc_error.dart';
-import 'package:foresight_core/src/application.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'dart:async';
@@ -57,7 +57,13 @@ void main() {
       final stopped = client.call('service.stop_if_idle');
       final rejected = expectLater(
         client.call('meetings.create', {'title': 'must not commit'}),
-        throwsA(isA<StateError>()),
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.unavailable,
+          ),
+        ),
       );
       expect(await stopped, {'stopped': true, 'shutdown_verified': true});
       await rejected;
@@ -79,28 +85,30 @@ void main() {
     'active or finishing capture is never stopped by idle shutdown',
     () async {
       final recording = TestRecording();
-      service.domain.application.recording = recording;
+      service.application.recording = recording;
       try {
         for (final finishing in [false, true]) {
           recording.finishing = finishing;
           await expectLater(
             client.call('service.stop_if_idle'),
             throwsA(
-              isA<StateError>().having(
-                (error) => error.message,
-                'message',
-                contains('final transcript'),
-              ),
+              isA<RpcError>()
+                  .having((error) => error.code, 'code', RpcErrorCode.busy)
+                  .having(
+                    (error) => error.message,
+                    'message',
+                    contains('final transcript'),
+                  ),
             ),
           );
-          expect(service.domain.application.recording, same(recording));
+          expect(service.application.recording, same(recording));
           expect(
             (await client.call('status') as Map)['capture']['active'],
             true,
           );
         }
       } finally {
-        service.domain.application.recording = null;
+        service.application.recording = null;
       }
       expect(
         (await client.call('service.stop_if_idle') as Map)['stopped'],
@@ -123,11 +131,13 @@ void main() {
         await expectLater(
           client.call('service.stop_if_idle'),
           throwsA(
-            isA<StateError>().having(
-              (error) => error.message,
-              'message',
-              contains('operations are in progress'),
-            ),
+            isA<RpcError>()
+                .having((error) => error.code, 'code', RpcErrorCode.busy)
+                .having(
+                  (error) => error.message,
+                  'message',
+                  contains('operations are in progress'),
+                ),
           ),
         );
         expect((await client.call('status') as Map)['pid'], pid);
@@ -156,11 +166,13 @@ void main() {
       await expectLater(
         client.call('service.stop_if_idle'),
         throwsA(
-          isA<StateError>().having(
-            (error) => error.message,
-            'message',
-            contains('shutdown failed'),
-          ),
+          isA<RpcError>()
+              .having((error) => error.code, 'code', RpcErrorCode.internal)
+              .having(
+                (error) => error.message,
+                'message',
+                contains('shutdown failed'),
+              ),
         ),
       );
       await service.closed;
@@ -197,7 +209,7 @@ void main() {
           rag,
           AdoptionControl(
             control.State(
-              referenceVersion: '1.0.3',
+              referenceVersion: helperProtocolVersion,
               buildId: 'open-foresight-$openForesightVersion-0123456789ab',
             ),
           ),

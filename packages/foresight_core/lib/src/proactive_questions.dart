@@ -2,6 +2,7 @@ import 'rpc_error.dart';
 import 'dart:async';
 import 'text_budget.dart';
 import 'store.dart';
+import 'persistence/proactive_question_queries.dart';
 
 import 'question_dispatch.dart';
 export 'question_dispatch.dart'
@@ -25,6 +26,7 @@ class ProactiveQuestions {
   final int Function() _nowMilliseconds;
 
   final Store store;
+  late final _queries = ProactiveQuestionQueries(store);
   final Future<List<String>> Function(String text, String requestId) detect;
   final Future<int> Function(int meetingId, String question, String requestId)
   answer;
@@ -56,19 +58,9 @@ class ProactiveQuestions {
     'active_meeting': _activeMeeting,
     'pending_meetings': _pending.toList(),
     'errors': {for (final entry in errors.entries) '${entry.key}': entry.value},
-    'queued_answers': store
-        .rows(
-          "SELECT COUNT(*) AS n FROM meeting_questions WHERE state='queued'",
-        )
-        .single['n'],
+    'queued_answers': _queries.queuedCount,
     'oldest_queue_age_ms': (() {
-      final oldest =
-          store
-                  .rows(
-                    "SELECT MIN(created) AS oldest FROM meeting_questions WHERE state='queued'",
-                  )
-                  .single['oldest']
-              as int?;
+      final oldest = _queries.oldestQueuedAt;
       return oldest == null
           ? 0
           : (_nowMilliseconds() - oldest).clamp(0, 1 << 53);
@@ -82,24 +74,11 @@ class ProactiveQuestions {
 
   /// Start at the existing history boundary on a meeting's first recording.
   /// An existing cursor retains unprocessed final segments across a restart.
-  void begin(int meetingId) {
-    store.db.execute(
-      'INSERT OR IGNORE INTO meeting_question_cursors(meeting_id,transcript_id) '
-      'VALUES(?,(SELECT COALESCE(MAX(id),0) FROM transcript WHERE meeting_id=?))',
-      [meetingId, meetingId],
-    );
-  }
+  void begin(int meetingId) => _queries.beginAtCurrentTranscript(meetingId);
 
   void restore() {
-    store.db.execute(
-      "UPDATE meeting_questions SET state='queued' WHERE state='answering'",
-    );
-    for (final row in store.rows(
-      "SELECT meeting_id FROM meeting_questions WHERE state='queued' UNION "
-      'SELECT c.meeting_id FROM meeting_question_cursors c JOIN transcript t '
-      'ON t.meeting_id=c.meeting_id WHERE t.final=1 AND t.id>c.transcript_id',
-    )) {
-      notify(row['meeting_id'] as int);
+    for (final meeting in _queries.restoreQueuedMeetings()) {
+      notify(meeting);
     }
     wake();
   }
@@ -158,9 +137,7 @@ class ProactiveQuestions {
   }
 
   void retry(int questionId) {
-    final question = store.rows('SELECT * FROM meeting_questions WHERE id=?', [
-      questionId,
-    ]).firstOrNull;
+    final question = _queries.question(questionId);
     if (question == null) {
       throw RpcError(RpcErrorCode.notFound, 'Question not found');
     }
@@ -168,14 +145,11 @@ class ProactiveQuestions {
       'failed',
       'insufficient_context',
       'cancelled',
-    ].contains(question['state'])) {
+    ].contains(question.state)) {
       throw StateError('Question is not awaiting retry');
     }
-    store.db.execute(
-      "UPDATE meeting_questions SET state='queued',error='' WHERE id=?",
-      [questionId],
-    );
-    notify(question['meeting_id'] as int);
+    _queries.queueForRetry(questionId);
+    notify(question.meetingId);
     changed();
   }
 
@@ -195,27 +169,12 @@ class ProactiveQuestions {
       return false;
     }
     if (_interim[meetingId]?.isNotEmpty ?? false) return true;
-    return store.rows(
-      'SELECT 1 FROM transcript t JOIN meeting_question_cursors c '
-      'ON c.meeting_id=t.meeting_id WHERE t.meeting_id=? AND t.final=1 '
-      'AND t.id>c.transcript_id LIMIT 1',
-      [meetingId],
-    ).isNotEmpty;
+    return _queries.hasFinalAfterCursor(meetingId);
   }
 
   bool get _allowed => !_closed && !_suspended && _yields == 0 && enabled;
-  bool _linkCommittedAnswer(int question, [int? answer]) {
-    final saved = store.rows(
-      "SELECT id,status FROM answers WHERE status='completed' AND ${answer == null ? 'request_id=?' : 'id=?'} ORDER BY id DESC LIMIT 1",
-      [answer ?? _request],
-    ).firstOrNull;
-    if (saved == null) return false;
-    store.db.execute(
-      "UPDATE meeting_questions SET state='completed',answer_id=?,error='' WHERE id=?",
-      [saved['id'], question],
-    );
-    return true;
-  }
+  bool _linkCommittedAnswer(int question, [int? answer]) =>
+      _queries.linkCommittedAnswer(question, answer: answer, request: _request);
 
   Future<void> yieldToForeground() async {
     _yields++;
@@ -239,64 +198,38 @@ class ProactiveQuestions {
     var queuedWork = false;
     try {
       errors.remove(meetingId);
-      final queued = store.rows(
-        "SELECT * FROM meeting_questions WHERE meeting_id=? AND state='queued' ORDER BY id LIMIT 1",
-        [meetingId],
-      ).firstOrNull;
+      final queued = _queries.nextQueued(meetingId);
       queuedWork = queued != null;
       if (queued != null && !_hasUnexaminedInput(meetingId)) {
-        questionId = queued['id'] as int;
-        store.db.execute(
-          "UPDATE meeting_questions SET state='answering',error='' WHERE id=?",
-          [questionId],
-        );
+        questionId = queued.id;
+        _queries.markAnswering(questionId);
         changed();
         _request =
             'proactive-answer-$questionId-${DateTime.now().microsecondsSinceEpoch}';
-        final answerId = await answer(
-          meetingId,
-          queued['question'] as String,
-          _request!,
-        );
+        final answerId = await answer(meetingId, queued.question, _request!);
         if (!_allowed) {
           if (_linkCommittedAnswer(questionId, answerId)) return;
-          store.db.execute(
-            "UPDATE meeting_questions SET state='queued' WHERE id=?",
-            [questionId],
-          );
+          _queries.returnToQueue(questionId);
           _pending.add(meetingId);
           return;
         }
-        final saved = store.rows('SELECT status FROM answers WHERE id=?', [
+        final status = _queries.answerStatus(answerId);
+        _queries.finishAnswer(
+          questionId,
           answerId,
-        ]).single;
-        store.db.execute(
-          'UPDATE meeting_questions SET state=?,answer_id=?,error=? WHERE id=?',
-          [
-            saved['status'],
-            answerId,
-            saved['status'] == 'failed'
-                ? 'Answer generation failed. Try again.'
-                : '',
-            questionId,
-          ],
+          status,
+          status == 'failed' ? 'Answer generation failed. Try again.' : '',
         );
       } else {
         final inputVersion = _inputVersions[meetingId] ?? 0;
         examinedInput = inputVersion;
         if (_examinedVersions[meetingId] == inputVersion) return;
-        final cursor = store.rows(
-          'SELECT transcript_id FROM meeting_question_cursors WHERE meeting_id=?',
-          [meetingId],
-        ).firstOrNull;
+        final cursor = _queries.cursor(meetingId);
         if (cursor == null) return;
-        final batch = store.rows(
-          'SELECT id,text FROM transcript WHERE meeting_id=? AND final=1 AND id>? ORDER BY id',
-          [meetingId, cursor['transcript_id']],
-        );
+        final batch = _queries.finalSegmentsAfter(meetingId, cursor);
         final isFinal = _lastInputIsFinal[meetingId] ?? true;
         final history = [
-          ...batch.map((row) => row['text'] as String),
+          ...batch.map((row) => row.text),
           ...?_interim[meetingId]?.values,
         ].join('\n').trim();
         _examinedVersions[meetingId] = inputVersion;
@@ -342,8 +275,7 @@ class ProactiveQuestions {
           _activeQuestions[meetingId] ?? {},
         );
         final detectedAt = _nowMilliseconds();
-        store.db.execute('SAVEPOINT detect_meeting_questions');
-        try {
+        _queries.detectionTransaction(() {
           for (final question in detectedQuestions) {
             final result = dispatcher.process(question, detectedAt);
             for (final key in result.expired) {
@@ -352,45 +284,31 @@ class ProactiveQuestions {
             for (final key in result.superseded) {
               final previousId = activeQuestions.remove(key);
               if (previousId != null) {
-                store.db.execute(
-                  "UPDATE meeting_questions SET state='superseded' WHERE id=? AND state='queued'",
-                  [previousId],
-                );
+                _queries.supersedeQueued(previousId);
               }
             }
             if (!result.accepted) continue;
-            store.db.execute(
-              'INSERT INTO meeting_questions(meeting_id,transcript_id,question,normalized,created) VALUES(?,?,?,?,?)',
-              [
-                meetingId,
-                batch.isEmpty ? null : batch.last['id'],
-                question,
-                result.normalized,
-                detectedAt,
-              ],
+            final inserted = _queries.insertDetected(
+              meeting: meetingId,
+              transcript: batch.isEmpty ? null : batch.last.id,
+              question: question,
+              normalized: result.normalized,
+              created: detectedAt,
             );
             if (result.normalized.isNotEmpty) {
-              activeQuestions[result.normalized] = store.db.lastInsertRowId;
+              activeQuestions[result.normalized] = inserted;
             }
           }
           // The original advances history only when detection finds queries.
           // Empty results must retain context for a later segment to complete
           // a question. The input version avoids polling that unchanged text.
           if (detectedQuestions.isNotEmpty && batch.isNotEmpty) {
-            store.db.execute(
-              'UPDATE meeting_question_cursors SET transcript_id=? WHERE meeting_id=?',
-              [batch.last['id'], meetingId],
-            );
+            _queries.advanceCursor(meetingId, batch.last.id);
           }
-          store.db.execute('RELEASE detect_meeting_questions');
-          _dispatchers[meetingId] = dispatcher;
-          _activeQuestions[meetingId] = activeQuestions;
-          _examinedVersions[meetingId] = inputVersion;
-        } catch (_) {
-          store.db.execute('ROLLBACK TO detect_meeting_questions');
-          store.db.execute('RELEASE detect_meeting_questions');
-          rethrow;
-        }
+        });
+        _dispatchers[meetingId] = dispatcher;
+        _activeQuestions[meetingId] = activeQuestions;
+        _examinedVersions[meetingId] = inputVersion;
       }
       _pending.add(
         meetingId,
@@ -399,10 +317,7 @@ class ProactiveQuestions {
       if (!_allowed) {
         if (questionId != null) {
           if (_linkCommittedAnswer(questionId)) return;
-          store.db.execute(
-            "UPDATE meeting_questions SET state='queued' WHERE id=?",
-            [questionId],
-          );
+          _queries.returnToQueue(questionId);
         }
         _pending.add(meetingId);
       } else {
@@ -414,10 +329,7 @@ class ProactiveQuestions {
           if (queuedWork) _pending.add(meetingId);
         }
         if (questionId != null) {
-          store.db.execute(
-            "UPDATE meeting_questions SET state='failed',error=? WHERE id=?",
-            [error.toString(), questionId],
-          );
+          _queries.failAnswer(questionId, error.toString());
         }
         if (questionId != null) _pending.add(meetingId);
       }

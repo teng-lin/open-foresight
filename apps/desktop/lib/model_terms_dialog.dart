@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
-import 'gemma_download.dart';
-import 'package:foresight_core/foresight_core.dart' show openPlatformUri;
-import 'store.dart';
+import 'package:foresight_core/desktop.dart';
 
 typedef ModelPreferenceWriter = Future<void> Function(String key, String value);
 
@@ -9,9 +7,9 @@ typedef ModelPreferenceWriter = Future<void> Function(String key, String value);
 /// generation, embedding and speech. It happens before any model HTTP request.
 Future<bool> confirmModelTerms(
   BuildContext context,
-  Store store,
+  StoreReader store,
   GemmaModel model, {
-  ModelPreferenceWriter? savePreference,
+  required ModelPreferenceWriter savePreference,
 }) async {
   final key = 'modelTerms.${model.repository}.${model.revision}';
   if (store.preference(key) == 'accepted') return true;
@@ -69,13 +67,7 @@ Future<bool> confirmModelTerms(
     ),
   );
   if (accepted != true) return false;
-  if (savePreference != null) {
-    // Packaged desktops read the profile through a read-only connection; the
-    // application service owns all preference writes.
-    await savePreference(key, 'accepted');
-  } else {
-    store.setPreference(key, 'accepted');
-  }
+  await savePreference(key, 'accepted');
   return true;
 }
 

@@ -34,7 +34,8 @@ void main() {
     profile = ProfilePaths('${root.path}/data', '${root.path}/run');
     environment = Map.of(runtimeConfiguration.environment);
     runtimeConfiguration.environment.removeWhere(
-      (key, _) => key.startsWith('FORESIGHT_'),
+      (key, _) =>
+          key.startsWith('FORESIGHT_') && key != 'FORESIGHT_SQLITE_LIBRARY',
     );
     addTearDown(() {
       runtimeConfiguration.environment
@@ -95,10 +96,15 @@ void main() {
       addTearDown(service.close);
       final client = await ServiceClient.connect(service.path);
       addTearDown(client.close);
-      await eventually(
-        () => service.domain.store.sources.any(
+      // Socket publication precedes background model restoration and the
+      // interrupted-meeting recovery loop. Join that work before inspecting
+      // its durable failure, rather than racing a fixed polling deadline.
+      await service.ready;
+      expect(
+        service.domain.store.sources.any(
           (source) => source['state'] == 'failed',
         ),
+        isTrue,
       );
       expect(service.domain.store.model('speech')!['digest'], digest);
       expect(

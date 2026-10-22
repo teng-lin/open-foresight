@@ -65,9 +65,9 @@ class _SettingsController extends _FeatureController {
           modelState = 'EmbeddingGemma 2 ready for local source search';
         });
     },
-    directory: Directory('${File(d.store.path).parent.path}/models/gemma4'),
-    library: runtimeConfiguration.nativeLibrary,
-    runner: runtimeConfiguration['FORESIGHT_LITERT_RUNNER'] ?? '',
+    directory: d.modelAssets.generation,
+    library: desktopRuntimeSettings.nativeLibrary,
+    runner: desktopRuntimeSettings['FORESIGHT_LITERT_RUNNER'] ?? '',
     memoryGb: physicalMemoryGb(),
     installGeneration: (path, runtime, current) async {
       await d.commandCurrent(Operation.modelsGeneration, {
@@ -90,7 +90,7 @@ class _SettingsController extends _FeatureController {
   );
 
   String speechModelName() {
-    final registration = d.store.model('speech');
+    final registration = d.store.model('speech')?.toRow();
     if (registration == null) return 'Select a transcription model';
     final known = speechModels
         .where((model) => model.digest == registration['digest'])
@@ -110,14 +110,14 @@ class _SettingsController extends _FeatureController {
   }
 
   Widget speechSetup({VoidCallback? onDone}) {
-    final registration = d.store.model('speech');
+    final registration = d.store.model('speech')?.toRow();
     return SpeechSetupDialog(
       store: d.store,
       savePreference: saveModelPreference,
       onDone: onDone,
-      directory: Directory('${File(d.store.path).parent.path}/models/whisper'),
+      directory: d.modelAssets.speech,
       runner:
-          runtimeConfiguration['FORESIGHT_WHISPER_RUNTIME'] ??
+          desktopRuntimeSettings['FORESIGHT_WHISPER_RUNTIME'] ??
           registration?['runtime'] as String? ??
           '',
       installSpeech: (asset, runner, digest, current) async {
@@ -203,9 +203,7 @@ class _SettingsController extends _FeatureController {
                 onPressed:
                     shell.busy ||
                         !Platform.isMacOS ||
-                        (runtimeConfiguration['FORESIGHT_WEB_CONTENT_API_KEY'] ??
-                                '')
-                            .isEmpty
+                        !desktopRuntimeSettings.webContentAvailable
                     ? null
                     : () async {
                         setState(() => queryModelDownloading = true);
@@ -261,9 +259,7 @@ class _SettingsController extends _FeatureController {
             ],
           ),
         if (modelKind == 'query-detection' &&
-            (!Platform.isMacOS ||
-                (runtimeConfiguration['FORESIGHT_WEB_CONTENT_API_KEY'] ?? '')
-                    .isEmpty))
+            (!Platform.isMacOS || !desktopRuntimeSettings.webContentAvailable))
           const Text(
             'Automatic download is unavailable in this distribution. You can import a supported local copy.',
           ),
@@ -333,7 +329,7 @@ class _SettingsController extends _FeatureController {
           value: integrationFeature.notifications,
           onChanged:
               (Platform.isMacOS
-                  ? runtimeConfiguration['FORESIGHT_NOTIFICATIONS'] != null
+                  ? desktopRuntimeSettings['FORESIGHT_NOTIFICATIONS'] != null
                   : integrationFeature.notificationState.startsWith(
                       'Notifications available',
                     ))
@@ -346,7 +342,7 @@ class _SettingsController extends _FeatureController {
         ListView(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
-          children: d.store.models
+          children: readRows(d.store.models)
               .map(
                 (m) => ListTile(
                   title: Text('${m['kind']}: ${m['path']}'),
@@ -399,7 +395,7 @@ class _SettingsController extends _FeatureController {
   );
 
   String generationName() {
-    final model = d.store.model('generation');
+    final model = d.store.model('generation')?.toRow();
     if (model == null) return 'Choose a local model';
     final known = gemmaModels
         .where((candidate) => candidate.digest == model['digest'])
@@ -420,34 +416,60 @@ class _SettingsController extends _FeatureController {
   }
 
   String? localOutputRevision;
+  FeatureRequestIdentity? _localOutputIdentity;
+  Object? _localOutputRequest;
   int localOutputCount = 0;
+  int recordedMeetings = 0, sourceCount = 0, completedAnswers = 0;
   List<int> localOutputWeekly = List<int>.filled(5, 0);
 
   int localWords() {
     final revision =
         '${d.store.dataRevision}:${outputWeekStart(DateTime.now()).millisecondsSinceEpoch}';
-    if (localOutputRevision != revision) {
+    if (localOutputRevision != revision ||
+        !(_localOutputIdentity?.isCurrent(d, alive: mounted) ?? false)) {
+      final identity = FeatureRequestIdentity.capture(d);
+      final request = Object();
       localOutputRevision = revision;
+      _localOutputIdentity = identity;
+      _localOutputRequest = request;
+      bool current() =>
+          identical(_localOutputRequest, request) &&
+          localOutputRevision == revision &&
+          identity.isCurrent(d, alive: mounted);
       unawaited(
-        localOutputStats(d.store.path).then((stats) {
-          if (!mounted || localOutputRevision != revision) return;
-          var changed = localOutputCount != stats.words;
-          for (var i = 0; i < 5; i++) {
-            changed |= localOutputWeekly[i] != stats.weekly[i];
-          }
-          localOutputCount = stats.words;
-          localOutputWeekly = stats.weekly;
-          if (changed) shell.serviceChanged();
-        }, onError: (Object _) {}),
+        localOutputStats(d.store).then(
+          (stats) {
+            if (!current()) return;
+            var changed = localOutputCount != stats.words;
+            for (var i = 0; i < 5; i++) {
+              changed |= localOutputWeekly[i] != stats.weekly[i];
+            }
+            changed |=
+                recordedMeetings != stats.recordedMeetings ||
+                sourceCount != stats.sources ||
+                completedAnswers != stats.completedAnswers;
+            recordedMeetings = stats.recordedMeetings;
+            sourceCount = stats.sources;
+            completedAnswers = stats.completedAnswers;
+            localOutputCount = stats.words;
+            localOutputWeekly = stats.weekly;
+            if (changed) shell.serviceChanged();
+          },
+          onError: (Object _) {
+            // Retry on the next normal read, retaining the last successful values.
+            // Scheduling a rebuild here would loop while the service is failing.
+            if (current()) localOutputRevision = null;
+          },
+        ),
       );
     }
     return localOutputCount;
   }
 
   Widget stats() {
-    final meetings = d.store.recordedMeetingCountRows().single['n'] as int;
-    final sources = d.store.sourceSummaries.length;
-    final answers = d.store.completedAnswerCountRows().single['n'] as int;
+    final meetings = recordedMeetings;
+    final sources = sourceCount;
+    final answers = completedAnswers;
     localWords();
     final weekly = localOutputWeekly;
     return SingleChildScrollView(

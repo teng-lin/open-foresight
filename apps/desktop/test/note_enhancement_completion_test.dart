@@ -5,8 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/domain.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/domain.dart';
+import 'package:foresight_core/src/store.dart';
 import 'package:open_foresight/generated_content.dart';
 import 'desktop_connection_fixture.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
@@ -41,13 +41,11 @@ void main() {
         createTimer: (duration, callback) =>
             time.run((_) => Timer(duration, callback)),
       );
+      final app = Application(domain);
       final generator = WidgetNoteGenerator();
       try {
         await tester.pumpWidget(
-          Foresight(
-            TestDesktopConnection(domain),
-            deviceLoader: () async => [],
-          ),
+          Foresight(TestDesktopConnection(app), deviceLoader: () async => []),
         );
         final dynamic state = tester.state(find.byType(Workspace));
         state.update(() => state.meetingFeature.meetingId = id);
@@ -55,7 +53,7 @@ void main() {
         domain.generator = generator;
         late Future<void> work;
         await tester.runAsync(() async {
-          work = domain.application.enhanceNotes(id);
+          work = app.enhanceNotes(id);
         });
         await waitForUi(tester, () => generator.entered.isCompleted);
         await tester.runAsync(() async {

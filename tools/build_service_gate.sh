@@ -11,6 +11,13 @@ case "$task_platform" in
   linux) task_native="$task_build/native/libforesight_native.so" ;;
   *) echo 'Platform must be linux or macos' >&2; exit 2 ;;
 esac
+if [[ "$task_platform" == macos ]]; then
+  export FORESIGHT_SQLITE_LIBRARY="$task_build/macos/libforesight_sqlite3.dylib"
+  [[ -f "$FORESIGHT_SQLITE_LIBRARY" ]] || {
+    echo "Missing application SQLite runtime: $FORESIGHT_SQLITE_LIBRARY; build foresight_sqlite3 first" >&2
+    exit 1
+  }
+fi
 for task_binary in "$task_build/application/foresight-service" "$task_build/application/foresight-mcp" "$task_build/services/helper/ForesightHelper" "$task_build/services/helper/model_worker_fixture"; do
   [[ -f "$task_binary" ]] || { echo "Missing stage prerequisite: $task_binary" >&2; exit 1; }
   [[ -x "$task_binary" ]] || { echo "Stage prerequisite is not executable: $task_binary" >&2; exit 1; }

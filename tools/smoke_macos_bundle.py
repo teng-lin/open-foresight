@@ -409,10 +409,10 @@ def verify_source_graph_restart(mcp, database, evidence):
         sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)
     ) as connection:
         labels = connection.execute(
-            "SELECT labels FROM source_details WHERE source_id=?",
+            "SELECT label_name FROM document_labels WHERE document_id=? ORDER BY position",
             [evidence["label_source"]],
-        ).fetchone()
-    if not (labels and json.loads(labels[0]) == ["Bundle Smoke"]):
+        ).fetchall()
+    if not ([row[0] for row in labels] == ["Bundle Smoke"]):
         raise RuntimeError("Verification failed")
 
 

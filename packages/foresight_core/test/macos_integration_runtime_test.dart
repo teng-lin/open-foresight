@@ -21,6 +21,7 @@ void main() {
     environment = {
       for (final key in [
         'FORESIGHT_NATIVE',
+        'FORESIGHT_SQLITE_LIBRARY',
         'FORESIGHT_HELPER',
         'FORESIGHT_SERVICE',
         'FORESIGHT_MODEL_WORKER',
@@ -125,6 +126,23 @@ void main() {
     expect(target.readAsStringSync(), 'preserve');
     expect(Link(manifest.path).existsSync(), isTrue);
   });
+
+  for (final value in [null, 'relative.dylib', '/missing/sqlite.dylib']) {
+    test('invalid SQLite fixture input $value never writes a manifest', () {
+      environment.remove('FORESIGHT_SQLITE_LIBRARY');
+      if (value != null) environment['FORESIGHT_SQLITE_LIBRARY'] = value;
+      expect(
+        () => prepareMacosIntegrationRuntime(
+          registerTearDown: addTearDown,
+          executable: executable,
+          environment: environment,
+          isMacOS: true,
+        ),
+        throwsStateError,
+      );
+      expect(manifest.existsSync(), isFalse);
+    });
+  }
 
   test('missing trusted native input never writes a manifest', () {
     expect(

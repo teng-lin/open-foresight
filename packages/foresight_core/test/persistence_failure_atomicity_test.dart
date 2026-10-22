@@ -5,7 +5,7 @@ import 'package:foresight_core/src/domain.dart';
 import 'package:foresight_core/src/helper.dart';
 import 'package:foresight_core/src/store.dart';
 import 'package:foresight_test_support/test_paths.dart';
-import 'package:sqlite3/sqlite3.dart';
+import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -123,7 +123,13 @@ void main() {
       store.labels(source, ['Planning']);
       store.saveLabelCluster('Planning');
       final before = store.documentLabels.map((label) => label.name).toList();
-      reject('source_details', operation: 'UPDATE');
+      // Fail after an earlier removal: canonical labels no longer update the
+      // redundant source_details JSON. Deleting a cluster must roll back its
+      // already-deleted document associations in the same transaction.
+      reject(
+        operation == 'labels' ? 'document_labels' : 'document_clusters',
+        operation: operation == 'labels' ? 'INSERT' : 'DELETE',
+      );
       expect(
         () => operation == 'labels'
             ? store.labels(source, ['Changed'])

@@ -1,10 +1,11 @@
+import 'package:foresight_test_support/persistence_fixtures.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:foresight_core/src/store.dart';
-import 'package:sqlite3/sqlite3.dart';
+import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -27,6 +28,7 @@ void main() {
     store.editArtifact(artifact, 'Human correction');
     store.db.execute('DROP TABLE meeting_tasks');
     store.db.execute('DROP TABLE document_summary_cache');
+    legacyLabelFixture(store.db);
     store.db.execute('PRAGMA user_version=14');
     store.close();
     store = Store(path);
@@ -49,6 +51,7 @@ void main() {
     store.editArtifact(1, 'Reviewed brief');
     store.db.execute('DROP TABLE meeting_summary_checkpoints');
     store.db.execute('ALTER TABLE artifacts DROP COLUMN manifest');
+    legacyLabelFixture(store.db);
     store.db.execute('PRAGMA user_version=13');
     store.close();
     store = Store(path);
@@ -73,6 +76,7 @@ void main() {
     store.saveNote(null, 'Kept', 'Body');
     store.db.execute('DROP TABLE IF EXISTS request_keys');
     store.db.execute("DELETE FROM preferences WHERE key='workspaceEpoch'");
+    legacyLabelFixture(store.db);
     store.db.execute('PRAGMA user_version=12');
     store.close();
     store = Store(path);
@@ -122,6 +126,7 @@ void main() {
     final meeting = store.meeting('An older meeting');
     store.artifact(meeting, 'summary', 'legacy output', 'fixture');
     store.db.execute('ALTER TABLE artifacts DROP COLUMN created');
+    legacyLabelFixture(store.db);
     store.db.execute('PRAGMA user_version=11');
     store.close();
     store = Store(path);
@@ -169,6 +174,7 @@ void main() {
       "UPDATE sources SET provenance='user edit; user edit; url:https://example.test/doc' WHERE id=?",
       [id],
     );
+    legacyLabelFixture(store.db);
     store.db.execute('PRAGMA user_version=10');
     store.close();
     store = Store(path);
@@ -198,6 +204,60 @@ void main() {
       store.close();
     }
   });
+
+  test('a reader opened after writer close follows later WAL commits', () {
+    var writer = Store(path);
+    addTearDown(() => writer.close());
+    final id = writer.saveNote(null, 'Kept', 'First body');
+    writer.close();
+    final reader = Store.readOnly(path);
+    addTearDown(reader.close);
+    expect(reader.rows('SELECT body FROM notes').single['body'], 'First body');
+    writer = Store(path);
+    writer.saveNote(id, 'Kept', 'Latest body');
+    expect(reader.rows('SELECT body FROM notes').single['body'], 'Latest body');
+  });
+
+  for (final writerClosesFirst in [false, true]) {
+    test(
+      'WAL readers retain committed data with writer first=$writerClosesFirst',
+      () {
+        final writer = Store(path);
+        addTearDown(writer.close);
+        final id = writer.saveNote(null, 'Kept', 'First body');
+        final reader = Store.readOnly(path);
+        addTearDown(reader.close);
+        reader.db.execute('BEGIN');
+        expect(
+          reader.rows('SELECT body FROM notes').single['body'],
+          'First body',
+        );
+        writer.saveNote(id, 'Kept', 'Latest body');
+        if (writerClosesFirst) {
+          writer.close();
+          expect(File('$path-wal').existsSync(), isTrue);
+        }
+        // A pinned reader keeps its original snapshot through writer close.
+        expect(
+          reader.rows('SELECT body FROM notes').single['body'],
+          'First body',
+        );
+        reader.db.execute('COMMIT');
+        expect(
+          reader.rows('SELECT body FROM notes').single['body'],
+          'Latest body',
+        );
+        reader.close();
+        if (!writerClosesFirst) writer.close();
+        final reopened = Store(path);
+        addTearDown(reopened.close);
+        expect(
+          reopened.rows('SELECT body FROM notes').single['body'],
+          'Latest body',
+        );
+      },
+    );
+  }
 
   test('fresh and current profiles support concurrent read-only connections', () {
     var publication = 0;
@@ -408,6 +468,7 @@ void main() {
       'url:https://example.com/original',
     );
     store.db.execute('ALTER TABLE source_details DROP COLUMN source_uri');
+    legacyLabelFixture(store.db);
     store.db.execute('PRAGMA user_version=4');
     // Simulate interruption after ADD COLUMN but during its data backfill.
     store.db.execute('''CREATE TRIGGER interrupt_migration
@@ -443,6 +504,7 @@ void main() {
     var store = Store(path);
     final id = store.importText('Retained', 'Body', 'text/plain', 'fixture');
     store.db.execute('DROP TABLE pending_helper_deletes');
+    legacyLabelFixture(store.db);
     store.db.execute('PRAGMA user_version=9');
     store.close();
     store = Store(path);
@@ -461,6 +523,7 @@ void main() {
   test('legacy malformed labels repair once without repeating writes', () {
     var store = Store(path);
     final id = store.importText('Title', 'Body', 'text/plain', 'fixture');
+    legacyLabelFixture(store.db);
     store.db.execute('UPDATE source_details SET labels=? WHERE source_id=?', [
       'invalid JSON',
       id,

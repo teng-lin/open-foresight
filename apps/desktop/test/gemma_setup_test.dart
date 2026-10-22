@@ -1,11 +1,12 @@
+import 'store_reader_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'fixtures/verified_model_files.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/gemma_download.dart';
+import 'package:foresight_core/src/gemma_download.dart';
 import 'package:open_foresight/gemma_setup_view.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/store.dart';
 
 void main() {
   testWidgets('missing runner reuses a registered model outside the cache', (
@@ -31,7 +32,9 @@ void main() {
           home: Scaffold(
             body: GemmaSetupDialog(
               findLocalModel: verifiedFixtureModelFile,
-              store: store,
+              store: fixtureReader(store),
+              savePreference: (key, value) async =>
+                  store.setPreference(key, value),
               directory: Directory('${root.path}/cache'),
               library: '',
               runner: '/usr/bin/true',
@@ -79,7 +82,9 @@ void main() {
             home: Scaffold(
               body: GemmaSetupDialog(
                 findLocalModel: verifiedFixtureModelFile,
-                store: store,
+                store: fixtureReader(store),
+                savePreference: (key, value) async =>
+                    store.setPreference(key, value),
                 directory: Directory('${root.path}/gemma4'),
                 library: '',
                 runner: '/usr/bin/true',
@@ -124,7 +129,9 @@ void main() {
           home: Scaffold(
             body: GemmaSetupDialog(
               findLocalModel: verifiedFixtureModelFile,
-              store: store,
+              store: fixtureReader(store),
+              savePreference: (key, value) async =>
+                  store.setPreference(key, value),
               directory: root,
               library: '',
               runner: '',
@@ -198,7 +205,9 @@ void main() {
                     context: context,
                     builder: (_) => GemmaSetupDialog(
                       findLocalModel: verifiedFixtureModelFile,
-                      store: store,
+                      store: fixtureReader(store),
+                      savePreference: (key, value) async =>
+                          store.setPreference(key, value),
                       directory: root,
                       library: '',
                       runner: '',
@@ -259,7 +268,9 @@ void main() {
           home: Scaffold(
             body: GemmaSetupDialog(
               findLocalModel: verifiedFixtureModelFile,
-              store: store,
+              store: fixtureReader(store),
+              savePreference: (key, value) async =>
+                  store.setPreference(key, value),
               directory: root,
               library: '',
               runner: '/usr/bin/true',

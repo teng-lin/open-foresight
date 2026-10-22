@@ -120,7 +120,8 @@ void main() {
   setUp(() async {
     environment = Map.of(runtimeConfiguration.environment);
     runtimeConfiguration.environment.removeWhere(
-      (key, _) => key.startsWith('FORESIGHT_'),
+      (key, _) =>
+          key.startsWith('FORESIGHT_') && key != 'FORESIGHT_SQLITE_LIBRARY',
     );
     runtimeConfiguration.environment['FORESIGHT_HELPER'] = '';
     root = createTestTempDirectorySync('lifetime-');
@@ -208,7 +209,8 @@ void main() {
     await agent.close();
     await service.close();
     runtimeConfiguration.environment.removeWhere(
-      (key, _) => key.startsWith('FORESIGHT_'),
+      (key, _) =>
+          key.startsWith('FORESIGHT_') && key != 'FORESIGHT_SQLITE_LIBRARY',
     );
     if (model) {
       final store = Store('${profile.data}/application.db');
@@ -313,6 +315,112 @@ void main() {
       }
     },
   );
+  test(
+    'malformed agent arguments never dispatch or stamp at rejection and settlement',
+    () async {
+      // Complete structural decoding rejects before work starts, including
+      // the settlement path that formerly stamped malformed agent calls.
+      expect(service.lastAgentActivity, isNull);
+      final start = now.add(const Duration(seconds: 1));
+      final settled = start.add(const Duration(seconds: 1));
+      var enteredDispatch = false;
+      readClock = () {
+        if (service.dispatchedCount > 0) {
+          enteredDispatch = true;
+          return start;
+        }
+        return enteredDispatch ? settled : now;
+      };
+      await expectLater(
+        agent.call('notes.save', {'title': 12, 'body': 'malformed'}),
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.invalidArgument,
+          ),
+        ),
+      );
+      await eventually(() => service.dispatchedCount == 0);
+      expect(enteredDispatch, isFalse);
+      expect(service.lastAgentActivity, isNull);
+      expect(service.domain.store.rows('SELECT * FROM notes'), isEmpty);
+    },
+  );
+  test(
+    'malformed agent input preserves armed desktop departure and deadline',
+    () async {
+      final d = await desktop();
+      await d.close();
+      await departed();
+      expect(service.desktopShutdownScheduled, isTrue);
+      final departure = service.lastDesktopDeparture;
+      final deadline = departure!.add(const Duration(seconds: 1));
+      final scheduled = lastTimerDelay;
+      now = now.add(const Duration(milliseconds: 200));
+      await expectLater(
+        agent.call('notes.save', {'title': 12, 'body': 'bad'}),
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.invalidArgument,
+          ),
+        ),
+      );
+      expect(service.dispatchedCount, 0);
+      expect(service.lastAgentActivity, isNull);
+      expect(service.lastDesktopDeparture, departure);
+      expect(service.desktopShutdownScheduled, isTrue);
+      expect(lastTimerDelay, scheduled);
+      expect((await lifetime())['exit_after'], deadline.millisecondsSinceEpoch);
+      now = deadline;
+      await tick();
+      await exited();
+    },
+  );
+
+  test(
+    'valid changed-key argument refusal still stamps dispatch and settlement',
+    () async {
+      await agent.call('notes.save', {
+        'title': 'first',
+        'body': 'body',
+        'idempotency_key': 'key',
+      });
+      final start = now.add(const Duration(seconds: 1));
+      final settled = start.add(const Duration(seconds: 1));
+      var enteredDispatch = false;
+      readClock = () {
+        if (service.dispatchedCount > 0) {
+          enteredDispatch = true;
+          return start;
+        }
+        return enteredDispatch ? settled : now;
+      };
+      await expectLater(
+        agent.call('notes.save', {
+          'title': 'changed',
+          'body': 'body',
+          'idempotency_key': 'key',
+        }),
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.invalidArgument,
+          ),
+        ),
+      );
+      await eventually(() => service.dispatchedCount == 0);
+      expect(enteredDispatch, isTrue);
+      expect(service.lastAgentActivity, settled);
+      expect(service.domain.store.rows('SELECT title FROM notes'), [
+        {'title': 'first'},
+      ]);
+    },
+  );
+
   test(
     'status-only service exits from service start without activity',
     () async {
@@ -1062,7 +1170,7 @@ void main() {
       final host = await desktop(host: true);
       await host.call('security.detach_desktop');
       await expectLater(
-        agent.call('sources.import', {'title': 'denied', 'content': 'body'}),
+        agent.call('sources.import', {'title': 'denied', 'text': 'body'}),
         throwsA(
           isA<RpcError>()
               .having((e) => e.code, 'code', RpcErrorCode.denied)

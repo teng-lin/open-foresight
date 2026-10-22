@@ -54,6 +54,20 @@ def write_litert_manifests(app, library, service):
         manifest.write_text(json.dumps({"gemma_runtime": runtime}, indent=2) + "\n")
 
 
+def seal_runtime_provenance(app, values, service):
+    write_litert_manifests(app, values["FORESIGHT_LITERT_LIBRARY"], service)
+    resources = app / "Contents/Resources"
+    provenance = resources / "licenses/sqlite-provenance.json"
+    metadata = json.loads(provenance.read_text())
+    library = values["FORESIGHT_SQLITE_LIBRARY"]
+    with library.open("rb") as stream:
+        metadata["bundled_library"] = {
+            "path": str(library.relative_to(resources)),
+            "sha256": hashlib.file_digest(stream, "sha256").hexdigest(),
+        }
+    provenance.write_text(json.dumps(metadata, indent=2) + "\n")
+
+
 def helper_bundle(path, executable, identifier):
     macos = path / "Contents/MacOS"
     macos.mkdir(parents=True)
@@ -166,6 +180,7 @@ def main(argv=None):
         "FORESIGHT_QUERY_WORKER": args.build / "services/inference/foresight-query",
         "FORESIGHT_HELPER": args.build / "services/helper/ForesightHelper",
         "FORESIGHT_NATIVE": args.build / "native/libforesight_native.dylib",
+        "FORESIGHT_SQLITE_LIBRARY": args.build / "macos/libforesight_sqlite3.dylib",
         "FORESIGHT_AUDIO_DEVICES": args.build / "native/foresight-audio",
         "FORESIGHT_NOTIFICATIONS": args.build / "macos/foresight-notifications",
         "FORESIGHT_FILE_PARSER": args.build / "macos/foresight-file-parser",
@@ -173,7 +188,8 @@ def main(argv=None):
     }
     service = args.build / "application/foresight-service"
     mcp = args.build / "application/foresight-mcp"
-    for path in [args.flutter_app, service, mcp, *required.values()]:
+    sqlite_provenance = args.build / "macos/foresight-sqlite3.json"
+    for path in [args.flutter_app, service, mcp, sqlite_provenance, *required.values()]:
         if not path.exists():
             parser.error(f"Build all components first: missing {path}")
     app = args.output.absolute()
@@ -223,6 +239,8 @@ def main(argv=None):
         notices / "nlohmann-json-LICENSE.MIT",
     )
     write_extension_provenance(extensions, notices / "LiteRT-LM-extension.json")
+    shutil.copy2(ROOT / "packaging/notices/sqlite-LICENSE", notices / "sqlite-LICENSE")
+    shutil.copy2(sqlite_provenance, notices / "sqlite-provenance.json")
     shutil.copy2(ROOT / "third_party/litert_lm/LICENSE", notices / "LiteRT-LM-LICENSE")
     shutil.copy2(
         ROOT / "third_party/sentencepiece/LICENSE", notices / "sentencepiece-LICENSE"
@@ -269,9 +287,7 @@ def main(argv=None):
         app,
         args.identity,
         entitlements,
-        before_seal=lambda: write_litert_manifests(
-            app, values["FORESIGHT_LITERT_LIBRARY"], service_path
-        ),
+        before_seal=lambda: seal_runtime_provenance(app, values, service_path),
     )
     environment = dict(
         os.environ, FORESIGHT_LITERT_LIBRARY=str(values["FORESIGHT_LITERT_LIBRARY"])

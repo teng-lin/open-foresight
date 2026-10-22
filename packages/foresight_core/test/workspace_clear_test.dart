@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_test_support/poll.dart';
 import 'dart:async';
@@ -9,7 +10,7 @@ import 'package:foresight_core/src/application.dart';
 import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
 import 'package:grpc/grpc.dart';
 import 'package:test/test.dart';
-import 'package:sqlite3/sqlite3.dart';
+import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
 
 import 'web_answer_test.dart' show ToolRuntime, fixtureSearch;
 
@@ -185,8 +186,8 @@ void main() {
 
   for (final online in [true, false]) {
     test('clear removes checkpoints across reopen, online=$online', () async {
-      await domain.askWithWebInConversation('Secret question', 'desktop').last;
-      await domain.askWithWebInConversation('Remember it', 'desktop').last;
+      await app.askWithWebInConversation('Secret question', 'desktop').last;
+      await app.askWithWebInConversation('Remember it', 'desktop').last;
       final meeting = store.meeting('Private meeting');
       store.transcript(meeting, 'DELETED SECRET', true, 0, 1, 'imported');
       store.saveMeetingNotes(meeting, 'DELETED SECRET');
@@ -278,8 +279,8 @@ void main() {
         app = Application(domain);
         runtime.histories.clear();
         runtime.answer = (_) async => 'New answer';
-        await domain.askWithWebInConversation('New first', 'desktop').last;
-        await domain.askWithWebInConversation('New second', 'desktop').last;
+        await app.askWithWebInConversation('New first', 'desktop').last;
+        await app.askWithWebInConversation('New second', 'desktop').last;
         expect(runtime.histories.first, isEmpty);
         final replay = jsonEncode(runtime.histories.last);
         expect(replay, contains('New first'));
@@ -303,7 +304,7 @@ void main() {
   test(
     'clearing removes safe-web markers before local answer IDs can be reused',
     () async {
-      await domain.askWithWebInConversation('Old web question', 'desktop').last;
+      await app.askWithWebInConversation('Old web question', 'desktop').last;
       expect(store.preference('webAnswer.v1.1'), 'true');
       await app.call('workspace.clear', {});
       expect(
@@ -322,7 +323,7 @@ void main() {
       );
       expect(store.db.lastInsertRowId, 1);
       runtime.answer = (_) async => 'Safe fresh answer';
-      await domain
+      await app
           .askWithWebInConversation('Fresh explicit web query', 'desktop')
           .last;
       expect(runtime.histories.last, isEmpty);
@@ -332,7 +333,7 @@ void main() {
   test(
     'an in-flight answer cannot recreate cleared answers or checkpoints',
     () async {
-      await domain.askWithWebInConversation('Old question', 'desktop').last;
+      await app.askWithWebInConversation('Old question', 'desktop').last;
       final entered = Completer<void>(), release = Completer<void>();
       runtime.answer = (_) async {
         entered.complete();
@@ -340,8 +341,14 @@ void main() {
         return 'DELETED SECRET';
       };
       final pending = expectLater(
-        domain.askWithWebInConversation('Old follow-up', 'desktop').last,
-        throwsStateError,
+        app.askWithWebInConversation('Old follow-up', 'desktop').last,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.cancelled,
+          ),
+        ),
       );
       await entered.future;
       await app.call('workspace.clear', {});
@@ -350,7 +357,7 @@ void main() {
       expect(store.rows('SELECT * FROM answers'), isEmpty);
       expect(store.rows('SELECT * FROM conversation_memory'), isEmpty);
       runtime.answer = (_) async => 'Fresh answer';
-      await domain.askWithWebInConversation('Fresh question', 'desktop').last;
+      await app.askWithWebInConversation('Fresh question', 'desktop').last;
       expect(runtime.histories.last, isEmpty);
     },
   );
@@ -371,7 +378,13 @@ void main() {
           'http://127.0.0.1:${server.port}/private',
           allowPrivateNetwork: true,
         ),
-        throwsStateError,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.cancelled,
+          ),
+        ),
       );
       await entered.future;
       await app.call('workspace.clear', {});
@@ -450,7 +463,13 @@ void main() {
       try {
         final pending = expectLater(
           auth.accessToken(forceRefresh: true),
-          throwsStateError,
+          throwsA(
+            isA<RpcError>().having(
+              (error) => error.code,
+              'code',
+              RpcErrorCode.cancelled,
+            ),
+          ),
         );
         await entered.future;
         await app.call('workspace.clear', {});

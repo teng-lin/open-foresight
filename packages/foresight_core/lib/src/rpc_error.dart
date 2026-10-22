@@ -50,18 +50,15 @@ bool isClosingRefusal(RpcError error) =>
             (error.message == serviceClosingMessage ||
                 error.message == _legacyExecuteClosingMessage)));
 
-// Preserve existing StateError catches while giving callers a stable wire code.
-// Its message is never serialized through StateError.toString().
-class RpcError extends StateError {
+/// A structured protocol failure, independent of programming StateErrors.
+class RpcError implements Exception {
+  final String message;
   final RpcErrorCode code;
   final RpcErrorReason? reason;
   // Whether the peer's frame named a reason, even one dropped as unknown.
   final bool _reasonOnWire;
-  RpcError(this.code, String message, {this.reason})
-    : _reasonOnWire = false,
-      super(message);
-  RpcError._fromWire(this.code, String message, this.reason, this._reasonOnWire)
-    : super(message);
+  RpcError(this.code, this.message, {this.reason}) : _reasonOnWire = false;
+  RpcError._fromWire(this.code, this.message, this.reason, this._reasonOnWire);
   Map<String, Object?> toJson() => {
     'code': code.name,
     'message': message,
@@ -100,9 +97,7 @@ class RpcError extends StateError {
       };
       return RpcError(code, error.message ?? 'Helper error');
     }
-    if (error is ArgumentError ||
-        error is FormatException ||
-        error is TypeError) {
+    if (error is ArgumentError || error is FormatException) {
       return RpcError(
         RpcErrorCode.invalidArgument,
         error is ArgumentError ? error.message.toString() : error.toString(),

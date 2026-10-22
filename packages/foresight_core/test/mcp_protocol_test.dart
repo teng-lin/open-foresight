@@ -52,6 +52,7 @@ class McpFixture {
                   // A current service names its profile.
                   'result': {
                     'ready': true,
+                    'application_api_version': 1,
                     'profile_id': ProfilePaths(root.path, root.path).identity,
                   },
                   'done': true,
@@ -242,6 +243,16 @@ void main() {
       final search = tools.singleWhere((tool) => tool['name'] == 'search');
       expect(search['inputSchema']['properties']['limit']['minimum'], 1);
       expect(search['inputSchema']['properties']['limit']['maximum'], 100);
+      final preparation = tools.singleWhere(
+        (tool) => tool['name'] == 'prepare_meeting',
+      );
+      expect(preparation['inputSchema']['properties']['source_ids'], {
+        'type': 'array',
+        'items': {'type': 'string'},
+        'minItems': 1,
+        'maxItems': 100,
+        'uniqueItems': true,
+      });
       expect(search['annotations']['readOnlyHint'], isTrue);
       expect(
         tools.where((tool) => tool['name'] == 'audio_request_microphone'),
@@ -269,6 +280,21 @@ void main() {
           isTrue,
           reason: arguments.toString(),
         );
+        expect(
+          reply['result']['content'][0]['text'],
+          contains('Invalid arguments'),
+        );
+      }
+      for (final sources in [
+        <String>[],
+        ['duplicate', 'duplicate'],
+        List.generate(101, (index) => 'source-$index'),
+      ]) {
+        final reply = await fixture.call('tools/call', {
+          'name': 'prepare_meeting',
+          'arguments': {'id': 1, 'source_ids': sources},
+        });
+        expect(reply['result']['isError'], isTrue, reason: sources.toString());
         expect(
           reply['result']['content'][0]['text'],
           contains('Invalid arguments'),

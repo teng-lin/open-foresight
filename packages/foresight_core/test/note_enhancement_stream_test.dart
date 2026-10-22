@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/application.dart';
 import 'dart:async';
@@ -119,6 +120,7 @@ class QueuedNoteGenerator extends ControlledNoteGenerator {
 }
 
 void main() {
+  late Application app;
   late Directory directory;
   late Domain domain;
   late FakeAsync time;
@@ -144,10 +146,11 @@ void main() {
     );
     generator = ControlledNoteGenerator();
     domain.generator = generator;
+    app = Application(domain);
   });
   setUp(() {
     addTearDown(() async {
-      await domain.application.close();
+      await app.close();
       domain.close();
       generator.close();
       await generator.events.close();
@@ -157,10 +160,9 @@ void main() {
     });
   });
   Map progress() =>
-      (domain.application.captureState['note_enhancements'] as Map)['$id']
-          as Map;
+      (app.captureState['note_enhancements'] as Map)['$id'] as Map;
   Future<void> emit(String text) async {
-    final changed = domain.application.changes.stream.first;
+    final changed = app.changes.stream.first;
     generator.events.add({'type': 'delta', 'text': text});
     await changed;
   }
@@ -170,9 +172,18 @@ void main() {
     () async {
       generator.events.stream.listen((_) {});
       generator.busy = true;
-      await expectLater(domain.application.enhanceNotes(id), throwsStateError);
-      await domain.application.enhanceNotes(id, deferWhenBusy: true);
-      await domain.application.enhanceNotes(id, deferWhenBusy: true);
+      await expectLater(
+        app.enhanceNotes(id),
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.busy,
+          ),
+        ),
+      );
+      await app.enhanceNotes(id, deferWhenBusy: true);
+      await app.enhanceNotes(id, deferWhenBusy: true);
       time.elapse(const Duration(seconds: 2));
       expect(generator.entered.isCompleted, isFalse);
       expect(domain.store.meetingEnhancedNotes(id), priorEnhanced);
@@ -181,10 +192,7 @@ void main() {
       domain.initialize(Future<void>.value());
       time.elapse(const Duration(seconds: 1));
       time.flushMicrotasks();
-      expect(
-        domain.application.recordingState,
-        contains('Model configuration is busy'),
-      );
+      expect(app.recordingState, contains('Model configuration is busy'));
       expect(generator.entered.isCompleted, isFalse);
       expect(domain.store.meetingEnhancedNotes(id), priorEnhanced);
       expect(
@@ -193,8 +201,14 @@ void main() {
       );
       expect(domain.store.rows('SELECT * FROM artifacts'), hasLength(1));
       await expectLater(
-        domain.application.enhanceNotes(id, current: () => false),
-        throwsStateError,
+        app.enhanceNotes(id, current: () => false),
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.cancelled,
+          ),
+        ),
       );
     },
   );
@@ -210,7 +224,7 @@ void main() {
         '- First enhanced\n\n- Second enhanced',
         'fixture',
       );
-      await domain.command(Operation.meetingsNotes, {
+      await app.call(Operation.meetingsNotes.wire, {
         'id': id,
         'body': 'Second raw\nFirst raw',
         'last_manual_edit': 333,
@@ -240,17 +254,17 @@ void main() {
       final artifact = domain.store
           .rows('SELECT id FROM artifacts ORDER BY id DESC')
           .first['id'];
-      await domain.command(Operation.artifactsEdit, {
+      await app.call(Operation.artifactsEdit.wire, {
         'id': artifact,
         'text': '- Manually changed',
       });
-      final work = domain.application.enhanceNotes(id);
+      final work = app.enhanceNotes(id);
       await generator.entered.future;
       expect(
         generator.prompts.single,
         isNot(contains('<previous_enhanced_notes>')),
       );
-      await domain.command(Operation.meetingsCancelEnhance, {
+      await app.call(Operation.meetingsCancelEnhance.wire, {
         'id': id,
         'request_id': progress()['request_id'],
       });
@@ -270,19 +284,19 @@ void main() {
         '- First enhanced\n\n- Second enhanced',
         'fixture',
       );
-      final work = domain.application.enhanceNotes(id);
+      final work = app.enhanceNotes(id);
       await generator.entered.future;
-      await domain.command(Operation.meetingsNotes, {
+      await app.call(Operation.meetingsNotes.wire, {
         'id': id,
         'body': 'Updated first\nUpdated second',
       });
-      await domain.command(Operation.meetingsCancelEnhance, {
+      await app.call(Operation.meetingsCancelEnhance.wire, {
         'id': id,
         'request_id': progress()['request_id'],
       });
       await emit('cancel observation');
       await work;
-      await domain.command(Operation.meetingsNotes, {
+      await app.call(Operation.meetingsNotes.wire, {
         'id': id,
         'body': 'Updated second\nUpdated first',
       });
@@ -303,16 +317,16 @@ void main() {
       domain.store.setPreference('liveEnhance', 'true');
       domain.store.saveMeetingNotes(id, 'First raw');
       domain.store.saveMeetingEnhancedDraft(id, '');
-      final first = domain.application.enhanceNotes(id, isLive: true);
+      final first = app.enhanceNotes(id, isLive: true);
       await queued.entered.future;
       domain.store.saveMeetingNotes(id, 'First raw\nSecond raw\nThird raw');
-      await domain.application.enhanceNotes(
+      await app.enhanceNotes(
         id,
         isLive: true,
         deferWhenBusy: true,
         targetBulletIndices: {1},
       );
-      await domain.application.enhanceNotes(
+      await app.enhanceNotes(
         id,
         isLive: true,
         deferWhenBusy: true,
@@ -321,13 +335,10 @@ void main() {
       queued.releaseFirst.complete();
       await first;
       await queued.secondDone.future;
-      if ((domain.application.captureState['note_enhancements'] as Map)
-          .isNotEmpty) {
-        await domain.application.changes.stream
+      if ((app.captureState['note_enhancements'] as Map).isNotEmpty) {
+        await app.changes.stream
             .firstWhere(
-              (_) =>
-                  (domain.application.captureState['note_enhancements'] as Map)
-                      .isEmpty,
+              (_) => (app.captureState['note_enhancements'] as Map).isEmpty,
             )
             .timeout(const Duration(seconds: 5));
       }
@@ -345,7 +356,7 @@ void main() {
     'manual enhancement can update notes already written in enhanced form',
     () async {
       domain.store.saveMeetingNotes(id, '- **Owner:** Mira');
-      final work = domain.application.enhanceNotes(id);
+      final work = app.enhanceNotes(id);
       await generator.entered.future;
       expect(generator.prompts.single, contains('- **Owner:** Mira'));
       await emit('- **Owner:** Mira sends the draft.');
@@ -378,7 +389,7 @@ void main() {
       ].map((word) => 'Raw $word').join('\n');
       domain.store.saveMeetingNotes(id, raw, lastManualEdit: 300);
 
-      await domain.application.enhanceNotes(id);
+      await app.enhanceNotes(id);
 
       expect(batched.prompts, hasLength(2));
       expect(batched.prompts.first, contains('Raw one'));
@@ -412,14 +423,14 @@ void main() {
       expect(stored['body'], raw);
       expect(stored['last_manual_edit'], 300);
       expect(stored['last_enhanced'], greaterThan(100));
-      expect(domain.application.captureState['note_enhancements'], isEmpty);
+      expect(app.captureState['note_enhancements'], isEmpty);
     },
   );
 
   test(
     'initial raw copy precedes the producer prior-map preview and draft save',
     () async {
-      final work = domain.application.enhanceNotes(id);
+      final work = app.enhanceNotes(id);
       expect(progress()['body'], 'Raw notes');
       await generator.entered.future;
       expect(progress()['body'], '- Prior');
@@ -431,7 +442,7 @@ void main() {
             .single,
         {'last_enhanced': 100, 'last_manual_edit': 200},
       );
-      await domain.command(Operation.meetingsCancelEnhance, {
+      await app.call(Operation.meetingsCancelEnhance.wire, {
         'id': id,
         'request_id': progress()['request_id'],
       });
@@ -444,12 +455,12 @@ void main() {
   test(
     'immediate restart keeps pending cancellation restoration as the baseline',
     () async {
-      final first = domain.application.enhanceNotes(id);
+      final first = app.enhanceNotes(id);
       await generator.entered.future;
       await emit('- Persisted partial');
       time.elapse(const Duration(seconds: 1));
       final firstRequest = progress()['request_id'];
-      await domain.command(Operation.meetingsCancelEnhance, {
+      await app.call(Operation.meetingsCancelEnhance.wire, {
         'id': id,
         'request_id': firstRequest,
       });
@@ -459,16 +470,16 @@ void main() {
       generator.close();
       generator = ControlledNoteGenerator();
       domain.generator = generator;
-      final second = domain.application.enhanceNotes(id);
+      final second = app.enhanceNotes(id);
       await generator.entered.future;
       expect(
-        await domain.command(Operation.meetingsCancelEnhance, {
+        await app.call(Operation.meetingsCancelEnhance.wire, {
           'id': id,
           'request_id': firstRequest,
         }),
         isFalse,
       );
-      await domain.command(Operation.meetingsCancelEnhance, {
+      await app.call(Operation.meetingsCancelEnhance.wire, {
         'id': id,
         'request_id': progress()['request_id'],
       });
@@ -481,7 +492,7 @@ void main() {
   test(
     'partial output debounces into current notes without per-token artifacts',
     () async {
-      final work = domain.application.enhanceNotes(id);
+      final work = app.enhanceNotes(id);
       await generator.entered.future;
       expect(progress()['body'], '- Prior');
       await emit('- First');
@@ -520,7 +531,7 @@ void main() {
             .single['last_enhanced'],
         greaterThan(100),
       );
-      expect(domain.application.captureState['note_enhancements'], isEmpty);
+      expect(app.captureState['note_enhancements'], isEmpty);
     },
   );
 
@@ -537,16 +548,16 @@ void main() {
         'fixture',
       );
       final current = domain.store.db.lastInsertRowId;
-      final work = domain.application.enhanceNotes(id);
+      final work = app.enhanceNotes(id);
       await generator.entered.future;
       await emit('- Partial');
-      await domain.command(Operation.artifactsEdit, {
+      await app.call(Operation.artifactsEdit.wire, {
         'id': historical,
         'text': 'Historical edit',
         'last_manual_edit': 666,
       });
       expect(progress()['body'], '- Partial');
-      await domain.command(Operation.artifactsEdit, {
+      await app.call(Operation.artifactsEdit.wire, {
         'id': current,
         'text': '- Manual',
         'last_manual_edit': 777,
@@ -577,7 +588,7 @@ void main() {
     'lease cancellation after autosave restores exact headings, prose and spacing',
     () async {
       var current = true;
-      final work = domain.application.enhanceNotes(id, current: () => current);
+      final work = app.enhanceNotes(id, current: () => current);
       await generator.entered.future;
       await emit('- Partial');
       time.elapse(const Duration(seconds: 1));
@@ -592,13 +603,24 @@ void main() {
   test(
     'owned cancel restores the exact previous body and retains it after autosave',
     () async {
-      final work = domain.application.enhanceNotes(id);
+      final work = app.enhanceNotes(id);
       await generator.entered.future;
       await emit('- Partial');
       time.elapse(const Duration(seconds: 1));
       final request = progress()['request_id'];
+      for (final target in <Map<String, dynamic>>[
+        {'id': id},
+        {'id': id, 'request_id': null},
+      ]) {
+        expect(
+          await app.call(Operation.meetingsCancelEnhance.wire, target),
+          isFalse,
+        );
+        expect(progress()['cancel_requested'], isFalse);
+        expect(generator.cancelled, isFalse);
+      }
       expect(
-        await domain.command(Operation.meetingsCancelEnhance, {
+        await app.call(Operation.meetingsCancelEnhance.wire, {
           'id': id,
           'request_id': 'stale',
         }),
@@ -606,7 +628,7 @@ void main() {
       );
       expect(progress()['cancel_requested'], isFalse);
       expect(
-        await domain.command(Operation.meetingsCancelEnhance, {
+        await app.call(Operation.meetingsCancelEnhance.wire, {
           'id': id,
           'request_id': request,
         }),
@@ -628,14 +650,14 @@ void main() {
         {'last_enhanced': 100, 'last_manual_edit': 200},
       );
       expect(domain.store.rows('SELECT * FROM artifacts'), hasLength(1));
-      expect(domain.application.captureState['note_enhancements'], isEmpty);
+      expect(app.captureState['note_enhancements'], isEmpty);
     },
   );
 
   test(
     'close synchronously restores an autosaved draft while the producer is stalled',
     () async {
-      final work = domain.application.enhanceNotes(id);
+      final work = app.enhanceNotes(id);
       await generator.entered.future;
       await emit('- Autosaved partial');
       time.elapse(const Duration(seconds: 1));
@@ -643,10 +665,11 @@ void main() {
       final savedTimestamp = domain.store
           .rows('SELECT timestamp FROM meeting_notes')
           .single['timestamp'];
-      await domain.application.close();
+      final closing = app.close();
       expect(domain.store.meetingEnhancedNotes(id), priorEnhanced);
       generator.events.add({'type': 'delta', 'text': ' ignored after close'});
       await work;
+      await closing;
       time.elapse(const Duration(seconds: 1));
       expect(domain.store.meetingEnhancedNotes(id), priorEnhanced);
       expect(

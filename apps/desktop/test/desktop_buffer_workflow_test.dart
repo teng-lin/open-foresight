@@ -1,3 +1,4 @@
+import 'store_reader_fixture.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -5,9 +6,9 @@ import 'package:flutter/gestures.dart' show kDoubleTapTimeout;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/remote.dart';
-import 'package:open_foresight/google_auth.dart';
+import 'package:foresight_core/src/google_auth.dart';
 import 'package:open_foresight/meeting_export.dart';
-import 'package:open_foresight/generated/helper_control.pb.dart' as control;
+import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
 import 'controller_fixture.dart';
 import 'pump_until.dart';
 
@@ -81,7 +82,7 @@ void main() {
       for (final id in ids) {
         f.store.state(id, 'indexed');
       }
-      f.connection.helper.snapshot = control.State(
+      f.connection.domain.helper.snapshot = control.State(
         pipeline: 'ready',
         instanceId: 'fixture',
         model: control.ModelIdentity(
@@ -140,7 +141,7 @@ void main() {
         f.store.state(id, 'indexed');
       }
       f.store.db.execute('COMMIT');
-      f.connection.helper.snapshot = control.State(
+      f.connection.domain.helper.snapshot = control.State(
         pipeline: 'ready',
         instanceId: 'fixture',
         model: control.ModelIdentity(
@@ -220,7 +221,7 @@ void main() {
         dimensions: 3,
       ),
     );
-    f.connection.helper.snapshot = snapshot('fixture');
+    f.connection.domain.helper.snapshot = snapshot('fixture');
     final reply = Completer<Map<String, List<double>>>();
     f.connection.graphReply = (_) => reply.future;
     f.shell.update(() {
@@ -231,7 +232,7 @@ void main() {
     await pumpUntil(tester, () => f.connection.graphRequests.isNotEmpty);
     // The helper restarts while the batch is in flight, before any rebuild
     // recomputes the layout key.
-    f.connection.helper.snapshot = snapshot('replacement');
+    f.connection.domain.helper.snapshot = snapshot('replacement');
     // Registered after the controller's await, so it runs after that
     // continuation.
     var delivered = false;
@@ -250,7 +251,7 @@ void main() {
       final opened = showDialog<void>(
         context: tester.element(find.byType(Scaffold).first),
         builder: (_) => MeetingExportDialog(
-          store: f.store,
+          store: fixtureReader(f.store),
           now: DateTime(2026, 10, 16),
           save: (_) async => false,
         ),
@@ -681,6 +682,9 @@ void main() {
       final previous = f.store.db.lastInsertRowId;
       f.store.artifact(id, 'summary', 'Current summary', 'fixture');
       final latest = f.store.db.lastInsertRowId;
+      final summaryEpoch = f.connection.workspaceEpoch;
+      expect(summaryEpoch, f.store.workspaceEpoch);
+      expect(summaryEpoch, isNotEmpty);
       f.shell.update(() {
         f.shell.meetingFeature.meetingId = id;
         f.shell.meetingFeature.meetingPanel = 'Summary';
@@ -715,7 +719,11 @@ void main() {
       await tester.tap(find.byTooltip('Generate Summary'));
       await tester.pumpAndSettle();
       expect(f.connection.calls.last.$1, Operation.meetingsGenerate);
-      expect(f.connection.calls.last.$2, {'id': id, 'kind': 'summary'});
+      expect(f.connection.calls.last.$2, {
+        'id': id,
+        'kind': 'summary',
+        'workspace_epoch': summaryEpoch,
+      });
     },
   );
 

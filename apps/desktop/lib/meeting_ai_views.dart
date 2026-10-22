@@ -1,7 +1,28 @@
 part of 'main.dart';
 
 extension _MeetingAiViews on _MeetingsController {
+  bool _meetingActionCurrent(int id, FeatureRequestIdentity identity) =>
+      meetingId == id && identity.isCurrent(d, alive: mounted);
+
+  Future<void> _runMeetingAction(
+    int id,
+    FeatureRequestIdentity identity,
+    Future<void> Function(bool Function() current) action,
+  ) async {
+    bool current() => _meetingActionCurrent(id, identity);
+    // An input event can already be queued when its rendered view retires.
+    if (!current()) return;
+    await shell.run(() async {
+      try {
+        await action(current);
+      } catch (_) {
+        if (current()) rethrow;
+      }
+    });
+  }
+
   Widget meetingAnswerScope(int id, {required bool automatic}) {
+    final identity = FeatureRequestIdentity.capture(d);
     final key = automatic ? 'proactiveScope.$id' : 'answerScope.meeting:$id';
     final scope = d.store.preference(key, automatic ? 'meeting' : 'workspace');
     return Padding(
@@ -28,31 +49,32 @@ extension _MeetingAiViews on _MeetingsController {
               ],
               onChanged: shell.busy
                   ? null
-                  : (value) => shell.run(() async {
-                      final epoch = d.store.workspaceEpoch;
+                  : (value) => _runMeetingAction(id, identity, (current) async {
                       if (value == 'selected') {
                         final ids = await selectMeetingSources(
                           id,
                           'answerSourcesSelection',
                         );
                         if (ids == null) return;
-                        if (d.store.workspaceEpoch != epoch)
-                          throw StateError(
-                            'Workspace changed; select sources again',
-                          );
-                        await d.command(Operation.preferencesSet, {
+                        if (!current()) return;
+                        await d.commandCurrent(Operation.preferencesSet, {
                           'key': 'answerSources.meeting:$id',
                           'value': jsonEncode(ids),
-                        });
-                        await d.command(Operation.preferencesSet, {
+                          'workspace_epoch': identity.workspaceEpoch,
+                        }, current);
+                        if (!current()) return;
+                        await d.commandCurrent(Operation.preferencesSet, {
                           'key': 'answerSourcesSelection.$id',
                           'value': jsonEncode(ids),
-                        });
+                          'workspace_epoch': identity.workspaceEpoch,
+                        }, current);
                       }
-                      await d.command(Operation.preferencesSet, {
+                      if (!current()) return;
+                      await d.commandCurrent(Operation.preferencesSet, {
                         'key': key,
                         'value': value!,
-                      });
+                        'workspace_epoch': identity.workspaceEpoch,
+                      }, current);
                     }),
             ),
           ),
@@ -113,8 +135,9 @@ extension _MeetingAiViews on _MeetingsController {
   }
 
   Widget meetingActionsPanel(int id) {
-    final tasks = d.store.meetingTasks(id);
-    final versions = d.store.meetingArtifacts(id, 'actions');
+    final identity = FeatureRequestIdentity.capture(d);
+    final tasks = readRows(d.store.meetingTasks(id));
+    final versions = readRows(d.store.meetingArtifacts(id, 'actions'));
     final active = _workflow(id, 'actions')?['active'] == true;
     return Column(
       children: [
@@ -129,7 +152,13 @@ extension _MeetingAiViews on _MeetingsController {
                 tooltip: 'Generate Action items',
                 onPressed: active || shell.busy
                     ? null
-                    : () => shell.run(() => generateMeeting('actions', id: id)),
+                    : () => _runMeetingAction(id, identity, (current) async {
+                        await d.commandCurrent(Operation.meetingsGenerate, {
+                          'id': id,
+                          'kind': 'actions',
+                          'workspace_epoch': identity.workspaceEpoch,
+                        }, current);
+                      }),
                 icon: const Icon(Icons.auto_awesome),
               ),
               if (versions.isNotEmpty)
@@ -181,17 +210,23 @@ extension _MeetingAiViews on _MeetingsController {
                                     value: task['status'] == 'completed',
                                     onChanged: active || shell.busy
                                         ? null
-                                        : (value) => shell.run(() async {
-                                            await d.command(
-                                              Operation.meetingsEditTask,
-                                              {
-                                                'id': task['id'],
-                                                'status': value == true
-                                                    ? 'completed'
-                                                    : 'open',
-                                              },
-                                            );
-                                          }),
+                                        : (value) =>
+                                              _runMeetingAction(id, identity, (
+                                                current,
+                                              ) async {
+                                                await d.commandCurrent(
+                                                  Operation.meetingsEditTask,
+                                                  {
+                                                    'id': task['id'],
+                                                    'status': value == true
+                                                        ? 'completed'
+                                                        : 'open',
+                                                    'workspace_epoch':
+                                                        identity.workspaceEpoch,
+                                                  },
+                                                  current,
+                                                );
+                                              }),
                                   ),
                                   Expanded(
                                     child: SelectableText(
@@ -203,7 +238,10 @@ extension _MeetingAiViews on _MeetingsController {
                                     onPressed: active || shell.busy
                                         ? null
                                         : () => unawaited(
-                                            editMeetingTask(task).catchError(
+                                            editMeetingTask(
+                                              task,
+                                              identity,
+                                            ).catchError(
                                               shell.reportAsyncError,
                                             ),
                                           ),
@@ -258,8 +296,15 @@ extension _MeetingAiViews on _MeetingsController {
     );
   }
 
-  Future<void> editMeetingTask(Map<String, Object?> task) async {
-    final epoch = d.store.workspaceEpoch;
+  Future<void> editMeetingTask(
+    Map<String, Object?> task,
+    FeatureRequestIdentity identity,
+  ) async {
+    final selectedMeeting = meetingId;
+    if (task['meeting_id'] != selectedMeeting) return;
+    bool current() =>
+        meetingId == selectedMeeting && identity.isCurrent(d, alive: mounted);
+    if (!current()) return;
     final text = TextEditingController(text: task['task'] as String),
         owner = TextEditingController(text: task['owner'] as String? ?? ''),
         due = TextEditingController(text: task['due'] as String? ?? '');
@@ -303,14 +348,16 @@ extension _MeetingAiViews on _MeetingsController {
           ],
         ),
       );
-      if (save == true)
-        await d.command(Operation.meetingsEditTask, {
+      if (save == true && current())
+        await d.commandCurrent(Operation.meetingsEditTask, {
           'id': task['id'],
           'task': text.text,
           'owner': owner.text.trim().isEmpty ? null : owner.text.trim(),
           'due': due.text.trim().isEmpty ? null : due.text.trim(),
-          'workspace_epoch': epoch,
-        });
+          'workspace_epoch': identity.workspaceEpoch,
+        }, current);
+    } catch (_) {
+      if (current()) rethrow;
     } finally {
       text.dispose();
       owner.dispose();
@@ -319,7 +366,7 @@ extension _MeetingAiViews on _MeetingsController {
   }
 
   Future<List<String>?> selectMeetingSources(int id, String preference) async {
-    final all = d.store.sourceSummaries
+    final all = readRows(d.store.sourceSummaries)
         .where(
           (source) =>
               !(source['id'] as String).startsWith('meeting-preparation-'),
@@ -374,23 +421,29 @@ extension _MeetingAiViews on _MeetingsController {
     );
   }
 
-  Future<void> generatePreparation(int id) async {
-    final epoch = d.store.workspaceEpoch;
+  Future<void> generatePreparation(
+    int id,
+    FeatureRequestIdentity identity,
+    bool Function() current,
+  ) async {
     final sources = await selectMeetingSources(id, 'preparationSources');
-    if (sources == null) return;
-    await d.command(Operation.preferencesSet, {
+    if (sources == null || !current()) return;
+    await d.commandCurrent(Operation.preferencesSet, {
       'key': 'preparationSources.$id',
       'value': jsonEncode(sources),
-    });
-    await d.command(Operation.meetingsPrepare, {
+      'workspace_epoch': identity.workspaceEpoch,
+    }, current);
+    if (!current()) return;
+    await d.commandCurrent(Operation.meetingsPrepare, {
       'id': id,
       'source_ids': sources,
-      'workspace_epoch': epoch,
-    });
+      'workspace_epoch': identity.workspaceEpoch,
+    }, current);
   }
 
   Widget meetingPreparationPanel(int id) {
-    final versions = d.store.meetingArtifacts(id, 'preparation');
+    final identity = FeatureRequestIdentity.capture(d);
+    final versions = readRows(d.store.meetingArtifacts(id, 'preparation'));
     final active = _workflow(id, 'preparation')?['active'] == true;
     final preview = _workflow(id, 'preparation')?['preview'] as String? ?? '';
     final artifact = versions.firstOrNull;
@@ -413,7 +466,11 @@ extension _MeetingAiViews on _MeetingsController {
                 tooltip: 'Prepare from local documents',
                 onPressed: active || shell.busy
                     ? null
-                    : () => shell.run(() => generatePreparation(id)),
+                    : () => _runMeetingAction(
+                        id,
+                        identity,
+                        (current) => generatePreparation(id, identity, current),
+                      ),
                 icon: const Icon(Icons.auto_awesome),
               ),
               if (artifact != null)

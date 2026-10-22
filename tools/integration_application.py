@@ -21,6 +21,11 @@ from tools import linux_sdk_artifacts as sdk
 from tools.ci_producer_trust import PRODUCERS
 
 
+# GitHub can report a finished prerequisite as pending for over two minutes.
+# Keep the wait bounded while still requiring its original successful attempt.
+PRODUCER_VISIBILITY_WAIT = 300
+
+
 def original_producer(
     repository,
     source,
@@ -28,7 +33,7 @@ def original_producer(
     attempt,
     artifact,
     *,
-    wait=60,
+    wait=PRODUCER_VISIBILITY_WAIT,
     consumer="inrun-application",
 ):
     """Refresh a uniquely identified pending producer without relaxing its proof."""
@@ -200,7 +205,7 @@ def retrieve(
     destination,
     *,
     component="linux-app",
-    producer_wait=60,
+    producer_wait=PRODUCER_VISIBILITY_WAIT,
     shadow=False,
     label="",
     purpose="acceptance",

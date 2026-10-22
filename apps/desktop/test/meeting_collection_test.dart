@@ -3,9 +3,9 @@ import 'desktop_connection_fixture.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/domain.dart';
+import 'package:foresight_core/src/domain.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/store.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 void main() {
@@ -30,7 +30,8 @@ void main() {
         store,
         OfflineHelper('${root.path}/socket', '${root.path}/helper'),
       );
-      expect(domain.application.google.syncing, false);
+      final app = Application(domain);
+      expect(app.google.syncing, false);
       final start = DateTime.now().millisecondsSinceEpoch;
       store.db.execute(
         'INSERT INTO calendar_events VALUES(?,?,?,?,?,?,?,?,?,?,?)',
@@ -50,10 +51,7 @@ void main() {
       );
       try {
         await tester.pumpWidget(
-          Foresight(
-            TestDesktopConnection(domain),
-            deviceLoader: () async => [],
-          ),
+          Foresight(TestDesktopConnection(app), deviceLoader: () async => []),
         );
         await tester.pumpAndSettle();
         expect(find.text('Calendar cancelled'), findsOneWidget);
@@ -93,9 +91,11 @@ void main() {
         await tester.pumpWidget(
           Foresight(
             TestDesktopConnection(
-              Domain(
-                store,
-                OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+              Application(
+                Domain(
+                  store,
+                  OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+                ),
               ),
             ),
             deviceLoader: () async => [],

@@ -54,6 +54,8 @@ void main() {
       store.close();
       store = Store('${tmp.path}/application.db');
       domain = Domain(store, helper);
+      final app = Application(domain);
+      addTearDown(app.close);
       expect(store.sources.single['revision'], 2);
       expect(
         store.rows('SELECT * FROM notes').single['body'],
@@ -87,7 +89,9 @@ void main() {
       addTearDown(store.close);
       final helper = Helper('${tmp.path}/socket', '${tmp.path}/helper');
       addTearDown(helper.close);
-      final output = await Domain(store, helper).ask('What happened?').toList();
+      final app = Application(Domain(store, helper));
+      addTearDown(app.close);
+      final output = await app.ask('What happened?').toList();
       expect(output.single, contains('Insufficient context'));
       expect(
         store.rows('SELECT status FROM answers').single['status'],

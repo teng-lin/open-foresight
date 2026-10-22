@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:foresight_core/foresight_core.dart';
@@ -59,7 +60,7 @@ void main() {
       model: control.ModelIdentity(modelDigest: 'original-model'),
     );
     domain = Domain(store, helper);
-    app = domain.application;
+    app = Application(domain);
     meeting = store.meeting('Capture');
     store.transcript(
       meeting,
@@ -161,7 +162,16 @@ void main() {
     'workspace invalidation keeps new requests independent of old work',
     () async {
       final first = app.indexMeeting(meeting);
-      final failedFirst = expectLater(first, throwsStateError);
+      final failedFirst = expectLater(
+        first,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.cancelled,
+          ),
+        ),
+      );
       await service.entered.future.timeout(const Duration(seconds: 5));
       domain.invalidateWorkspace();
       final second = app.indexMeeting(meeting);

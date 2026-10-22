@@ -1,7 +1,7 @@
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:convert';
 import 'package:test/test.dart';
-import 'package:sqlite3/sqlite3.dart';
+import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
 import 'package:foresight_core/src/store.dart';
 import 'package:foresight_core/src/graph_layout.dart';
 import 'package:foresight_core/src/graph_persistence.dart';

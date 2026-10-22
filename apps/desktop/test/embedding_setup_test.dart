@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/application.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'package:foresight_test_support/poll.dart';
@@ -5,10 +6,10 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:grpc/grpc.dart';
-import 'package:open_foresight/domain.dart';
-import 'package:open_foresight/generated/rag_service.pbgrpc.dart';
+import 'package:foresight_core/src/domain.dart';
+import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/store.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 class EmbeddingSetupService extends RagServiceBase {
@@ -60,7 +61,7 @@ void main() {
     try {
       await tester.pumpWidget(
         Foresight(
-          TestDesktopConnection(Domain(store, helper)),
+          TestDesktopConnection(Application(Domain(store, helper))),
           deviceLoader: () async => [],
         ),
       );

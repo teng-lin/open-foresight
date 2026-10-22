@@ -1,3 +1,4 @@
+import 'store_reader_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'package:foresight_core/src/application.dart';
@@ -9,8 +10,8 @@ import 'package:intl/date_symbol_data_local.dart';
 import 'package:intl/intl.dart';
 import 'package:open_foresight/meeting_export.dart';
 import 'package:open_foresight/generated_content.dart';
-import 'package:open_foresight/store.dart';
-import 'package:open_foresight/domain.dart';
+import 'package:foresight_core/src/store.dart';
+import 'package:foresight_core/src/domain.dart';
 import 'package:open_foresight/main.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
@@ -22,10 +23,6 @@ void main() {
   setUp(() {
     directory = createTestTempDirectorySync('meeting-export-');
     store = Store('${directory.path}/app.db');
-    Domain(
-      store,
-      OfflineHelper('${directory.path}/socket', '${directory.path}/helper'),
-    ).application.google;
   });
   setUp(() {
     addTearDown(() {
@@ -81,15 +78,15 @@ void main() {
       );
       store.saveMeetingEnhancedDraft(id, '- Current partial');
       expect(
-        composeMeetingExport(store).markdown,
+        composeMeetingExport(fixtureReader(store)).markdown,
         contains('- Current partial'),
       );
       expect(
-        composeMeetingExport(store).markdown,
+        composeMeetingExport(fixtureReader(store)).markdown,
         isNot(contains('Old generated enhancement')),
       );
       store.saveMeetingEnhancedDraft(id, '');
-      final cleared = composeMeetingExport(store).markdown;
+      final cleared = composeMeetingExport(fixtureReader(store)).markdown;
       expect(cleared, contains('Raw fallback'));
       expect(cleared, isNot(contains('Old generated enhancement')));
       expect(
@@ -120,7 +117,7 @@ void main() {
       '{"summary":"Current title"}',
     ]);
     expect(
-      composeMeetingExport(store).markdown,
+      composeMeetingExport(fixtureReader(store)).markdown,
       startsWith('## Captured title\n'),
     );
     // Later nonempty names replace a duplicate ID's name without moving that
@@ -136,18 +133,21 @@ void main() {
       );
     }
     expect(
-      composeMeetingExport(store).markdown,
+      composeMeetingExport(fixtureReader(store)).markdown,
       startsWith('## Updated association\n'),
     );
     store.db.execute('UPDATE meetings SET title=? WHERE id=?', [
       ' User title ',
       id,
     ]);
-    expect(composeMeetingExport(store).markdown, startsWith('## User title\n'));
+    expect(
+      composeMeetingExport(fixtureReader(store)).markdown,
+      startsWith('## User title\n'),
+    );
     store.db.execute('UPDATE meetings SET title=? WHERE id=?', ['', id]);
     store.db.execute('DELETE FROM calendar_events');
     expect(
-      composeMeetingExport(store).markdown,
+      composeMeetingExport(fixtureReader(store)).markdown,
       startsWith('## Updated association\n'),
     );
   });
@@ -188,7 +188,7 @@ void main() {
       meeting('Tomorrow', DateTime(2026, 10, 17), notes: 'excluded after');
       meeting('Empty calendar placeholder', today);
       final result = composeMeetingExport(
-        store,
+        fixtureReader(store),
         range: meetingExportRange(MeetingExportPeriod.last7Days, today),
       );
       expect(result.count, 2);
@@ -256,13 +256,13 @@ void main() {
       );
       expect(
         composeMeetingExport(
-          store,
+          fixtureReader(store),
           range: DateTimeRange(start: today, end: today),
         ).count,
         1,
       );
       expect(
-        composeMeetingExport(store).markdown,
+        composeMeetingExport(fixtureReader(store)).markdown,
         contains(
           '[Oct 16, 2026 12:00am - 1:00am](https://calendar.example.test/event?id=123&view=full)',
         ),
@@ -286,7 +286,7 @@ void main() {
         store.db.lastInsertRowId,
       ]);
       final before = store.rows('SELECT * FROM notes ORDER BY id');
-      final all = composeMeetingExport(store);
+      final all = composeMeetingExport(fixtureReader(store));
       expect(all.count, 3);
       expect(
         all.markdown,
@@ -301,7 +301,7 @@ void main() {
         ),
       );
       final filtered = composeMeetingExport(
-        store,
+        fixtureReader(store),
         range: DateTimeRange(start: today, end: today),
       );
       expect(filtered.count, 2);
@@ -382,11 +382,11 @@ void main() {
         store.db.execute('ROLLBACK');
         rethrow;
       }
-      final all = composeMeetingExport(store);
+      final all = composeMeetingExport(fixtureReader(store));
       expect(all.count, 501);
       expect(all.markdown, isNot(contains('Excluded')));
       final filtered = composeMeetingExport(
-        store,
+        fixtureReader(store),
         range: DateTimeRange(start: today, end: today),
       );
       expect(filtered.count, 2);
@@ -406,7 +406,7 @@ void main() {
     meeting('First', DateTime(2026, 10, 12, 9), notes: '\n  First note\n\n');
     meeting('Second', DateTime(2026, 10, 12, 10), notes: '  中文 note  \n');
     expect(
-      composeMeetingExport(store).markdown,
+      composeMeetingExport(fixtureReader(store)).markdown,
       '## Second\nOct 12, 2026 10:00am\n\n中文 note\n\n\n\n'
       '## First\nOct 12, 2026 9:00am\n\nFirst note\n',
     );
@@ -437,7 +437,7 @@ void main() {
     store.artifact(id, 'summary', 'Unrelated summary', 'fixture');
     savedAt(id, today);
     expect(
-      composeMeetingExport(store).markdown,
+      composeMeetingExport(fixtureReader(store)).markdown,
       '## Enhanced\nOct 16, 2026 12:00am\n\n**Current enhancement**\n',
     );
 
@@ -445,7 +445,7 @@ void main() {
     savedAt(id, today);
     final before = store.rows('SELECT * FROM artifacts ORDER BY id');
     expect(
-      composeMeetingExport(store).markdown,
+      composeMeetingExport(fixtureReader(store)).markdown,
       '## Enhanced\nOct 16, 2026 12:00am\n\nUser-edited enhancement\n',
     );
     expect(store.rows('SELECT * FROM artifacts ORDER BY id'), before);
@@ -461,7 +461,7 @@ void main() {
     store.editArtifact(current, ' \n\t');
     savedAt(id, today);
     expect(
-      composeMeetingExport(store).markdown,
+      composeMeetingExport(fixtureReader(store)).markdown,
       '## Enhanced\nOct 16, 2026 12:00am\n\nRaw shorthand\n',
     );
   });
@@ -471,7 +471,7 @@ void main() {
     store.saveMeetingNotes(id, ' \n');
     store.artifact(id, 'enhanced_notes', '\n  Enhanced content  \n', 'fixture');
     savedAt(id, today);
-    final result = composeMeetingExport(store);
+    final result = composeMeetingExport(fixtureReader(store));
     expect(result.count, 1);
     expect(
       result.markdown,
@@ -481,7 +481,7 @@ void main() {
       store.rows('SELECT id FROM artifacts').single['id'] as int,
       '',
     );
-    expect(composeMeetingExport(store).count, 0);
+    expect(composeMeetingExport(fixtureReader(store)).count, 0);
   });
 
   test(
@@ -495,16 +495,16 @@ void main() {
       savedAt(id, DateTime(2026, 10, 16, 14, 5));
       final range = DateTimeRange(start: today, end: today);
       expect(
-        composeMeetingExport(store, range: range).markdown,
+        composeMeetingExport(fixtureReader(store), range: range).markdown,
         '## Unscheduled\nOct 16, 2026 2:05pm\n\nSaved recently\n',
       );
       store.db.execute(
         'UPDATE meeting_notes SET timestamp=NULL WHERE meeting_id=?',
         [id],
       );
-      expect(composeMeetingExport(store, range: range).count, 0);
+      expect(composeMeetingExport(fixtureReader(store), range: range).count, 0);
       expect(
-        composeMeetingExport(store).markdown,
+        composeMeetingExport(fixtureReader(store)).markdown,
         contains('Jan 1, 2020 12:00am'),
       );
       expect(
@@ -537,12 +537,12 @@ void main() {
         ],
       );
       expect(
-        composeMeetingExport(store).markdown,
+        composeMeetingExport(fixtureReader(store)).markdown,
         startsWith('## Manual title\n'),
       );
       store.db.execute('UPDATE meetings SET title=? WHERE id=?', [' \n ', id]);
       expect(
-        composeMeetingExport(store).markdown,
+        composeMeetingExport(fixtureReader(store)).markdown,
         startsWith('## Calendar fallback\n'),
       );
       store.db.execute(
@@ -550,12 +550,12 @@ void main() {
         [id],
       );
       expect(
-        composeMeetingExport(store).markdown,
+        composeMeetingExport(fixtureReader(store)).markdown,
         startsWith('## Untitled meeting\n'),
       );
       store.db.execute('DELETE FROM calendar_events WHERE meeting_id=?', [id]);
       expect(
-        composeMeetingExport(store).markdown,
+        composeMeetingExport(fixtureReader(store)).markdown,
         '## Untitled meeting\nOct 16, 2026 12:00am\n\nRaw notes\n',
       );
       expect(
@@ -574,7 +574,7 @@ void main() {
       meeting('Réunion', DateTime(2026, 10, 12, 15, 19), notes: 'Compte rendu');
       final result = Intl.withLocale(
         'fr_FR',
-        () => composeMeetingExport(store),
+        () => composeMeetingExport(fixtureReader(store)),
       );
       expect(
         result.markdown,
@@ -617,7 +617,7 @@ void main() {
         1000,
         'microphone',
       );
-      final result = composeMeetingExport(store);
+      final result = composeMeetingExport(fixtureReader(store));
       expect(result.count, 1);
       expect(
         result.markdown,
@@ -634,7 +634,7 @@ void main() {
       meeting('Late', DateTime(2026, 11, 1, 23, 59), notes: 'late note');
       meeting('Next day', DateTime(2026, 11, 2), notes: 'excluded next day');
       final result = composeMeetingExport(
-        store,
+        fixtureReader(store),
         range: DateTimeRange(start: day, end: day),
       );
       expect(result.count, 2);
@@ -660,7 +660,7 @@ void main() {
       notes: 'included last',
     );
     meeting('After end', DateTime(2026, 11, 6), notes: 'excluded after');
-    final result = composeMeetingExport(store, range: range);
+    final result = composeMeetingExport(fixtureReader(store), range: range);
     expect(result.count, 2);
     expect(result.markdown, contains('included first'));
     expect(result.markdown, contains('included last'));
@@ -707,7 +707,7 @@ void main() {
         MaterialApp(
           home: Scaffold(
             body: MeetingExportDialog(
-              store: store,
+              store: fixtureReader(store),
               now: today,
               save: (text) async {
                 saved = text;
@@ -795,7 +795,7 @@ void main() {
         day.subtract(const Duration(days: 1)),
         notes: '_Suite_',
       );
-      final expected = composeMeetingExport(store).markdown;
+      final expected = composeMeetingExport(fixtureReader(store)).markdown;
       final output = File('${directory.path}/selected.md');
       var calls = 0;
       final channel = const MethodChannel('plugins.flutter.io/file_selector');
@@ -823,7 +823,7 @@ void main() {
       );
       await tester.pumpWidget(
         Foresight(
-          TestDesktopConnection(Domain(store, helper)),
+          TestDesktopConnection(Application(Domain(store, helper))),
           deviceLoader: () async => [],
         ),
       );
@@ -874,7 +874,7 @@ void main() {
         MaterialApp(
           home: Scaffold(
             body: MeetingExportDialog(
-              store: store,
+              store: fixtureReader(store),
               now: today,
               save: (_) async => true,
             ),

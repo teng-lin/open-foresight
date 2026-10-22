@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from helper_protocol import HELPER_PROTOCOL_VERSION
 import re
 import shutil
 import subprocess
@@ -363,7 +364,7 @@ esac
         "whisper_gpu_device_default": args.whisper_gpu_device
         if args.whisper_gpu_runtime
         else None,
-        "legacy_ping_version": "1.0.3",
+        "legacy_ping_version": HELPER_PROTOCOL_VERSION,
         "bundled_libraries": sorted(bundled),
         "host_dependencies": [
             "Linux x86_64, compatible glibc/libstdc++",

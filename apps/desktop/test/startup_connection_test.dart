@@ -1,13 +1,14 @@
+import 'package:foresight_core/src/application.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/commands.dart';
-import 'package:open_foresight/domain.dart';
+import 'package:foresight_core/src/domain.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/profile_paths.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/profile_paths.dart';
+import 'package:foresight_core/src/store.dart';
 import 'controller_fixture.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 import 'pump_until.dart';
@@ -24,9 +25,11 @@ void main() {
     final store = Store('${profile.data}/app.db');
     store.setPreference('onboarding.complete', 'true');
     return ControllerConnection(
-      Domain(
-        store,
-        OfflineHelper('${root.path}/helper.sock', '${root.path}/helper'),
+      Application(
+        Domain(
+          store,
+          OfflineHelper('${root.path}/helper.sock', '${root.path}/helper'),
+        ),
       ),
     );
   }

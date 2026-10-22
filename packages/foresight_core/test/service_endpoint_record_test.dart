@@ -43,7 +43,7 @@ while not stopped:
     with peer, peer.makefile('rb') as requests:
         for line in requests:
             request = json.loads(line)
-            reply = {'id': request['id'], 'result': {'pid': os.getpid()}, 'done': True}
+            reply = {'id': request['id'], 'result': {'pid': os.getpid(), 'application_api_version': 1}, 'done': True}
             peer.sendall((json.dumps(reply) + '\n').encode())
             if request['method'] == 'fixture.stop':
                 stopped = True

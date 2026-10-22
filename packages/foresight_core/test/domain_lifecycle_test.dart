@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
 import 'dart:io';
@@ -5,11 +6,127 @@ import 'package:test/test.dart';
 import 'package:grpc/grpc.dart';
 import 'package:foresight_core/src/domain.dart';
 import 'package:foresight_core/src/helper.dart';
+import 'package:foresight_core/src/native.dart';
 import 'package:foresight_core/src/store.dart';
 
 import 'package:foresight_test_support/delayed_index_service.dart';
 
+class DiscoveredRuntime extends NativeRuntime {
+  DiscoveredRuntime()
+    : super(Platform.isMacOS ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6');
+  int closes = 0;
+  @override
+  void close() => closes++;
+}
+
 void main() {
+  for (final hasCandidate in [false, true]) {
+    test(
+      'resume refuses late discovery after close, candidate=$hasCandidate',
+      () async {
+        final temporary = createTestTempDirectorySync('resume-discovery-');
+        final store = Store('${temporary.path}/app.db');
+        final helper = Helper(
+          '${temporary.path}/helper.sock',
+          '${temporary.path}/helper',
+          manageProcess: false,
+        );
+        final entered = Completer<void>();
+        final release = Completer<NativeRuntime?>();
+        bool Function()? stillCurrent;
+        final candidate = hasCandidate ? DiscoveredRuntime() : null;
+        final domain = Domain(
+          store,
+          helper,
+          discoverGeneration: (receivedStore, library, {current}) {
+            expect(receivedStore, same(store));
+            stillCurrent = current;
+            entered.complete();
+            return release.future;
+          },
+        );
+        try {
+          final pending = domain.resume();
+          final cancelled = expectLater(
+            pending,
+            throwsA(
+              isA<RpcError>().having(
+                (error) => error.code,
+                'code',
+                RpcErrorCode.cancelled,
+              ),
+            ),
+          );
+          await entered.future;
+          expect(stillCurrent!(), isTrue);
+          domain.close();
+          expect(stillCurrent!(), isFalse);
+          // Keep this negative control safe: a late fallback read must not even
+          // inspect a retired Store whose schema is no longer supported.
+          store.db.execute('PRAGMA user_version=${Store.schemaVersion + 1}');
+          release.complete(candidate);
+          await cancelled;
+          expect(domain.generator, isNull);
+          expect(candidate?.closes, hasCandidate ? 1 : null);
+          expect(domain.resumeInProgress, isFalse);
+        } finally {
+          if (!release.isCompleted) release.complete(candidate);
+          domain.close();
+          await helper.close();
+          store.close();
+        }
+      },
+    );
+  }
+
+  test('resume adopts discovery only while its owner remains open', () async {
+    final temporary = createTestTempDirectorySync('resume-current-');
+    final store = Store('${temporary.path}/app.db');
+    final helper = Helper(
+      '${temporary.path}/helper.sock',
+      '${temporary.path}/helper',
+      manageProcess: false,
+    );
+    final entered = Completer<void>();
+    final release = Completer<NativeRuntime?>();
+    final candidate = DiscoveredRuntime();
+    final domain = Domain(
+      store,
+      helper,
+      discoverGeneration: (_, _, {current}) {
+        expect(current!(), isTrue);
+        entered.complete();
+        return release.future;
+      },
+    );
+    try {
+      final pending = domain.resume();
+      await entered.future;
+      expect(domain.generator, isNull);
+      release.complete(candidate);
+      await pending;
+      expect(domain.generator, same(candidate));
+      expect(candidate.closes, 0);
+      expect(domain.resumeInProgress, isFalse);
+    } finally {
+      if (!release.isCompleted) release.complete(candidate);
+      domain.close();
+      candidate.close();
+      await helper.close();
+      store.close();
+    }
+  });
+
+  test('late empty discovery never enters a disposed SQLite handle', () async {
+    final temporary = createTestTempDirectorySync('resume-disposed-');
+    final result = await Process.run(Platform.resolvedExecutable, [
+      'test/fixtures/resume_discovery_after_close.dart',
+      temporary.path,
+    ]);
+    expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+    expect(result.stdout, contains('cancelled-before-closed-store-read'));
+  });
+
   test('embedding backend selection survives app database restart', () async {
     final temporary = createTestTempDirectorySync('foresight-gpu-restore-');
     addTearDown(() {
@@ -120,11 +237,9 @@ void main() {
         final waiting = expectLater(
           domain.index(later),
           throwsA(
-            isA<StateError>().having(
-              (e) => e.message,
-              'message',
-              'Workspace closed',
-            ),
+            isA<RpcError>()
+                .having((error) => error.code, 'code', RpcErrorCode.cancelled)
+                .having((e) => e.message, 'message', 'Workspace closed'),
           ),
         );
         domain.close();
@@ -170,21 +285,17 @@ void main() {
         final firstResult = expectLater(
           first,
           throwsA(
-            isA<StateError>().having(
-              (e) => e.message,
-              'message',
-              'Workspace closed',
-            ),
+            isA<RpcError>()
+                .having((error) => error.code, 'code', RpcErrorCode.cancelled)
+                .having((e) => e.message, 'message', 'Workspace closed'),
           ),
         );
         final queuedResult = expectLater(
           queued,
           throwsA(
-            isA<StateError>().having(
-              (e) => e.message,
-              'message',
-              'Workspace closed',
-            ),
+            isA<RpcError>()
+                .having((error) => error.code, 'code', RpcErrorCode.cancelled)
+                .having((e) => e.message, 'message', 'Workspace closed'),
           ),
         );
         await service.started.future.timeout(const Duration(seconds: 5));

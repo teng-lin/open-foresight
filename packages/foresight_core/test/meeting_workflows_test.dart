@@ -185,6 +185,41 @@ void main() {
     },
   );
   test(
+    'missing/null or other-kind cancellation leaves withheld action producer active',
+    () async {
+      runtime.entered = Completer();
+      runtime.release = Completer();
+      final work = app.generateActions(meeting, requestId: 'owned-actions');
+      final settled = expectLater(
+        work,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.cancelled,
+          ),
+        ),
+      );
+      await runtime.entered!.future;
+      for (final arguments in <Map<String, dynamic>>[
+        {'id': meeting},
+        {'id': meeting, 'kind': null},
+        {'id': meeting, 'kind': 'preparation'},
+      ]) {
+        expect(await app.call('meetings.cancel_generation', arguments), isNull);
+        expect(runtime.cancelled, isEmpty);
+        expect(runtime.release!.isCompleted, isFalse);
+      }
+      await app.call('meetings.cancel_generation', {
+        'id': meeting,
+        'kind': 'actions',
+      });
+      await settled;
+      expect(runtime.cancelled, contains('owned-actions-actions-1'));
+      expect(store.meetingTasks(meeting), isEmpty);
+    },
+  );
+  test(
     'document passthrough, shared cache, event reuse and revision invalidation',
     () async {
       final source = store.importText(
@@ -210,6 +245,37 @@ void main() {
       await app.prepareMeeting(meeting, [source]);
       expect(runtime.calls.length, greaterThan(count));
       expect(store.meetingArtifacts(meeting, 'preparation'), hasLength(2));
+    },
+  );
+  test(
+    'soft deletion retains old cache bytes but refuses reuse until workspace clear',
+    () async {
+      final source = store.importText(
+        'Design',
+        'Document content ' * 70,
+        'text/plain',
+        'fixture',
+      );
+      await app.prepareMeeting(meeting, [source]);
+      final cached = store.rows('SELECT * FROM document_summary_cache');
+      expect(cached, isNotEmpty);
+      final calls = runtime.calls.length;
+      store.tombstone(source);
+      expect(store.rows('SELECT * FROM document_summary_cache'), cached);
+      await expectLater(
+        app.prepareMeeting(meeting, [source]),
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.notFound,
+          ),
+        ),
+      );
+      expect(runtime.calls, hasLength(calls));
+      expect(store.rows('SELECT * FROM document_summary_cache'), cached);
+      await app.call('workspace.clear', {});
+      expect(store.rows('SELECT * FROM document_summary_cache'), isEmpty);
     },
   );
   test(

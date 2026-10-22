@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "source_commit": "c28a1561b5091645718462169bc6c0cfd0040943",
+  "files": {
+    "store.dart.txt": {
+      "source_path": "packages/foresight_core/lib/src/store.dart",
+      "sha256": "5dec3dcce912e3f48f8913de233dfa7d81346461f071dfbea2a7115e7efd26ed"
+    },
+    "graph_labels.dart.txt": {
+      "source_path": "packages/foresight_core/lib/src/graph_labels.dart",
+      "sha256": "86a433df7cd6f4c6e33ea98f6f13df06940ecbcd6c7a63957eb73fd78dab278d"
+    },
+    "schema8.sql": {
+      "source_path": "packages/foresight_core/lib/src/store.dart",
+      "sha256": "c3f20a247d0599659907a0bd60c859bc833a618e77e7f0a3a1b1039df6564a12"
+    },
+    "schema15.sql": {
+      "source_path": "packages/foresight_core/lib/src/store.dart",
+      "sha256": "b4a5ce62eccffb8b641f1322d0da180d044deeb6b90f5d03161f55c893c16fd0"
+    }
+  }
+}

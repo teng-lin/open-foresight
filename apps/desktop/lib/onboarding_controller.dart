@@ -145,7 +145,7 @@ class _OnboardingController extends _FeatureController {
   Widget library(BuildContext context) => ValueListenableBuilder<int>(
     valueListenable: shell.serviceUiRevision,
     builder: (_, __, ___) {
-      final sources = d.store.sourceSummaries;
+      final sources = readRows(d.store.sourceSummaries);
       final indexed = sources.where((s) => s['state'] == 'indexed').length;
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -160,7 +160,7 @@ class _OnboardingController extends _FeatureController {
               'Add documents to see them here. You can also do this later from Knowledge sources.',
             ),
           if (sources.isNotEmpty) ...[
-            if (d.store.model('embedding') == null &&
+            if (d.store.model('embedding')?.toRow() == null &&
                 indexed < sources.length) ...[
               const Text(
                 'Documents are saved. Finish model setup to make them searchable.',
@@ -224,7 +224,7 @@ class _OnboardingController extends _FeatureController {
   String sourceStatus(Map<String, Object?> source) {
     final state = source['state'];
     final error = source['error']?.toString() ?? '';
-    if (d.store.model('embedding') == null &&
+    if (d.store.model('embedding')?.toRow() == null &&
         (state == 'pending' ||
             (state == 'failed' &&
                 error.contains('Pipeline not initialized')))) {
@@ -246,7 +246,8 @@ class _OnboardingController extends _FeatureController {
     runtimeError: shell.error,
     retryRuntime: () async {
       setState(() => shell.error = '');
-      await d.helper.start();
+      await d.initialize();
+      await d.resume();
     },
     saveStep: (step) async {
       await d.command(Operation.preferencesSet, {

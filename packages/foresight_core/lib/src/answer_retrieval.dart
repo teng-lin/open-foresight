@@ -1,7 +1,6 @@
-import 'dart:isolate';
+export 'answer_passage_reader.dart' show retrieveAnswerPassages;
 import 'dart:convert';
 import 'dart:math' as math;
-import 'package:sqlite3/sqlite3.dart';
 
 /// Clean retrieval copies only; source documents and the helper index stay intact.
 String cleanAnswerText(String text) {
@@ -506,24 +505,3 @@ String renderProcedureGuide(String document, String citation) {
   }
   return 'From your source guide:\n\n${sections.join('\n\n')}';
 }
-
-Future<List<Map<String, Object?>>> retrieveAnswerPassages(
-  String databasePath,
-  String question,
-  Map<String, Object?> revisions,
-  List<Map<String, Object?>> semantic,
-) => Isolate.run(() {
-  final db = sqlite3.open(databasePath, mode: OpenMode.readOnly);
-  try {
-    final sources = db
-        .select(
-          "SELECT id,title,content,revision FROM sources WHERE deleted=0 AND state='indexed'",
-        )
-        .where((row) => revisions[row['id']] == row['revision'])
-        .map((row) => Map<String, Object?>.from(row))
-        .toList();
-    return rankAnswerPassages(question, sources, semantic);
-  } finally {
-    db.dispose();
-  }
-});

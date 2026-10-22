@@ -2,10 +2,10 @@ import 'package:foresight_core/src/application.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/domain.dart';
-import 'package:open_foresight/helper.dart';
-import 'package:open_foresight/native.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/domain.dart';
+import 'package:foresight_core/src/helper.dart';
+import 'package:foresight_core/src/native.dart';
+import 'package:foresight_core/src/store.dart';
 
 void main() {
   test(
@@ -18,6 +18,7 @@ void main() {
         '${Directory.systemTemp.path}/unused-answer-helper',
       );
       final domain = Domain(store, helper);
+      final app = Application(domain);
       final generator = NativeRuntime(env['FORESIGHT_NATIVE']!);
       domain.generator = generator;
       try {
@@ -31,7 +32,7 @@ void main() {
           backend: model['backend'] as String,
         );
         final timer = Stopwatch()..start();
-        final result = await domain
+        final result = await app
             .ask(env['FORESIGHT_ANSWER_QUESTION']!)
             .toList();
         final answer = store
@@ -134,6 +135,7 @@ void main() {
           })}\n',
         );
       } finally {
+        await app.close();
         domain.close();
         generator.close();
         await helper.close();

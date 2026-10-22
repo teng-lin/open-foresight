@@ -1,168 +1,183 @@
+import 'operation_descriptor.dart';
+import 'operation_tool_projection.dart';
+import 'operation_descriptors.dart' as contracts;
 import 'package:mcp_dart/mcp_dart.dart';
 import 'rpc_error.dart';
 
 /// The single wire operation registry. Dispatch is exhaustive over this enum.
 enum Operation {
-  notificationsCapabilities('notifications.capabilities'),
-  notificationsRequestPermission('notifications.request_permission'),
-  audioCapabilities('audio.capabilities'),
-  audioRequestSystem('audio.request_system'),
-  audioRequestMicrophone('audio.request_microphone'),
-  status('status'),
-  sourcesList('sources.list'),
-  sourcesGet('sources.get'),
-  sourcesImport('sources.import'),
-  sourcesImportUrl('sources.import_url'),
-  sourcesImportDirectory('sources.import_directory'),
-  sourcesRefresh('sources.refresh'),
-  sourcesImportFile('sources.import_file'),
-  sourcesIndex('sources.index'),
-  sourcesDelete('sources.delete'),
-  sourcesPause('sources.pause'),
-  sourcesResume('sources.resume'),
-  sourcesSearch('sources.search'),
-  answer('answer'),
-  googleStatus('google.status'),
-  googleConfigure('google.configure'),
-  googleCompleteSignIn('google.complete_sign_in'),
-  googleCancelSignIn('google.cancel_sign_in'),
-  googleDisconnect('google.disconnect'),
-  googleSwitchAccount('google.switch_account'),
-  googleSignOutAccount('google.sign_out_account'),
-  googleDriveFiles('google.drive_files'),
-  googleImportFile('google.import_file'),
-  googleImportFolder('google.import_folder'),
-  googleImportYear('google.import_year'),
-  googleRefresh('google.refresh'),
-  googleCalendar('google.calendar'),
-  googleAttachments('google.attachments'),
-  notesList('notes.list'),
-  notesSave('notes.save'),
-  preferencesSet('preferences.set'),
-  meetingsList('meetings.list'),
-  meetingsCreate('meetings.create'),
-  meetingsGet('meetings.get'),
-  meetingsRetryQuestion('meetings.retry_question'),
-  meetingsRetryDetection('meetings.retry_detection'),
-  meetingsLinkAnswer('meetings.link_answer'),
-  workspaceClear('workspace.clear'),
-  meetingsNotes('meetings.notes'),
-  meetingsTranscript('meetings.transcript'),
-  meetingsIndex('meetings.index'),
-  meetingsGenerate('meetings.generate'),
-  meetingsTasks('meetings.tasks'),
-  meetingsEditTask('meetings.edit_task'),
-  meetingsPrepare('meetings.prepare'),
-  meetingsCancelGeneration('meetings.cancel_generation'),
-  meetingsEnhance('meetings.enhance'),
-  meetingsCancelEnhance('meetings.cancel_enhance'),
-  meetingsCancelSummary('meetings.cancel_summary'),
-  meetingsStart('meetings.start'),
-  meetingsStop('meetings.stop'),
-  meetingsPause('meetings.pause'),
-  meetingsResume('meetings.resume'),
-  artifactsEdit('artifacts.edit'),
-  modelsCancelQueryAcquisition('models.cancel_query_acquisition'),
-  modelsAcquireQuery('models.acquire_query'),
-  modelsSpeech('models.speech'),
-  modelsRegister('models.register'),
-  modelsGeneration('models.generation'),
-  modelsEmbedding('models.embedding'),
-  applicationResume('application.resume'),
-  graphEmbeddings('graph.embeddings'),
-  labelsAutoAssign('labels.auto_assign'),
-  labelsPut('labels.put'),
-  labelsSet('labels.set'),
-  labelsCluster('labels.cluster'),
-  labelsDelete('labels.delete'),
-  graphInvalidate('graph.invalidate'),
-  graphAcknowledge('graph.acknowledge'),
-  graphSave('graph.save'),
-  answerStream('answer.stream'),
-  googleSignIn('google.sign_in'),
-  googleAddAccount('google.add_account'),
-  securityAttachDesktop('security.attach_desktop'),
-  securityDetachDesktop('security.detach_desktop'),
-  securityDecide('security.decide'),
-  securityAllowImportRoot('security.allow_import_root'),
-  serviceStopIfIdle('service.stop_if_idle');
+  notificationsCapabilities(
+    'notifications.capabilities',
+    contracts.notificationsCapabilitiesDescriptor,
+  ),
+  notificationsRequestPermission(
+    'notifications.request_permission',
+    contracts.notificationsRequestPermissionDescriptor,
+  ),
+  audioCapabilities(
+    'audio.capabilities',
+    contracts.audioCapabilitiesDescriptor,
+  ),
+  audioRequestSystem(
+    'audio.request_system',
+    contracts.audioRequestSystemDescriptor,
+  ),
+  audioRequestMicrophone(
+    'audio.request_microphone',
+    contracts.audioRequestMicrophoneDescriptor,
+  ),
+  status('status', contracts.statusDescriptor),
+  sourcesList('sources.list', contracts.sourcesListDescriptor),
+  sourcesGet('sources.get', contracts.sourcesGetDescriptor),
+  sourcesImport('sources.import', contracts.sourcesImportDescriptor),
+  sourcesImportUrl('sources.import_url', contracts.sourcesImportUrlDescriptor),
+  sourcesImportDirectory(
+    'sources.import_directory',
+    contracts.sourcesImportDirectoryDescriptor,
+  ),
+  sourcesRefresh('sources.refresh', contracts.sourcesRefreshDescriptor),
+  sourcesImportFile(
+    'sources.import_file',
+    contracts.sourcesImportFileDescriptor,
+  ),
+  sourcesIndex('sources.index', contracts.sourcesIndexDescriptor),
+  sourcesDelete('sources.delete', contracts.sourcesDeleteDescriptor),
+  sourcesPause('sources.pause', contracts.sourcesPauseDescriptor),
+  sourcesResume('sources.resume', contracts.sourcesResumeDescriptor),
+  sourcesSearch('sources.search', contracts.sourcesSearchDescriptor),
+  answer('answer', contracts.answerDescriptor),
+  googleStatus('google.status', contracts.googleStatusDescriptor),
+  googleConfigure('google.configure', contracts.googleConfigureDescriptor),
+  googleCompleteSignIn(
+    'google.complete_sign_in',
+    contracts.googleCompleteSignInDescriptor,
+  ),
+  googleCancelSignIn(
+    'google.cancel_sign_in',
+    contracts.googleCancelSignInDescriptor,
+  ),
+  googleDisconnect('google.disconnect', contracts.googleDisconnectDescriptor),
+  googleSwitchAccount(
+    'google.switch_account',
+    contracts.googleSwitchAccountDescriptor,
+  ),
+  googleSignOutAccount(
+    'google.sign_out_account',
+    contracts.googleSignOutAccountDescriptor,
+  ),
+  googleDriveFiles('google.drive_files', contracts.googleDriveFilesDescriptor),
+  googleImportFile('google.import_file', contracts.googleImportFileDescriptor),
+  googleImportFolder(
+    'google.import_folder',
+    contracts.googleImportFolderDescriptor,
+  ),
+  googleImportYear('google.import_year', contracts.googleImportYearDescriptor),
+  googleRefresh('google.refresh', contracts.googleRefreshDescriptor),
+  googleCalendar('google.calendar', contracts.googleCalendarDescriptor),
+  googleAttachments(
+    'google.attachments',
+    contracts.googleAttachmentsDescriptor,
+  ),
+  notesList('notes.list', contracts.notesListDescriptor),
+  notesSave('notes.save', contracts.notesSaveDescriptor),
+  preferencesSet('preferences.set', contracts.preferencesSetDescriptor),
+  meetingsList('meetings.list', contracts.meetingsListDescriptor),
+  meetingsCreate('meetings.create', contracts.meetingsCreateDescriptor),
+  meetingsGet('meetings.get', contracts.meetingsGetDescriptor),
+  meetingsRetryQuestion(
+    'meetings.retry_question',
+    contracts.meetingsRetryQuestionDescriptor,
+  ),
+  meetingsRetryDetection(
+    'meetings.retry_detection',
+    contracts.meetingsRetryDetectionDescriptor,
+  ),
+  meetingsLinkAnswer(
+    'meetings.link_answer',
+    contracts.meetingsLinkAnswerDescriptor,
+  ),
+  workspaceClear('workspace.clear', contracts.workspaceClearDescriptor),
+  meetingsNotes('meetings.notes', contracts.meetingsNotesDescriptor),
+  meetingsTranscript(
+    'meetings.transcript',
+    contracts.meetingsTranscriptDescriptor,
+  ),
+  meetingsIndex('meetings.index', contracts.meetingsIndexDescriptor),
+  meetingsGenerate('meetings.generate', contracts.meetingsGenerateDescriptor),
+  meetingsTasks('meetings.tasks', contracts.meetingsTasksDescriptor),
+  meetingsEditTask('meetings.edit_task', contracts.meetingsEditTaskDescriptor),
+  meetingsPrepare('meetings.prepare', contracts.meetingsPrepareDescriptor),
+  meetingsCancelGeneration(
+    'meetings.cancel_generation',
+    contracts.meetingsCancelGenerationDescriptor,
+  ),
+  meetingsEnhance('meetings.enhance', contracts.meetingsEnhanceDescriptor),
+  meetingsCancelEnhance(
+    'meetings.cancel_enhance',
+    contracts.meetingsCancelEnhanceDescriptor,
+  ),
+  meetingsCancelSummary(
+    'meetings.cancel_summary',
+    contracts.meetingsCancelSummaryDescriptor,
+  ),
+  meetingsStart('meetings.start', contracts.meetingsStartDescriptor),
+  meetingsStop('meetings.stop', contracts.meetingsStopDescriptor),
+  meetingsPause('meetings.pause', contracts.meetingsPauseDescriptor),
+  meetingsResume('meetings.resume', contracts.meetingsResumeDescriptor),
+  artifactsEdit('artifacts.edit', contracts.artifactsEditDescriptor),
+  modelsCancelQueryAcquisition(
+    'models.cancel_query_acquisition',
+    contracts.modelsCancelQueryAcquisitionDescriptor,
+  ),
+  modelsAcquireQuery(
+    'models.acquire_query',
+    contracts.modelsAcquireQueryDescriptor,
+  ),
+  modelsSpeech('models.speech', contracts.modelsSpeechDescriptor),
+  modelsRegister('models.register', contracts.modelsRegisterDescriptor),
+  modelsGeneration('models.generation', contracts.modelsGenerationDescriptor),
+  modelsEmbedding('models.embedding', contracts.modelsEmbeddingDescriptor),
+  applicationResume(
+    'application.resume',
+    contracts.applicationResumeDescriptor,
+  ),
+  graphEmbeddings('graph.embeddings', contracts.graphEmbeddingsDescriptor),
+  labelsAutoAssign('labels.auto_assign', contracts.labelsAutoAssignDescriptor),
+  labelsPut('labels.put', contracts.labelsPutDescriptor),
+  labelsSet('labels.set', contracts.labelsSetDescriptor),
+  labelsCluster('labels.cluster', contracts.labelsClusterDescriptor),
+  labelsDelete('labels.delete', contracts.labelsDeleteDescriptor),
+  graphInvalidate('graph.invalidate', contracts.graphInvalidateDescriptor),
+  graphAcknowledge('graph.acknowledge', contracts.graphAcknowledgeDescriptor),
+  graphSave('graph.save', contracts.graphSaveDescriptor),
+  answerStream('answer.stream', contracts.answerStreamDescriptor),
+  googleSignIn('google.sign_in', contracts.googleSignInDescriptor),
+  googleAddAccount('google.add_account', contracts.googleAddAccountDescriptor),
+  securityAttachDesktop(
+    'security.attach_desktop',
+    contracts.securityAttachDesktopDescriptor,
+  ),
+  securityDetachDesktop(
+    'security.detach_desktop',
+    contracts.securityDetachDesktopDescriptor,
+  ),
+  securityDecide('security.decide', contracts.securityDecideDescriptor),
+  securityAllowImportRoot(
+    'security.allow_import_root',
+    contracts.securityAllowImportRootDescriptor,
+  ),
+  serviceStopIfIdle(
+    'service.stop_if_idle',
+    contracts.serviceStopIfIdleDescriptor,
+  );
 
-  const Operation(this.wire);
+  const Operation(this.wire, this.descriptor);
+  final OperationDescriptor descriptor;
   final String wire;
-  bool requiresApproval({bool webSearch = false}) {
-    if ((this == Operation.answer || this == Operation.answerStream) &&
-        webSearch) {
-      return true;
-    }
-    return !{
-      Operation.status,
-      Operation.audioCapabilities,
-      Operation.notificationsCapabilities,
-      Operation.sourcesList,
-      Operation.sourcesGet,
-      Operation.sourcesSearch,
-      Operation.sourcesIndex,
-      Operation.notesList,
-      Operation.notesSave,
-      Operation.meetingsList,
-      Operation.meetingsGet,
-      Operation.meetingsCreate,
-      Operation.meetingsNotes,
-      Operation.meetingsPause,
-      Operation.meetingsStop,
-      Operation.answer,
-      Operation.answerStream,
-      Operation.applicationResume,
-      Operation.googleStatus,
-      Operation.artifactsEdit,
-      Operation.meetingsGenerate,
-      Operation.meetingsTasks,
-      Operation.meetingsEditTask,
-      Operation.meetingsPrepare,
-      Operation.meetingsCancelGeneration,
-      Operation.meetingsEnhance,
-      Operation.meetingsCancelEnhance,
-      Operation.meetingsCancelSummary,
-      Operation.meetingsRetryQuestion,
-      Operation.meetingsRetryDetection,
-      Operation.meetingsLinkAnswer,
-    }.contains(this);
-  }
-
-  /// Creates and appends that a retry after a lost reply would repeat. Their
-  /// optional `idempotency_key` makes the retry return the first result.
-  bool get acceptsIdempotencyKey => {
-    Operation.notesSave,
-    Operation.meetingsCreate,
-    Operation.sourcesImport,
-    Operation.meetingsTranscript,
-  }.contains(this);
-
-  /// Edits and appends whose `id` names a row that a workspace clear can hand
-  /// to a different item. The desktop sends its workspace epoch with them.
-  bool get carriesWorkspaceEpoch => {
-    Operation.notesSave,
-    Operation.sourcesImport,
-    Operation.sourcesIndex,
-    Operation.sourcesDelete,
-    Operation.meetingsNotes,
-    Operation.meetingsTranscript,
-    Operation.meetingsIndex,
-    Operation.meetingsGenerate,
-    Operation.meetingsEditTask,
-    Operation.meetingsPrepare,
-    Operation.meetingsCancelGeneration,
-    Operation.meetingsCancelSummary,
-    Operation.meetingsEnhance,
-    Operation.meetingsStart,
-    Operation.meetingsRetryQuestion,
-    Operation.meetingsRetryDetection,
-    Operation.meetingsLinkAnswer,
-    Operation.artifactsEdit,
-    Operation.labelsPut,
-    Operation.labelsSet,
-    Operation.googleAttachments,
-  }.contains(this);
+  bool requiresApproval({bool webSearch = false}) =>
+      descriptor.requiresApproval(webSearch: webSearch);
+  bool get acceptsIdempotencyKey => descriptor.acceptsIdempotencyKey;
+  bool get carriesWorkspaceEpoch => descriptor.carriesWorkspaceEpoch;
 
   /// [args] with [epoch] added when this call edits an existing row by ID, or
   /// is a keyed create that a retry must not replay into a cleared workspace,
@@ -179,56 +194,8 @@ enum Operation {
         : args;
   }
 
-  bool get notifiesChanges => !{
-    Operation.status,
-    Operation.audioCapabilities,
-    Operation.notificationsCapabilities,
-    Operation.sourcesList,
-    Operation.sourcesGet,
-    Operation.sourcesSearch,
-    Operation.notesList,
-    Operation.meetingsList,
-    Operation.meetingsGet,
-    Operation.meetingsTasks,
-    Operation.meetingsCancelGeneration,
-    Operation.meetingsCancelSummary,
-    Operation.googleStatus,
-    Operation.googleDriveFiles,
-    Operation.graphEmbeddings,
-  }.contains(this);
-
-  bool get requiresHelper => !{
-    Operation.status,
-    Operation.audioCapabilities,
-    Operation.notificationsCapabilities,
-    Operation.notificationsRequestPermission,
-    Operation.audioRequestMicrophone,
-    Operation.audioRequestSystem,
-    Operation.sourcesList,
-    Operation.sourcesGet,
-    Operation.notesList,
-    Operation.notesSave,
-    Operation.meetingsList,
-    Operation.meetingsGet,
-    Operation.meetingsTasks,
-    Operation.meetingsEditTask,
-    Operation.meetingsPrepare,
-    Operation.meetingsCancelGeneration,
-    Operation.meetingsCancelSummary,
-    Operation.meetingsCreate,
-    Operation.meetingsNotes,
-    Operation.preferencesSet,
-    Operation.artifactsEdit,
-    Operation.googleStatus,
-    Operation.googleConfigure,
-    Operation.googleCompleteSignIn,
-    Operation.googleSignIn,
-    Operation.googleAddAccount,
-    Operation.googleCancelSignIn,
-    Operation.googleDisconnect,
-    Operation.googleSwitchAccount,
-    Operation.googleSignOutAccount,
-  }.contains(this);
+  bool get notifiesChanges => descriptor.notifiesChanges;
+  bool get requiresHelper => descriptor.requiresHelper;
 
   static Operation parse(String method) => values.firstWhere(
     (operation) => operation.wire == method,
@@ -263,314 +230,196 @@ class RpcTool {
   );
 }
 
+RpcTool _projectedTool(
+  String name,
+  Operation operation,
+  String description, {
+  bool destructive = false,
+  bool openWorld = false,
+}) {
+  final projection = operationToolProjections.singleWhere(
+    (projection) =>
+        projection.operation == operation && projection.name == name,
+  );
+  return RpcTool(
+    name,
+    operation,
+    description,
+    projection.properties,
+    projection.required,
+    readOnly: operation.descriptor.readOnly,
+    destructive: destructive,
+    openWorld: openWorld,
+  );
+}
+
 List<RpcTool> get rpcTools {
-  final text = JsonSchema.string();
-  final integer = JsonSchema.integer();
-  final epoch = JsonSchema.string(
-    description:
-        'Optional workspace_epoch from get_status. If the workspace was cleared since, the call fails with notFound instead of acting on an ID that may now name a different item, or replaying a keyed change into the new workspace.',
-  );
-  final idempotencyKey = JsonSchema.string(
-    minLength: 1,
-    maxLength: 256,
-    description:
-        'Optional unique key for this change. If a call fails with reason outcomeUnknown, retry with the same idempotency_key: the change is applied at most once in the same workspace (pass workspace_epoch) and the retry returns its result. Use a new key for a different change.',
-  );
   const retry =
       ' If a call fails with reason outcomeUnknown, retry with the same idempotency_key.'
       ' Pass workspace_epoch from get_status too, so a retry after a workspace clear fails instead of applying the change again.';
   return [
-    RpcTool(
+    _projectedTool(
       'audio_capabilities',
       Operation.audioCapabilities,
       'Inspect audio backend and permission state without requesting permission or starting capture.',
-      {},
-      [],
-      readOnly: true,
     ),
-    RpcTool(
+    _projectedTool(
       'audio_request_microphone',
       Operation.audioRequestMicrophone,
       'Explicitly request microphone permission for the application service. May show macOS system consent UI; requires an interactive logged-in session.',
-      {},
-      [],
     ),
-    RpcTool(
+    _projectedTool(
       'audio_request_system',
       Operation.audioRequestSystem,
       'Explicitly request system audio recording consent for the application service. May show macOS consent UI; requires an interactive logged-in session. CoreAudio cannot verify authorization: completed or unknown does not prove permission or audible input. Inspect the returned message and settings guidance.',
-      {},
-      [],
     ),
-    RpcTool(
+    _projectedTool(
       'get_status',
       Operation.status,
       'Get local model readiness, indexing state, and active recording.',
-      {},
-      [],
-      readOnly: true,
     ),
-    RpcTool(
+    _projectedTool(
       'list_sources',
       Operation.sourcesList,
       'List active source metadata and revisions.',
-      {},
-      [],
-      readOnly: true,
     ),
-    RpcTool(
+    _projectedTool(
       'get_source',
       Operation.sourcesGet,
       'Read a complete active source by ID.',
-      {'id': text, 'workspace_epoch': epoch},
-      ['id'],
-      readOnly: true,
     ),
-    RpcTool(
+    _projectedTool(
       'search',
       Operation.sourcesSearch,
       'Search indexed local knowledge. Returns passages, source IDs, titles, revisions, and scores.',
-      {'query': text, 'limit': JsonSchema.integer(minimum: 1, maximum: 100)},
-      ['query'],
-      readOnly: true,
     ),
-    RpcTool(
+    _projectedTool(
       'import_text',
       Operation.sourcesImport,
       'Create or update a text source and index it. Supplying the ID of an existing source replaces its content and increments its revision; an ID that names no source fails with notFound.$retry',
-      {
-        'title': text,
-        'text': text,
-        'id': text,
-        'workspace_epoch': epoch,
-        'idempotency_key': idempotencyKey,
-      },
-      ['title', 'text'],
     ),
-    RpcTool(
+    _projectedTool(
       'import_file',
       Operation.sourcesImportFile,
       'Request desktop approval to import a regular local UTF-8, PDF, or RTF file (up to 10 MiB) within a folder selected in the desktop. The application profile is excluded.',
-      {'path': text},
-      ['path'],
     ),
-    RpcTool(
+    _projectedTool(
       'import_url',
       Operation.sourcesImportUrl,
       'Fetch and index an HTTP or HTTPS text/HTML page.',
-      {
-        'url': text,
-        'allow_private_network': JsonSchema.boolean(
-          description:
-              'Explicitly permit local/private/special-use addresses for this import. Defaults to false.',
-        ),
-      },
-      ['url'],
       openWorld: true,
     ),
-    RpcTool(
+    _projectedTool(
       'import_directory',
       Operation.sourcesImportDirectory,
       'Import supported text, Markdown, PDF, and RTF files recursively from a local directory.',
-      {'path': text},
-      ['path'],
     ),
-    RpcTool(
+    _projectedTool(
       'refresh_sources',
       Operation.sourcesRefresh,
       'Refresh imported sources and connected Google sources, then update the index.',
-      {
-        'allow_private_network': JsonSchema.boolean(
-          description:
-              'Explicitly permit private network URL refreshes for this request. Defaults to false.',
-        ),
-      },
-      [],
       openWorld: true,
     ),
-    RpcTool(
+    _projectedTool(
       'delete_source',
       Operation.sourcesDelete,
       'Delete a source from the application and search index.',
-      {'id': text, 'workspace_epoch': epoch},
-      ['id'],
       destructive: true,
     ),
-    RpcTool(
+    _projectedTool(
       'list_notes',
       Operation.notesList,
       'Read saved personal notes.',
-      {},
-      [],
-      readOnly: true,
     ),
-    RpcTool(
+    _projectedTool(
       'save_note',
       Operation.notesSave,
       'Create a personal note or update an existing note by ID.$retry',
-      {
-        'id': integer,
-        'title': text,
-        'body': text,
-        'workspace_epoch': epoch,
-        'idempotency_key': idempotencyKey,
-      },
-      ['title', 'body'],
     ),
-    RpcTool(
+    _projectedTool(
       'list_meetings',
       Operation.meetingsList,
       'List meetings and their states.',
-      {},
-      [],
-      readOnly: true,
     ),
-    RpcTool(
+    _projectedTool(
       'create_meeting',
       Operation.meetingsCreate,
       'Create a meeting without starting audio capture.$retry',
-      {
-        'title': text,
-        'workspace_epoch': epoch,
-        'idempotency_key': idempotencyKey,
-      },
-      ['title'],
     ),
-    RpcTool(
+    _projectedTool(
       'get_meeting',
       Operation.meetingsGet,
       'Read meeting notes, transcript segments, and generated/edited artifacts.',
-      {'id': integer, 'workspace_epoch': epoch},
-      ['id'],
-      readOnly: true,
     ),
-    RpcTool(
+    _projectedTool(
       'save_meeting_notes',
       Operation.meetingsNotes,
       'Save original meeting notes. Live enhancement uses final transcript evidence when enabled.',
-      {'id': integer, 'body': text, 'workspace_epoch': epoch},
-      ['id', 'body'],
     ),
-    RpcTool(
+    _projectedTool(
       'import_transcript',
       Operation.meetingsTranscript,
       'Append a final transcript segment and index the meeting.$retry',
-      {
-        'id': integer,
-        'text': text,
-        'start': integer,
-        'end': integer,
-        'source': text,
-        'workspace_epoch': epoch,
-        'idempotency_key': idempotencyKey,
-      },
-      ['id', 'text'],
     ),
-    RpcTool(
+    _projectedTool(
       'generate_meeting_artifact',
       Operation.meetingsGenerate,
       'Generate a summary or actions from final transcript evidence using the configured local model.',
-      {
-        'id': integer,
-        'kind': JsonSchema.string(enumValues: ['summary', 'actions']),
-        'workspace_epoch': epoch,
-      },
-      ['id', 'kind'],
     ),
-    RpcTool(
+    _projectedTool(
       'enhance_meeting_notes',
       Operation.meetingsEnhance,
       'Generate an enhanced version of original meeting notes using final transcript evidence.',
-      {'id': integer, 'workspace_epoch': epoch},
-      ['id'],
     ),
-    RpcTool(
+    _projectedTool(
       'get_meeting_tasks',
       Operation.meetingsTasks,
       'Read evidence-backed tasks, edits, completion and stale status.',
-      {'id': integer, 'workspace_epoch': epoch},
-      ['id'],
-      readOnly: true,
     ),
-    RpcTool(
+    _projectedTool(
       'edit_meeting_task',
       Operation.meetingsEditTask,
       'Edit a task or change its status while preserving extraction evidence.',
-      {
-        'id': integer,
-        'task': text,
-        'owner': text,
-        'due': text,
-        'status': JsonSchema.string(
-          enumValues: ['open', 'completed', 'cancelled'],
-        ),
-        'workspace_epoch': epoch,
-      },
-      ['id'],
     ),
-    RpcTool(
+    _projectedTool(
       'prepare_meeting',
       Operation.meetingsPrepare,
       'Generate a preparation brief from explicitly selected already-imported local documents. Does not fetch attachments or enable network access.',
-      {
-        'id': integer,
-        'source_ids': JsonSchema.array(items: text),
-        'workspace_epoch': epoch,
-      },
-      ['id', 'source_ids'],
     ),
-    RpcTool(
+    _projectedTool(
       'cancel_meeting_generation',
       Operation.meetingsCancelGeneration,
       'Cancel active task extraction or preparation for this meeting.',
-      {
-        'id': integer,
-        'kind': JsonSchema.string(enumValues: ['actions', 'preparation']),
-        'workspace_epoch': epoch,
-      },
-      ['id', 'kind'],
     ),
-    RpcTool(
+    _projectedTool(
       'edit_artifact',
       Operation.artifactsEdit,
       'Save an edited version of a meeting artifact while retaining its generated text.',
-      {'id': integer, 'text': text, 'workspace_epoch': epoch},
-      ['id', 'text'],
     ),
-    RpcTool(
+    _projectedTool(
       'start_recording',
       Operation.meetingsStart,
       'Request visible desktop confirmation to start microphone and playback recording. Requires an open desktop with a recording indicator. Only one meeting can record per profile.',
-      {'id': integer, 'workspace_epoch': epoch},
-      ['id'],
     ),
-    RpcTool(
+    _projectedTool(
       'pause_recording',
       Operation.meetingsPause,
       'Pause microphone and playback capture, retaining pre-pause transcription. An optional meeting ID guards ownership.',
-      {'id': integer, 'workspace_epoch': epoch},
-      [],
     ),
-    RpcTool(
+    _projectedTool(
       'resume_recording',
       Operation.meetingsResume,
       'Request visible desktop confirmation to resume a paused recording with the same audio routes and transcript timeline.',
-      {'id': integer, 'workspace_epoch': epoch},
-      [],
     ),
-    RpcTool(
+    _projectedTool(
       'stop_recording',
       Operation.meetingsStop,
       'Stop the current recording, finish transcription, and index final transcript evidence.',
-      {},
-      [],
     ),
-    RpcTool(
+    _projectedTool(
       'ask',
       Operation.answerStream,
       'Generate a grounded, cited answer from indexed local sources. Uses the shared local generation worker.',
-      {'question': text},
-      ['question'],
     ),
   ];
 }

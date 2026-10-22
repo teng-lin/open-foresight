@@ -329,6 +329,11 @@ def test_native_runtime_payload_omits_compilers_and_retains_products_and_notices
         "build/sdk/foresight-sdk.json",
         "build/sdk/share/foresight-sdk/licenses/LICENSE",
     ]
+    if platform == "macos":
+        products += [
+            "build/macos/libforesight_sqlite3.dylib",
+            "build/macos/foresight-sqlite3.json",
+        ]
     excluded = [
         "build/_deps/compiler/big.o",
         "build/native/CMakeFiles/native.o",
@@ -351,6 +356,7 @@ def test_native_runtime_payload_omits_compilers_and_retains_products_and_notices
     )
     for relative in products:
         assert (target / relative).read_bytes() == relative.encode()
+        assert module.entry(target / relative, target) == manifest["files"][relative]
     for relative in excluded:
         assert not (target / relative).exists()
     restored_worker = target / worker.relative_to(root)
@@ -359,6 +365,22 @@ def test_native_runtime_payload_omits_compilers_and_retains_products_and_notices
         subprocess.check_output([str(restored_worker)], text=True, timeout=10).strip()
         == "model-worker-fixture-ok"
     )
+    copied_output = tmp_path / "saved-runtime-copy"
+    copied_manifest = module.pack(target, platform, "native-runtime", copied_output)
+    assert copied_manifest == manifest
+    copied_target = tmp_path / "copied-target"
+    module.unpack(
+        copied_target,
+        platform,
+        "native-runtime",
+        copied_output / "payload.tar.gz",
+        copied_manifest,
+    )
+    for relative in products:
+        assert (
+            module.entry(copied_target / relative, copied_target)
+            == manifest["files"][relative]
+        )
 
 
 def test_runtime_manifest_cannot_restore_compiler_objects(tmp_path):

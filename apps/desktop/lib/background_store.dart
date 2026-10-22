@@ -1,51 +1,22 @@
-import 'dart:isolate';
-import 'store.dart';
+import 'package:foresight_core/desktop.dart';
 
-/// Only the database path and query cross isolate boundaries. Keeping the
-/// closure outside widget methods avoids retaining a State/BuildContext.
-Future<Set<String>> searchSourceIds(String path, String query) => Isolate.run(
-  () {
-    final reader = Store.readOnly(path);
-    try {
-      final normalized = query.toLowerCase();
-      // SQLite's built-in lower() folds ASCII only. Preserve the desktop's
-      // Unicode matching semantics while reading bodies on this worker isolate.
-      return reader
-          .rows('SELECT id,title,content FROM sources WHERE deleted=0')
-          .where(
-            (row) => '${row['title']} ${row['content']}'.toLowerCase().contains(
-              normalized,
-            ),
-          )
-          .map((row) => row['id'] as String)
-          .toSet();
-    } finally {
-      reader.close();
-    }
-  },
-);
-
-class LocalOutputStats {
-  final int words;
-  final List<int> weekly;
-  LocalOutputStats(this.words, this.weekly);
+Future<Set<String>> searchSourceIds(StoreReader reader, String query) async {
+  final result = await reader.read(StoreReadQueries.sourceSearch(query));
+  if (result.error != null) throw result.error!;
+  return result.value!;
 }
 
-Future<LocalOutputStats> localOutputStats(String path, {int? nowMs}) =>
-    Isolate.run(() {
-      final reader = Store.readOnly(path);
-      try {
-        final now = nowMs == null
-            ? DateTime.now()
-            : DateTime.fromMillisecondsSinceEpoch(nowMs);
-        return LocalOutputStats(
-          reader.localOutputWords,
-          reader.weeklyOutputWords(now),
-        );
-      } finally {
-        reader.close();
-      }
-    });
+Future<OutputStats> localOutputStats(StoreReader reader, {int? nowMs}) async {
+  final result = await reader.read(
+    StoreReadQueries.outputStats(
+      now: nowMs == null
+          ? DateTime.now()
+          : DateTime.fromMillisecondsSinceEpoch(nowMs),
+    ),
+  );
+  if (result.error != null) throw result.error!;
+  return result.value!;
+}
 
-Future<int> localOutputWords(String path) async =>
-    (await localOutputStats(path)).words;
+Future<int> localOutputWords(StoreReader reader) async =>
+    (await localOutputStats(reader)).words;

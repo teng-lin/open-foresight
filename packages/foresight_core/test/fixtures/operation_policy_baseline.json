@@ -1,0 +1,1473 @@
+{
+  "notifications.capabilities": {
+    "requires_helper": false,
+    "approval": false,
+    "approval_web_search": false,
+    "notifies_changes": false,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "notifications.request_permission": {
+    "requires_helper": false,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "audio.capabilities": {
+    "requires_helper": false,
+    "approval": false,
+    "approval_web_search": false,
+    "notifies_changes": false,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": [
+      {
+        "name": "audio_capabilities",
+        "schema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "read_only": true,
+        "destructive": false,
+        "open_world": false
+      }
+    ]
+  },
+  "audio.request_system": {
+    "requires_helper": false,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": [
+      {
+        "name": "audio_request_system",
+        "schema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "read_only": false,
+        "destructive": false,
+        "open_world": false
+      }
+    ]
+  },
+  "audio.request_microphone": {
+    "requires_helper": false,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": [
+      {
+        "name": "audio_request_microphone",
+        "schema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "read_only": false,
+        "destructive": false,
+        "open_world": false
+      }
+    ]
+  },
+  "status": {
+    "requires_helper": false,
+    "approval": false,
+    "approval_web_search": false,
+    "notifies_changes": false,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": [
+      {
+        "name": "get_status",
+        "schema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "read_only": true,
+        "destructive": false,
+        "open_world": false
+      }
+    ]
+  },
+  "sources.list": {
+    "requires_helper": false,
+    "approval": false,
+    "approval_web_search": false,
+    "notifies_changes": false,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": [
+      {
+        "name": "list_sources",
+        "schema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "read_only": true,
+        "destructive": false,
+        "open_world": false
+      }
+    ]
+  },
+  "sources.get": {
+    "requires_helper": false,
+    "approval": false,
+    "approval_web_search": false,
+    "notifies_changes": false,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": [
+      {
+        "name": "get_source",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "workspace_epoch": {
+              "description": "Optional workspace_epoch from get_status. If the workspace was cleared since, the call fails with notFound instead of acting on an ID that may now name a different item, or replaying a keyed change into the new workspace.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        "read_only": true,
+        "destructive": false,
+        "open_world": false
+      }
+    ]
+  },
+  "sources.import": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": true,
+    "idempotency_key": true,
+    "tools": [
+      {
+        "name": "import_text",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "workspace_epoch": {
+              "description": "Optional workspace_epoch from get_status. If the workspace was cleared since, the call fails with notFound instead of acting on an ID that may now name a different item, or replaying a keyed change into the new workspace.",
+              "type": "string"
+            },
+            "idempotency_key": {
+              "description": "Optional unique key for this change. If a call fails with reason outcomeUnknown, retry with the same idempotency_key: the change is applied at most once in the same workspace (pass workspace_epoch) and the retry returns its result. Use a new key for a different change.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "required": [
+            "title",
+            "text"
+          ],
+          "additionalProperties": false
+        },
+        "read_only": false,
+        "destructive": false,
+        "open_world": false
+      }
+    ]
+  },
+  "sources.import_url": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": [
+      {
+        "name": "import_url",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string"
+            },
+            "allow_private_network": {
+              "description": "Explicitly permit local/private/special-use addresses for this import. Defaults to false.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "url"
+          ],
+          "additionalProperties": false
+        },
+        "read_only": false,
+        "destructive": false,
+        "open_world": true
+      }
+    ]
+  },
+  "sources.import_directory": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": [
+      {
+        "name": "import_directory",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "additionalProperties": false
+        },
+        "read_only": false,
+        "destructive": false,
+        "open_world": false
+      }
+    ]
+  },
+  "sources.refresh": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": [
+      {
+        "name": "refresh_sources",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "allow_private_network": {
+              "description": "Explicitly permit private network URL refreshes for this request. Defaults to false.",
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        "read_only": false,
+        "destructive": false,
+        "open_world": true
+      }
+    ]
+  },
+  "sources.import_file": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": [
+      {
+        "name": "import_file",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "additionalProperties": false
+        },
+        "read_only": false,
+        "destructive": false,
+        "open_world": false
+      }
+    ]
+  },
+  "sources.index": {
+    "requires_helper": true,
+    "approval": false,
+    "approval_web_search": false,
+    "notifies_changes": true,
+    "workspace_epoch": true,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "sources.delete": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": true,
+    "idempotency_key": false,
+    "tools": [
+      {
+        "name": "delete_source",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "workspace_epoch": {
+              "description": "Optional workspace_epoch from get_status. If the workspace was cleared since, the call fails with notFound instead of acting on an ID that may now name a different item, or replaying a keyed change into the new workspace.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        "read_only": false,
+        "destructive": true,
+        "open_world": false
+      }
+    ]
+  },
+  "sources.pause": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "sources.resume": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "sources.search": {
+    "requires_helper": true,
+    "approval": false,
+    "approval_web_search": false,
+    "notifies_changes": false,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": [
+      {
+        "name": "search",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "additionalProperties": false
+        },
+        "read_only": true,
+        "destructive": false,
+        "open_world": false
+      }
+    ]
+  },
+  "answer": {
+    "requires_helper": true,
+    "approval": false,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "google.status": {
+    "requires_helper": false,
+    "approval": false,
+    "approval_web_search": false,
+    "notifies_changes": false,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "google.configure": {
+    "requires_helper": false,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "google.complete_sign_in": {
+    "requires_helper": false,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "google.cancel_sign_in": {
+    "requires_helper": false,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "google.disconnect": {
+    "requires_helper": false,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "google.switch_account": {
+    "requires_helper": false,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "google.sign_out_account": {
+    "requires_helper": false,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "google.drive_files": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": false,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "google.import_file": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "google.import_folder": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "google.import_year": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "google.refresh": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "google.calendar": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "google.attachments": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": true,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "notes.list": {
+    "requires_helper": false,
+    "approval": false,
+    "approval_web_search": false,
+    "notifies_changes": false,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": [
+      {
+        "name": "list_notes",
+        "schema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "read_only": true,
+        "destructive": false,
+        "open_world": false
+      }
+    ]
+  },
+  "notes.save": {
+    "requires_helper": false,
+    "approval": false,
+    "approval_web_search": false,
+    "notifies_changes": true,
+    "workspace_epoch": true,
+    "idempotency_key": true,
+    "tools": [
+      {
+        "name": "save_note",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "integer"
+            },
+            "title": {
+              "type": "string"
+            },
+            "body": {
+              "type": "string"
+            },
+            "workspace_epoch": {
+              "description": "Optional workspace_epoch from get_status. If the workspace was cleared since, the call fails with notFound instead of acting on an ID that may now name a different item, or replaying a keyed change into the new workspace.",
+              "type": "string"
+            },
+            "idempotency_key": {
+              "description": "Optional unique key for this change. If a call fails with reason outcomeUnknown, retry with the same idempotency_key: the change is applied at most once in the same workspace (pass workspace_epoch) and the retry returns its result. Use a new key for a different change.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "required": [
+            "title",
+            "body"
+          ],
+          "additionalProperties": false
+        },
+        "read_only": false,
+        "destructive": false,
+        "open_world": false
+      }
+    ]
+  },
+  "preferences.set": {
+    "requires_helper": false,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "meetings.list": {
+    "requires_helper": false,
+    "approval": false,
+    "approval_web_search": false,
+    "notifies_changes": false,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": [
+      {
+        "name": "list_meetings",
+        "schema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "read_only": true,
+        "destructive": false,
+        "open_world": false
+      }
+    ]
+  },
+  "meetings.create": {
+    "requires_helper": false,
+    "approval": false,
+    "approval_web_search": false,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": true,
+    "tools": [
+      {
+        "name": "create_meeting",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string"
+            },
+            "workspace_epoch": {
+              "description": "Optional workspace_epoch from get_status. If the workspace was cleared since, the call fails with notFound instead of acting on an ID that may now name a different item, or replaying a keyed change into the new workspace.",
+              "type": "string"
+            },
+            "idempotency_key": {
+              "description": "Optional unique key for this change. If a call fails with reason outcomeUnknown, retry with the same idempotency_key: the change is applied at most once in the same workspace (pass workspace_epoch) and the retry returns its result. Use a new key for a different change.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "required": [
+            "title"
+          ],
+          "additionalProperties": false
+        },
+        "read_only": false,
+        "destructive": false,
+        "open_world": false
+      }
+    ]
+  },
+  "meetings.get": {
+    "requires_helper": false,
+    "approval": false,
+    "approval_web_search": false,
+    "notifies_changes": false,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": [
+      {
+        "name": "get_meeting",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "integer"
+            },
+            "workspace_epoch": {
+              "description": "Optional workspace_epoch from get_status. If the workspace was cleared since, the call fails with notFound instead of acting on an ID that may now name a different item, or replaying a keyed change into the new workspace.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        "read_only": true,
+        "destructive": false,
+        "open_world": false
+      }
+    ]
+  },
+  "meetings.retry_question": {
+    "requires_helper": true,
+    "approval": false,
+    "approval_web_search": false,
+    "notifies_changes": true,
+    "workspace_epoch": true,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "meetings.retry_detection": {
+    "requires_helper": true,
+    "approval": false,
+    "approval_web_search": false,
+    "notifies_changes": true,
+    "workspace_epoch": true,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "meetings.link_answer": {
+    "requires_helper": true,
+    "approval": false,
+    "approval_web_search": false,
+    "notifies_changes": true,
+    "workspace_epoch": true,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "workspace.clear": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "meetings.notes": {
+    "requires_helper": false,
+    "approval": false,
+    "approval_web_search": false,
+    "notifies_changes": true,
+    "workspace_epoch": true,
+    "idempotency_key": false,
+    "tools": [
+      {
+        "name": "save_meeting_notes",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "integer"
+            },
+            "body": {
+              "type": "string"
+            },
+            "workspace_epoch": {
+              "description": "Optional workspace_epoch from get_status. If the workspace was cleared since, the call fails with notFound instead of acting on an ID that may now name a different item, or replaying a keyed change into the new workspace.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "body"
+          ],
+          "additionalProperties": false
+        },
+        "read_only": false,
+        "destructive": false,
+        "open_world": false
+      }
+    ]
+  },
+  "meetings.transcript": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": true,
+    "idempotency_key": true,
+    "tools": [
+      {
+        "name": "import_transcript",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "integer"
+            },
+            "text": {
+              "type": "string"
+            },
+            "start": {
+              "type": "integer"
+            },
+            "end": {
+              "type": "integer"
+            },
+            "source": {
+              "type": "string"
+            },
+            "workspace_epoch": {
+              "description": "Optional workspace_epoch from get_status. If the workspace was cleared since, the call fails with notFound instead of acting on an ID that may now name a different item, or replaying a keyed change into the new workspace.",
+              "type": "string"
+            },
+            "idempotency_key": {
+              "description": "Optional unique key for this change. If a call fails with reason outcomeUnknown, retry with the same idempotency_key: the change is applied at most once in the same workspace (pass workspace_epoch) and the retry returns its result. Use a new key for a different change.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "required": [
+            "id",
+            "text"
+          ],
+          "additionalProperties": false
+        },
+        "read_only": false,
+        "destructive": false,
+        "open_world": false
+      }
+    ]
+  },
+  "meetings.index": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": true,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "meetings.generate": {
+    "requires_helper": true,
+    "approval": false,
+    "approval_web_search": false,
+    "notifies_changes": true,
+    "workspace_epoch": true,
+    "idempotency_key": false,
+    "tools": [
+      {
+        "name": "generate_meeting_artifact",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "integer"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "summary",
+                "actions"
+              ]
+            },
+            "workspace_epoch": {
+              "description": "Optional workspace_epoch from get_status. If the workspace was cleared since, the call fails with notFound instead of acting on an ID that may now name a different item, or replaying a keyed change into the new workspace.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        "read_only": false,
+        "destructive": false,
+        "open_world": false
+      }
+    ]
+  },
+  "meetings.tasks": {
+    "requires_helper": false,
+    "approval": false,
+    "approval_web_search": false,
+    "notifies_changes": false,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": [
+      {
+        "name": "get_meeting_tasks",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "integer"
+            },
+            "workspace_epoch": {
+              "description": "Optional workspace_epoch from get_status. If the workspace was cleared since, the call fails with notFound instead of acting on an ID that may now name a different item, or replaying a keyed change into the new workspace.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        "read_only": true,
+        "destructive": false,
+        "open_world": false
+      }
+    ]
+  },
+  "meetings.edit_task": {
+    "requires_helper": false,
+    "approval": false,
+    "approval_web_search": false,
+    "notifies_changes": true,
+    "workspace_epoch": true,
+    "idempotency_key": false,
+    "tools": [
+      {
+        "name": "edit_meeting_task",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "integer"
+            },
+            "task": {
+              "type": "string"
+            },
+            "owner": {
+              "type": "string"
+            },
+            "due": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "open",
+                "completed",
+                "cancelled"
+              ]
+            },
+            "workspace_epoch": {
+              "description": "Optional workspace_epoch from get_status. If the workspace was cleared since, the call fails with notFound instead of acting on an ID that may now name a different item, or replaying a keyed change into the new workspace.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        "read_only": false,
+        "destructive": false,
+        "open_world": false
+      }
+    ]
+  },
+  "meetings.prepare": {
+    "requires_helper": false,
+    "approval": false,
+    "approval_web_search": false,
+    "notifies_changes": true,
+    "workspace_epoch": true,
+    "idempotency_key": false,
+    "tools": [
+      {
+        "name": "prepare_meeting",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "integer"
+            },
+            "source_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "workspace_epoch": {
+              "description": "Optional workspace_epoch from get_status. If the workspace was cleared since, the call fails with notFound instead of acting on an ID that may now name a different item, or replaying a keyed change into the new workspace.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "source_ids"
+          ],
+          "additionalProperties": false
+        },
+        "read_only": false,
+        "destructive": false,
+        "open_world": false
+      }
+    ]
+  },
+  "meetings.cancel_generation": {
+    "requires_helper": false,
+    "approval": false,
+    "approval_web_search": false,
+    "notifies_changes": false,
+    "workspace_epoch": true,
+    "idempotency_key": false,
+    "tools": [
+      {
+        "name": "cancel_meeting_generation",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "integer"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "actions",
+                "preparation"
+              ]
+            },
+            "workspace_epoch": {
+              "description": "Optional workspace_epoch from get_status. If the workspace was cleared since, the call fails with notFound instead of acting on an ID that may now name a different item, or replaying a keyed change into the new workspace.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        "read_only": false,
+        "destructive": false,
+        "open_world": false
+      }
+    ]
+  },
+  "meetings.enhance": {
+    "requires_helper": true,
+    "approval": false,
+    "approval_web_search": false,
+    "notifies_changes": true,
+    "workspace_epoch": true,
+    "idempotency_key": false,
+    "tools": [
+      {
+        "name": "enhance_meeting_notes",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "integer"
+            },
+            "workspace_epoch": {
+              "description": "Optional workspace_epoch from get_status. If the workspace was cleared since, the call fails with notFound instead of acting on an ID that may now name a different item, or replaying a keyed change into the new workspace.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        "read_only": false,
+        "destructive": false,
+        "open_world": false
+      }
+    ]
+  },
+  "meetings.cancel_enhance": {
+    "requires_helper": true,
+    "approval": false,
+    "approval_web_search": false,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "meetings.cancel_summary": {
+    "requires_helper": false,
+    "approval": false,
+    "approval_web_search": false,
+    "notifies_changes": false,
+    "workspace_epoch": true,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "meetings.start": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": true,
+    "idempotency_key": false,
+    "tools": [
+      {
+        "name": "start_recording",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "integer"
+            },
+            "workspace_epoch": {
+              "description": "Optional workspace_epoch from get_status. If the workspace was cleared since, the call fails with notFound instead of acting on an ID that may now name a different item, or replaying a keyed change into the new workspace.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        "read_only": false,
+        "destructive": false,
+        "open_world": false
+      }
+    ]
+  },
+  "meetings.stop": {
+    "requires_helper": true,
+    "approval": false,
+    "approval_web_search": false,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": [
+      {
+        "name": "stop_recording",
+        "schema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "read_only": false,
+        "destructive": false,
+        "open_world": false
+      }
+    ]
+  },
+  "meetings.pause": {
+    "requires_helper": true,
+    "approval": false,
+    "approval_web_search": false,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": [
+      {
+        "name": "pause_recording",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "integer"
+            },
+            "workspace_epoch": {
+              "description": "Optional workspace_epoch from get_status. If the workspace was cleared since, the call fails with notFound instead of acting on an ID that may now name a different item, or replaying a keyed change into the new workspace.",
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "read_only": false,
+        "destructive": false,
+        "open_world": false
+      }
+    ]
+  },
+  "meetings.resume": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": [
+      {
+        "name": "resume_recording",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "integer"
+            },
+            "workspace_epoch": {
+              "description": "Optional workspace_epoch from get_status. If the workspace was cleared since, the call fails with notFound instead of acting on an ID that may now name a different item, or replaying a keyed change into the new workspace.",
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "read_only": false,
+        "destructive": false,
+        "open_world": false
+      }
+    ]
+  },
+  "artifacts.edit": {
+    "requires_helper": false,
+    "approval": false,
+    "approval_web_search": false,
+    "notifies_changes": true,
+    "workspace_epoch": true,
+    "idempotency_key": false,
+    "tools": [
+      {
+        "name": "edit_artifact",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "integer"
+            },
+            "text": {
+              "type": "string"
+            },
+            "workspace_epoch": {
+              "description": "Optional workspace_epoch from get_status. If the workspace was cleared since, the call fails with notFound instead of acting on an ID that may now name a different item, or replaying a keyed change into the new workspace.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "text"
+          ],
+          "additionalProperties": false
+        },
+        "read_only": false,
+        "destructive": false,
+        "open_world": false
+      }
+    ]
+  },
+  "models.cancel_query_acquisition": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "models.acquire_query": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "models.speech": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "models.register": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "models.generation": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "models.embedding": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "application.resume": {
+    "requires_helper": true,
+    "approval": false,
+    "approval_web_search": false,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "graph.embeddings": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": false,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "labels.auto_assign": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "labels.put": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": true,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "labels.set": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": true,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "labels.cluster": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "labels.delete": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "graph.invalidate": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "graph.acknowledge": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "graph.save": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "answer.stream": {
+    "requires_helper": true,
+    "approval": false,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": [
+      {
+        "name": "ask",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "question": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "question"
+          ],
+          "additionalProperties": false
+        },
+        "read_only": false,
+        "destructive": false,
+        "open_world": false
+      }
+    ]
+  },
+  "google.sign_in": {
+    "requires_helper": false,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "google.add_account": {
+    "requires_helper": false,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "security.attach_desktop": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "security.detach_desktop": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "security.decide": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "security.allow_import_root": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  },
+  "service.stop_if_idle": {
+    "requires_helper": true,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": true,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
+  }
+}

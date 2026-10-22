@@ -1,7 +1,8 @@
+import 'store_reader_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/background_store.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/store.dart';
 
 void main() {
   test(
@@ -18,7 +19,7 @@ void main() {
         store.artifact(meeting, 'summary', ' three\t four five ', 'fixture');
         store.artifact(meeting, 'questions', '', 'fixture');
         store.artifact(meeting, 'actions', ' \n ', 'fixture');
-        final stats = await localOutputStats(store.path);
+        final stats = await localOutputStats(fixtureReader(store));
         expect(stats.words, 5);
         expect(stats.weekly, [0, 0, 0, 0, 5]);
       } finally {
@@ -46,11 +47,13 @@ void main() {
           'text/plain',
           'fixture',
         );
-        expect(await searchSourceIds(store.path, 'needle'), {match});
-        expect(await searchSourceIds(store.path, 'PLANNING'), {match});
-        expect(await searchSourceIds(store.path, 'école'), {match});
-        expect(await searchSourceIds(store.path, 'missing'), isEmpty);
-        expect(await localOutputWords(store.path), 0);
+        expect(await searchSourceIds(fixtureReader(store), 'needle'), {match});
+        expect(await searchSourceIds(fixtureReader(store), 'PLANNING'), {
+          match,
+        });
+        expect(await searchSourceIds(fixtureReader(store), 'école'), {match});
+        expect(await searchSourceIds(fixtureReader(store), 'missing'), isEmpty);
+        expect(await localOutputWords(fixtureReader(store)), 0);
       } finally {
         store.close();
         temporary.deleteSync(recursive: true);

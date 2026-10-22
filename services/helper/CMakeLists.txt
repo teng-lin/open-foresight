@@ -89,3 +89,18 @@ if(BUILD_TESTING)
  target_compile_definitions(helper_model_lifetime PRIVATE FORESIGHT_ENABLE_TEST_HOOKS=1)
  target_compile_definitions(helper_adapter_faults PRIVATE FORESIGHT_ENABLE_TEST_HOOKS=1)
 endif()
+
+if(BUILD_TESTING)
+ add_executable(helper_schema_preflight_test "${REPO_ROOT}/tests/helper/schema_preflight.cpp")
+ target_include_directories(helper_schema_preflight_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+ target_compile_options(helper_schema_preflight_test PRIVATE -Wall -Wextra -Werror)
+ target_link_libraries(helper_schema_preflight_test PRIVATE SQLite3::SQLite3)
+ add_executable(sqlite_commit_boundary "${REPO_ROOT}/tests/fixtures/sqlite_commit_boundary.cpp")
+ target_compile_options(sqlite_commit_boundary PRIVATE -Wall -Wextra -Werror)
+ target_link_libraries(sqlite_commit_boundary PRIVATE SQLite3::SQLite3)
+ add_test(NAME helper_schema_preflight COMMAND ${Python3_EXECUTABLE}
+  "${REPO_ROOT}/tests/helper/schema_preflight.py"
+  $<TARGET_FILE:helper_schema_preflight_test> $<TARGET_FILE:sqlite_commit_boundary>
+  $<TARGET_FILE:ForesightHelper>)
+ set_tests_properties(helper_schema_preflight PROPERTIES TIMEOUT 90)
+endif()

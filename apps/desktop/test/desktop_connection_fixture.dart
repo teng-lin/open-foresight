@@ -1,17 +1,73 @@
+import 'dart:io';
+import 'store_reader_fixture.dart';
+import 'package:foresight_core/remote.dart'
+    show StoreReader, HelperStatus, DesktopModelAssets;
 import 'dart:async';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/application.dart';
+import 'package:foresight_core/src/rpc_error.dart';
 
 /// Explicit test adapter for the desktop capability contract. Production only
 /// constructs RemoteDomain; widget fixtures can control core services directly.
 class TestDesktopConnection implements DesktopConnection {
   final Domain domain;
-  late final Application application = domain.application;
+  final Application application;
   StreamSubscription<void>? _changes;
+  final _events = StreamController<void>.broadcast(sync: true);
+  Future<void>? _closing;
+  final _ready = Completer<void>();
+  Future<void>? _initializing;
+  @override
+  Stream<void> get changes => _events.stream;
+  Object _clientSessionGeneration = Object();
+  @override
+  Object get clientSessionGeneration => _clientSessionGeneration;
+
+  /// Simulates actual connection replacement, not an ordinary helper event.
+  void replaceClientSessionForTesting() {
+    if (_closing != null) return;
+    _clientSessionGeneration = Object();
+    _events.add(null);
+  }
+
+  @override
+  Future<void> get closed => _closing ?? Future<void>.value();
+  @override
+  Future<void> initialize() => _initializing ??= _initialize();
+  Future<void> _initialize() async {
+    if (_closing != null) {
+      throw RpcError(RpcErrorCode.cancelled, 'Desktop connection closed');
+    }
+    await domain.helper.start();
+    await _ready.future;
+    if (_closing != null) {
+      throw RpcError(RpcErrorCode.cancelled, 'Desktop connection closed');
+    }
+  }
+
+  @override
+  DesktopModelAssets get modelAssets => DesktopModelAssets(
+    generation: Directory(
+      "${File(domain.store.path).parent.path}/models/gemma4",
+    ),
+    speech: Directory("${File(domain.store.path).parent.path}/models/whisper"),
+  );
   String? _workspaceEpoch;
-  TestDesktopConnection(this.domain) {
+  TestDesktopConnection(this.application) : domain = application.domain {
+    domain.helper.onReady = () async {
+      if (!_ready.isCompleted) _ready.complete();
+    };
+    if (domain is CommandFixtureDomain) {
+      (domain as CommandFixtureDomain).application = application;
+    }
+    if (domain is AnswerFixtureDomain) {
+      (domain as AnswerFixtureDomain).application = application;
+    }
     _workspaceEpoch = _serviceEpoch;
-    _changes = application.changes.stream.listen((_) => helper.changed?.call());
+    domain.helper.changed = () => _events.add(null);
+    _changes = application.changes.stream.listen(
+      (_) => domain.helper.changed?.call(),
+    );
   }
   String? get _serviceEpoch {
     final epoch = store.workspaceEpoch;
@@ -26,9 +82,12 @@ class TestDesktopConnection implements DesktopConnection {
   @override
   void adoptWorkspace() => _workspaceEpoch = _serviceEpoch;
   @override
-  Store get store => domain.store;
+  StoreReader get store => fixtureReader(domain.store);
   @override
-  Helper get helper => domain.helper;
+  HelperStatus get helper => HelperStatus.fromEvent({
+    'helper': domain.helper.snapshot?.toProto3Json(),
+    'helper_state': domain.helper.state,
+  });
   @override
   GenerationStatus? get generator => domain.generator;
   @override
@@ -137,14 +196,28 @@ class TestDesktopConnection implements DesktopConnection {
   Future<void> disableDesktopApprovals() async {}
   @override
   void close() {
-    unawaited(_changes?.cancel());
+    if (_closing != null) return;
+    domain.helper.changed = null;
+    domain.helper.onReady = null;
+    if (!_ready.isCompleted) _ready.complete();
     application.google.close();
-    unawaited(application.close());
+    // Cancel owned application timers before the first asynchronous join, as
+    // the production service does when closing its application owner.
+    final applicationClosing = application.close();
     domain.close();
+    _closing = () async {
+      await _changes?.cancel();
+      await applicationClosing;
+      await domain.helper.close();
+      await _initializing?.then<void>((_) {}, onError: (Object _) {});
+      domain.store.close();
+      await _events.close();
+    }();
   }
 }
 
 class CommandFixtureDomain extends Domain {
+  late final Application application;
   CommandFixtureDomain(super.store, super.helper);
   Future<Object?> command(
     Operation operation, [
@@ -153,6 +226,7 @@ class CommandFixtureDomain extends Domain {
 }
 
 class AnswerFixtureDomain extends Domain {
+  late final Application application;
   AnswerFixtureDomain(super.store, super.helper);
   Stream<String> askInConversation(
     String question,

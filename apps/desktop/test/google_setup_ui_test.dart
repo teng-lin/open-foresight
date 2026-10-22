@@ -5,10 +5,10 @@ import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/domain.dart';
+import 'package:foresight_core/src/domain.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/store.dart';
-import 'package:open_foresight/google_auth.dart';
+import 'package:foresight_core/src/store.dart';
+import 'package:foresight_core/src/google_auth.dart';
 import 'package:foresight_core/src/application.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
@@ -24,11 +24,7 @@ class BundledGoogleAuth extends GoogleAuth {
 
 class BundledGoogleDomain extends Domain {
   final GoogleAuth auth;
-  BundledGoogleDomain(super.store, super.helper, this.auth) {
-    _application;
-  }
-  late final _application = Application(this, auth: auth);
-  Application get application => _application;
+  BundledGoogleDomain(super.store, super.helper, this.auth);
 }
 
 void main() {
@@ -43,8 +39,9 @@ void main() {
         '${root.path}/helper',
       );
       final domain = BundledGoogleDomain(store, helper, auth);
+      final app = Application(domain, auth: domain.auth);
       await tester.pumpWidget(
-        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+        Foresight(TestDesktopConnection(app), deviceLoader: () async => []),
       );
       await tester.tap(find.text('Settings'));
       await tester.pumpAndSettle();
@@ -107,12 +104,10 @@ void main() {
         '${root.path}/helper',
       );
       final domain = BundledGoogleDomain(store, helper, auth);
+      final app = Application(domain, auth: domain.auth);
       try {
         await tester.pumpWidget(
-          Foresight(
-            TestDesktopConnection(domain),
-            deviceLoader: () async => [],
-          ),
+          Foresight(TestDesktopConnection(app), deviceLoader: () async => []),
         );
         await tester.tap(find.text('Settings'));
         await tester.pumpAndSettle();
@@ -171,12 +166,10 @@ void main() {
         store,
         OfflineHelper('${root.path}/socket', '${root.path}/helper'),
       );
+      final app = Application(domain);
       try {
         await tester.pumpWidget(
-          Foresight(
-            TestDesktopConnection(domain),
-            deviceLoader: () async => [],
-          ),
+          Foresight(TestDesktopConnection(app), deviceLoader: () async => []),
         );
         await tester.tap(find.text('Settings'));
         await tester.pumpAndSettle();
@@ -200,8 +193,8 @@ void main() {
           state.error,
           contains('Google sign-in is unavailable in this build.'),
         );
-        expect(domain.application.googleAuth.connected, false);
-        expect(domain.application.googleAuth.signingIn, false);
+        expect(app.googleAuth.connected, false);
+        expect(app.googleAuth.signingIn, false);
         expect(tester.takeException(), isNull);
       } finally {
         await tester.pumpWidget(const SizedBox.shrink());

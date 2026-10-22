@@ -48,6 +48,8 @@ NATIVE_RUNTIME_PATHS = (
     "build/macos/foresight-notifications",
     "build/macos/foresight-file-parser",
     "build/macos/foresight-model-crypto",
+    "build/macos/libforesight_sqlite3.dylib",
+    "build/macos/foresight-sqlite3.json",
     "build/sdk/foresight-sdk.json",
     "build/sdk/share/foresight-sdk/licenses",
 )

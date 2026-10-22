@@ -233,7 +233,16 @@ void fs_string_free(char *value) { strings--; free(value); }
         '/candidate/runtime',
         onCandidate: (value) => candidate = value,
       );
-      final failed = expectLater(pending, throwsStateError);
+      final failed = expectLater(
+        pending,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.cancelled,
+          ),
+        ),
+      );
       try {
         await eventually(() => probeEntered() == 1);
       } finally {

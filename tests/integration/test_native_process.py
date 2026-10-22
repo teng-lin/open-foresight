@@ -5,12 +5,147 @@ Usage: test_native_process.py /path/libforesight_native.dylib /path/ForesightHel
 """
 
 import ctypes
+import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import time
+
+
+def check_runtime_environment_replay(lib, helper, directory):
+    """Replay is read-only; a different profile cannot reconfigure workers."""
+    for name, args, result in [
+        (
+            "fs_engine_create_backend",
+            [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int],
+            ctypes.c_void_p,
+        ),
+        ("fs_engine_probe", [ctypes.c_void_p], ctypes.c_int),
+        ("fs_engine_destroy", [ctypes.c_void_p], ctypes.c_int),
+        ("fs_conversation_create", [ctypes.c_void_p], ctypes.c_void_p),
+        ("fs_conversation_destroy", [ctypes.c_void_p, ctypes.c_int], ctypes.c_int),
+        (
+            "fs_generate",
+            [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p],
+            ctypes.c_int,
+        ),
+        ("fs_event_poll", [ctypes.c_void_p, ctypes.c_int], ctypes.c_void_p),
+        ("fs_string_free", [ctypes.c_void_p], None),
+    ]:
+        function = getattr(lib, name)
+        function.argtypes, function.restype = args, result
+    getenv = ctypes.CDLL(None).getenv
+    getenv.argtypes, getenv.restype = [ctypes.c_char_p], ctypes.c_char_p
+    original = {
+        b"FORESIGHT_HELPER": os.fsencode(helper),
+        b"FORESIGHT_LITERT_CACHE": os.fsencode(directory / "profile-a/cache/litert"),
+        b"PYTHONPYCACHEPREFIX": os.fsencode(directory / "profile-a/cache/python"),
+        b"FORESIGHT_WHISPER_BACKEND": b"",
+    }
+    absent = b"FORESIGHT_WHISPER_DEVICE"
+    unknown = b"FORESIGHT_UNKNOWN_RUNTIME_SETTING"
+    os.environ.pop(absent.decode(), None)
+    assert getenv(absent) is None
+    os.environ[unknown.decode()] = "already present"
+    for key, value in original.items():
+        assert lib.fs_set_runtime_environment(key, value) == 0
+        assert getenv(key) == value
+
+    def check_sealed():
+        for key, value in original.items():
+            assert lib.fs_set_runtime_environment(key, value) == 0
+            assert getenv(key) == value
+            assert lib.fs_set_runtime_environment(key, value + b"-changed") == -1
+            assert getenv(key) == value
+        for value in (b"", b"new device"):
+            assert lib.fs_set_runtime_environment(absent, value) == -1
+            assert getenv(absent) is None
+        assert lib.fs_set_runtime_environment(unknown, b"already present") == -1
+        assert getenv(unknown) == b"already present"
+        assert lib.fs_set_runtime_environment(None, b"value") == -1
+        assert lib.fs_set_runtime_environment(b"FORESIGHT_HELPER", None) == -1
+
+    runner, model = directory / "runtime-worker", directory / "model"
+    model.write_text("owned protocol fixture; no model inference")
+    runner.write_text(
+        f"#!{sys.executable}\n"
+        "import json,os,pathlib,sys\n"
+        "root=pathlib.Path(__file__).parent\n"
+        "if '--probe' in sys.argv:\n"
+        " print('{\"worker_protocol\":1}',flush=True)\n"
+        " sys.exit(0)\n"
+        "assert '--serve' in sys.argv\n"
+        "snapshot={k:os.environ.get(k) for k in "
+        + repr([key.decode() for key in original])
+        + "}\n"
+        "(root/'worker.json').write_text(json.dumps({'pid':os.getpid(),'environment':snapshot}))\n"
+        "print('ready 1',flush=True)\n"
+        "for line in sys.stdin:\n"
+        " if line.strip()=='shutdown':\n"
+        "  (root/'worker.closed').write_text('closed')\n"
+        "  break\n"
+        " command,token,payload=line.rstrip('\\n').split(' ',2)\n"
+        " assert command=='generate'\n"
+        " json.loads(payload)\n"
+        " print(token+' text '+json.dumps('retained runtime environment'),flush=True)\n"
+        " print(token+' done completed',flush=True)\n"
+    )
+    runner.chmod(0o700)
+    engine = lib.fs_engine_create_backend(os.fsencode(runner), os.fsencode(model), 1)
+    assert engine
+    conversation = None
+    try:
+        assert lib.fs_engine_probe(engine) == 0
+        conversation = lib.fs_conversation_create(engine)
+        assert conversation
+
+        def generate(identity):
+            assert lib.fs_generate(conversation, identity, b"environment") == 0
+            events = []
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                pointer = lib.fs_event_poll(conversation, 100)
+                if not pointer:
+                    continue
+                try:
+                    event = json.loads(ctypes.string_at(pointer))
+                finally:
+                    lib.fs_string_free(pointer)
+                events.append(event)
+                if event["type"] == "done":
+                    break
+            assert events and events[-1].get("status") == "completed", events
+            assert (
+                "".join(e.get("text", "") for e in events if e["type"] == "delta")
+                == "retained runtime environment"
+            ), events
+
+        generate(b"before-replay")
+        worker = json.loads((directory / "worker.json").read_text())
+        assert worker["environment"] == {
+            k.decode(): v.decode() for k, v in original.items()
+        }
+        os.kill(worker["pid"], 0)
+        check_sealed()
+        generate(b"after-replay")
+        assert json.loads((directory / "worker.json").read_text()) == worker
+        os.kill(worker["pid"], 0)
+    finally:
+        try:
+            if conversation:
+                assert lib.fs_conversation_destroy(conversation, 1) == 0
+        finally:
+            assert lib.fs_engine_destroy(engine) == 0
+    assert (directory / "worker.closed").read_text() == "closed"
+    try:
+        os.kill(worker["pid"], 0)
+    except ProcessLookupError:
+        pass
+    else:
+        raise AssertionError("native close did not reap its persistent worker")
+    check_sealed()
 
 
 def main():
@@ -66,7 +201,8 @@ def main():
             process.terminate()
             process.wait(timeout=10)
         assert matches() == 0, "Exited verified helper must be positively absent"
-    print("native helper identity and environment boundary passed")
+        check_runtime_environment_replay(lib, helper, Path(directory))
+    print("native helper identity and immutable environment replay boundary passed")
 
 
 if __name__ == "__main__":

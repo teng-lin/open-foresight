@@ -11,6 +11,9 @@ import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
 import 'package:foresight_test_support/remote_service.dart';
 import 'package:foresight_test_support/service_fault_proxy.dart';
 
+Matcher throwsRpcCode(RpcErrorCode code) =>
+    throwsA(isA<RpcError>().having((error) => error.code, 'code', code));
+
 void main() {
   late RemoteFixture f;
   setUp(() async {
@@ -18,6 +21,24 @@ void main() {
     await f.start();
   });
   tearDown(() => f.close());
+
+  test(
+    'a future schema retires the reader and reports an actionable connection state',
+    () async {
+      final notification = f.remote.changes.first;
+      f.owner.db.execute('BEGIN IMMEDIATE');
+      f.owner.db.execute(
+        'ALTER TABLE preferences RENAME TO future_preferences',
+      );
+      f.owner.db.execute('PRAGMA user_version=${Store.schemaVersion + 1}');
+      f.owner.db.execute('COMMIT');
+      f.event({...f.status, 'helper_state': 'must not hide incompatibility'});
+      await notification;
+      expect(f.remote.store.failure!.code, RpcErrorCode.unavailable);
+      expect(f.remote.helper.state, contains('Update Open Foresight'));
+      expect(f.remote.helper.state, isNot('must not hide incompatibility'));
+    },
+  );
 
   test('acknowledged clear survives a failed status refresh', () async {
     f.handler = (socket, request) {
@@ -41,7 +62,8 @@ void main() {
     'capture telemetry updates only level listeners and preserves workspace state',
     () async {
       var changes = 0;
-      f.remote.helper.changed = () => changes++;
+      final changesSubscription = f.remote.changes.listen((_) => changes++);
+      addTearDown(changesSubscription.cancel);
       f.event({
         'capture': {'meeting_id': 17, 'active': true},
         'google': {'connected': true},
@@ -83,7 +105,8 @@ void main() {
     'service snapshots update capture, model, Google and pause state together',
     () async {
       var changes = 0;
-      f.remote.helper.changed = () => changes++;
+      final changesSubscription = f.remote.changes.listen((_) => changes++);
+      addTearDown(changesSubscription.cancel);
       f.event({
         'capture': {'meeting_id': 17, 'active': true},
         'generation': {'state': 'ready', 'generating': true},
@@ -160,15 +183,20 @@ void main() {
         }
         f.reply(socket, request, null);
       };
-      expect(f.remote.store.sources.single['content'], 'committed body');
+      expect(f.remote.store.sourceById(id)!.content, 'committed body');
       await f.remote.index(id);
-      expect(f.remote.store.sources.single['state'], 'indexed');
-      expect(await f.remote.graphEmbeddings(f.remote.store.sources), {
-        id: [1.0, 2.5],
-      });
+      expect(f.remote.store.sourceById(id)!.state, 'indexed');
+      expect(
+        await f.remote.graphEmbeddings([
+          f.remote.store.sourceById(id)!.toRow(),
+        ]),
+        {
+          id: [1.0, 2.5],
+        },
+      );
       await f.remote.resume();
       await f.remote.delete(id);
-      expect(f.remote.store.sources, isEmpty);
+      expect(f.remote.store.sourceSummaries, isEmpty);
       expect(
         f.requests.where((r) => r['method'] == 'application.resume'),
         hasLength(1),
@@ -193,7 +221,7 @@ void main() {
       f.remote.pauseSources();
       final blocked = expectLater(
         f.remote.waitForSourceWork(),
-        throwsStateError,
+        throwsRpcCode(RpcErrorCode.cancelled),
       );
       f.remote.close();
       await blocked;
@@ -207,7 +235,10 @@ void main() {
       final result = f.remote.commandCurrent(Operation.sourcesImportDirectory, {
         'path': '/fixture',
       }, () => current);
-      final failure = expectLater(result, throwsStateError);
+      final failure = expectLater(
+        result,
+        throwsRpcCode(RpcErrorCode.cancelled),
+      );
       await eventually(
         () => f.requests.any((r) => r['method'] == 'sources.import_directory'),
       );
@@ -228,7 +259,7 @@ void main() {
       );
       await expectLater(
         f.remote.commandCurrent(Operation.notesSave, {}, () => true),
-        throwsStateError,
+        throwsRpcCode(RpcErrorCode.internal),
       );
     },
   );
@@ -266,7 +297,10 @@ void main() {
         final request = f.requests.last;
         current = false;
         f.reply(f.sockets.last, request, 'late');
-        await expectLater(iterator.moveNext(), throwsStateError);
+        await expectLater(
+          iterator.moveNext(),
+          throwsRpcCode(RpcErrorCode.cancelled),
+        );
         await iterator.cancel();
         final preCancelled = web
             ? f.remote.askWithWebInConversation(
@@ -279,7 +313,10 @@ void main() {
                 'desktop',
                 current: () => false,
               );
-        await expectLater(preCancelled.toList(), throwsStateError);
+        await expectLater(
+          preCancelled.toList(),
+          throwsRpcCode(RpcErrorCode.cancelled),
+        );
       }
     },
   );
@@ -293,7 +330,10 @@ void main() {
         f.remote.askInConversation('Question', 'desktop', requestId: 'owner'),
       );
       expect(await iterator.moveNext(), isTrue);
-      final failure = expectLater(iterator.moveNext(), throwsStateError);
+      final failure = expectLater(
+        iterator.moveNext(),
+        throwsRpcCode(RpcErrorCode.cancelled),
+      );
       expect(f.remote.runtime.cancel(requestId: 'owner'), isTrue);
       await failure;
       await iterator.cancel();
@@ -465,7 +505,10 @@ void main() {
         'title': 'uncertain',
         'body': 'body',
       });
-      final failed = expectLater(pending, throwsStateError);
+      final failed = expectLater(
+        pending,
+        throwsRpcCode(RpcErrorCode.unavailable),
+      );
       await eventually(
         () => f.requests.any((r) => r['method'] == 'notes.save'),
       );
@@ -902,8 +945,8 @@ void main() {
       throwsA(isA<TypeError>()),
     );
     expect(created, isNotNull);
-    expect(() => created!.store.rows('SELECT 1'), throwsA(anything));
-    expect(created!.helper.stopping, isTrue);
+    await created!.closed;
+    expect(() => created!.store.preference('unused'), throwsA(anything));
     expect(created!.client.isClosed, isTrue);
     expect(f.sockets.length, greaterThan(connections));
   });
@@ -988,7 +1031,8 @@ void main() {
         f.event({...f.status, 'sources_paused': paused});
         await eventually(() => f.remote.sourcesPaused == paused);
         var changes = 0;
-        f.remote.helper.changed = () => changes++;
+        final changesSubscription = f.remote.changes.listen((_) => changes++);
+        addTearDown(changesSubscription.cancel);
         f.handler = (socket, request) => socket.writeln(
           jsonEncode({
             'id': request['id'],
@@ -1298,7 +1342,10 @@ void main() {
       );
       expect(await first.moveNext(), isTrue);
       expect(await second.moveNext(), isTrue);
-      final failure = expectLater(first.moveNext(), throwsStateError);
+      final failure = expectLater(
+        first.moveNext(),
+        throwsRpcCode(RpcErrorCode.cancelled),
+      );
       expect(f.remote.runtime.cancel(requestId: 'missing'), isFalse);
       expect(f.remote.runtime.cancel(requestId: 'first'), isTrue);
       await failure;
@@ -1322,7 +1369,7 @@ void main() {
         f.remote
             .askInConversation('Silent', 'desktop', current: () => current)
             .last,
-        throwsStateError,
+        throwsRpcCode(RpcErrorCode.cancelled),
       );
       await eventually(
         () => f.requests.any((request) => request['method'] == 'answer.stream'),
@@ -1340,12 +1387,10 @@ void main() {
     'helper snapshots follow service events without opening a helper watcher',
     () async {
       var ready = 0;
-      f.remote.helper.onReady = () async {
-        ready++;
-      };
-      await f.remote.helper.start().timeout(const Duration(seconds: 1));
+      final subscription = f.remote.changes.listen((_) => ready++);
+      addTearDown(subscription.cancel);
+      await f.remote.initialize().timeout(const Duration(seconds: 1));
       expect(ready, 1);
-      expect(f.remote.helper.watch, isNull);
       f.event({
         ...f.status,
         'helper_state': 'live in relocated runtime',
@@ -1362,14 +1407,17 @@ void main() {
       f.event({...f.status, 'helper': null, 'helper_state': 'helper exited'});
       await eventually(() => f.remote.helper.snapshot == null);
       expect(f.remote.helper.state, 'helper exited');
-      expect(f.remote.helper.watch, isNull);
+      // The state-only status object cannot own a watcher/channel. A second
+      // initialization only emits the existing connection's state.
+      await f.remote.initialize();
     },
   );
   test(
     'by-ID edits carry the workspace the desktop views were read in',
     () async {
       var changes = 0;
-      f.remote.helper.changed = () => changes++;
+      final changesSubscription = f.remote.changes.listen((_) => changes++);
+      addTearDown(changesSubscription.cancel);
       f.handler = (socket, request) => f.reply(socket, request, {'id': 3});
       // The desktop starts in the profile's workspace.
       final before = f.owner.workspaceEpoch;
@@ -1572,9 +1620,10 @@ void main() {
     await eventually(() => f.remote.workspaceReplaced);
     f.remote.adoptWorkspace();
     var resets = 0;
-    f.remote.helper.changed = () {
+    final resetSubscription = f.remote.changes.listen((_) {
       if (f.remote.workspaceReplaced) resets++;
-    };
+    });
+    addTearDown(resetSubscription.cancel);
     // The old connection's event for the epoch it replaced arrives late.
     f.sockets.last.writeln(
       jsonEncode({'event': 'changed', 'workspace_epoch': replaced}),

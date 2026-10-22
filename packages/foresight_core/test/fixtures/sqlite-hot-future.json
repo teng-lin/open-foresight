@@ -1,0 +1,27 @@
+{
+  "generator": "tests/fixtures/sqlite_commit_boundary.cpp with real SQLite VFS xDelete before/after superjournal deletion; original user_version=2, current=0",
+  "sqlite_version": "3.54.0",
+  "fixtures": {
+    "before": {
+      "agent_metadata.db": {
+        "sha256": "13495b93e66f5b4f487d165927a1aa67a7ecb89828f40431fed34c85df2b0f65",
+        "gzip_base64": "H4sIAAAAAAAC/+3Zz27TMBwHcLvpsj/SWjSoepiqmtsmRZRqRy60VYQqChshB3aqvMTroiZOSZypObL7HmBvwUtw4ik4c0baESelAYQQVxjfj35Rfv45imzfbL9+NQmUYOdxEnHFjsg9Qil5yhghxNTPBvmupp/6D21K/swkj27e7zZvSb1xTZp7zQ+N68YnAgAAAAAAAP83xzDbnQ7NFT8LRSqUCuQsXb/rI8ceuDZzB8OJzdbVg7nImWu/cdmJM34xcE7Zc/vUuuRhJsryYa9utkcdSgLpi2X6NtS73SnPVFy2p+vfTPvrbOPdY7rZ7nbpVa8chh97WSSkSquk9tNAqvJB4P86EC+WSneWHVaWimS8+siK+NKN50KmJyIZXWRyzsYvXfuZ7Vhe0Tq+FEnIF1UxCiLh5ovVnKwg4jMxzJVI2XByPDzs18y23f3dHKsRTvtVaujV3iqWfLfYyDc/Eh0AAAAAAAAA8Pc7olutJy1KH5K5WCgvjqJAKeGzsziTPk9ynfh5cQbhP1BiqXqLkAdyp9z/3xIdAAAAAAAAAHDHbBqt7eKYYHX//5noAAAAAAAAAIB/331q7HfPg6XKEpFJ74LLmfBX9/9fiA4AAAAAAAAAuEt2jP3tbwcBXwEgLBMvAFAAAA=="
+      },
+      "agent_metadata.db-journal": {
+        "sha256": "bafea1cdcf15440995c94bf1a099344aef03b260502b86a2a764e6dbd4addf30",
+        "gzip_base64": "H4sIAAAAAAAC/+3az27TMBgAcLtLyy5rJ8TUU1VzQOqktCFiIHaCtgqoorARcmCnyGm8Lmv+kThVc4T7Ltw48gbc9gLjEdi0I2deAG44aROBENxRv58S2f4cR7bjiyNff6n+IB8nVwihysV595tIqyIrkm0E1gJ+9XLscEaOg8ijnNwTXx5j9JiQ5VrI70K2MKRf265i/1JFvQ+fthrfkVQ/Q42bjc/1s/pXmHYAAAAAAAAAWHP6Rq3ZauGUU8tlMePc8adxkUpDXesbGjH6g7FGimhnxlJiaK8NcqiPnvf1I/JMO5Ln1E1YHt5VpFpz2MLI8W22iN+4Yrdr0oQHedksXmOqRa769i6+0Wy38Tsl74YdTBKP+TwuM5XfOlKGO479Z0cmgc9FZV4hJzGLRsuHZI8ujGDG/PiQRcOTxJ+R0QtDe6rp8iQrHcxZ5NKwDHqOx4w0XI5Jdjw6ZYOUs5gMxgeDXbVSa2rtv42x7KGpltkNMdub2ZRfnPceZfv4rWxD37hE4gIAAAAAAAAAAMB/pYM3d+7sYHwbzVjIw8iZU86IFdhp9i/CvsXZgiuhSx1/df4DrBMJYYV7oRIcd22rO3VOLddK7yt0ynxueoxTm3LaE1XeaV/df/jkwf7enmimIrT9/np1eOgn/QcORkUkAAA="
+      }
+    },
+    "after": {
+      "agent_metadata.db": {
+        "sha256": "13495b93e66f5b4f487d165927a1aa67a7ecb89828f40431fed34c85df2b0f65",
+        "gzip_base64": "H4sIAAAAAAAC/+3Zz27TMBwHcLvpsj/SWjSoepiqmtsmRZRqRy60VYQqChshB3aqvMTroiZOSZypObL7HmBvwUtw4ik4c0baESelAYQQVxjfj35Rfv45imzfbL9+NQmUYOdxEnHFjsg9Qil5yhghxNTPBvmupp/6D21K/swkj27e7zZvSb1xTZp7zQ+N68YnAgAAAAAAAP83xzDbnQ7NFT8LRSqUCuQsXb/rI8ceuDZzB8OJzdbVg7nImWu/cdmJM34xcE7Zc/vUuuRhJsryYa9utkcdSgLpi2X6NtS73SnPVFy2p+vfTPvrbOPdY7rZ7nbpVa8chh97WSSkSquk9tNAqvJB4P86EC+WSneWHVaWimS8+siK+NKN50KmJyIZXWRyzsYvXfuZ7Vhe0Tq+FEnIF1UxCiLh5ovVnKwg4jMxzJVI2XByPDzs18y23f3dHKsRTvtVaujV3iqWfLfYyDc/Eh0AAAAAAAAA8Pc7olutJy1KH5K5WCgvjqJAKeGzsziTPk9ynfh5cQbhP1BiqXqLkAdyp9z/3xIdAAAAAAAAAHDHbBqt7eKYYHX//5noAAAAAAAAAIB/331q7HfPg6XKEpFJ74LLmfBX9/9fiA4AAAAAAAAAuEt2jP3tbwcBXwEgLBMvAFAAAA=="
+      },
+      "agent_metadata.db-journal": {
+        "sha256": "96a3aeb15bba6119049f117a1da3430f4ce64b477768679fafd60bc5b558da3c",
+        "gzip_base64": "H4sIAAAAAAAC/+3az27TMBgAcLtLyy5rK8TUU1VzQOqkbKGgCnpbU0WoorARcuhOkdt8K6H5t8SpGiEOcN8DcOQNeAnOnADtyFvAYRJJ20QgBHfU76dEtj/Hke344shXn8s/2PvpV0JIqX49fpWm5TSbJnWCtgJ9/mxkC2Dnfuhywe6nX55ScszYei2s7ly2MKRf225i/1ImR+8+7NW+E6l6SWo3ax+rl9VvOO0IIYQQQgghtOX0nUqj2aSJ4BMHIhDC9mZRnkoDXesbGjP66khjebQ9h4QZ2thgp/rwSV8/Y4+1M3nBnRhW4QNFqjQGTUpsz4JldOGku12Tx8Jflc38NWYnz5Xf3KU3Gq0WfausumH509gFT0RFpvRbR4pw27b+7MjU90RauaqQ4wjC4foh2eVLw5+DF51COHgRe3M2fGpojzRdnmalkwWEDg+KoGu7YCTBekyy7fIZqImAiKmjE/WgU6o0tNbfxlj00OwU2Z10tnezKa9fjz9l+/i9bENf+0LSCyGEEEIIIYQQQv+VNt3dv7NP6W0yh0AEob3gAtjEt5LsX4R1S8BSKIHDbW9z/gNtE4lQRbiB4p8fWpPDJIB7TvAgUvgMPGG6ILjFBT9Kq9yX3d7Dbq/X66ppsw4h9ddXm8NDPwEciGFHRSQAAA=="
+      }
+    }
+  },
+  "seed_python_sqlite_version": "3.53.1"
+}

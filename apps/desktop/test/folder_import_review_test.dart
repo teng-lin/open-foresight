@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/application.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -5,8 +6,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/domain.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/domain.dart';
+import 'package:foresight_core/src/store.dart';
 import 'desktop_connection_fixture.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 import 'pump_until.dart';
@@ -30,7 +31,9 @@ void main() {
     try {
       await tester.pumpWidget(
         Foresight(
-          TestDesktopConnection(Domain(Store('${root.path}/app.db'), helper)),
+          TestDesktopConnection(
+            Application(Domain(Store('${root.path}/app.db'), helper)),
+          ),
           deviceLoader: () async => [],
         ),
       );
@@ -74,7 +77,7 @@ void main() {
       try {
         await tester.pumpWidget(
           Foresight(
-            TestDesktopConnection(Domain(store, helper)),
+            TestDesktopConnection(Application(Domain(store, helper))),
             deviceLoader: () async => [],
           ),
         );

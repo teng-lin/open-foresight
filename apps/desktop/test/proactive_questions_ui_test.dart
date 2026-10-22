@@ -4,9 +4,9 @@ import 'package:foresight_core/src/application.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/domain.dart';
+import 'package:foresight_core/src/domain.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/store.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 void main() {
@@ -26,6 +26,7 @@ void main() {
         store,
         OfflineHelper('${directory.path}/socket', '${directory.path}/helper'),
       );
+      final app = Application(domain);
       final id = store.meeting('Automatic fixture');
       final other = store.meeting('Other meeting');
       int seed(int meeting, String question, String state, {String? body}) {
@@ -80,10 +81,7 @@ void main() {
       );
       try {
         await tester.pumpWidget(
-          Foresight(
-            TestDesktopConnection(domain),
-            deviceLoader: () async => [],
-          ),
+          Foresight(TestDesktopConnection(app), deviceLoader: () async => []),
         );
         final dynamic workspace = tester.state(find.byType(Workspace));
         workspace.update(() {
@@ -139,7 +137,7 @@ void main() {
           expect(tester.takeException(), isNull);
         }
       } finally {
-        await domain.application.close();
+        await app.close();
         await tester.pumpWidget(const SizedBox.shrink());
         tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
           SystemChannels.platform,

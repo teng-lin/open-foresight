@@ -494,7 +494,9 @@ def test_source_graph_probe_checks_real_sqlite_rows_and_restart_content(
         db.execute(
             "CREATE TABLE graph_documents (model_identity TEXT, document_id TEXT, source_revision INTEGER, embedding BLOB, proj_x REAL, proj_y REAL, proj_z REAL)"
         )
-        db.execute("CREATE TABLE source_details (source_id TEXT, labels TEXT)")
+        db.execute(
+            "CREATE TABLE document_labels (document_id TEXT,label_name TEXT,position INTEGER)"
+        )
     sources = {}
 
     class Application:
@@ -521,9 +523,12 @@ def test_source_graph_probe_checks_real_sqlite_rows_and_restart_content(
                 return {"id": identifier}
             if method == "labels.set":
                 with sqlite3.connect(database) as db:
-                    db.execute(
-                        "INSERT INTO source_details VALUES (?,?)",
-                        [args["id"], json.dumps(args["labels"])],
+                    db.executemany(
+                        "INSERT INTO document_labels(document_id,label_name,position) VALUES (?,?,?)",
+                        [
+                            (args["id"], label, position)
+                            for position, label in enumerate(args["labels"])
+                        ],
                     )
                 return True
             if method == "graph.save":

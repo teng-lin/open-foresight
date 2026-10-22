@@ -22,7 +22,68 @@ class FailingImportDomain extends AdapterDomain {
   }
 }
 
+class RpcFailingExportAuth extends GoogleAuth {
+  RpcFailingExportAuth(super.directory, {required super.endpoints})
+    : super(secretStore: const UnavailableSecretStore());
+
+  @override
+  Future<Uint8ListResponse> api(
+    Uri uri, {
+    int maximumBytes = 32 * 1024 * 1024,
+  }) {
+    if (uri.path.endsWith('/export')) {
+      throw RpcError(RpcErrorCode.unavailable, 'fixture export unavailable');
+    }
+    return super.api(uri, maximumBytes: maximumBytes);
+  }
+}
+
 void main() {
+  test(
+    'Drive RPC export errors retain filename and internal wire code',
+    () async {
+      final directory = createTestTempDirectorySync('drive-rpc-error-');
+      final fixture = GoogleFixture();
+      await fixture.start();
+      final auth = RpcFailingExportAuth(
+        Directory('${directory.path}/google'),
+        endpoints: fixture.endpoints,
+      )..client = GoogleClient('fixture.apps.googleusercontent.com', '');
+      final store = Store('${directory.path}/app.db');
+      final helper = Helper(
+        '${directory.path}/socket',
+        '${directory.path}/helper',
+      );
+      final connection = GoogleConnections(
+        FailingImportDomain(store, helper),
+        auth,
+      );
+      try {
+        await auth.signIn(fixture.consent);
+        await expectLater(
+          connection.importDriveFile('doc'),
+          throwsA(
+            isA<StateError>().having(
+              (error) {
+                final wire = RpcError.from(error);
+                return (wire.code, wire.message);
+              },
+              'wire error',
+              (RpcErrorCode.internal, 'Apollo: fixture export unavailable'),
+            ),
+          ),
+        );
+        expect(store.sources, isEmpty);
+      } finally {
+        connection.close();
+        await auth.close();
+        await helper.close();
+        store.close();
+        await fixture.close();
+        directory.deleteSync(recursive: true);
+      }
+    },
+  );
   test(
     'Drive rejects restricted downloads and names each file once across batch imports',
     () async {
@@ -485,14 +546,11 @@ void main() {
           reason:
               'Refreshing only an original link must not reindex source content',
         );
-        // Repair previously imported profiles without modifying their content/revisions.
+        // Repair belongs to schema16; constructing the adapter does not write.
         store.db.execute('UPDATE source_details SET changed=123');
         connection.close();
         connection = GoogleConnections(AdapterDomain(store, helper), auth);
-        expect(
-          document()['changed'],
-          DateTime.parse(fixture.modified).millisecondsSinceEpoch,
-        );
+        expect(document()['changed'], 123);
         expect(document()['revision'], initial['revision']);
         expect(document()['imported'], initial['imported']);
         expect(store.sources, hasLength(1));

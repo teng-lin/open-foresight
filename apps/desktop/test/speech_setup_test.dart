@@ -1,11 +1,12 @@
+import 'store_reader_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'fixtures/verified_model_files.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/speech_models.dart';
+import 'package:foresight_core/src/speech_models.dart';
 import 'package:open_foresight/speech_setup_view.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/store.dart';
 
 void main() {
   testWidgets(
@@ -37,7 +38,9 @@ void main() {
                 context: context,
                 builder: (_) => SpeechSetupDialog(
                   findLocalModel: verifiedFixtureModelFile,
-                  store: store,
+                  store: fixtureReader(store),
+                  savePreference: (key, value) async =>
+                      store.setPreference(key, value),
                   directory: directory,
                   runner: runner.path,
                   installed: () => installed = true,

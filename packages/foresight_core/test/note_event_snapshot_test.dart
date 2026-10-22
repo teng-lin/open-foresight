@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/persistence_fixtures.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'package:foresight_core/src/store.dart';
@@ -69,6 +70,7 @@ void main() {
     store.saveMeetingNotes(id, 'Existing note');
     event(id, 'Only current title is known');
     store.db.execute('DROP TABLE meeting_note_events');
+    legacyLabelFixture(store.db);
     store.db.execute('PRAGMA user_version=1');
     store.close();
     store = Store('${directory.path}/notes.db');

@@ -166,7 +166,7 @@ class _MeetingsController extends _FeatureController {
           (value) => (value as Map)['active'] == true,
         );
     recording = state['active'] == true
-        ? RemoteRecording(Map<String, dynamic>.from(state))
+        ? RecordingSnapshot(Map<String, dynamic>.from(state))
         : null;
     recordingMeeting = state['meeting_id'] as int?;
     recordingState = state['state'] as String? ?? 'idle';
@@ -220,11 +220,22 @@ class _MeetingsController extends _FeatureController {
     await d.command(Operation.meetingsIndex, {'id': id});
   }
 
-  Future<void> generateMeeting(String kind, {int? id}) async {
-    await d.command(Operation.meetingsGenerate, {
+  Future<void> generateMeeting(
+    String kind, {
+    int? id,
+    String? workspaceEpoch,
+    bool Function()? current,
+  }) async {
+    final args = {
       'id': id ?? meetingId!,
       'kind': kind,
-    });
+      if (workspaceEpoch != null) 'workspace_epoch': workspaceEpoch,
+    };
+    if (current == null) {
+      await d.command(Operation.meetingsGenerate, args);
+    } else {
+      await d.commandCurrent(Operation.meetingsGenerate, args, current);
+    }
   }
 
   Future<void> editArtifact(Map<String, Object?> a) async {
@@ -392,8 +403,7 @@ class _MeetingsController extends _FeatureController {
   );
 
   Widget meetingList({bool showHeading = true}) {
-    final rows = d.store
-        .meetingCollection()
+    final rows = readRows(d.store.meetingCollection)
         .where(
           (m) => (m['title'] as String).toLowerCase().contains(
             meetingQuery.toLowerCase(),
@@ -1594,7 +1604,7 @@ class _MeetingsController extends _FeatureController {
 
   Widget meetingQuestionsPanel(int id) {
     final automatic = d.store.preference('proactiveAnswers', 'true') == 'true';
-    final detected = d.store.meetingQuestions(id);
+    final detected = readRows(d.store.meetingQuestions(id));
     final manual = d.store
         .finalTranscript(id)
         .where(
@@ -1766,7 +1776,7 @@ class _MeetingsController extends _FeatureController {
   }
 
   Widget meetingTranscriptPanel(int id, {bool questions = false}) {
-    final rows = d.store.meetingTranscript(id);
+    final rows = readRows(d.store.meetingTranscript(id));
     final displayed = questions
         ? rows.where((t) => (t['text'] as String).contains('?')).toList()
         : rows;
@@ -1917,9 +1927,10 @@ class _MeetingsController extends _FeatureController {
 
   Widget meetingSummaryPanel(int id, {bool actions = false}) {
     if (actions) return meetingActionsPanel(id);
+    final identity = FeatureRequestIdentity.capture(d);
     final kind = actions ? 'actions' : 'summary';
     final title = actions ? 'Action items' : 'Summary';
-    final versions = d.store.meetingArtifacts(id, kind);
+    final versions = readRows(d.store.meetingArtifacts(id, kind));
     final artifact = versions.firstOrNull;
     final summary = actions
         ? null
@@ -1950,7 +1961,16 @@ class _MeetingsController extends _FeatureController {
                         chatFeature.asking ||
                         meetingEnhancing
                     ? null
-                    : () => shell.run(() => generateMeeting(kind, id: id)),
+                    : () => _runMeetingAction(
+                        id,
+                        identity,
+                        (current) => generateMeeting(
+                          kind,
+                          id: id,
+                          workspaceEpoch: identity.workspaceEpoch,
+                          current: current,
+                        ),
+                      ),
                 icon: const Icon(Icons.auto_awesome),
               ),
               if (active)
@@ -2039,11 +2059,7 @@ class _MeetingsController extends _FeatureController {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       if ((artifact['input_revision'] as int? ?? 0) <
-                          (d.store.rows(
-                                'SELECT revision FROM meetings WHERE id=?',
-                                [id],
-                              ).first['revision']
-                              as int))
+                          (d.store.meetingRevision(id) ?? 0))
                         const Text('Out of date — regenerate'),
                       if (clipped)
                         const Text(

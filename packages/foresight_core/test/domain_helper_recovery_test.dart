@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
@@ -93,6 +94,7 @@ class RecoveryControl extends control.HelperControlServiceBase {
 }
 
 void main() {
+  late Application app;
   final native = Platform.environment['FORESIGHT_NATIVE_LIBRARY'];
   late Directory root;
   late Store store;
@@ -114,6 +116,7 @@ void main() {
     );
     helper = Helper(path, '${root.path}/helper', manageProcess: false);
     domain = Domain(store, helper);
+    app = Application(domain);
   });
   setUp(() {
     addTearDown(() async {
@@ -147,7 +150,13 @@ void main() {
       rag.duringEmbedding = domain.close;
       await expectLater(
         domain.graphEmbeddings(store.sources),
-        throwsStateError,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.cancelled,
+          ),
+        ),
       );
     },
   );
@@ -432,14 +441,23 @@ void main() {
       await failure;
       expect(domain.restoring, isFalse);
       final result =
-          await domain.command(Operation.meetingsCreate, {'title': 'Recovered'})
+          await app.call(Operation.meetingsCreate.wire, {'title': 'Recovered'})
               as Map;
       expect(result['id'], isA<int>());
       await expectLater(
-        domain.commandCurrent(Operation.notesSave, {}, () => false),
-        throwsStateError,
+        app.call(Operation.notesSave.wire, {
+          'title': 'Cancelled',
+          'body': '',
+        }, current: () => false),
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.cancelled,
+          ),
+        ),
       );
-      await domain.application.close();
+      await app.close();
     },
   );
 }

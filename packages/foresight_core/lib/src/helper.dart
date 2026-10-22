@@ -1,3 +1,4 @@
+import 'helper_protocol_version.dart';
 import 'platform_services.dart';
 import 'version.dart';
 import 'helper_channel.dart';
@@ -20,8 +21,8 @@ void validateHelperCompatibility(
 }) {
   final config = configuration ?? runtimeConfiguration;
   if (!ping.success ||
-      ping.version != '1.0.3' ||
-      value.referenceVersion != '1.0.3') {
+      ping.version != helperProtocolVersion ||
+      value.referenceVersion != helperProtocolVersion) {
     throw StateError(
       'Incompatible helper protocol; stop the previous service before restarting',
     );

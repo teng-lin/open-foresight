@@ -3,9 +3,9 @@ import 'package:foresight_core/src/application.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/domain.dart';
-import 'package:open_foresight/helper.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/domain.dart';
+import 'package:foresight_core/src/helper.dart';
+import 'package:foresight_core/src/store.dart';
 
 void main() {
   test(
@@ -23,6 +23,7 @@ void main() {
         '${temporary.path}/helper',
       );
       final domain = Domain(store, helper);
+      final app = Application(domain);
       try {
         await store.register('embedding', env['FORESIGHT_EMBEDDING']!, '');
         await store.register(
@@ -42,7 +43,7 @@ void main() {
           'real speech evaluation fixture',
         );
         await domain.index(id);
-        await domain
+        await app
             .ask('What does the speaker ask Americans to do? Cite [S1].')
             .drain<void>();
         final answer = store.rows('SELECT * FROM answers').single;

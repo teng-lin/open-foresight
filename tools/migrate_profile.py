@@ -8,12 +8,20 @@ data and belong outside the source tree.
 
 import argparse
 import fcntl
+import importlib
 import os
 from pathlib import Path
 import shutil
 import sqlite3
 import subprocess
 import sys
+
+try:
+    preflight = importlib.import_module("tools.sqlite_preflight")
+except ModuleNotFoundError as error:
+    if error.name != "tools":
+        raise
+    preflight = importlib.import_module("sqlite_preflight")
 
 
 def check_open_profile(source):
@@ -84,6 +92,7 @@ def migrate(source, destination, backup, old_bundle, new_bundle, copy_external=F
         raise ValueError("Atomic profile migration requires the same filesystem")
     # Cooperate with the helper's own single-owner lock as well as checking app
     # and worker descriptors. Do not move SQLite WALs from a running process.
+    originals = preflight.qualify_profile(source)
     lock_path = source / "helper/.helper.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with (
@@ -94,6 +103,7 @@ def migrate(source, destination, backup, old_bundle, new_bundle, copy_external=F
         fcntl.lockf(application_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         check_open_profile(source)
+        preflight.verify_profile_unchanged(source, originals)
         with sqlite3.connect(source / "application.db") as db:
             active = db.execute(
                 "SELECT count(*) FROM meetings WHERE state IN ('recording','transcribing')"

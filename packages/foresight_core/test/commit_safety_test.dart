@@ -11,7 +11,7 @@ import 'package:foresight_core/src/application.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/remote_domain.dart';
 import 'package:foresight_core/src/service.dart';
-import 'package:sqlite3/sqlite3.dart';
+import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
 import 'package:test/test.dart';
 
 const clearedMessage = 'This item was removed when the workspace was cleared.';
@@ -739,7 +739,7 @@ void main() {
                     'body': 'old',
                   })
                   as Map)['id'];
-          final owner = service.domain.application;
+          final owner = service.application;
           await owner.call(Operation.workspaceClear.wire, {});
           final fresh =
               (await owner.call(Operation.notesSave.wire, {
@@ -761,9 +761,7 @@ void main() {
           });
         } finally {
           desktop?.close();
-          await desktop?.client.close();
-          await desktop?.helper.close();
-          desktop?.store.close();
+          await desktop?.closed;
           await service.close();
         }
       },

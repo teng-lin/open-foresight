@@ -274,6 +274,7 @@ void main() {
       File('${resources.path}/runtime.json').writeAsStringSync(
         jsonEncode({
           'FORESIGHT_NATIVE': 'lib/trusted.dylib',
+          'FORESIGHT_SQLITE_LIBRARY': 'lib/trusted-sqlite.dylib',
           'FORESIGHT_HELPER': 'bin/trusted-helper',
           'FORESIGHT_RUNTIME_REVISION': 'trusted-revision',
         }),
@@ -285,6 +286,7 @@ void main() {
       final injected = {
         'FORESIGHT_RESOURCES': untrusted.path,
         'FORESIGHT_NATIVE': '/attacker.dylib',
+        'FORESIGHT_SQLITE_LIBRARY': '/attacker-sqlite.dylib',
         'FORESIGHT_HELPER': '/attacker-helper',
         'FORESIGHT_QUERY_WORKER': '/attacker-query',
         'FORESIGHT_RUNTIME_REVISION': 'attacker-revision',
@@ -309,6 +311,10 @@ void main() {
         expect(
           settings['FORESIGHT_HELPER'],
           '${resources.path}/bin/trusted-helper',
+        );
+        expect(
+          settings['FORESIGHT_SQLITE_LIBRARY'],
+          '${resources.path}/lib/trusted-sqlite.dylib',
         );
         expect(settings['FORESIGHT_RESOURCES'], resources.path);
         expect(settings['FORESIGHT_QUERY_WORKER'], isNull);

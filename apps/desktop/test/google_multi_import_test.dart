@@ -1,10 +1,11 @@
+import 'package:foresight_core/src/application.dart';
 import 'dart:io';
 import 'package:foresight_core/remote.dart' show ConnectedSources;
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/store.dart';
 import 'desktop_connection_fixture.dart';
 import 'google_picker_workflow_test.dart' show PendingDrive, file;
 import 'google_setup_ui_test.dart' show BundledGoogleDomain;
@@ -71,7 +72,7 @@ class BatchDrive extends PendingDrive {
 
 class BatchConnection extends TestDesktopConnection {
   final BatchDrive drive;
-  BatchConnection(super.domain, this.drive);
+  BatchConnection(super.application, this.drive);
   @override
   ConnectedSources get google => drive;
 }
@@ -106,7 +107,7 @@ void main() {
         try {
           await tester.pumpWidget(
             Foresight(
-              BatchConnection(domain, drive),
+              BatchConnection(Application(domain, auth: auth), drive),
               deviceLoader: () async => [],
             ),
           );

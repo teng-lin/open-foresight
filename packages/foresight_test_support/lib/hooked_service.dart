@@ -260,7 +260,8 @@ class HookedServiceProcess {
   String get output => _output.toString();
 
   /// Start the service for [profile]. Only non-`FORESIGHT_` variables are
-  /// inherited; [environment] adds or overrides service configuration. The
+  /// inherited, together with the qualified application SQLite library;
+  /// [environment] adds or overrides service configuration. The
   /// helper is disabled unless [environment] sets `FORESIGHT_HELPER`. The
   /// current test's teardown calls [stop].
   static Future<HookedServiceProcess> start(
@@ -280,7 +281,9 @@ class HookedServiceProcess {
       [build.kernel],
       environment: {
         for (final entry in Platform.environment.entries)
-          if (!entry.key.startsWith('FORESIGHT_')) entry.key: entry.value,
+          if (!entry.key.startsWith('FORESIGHT_') ||
+              entry.key == 'FORESIGHT_SQLITE_LIBRARY')
+            entry.key: entry.value,
         'FORESIGHT_DATA': profile.data,
         'FORESIGHT_RUNTIME': profile.runtime,
         'FORESIGHT_HELPER': '',

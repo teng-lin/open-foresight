@@ -39,6 +39,7 @@ class FailedRecording extends Recording {
 }
 
 void main() {
+  late Application app;
   late Directory temp;
   late Store store;
   late RecoveryHelper helper;
@@ -48,10 +49,11 @@ void main() {
     store = Store('${temp.path}/application.db');
     helper = RecoveryHelper('${temp.path}/helper.sock', '${temp.path}/helper');
     domain = IndexingDomain(store, helper);
+    app = Application(domain);
   });
   setUp(() {
     addTearDown(() async {
-      await domain.application.close();
+      await app.close();
       domain.close();
       await helper.close();
       store.close();
@@ -70,9 +72,9 @@ void main() {
         1000,
         'microphone',
       );
-      domain.application.recording = FailedRecording();
-      domain.application.recordingMeeting = id;
-      await domain.application.stopRecording();
+      app.recording = FailedRecording();
+      app.recordingMeeting = id;
+      await app.stopRecording();
       expect(domain.indexed, ['meeting-$id']);
       expect(
         store.rows('SELECT state FROM meetings WHERE id=?', [
@@ -84,11 +86,8 @@ void main() {
         store.sources.single['content'],
         contains('Already committed useful speech'),
       );
-      expect(domain.application.recording, isNull);
-      expect(
-        domain.application.recordingState,
-        contains('Transcript retained'),
-      );
+      expect(app.recording, isNull);
+      expect(app.recordingState, contains('Transcript retained'));
     },
   );
   test(
@@ -97,8 +96,8 @@ void main() {
       helper.restarts = 5;
       helper.state = 'unavailable';
       await Future.wait([
-        domain.command(Operation.applicationResume),
-        domain.command(Operation.applicationResume),
+        app.call(Operation.applicationResume.wire, const {}),
+        app.call(Operation.applicationResume.wire, const {}),
       ]);
       expect(helper.launches, 1);
       expect(helper.restarts, 0);
@@ -110,7 +109,7 @@ void main() {
       helper.incompatible = true;
       helper.restarts = 5;
       await expectLater(
-        domain.command(Operation.applicationResume),
+        app.call(Operation.applicationResume.wire, const {}),
         throwsStateError,
       );
       expect(helper.launches, 0);

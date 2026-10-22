@@ -55,12 +55,19 @@ def gate(tmp_path):
     (root / "tools").mkdir(parents=True)
     (root / "packages/foresight_core").mkdir(parents=True)
     (root / "apps/desktop").mkdir(parents=True)
+    sqlite = root / "build/macos/libforesight_sqlite3.dylib"
+    sqlite.parent.mkdir(parents=True)
+    # The fake Dart/Flutter executable records selection without loading FFI.
+    sqlite.write_bytes(b"application SQLite fixture")
     for name in (
         "build_dart_gates.sh",
         "ci_timing.sh",
         "coverage_core.sh",
+        "run_core_tests.sh",
         "check_coverage.py",
         "compare_test_runs.py",
+        "verify_toolchain_pins.py",
+        "pins.json",
     ):
         shutil.copy2(ROOT / "tools" / name, root / "tools" / name)
     binary = tmp_path / "bin"
@@ -72,10 +79,30 @@ def gate(tmp_path):
 args = sys.argv[1:]
 with open(os.environ['COMMANDS'], 'a') as stream:
     stream.write(json.dumps({'args': args, 'tool': sys.argv[0], 'native': os.getenv('FORESIGHT_NATIVE_LIBRARY'),
-                             'helper': os.getenv('FORESIGHT_HELPER')}) + '\\n')
+                             'helper': os.getenv('FORESIGHT_HELPER'),
+                             'sqlite': os.getenv('FORESIGHT_SQLITE_LIBRARY'),
+                             'cache': os.getenv('FORESIGHT_BOUNDARY_ANALYSIS_CACHE'),
+                             'cache_mode': (oct(pathlib.Path(os.environ['FORESIGHT_BOUNDARY_ANALYSIS_CACHE']).stat().st_mode & 0o777)
+                                            if os.getenv('FORESIGHT_BOUNDARY_ANALYSIS_CACHE') else None),
+                             'warmed': (pathlib.Path(os.environ['FORESIGHT_BOUNDARY_ANALYSIS_CACHE'], 'warmed').exists()
+                                        if os.getenv('FORESIGHT_BOUNDARY_ANALYSIS_CACHE') else False)}) + '\\n')
 if args[0] == 'analyze':
     sys.exit(int(os.getenv('ANALYSIS_EXIT', '0')))
-if args[0] == 'test':
+if args == ['--version']:
+    print('Dart SDK version: 3.9.2 (stable)')
+    sys.exit(0)
+if args == ['--version', '--machine']:
+    print(json.dumps({'frameworkVersion': '3.35.7',
+                      'frameworkRevision': 'adc901062556672b4138e18a4dc62a4be8f4b3c2',
+                      'dartSdkVersion': '3.9.2'}))
+    sys.exit(0)
+if args == ['run', 'tool/warm_boundary_analysis.dart']:
+    print('boundary warmer diagnostic', flush=True)
+    code = int(os.getenv('WARM_EXIT', '0'))
+    if code:
+        sys.exit(code)
+    pathlib.Path(os.environ['FORESIGHT_BOUNDARY_ANALYSIS_CACHE'], 'warmed').write_text('compiler bundles')
+elif args[0] == 'test':
     coverage = any(arg.startswith('--coverage=') for arg in args)
     code = int(os.getenv('COVERED_EXIT' if coverage else 'PLAIN_EXIT', '0'))
     if code:
@@ -131,10 +158,13 @@ def run(gate, platform="linux", stage="core", **settings):
         text=True,
         timeout=30,
     )
-    commands = [
-        json.loads(line)
-        for line in Path(environment["COMMANDS"]).read_text().splitlines()
-    ]
+    commands_path = Path(environment["COMMANDS"])
+    assert commands_path.is_file(), (
+        f"Gate invoked no Dart/Flutter command (exit {result.returncode}):\n"
+        + result.stdout
+        + result.stderr
+    )
+    commands = [json.loads(line) for line in commands_path.read_text().splitlines()]
     return result, commands
 
 
@@ -204,6 +234,36 @@ def test_benchmark_runs_both_full_suites_and_preserves_coverage_threshold(
     assert f"Core benchmark order: {' then '.join(modes)}" in result.stdout
     assert "minimum 90%" in result.stdout
     assert "Core benchmark matched: 1 passed, 0 skipped" in result.stdout
+    sqlite = (
+        str(gate[0] / "build/macos/libforesight_sqlite3.dylib")
+        if platform == "macos"
+        else None
+    )
+    assert all(command["sqlite"] == sqlite for command in commands)
+
+
+@pytest.mark.parametrize("stage", ["core", "desktop"])
+def test_macos_missing_sqlite_fails_before_any_dart_or_flutter_command(gate, stage):
+    root, environment = gate
+    sqlite = root / "build/macos/libforesight_sqlite3.dylib"
+    sqlite.unlink()
+    result = subprocess.run(
+        [
+            "bash",
+            str(root / "tools/build_dart_gates.sh"),
+            stage,
+            "macos",
+            str(root / "build"),
+            sys.executable,
+        ],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert f"Missing application SQLite runtime: {sqlite}" in result.stderr
+    assert not Path(environment["COMMANDS"]).exists()
 
 
 def test_local_benchmark_without_github_counters_defaults_to_plain_first(gate):
@@ -234,6 +294,13 @@ def test_benchmark_uses_the_same_overridden_dart_and_supplied_python(gate, run_n
     tests = [command for command in commands if command["args"][0] == "test"]
     assert len(tests) == 2
     assert all(command["tool"] == str(override) for command in tests)
+    warmers = [
+        command
+        for command in commands
+        if command["args"] == ["run", "tool/warm_boundary_analysis.dart"]
+    ]
+    assert len(warmers) == 2
+    assert all(command["tool"] == str(override) for command in warmers)
     formatter = next(
         command
         for command in commands
@@ -330,3 +397,92 @@ def test_benchmark_rejects_zero_attempts_before_running_tests(gate, attempt):
     assert result.returncode == 2
     assert "GITHUB_RUN_ATTEMPT must be positive" in result.stderr
     assert all(command["args"][0] not in {"test", "compile"} for command in commands)
+
+
+def test_overridden_dart_must_match_pins_before_any_stage_work(gate):
+    root, _ = gate
+    override = root / "wrong dart"
+    override.write_text("#!/bin/sh\necho 'Dart SDK version: 0.0.1'\n")
+    override.chmod(0o700)
+    result, commands = run(gate, FORESIGHT_DART=str(override))
+    assert result.returncode != 0
+    assert "tools/pins.json requires" in result.stderr
+    assert all(command["args"] == ["--version"] for command in commands)
+
+
+@pytest.mark.parametrize("coverage", ["0", "1"])
+def test_warm_failure_preserves_diagnostic_and_stops_tests_and_compilation(
+    gate, coverage
+):
+    result, commands = run(gate, FORESIGHT_COVERAGE=coverage, WARM_EXIT="23")
+    assert result.returncode == 23
+    assert "boundary warmer diagnostic" in result.stdout
+    assert all(command["args"][0] not in {"test", "compile"} for command in commands)
+    warmer = next(
+        command
+        for command in commands
+        if command["args"] == ["run", "tool/warm_boundary_analysis.dart"]
+    )
+    assert not Path(warmer["cache"]).exists()
+
+
+def test_each_benchmark_suite_warms_a_fresh_private_cache_before_fanout(gate, tmp_path):
+    inherited = tmp_path / "inherited cache"
+    inherited.mkdir()
+    (inherited / "keep").write_text("unrelated cache")
+    result, commands = run(
+        gate,
+        FORESIGHT_CORE_COVERAGE_BENCHMARK="1",
+        FORESIGHT_BOUNDARY_ANALYSIS_CACHE=str(inherited),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    warmers = [
+        c for c in commands if c["args"] == ["run", "tool/warm_boundary_analysis.dart"]
+    ]
+    tests = [c for c in commands if c["args"][0] == "test"]
+    assert len(warmers) == len(tests) == 2
+    assert len({c["cache"] for c in warmers}) == 2
+    for warmer, test in zip(warmers, tests, strict=True):
+        assert warmer["cache"] == test["cache"] != str(inherited)
+        assert warmer["cache_mode"] == test["cache_mode"] == "0o700"
+        assert not warmer["warmed"] and test["warmed"]
+        assert not Path(test["cache"]).exists()
+    assert (inherited / "keep").read_text() == "unrelated cache"
+
+
+def test_core_wrapper_preserves_arguments_override_environment_and_test_failure(gate):
+    root, environment = gate
+    binary = Path(environment["PATH"].split(":")[0])
+    override = binary / "alternate dart"
+    shutil.copy2(binary / "dart", override)
+    arguments = ["test/desktop_boundary_test.dart", "--name", "a name with spaces"]
+    result = subprocess.run(
+        [str(root / "tools/run_core_tests.sh"), *arguments],
+        env={
+            **environment,
+            "FORESIGHT_DART": str(override),
+            "PLAIN_EXIT": "19",
+            "FORESIGHT_NATIVE_LIBRARY": "/current native",
+            "FORESIGHT_HELPER": "/current helper",
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 19, result.stdout + result.stderr
+    commands = [
+        json.loads(line)
+        for line in Path(environment["COMMANDS"]).read_text().splitlines()
+    ]
+    assert [c["args"] for c in commands] == [
+        ["run", "tool/warm_boundary_analysis.dart"],
+        ["test", *arguments],
+    ]
+    assert all(c["tool"] == str(override) for c in commands)
+    assert all(
+        c["native"] == "/current native" and c["helper"] == "/current helper"
+        for c in commands
+    )
+    assert commands[0]["cache"] == commands[1]["cache"]
+    assert commands[1]["warmed"]
+    assert not Path(commands[1]["cache"]).exists()

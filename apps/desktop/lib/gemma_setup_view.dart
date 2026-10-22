@@ -1,19 +1,15 @@
 import 'model_setup_surface.dart';
-import 'package:foresight_core/remote.dart' show GenerationStatus;
 import 'dart:io';
 import 'dart:async';
 import 'model_terms_dialog.dart';
 import 'package:flutter/material.dart';
-import 'gemma_download.dart';
-import 'model_setup.dart';
-import 'native.dart';
-import 'store.dart';
+import 'package:foresight_core/desktop.dart';
 
 class GemmaSetupDialog extends StatefulWidget {
   final VoidCallback? onDone;
   bool get embedded => onDone != null;
-  final Store store;
-  final ModelPreferenceWriter? savePreference;
+  final StoreReader store;
+  final ModelPreferenceWriter savePreference;
   final GemmaDownload Function()? createDownload;
   final LocalModelFinder findLocalModel;
   final bool firstRun, needsEmbedding, needsGeneration;
@@ -29,7 +25,7 @@ class GemmaSetupDialog extends StatefulWidget {
     super.key,
     this.onDone,
     required this.store,
-    this.savePreference,
+    required this.savePreference,
     this.createDownload,
     this.findLocalModel = localModelFile,
     this.installGeneration,
@@ -91,7 +87,7 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
         model,
         model == embeddingGemmaModel ? embeddingDirectory : widget.directory,
         registration: model == embeddingGemmaModel
-            ? widget.store.model('embedding')
+            ? widget.store.model('embedding')?.toRow()
             : registeredGeneration,
       );
       if (!mounted) return;
@@ -116,7 +112,7 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
   }
 
   GemmaDownload? download;
-  NativeRuntime? candidate;
+
   Process? preflight;
   bool working = false, cancelled = false;
   String status = '', error = '';
@@ -127,7 +123,7 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
   void initState() {
     super.initState();
     embeddingReady = !widget.needsEmbedding;
-    registeredGeneration = widget.store.model('generation');
+    registeredGeneration = widget.store.model('generation')?.toRow();
     final digest = registeredGeneration?['digest'];
     for (final model in gemmaModels) {
       downloaded[model] = false;
@@ -159,7 +155,6 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
   void cancel() {
     cancelled = true;
     download?.cancel();
-    candidate?.close();
     preflight?.kill();
   }
 
@@ -267,28 +262,14 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
         verifiedFiles[model] = asset;
         status = 'Loading ${model.name} and preparing GPU cache...';
       });
-      final ready = widget.installGeneration != null
-          ? await widget.installGeneration!(
-              asset.path,
-              widget.runner,
-              () => mounted && !cancelled,
-            )
-          : await configureGeneration(
-              widget.store,
-              widget.library,
-              asset.path,
-              widget.runner,
-              backend: 'litert_lm',
-              current: () => mounted && !cancelled,
-              onCandidate: (value) => candidate = value,
-              onRegister: () {
-                if (mounted && !cancelled)
-                  setState(
-                    () => status = 'Saving ${model.name} registration...',
-                  );
-              },
-            );
-      candidate = null; // ownership is transferred only after a complete load.
+      final install = widget.installGeneration;
+      if (install == null)
+        throw StateError('Model installation service is unavailable');
+      final ready = await install(
+        asset.path,
+        widget.runner,
+        () => mounted && !cancelled,
+      );
       if (!mounted || cancelled) {
         ready.close();
         return;

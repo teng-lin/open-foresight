@@ -1,3 +1,7 @@
+import 'package:foresight_core/src/service.dart';
+import 'package:foresight_core/src/platform_services.dart';
+import 'package:foresight_core/src/profile_paths.dart';
+import 'package:foresight_core/src/operation_descriptor.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:convert';
 import 'dart:io';
@@ -76,7 +80,21 @@ void main() {
     () {
       for (final name in [
         'remote_domain.dart',
-        'service.dart',
+        ...Directory('lib/src')
+            .listSync()
+            .whereType<File>()
+            .where(
+              (file) =>
+                  file.path.split('/').last.startsWith('service') &&
+                  file.path.endsWith('.dart'),
+            )
+            .map((file) => file.path.split('/').last),
+        'application_service.dart',
+        ...Directory('lib/src/application_services')
+            .listSync(recursive: true)
+            .whereType<File>()
+            .where((file) => file.path.endsWith('.dart'))
+            .map((file) => file.path.substring('lib/src/'.length)),
         'application.dart',
       ]) {
         final source = File('lib/src/$name').readAsStringSync();
@@ -116,6 +134,12 @@ void main() {
           reason: '${file.path} contains a raw desktop RPC name',
         );
       }
+    }
+  });
+
+  test('CLI and MCP use the registered application wire identities', () {
+    for (final path in ['bin/service.dart', 'bin/mcp.dart']) {
+      expect(rawRpcCalls(File(path).readAsStringSync()), isEmpty, reason: path);
     }
   });
 
@@ -184,20 +208,46 @@ void invalidCommands(DesktopConnection desktop) {
     timeout: const Timeout(Duration(seconds: 60)),
   );
 
-  test('application dispatch is exhaustive over registered operations', () {
-    final source = File('lib/src/application.dart').readAsStringSync();
-    final dispatch = source.substring(
-      source.indexOf('switch (Operation.parse(method))'),
-    );
-    final cases = RegExp(
-      r'case Operation\.(\w+):',
-    ).allMatches(dispatch).map((match) => match[1]).toSet();
-    expect(cases, Operation.values.map((operation) => operation.name).toSet());
-    expect(
-      dispatch.substring(0, dispatch.indexOf('} finally {')),
-      isNot(contains('default:')),
-    );
-  });
+  test(
+    'actual service and application registries partition every operation',
+    () async {
+      final root = createTestTempDirectorySync('dispatch-owners-');
+      final original = runtimeConfiguration.environment['FORESIGHT_HELPER'];
+      runtimeConfiguration.environment['FORESIGHT_HELPER'] = '';
+      ApplicationService? service;
+      try {
+        service = await ApplicationService.start(
+          ProfilePaths('${root.path}/d', '${root.path}/r'),
+        );
+        final application = service.application.registeredOperations;
+        final transport = service.registeredOperations;
+        expect(application.intersection(transport), isEmpty);
+        expect({...application, ...transport}, Operation.values.toSet());
+        expect(
+          application.every(
+            (operation) =>
+                operation.descriptor.scope == OperationScope.application,
+          ),
+          isTrue,
+        );
+        expect(
+          transport.every(
+            (operation) => operation.descriptor.scope == OperationScope.service,
+          ),
+          isTrue,
+        );
+        expect(() => application.clear(), throwsUnsupportedError);
+        expect(() => transport.clear(), throwsUnsupportedError);
+      } finally {
+        await service?.close();
+        if (original == null) {
+          runtimeConfiguration.environment.remove('FORESIGHT_HELPER');
+        } else {
+          runtimeConfiguration.environment['FORESIGHT_HELPER'] = original;
+        }
+      }
+    },
+  );
   test('helper account wire identity has one definition', () {
     final literals = <String>[];
     for (final file in Directory(

@@ -1,13 +1,14 @@
+import 'package:foresight_core/src/application.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/graph_layout.dart';
+import 'package:foresight_core/src/graph_layout.dart';
 import 'package:open_foresight/graph_rendering.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/store.dart';
-import 'package:open_foresight/generated/helper_control.pb.dart' as control;
+import 'package:foresight_core/src/store.dart';
+import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
 import 'graph_workflow_test.dart' show GraphDomain;
 import 'meeting_setup_test.dart' show OfflineHelper;
 
@@ -56,7 +57,7 @@ void main() {
       final opened = <Uri>[];
       await tester.pumpWidget(
         Foresight(
-          TestDesktopConnection(domain),
+          TestDesktopConnection(Application(domain)),
           deviceLoader: () async => [],
           sourceLinkOpener: (uri) async {
             opened.add(uri);

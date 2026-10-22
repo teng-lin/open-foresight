@@ -1,10 +1,11 @@
+import 'store_reader_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/gemma_download.dart';
+import 'package:foresight_core/src/gemma_download.dart';
 import 'package:open_foresight/gemma_setup_view.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/store.dart';
 
 void main() {
   for (final generation in [false, true]) {
@@ -26,7 +27,9 @@ void main() {
                   onPressed: () => showDialog<void>(
                     context: context,
                     builder: (_) => GemmaSetupDialog(
-                      store: store,
+                      store: fixtureReader(store),
+                      savePreference: (key, value) async =>
+                          store.setPreference(key, value),
                       firstRun: true,
                       needsEmbedding: true,
                       needsGeneration: generation,

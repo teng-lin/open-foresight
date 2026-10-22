@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+from helper_protocol import HELPER_PROTOCOL_VERSION
 import shutil
 import signal
 import select
@@ -166,7 +167,7 @@ def main():
                     response_deserializer=classes["PingResponse"].FromString,
                 )
                 ping = rpc(classes["PingRequest"](), timeout=5)
-                if not (ping.success and ping.version == "1.0.3"):
+                if not (ping.success and ping.version == HELPER_PROTOCOL_VERSION):
                     raise RuntimeError("Verification failed")
                 state = control_snapshot(channel)
                 if not (state["pipeline"] == "unconfigured"):

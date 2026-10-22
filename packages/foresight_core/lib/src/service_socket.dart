@@ -106,16 +106,42 @@ final int Function(Pointer<Utf8>, Pointer<Uint8>)? _lstat = Platform.isMacOS
 /// dead one can carry its old inode. A socket's modification time is set when
 /// it is bound; linking, renaming and chmod leave it alone. APFS never reuses
 /// inode numbers.
-Future<String?> fileIdentity(String path) async {
+Future<String?> fileIdentity(String path) async => fileIdentitySync(path);
+
+/// The same filesystem identity for synchronous database qualification.
+String? fileIdentitySync(String path) =>
+    _fileStat(path, _linuxIdentity, _darwinIdentity);
+
+/// One native metadata snapshot, retaining precision lost by Dart FileStat.
+/// Socket ownership keeps its separate identity: rename/link/chmod must not
+/// change which entry an owner is allowed to remove.
+typedef FileMetadata = ({
+  String identity,
+  int size,
+  int mode,
+  int modifiedSeconds,
+  int modifiedNanos,
+  int changedSeconds,
+  int changedNanos,
+});
+
+FileMetadata? fileMetadataSync(String path) =>
+    _fileStat(path, _linuxMetadata, _darwinMetadata);
+
+T? _fileStat<T>(
+  String path,
+  T Function(Pointer<Uint8>) linux,
+  T Function(Pointer<Uint8>) darwin,
+) {
   if (path.contains('\u0000')) {
     throw ArgumentError.value(path, 'path', 'Path contains a NUL character');
   }
   final nativePath = path.toNativeUtf8(allocator: calloc);
   final buffer = calloc<Uint8>(_statxSize);
   try {
-    final String? identity;
+    final T? metadata;
     if (_statx case final statx?) {
-      identity =
+      metadata =
           statx(
                 _atFdCwd,
                 nativePath,
@@ -124,16 +150,14 @@ Future<String?> fileIdentity(String path) async {
                 buffer,
               ) ==
               0
-          ? _linuxIdentity(buffer)
+          ? linux(buffer)
           : null;
     } else if (_lstat case final lstat?) {
-      identity = lstat(nativePath, buffer) == 0
-          ? _darwinIdentity(buffer)
-          : null;
+      metadata = lstat(nativePath, buffer) == 0 ? darwin(buffer) : null;
     } else {
       throw UnsupportedError('No file identity on ${Platform.operatingSystem}');
     }
-    if (identity != null) return identity;
+    if (metadata != null) return metadata;
   } finally {
     calloc.free(buffer);
     calloc.free(nativePath);
@@ -143,6 +167,41 @@ Future<String?> fileIdentity(String path) async {
     return null;
   }
   throw FileSystemException('Cannot inspect', path);
+}
+
+FileMetadata _linuxMetadata(Pointer<Uint8> statx) {
+  final view = ByteData.sublistView(statx.asTypedList(_statxSize));
+  // statx: type, mode, mtime, ctime, inode and size must all be available.
+  const required = 0x001 | 0x002 | 0x040 | 0x080 | 0x100 | 0x200;
+  if (view.getUint32(0, Endian.host) & required != required) {
+    throw FileSystemException('Incomplete native file metadata');
+  }
+  return (
+    identity:
+        '${view.getUint32(136, Endian.host)}:'
+        '${view.getUint32(140, Endian.host)}:'
+        '${view.getUint64(32, Endian.host)}',
+    size: view.getUint64(40, Endian.host),
+    mode: view.getUint16(28, Endian.host),
+    modifiedSeconds: view.getInt64(112, Endian.host),
+    modifiedNanos: view.getUint32(120, Endian.host),
+    changedSeconds: view.getInt64(96, Endian.host),
+    changedNanos: view.getUint32(104, Endian.host),
+  );
+}
+
+FileMetadata _darwinMetadata(Pointer<Uint8> stat) {
+  final view = ByteData.sublistView(stat.asTypedList(_darwinStatSize));
+  // Darwin arm64 struct stat: st_mtimespec at 48, st_ctimespec at 64.
+  return (
+    identity: _darwinIdentity(stat),
+    size: view.getInt64(96, Endian.host),
+    mode: view.getUint16(4, Endian.host),
+    modifiedSeconds: view.getInt64(48, Endian.host),
+    modifiedNanos: view.getInt64(56, Endian.host),
+    changedSeconds: view.getInt64(64, Endian.host),
+    changedNanos: view.getInt64(72, Endian.host),
+  );
 }
 
 /// dev_major:dev_minor:ino:mtime from a struct statx.

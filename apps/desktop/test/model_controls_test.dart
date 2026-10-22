@@ -2,9 +2,9 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/remote.dart';
-import 'package:open_foresight/gemma_download.dart';
+import 'package:foresight_core/src/gemma_download.dart';
 import 'package:open_foresight/gemma_setup_view.dart';
-import 'package:open_foresight/speech_models.dart';
+import 'package:foresight_core/src/speech_models.dart';
 import 'package:open_foresight/speech_setup_view.dart';
 import 'controller_fixture.dart';
 

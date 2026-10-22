@@ -438,7 +438,7 @@ def test_disposable_installed_document_containers_can_initialize_isolated_loopba
         assert "--privileged" not in command
     # This configures the disposable outer container; the real parser retains
     # its separate user/PID/network/mount namespaces and drops all capabilities.
-    parser = (ROOT / "packages/foresight_core/lib/src/store.dart").read_text()
+    parser = (ROOT / "packages/foresight_core/lib/src/document_parser.dart").read_text()
     assert "'--unshare-all'" in parser
     assert "'--cap-drop',\n        'ALL'" in parser
 

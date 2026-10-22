@@ -45,13 +45,14 @@ void main() {
           summarize: (_, _) async => '',
         ),
       )..generator = runtime;
+      final app = Application(domain);
       try {
         await runtime.load(
           env['FORESIGHT_GENERATION_RUNNER']!,
           env['FORESIGHT_GENERATION_MODEL']!,
           backend: 'litert_lm',
         );
-        final deltas = await domain
+        final deltas = await app
             .askWithWebInConversation(
               'Using Google search, what is the current release code of the Open Foresight controlled parity fixture? Cite the result.',
               'controlled-model-fixture',
@@ -84,7 +85,7 @@ void main() {
           'https://example.invalid/controlled-parity-fixture',
         );
         final searchCount = queries.length;
-        final followup = await domain
+        final followup = await app
             .askWithWebInConversation(
               'What was that code? Reply with just the code.',
               'controlled-model-fixture',
@@ -121,7 +122,7 @@ void main() {
             'true',
           );
         }
-        final compressedAnswer = await domain
+        final compressedAnswer = await app
             .askWithWebInConversation(
               'What project theme color did I choose? Reply with just the color.',
               'controlled-compression-fixture',
@@ -172,6 +173,7 @@ void main() {
         );
         expect(queries.length, searchCount + 2, reason: reason);
       } finally {
+        await app.close();
         domain.close();
         runtime.close();
         await helper.close();

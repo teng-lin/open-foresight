@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/native.dart';
+import 'package:foresight_core/src/native.dart';
+import 'package:foresight_core/src/rpc_error.dart';
 
 void main() {
   test(
@@ -19,7 +20,16 @@ void main() {
       final pending = native.load(runner, model, backend: backend);
       expect(native.effectiveState['state'], 'loading');
       native.close();
-      await expectLater(pending, throwsStateError);
+      await expectLater(
+        pending,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.cancelled,
+          ),
+        ),
+      );
       expect(native.effectiveState['state'], 'unconfigured');
       await native.load(runner, model, backend: backend);
       expect(native.effectiveState['state'], 'ready');

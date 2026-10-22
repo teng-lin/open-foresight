@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/commands.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/profile_paths.dart';
+import 'package:foresight_core/src/profile_paths.dart';
 
 void main() {
   testWidgets(

@@ -1,12 +1,13 @@
+import 'store_reader_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_test_support/poll.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/gemma_download.dart';
+import 'package:foresight_core/src/gemma_download.dart';
 import 'package:open_foresight/gemma_setup_view.dart';
 import 'package:open_foresight/model_setup.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/store.dart';
 
 class LocalDownload extends GemmaDownload {
   final File asset;
@@ -40,9 +41,9 @@ void main() {
         final file = File('${root.path}/embedding.litertlm')
           ..writeAsStringSync('fixture');
         await store.register('embedding', file.path, '');
-        expect(needsModel(store, 'embedding'), false);
+        expect(needsModel(fixtureReader(store), 'embedding'), false);
         file.deleteSync();
-        expect(needsModel(store, 'embedding'), true);
+        expect(needsModel(fixtureReader(store), 'embedding'), true);
         expect(store.rows('SELECT * FROM models'), hasLength(1));
       } finally {
         store.close();
@@ -84,7 +85,9 @@ void main() {
                   onPressed: () => showDialog<void>(
                     context: context,
                     builder: (_) => GemmaSetupDialog(
-                      store: store,
+                      store: fixtureReader(store),
+                      savePreference: (key, value) async =>
+                          store.setPreference(key, value),
                       directory: root,
                       library: '',
                       runner: '/usr/bin/true',

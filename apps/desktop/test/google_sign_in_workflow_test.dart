@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/application.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:async';
@@ -7,11 +8,12 @@ import 'pump_until.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/domain.dart';
-import 'package:open_foresight/google_auth.dart';
+import 'package:foresight_core/src/domain.dart';
+import 'package:foresight_core/src/google_auth.dart';
 import 'package:open_foresight/google_sign_in_dialog.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/store.dart';
+import 'package:foresight_core/remote.dart' show RpcError, RpcErrorCode;
 import 'google_setup_ui_test.dart' show BundledGoogleDomain;
 import 'meeting_setup_test.dart' show OfflineHelper;
 
@@ -56,82 +58,94 @@ class PendingGoogleAuth extends GoogleAuth {
 }
 
 void main() {
-  testWidgets(
-    'Granola return paste hides codes, permits retry and completes the pending login',
-    (tester) async {
-      final root = createTestTempDirectorySync('granola-return-ui-');
-      final auth = PendingGoogleAuth(Directory('${root.path}/google'))
-        ..inviteBrowser = true;
-      addTearDown(auth.close);
-      var submissions = 0;
-      GoogleSignInOutcome? outcome;
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Builder(
-            builder: (context) => Scaffold(
-              body: TextButton(
-                onPressed: () async {
-                  outcome = await showDialog<GoogleSignInOutcome>(
-                    context: context,
-                    builder: (_) => GoogleSignInDialog(
-                      auth: auth,
-                      openBrowser: (_) async {},
-                      calendarThroughGranola: true,
-                      completeSignIn: (url) async {
-                        submissions++;
-                        expect(
-                          url,
-                          'granola://login-complete?code=private-fixture',
-                        );
-                        if (submissions == 1)
-                          throw StateError(
-                            GranolaReturnFailure.wrongAttempt.message,
+  for (final rpc in [false, true]) {
+    testWidgets(
+      'Granola return paste hides codes, permits retry and completes the pending login (${rpc ? 'RPC' : 'local'})',
+      (tester) async {
+        final root = createTestTempDirectorySync('granola-return-ui-');
+        final auth = PendingGoogleAuth(Directory('${root.path}/google'))
+          ..inviteBrowser = true;
+        addTearDown(auth.close);
+        var submissions = 0;
+        GoogleSignInOutcome? outcome;
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Builder(
+              builder: (context) => Scaffold(
+                body: TextButton(
+                  onPressed: () async {
+                    outcome = await showDialog<GoogleSignInOutcome>(
+                      context: context,
+                      builder: (_) => GoogleSignInDialog(
+                        auth: auth,
+                        openBrowser: (_) async {},
+                        calendarThroughGranola: true,
+                        completeSignIn: (url) async {
+                          submissions++;
+                          expect(
+                            url,
+                            'granola://login-complete?code=private-fixture',
                           );
-                        if (submissions == 2)
-                          throw StateError('Do not echo private-fixture');
-                        auth.signedIn = true;
-                        auth.pending!.complete();
-                      },
-                    ),
-                  );
-                },
-                child: const Text('Connect fixture'),
+                          if (submissions == 1)
+                            throw rpc
+                                ? RpcError(
+                                    RpcErrorCode.invalidArgument,
+                                    GranolaReturnFailure.wrongAttempt.message,
+                                  )
+                                : StateError(
+                                    GranolaReturnFailure.wrongAttempt.message,
+                                  );
+                          if (submissions == 2)
+                            throw rpc
+                                ? RpcError(
+                                    RpcErrorCode.internal,
+                                    'Do not echo private-fixture',
+                                  )
+                                : StateError('Do not echo private-fixture');
+                          auth.signedIn = true;
+                          auth.pending!.complete();
+                        },
+                      ),
+                    );
+                  },
+                  child: const Text('Connect fixture'),
+                ),
               ),
             ),
           ),
-        ),
-      );
-      await tester.tap(find.text('Connect fixture'));
-      await tester.pump();
-      await tester.pump();
-      final field = find.byType(TextField);
-      expect(tester.widget<TextField>(field).obscureText, true);
-      await tester.enterText(
-        field,
-        'granola://login-complete?code=private-fixture',
-      );
-      await tester.tap(find.text('Complete sign-in with return URL'));
-      await tester.pump();
-      expect(
-        find.text(GranolaReturnFailure.wrongAttempt.message),
-        findsOneWidget,
-      );
-      await tester.tap(find.text('Complete sign-in with return URL'));
-      await tester.pump();
-      expect(
-        find.textContaining('The return link was not accepted.'),
-        findsOneWidget,
-      );
-      expect(find.text('Do not echo private-fixture'), findsNothing);
-      expect(auth.signingIn, true);
-      await tester.tap(find.text('Complete sign-in with return URL'));
-      await tester.pumpAndSettle();
-      expect(submissions, 3);
-      expect(outcome, isNotNull);
-      expect(outcome!.error, null);
-      expect(find.byType(GoogleSignInDialog), findsNothing);
-    },
-  );
+        );
+        await tester.tap(find.text('Connect fixture'));
+        await tester.pump();
+        await tester.pump();
+        final field = find.byType(TextField);
+        expect(tester.widget<TextField>(field).obscureText, true);
+        await tester.enterText(
+          field,
+          'granola://login-complete?code=private-fixture',
+        );
+        await tester.tap(find.text('Complete sign-in with return URL'));
+        await tester.pump();
+        expect(
+          find.text(GranolaReturnFailure.wrongAttempt.message),
+          findsOneWidget,
+        );
+        await tester.tap(find.text('Complete sign-in with return URL'));
+        await tester.pump();
+        expect(
+          find.textContaining('The return link was not accepted.'),
+          findsOneWidget,
+        );
+        expect(find.text('Do not echo private-fixture'), findsNothing);
+        expect(auth.signingIn, true);
+        await tester.tap(find.text('Complete sign-in with return URL'));
+        await tester.pumpAndSettle();
+        expect(submissions, 3);
+        expect(outcome, isNotNull);
+        expect(outcome!.error, null);
+        expect(find.byType(GoogleSignInDialog), findsNothing);
+      },
+    );
+  }
 
   testWidgets(
     'Google sign-in can be cancelled and retried from every entry point',
@@ -181,7 +195,7 @@ void main() {
       try {
         await tester.pumpWidget(
           Foresight(
-            TestDesktopConnection(domain),
+            TestDesktopConnection(Application(domain, auth: auth)),
             deviceLoader: () async => [],
           ),
         );

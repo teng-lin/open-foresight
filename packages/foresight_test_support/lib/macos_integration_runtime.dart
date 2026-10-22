@@ -5,6 +5,7 @@ const _fixtureKey = 'FORESIGHT_TEST_RUNTIME_FIXTURE';
 const _fixtureValue = 'flutter-debug-integration-v1';
 const _runtimePaths = {
   'FORESIGHT_NATIVE',
+  'FORESIGHT_SQLITE_LIBRARY',
   'FORESIGHT_HELPER',
   'FORESIGHT_SERVICE',
   'FORESIGHT_MODEL_WORKER',
@@ -72,8 +73,10 @@ File? prepareMacosIntegrationRuntime({
     }
     entries[key] = value;
   }
-  if (!entries.containsKey('FORESIGHT_NATIVE')) {
-    throw StateError('The integration test must supply FORESIGHT_NATIVE.');
+  for (final key in ['FORESIGHT_NATIVE', 'FORESIGHT_SQLITE_LIBRARY']) {
+    if (!entries.containsKey(key)) {
+      throw StateError('The integration test must supply $key.');
+    }
   }
   final content = '${jsonEncode(entries)}\n';
   resources.createSync(recursive: true);

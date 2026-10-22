@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_test_support/native_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_test_support/poll.dart';
@@ -124,6 +125,7 @@ Future<void> withTranscriptFixture(
     EmbeddingService embeddings,
     TranscriptDomain domain,
     PromptRuntime runtime,
+    Application app,
   )
   run,
 ) async {
@@ -143,6 +145,7 @@ Future<void> withTranscriptFixture(
   final domain = TranscriptDomain(store, helper);
   final runtime = PromptRuntime();
   domain.generator = runtime;
+  final app = Application(domain);
   try {
     await server.serve(
       address: InternetAddress(socket, type: InternetAddressType.unix),
@@ -151,9 +154,9 @@ Future<void> withTranscriptFixture(
     helper.snapshot = control.State(pipeline: 'ready', tokenizerReady: false);
     store.setPreference('liveEnhance', 'false');
     store.setPreference('proactiveAnswers', 'false');
-    await run(directory, embeddings, domain, runtime);
+    await run(directory, embeddings, domain, runtime, app);
   } finally {
-    await domain.application.close();
+    await app.close();
     domain.close();
     runtime.close();
     await helper.close();
@@ -183,6 +186,7 @@ void main() {
       )..snapshot = control.State(pipeline: 'ready');
       final runtime = ChainRuntime();
       late TranscriptDomain domain;
+      late Application app;
       var observedChain = false;
       domain = TranscriptDomain(
         store,
@@ -190,16 +194,17 @@ void main() {
         createTimer: (duration, callback) {
           if (runtime.finishedFirst && runtime.calls == 1) {
             observedChain = true;
-            expect(domain.application.activeEnhancements, greaterThan(0));
+            expect(app.activeEnhancements, greaterThan(0));
           }
           return Timer(duration, callback);
         },
       )..generator = runtime;
+      app = Application(domain);
       addTearDown(() async {
         if (!embeddings.embeddingGate!.isCompleted) {
           embeddings.embeddingGate!.complete();
         }
-        await domain.application.close();
+        await app.close();
         domain.close();
         await helper.close();
         await server.shutdown();
@@ -219,9 +224,9 @@ void main() {
           'imported',
         );
       }
-      final work = domain.application.enhanceNotes(first, isLive: true);
+      final work = app.enhanceNotes(first, isLive: true);
       await embeddings.embeddingEntered.future;
-      await domain.application.enhanceNotes(
+      await app.enhanceNotes(
         second,
         isLive: true,
         deferWhenBusy: true,
@@ -229,10 +234,10 @@ void main() {
       );
       embeddings.embeddingGate!.complete();
       await work;
-      await eventually(() => domain.application.activeEnhancements == 0);
+      await eventually(() => app.activeEnhancements == 0);
       expect(runtime.calls, 2);
       expect(observedChain, true);
-      expect(domain.application.backgroundBusy, false);
+      expect(app.backgroundBusy, false);
     },
   );
 
@@ -244,6 +249,7 @@ void main() {
         embeddings,
         domain,
         runtime,
+        app,
       ) async {
         final id = domain.store.meeting('Structured saved record');
         domain.store.saveMeetingNotes(id, 'Raw note');
@@ -263,7 +269,7 @@ void main() {
           40,
           'imported',
         );
-        await domain.application.enhanceNotes(id);
+        await app.enhanceNotes(id);
         expect(
           embeddings.texts.first,
           '--- [Planning] ---\nAda: Ship it\n\nPlain evidence',
@@ -282,19 +288,17 @@ void main() {
         embeddings,
         domain,
         runtime,
+        app,
       ) async {
         final store = domain.store;
         final id = store.meeting('Retry embedding');
         store.saveMeetingNotes(id, 'Raw note');
         store.transcript(id, 'Saved evidence', true, 0, 20, 'imported');
         embeddings.embeddingFailuresRemaining = 1;
-        await expectLater(
-          domain.application.enhanceNotes(id),
-          throwsA(isA<GrpcError>()),
-        );
+        await expectLater(app.enhanceNotes(id), throwsA(isA<GrpcError>()));
         expect(runtime.prompts, isEmpty);
         expect(store.rows('SELECT * FROM artifacts'), isEmpty);
-        await domain.application.enhanceNotes(id);
+        await app.enhanceNotes(id);
         expect(runtime.prompts, hasLength(1));
         expect(embeddings.texts, [
           'Saved evidence',
@@ -316,15 +320,16 @@ void main() {
           embeddings,
           domain,
           runtime,
+          app,
         ) async {
           final store = domain.store;
           final id = store.meeting('Saved meeting');
           store.saveMeetingNotes(id, 'Raw note');
           store.transcript(id, 'Saved evidence', true, 0, 20, 'imported');
-          await domain.application.enhanceNotes(id);
+          await app.enhanceNotes(id);
           final model = File('${directory.path}/embedding.litertlm');
           model.writeAsStringSync('ABI fixture model');
-          final change = domain.command(Operation.modelsEmbedding, {
+          final change = app.call(Operation.modelsEmbedding.wire, {
             'path': model.path,
             if (!registrySucceeds) 'digest': 'incorrect-digest',
           });
@@ -334,7 +339,7 @@ void main() {
             await expectLater(change, throwsStateError);
           }
           expect(embeddings.modelUpdates, 1);
-          await domain.application.enhanceNotes(id);
+          await app.enhanceNotes(id);
           expect(
             embeddings.texts.where((text) => text == 'Saved evidence'),
             hasLength(2),
@@ -342,10 +347,10 @@ void main() {
 
           embeddings.modelUpdateSucceeds = false;
           await expectLater(
-            domain.command(Operation.modelsEmbedding, {'path': model.path}),
+            app.call(Operation.modelsEmbedding.wire, {'path': model.path}),
             throwsStateError,
           );
-          await domain.application.enhanceNotes(id);
+          await app.enhanceNotes(id);
           expect(
             embeddings.texts.where((text) => text == 'Saved evidence'),
             hasLength(2),
@@ -363,6 +368,7 @@ void main() {
         embeddings,
         domain,
         runtime,
+        app,
       ) async {
         final store = domain.store;
         final id = store.meeting('Waiting enhancement');
@@ -370,21 +376,30 @@ void main() {
         store.transcript(id, 'Saved evidence', true, 0, 20, 'imported');
         final gate = Completer<void>();
         embeddings.embeddingGate = gate;
-        final enhancement = domain.application.enhanceNotes(id);
+        final enhancement = app.enhanceNotes(id);
         try {
           await embeddings.embeddingEntered.future;
           expect(runtime.generating, isFalse);
-          expect(domain.application.activeEnhancements, 1);
-          expect(domain.application.transcriptComputing, 1);
-          expect(domain.application.backgroundBusy, true);
+          expect(app.activeEnhancements, 1);
+          expect(app.transcriptComputing, 1);
+          expect(app.backgroundBusy, true);
           expect(runtime.prompts, isEmpty);
           for (final method in [
             Operation.modelsEmbedding,
             Operation.modelsGeneration,
           ]) {
             await expectLater(
-              domain.command(method, {'path': '/unused'}),
-              throwsStateError,
+              app.call(method.wire, {
+                'path': '/unused',
+                if (method == Operation.modelsGeneration) 'runtime': '/unused',
+              }),
+              throwsA(
+                isA<RpcError>().having(
+                  (error) => error.code,
+                  'code',
+                  RpcErrorCode.busy,
+                ),
+              ),
             );
           }
           expect(embeddings.modelUpdates, 0);
@@ -392,9 +407,9 @@ void main() {
           gate.complete();
           await enhancement;
         }
-        expect(domain.application.activeEnhancements, 0);
-        expect(domain.application.transcriptComputing, 0);
-        expect(domain.application.backgroundBusy, false);
+        expect(app.activeEnhancements, 0);
+        expect(app.transcriptComputing, 0);
+        expect(app.backgroundBusy, false);
         expect(runtime.prompts, hasLength(1));
       });
     },
@@ -408,6 +423,7 @@ void main() {
         embeddings,
         domain,
         runtime,
+        app,
       ) async {
         final store = domain.store;
         final id = store.meeting('Cancelled preparation');
@@ -416,14 +432,13 @@ void main() {
         store.artifact(id, 'enhanced_notes', '- Prior accepted', 'fixture');
         final gate = Completer<void>();
         embeddings.embeddingGate = gate;
-        final enhancement = domain.application.enhanceNotes(id);
+        final enhancement = app.enhanceNotes(id);
         try {
           await embeddings.embeddingEntered.future;
-          final states =
-              domain.application.captureState['note_enhancements'] as Map;
+          final states = app.captureState['note_enhancements'] as Map;
           final state = states['$id'] as Map;
           expect(
-            await domain.command(Operation.meetingsCancelEnhance, {
+            await app.call(Operation.meetingsCancelEnhance.wire, {
               'id': id,
               'request_id': state['request_id'],
             }),
@@ -439,7 +454,7 @@ void main() {
         expect(runtime.prompts, isEmpty);
         expect(store.meetingEnhancedNotes(id), '- Prior accepted');
         expect(store.rows('SELECT * FROM artifacts'), hasLength(1));
-        await domain.application.enhanceNotes(id);
+        await app.enhanceNotes(id);
         expect(runtime.prompts, hasLength(1));
         expect(
           embeddings.texts.where((text) => text == 'Saved evidence'),
@@ -462,6 +477,7 @@ void main() {
         embeddings,
         domain,
         runtime,
+        app,
       ) async {
         final library =
             '${directory.path}/recording.${Platform.isMacOS ? "dylib" : "so"}';
@@ -482,16 +498,11 @@ void main() {
         store.saveMeetingNotes(id, 'Raw note');
         store.transcript(id, 'First evidence', true, 0, 20, 'microphone');
         try {
-          await domain.application.startRecording(id);
+          await app.startRecording(id);
           await embeddings.embeddingEntered.future;
           // This is the actual final-transcript callback installed by Application.
-          domain.application.recording!.transcript(
-            'Second evidence',
-            20,
-            40,
-            'playback',
-          );
-          await domain.application.enhanceNotes(id, isLive: true);
+          app.recording!.transcript('Second evidence', 20, 40, 'playback');
+          await app.enhanceNotes(id, isLive: true);
           expect(embeddings.texts.first, 'Microphone: First evidence');
           expect(
             embeddings.texts,
@@ -501,8 +512,8 @@ void main() {
             runtime.prompts.single,
             contains('Microphone: First evidence\nRemote: Second evidence'),
           );
-          await domain.application.stopRecording();
-          await domain.application.enhanceNotes(id);
+          await app.stopRecording();
+          await app.enhanceNotes(id);
           expect(
             embeddings.texts,
             contains('First evidence\n\nSecond evidence'),
@@ -537,6 +548,7 @@ void main() {
       final domain = TranscriptDomain(store, helper);
       final runtime = PromptRuntime();
       domain.generator = runtime;
+      final app = Application(domain);
       try {
         await server.serve(
           address: InternetAddress(socket, type: InternetAddressType.unix),
@@ -550,17 +562,17 @@ void main() {
         final id = store.meeting('Saved meeting');
         store.saveMeetingNotes(id, 'Raw note');
         store.transcript(id, 'Original evidence', true, 0, 20, 'imported');
-        await domain.application.enhanceNotes(id);
+        await app.enhanceNotes(id);
         expect(runtime.prompts, hasLength(1));
         expect(runtime.prompts.first, contains('Original evidence'));
         expect(runtime.prompts.first, isNot(contains('Novel evidence')));
         expect(embeddings.texts, ['Original evidence', 'Raw note']);
 
-        await domain.command(Operation.meetingsTranscript, {
+        await app.call(Operation.meetingsTranscript.wire, {
           'id': id,
           'text': 'Novel evidence',
         });
-        await domain.application.enhanceNotes(id);
+        await app.enhanceNotes(id);
         expect(runtime.prompts, hasLength(2));
         expect(runtime.prompts.last, contains('Original evidence'));
         expect(runtime.prompts.last, contains('Novel evidence'));
@@ -574,7 +586,7 @@ void main() {
         );
         expect(store.meetingEnhancedNotes(id), '- Enhanced plan');
       } finally {
-        await domain.application.close();
+        await app.close();
         domain.close();
         runtime.close();
         await helper.close();

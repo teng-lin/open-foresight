@@ -125,6 +125,9 @@ void main() {
         '${directory.path}/run',
       );
       final values = {
+        if (runtimeConfiguration['FORESIGHT_SQLITE_LIBRARY']
+            case final library?)
+          'FORESIGHT_SQLITE_LIBRARY': library,
         'FORESIGHT_DATA': profile.data,
         'FORESIGHT_RUNTIME': profile.runtime,
         'FORESIGHT_SERVICE_TRACE': '1',

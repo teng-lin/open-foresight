@@ -39,9 +39,110 @@ Matcher invalidReply(String? reason) => rpcError(
 );
 
 void main() {
+  for (final bareError in [true, false]) {
+    test(
+      bareError
+          ? 'a pending bare connect reset becomes a SocketException with its original OS error'
+          : 'a pending SocketException reset propagates its original identity',
+      () async {
+        final directory = createTestTempDirectorySync('of-connect-reset-');
+        final path = '${directory.path}/application.sock';
+        const osError = OSError('Connection reset by peer', 104);
+        final original = bareError
+            ? osError
+            : SocketException(
+                'Connection reset by peer',
+                osError: osError,
+                address: InternetAddress(path, type: InternetAddressType.unix),
+              );
+        final entered = Completer<void>(), socket = Completer<Socket>();
+        socket.future.ignore();
+        var settled = false;
+        final observed = <String, Object?>{};
+        final connecting = IOOverrides.runZoned(
+          () => ServiceClient.connect(path),
+          socketConnect:
+              (
+                host,
+                port, {
+                sourceAddress,
+                int sourcePort = 0,
+                Duration? timeout,
+              }) {
+                observed.addAll({
+                  'host': host,
+                  'port': port,
+                  'sourceAddress': sourceAddress,
+                  'sourcePort': sourcePort,
+                  'timeout': timeout,
+                });
+                entered.complete();
+                return socket.future;
+              },
+        );
+        final joined = connecting.then<void>(
+          (client) async {
+            settled = true;
+            await client.close();
+          },
+          onError: (Object _, StackTrace __) {
+            settled = true;
+          },
+        );
+        final rejected = expectLater(
+          connecting,
+          throwsA(
+            bareError
+                ? isA<SocketException>()
+                      .having(
+                        (error) => error.osError,
+                        'original OS error',
+                        same(osError),
+                      )
+                      .having((error) => error.osError?.errorCode, 'errno', 104)
+                      .having((error) => error.address?.address, 'path', path)
+                      .having(
+                        (error) => error.address?.type,
+                        'type',
+                        InternetAddressType.unix,
+                      )
+                : allOf(
+                    same(original),
+                    isA<SocketException>().having(
+                      (error) => error.osError?.errorCode,
+                      'errno',
+                      104,
+                    ),
+                  ),
+          ),
+        );
+        try {
+          await Future.any([entered.future, joined]);
+          expect(entered.isCompleted, isTrue);
+          expect(
+            observed['host'],
+            isA<InternetAddress>()
+                .having((value) => value.type, 'type', InternetAddressType.unix)
+                .having((value) => value.address, 'path', path),
+          );
+          expect(observed['port'], 0);
+          expect(observed['sourceAddress'], isNull);
+          expect(observed['sourcePort'], 0);
+          expect(observed['timeout'], const Duration(seconds: 2));
+          expect(settled, isFalse);
+          socket.completeError(original);
+          await rejected;
+        } finally {
+          if (!socket.isCompleted) socket.completeError(original);
+          await joined;
+          await rejected;
+        }
+      },
+    );
+  }
+
   test(
-    'a connect whose listener closes while it waits fails as a '
-    'SocketException',
+    'a real backlog close resets the connect or naturally disconnects its client',
     () async {
       final directory = createTestTempDirectorySync('of-connect-');
       final path = '${directory.path}/application.sock';
@@ -79,7 +180,8 @@ void main() {
       final address = calloc<Uint8>(110);
       final pollfd = calloc<Int16>(4);
       var listenerClosed = false;
-      ServiceClient? unexpectedClient;
+      ServiceClient? connectedClient;
+      Future<Object>? outcome;
       try {
         final bytes = utf8.encode(path);
         expect(bytes.length, lessThan(108));
@@ -87,11 +189,10 @@ void main() {
         address.asTypedList(110).setRange(2, 2 + bytes.length, bytes);
         expect(bind(descriptor, address.cast(), 2 + bytes.length + 1), 0);
         expect(listen(descriptor, 1), 0);
-        final connecting = ServiceClient.connect(path).then((client) {
-          unexpectedClient = client;
-          return client;
-        });
-        connecting.ignore();
+        outcome = ServiceClient.connect(path).then<Object>(
+          (client) => connectedClient = client,
+          onError: (Object error) => error,
+        );
         pollfd.cast<Int32>().value = descriptor;
         pollfd[2] = 1; // POLLIN: a connection is queued for accept.
         final waited = Stopwatch()..start();
@@ -100,41 +201,55 @@ void main() {
           if (waited.elapsed > const Duration(seconds: 5)) {
             fail('The client did not reach the listener backlog');
           }
-          // Drain only microtasks until the kernel confirms the connect.
-          // Delivering I/O events here could complete it before shutdown.
+          // Wait for the real kernel backlog without accepting the peer.
+          // This does not order the VM's independent connect completion.
           await Future<void>.microtask(() {});
           queued = poll(pollfd.cast(), 1, 0);
         }
         expect(queued, 1);
         expect(pollfd[3] & 1, 1);
-        // Shut down and close the listener before its write-ready callback runs.
-        // A forked child can retain a CLOEXEC copy until it execs.
+        // POLLIN proves that a peer reached the backlog, but the VM may
+        // already have observed successful connection before this close.
         expect(shutdown(descriptor, 2), 0); // SHUT_RDWR.
         final closed = close(descriptor);
-        listenerClosed = true;
+        listenerClosed = closed == 0;
         expect(closed, 0);
-        // Only the reset path; a plain refused or missing socket would be a
-        // SocketException too.
-        await expectLater(
-          connecting,
-          throwsA(
+        final result = await outcome;
+        if (result is ServiceClient) {
+          // Observe actual peer loss before explicit cleanup: no request can
+          // have reached a server, and a later request must remain notSent.
+          await result.closed;
+          expect(result.isClosed, isTrue);
+          await expectLater(
+            result.call('status'),
+            throwsA(disconnected('notSent')),
+          );
+        } else {
+          // Only the reset path is valid here; refused/missing endpoints do
+          // not establish this real queued-peer shutdown contract.
+          expect(
+            result,
             isA<SocketException>().having(
               (error) => error.osError?.errorCode,
               'errno',
               104,
             ),
-          ),
-        );
+          );
+        }
       } finally {
         if (!listenerClosed) close(descriptor);
-        await unexpectedClient?.close();
-        calloc.free(address);
-        calloc.free(pollfd);
-        directory.deleteSync(recursive: true);
+        try {
+          await outcome;
+          await connectedClient?.close();
+        } finally {
+          calloc.free(address);
+          calloc.free(pollfd);
+          directory.deleteSync(recursive: true);
+        }
       }
     },
-    // Linux resets a connect waiting in a closed AF_UNIX backlog with
-    // ECONNRESET; the order this test forces relies on that.
+    // This real AF_UNIX backlog/reset integration is Linux-specific. Portable
+    // pending-reset propagation and normalization are proven independently.
     testOn: 'linux',
   );
 
@@ -186,7 +301,16 @@ void main() {
       final pending = connection.stream('notes.save', {
         'title': 'uncertain',
       }).toList();
-      final failed = expectLater(pending, throwsStateError);
+      final failed = expectLater(
+        pending,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.unavailable,
+          ),
+        ),
+      );
       await eventually(
         () => f.requests.any((r) => r['method'] == 'notes.save'),
       );
@@ -497,7 +621,8 @@ void main() {
 
   test('launcher waits for model verification beyond ten seconds', () async {
     runtimeConfiguration.environment.removeWhere(
-      (key, _) => key.startsWith('FORESIGHT_'),
+      (key, _) =>
+          key.startsWith('FORESIGHT_') && key != 'FORESIGHT_SQLITE_LIBRARY',
     );
     runtimeConfiguration.environment['FORESIGHT_SERVICE'] = '/usr/bin/true';
     final profile = ProfilePaths(
@@ -528,7 +653,11 @@ void main() {
                 socket.writeln(
                   jsonEncode({
                     'id': request['id'],
-                    'result': {'pid': pid, 'profile_id': profile.identity},
+                    'result': {
+                      'pid': pid,
+                      'profile_id': profile.identity,
+                      'application_api_version': 1,
+                    },
                     'done': true,
                   }),
                 );

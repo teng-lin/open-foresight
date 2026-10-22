@@ -1,6 +1,6 @@
-import 'package:foresight_core/remote.dart' show ConnectedSources;
+import 'package:foresight_core/desktop.dart'
+    show ConnectedSources, supportsGoogleDriveMime, canDownloadGoogleDriveFile;
 import 'package:flutter/material.dart';
-import 'google_connections.dart';
 
 class GoogleDrivePicker extends StatefulWidget {
   final ConnectedSources connection;
@@ -119,10 +119,10 @@ class _GoogleDrivePickerState extends State<GoogleDrivePicker> {
                 children: files.map((file) {
                   final folder =
                       file['mimeType'] == 'application/vnd.google-apps.folder';
-                  final supported = GoogleConnections.supported(
+                  final supported = supportsGoogleDriveMime(
                     file['mimeType'] as String,
                   );
-                  final downloadable = GoogleConnections.canDownload(file);
+                  final downloadable = canDownloadGoogleDriveFile(file);
                   return ListTile(
                     leading: folder
                         ? const Icon(Icons.folder_outlined)

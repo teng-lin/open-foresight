@@ -427,7 +427,16 @@ void main() {
         expect(recording.currentVolumes, [0, 0]);
         expect(emit(0, 999), 0);
         expect(emit(1, 999), 0);
-        expect(() => recording.start('/usr/bin/true', model), throwsStateError);
+        expect(
+          () => recording.start('/usr/bin/true', model),
+          throwsA(
+            isA<RpcError>().having(
+              (error) => error.code,
+              'code',
+              RpcErrorCode.busy,
+            ),
+          ),
+        );
         recording.pause(); // Idempotent pause preserves pending work.
         recording.resume();
         expect(recording.paused, false);
@@ -518,25 +527,35 @@ void main() {
         Helper('${directory.path}/unused.sock', '${directory.path}/unused'),
         clock: Clock(() => now),
       );
-      final app = domain.application;
+      final app = Application(domain);
       final id = store.meeting('Pause fixture');
+      final note = store.saveNote(null, 'Retained note', 'Private note body');
+      store.saveMeetingNotes(id, 'Retained meeting notes');
+      store.setPreference('echoCancellation', 'true');
+      final epoch = store.workspaceEpoch;
       final recording = Recording(
         library,
         (state) => app.recordingState = state,
         (_, _, _, _) {},
       );
       try {
-        recording.start('/usr/bin/true', model);
+        recording.start('/usr/bin/true', model, echoCancellation: true);
         app.recording = recording;
         app.recordingMeeting = id;
         app.recordingBegan = now;
         await expectLater(
-          domain.command(Operation.meetingsPause, {'id': id + 1}),
-          throwsStateError,
+          app.call(Operation.meetingsPause.wire, {'id': id + 1}),
+          throwsA(
+            isA<RpcError>().having(
+              (error) => error.code,
+              'code',
+              RpcErrorCode.notFound,
+            ),
+          ),
         );
         expect(recording.paused, false);
         final paused =
-            await domain.command(Operation.meetingsPause, {'id': id}) as Map;
+            await app.call(Operation.meetingsPause.wire, {'id': id}) as Map;
         expect(paused['active'], true);
         expect(paused['paused'], true);
         now = now.add(const Duration(seconds: 20));
@@ -554,15 +573,97 @@ void main() {
           ]).single['state'],
           'paused',
         );
+        final meetingRows = store.rows('SELECT * FROM meetings WHERE id=?', [
+          id,
+        ]);
+        final meetingNotes = store.meetingNoteRows(id);
+        void expectPausedOwnership() {
+          expect(store.workspaceEpoch, epoch);
+          expect(
+            store.rows('SELECT * FROM meetings WHERE id=?', [id]),
+            meetingRows,
+          );
+          expect(store.meetingNoteRows(id), meetingNotes);
+          expect(store.noteBody(note), 'Private note body');
+          expect(app.recording, same(recording));
+          expect(app.recordingMeeting, id);
+          expect(app.recordingBegan, DateTime.utc(2026));
+          expect(app.captureState['active'], true);
+          expect(app.captureState['paused'], true);
+          expect(app.captureState['meeting_id'], id);
+          expect(recording.captures, isEmpty);
+        }
+
+        // Pausing releases the devices, but keeps the recording owner. A new
+        // start or workspace clear must not treat it as an idle workspace.
         await expectLater(
-          domain.command(Operation.modelsSpeech, {
+          app.call(Operation.meetingsStart.wire, {'id': id}),
+          throwsA(
+            isA<RpcError>()
+                .having((error) => error.code, 'code', RpcErrorCode.busy)
+                .having(
+                  (error) => error.message,
+                  'message',
+                  'A meeting is already recording',
+                ),
+          ),
+        );
+        expectPausedOwnership();
+        await expectLater(
+          app.call(Operation.workspaceClear.wire, const {}),
+          throwsA(
+            isA<RpcError>()
+                .having((error) => error.code, 'code', RpcErrorCode.busy)
+                .having(
+                  (error) => error.message,
+                  'message',
+                  'Stop recording before clearing the workspace',
+                ),
+          ),
+        );
+        expectPausedOwnership();
+        expect(recording.echoCancellationState['requested'], true);
+        await app.call(Operation.preferencesSet.wire, {
+          'key': 'echoCancellation',
+          'value': 'false',
+        });
+        expect(store.preference('echoCancellation'), 'false');
+        expect(recording.echoCancellationState['requested'], false);
+        expectPausedOwnership();
+        if (Platform.isLinux) {
+          await expectLater(
+            app.call(Operation.preferencesSet.wire, {
+              'key': 'echoCancellation',
+              'value': 'true',
+            }),
+            throwsA(
+              isA<StateError>().having(
+                (error) => error.message,
+                'message',
+                'Native echo cancellation is available on macOS',
+              ),
+            ),
+          );
+          expect(store.preference('echoCancellation'), 'false');
+          expect(recording.echoCancellationState['requested'], false);
+          expectPausedOwnership();
+        }
+        await expectLater(
+          app.call(Operation.modelsSpeech.wire, {
             'path': 'unused',
             'runtime': 'unused',
+            'digest': 'unused',
           }),
-          throwsStateError,
+          throwsA(
+            isA<RpcError>().having(
+              (error) => error.code,
+              'code',
+              RpcErrorCode.busy,
+            ),
+          ),
         );
         final resumed =
-            await domain.command(Operation.meetingsResume, {'id': id}) as Map;
+            await app.call(Operation.meetingsResume.wire, {'id': id}) as Map;
         expect(resumed['paused'], false);
         expect(
           store.rows('SELECT state FROM meetings WHERE id=?', [
@@ -570,8 +671,9 @@ void main() {
           ]).single['state'],
           'recording',
         );
-        await domain.command(Operation.meetingsPause);
-        final stopped = await domain.command(Operation.meetingsStop) as Map;
+        await app.call(Operation.meetingsPause.wire, const {});
+        final stopped =
+            await app.call(Operation.meetingsStop.wire, const {}) as Map;
         expect(stopped['active'], false);
         expect(stopped['meeting_id'], isNull);
         expect(stopped['began'], isNull);
@@ -585,8 +687,14 @@ void main() {
           'empty',
         );
         await expectLater(
-          domain.command(Operation.meetingsResume),
-          throwsStateError,
+          app.call(Operation.meetingsResume.wire, const {}),
+          throwsA(
+            isA<RpcError>().having(
+              (error) => error.code,
+              'code',
+              RpcErrorCode.notFound,
+            ),
+          ),
         );
       } finally {
         await app.close();

@@ -75,6 +75,7 @@ void main() {
       final helper = Helper(socket, '${directory.path}/helper');
       final runtime = _Runtime();
       final domain = Domain(store, helper)..generator = runtime;
+      final app = Application(domain);
       try {
         final first = store.meeting('Alpha');
         final second = store.meeting('Beta');
@@ -108,7 +109,7 @@ void main() {
           'fixture',
           conversation: 'meeting:$second',
         );
-        await domain
+        await app
             .askInConversation(
               'What about it?',
               'ignored by meeting scope',
@@ -137,7 +138,7 @@ void main() {
           'answerSources.meeting:$first',
           '["${retrieval.document}"]',
         );
-        await domain
+        await app
             .askInConversation('What about it?', 'ignored', meetingId: first)
             .drain<void>();
         expect(retrieval.allowed.last, [retrieval.document]);
@@ -147,15 +148,21 @@ void main() {
         // A selected empty scope stays empty rather than widening to workspace.
         store.setPreference('answerSources.meeting:$first', '[]');
         final before = retrieval.queries.length;
-        await domain
+        await app
             .askInConversation('Private empty', 'ignored', meetingId: first)
             .drain<void>();
         expect(retrieval.queries, hasLength(before));
         await expectLater(
-          domain
+          app
               .askInConversation('Invalid meeting', 'desktop', meetingId: 999)
               .drain<void>(),
-          throwsStateError,
+          throwsA(
+            isA<RpcError>().having(
+              (error) => error.code,
+              'code',
+              RpcErrorCode.notFound,
+            ),
+          ),
         );
         expect(
           store.rows('SELECT * FROM answers WHERE question=?', [
@@ -164,6 +171,7 @@ void main() {
           isEmpty,
         );
       } finally {
+        await app.close();
         domain.close();
         runtime.close();
         await helper.close();
@@ -242,7 +250,13 @@ void main() {
           first
               .askInConversation('Invalid', 'desktop', meetingId: 999)
               .drain<void>(),
-          throwsStateError,
+          throwsA(
+            isA<RpcError>().having(
+              (error) => error.code,
+              'code',
+              RpcErrorCode.notFound,
+            ),
+          ),
         );
         expect(
           service.domain.store.rows('SELECT * FROM answers'),
@@ -253,8 +267,7 @@ void main() {
           if (remote == null) continue;
           remote.close();
           await remote.client.close();
-          await remote.helper.close();
-          remote.store.close();
+          await remote.closed;
         }
         await service.close();
         if (original == null) {

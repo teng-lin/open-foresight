@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/helper_protocol_version.dart';
 import 'package:foresight_test_support/helper_adoption.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
@@ -28,7 +29,7 @@ void main() {
     rag = AdoptionRag();
     status = AdoptionControl(
       control.State(
-        referenceVersion: '1.0.3',
+        referenceVersion: helperProtocolVersion,
         buildId:
             'open-foresight-$openForesightVersion-${revision.substring(0, 12)}',
         pipeline: 'ready',

@@ -1,3 +1,6 @@
+import '../test_support/reader_admissions.dart';
+import 'store_reader_fixture.dart';
+import 'package:foresight_core/src/application.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:async';
@@ -6,11 +9,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/domain.dart';
+import 'package:foresight_core/src/domain.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/store.dart';
 import 'package:open_foresight/graph_rendering.dart';
-import 'package:open_foresight/generated/helper_control.pb.dart' as control;
+import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 class SourceReadCountingStore extends Store {
@@ -57,7 +60,7 @@ void main() {
     final helper = OfflineHelper('${temp.path}/socket', '${temp.path}/helper');
     await tester.pumpWidget(
       Foresight(
-        TestDesktopConnection(Domain(store, helper)),
+        TestDesktopConnection(Application(Domain(store, helper))),
         deviceLoader: () async => [],
       ),
     );
@@ -100,6 +103,8 @@ void main() {
       if (temp.existsSync()) temp.deleteSync(recursive: true);
     });
     final store = SourceReadCountingStore('${temp.path}/app.db');
+    final admissions = ReaderAdmissions();
+    fixtureReader(store, admissions: admissions);
     final body = 'Independent source body search needle. '.padRight(
       64 * 1024,
       'x',
@@ -110,7 +115,7 @@ void main() {
     final helper = OfflineHelper('${temp.path}/socket', '${temp.path}/helper');
     await tester.pumpWidget(
       Foresight(
-        TestDesktopConnection(Domain(store, helper)),
+        TestDesktopConnection(Application(Domain(store, helper))),
         deviceLoader: () async => [],
       ),
     );
@@ -122,10 +127,16 @@ void main() {
     final dynamic state = tester.state(find.byType(Workspace));
     final before = store.sourceReads;
     final frameBefore = state.sourceFeature.graphMotionFrames.value as int;
+    final typedBeforeFrames = admissions.snapshot();
     for (var i = 0; i < 10; i++) {
       await tester.pump(const Duration(milliseconds: 16));
     }
     expect(state.sourceFeature.graphMotionFrames.value - frameBefore, 10);
+    expect(
+      admissions.snapshot(),
+      typedBeforeFrames,
+      reason: 'Graph frames admit no typed sync/read/watch/worker projections',
+    );
     expect(
       store.sourceReads - before,
       0,
@@ -180,7 +191,10 @@ void main() {
       );
       final domain = Domain(store, helper);
       await tester.pumpWidget(
-        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+        Foresight(
+          TestDesktopConnection(Application(domain)),
+          deviceLoader: () async => [],
+        ),
       );
       await tester.tap(find.text('Sources'));
       await tester.pumpAndSettle();
@@ -310,6 +324,8 @@ void main() {
         if (temp.existsSync()) temp.deleteSync(recursive: true);
       });
       final store = SourceReadCountingStore('${temp.path}/app.db');
+      final admissions = ReaderAdmissions();
+      fixtureReader(store, admissions: admissions);
       final a = store.importText('Apollo', 'Launch', 'text/plain', 'fixture:a');
       final b = store.importText(
         'Borealis',
@@ -330,7 +346,10 @@ void main() {
       );
       final domain = GraphDomain(store, helper);
       await tester.pumpWidget(
-        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+        Foresight(
+          TestDesktopConnection(Application(domain)),
+          deviceLoader: () async => [],
+        ),
       );
       await tester.tap(find.text('Sources'));
       await tester.pumpAndSettle();
@@ -382,6 +401,7 @@ void main() {
       // Commit the completed scene before measuring projection-only frames.
       await tester.pumpAndSettle();
       final readyReads = store.sourceReads;
+      final typedReadyReads = admissions.snapshot();
       for (var i = 0; i < 10; i++) {
         state.sourceFeature.graphYaw += .01;
         state.sourceFeature.graphMotionFrames.value++;
@@ -392,6 +412,11 @@ void main() {
         0,
         reason:
             'Ready-model projection frames must reuse the source/model snapshot',
+      );
+      expect(
+        admissions.snapshot(),
+        typedReadyReads,
+        reason: 'Ready-model graph frames admit no typed persistence work',
       );
       expect(identical(state.sourceFeature.graphEdges, preparedEdges), true);
       final apollo = find.byKey(ValueKey('graph-node-$a'));

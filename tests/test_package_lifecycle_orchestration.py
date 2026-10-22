@@ -13,6 +13,8 @@ from unittest.mock import Mock
 
 import pytest
 
+from tools.helper_protocol import HELPER_PROTOCOL_VERSION
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import smoke_bundle as smoke
 import installed_documents as documents
@@ -68,7 +70,7 @@ def test_linux_smoke_checks_relocation_isolated_owners_and_cleanup(
         close=Mock(),
         unary_unary=lambda *a, **kw: (
             lambda request, **kw2: SimpleNamespace(
-                success=failure != "ping", version="1.0.3"
+                success=failure != "ping", version=HELPER_PROTOCOL_VERSION
             )
         ),
     )

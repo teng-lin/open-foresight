@@ -20,6 +20,8 @@ def build_tree(tmp_path):
         "build_service_gate.sh",
         "ci_timing.sh",
         "check_build_cache.py",
+        "verify_toolchain_pins.py",
+        "pins.json",
     ):
         shutil.copy2(ROOT / "tools" / name, tools / name)
     (tools / "verify_descriptor.py").write_text("print('descriptor checked')\n")
@@ -30,6 +32,7 @@ def build_tree(tmp_path):
     for name, body in {
         "cmake": 'echo "cmake:$*"; mkdir -p "$FORESIGHT_BUILD_DIR"',
         "ctest": 'echo "ctest:$*"; exit "${FIXTURE_CTEST_EXIT:-0}"',
+        "protoc": 'echo "libprotoc 35.1"',
     }.items():
         script = binary / name
         script.write_text("#!/bin/bash\n" + body + "\n")

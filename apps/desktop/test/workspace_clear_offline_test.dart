@@ -4,10 +4,10 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/src/application.dart';
-import 'package:open_foresight/domain.dart';
-import 'package:open_foresight/google_auth.dart';
+import 'package:foresight_core/src/domain.dart';
+import 'package:foresight_core/src/google_auth.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/store.dart';
 import 'desktop_connection_fixture.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
@@ -61,7 +61,10 @@ void main() {
     expect(state.sourceFeature.sourceSearchController.text, isEmpty);
     expect(state.chatFeature.answer, isEmpty);
     expect(tester.takeException(), isNull);
-    await tester.runAsync(fixture.remote.helper.close);
+    await tester.runAsync(() async {
+      fixture.remote.close();
+      await fixture.remote.closed;
+    });
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pumpAndSettle();
   });
@@ -75,9 +78,9 @@ void main() {
     final helper = OfflineHelper('${root.path}/sock', '${root.path}/helper');
     final domain = Domain(store, helper);
     final auth = OfflineRevokeAuth(Directory('${root.path}/google'));
-    Application(domain, auth: auth);
+    final app = Application(domain, auth: auth);
     await tester.pumpWidget(
-      Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+      Foresight(TestDesktopConnection(app), deviceLoader: () async => []),
     );
     await tester.pumpAndSettle();
     final dynamic state = tester.state(find.byType(Workspace));

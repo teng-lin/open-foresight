@@ -1,13 +1,14 @@
+import 'store_reader_fixture.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_test_support/test_paths.dart';
-import 'package:open_foresight/gemma_download.dart';
+import 'package:foresight_core/src/gemma_download.dart';
 import 'package:open_foresight/gemma_setup_view.dart';
 import 'package:open_foresight/speech_setup_view.dart';
-import 'package:open_foresight/speech_models.dart';
-import 'package:open_foresight/store.dart';
+import 'package:foresight_core/src/speech_models.dart';
+import 'package:foresight_core/src/store.dart';
 import 'controller_fixture.dart' show ReadyGeneration;
 import 'pump_until.dart';
 
@@ -88,7 +89,9 @@ void main() {
 
         final widget = speech
             ? SpeechSetupDialog(
-                store: store,
+                store: fixtureReader(store),
+                savePreference: (key, value) async =>
+                    store.setPreference(key, value),
                 directory: root,
                 runner: '/usr/bin/true',
                 createDownload: () => download,
@@ -104,7 +107,9 @@ void main() {
                 installed: () => installed++,
               )
             : GemmaSetupDialog(
-                store: store,
+                store: fixtureReader(store),
+                savePreference: (key, value) async =>
+                    store.setPreference(key, value),
                 directory: root,
                 library: '',
                 runner: '/usr/bin/true',

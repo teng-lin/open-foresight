@@ -1,8 +1,6 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
-import 'graph_clusters.dart';
-import 'graph_labels.dart';
-import 'graph_layout.dart';
+import 'package:foresight_core/desktop.dart';
 import 'graph_rendering.dart';
 
 GraphPoint clusterMemberCenter(

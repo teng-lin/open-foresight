@@ -1,6 +1,6 @@
-import 'package:foresight_core/remote.dart' show GoogleAccount;
+import 'package:foresight_core/desktop.dart'
+    show GoogleAccount, RpcError, GranolaReturnFailure;
 import 'package:flutter/material.dart';
-import 'google_auth.dart' show GranolaReturnFailure;
 import 'package:flutter/services.dart';
 
 class GoogleSignInOutcome {
@@ -108,14 +108,18 @@ class _GoogleSignInDialogState extends State<GoogleSignInDialog> {
       if (mounted) returnUrl.clear();
     } catch (error) {
       // Callback URLs contain codes. Never echo them or transport error bodies.
+      final message = switch (error) {
+        RpcError() => error.message,
+        StateError() => error.message.toString(),
+        _ => null,
+      };
       if (mounted)
         setState(
           () => returnError =
-              error is StateError &&
-                  GranolaReturnFailure.values.any(
-                    (failure) => failure.message == error.message,
-                  )
-              ? error.message.toString()
+              GranolaReturnFailure.values.any(
+                (failure) => failure.message == message,
+              )
+              ? message!
               : 'The return link was not accepted. Use the link from this sign-in attempt, or cancel and sign in again.',
         );
     } finally {

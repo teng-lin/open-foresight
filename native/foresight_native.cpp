@@ -1939,8 +1939,12 @@ extern "C" int fs_set_runtime_environment(const char *key, const char *value) {
     if (!allowed.count(key))
       return -1;
     std::lock_guard lock(foresight::launch_mutex);
-    if (foresight::runtime_environment_sealed)
-      return -1;
+    if (foresight::runtime_environment_sealed) {
+      // Fresh Dart isolates may replay the same resolved runtime map. Keep the
+      // sealed process environment immutable while accepting that exact no-op.
+      const char *current = std::getenv(key);
+      return current && std::strcmp(current, value) == 0 ? 0 : -1;
+    }
     return setenv(key, value, 1) == 0 ? 0 : -1;
 
   } catch (const std::exception &barrier_error) {

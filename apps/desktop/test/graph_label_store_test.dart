@@ -1,11 +1,12 @@
+import 'package:foresight_test_support/persistence_fixtures.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/graph_labels.dart';
+import 'package:foresight_core/src/graph_labels.dart';
 import 'package:open_foresight/graph_rendering.dart';
-import 'package:open_foresight/store.dart';
-import 'package:sqlite3/sqlite3.dart';
+import 'package:foresight_core/src/store.dart';
+import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
 
 void main() {
   test(
@@ -49,61 +50,129 @@ void main() {
     },
   );
 
-  test(
-    'associations persist colors, metadata and removal without changing source revisions',
-    () {
-      final dir = createTestTempDirectorySync('foresight-label-records-');
-      addTearDown(() => dir.deleteSync(recursive: true));
-      var store = Store('${dir.path}/app.db');
-      final a = store.importText('Apollo', 'Body', 'text/plain', 'fixture:a');
-      final b = store.importText(
-        'Borealis',
-        'Other body',
-        'text/plain',
-        'fixture:b',
-      );
-      final original = store.sources.first;
-      store.labels(a, ['Planning', 'Local AI']);
-      store.labels(b, ['planning']);
-      expect(store.documentLabels.map((r) => r.colorHex), [
-        '#0EBC5F',
-        '#60D5F3',
-        '#0EBC5F',
-      ]);
-      expect(
-        store.documentLabels.every(
-          (r) => r.source == 'user_defined' && r.rationale == null,
-        ),
-        true,
-      );
-      expect(store.sources.first['revision'], original['revision']);
-      expect(store.sources.first['changed'], original['changed']);
-      store.db.execute(
-        'UPDATE document_labels SET rationale=? WHERE document_id=? AND label_name=?',
-        ['Keep this rationale', a, 'Planning'],
-      );
-      store.close();
-      store = Store('${dir.path}/app.db');
-      expect(store.documentLabels.first.rationale, 'Keep this rationale');
-      expect(store.documentLabels.map((r) => r.colorHex), [
-        '#0EBC5F',
-        '#60D5F3',
-        '#0EBC5F',
-      ]);
-      store.labels(a, ['Planning']);
-      expect(
-        store.documentLabels.where((r) => r.documentId == a).map((r) => r.name),
-        ['Planning'],
-      );
-      expect(jsonDecode(store.sources.first['labels'] as String), ['Planning']);
-      store.labels(b, []);
-      expect(store.documentLabels.where((r) => r.documentId == b), isEmpty);
-      store.db.execute('DELETE FROM source_details WHERE source_id=?', [a]);
-      store.db.execute('DELETE FROM sources WHERE id=?', [a]);
-      expect(store.rows('SELECT * FROM document_labels'), isEmpty);
-      store.close();
-    },
-  );
+  for (final apolloFirst in [true, false]) {
+    test(
+      'associations persist colors, metadata and removal without changing source revisions '
+      '(${apolloFirst ? 'Apollo' : 'Borealis'} sorts first)',
+      () {
+        final dir = createTestTempDirectorySync('foresight-label-records-');
+        addTearDown(() => dir.deleteSync(recursive: true));
+        var store = Store('${dir.path}/app.db');
+        final a = store.importText(
+          'Apollo',
+          'Body',
+          'text/plain',
+          'fixture:a',
+          id: apolloFirst ? 'a' : 'z',
+        );
+        final b = store.importText(
+          'Borealis',
+          'Other body',
+          'text/plain',
+          'fixture:b',
+          id: apolloFirst ? 'z' : 'a',
+        );
+        Map<String, Object?> source(String id) =>
+            store.sources.singleWhere((row) => row['id'] == id);
+        final original = {
+          for (final id in [a, b]) id: source(id),
+        };
+        void expectSourceRevisionsUnchanged() {
+          for (final id in [a, b]) {
+            expect(source(id)['revision'], original[id]!['revision']);
+            expect(source(id)['changed'], original[id]!['changed']);
+          }
+        }
+
+        final expectedPositions = apolloFirst
+            ? [(a, 'Planning', 0), (a, 'Local AI', 1), (b, 'planning', 0)]
+            : [(b, 'planning', 0), (a, 'Planning', 0), (a, 'Local AI', 1)];
+        void expectLabelOrder() {
+          expect(
+            store.documentLabels.map((label) => (label.documentId, label.name)),
+            expectedPositions.map((row) => (row.$1, row.$2)),
+          );
+          expect(
+            store
+                .rows(
+                  'SELECT document_id,label_name,position FROM document_labels '
+                  'ORDER BY document_id,position',
+                )
+                .map(
+                  (row) =>
+                      (row['document_id'], row['label_name'], row['position']),
+                ),
+            expectedPositions,
+          );
+        }
+
+        store.labels(a, ['Planning', 'Local AI']);
+        store.labels(b, ['planning']);
+        final expectedColors = {
+          (a, 'Planning'): '#0EBC5F',
+          (a, 'Local AI'): '#60D5F3',
+          (b, 'planning'): '#0EBC5F',
+        };
+        expect({
+          for (final label in store.documentLabels)
+            (label.documentId, label.name): label.colorHex,
+        }, expectedColors);
+        expect(
+          store.documentLabels.every(
+            (r) => r.source == 'user_defined' && r.rationale == null,
+          ),
+          true,
+        );
+        expectLabelOrder();
+        expectSourceRevisionsUnchanged();
+        store.db.execute(
+          'UPDATE document_labels SET rationale=? WHERE document_id=? AND label_name=?',
+          ['Keep this rationale', a, 'Planning'],
+        );
+        store.close();
+        store = Store('${dir.path}/app.db');
+        expect(
+          {
+            for (final label in store.documentLabels)
+              (label.documentId, label.name): (
+                label.colorHex,
+                label.source,
+                label.rationale,
+              ),
+          },
+          {
+            (a, 'Planning'): ('#0EBC5F', 'user_defined', 'Keep this rationale'),
+            (a, 'Local AI'): ('#60D5F3', 'user_defined', null),
+            (b, 'planning'): ('#0EBC5F', 'user_defined', null),
+          },
+        );
+        expectLabelOrder();
+        expectSourceRevisionsUnchanged();
+        expect(jsonDecode(source(a)['labels'] as String), [
+          'Planning',
+          'Local AI',
+        ]);
+        expect(jsonDecode(source(b)['labels'] as String), ['planning']);
+        store.labels(a, ['Planning']);
+        expect(
+          store.documentLabels
+              .where((r) => r.documentId == a)
+              .map((r) => r.name),
+          ['Planning'],
+        );
+        expect(jsonDecode(source(a)['labels'] as String), ['Planning']);
+        expect(jsonDecode(source(b)['labels'] as String), ['planning']);
+        store.labels(b, []);
+        expect(store.documentLabels.where((r) => r.documentId == b), isEmpty);
+        expect(jsonDecode(source(b)['labels'] as String), isEmpty);
+        expectSourceRevisionsUnchanged();
+        store.db.execute('DELETE FROM source_details WHERE source_id=?', [a]);
+        store.db.execute('DELETE FROM sources WHERE id=?', [a]);
+        expect(store.rows('SELECT * FROM document_labels'), isEmpty);
+        store.close();
+      },
+    );
+  }
 
   test(
     'legacy JSON edits reconcile atomically while source data and existing colours survive',
@@ -122,12 +191,14 @@ void main() {
         'UPDATE document_labels SET color_hex=? WHERE document_id=?',
         ['#123456', id],
       );
+      final before = Map<String, Object?>.from(store.sources.single);
+      legacyLabelFixture(store.db);
       store.db.execute('UPDATE source_details SET labels=? WHERE source_id=?', [
         jsonEncode(['Existing', 'New']),
         id,
       ]);
       store.db.execute('PRAGMA user_version=8');
-      final before = store.sources.single;
+      before['labels'] = jsonEncode(['Existing', 'New']);
       store.close();
       store = Store('${dir.path}/app.db');
       expect(store.sources.single, before);
@@ -179,13 +250,15 @@ void main() {
         'fixture',
         sourceUri: 'https://example.test/document',
       );
+      final before = Map<String, Object?>.from(store.sources.single);
+      legacyLabelFixture(store.db);
       store.db.execute('UPDATE source_details SET labels=? WHERE source_id=?', [
         jsonEncode(['First', 'Second']),
         id,
       ]);
       store.db.execute('DROP TABLE document_labels');
       store.db.execute('PRAGMA user_version=1');
-      final before = store.sources.single;
+      before['labels'] = jsonEncode(['First', 'Second']);
       store.close();
       store = Store('${dir.path}/app.db');
       expect(store.sources.single, before);
