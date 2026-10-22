@@ -851,3 +851,34 @@ complete frozen-source run. No checkpoint acceptance or feature extraction is
 claimed. Reports and exact-source evidence:
 `/var/tmp/foresight-core-implementation-review-r8/{claude.md,result.json}` and
 `/var/tmp/foresight-core-desktop/core-contracts/namespace-cache-implementation-review-native.md`.
+
+## Cache-test granularity review, round9
+
+The independent native review converges on the four-case split and verifies the
+raw six-test focused events and log hashes. Claude CLI reviews frozen
+`63fc4a80546a5d856bc11fb5aeca620984f674f1` and finds no blocking defect, but withholds
+convergence for an actionable cleanup issue: teardown revalidates already-flushed
+cold entries after the corruption case deliberately damages them. If a primary
+assertion fails, that can add a misleading disk-write error. The accepted fix
+tracks only writes still awaiting independent disk verification, keeping the
+complete write-history assertions and existing bounds.
+
+The later metadata-only finalization script was also absent from the retained
+evidence directory. Its recovery/reproducer must be explicitly preserved without
+rewriting the failed original driver or repeating the old passed runtime. The
+next complete run must record actual durations for all four cases; an idle/load
+ratio is not a causal explanation or proof of timing margin. No full 63fc
+canonical run was launched. Its seven static commands pass, and the subsequent
+test-only correction still requires affected checks and native/Claude review.
+Report: `/var/tmp/foresight-core-implementation-review-r9/{claude.md,result.json}`.
+
+## Revision14 owner coverage amendment: review pending
+
+Revision13's whole-plan convergence remains scoped to its frozen document bytes.
+The owner subsequently requests a95% coverage target while retaining the90%
+enforced minimum. Revision14 applies that target to Dart core at the core
+checkpoint and both Dart suites at final combined acceptance, without changing
+Python's95% gate, coverage exclusions, native requirements or real platform/skip
+obligations. Current-source reports drive meaningful additional behavior tests;
+historical coverage is labeled by its actual source. Native/Claude review of this
+amendment and the pending-write correction remains pending.

@@ -14,6 +14,7 @@ import 'package:test/test.dart';
 class _ObservedStore implements ByteStore {
   final FileByteStore delegate;
   final writtenKeys = <String>{};
+  final _pendingKeys = <String>{};
   int hits = 0;
   int misses = 0;
 
@@ -33,6 +34,7 @@ class _ObservedStore implements ByteStore {
   @override
   Uint8List putGet(String key, Uint8List bytes) {
     writtenKeys.add(key);
+    _pendingKeys.add(key);
     return delegate.putGet(key, bytes);
   }
 
@@ -40,15 +42,18 @@ class _ObservedStore implements ByteStore {
   void release(Iterable<String> keys) => delegate.release(keys);
 
   Future<void> awaitDiskWrites(String cache) async {
+    if (_pendingKeys.isEmpty) return;
     // Use another store so an in-progress write cannot masquerade as disk reuse.
     final reader = FileByteStore(cache);
     final clock = Stopwatch()..start();
-    while (!writtenKeys.every((key) => reader.get(key) != null)) {
+    while (!_pendingKeys.every((key) => reader.get(key) != null)) {
       if (clock.elapsed > const Duration(seconds: 5)) {
         fail('Analyzer compiler bundles did not finish writing to $cache');
       }
       await Future<void>.delayed(const Duration(milliseconds: 10));
     }
+    // These writes stay complete when a test later damages their cache entries.
+    _pendingKeys.clear();
   }
 }
 

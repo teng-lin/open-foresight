@@ -670,3 +670,31 @@ match this follow-up; later progress/review prose edits are separate documentati
 changes. Independent native/Claude delta review and another complete frozen-source
 canonical run remain required before checkpoint acceptance.
 Freshly fetched main remains `3fb259243a99137e3cba1d5e795c44100f42e688`.
+
+Frozen follow-up `63fc4a80546a5d856bc11fb5aeca620984f674f1` passes all seven
+current-source static commands, and native review converges on the split. Claude
+round9 identifies a cleanup diagnostic issue and a missing retained metadata
+finalizer, so no complete 63fc canonical run is launched. The next correction
+retains pending-write state until independent disk verification, then avoids
+rechecking intentionally damaged completed entries during teardown. Actual
+before/after fault injection and the six unaffected-deadline semantic tests are
+required; original failed and focused-run evidence remains source-bound. No
+checkpoint acceptance is implied by static or review results.
+
+## Owner coverage target, revision14 amendment
+
+The owner requests 95% coverage while retaining the 90% minimum. This applies to
+the Dart core and desktop suites that currently enforce 90%; Python retains its
+existing 95% threshold. Plan revision14 requires core to reach 95% at its
+checkpoint and both suites to reach 95% at the final combined head. CI minima,
+coverage inclusions/exclusions and skip requirements remain unchanged. Native
+tests do not acquire an invented percentage requirement.
+
+The latest completed core coverage measurement is historical2d (92.04%,
+15,053/16,354); subsequent failed canonical runs did not complete core coverage.
+The authentic278 desktop measurement is91.35% (6,104/6,682). These are diagnostic
+starting points, not new-source results. Native agents are mapping meaningful
+uncovered success/error/stale-publication/cleanup behavior. The next actual full
+run must supply current core coverage before choosing its additional tests.
+The coverage amendment and pending-write follow-up require independent review;
+reaching the existing 90% gate alone does not complete this requested improvement.
