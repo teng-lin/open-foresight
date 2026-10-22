@@ -131,6 +131,9 @@ class ArgumentField {
     if (maximum != null) 'maximum': maximum,
     if (minimumLength != null) 'minLength': minimumLength,
     if (maximumLength != null) 'maxLength': maximumLength,
+    if (minimumItems != null) 'minItems': minimumItems,
+    if (maximumItems != null) 'maxItems': maximumItems,
+    if (distinct) 'uniqueItems': true,
     if (choices != null) 'enum': choices,
     if (description != null) 'description': description,
   };

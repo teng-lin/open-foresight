@@ -220,11 +220,22 @@ class _MeetingsController extends _FeatureController {
     await d.command(Operation.meetingsIndex, {'id': id});
   }
 
-  Future<void> generateMeeting(String kind, {int? id}) async {
-    await d.command(Operation.meetingsGenerate, {
+  Future<void> generateMeeting(
+    String kind, {
+    int? id,
+    String? workspaceEpoch,
+    bool Function()? current,
+  }) async {
+    final args = {
       'id': id ?? meetingId!,
       'kind': kind,
-    });
+      if (workspaceEpoch != null) 'workspace_epoch': workspaceEpoch,
+    };
+    if (current == null) {
+      await d.command(Operation.meetingsGenerate, args);
+    } else {
+      await d.commandCurrent(Operation.meetingsGenerate, args, current);
+    }
   }
 
   Future<void> editArtifact(Map<String, Object?> a) async {
@@ -1916,6 +1927,7 @@ class _MeetingsController extends _FeatureController {
 
   Widget meetingSummaryPanel(int id, {bool actions = false}) {
     if (actions) return meetingActionsPanel(id);
+    final identity = FeatureRequestIdentity.capture(d);
     final kind = actions ? 'actions' : 'summary';
     final title = actions ? 'Action items' : 'Summary';
     final versions = readRows(d.store.meetingArtifacts(id, kind));
@@ -1949,7 +1961,16 @@ class _MeetingsController extends _FeatureController {
                         chatFeature.asking ||
                         meetingEnhancing
                     ? null
-                    : () => shell.run(() => generateMeeting(kind, id: id)),
+                    : () => _runMeetingAction(
+                        id,
+                        identity,
+                        (current) => generateMeeting(
+                          kind,
+                          id: id,
+                          workspaceEpoch: identity.workspaceEpoch,
+                          current: current,
+                        ),
+                      ),
                 icon: const Icon(Icons.auto_awesome),
               ),
               if (active)

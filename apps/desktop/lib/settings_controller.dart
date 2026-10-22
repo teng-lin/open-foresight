@@ -416,6 +416,8 @@ class _SettingsController extends _FeatureController {
   }
 
   String? localOutputRevision;
+  FeatureRequestIdentity? _localOutputIdentity;
+  Object? _localOutputRequest;
   int localOutputCount = 0;
   int recordedMeetings = 0, sourceCount = 0, completedAnswers = 0;
   List<int> localOutputWeekly = List<int>.filled(5, 0);
@@ -423,26 +425,42 @@ class _SettingsController extends _FeatureController {
   int localWords() {
     final revision =
         '${d.store.dataRevision}:${outputWeekStart(DateTime.now()).millisecondsSinceEpoch}';
-    if (localOutputRevision != revision) {
+    if (localOutputRevision != revision ||
+        !(_localOutputIdentity?.isCurrent(d, alive: mounted) ?? false)) {
+      final identity = FeatureRequestIdentity.capture(d);
+      final request = Object();
       localOutputRevision = revision;
+      _localOutputIdentity = identity;
+      _localOutputRequest = request;
+      bool current() =>
+          identical(_localOutputRequest, request) &&
+          localOutputRevision == revision &&
+          identity.isCurrent(d, alive: mounted);
       unawaited(
-        localOutputStats(d.store).then((stats) {
-          if (!mounted || localOutputRevision != revision) return;
-          var changed = localOutputCount != stats.words;
-          for (var i = 0; i < 5; i++) {
-            changed |= localOutputWeekly[i] != stats.weekly[i];
-          }
-          changed |=
-              recordedMeetings != stats.recordedMeetings ||
-              sourceCount != stats.sources ||
-              completedAnswers != stats.completedAnswers;
-          recordedMeetings = stats.recordedMeetings;
-          sourceCount = stats.sources;
-          completedAnswers = stats.completedAnswers;
-          localOutputCount = stats.words;
-          localOutputWeekly = stats.weekly;
-          if (changed) shell.serviceChanged();
-        }, onError: (Object _) {}),
+        localOutputStats(d.store).then(
+          (stats) {
+            if (!current()) return;
+            var changed = localOutputCount != stats.words;
+            for (var i = 0; i < 5; i++) {
+              changed |= localOutputWeekly[i] != stats.weekly[i];
+            }
+            changed |=
+                recordedMeetings != stats.recordedMeetings ||
+                sourceCount != stats.sources ||
+                completedAnswers != stats.completedAnswers;
+            recordedMeetings = stats.recordedMeetings;
+            sourceCount = stats.sources;
+            completedAnswers = stats.completedAnswers;
+            localOutputCount = stats.words;
+            localOutputWeekly = stats.weekly;
+            if (changed) shell.serviceChanged();
+          },
+          onError: (Object _) {
+            // Retry on the next normal read, retaining the last successful values.
+            // Scheduling a rebuild here would loop while the service is failing.
+            if (current()) localOutputRevision = null;
+          },
+        ),
       );
     }
     return localOutputCount;

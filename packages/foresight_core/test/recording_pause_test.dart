@@ -529,13 +529,17 @@ void main() {
       );
       final app = Application(domain);
       final id = store.meeting('Pause fixture');
+      final note = store.saveNote(null, 'Retained note', 'Private note body');
+      store.saveMeetingNotes(id, 'Retained meeting notes');
+      store.setPreference('echoCancellation', 'true');
+      final epoch = store.workspaceEpoch;
       final recording = Recording(
         library,
         (state) => app.recordingState = state,
         (_, _, _, _) {},
       );
       try {
-        recording.start('/usr/bin/true', model);
+        recording.start('/usr/bin/true', model, echoCancellation: true);
         app.recording = recording;
         app.recordingMeeting = id;
         app.recordingBegan = now;
@@ -569,6 +573,81 @@ void main() {
           ]).single['state'],
           'paused',
         );
+        final meetingRows = store.rows('SELECT * FROM meetings WHERE id=?', [
+          id,
+        ]);
+        final meetingNotes = store.meetingNoteRows(id);
+        void expectPausedOwnership() {
+          expect(store.workspaceEpoch, epoch);
+          expect(
+            store.rows('SELECT * FROM meetings WHERE id=?', [id]),
+            meetingRows,
+          );
+          expect(store.meetingNoteRows(id), meetingNotes);
+          expect(store.noteBody(note), 'Private note body');
+          expect(app.recording, same(recording));
+          expect(app.recordingMeeting, id);
+          expect(app.recordingBegan, DateTime.utc(2026));
+          expect(app.captureState['active'], true);
+          expect(app.captureState['paused'], true);
+          expect(app.captureState['meeting_id'], id);
+          expect(recording.captures, isEmpty);
+        }
+
+        // Pausing releases the devices, but keeps the recording owner. A new
+        // start or workspace clear must not treat it as an idle workspace.
+        await expectLater(
+          app.call(Operation.meetingsStart.wire, {'id': id}),
+          throwsA(
+            isA<RpcError>()
+                .having((error) => error.code, 'code', RpcErrorCode.busy)
+                .having(
+                  (error) => error.message,
+                  'message',
+                  'A meeting is already recording',
+                ),
+          ),
+        );
+        expectPausedOwnership();
+        await expectLater(
+          app.call(Operation.workspaceClear.wire, const {}),
+          throwsA(
+            isA<RpcError>()
+                .having((error) => error.code, 'code', RpcErrorCode.busy)
+                .having(
+                  (error) => error.message,
+                  'message',
+                  'Stop recording before clearing the workspace',
+                ),
+          ),
+        );
+        expectPausedOwnership();
+        expect(recording.echoCancellationState['requested'], true);
+        await app.call(Operation.preferencesSet.wire, {
+          'key': 'echoCancellation',
+          'value': 'false',
+        });
+        expect(store.preference('echoCancellation'), 'false');
+        expect(recording.echoCancellationState['requested'], false);
+        expectPausedOwnership();
+        if (Platform.isLinux) {
+          await expectLater(
+            app.call(Operation.preferencesSet.wire, {
+              'key': 'echoCancellation',
+              'value': 'true',
+            }),
+            throwsA(
+              isA<StateError>().having(
+                (error) => error.message,
+                'message',
+                'Native echo cancellation is available on macOS',
+              ),
+            ),
+          );
+          expect(store.preference('echoCancellation'), 'false');
+          expect(recording.echoCancellationState['requested'], false);
+          expectPausedOwnership();
+        }
         await expectLater(
           app.call(Operation.modelsSpeech.wire, {
             'path': 'unused',

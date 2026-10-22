@@ -107,7 +107,11 @@ keeps the service's canonical scope digest authoritative when preparing scoped d
 features must not copy the digest algorithm or import writable core implementation types.
 Desktop characterizations are active; 7A production extraction and 7B/7C remain outstanding.
 The progress record identifies actual hosted failures, source-bound evidence and the recovered
-local Docker access. No historical failure or intermediate review verdict is final acceptance.
+local Docker access. The updated23360009 canonical Linux matrix passes its90% gates but core
+coverage is94.97%, so it is not the95% checkpoint; its full HanSolo matrix passes at95.39% core.
+The next freeze batches the paused-recording coverage regressions, actual hosted Google-verifier
+cancellation correction and valid MCP/graph/Stats review fixes. No historical failure or
+intermediate review verdict is final acceptance.
 
 The renewed review originally used core candidate `4bd2c75d5890399f03d57ce8a46788da2dfcc623`;
 main resolved to `3fb259243a99137e3cba1d5e795c44100f42e688`.

@@ -62,6 +62,8 @@ class _SourcesController extends _FeatureController {
 
   String graphLayoutKey = '';
 
+  FeatureRequestIdentity? _graphLayoutOwner;
+
   bool graphOrganizing = false;
 
   String graphLayoutError = '';
@@ -1453,6 +1455,36 @@ class _SourcesController extends _FeatureController {
     ),
   );
 
+  bool _graphLayoutCurrent(String key, FeatureRequestIdentity owner) =>
+      graphLayoutKey == key &&
+      identical(_graphLayoutOwner, owner) &&
+      owner.isCurrent(d, alive: mounted);
+
+  void _graphLayoutFailed(
+    String key,
+    FeatureRequestIdentity owner,
+    Object error, {
+    bool clearScene = false,
+  }) {
+    if (!_graphLayoutCurrent(key, owner)) return;
+    shell.update(() {
+      if (clearScene) {
+        graphPoints = {};
+        graphEdges = [];
+        graphSceneVectors = {};
+        graphSelectionRevision++;
+        graphSelectionEdges = [];
+      }
+      graphOrganizing = false;
+      graphLayoutError = error.toString();
+    });
+    // Render the failure with its key still deduplicated. A later external
+    // refresh can retry the same inputs without an error/rebuild retry loop.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_graphLayoutCurrent(key, owner)) graphLayoutKey = '';
+    });
+  }
+
   void scheduleGraphLayout(List<Map<String, Object?>> all) {
     final selected = graphSelectedDocument;
     if (selected != null && !all.any((row) => row['id'] == selected)) {
@@ -1501,29 +1533,36 @@ class _SourcesController extends _FeatureController {
         labelSet,
         graphOrganizationRevision,
       ]);
-      if (key == graphLayoutKey) return;
+      if (key == graphLayoutKey &&
+          (_graphLayoutOwner?.isCurrent(d, alive: mounted) ?? false)) {
+        return;
+      }
       graphLayoutKey = key;
+      final owner = _graphLayoutOwner = FeatureRequestIdentity.capture(d);
+      bool current() => _graphLayoutCurrent(key, owner);
       WidgetsBinding.instance.addPostFrameCallback((_) async {
-        if (!mounted || graphLayoutKey != key) return;
-        var saved = await d.store.loadRegisteredGraphLayout(
-          sources,
-          labelSet: labelSet,
-        );
-        sources = graphSceneSources(sources, saved.vectors);
-        saved = await d.store.loadRegisteredGraphLayout(
-          sources,
-          labelSet: labelSet,
-        );
-        shell.update(() {
-          graphPoints = saved.points;
-          graphEdges = [];
-          graphSceneVectors = saved.vectors;
-          graphSelectionRevision++;
-          graphSelectionEdges = [];
-          graphOrganizing = true;
-          graphLayoutError = '';
-        });
+        if (!current()) return;
         try {
+          var saved = await d.store.loadRegisteredGraphLayout(
+            sources,
+            labelSet: labelSet,
+          );
+          if (!current()) return;
+          sources = graphSceneSources(sources, saved.vectors);
+          saved = await d.store.loadRegisteredGraphLayout(
+            sources,
+            labelSet: labelSet,
+          );
+          if (!current()) return;
+          shell.update(() {
+            graphPoints = saved.points;
+            graphEdges = [];
+            graphSceneVectors = saved.vectors;
+            graphSelectionRevision++;
+            graphSelectionEdges = [];
+            graphOrganizing = true;
+            graphLayoutError = '';
+          });
           final scene = saved.complete
               ? null
               : await organizeForceGraphSceneInBackground(
@@ -1533,9 +1572,10 @@ class _SourcesController extends _FeatureController {
                   saved.points,
                   documents: sources.map((s) => s['id'] as String).toList(),
                 );
+          if (!current()) return;
           final edges =
               scene?.edges ?? await graphEdgesInBackground(saved.vectors);
-          if (!mounted || graphLayoutKey != key) return;
+          if (!current()) return;
           if (scene != null &&
               saved.identity != null &&
               scene.points.length == sources.length &&
@@ -1548,6 +1588,7 @@ class _SourcesController extends _FeatureController {
               labelSet: labelSet,
               clusters: scene.clusters,
             );
+            if (!current()) return;
             if (!published) {
               shell.update(() {
                 graphLayoutKey = '';
@@ -1564,11 +1605,7 @@ class _SourcesController extends _FeatureController {
           refreshGraphSelection();
           scheduleGraphFit();
         } catch (e) {
-          if (!mounted || graphLayoutKey != key) return;
-          shell.update(() {
-            graphOrganizing = false;
-            graphLayoutError = e.toString();
-          });
+          _graphLayoutFailed(key, owner, e);
         }
       });
       return;
@@ -1600,10 +1637,15 @@ class _SourcesController extends _FeatureController {
       labelSet,
       graphOrganizationRevision,
     ]);
-    if (key == graphLayoutKey) return;
+    if (key == graphLayoutKey &&
+        (_graphLayoutOwner?.isCurrent(d, alive: mounted) ?? false)) {
+      return;
+    }
     graphLayoutKey = key;
+    final owner = _graphLayoutOwner = FeatureRequestIdentity.capture(d);
+    bool current() => _graphLayoutCurrent(key, owner);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      if (!mounted || graphLayoutKey != key) return;
+      if (!current()) return;
       // Results computed for this layout apply only to the same model run.
       bool helperChanged() {
         final current = d.helper.snapshot;
@@ -1614,36 +1656,37 @@ class _SourcesController extends _FeatureController {
             current.activeGeneration.toString() != generation;
       }
 
-      final saved = await d.store.loadGraphLayout(
-        persistentIdentity,
-        sources,
-        snapshot.model.dimensions,
-        labelSet: labelSet,
-      );
-      for (final source in sources) {
-        final vector = saved.vectors[source['id']];
-        if (vector != null) {
-          graphVectorCache[jsonEncode([
-                identity,
-                source['id'],
-                source['revision'],
-              ])] =
-              vector;
-        }
-      }
-      shell.update(() {
-        graphPoints = saved.points;
-        graphEdges = [];
-        graphSceneVectors = saved.vectors;
-        graphSelectionRevision++;
-        graphSelectionEdges = [];
-        graphOrganizing = true;
-        graphLayoutError = '';
-      });
       try {
+        final saved = await d.store.loadGraphLayout(
+          persistentIdentity,
+          sources,
+          snapshot.model.dimensions,
+          labelSet: labelSet,
+        );
+        if (!current() || helperChanged()) return;
+        for (final source in sources) {
+          final vector = saved.vectors[source['id']];
+          if (vector != null) {
+            graphVectorCache[jsonEncode([
+                  identity,
+                  source['id'],
+                  source['revision'],
+                ])] =
+                vector;
+          }
+        }
+        shell.update(() {
+          graphPoints = saved.points;
+          graphEdges = [];
+          graphSceneVectors = saved.vectors;
+          graphSelectionRevision++;
+          graphSelectionEdges = [];
+          graphOrganizing = true;
+          graphLayoutError = '';
+        });
         if (saved.complete) {
           final edges = await graphEdgesInBackground(saved.vectors);
-          if (!mounted || graphLayoutKey != key || helperChanged()) return;
+          if (!current() || helperChanged()) return;
           shell.update(() {
             graphEdges = edges;
             graphOrganizing = false;
@@ -1673,7 +1716,7 @@ class _SourcesController extends _FeatureController {
           );
           final fresh = await d.graphEmbeddings(batch);
           // Never cache vectors from a model run that has since changed.
-          if (!mounted || graphLayoutKey != key || helperChanged()) return;
+          if (!current() || helperChanged()) return;
           for (final source in batch) {
             final vector = fresh[source['id']];
             if (vector != null)
@@ -1707,7 +1750,7 @@ class _SourcesController extends _FeatureController {
           documents: sources.map((s) => s['id'] as String).toList(),
         );
         final layout = scene.points;
-        if (!mounted || graphLayoutKey != key || helperChanged()) return;
+        if (!current() || helperChanged()) return;
         if (layout.length == sources.length && sources.length >= 2) {
           final published = await saveGraphLayout(
             persistentIdentity,
@@ -1717,6 +1760,7 @@ class _SourcesController extends _FeatureController {
             labelSet: labelSet,
             clusters: scene.clusters,
           );
+          if (!current() || helperChanged()) return;
           if (!published) {
             shell.update(() {
               graphLayoutKey = '';
@@ -1734,16 +1778,8 @@ class _SourcesController extends _FeatureController {
         refreshGraphSelection();
         scheduleGraphFit();
       } catch (e) {
-        if (!mounted || graphLayoutKey != key) return;
-        shell.update(() {
-          graphPoints = {};
-          graphEdges = [];
-          graphSceneVectors = {};
-          graphSelectionRevision++;
-          graphSelectionEdges = [];
-          graphOrganizing = false;
-          graphLayoutError = e.toString();
-        });
+        if (!current() || helperChanged()) return;
+        _graphLayoutFailed(key, owner, e, clearScene: true);
       }
     });
   }

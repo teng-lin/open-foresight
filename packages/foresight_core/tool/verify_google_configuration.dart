@@ -2,6 +2,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:foresight_core/src/google_auth.dart';
+import 'package:foresight_core/src/rpc_error.dart';
 
 Future<void> main() async {
   final root = Directory.systemTemp.createTempSync('foresight-google-config-');
@@ -29,8 +30,8 @@ Future<void> main() async {
             Uri.parse(params['redirect_uri']!).host == '127.0.0.1';
         auth.cancelSignIn();
       });
-    } on StateError {
-      if (!invited) rethrow;
+    } on RpcError catch (error) {
+      if (!invited || error.code != RpcErrorCode.cancelled) rethrow;
     }
     if (!invited || auth.connected || auth.signingIn || profile.existsSync()) {
       throw StateError('Packaged Google browser invitation failed');

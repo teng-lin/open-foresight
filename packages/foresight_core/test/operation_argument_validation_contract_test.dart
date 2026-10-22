@@ -64,6 +64,44 @@ void main() {
     );
   });
 
+  test('list schema advertises the bounds and uniqueness it enforces', () {
+    const field = ArgumentField(
+      'sources',
+      ArgumentKind.strings,
+      minimumItems: 1,
+      maximumItems: 2,
+      distinct: true,
+    );
+    const schema = OperationArgumentSchema([field]);
+    expect((schema.schema.toJson()['properties'] as Map)['sources'], {
+      'type': 'array',
+      'items': {'type': 'string'},
+      'minItems': 1,
+      'maxItems': 2,
+      'uniqueItems': true,
+    });
+    for (final sources in [
+      <String>[],
+      ['duplicate', 'duplicate'],
+      ['one', 'two', 'three'],
+    ]) {
+      expect(
+        () => schema.decode({'sources': sources}),
+        invalidField('sources'),
+      );
+    }
+    for (final sources in [
+      ['one'],
+      ['one', 'two'],
+    ]) {
+      final values = schema
+          .decode({'sources': sources})
+          .value<List<String>>('sources');
+      expect(values, sources);
+      expect(() => values.add('three'), throwsUnsupportedError);
+    }
+  });
+
   test(
     'published graph and optional-field schema matches decoder exposure',
     () {
