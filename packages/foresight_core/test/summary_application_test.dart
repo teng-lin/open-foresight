@@ -129,6 +129,10 @@ void main() {
         (app.captureState['meeting_summaries'] as Map)['$meeting']['active'],
         isFalse,
       );
+      expect(
+        (app.captureState['meeting_summaries'] as Map)['$meeting'],
+        isNot(contains('preview')),
+      );
       // A canceled prior user edit must never be used as an incremental checkpoint.
       store.editArtifact(artifact['id'] as int, 'User correction');
       expect(store.summaryCheckpoint(meeting), isNull);

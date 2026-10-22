@@ -52,6 +52,8 @@ class ApplicationService {
   StreamSubscription<void>? _changes;
   StreamSubscription<void>? _captureLevels;
   Timer? _heartbeat;
+  Timer? _pendingBroadcast;
+  late String _broadcastEpoch;
   final _ledger = ServiceRequestLedger();
   final _desktopClients = <Socket>{};
   Timer? _lifetime;
@@ -88,6 +90,8 @@ class ApplicationService {
   void _retireSchemaReads() {
     _schemaReadsRetired = true;
     _heartbeat?.cancel();
+    _pendingBroadcast?.cancel();
+    _pendingBroadcast = null;
   }
 
   ServiceLifetimeSnapshot get _lifetimeSnapshot => ServiceLifetimeSnapshot(
@@ -183,6 +187,7 @@ class ApplicationService {
       token,
       (host, event) => _messages.send(host as Socket, event),
     );
+    _broadcastEpoch = domain.store.workspaceEpoch;
     _changes = application.changes.stream.listen((_) {
       _broadcast();
       _exitIfIdle();
@@ -206,6 +211,7 @@ class ApplicationService {
   void _discard() {
     _lifetime?.cancel();
     _heartbeat?.cancel();
+    _pendingBroadcast?.cancel();
     unawaited(_changes?.cancel());
     unawaited(_captureLevels?.cancel());
   }
@@ -389,6 +395,29 @@ class ApplicationService {
 
   void _broadcast() {
     if (_closing || _schemaReadsRetired) return;
+    try {
+      // Workspace replacement must retire old desktop views immediately.
+      if (domain.store.workspaceEpoch != _broadcastEpoch) {
+        _flushBroadcast();
+        return;
+      }
+    } on IncompatibleReadSchema {
+      _retireSchemaReads();
+      return;
+    }
+    // Bound background progress traffic while retaining its latest snapshot.
+    // Keeping the first deadline prevents a continuous producer from starving
+    // presentation updates indefinitely.
+    _pendingBroadcast ??= domain.createTimer(
+      const Duration(milliseconds: 100),
+      _flushBroadcast,
+    );
+  }
+
+  void _flushBroadcast() {
+    _pendingBroadcast?.cancel();
+    _pendingBroadcast = null;
+    if (_closing || _schemaReadsRetired) return;
     late final Map<String, Object?> message;
     try {
       message = {
@@ -403,6 +432,7 @@ class ApplicationService {
         'helper_state': domain.helper.state,
         'workspace_epoch': domain.store.workspaceEpoch,
       };
+      _broadcastEpoch = message['workspace_epoch']! as String;
     } on IncompatibleReadSchema {
       _retireSchemaReads();
       return;
@@ -596,6 +626,10 @@ class ApplicationService {
       (value) =>
           _messages.send(client, {'id': id, 'result': value, 'done': false}),
       onError: (Object e, StackTrace stack) {
+        if (typed.operation.descriptor.scope == OperationScope.service &&
+            typed.operation.notifiesChanges) {
+          _flushBroadcast();
+        }
         _messages.send(client, {
           'id': id,
           'error': requestFailure(e, stack).toJson(),
@@ -607,6 +641,10 @@ class ApplicationService {
         _exitIfIdle();
       },
       onDone: () {
+        if (typed.operation.descriptor.scope == OperationScope.service &&
+            typed.operation.notifiesChanges) {
+          _flushBroadcast();
+        }
         _messages.send(client, {'id': id, 'done': true});
         _subscriptions[client]?.remove(id);
         _leases[client]?.remove(id);
@@ -766,10 +804,17 @@ class ApplicationService {
       throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
     }
     _dispatch(lease);
-    final result = await application.callRequest(
-      request,
-      current: () => !lease.cancelled,
-    );
+    final Object? result;
+    try {
+      result = await application.callRequest(
+        request,
+        current: () => !lease.cancelled,
+      );
+    } finally {
+      // Desktop commands synchronously consume the state after their reply.
+      // Preserve event-before-reply even for a failed or held request.
+      if (request.operation.notifiesChanges) _flushBroadcast();
+    }
     // The operation has committed; a lifecycle test may hold its reply here.
     if (serviceGatesEnabled) await serviceGate('request.committed.$method');
     if (method == Operation.status.wire) {
@@ -824,6 +869,7 @@ class ApplicationService {
     _closing = true;
     _heartbeat?.cancel();
     _lifetime?.cancel();
+    _pendingBroadcast?.cancel();
     domain.helper.onReady = null;
     // An isolated frontend refuses new connections from here on.
     _onDraining?.call();

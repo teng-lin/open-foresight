@@ -117,6 +117,10 @@ void main() {
     'both action aliases share one typed artifact and preserve manual edits',
     () async {
       await app.generateMeeting(meeting, 'action_items');
+      expect(
+        (app.captureState['meeting_workflows'] as Map)['$meeting:actions'],
+        allOf(containsPair('active', false), isNot(contains('preview'))),
+      );
       expect(store.meetingArtifacts(meeting, 'action_items'), isEmpty);
       final task = store.meetingTasks(meeting).single;
       await app.call('meetings.edit_task', {

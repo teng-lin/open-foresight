@@ -48,7 +48,6 @@ class RemoteDomain
 
   void _notifyChanges() {
     if (_disposed) return;
-    _reader.invalidate();
     _changes.add(null);
   }
 
@@ -173,6 +172,8 @@ class RemoteDomain
   @override
   Stream<List<double>> get captureLevels => _captureLevels.stream;
   String? _eventSignature;
+  Object? _dataRevision;
+  Object? _readerSessionGeneration;
   void _apply(Map<String, dynamic> event, {bool forceNotify = false}) {
     if (event['event'] == 'capture_levels') {
       final volumes = (event['volumes'] as List)
@@ -196,12 +197,21 @@ class RemoteDomain
     final signature = jsonEncode(event);
     if (_eventSignature == signature && !forceNotify) return;
     _eventSignature = signature;
+    final previousEpoch = _serviceEpoch;
     final epoch = event['workspace_epoch'];
     if (epoch is String) {
       _observeEpoch(epoch);
       // The first epoch names the workspace the desktop starts in. A later one
       // waits for the desktop to drop views that hold older IDs.
       _workspaceEpoch ??= _serviceEpoch;
+    }
+    final revision = event['revision'];
+    if (_dataRevision != revision ||
+        previousEpoch != _serviceEpoch ||
+        !identical(_readerSessionGeneration, _clientSessionGeneration)) {
+      _dataRevision = revision;
+      _readerSessionGeneration = _clientSessionGeneration;
+      _reader.invalidate();
     }
     _webSearchAvailable = event['web_search_available'] == true;
     googleStatus = Map<String, dynamic>.from(event['google'] as Map? ?? {});
@@ -229,6 +239,7 @@ class RemoteDomain
     if (stored.isEmpty || stored == _serviceEpoch) return;
     _serviceEpoch = stored;
     _workspaceEpoch ??= stored;
+    _reader.invalidate();
     _notifyChanges();
   }
 

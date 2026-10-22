@@ -25,7 +25,8 @@ class _MeetingWorkflowRun {
   String error = '';
   SummaryProgress progress = const SummaryProgress('planning');
   Map<String, Object?> get state => {
-    ...progress.json,
+    for (final entry in progress.json.entries)
+      if (active || entry.key != 'preview') entry.key: entry.value,
     'active': active,
     'cancelled': cancelled,
     'error': error,

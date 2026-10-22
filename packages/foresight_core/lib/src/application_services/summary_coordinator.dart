@@ -22,7 +22,8 @@ class _SummaryRun {
   String error = '';
   SummaryProgress progress = const SummaryProgress('planning');
   Map<String, Object?> get state => {
-    ...progress.json,
+    for (final entry in progress.json.entries)
+      if (active || entry.key != 'preview') entry.key: entry.value,
     'active': active,
     'cancelled': cancelled,
     'error': error,
@@ -215,7 +216,7 @@ final class SummaryCoordinator {
         effective: effective,
         outputTokens: outputTokens,
       );
-      run.progress = SummaryProgress('completed', preview: result.body);
+      run.progress = const SummaryProgress('completed');
     } catch (error) {
       run.error = error.toString();
       run.progress = const SummaryProgress('failed');
