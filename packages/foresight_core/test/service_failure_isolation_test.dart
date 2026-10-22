@@ -34,7 +34,8 @@ void main() {
     profile = ProfilePaths('${root.path}/data', '${root.path}/run');
     environment = Map.of(runtimeConfiguration.environment);
     runtimeConfiguration.environment.removeWhere(
-      (key, _) => key.startsWith('FORESIGHT_'),
+      (key, _) =>
+          key.startsWith('FORESIGHT_') && key != 'FORESIGHT_SQLITE_LIBRARY',
     );
     addTearDown(() {
       runtimeConfiguration.environment

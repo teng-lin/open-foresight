@@ -206,7 +206,9 @@ void main() {
         [build.kernel, argument],
         environment: {
           for (final entry in Platform.environment.entries)
-            if (!entry.key.startsWith('FORESIGHT_')) entry.key: entry.value,
+            if (!entry.key.startsWith('FORESIGHT_') ||
+                entry.key == 'FORESIGHT_SQLITE_LIBRARY')
+              entry.key: entry.value,
           'FORESIGHT_DATA': profile.data,
           'FORESIGHT_RUNTIME': profile.runtime,
         },

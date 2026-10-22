@@ -21,7 +21,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'graph_labels.dart';
 import 'dart:math' show Random;
-import 'package:sqlite3/sqlite3.dart';
+import 'persistence/sqlite_runtime.dart';
 
 /// Linux application schema, independently versioned from helper databases.
 class Store {

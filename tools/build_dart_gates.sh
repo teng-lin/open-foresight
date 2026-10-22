@@ -14,6 +14,13 @@ case "$task_platform" in
   linux) task_native="$task_build/native/libforesight_native.so" ;;
   *) echo 'Platform must be linux or macos' >&2; exit 2 ;;
 esac
+if [[ "$task_platform" == macos ]]; then
+  export FORESIGHT_SQLITE_LIBRARY="$task_build/macos/libforesight_sqlite3.dylib"
+  [[ -f "$FORESIGHT_SQLITE_LIBRARY" ]] || {
+    echo "Missing application SQLite runtime: $FORESIGHT_SQLITE_LIBRARY; build foresight_sqlite3 first" >&2
+    exit 1
+  }
+fi
 "$task_python" "$task_root/tools/verify_toolchain_pins.py" "$task_gate"
 if [[ "$task_gate" == core && -n "${FORESIGHT_DART:-}" && "$FORESIGHT_DART" != dart ]]; then
   "$task_python" "$task_root/tools/verify_toolchain_pins.py" core --dart "$FORESIGHT_DART"

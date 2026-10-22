@@ -5,7 +5,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sqlite3/sqlite3.dart';
+import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
 import 'package:foresight_core/src/domain.dart';
 import 'package:open_foresight/main.dart';
 import 'package:foresight_core/src/store.dart';

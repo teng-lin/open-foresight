@@ -621,7 +621,8 @@ void main() {
 
   test('launcher waits for model verification beyond ten seconds', () async {
     runtimeConfiguration.environment.removeWhere(
-      (key, _) => key.startsWith('FORESIGHT_'),
+      (key, _) =>
+          key.startsWith('FORESIGHT_') && key != 'FORESIGHT_SQLITE_LIBRARY',
     );
     runtimeConfiguration.environment['FORESIGHT_SERVICE'] = '/usr/bin/true';
     final profile = ProfilePaths(

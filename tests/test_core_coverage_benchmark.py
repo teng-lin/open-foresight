@@ -55,6 +55,10 @@ def gate(tmp_path):
     (root / "tools").mkdir(parents=True)
     (root / "packages/foresight_core").mkdir(parents=True)
     (root / "apps/desktop").mkdir(parents=True)
+    sqlite = root / "build/macos/libforesight_sqlite3.dylib"
+    sqlite.parent.mkdir(parents=True)
+    # The fake Dart/Flutter executable records selection without loading FFI.
+    sqlite.write_bytes(b"application SQLite fixture")
     for name in (
         "build_dart_gates.sh",
         "ci_timing.sh",
@@ -76,6 +80,7 @@ args = sys.argv[1:]
 with open(os.environ['COMMANDS'], 'a') as stream:
     stream.write(json.dumps({'args': args, 'tool': sys.argv[0], 'native': os.getenv('FORESIGHT_NATIVE_LIBRARY'),
                              'helper': os.getenv('FORESIGHT_HELPER'),
+                             'sqlite': os.getenv('FORESIGHT_SQLITE_LIBRARY'),
                              'cache': os.getenv('FORESIGHT_BOUNDARY_ANALYSIS_CACHE'),
                              'cache_mode': (oct(pathlib.Path(os.environ['FORESIGHT_BOUNDARY_ANALYSIS_CACHE']).stat().st_mode & 0o777)
                                             if os.getenv('FORESIGHT_BOUNDARY_ANALYSIS_CACHE') else None),
@@ -153,10 +158,13 @@ def run(gate, platform="linux", stage="core", **settings):
         text=True,
         timeout=30,
     )
-    commands = [
-        json.loads(line)
-        for line in Path(environment["COMMANDS"]).read_text().splitlines()
-    ]
+    commands_path = Path(environment["COMMANDS"])
+    assert commands_path.is_file(), (
+        f"Gate invoked no Dart/Flutter command (exit {result.returncode}):\n"
+        + result.stdout
+        + result.stderr
+    )
+    commands = [json.loads(line) for line in commands_path.read_text().splitlines()]
     return result, commands
 
 
@@ -226,6 +234,36 @@ def test_benchmark_runs_both_full_suites_and_preserves_coverage_threshold(
     assert f"Core benchmark order: {' then '.join(modes)}" in result.stdout
     assert "minimum 90%" in result.stdout
     assert "Core benchmark matched: 1 passed, 0 skipped" in result.stdout
+    sqlite = (
+        str(gate[0] / "build/macos/libforesight_sqlite3.dylib")
+        if platform == "macos"
+        else None
+    )
+    assert all(command["sqlite"] == sqlite for command in commands)
+
+
+@pytest.mark.parametrize("stage", ["core", "desktop"])
+def test_macos_missing_sqlite_fails_before_any_dart_or_flutter_command(gate, stage):
+    root, environment = gate
+    sqlite = root / "build/macos/libforesight_sqlite3.dylib"
+    sqlite.unlink()
+    result = subprocess.run(
+        [
+            "bash",
+            str(root / "tools/build_dart_gates.sh"),
+            stage,
+            "macos",
+            str(root / "build"),
+            sys.executable,
+        ],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert f"Missing application SQLite runtime: {sqlite}" in result.stderr
+    assert not Path(environment["COMMANDS"]).exists()
 
 
 def test_local_benchmark_without_github_counters_defaults_to_plain_first(gate):

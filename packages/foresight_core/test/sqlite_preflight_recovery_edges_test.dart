@@ -5,7 +5,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:foresight_core/src/persistence/sqlite_preflight.dart';
 import 'package:foresight_test_support/test_paths.dart';
-import 'package:sqlite3/sqlite3.dart';
+import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
 import 'package:test/test.dart';
 
 class _DatabaseFiles {

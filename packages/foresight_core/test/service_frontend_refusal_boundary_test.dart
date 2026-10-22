@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/service.dart';
@@ -25,7 +26,8 @@ void main() {
         final profile = ProfilePaths('${root.path}/data', '${root.path}/run');
         final saved = Map.of(runtimeConfiguration.environment);
         runtimeConfiguration.environment.removeWhere(
-          (key, _) => key.startsWith('FORESIGHT_'),
+          (key, _) =>
+              key.startsWith('FORESIGHT_') && key != 'FORESIGHT_SQLITE_LIBRARY',
         );
         final gates = await ServiceGates.create(root);
         gates.hold('close.before_frontend_release');
@@ -49,7 +51,9 @@ void main() {
               .fold<List<int>>([], (bytes, chunk) => bytes..addAll(chunk))
               .onError<SocketException>((_, _) => []);
           if (malformed == 'oversized') {
-            malformedPeer.add(List<int>.filled(maxServiceMessage, 32));
+            malformedPeer.add(
+              Uint8List(maxServiceMessage)..fillRange(0, maxServiceMessage, 32),
+            );
           } else {
             malformedPeer.write(malformed);
           }
@@ -121,7 +125,8 @@ void main() {
       final profile = ProfilePaths('${root.path}/data', '${root.path}/run');
       final saved = Map.of(runtimeConfiguration.environment);
       runtimeConfiguration.environment.removeWhere(
-        (key, _) => key.startsWith('FORESIGHT_'),
+        (key, _) =>
+            key.startsWith('FORESIGHT_') && key != 'FORESIGHT_SQLITE_LIBRARY',
       );
       IsolatedApplicationService? host;
       ServiceClient? broken, recovered;

@@ -192,6 +192,14 @@
       "reason": "Forced writer death and symlink cases run on the supported Linux and macOS platforms in every regular core build."
     },
     {
+      "path": "packages/foresight_core/test/sqlite_runtime_test.dart",
+      "conditions": [
+        "Platform.isMacOS ? false : 'Application SQLite selection is macOS-only'"
+      ],
+      "gate": "platform",
+      "reason": "Four macOS-only subprocess refusal cases validate the application-owned SQLite runtime path and engine selection in the regular Mac platform gate. The engine identity and fresh-isolate case also runs on Linux."
+    },
+    {
       "path": "packages/foresight_core/test/web_model_test.dart",
       "conditions": [
         "env['FORESIGHT_WEB_MODEL_TEST'] != '1'"

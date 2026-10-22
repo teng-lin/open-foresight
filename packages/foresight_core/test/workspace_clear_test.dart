@@ -10,7 +10,7 @@ import 'package:foresight_core/src/application.dart';
 import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
 import 'package:grpc/grpc.dart';
 import 'package:test/test.dart';
-import 'package:sqlite3/sqlite3.dart';
+import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
 
 import 'web_answer_test.dart' show ToolRuntime, fixtureSearch;
 

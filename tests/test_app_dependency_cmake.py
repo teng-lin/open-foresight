@@ -112,6 +112,15 @@ def test_dependency_objects_survive_full_application_reconfigure(
         "ForesightSanitizers.cmake",
     ):
         shutil.copy(ROOT / "cmake" / include, source / "cmake")
+    # Exercise the real root's new application-owned SQLite include without
+    # downloading the amalgamation. This target is application work outside
+    # _deps, so it may compile while the retained SDK outputs stay unchanged.
+    (source / "sqlite_stub.c").write_text("int sqlite_fixture(void) { return 0; }\n")
+    (source / "cmake/ForesightSqlite.cmake").write_text(
+        'add_library(foresight_sqlite3 SHARED "${PROJECT_SOURCE_DIR}/sqlite_stub.c")\n'
+        'set_target_properties(foresight_sqlite3 PROPERTIES SUFFIX ".dylib"\n'
+        ' LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/macos")\n'
+    )
     (source / "apps/desktop").mkdir(parents=True)
     shutil.copy(
         ROOT / "apps/desktop/pubspec.yaml", source / "apps/desktop/pubspec.yaml"
@@ -149,6 +158,7 @@ def test_dependency_objects_survive_full_application_reconfigure(
     verify(build)
     assert not (build / "services/helper/generated.cpp").exists()
     assert not (build / "services/helper/libprotocol.a").exists()
+    assert not (build / "macos/libforesight_sqlite3.dylib").exists()
     run(
         "cmake",
         "--build",
@@ -171,6 +181,26 @@ def test_dependency_objects_survive_full_application_reconfigure(
     after = json.loads((build / "compile_commands.json").read_text())
     dependency_sources = {row["file"] for row in commands}
     assert [row for row in after if row["file"] in dependency_sources] == commands
+    # Build both newly generated application sources and the new application
+    # SQLite target. Existing dependency outputs must remain byte-identical,
+    # and the reuse guard must also pass with application outputs present.
+    run(
+        "cmake",
+        "--build",
+        str(build),
+        "--target",
+        "application",
+        "foresight_sqlite3",
+        "--parallel",
+        "2",
+    )
+    assert (build / "services/helper/generated.cpp").is_file()
+    assert (build / "services/helper/libprotocol.a").is_file()
+    assert (build / "macos/libforesight_sqlite3.dylib").is_file()
+    verify(build)
+    assert {
+        path: (path.stat().st_mtime_ns, path.read_bytes()) for path in objects
+    } == objects
     if change == "source":
         changed = tmp_path / "flatbuffers/unit.cpp"
         changed.write_text("int main() { return 1; }\n")

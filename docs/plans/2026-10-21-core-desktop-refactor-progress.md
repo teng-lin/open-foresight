@@ -852,3 +852,218 @@ and hits on google_auth.dart149/158/161/174. The socket correction binds
 SHA5981a7c8419036f33f73009f81f0308e4311b9be843e4366c6116fbdbfae69f4
 and31 affected-file passes. These are focused checks using94deb native/helper
 bytes, not a new whole-source gate,95% result or checkpoint acceptance.
+
+## bc7 Linux core target reached; complete checkpoint still pending
+
+Frozen source `bc7b2f241b38d7097ddb9de0e05a0959826feca3` contains1357
+tracked files with exact modes and no `.git`. Archive SHA256 is
+`ae53cdfd0a3d517f1dde0a6b7c40110723edec37de63ce4e6809fe3386ddcf65`;
+manifest SHA256 is
+`6a920280d0ca9ef94d2ab31fe8d1ae9d0e3a7db9111196f54bf31312bee1490e`.
+The complete Linux canonical container gate passes, with actual core coverage
+15610/16425 (95.04%),1968 passed and14 skipped. This reaches the owner core95
+target in one actual run; the enforced minimum remains90. Its other stages
+pass: native30, desktop287/17skip with6104/6682 (91.35%), fast2,
+host462/3skip/1deselected, and compiled service/MCP32/0skip including the real
+desktop/service integration. Evidence is under
+`/var/tmp/foresight-core-desktop/core-checkpoint/bc7b2f241b38/`, especially
+`logs/container-attempt.GbtkzT/CORE-CENSUS.json` and
+`logs/root-container-result.json`.
+
+The separate Linux host sequence also passes all five stages: core1971/12skip
+with15629/16425 (95.15%), default-disabled hooks, desktop287/17skip,
+compiled service/MCP32/0skip plus fast2 and the isolated-display integration,
+and cached-development-option-to-Release hook exclusion. These are separate
+measurements, not merged coverage. The Release helper has hooks disabled even
+when its build cache retains the development option as ON. Current project
+native binaries use verified original dependencies; no SDK rebuild is claimed.
+`logs/host-runtime-sequence/result.json` and the individual stage receipts retain
+commands, exits, source checks and consumed binary identities.
+
+All seven static checks pass, including actionlint with ShellCheck0.10 on PATH.
+Full Python Quality fails one fixture-hygiene assertion despite5179 passing,
+31 skipped and95.89% coverage: the new boundary compiler-cache fixture used
+a raw temporary-directory allocator. The working correction uses the shared
+cleanup helper while retaining pending-write drainage and all semantic cache
+assertions. Its six affected Dart cases, three Python hygiene cases, analyzer
+and zero-change format check pass. Receipt:
+`/var/tmp/foresight-core-desktop/boundary-temp-helper-fix/result.json`.
+This focused correction is not a passing full Python Quality result. Ref/cache
+fixtures subsequently pass: all93 selected modules run under unrelated PR998,
+main and unset CI metadata, each3707/3skip plus1270 passing subtests; the real
+offline BuildKit cache fixture passes1/0skip. Sanitizer, dual-standard-library and remaining packaged
+acceptance checks are not yet accepted for the corrected source.
+
+HanSolo's actual bc7 native33, desktop289/13skip, compiled process plus real
+desktop/MCP32/0skip, host504/9skip/1deselected, enabled-hook and local development
+DMG/install/upgrade acceptance checks pass. Full Mac core fails1958/14skip/9:
+eight failures concern process-wide sealed native configuration replay across
+Dart isolates, and one concerns strict SQLite preflight identity checking.
+Subsequent diagnostic overlays are explicitly separate from frozen acceptance
+source; they identify original SHM ctime drift and a separate sub-millisecond
+metadata-detection gap. These findings remain under correction/investigation;
+neither focused successes nor the Linux95 result supersede the Mac failures.
+Current Mac evidence is `/var/tmp/foresight-core-desktop/mac-bc7-saj1rktf/`.
+
+No `core_acceptance_sha` is recorded. Desktop7A/B/C has not started, its final95
+target remains outstanding, and no PR has been created or pushed. The next
+corrected freeze needs native and Claude delta review plus the applicable full
+Linux and Mac matrix before checkpoint acceptance; the complete combined
+implementation and final Mac acceptance remain prerequisites to PR creation.
+
+## Mac SQLite engine comparison, 2026-10-22
+
+The native identical-value replay correction passes all54 cases across the five
+originally affected Mac test files. A separate coherent native metadata signature
+fixes the demonstrated sub-millisecond detection gap without changing general
+socket identity semantics; focused preflight/recovery/socket tests pass39 on
+Linux and38 on Mac. Independent source/ABI review finds no blocking issue.
+Neither correction exempts original SHM ctime changes from qualification.
+
+The owner requested an actual comparison with newer SQLite. A complete1357-file
+working-source snapshot, including those corrections, is tested on HanSolo with
+the same native/helper binaries, test inventory, default fanout and timeouts.
+Two explicitly retained diagnostic overlays select the engine in a private copy
+of sqlite3-2.9.4 and log metadata only after the unchanged rejection predicate
+has already fired. These are diagnostic runs, not final-source acceptance.
+
+| Selected Mac engine | Passed | Skipped | Failed |
+| --- | ---: | ---: | ---: |
+| Apple system3.51.0 | 1966 | 14 | 3 |
+| Existing Homebrew upstream3.53.4 | 1969 | 14 | 0 |
+| Private upstream3.54.1 | 1969 | 14 | 0 |
+
+All1983 visible test outcomes have the same inventory. Apple failures are two
+strict original-SHM-ctime-only rejections (migration rollback and legacy
+proactive-origin migration) and one oversized-socket fixture timeout. Main/WAL
+metadata remains unchanged in both unexpected SQLite rejections. The latest
+engine is genuinely compiled in8.01s from official3.54.1 amalgamation source,
+with published archive and sqlite3.c SHA3 checks verified. It is a new private
+SQLite diagnostic build, not a new SDK/application compilation or an installed
+dependency. Original qualified native/helper bytes are reused with their
+producer identity retained. All transferred command-log hashes and raw outcome
+counts are independently recomputed by the root audit.
+
+Native file-control probes identify a real build-policy difference: Apple
+defaults `SQLITE_FCNTL_PERSIST_WAL` to1; both upstream builds default to0.
+Explicit0 on an owned Apple fixture removes WAL/SHM after close; explicit1 on
+either upstream fixture retains them. This explains sidecar retention, but
+does not prove the causal operation behind the intermittent SHM ctime changes
+or establish a version-specific SQLite defect. A writable-only policy also
+cannot repair a first qualification that refuses an already-existing unstable
+profile. Read-only close ordering and non-writable-directory compatibility must
+be checked before adopting any such policy.
+
+The independent oversized-fixture correction supplies the identical16MiB space
+payload as Uint8List, avoiding repeated generic-list copies after partial socket
+writes. All five affected cases pass on Linux and Mac, with exact payload-byte
+equivalence, unchanged assertions/deadlines and clean analyzer/format. The engine
+comparisons above retain the original fixture to isolate their engine change.
+Initial follow-up probe pointer-type/CLI harness errors are preserved; corrected
+probe and focused-test results are separately labeled r2.
+
+Evidence and audit:
+`/var/tmp/foresight-core-desktop/sqlite-engine-suite-ab/audit-results.json`,
+with retained drivers, diagnostic diffs, raw events and full command logs.
+Application defaults and dependency pins remain unchanged; the app still uses
+Apple's system library. Engine/configuration integration, corrected-source
+review/coverage/full matrices and desktop extraction remain outstanding.
+
+
+## Mac application-owned SQLite correction, 2026-10-22
+
+Latest owner direction accepts current desktop coverage for now, retaining its
+90% enforced minimum, and requests a draft PR soon. Revision15 reconciles those
+instructions: final Mac acceptance and unfinished desktop7A/B/C remain merge
+requirements, rather than prerequisites to opening a transparent draft. The
+core95% target and Python95% gate are unchanged. A fresh main fetch still
+resolves to3fb259243a99137e3cba1d5e795c44100f42e688. No existing branch PR or
+bc7 pull-request workflow is found before publication.
+
+The first writable PERSIST_WAL=0 experiment passes118 related Linux cases but
+fails20 of118 on Apple: sidecar-free WAL-mode files cannot be read through its
+ordinary read-only probe. Independent review identifies the required live
+reader-after-writer-close sequence as a further incompatibility. The production
+policy is completely reverted. A real regression now covers that sequence and
+later commits on the same reader, plus both pinned-reader close orders. No live
+immutable reader or metadata exception is introduced. A policy-free, full Apple
+core rerun still fails the original strict qualification under load. All2,080
+bounded simple/complex Apple probes fail to reproduce that metadata change;
+its causal syscall/kernel behavior remains unproven.
+
+The implemented correction builds application-owned SQLite3.54.1, rather than
+using an environment-only diagnostic override or changing system SQLite.
+ForesightSqlite.cmake verifies the official archive SHA256 and extracted C/header
+hashes, retains a content-addressed local source cache, and emits build-input
+provenance. Its actual Mac output is arm64, minimum deployment15, with @rpath
+identity and the tested upstream options. Real corrupted archive/source checks
+refuse; untouched incremental compilation reuses exact bytes and mtime. The
+original SDK/helper dependency inputs and toolchains remain unchanged.
+
+Dart's existing2.9.4 package is configured before its first cached getter in each
+isolate. The selected source ID must match3.54.1; absent/relative/wrong and
+previously cached Apple runtime cases refuse instead of falling back. Production
+Store, private preflight and reader fallback share this loader; current test and
+crash-writer fixtures use it too. Frozen migration bodies and type-only imports
+remain unchanged. Protected signed-bundle runtime configuration supplies both
+main and nested service hosts, and packaging records the checksum after dylib
+relocation/signing, before bundle sealing. Artifact and saved-copy provenance
+retain the dylib and generated source/build receipt. Real Make/Ninja fixtures
+still reject dependency compilation/relinking and preserve all eight dependency
+objects through application configuration and build.
+
+Initial integration runs expose fixture maps that intentionally stripped all
+FORESIGHT_ variables, including the new mandatory runtime asset. Their profile,
+helper and gate isolation is retained while explicitly forwarding the qualified
+SQLite resource. The private startup-handoff fixture still strips every ambient
+FORESIGHT_ value and carries SQLite only through its handoff. The Debug desktop
+fixture now requires an existing absolute SQLite file in its private manifest;
+its sealed resolver rejects ambient replacement. Failed attempts and output
+remain retained. The r14 Claude finding about filesystem timestamp precision
+is addressed by requiring an observed native-nanosecond delta before exercising
+the real same-millisecond committed-write assertion, with a bounded explicit
+skip on filesystems that cannot expose that condition. Production qualification
+never retries or ignores metadata changes.
+
+Current working-source results, before a final frozen-head claim:
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Mac full root native |33 passed, zero skips; all16 targets omitted by standalone native also executed |mac-owned-sqlite-native-r2/attempt-2/AUDIT.json |
+| Mac canonical core |1980 passed/14 expected skips;95.38% (15700/16461); enabled source-compiler hook1; current service/MCP AOT compiled |mac-owned-sqlite-validation-r4/audit-r4.json |
+| Mac desktop unit suite |289 passed/13 expected skips;91.23% (6093/6679), analyzer passed |same r4 raw events and LCOV |
+| Linux full root native |30 passed, zero skips, fresh project compilation with verified original dependencies |linux-macfix-validation-r3/logs/native-qualification/result.json |
+| Linux canonical core |1980 passed/16 expected skips;95.08% (15651/16461); enabled source-compiler hook1 |linux-macfix-validation-r3/logs/runtime/ |
+| Changed shutdown fixture on Linux r4 |4 passed/zero skips; every other1360 source files/modes match r3 |linux-macfix-validation-r4/logs/r3-r4-comparison.json |
+
+All paths above are beneath /var/tmp/foresight-core-desktop/. Mac r4 is a complete
+1361-file Git-free export, with all source hashes/modes verified before/after.
+Native r2 and application r4 retain distinct source identities; matching actual
+native/component inputs are verified, never relabeled as a new compilation.
+The original r4 desktop stage exits1 after its passing tests because its Release
+compile lacks the existing qualified CocoaPods Ruby environment. Only that
+failed compilation is rerun with the original qualified Ruby/CocoaPods cache;
+its original failure remains recorded. Current real compiled service/MCP/UI,
+packaged/relocated runtime, final Python Quality rerun, Linux desktop/process
+matrix and renewed Claude integration review are still pending at this record.
+No core_acceptance_sha, completed desktop extraction, final Mac acceptance or
+merge readiness is claimed here.
+
+
+Follow-up: Linux desktop287/17 expected skips passes91.33% (6103/6682), current
+Release app and AOT service/MCP compile, compiled-process/MCP suite32/zero skips,
+real isolated UI59 observations and fast integration2 pass. Full current Python
+Quality passes5185/31 expected skips at95.91%, with Ruff, mypy163 files and
+subprocess-timeout checks passing. Both use exact Git-free source exports and
+retain component/source identities. Their remaining working-tree differences
+are only subsequent Mac project controls and documentation.
+
+The qualified CocoaPods environment makes the Mac Release command compile, but
+its post-build source proof correctly rejects two generated tracked updates:
+the already locked file_selector_macos Pod entry and the standard Embed Pods
+Frameworks phase. These bytes are inspected and admitted locally with0644
+repository modes; original failure and generated diffs remain retained. The
+corrected source needs its own clean build/source proof before service/UI and
+packaged runtime acceptance. No dependency version or SDK input changed for this
+CocoaPods synchronization. The latest prior Mac unit/coverage results remain
+bound to their original export, not silently relabeled as this later source.

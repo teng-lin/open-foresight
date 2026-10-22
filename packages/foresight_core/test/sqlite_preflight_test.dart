@@ -3,8 +3,9 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:foresight_core/src/persistence/sqlite_preflight.dart';
+import 'package:foresight_core/src/service_socket.dart' show fileMetadataSync;
 import 'package:foresight_test_support/test_paths.dart';
-import 'package:sqlite3/sqlite3.dart';
+import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -22,7 +23,7 @@ void main() {
     final result = Process.runSync(python, [
       '-c',
       '''
-import hashlib, json, pathlib, sys
+import hashlib, json, os, pathlib, sys
 result = {}
 for path in pathlib.Path(sys.argv[1]).iterdir():
     if not path.is_file():
@@ -30,6 +31,7 @@ for path in pathlib.Path(sys.argv[1]).iterdir():
     info = path.stat()
     result[path.name] = {
         'device': info.st_dev, 'inode': info.st_ino, 'size': info.st_size,
+        'device_major': os.major(info.st_dev), 'device_minor': os.minor(info.st_dev),
         'mode': info.st_mode, 'uid': info.st_uid, 'gid': info.st_gid,
         'mtime_ns': info.st_mtime_ns, 'ctime_ns': info.st_ctime_ns,
         'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
@@ -77,6 +79,44 @@ print(json.dumps(result, sort_keys=True))
     expect(root.listSync(), isEmpty);
     File(path).writeAsBytesSync([]);
     qualify();
+  });
+  test('native metadata retains independent nanosecond stat fields', () {
+    expect(fileMetadataSync(path), isNull);
+    expect(() => fileMetadataSync('$path\u0000'), throwsArgumentError);
+    final db = sqlite3.open(path);
+    db.execute('PRAGMA user_version=15');
+    db.dispose();
+    final independent =
+        (jsonDecode(snapshot()) as Map)['application.db'] as Map;
+    final metadata = fileMetadataSync(path)!;
+    expect(metadata.size, independent['size']);
+    expect(metadata.mode, independent['mode']);
+    expect(
+      metadata.modifiedSeconds * 1000000000 + metadata.modifiedNanos,
+      independent['mtime_ns'],
+    );
+    expect(
+      metadata.changedSeconds * 1000000000 + metadata.changedNanos,
+      independent['ctime_ns'],
+    );
+    expect(
+      metadata.identity,
+      Platform.isLinux
+          ? '${independent['device_major']}:${independent['device_minor']}:'
+                '${independent['inode']}'
+          : '${independent['device']}:${independent['inode']}',
+    );
+    final directory = Directory('${root.path}/not-a-database')..createSync();
+    expect(
+      () => SqlitePreflight(directory.path, supportedVersion: 15).qualify(),
+      throwsA(
+        isA<StateError>().having(
+          (error) => error.message,
+          'reason',
+          contains('not a regular file'),
+        ),
+      ),
+    );
   });
   test('healthy and future DELETE profiles do not mutate', () {
     final db = sqlite3.open(path);
@@ -171,6 +211,57 @@ print(json.dumps(result, sort_keys=True))
     expect(check.verifyUnchanged, throwsStateError);
     db.dispose();
   });
+  test('same-size committed change within a FileStat tick is refused', () {
+    final db = sqlite3.open(path);
+    addTearDown(db.dispose);
+    // Exercise committed bytes without requiring two fsyncs within one tick.
+    // This fixture tests admission, not crash durability.
+    db.execute('PRAGMA synchronous=OFF');
+    for (var attempt = 0; attempt < 256; attempt++) {
+      db.execute('PRAGMA user_version=15');
+      final check = SqlitePreflight(path, supportedVersion: 15)..qualify();
+      final before = fileMetadataSync(path)!;
+      final beforeStat = File(path).statSync();
+      final beforeBytes = File(path).readAsBytesSync();
+      db.execute('PRAGMA user_version=16');
+      final after = fileMetadataSync(path)!;
+      final afterStat = File(path).statSync();
+      if (beforeStat.modified != afterStat.modified ||
+          beforeStat.changed != afterStat.changed ||
+          before == after) {
+        continue;
+      }
+      final afterBytes = File(path).readAsBytesSync();
+      expect(db.autocommit, isTrue, reason: 'The version write is committed');
+      expect(before.identity, after.identity);
+      expect(before.size, after.size);
+      expect(before.mode, after.mode);
+      final modifiedDelta =
+          (after.modifiedSeconds - before.modifiedSeconds) * 1000000000 +
+          after.modifiedNanos -
+          before.modifiedNanos;
+      final changedDelta =
+          (after.changedSeconds - before.changedSeconds) * 1000000000 +
+          after.changedNanos -
+          before.changedNanos;
+      expect(modifiedDelta, inInclusiveRange(0, 999999));
+      expect(changedDelta, inInclusiveRange(0, 999999));
+      expect(beforeBytes.length, afterBytes.length);
+      expect(ByteData.sublistView(beforeBytes).getUint32(60), 15);
+      expect(ByteData.sublistView(afterBytes).getUint32(60), 16);
+      expect(
+        after,
+        isNot(before),
+        reason: 'Native timestamp precision retained',
+      );
+      expect(check.verifyUnchanged, throwsStateError);
+      return;
+    }
+    markTestSkipped(
+      'Filesystem did not expose distinct nanosecond timestamps for a '
+      'same-millisecond committed mutation in 256 bounded attempts',
+    );
+  });
   test('metadata-only source change still rejects writable admission', () {
     final db = sqlite3.open(path);
     db.execute('PRAGMA user_version=15');
@@ -179,7 +270,7 @@ print(json.dumps(result, sort_keys=True))
     final before = Map<String, dynamic>.from(
       (jsonDecode(snapshot()) as Map)['application.db'] as Map,
     );
-    final changed = File(path).statSync().changed;
+    final changed = fileMetadataSync(path)!;
     final elapsed = Stopwatch()..start();
     while (true) {
       final result = Process.runSync(python, [
@@ -189,9 +280,11 @@ print(json.dumps(result, sort_keys=True))
         path,
       ]);
       expect(result.exitCode, 0, reason: '${result.stderr}');
-      // Observe a timestamp change at the production API's resolution; do not
-      // assume a fixed sleep or silently rewrite mtime through Dart FileStat.
-      if (File(path).statSync().changed != changed) break;
+      final now = fileMetadataSync(path)!;
+      if ((now.changedSeconds, now.changedNanos) !=
+          (changed.changedSeconds, changed.changedNanos)) {
+        break;
+      }
       if (elapsed.elapsed > const Duration(seconds: 5)) {
         fail('Filesystem did not report a metadata rewrite');
       }

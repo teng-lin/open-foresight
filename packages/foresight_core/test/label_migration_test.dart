@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:foresight_core/src/persistence/schema_migrations.dart';
 import 'package:foresight_test_support/test_paths.dart';
-import 'package:sqlite3/sqlite3.dart';
+import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
 import 'package:test/test.dart';
 
 void main() {

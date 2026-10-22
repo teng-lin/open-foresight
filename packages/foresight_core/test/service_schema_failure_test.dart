@@ -21,7 +21,8 @@ void main() {
       privateDirectory(profile.runtime);
       final environment = Map.of(runtimeConfiguration.environment);
       runtimeConfiguration.environment.removeWhere(
-        (key, _) => key.startsWith('FORESIGHT_'),
+        (key, _) =>
+            key.startsWith('FORESIGHT_') && key != 'FORESIGHT_SQLITE_LIBRARY',
       );
       final server = Server.create(
         services: [AdoptionRag(), AdoptionControl(control.State())],

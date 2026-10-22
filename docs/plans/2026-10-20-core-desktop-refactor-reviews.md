@@ -978,3 +978,61 @@ zero HTTP requests. Final receipt:
 `/var/tmp/foresight-core-desktop/coverage-b2/registry-permission-fix/result-final.json`.
 The next Claude round assesses this exact correction, the socket fixture change
 and the updated execution-status prose; round11 itself remains not converged.
+
+## bc7 scoped correction review and evidence repair
+
+Claude round12 finds the credential and connect-reset corrections clean on
+frozenbc7. It raises one P3: a cited original94deb Mac compilation evidence
+directory was present remotely but had not been copied to the cited local path.
+The original directory is now transported with its four command logs, original
+metadata and four source-after proofs; all recorded log hashes are checked
+against the copied bytes. Append-only transport and source-verification receipts
+retain the original producer/source identity. Passed builds are not rerun and
+94deb compilation is not attributed tobc7.
+
+Claude round13 reads the actual repaired evidence and converges for that scoped
+correction/evidence review, with no actionable findings remaining. The reviewer
+reads recorded hash agreement rather than computing hashes or running tests.
+Reports are `/var/tmp/foresight-core-implementation-review-r12/` and
+`/var/tmp/foresight-core-implementation-review-r13/` (`claude.md` and
+`result.json`). The original reports and their inspection-time limits remain
+unchanged. This verdict does not accept the core checkpoint, desktop extraction,
+final Mac matrix, PR or merge. Later runtime-driven native and SQLite corrections
+require their own delta review and complete applicable verification.
+
+
+## Mac compatibility review and owner delivery update, 2026-10-22
+
+Revision15 adopts the owner's later desktop-coverage waiver (keep90% minimum)
+and draft-PR direction, retaining full implementation/final Mac acceptance
+before merge. The application-owned SQLite exception is explicit in the plan;
+SDK/helper dependencies and toolchains remain unchanged.
+
+Independent native review rejects the PERSIST_WAL=0 experiment because live
+read-only reopen must continue to observe later writer commits; it is fully
+reverted. A second native integration review finds only service-fixture and
+Debug-manifest propagation gaps, now corrected without weakening their profile,
+helper, handoff or sealed-resource assertions. It finds no additional production
+blocker in the public per-isolate loader, pinned CMake inputs, artifact payload,
+packaging or signed-byte provenance.
+
+Claude CLI r14 approves the production native replay and coherent metadata
+changes but flags a filesystem-dependent same-tick test assumption. The bounded
+regression now requires an actual observed native-nanosecond difference and
+reports an explicit skip when that filesystem cannot expose the condition;
+production qualification remains strict. r15 closes that finding and approves
+the new production Dart/CMake/packaging/verifier code. Its sole required P2 is
+the missing new platform-skip inventory row. The row is added with the exact
+Mac-only condition; the full Python Quality rerun passes5185 tests/31 expected
+skips with95.91% coverage. Two safe-failure/developer-message consistency P3s
+remain optional and are deliberately deferred. A narrow closure review follows;
+no whole-implementation or merge acceptance is inferred from these delta reviews.
+
+The real Mac Release compile reveals stale tracked CocoaPods integration for
+file_selector_macos, already present in the locked Dart dependencies. The
+reviewed generated lock entry and standard Embed Pods Frameworks phase are
+admitted as source, with ordinary0644 file modes. The initial build's changed
+source proof remains a failure; a new source-bound build must pass without
+rewriting tracked bytes/modes. New provenance never relabels that attempt as a
+clean-source pass. Evidence and exact current runtime results are in the progress
+record and /var/tmp/foresight-core-desktop/mac-owned-sqlite-service-r4/.

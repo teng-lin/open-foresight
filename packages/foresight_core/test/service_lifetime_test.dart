@@ -120,7 +120,8 @@ void main() {
   setUp(() async {
     environment = Map.of(runtimeConfiguration.environment);
     runtimeConfiguration.environment.removeWhere(
-      (key, _) => key.startsWith('FORESIGHT_'),
+      (key, _) =>
+          key.startsWith('FORESIGHT_') && key != 'FORESIGHT_SQLITE_LIBRARY',
     );
     runtimeConfiguration.environment['FORESIGHT_HELPER'] = '';
     root = createTestTempDirectorySync('lifetime-');
@@ -208,7 +209,8 @@ void main() {
     await agent.close();
     await service.close();
     runtimeConfiguration.environment.removeWhere(
-      (key, _) => key.startsWith('FORESIGHT_'),
+      (key, _) =>
+          key.startsWith('FORESIGHT_') && key != 'FORESIGHT_SQLITE_LIBRARY',
     );
     if (model) {
       final store = Store('${profile.data}/application.db');

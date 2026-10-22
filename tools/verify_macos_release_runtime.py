@@ -3,6 +3,7 @@
 
 from typing import Any
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -25,6 +26,7 @@ def runtime_paths(app):
         "FORESIGHT_WHISPER_RUNTIME",
         "FORESIGHT_QUERY_WORKER",
         "FORESIGHT_QUERY_RUNTIME",
+        "FORESIGHT_SQLITE_LIBRARY",
     ):
         relative = config.get(key)
         if (
@@ -41,14 +43,39 @@ def runtime_paths(app):
         raise ValueError("Generation and embedding must share the native worker")
     if paths["FORESIGHT_QUERY_RUNTIME"] != paths["FORESIGHT_QUERY_WORKER"]:
         raise ValueError("Question detection must use the native worker directly")
+    service_resources = (
+        app / "Contents/Library/Services/Open Foresight Service.app/Contents/Resources"
+    )
+    service_config = json.loads((service_resources / "runtime.json").read_text())
+    relative = service_config.get("FORESIGHT_SQLITE_LIBRARY")
+    if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
+        raise ValueError("Service lacks bundled FORESIGHT_SQLITE_LIBRARY")
+    service_sqlite = (service_resources / relative).resolve(strict=True)
+    if (
+        not service_sqlite.is_relative_to(app)
+        or service_sqlite != paths["FORESIGHT_SQLITE_LIBRARY"]
+    ):
+        raise ValueError("Service SQLite runtime must share the owned bundled library")
     for notice in (
         "LiteRT-LM-extension.json",
         "LiteRT-LM-LICENSE",
         "sentencepiece-LICENSE",
         "whisper-LICENSE",
+        "sqlite-LICENSE",
+        "sqlite-provenance.json",
     ):
         if not (resources / "licenses" / notice).is_file():
             raise ValueError("Release lacks runtime provenance/license: " + notice)
+    provenance = json.loads((resources / "licenses/sqlite-provenance.json").read_text())
+    expected = provenance.get("bundled_library", {})
+    sqlite_library = paths["FORESIGHT_SQLITE_LIBRARY"]
+    with sqlite_library.open("rb") as stream:
+        checksum = hashlib.file_digest(stream, "sha256").hexdigest()
+    if (
+        expected.get("path") != config["FORESIGHT_SQLITE_LIBRARY"]
+        or expected.get("sha256") != checksum
+    ):
+        raise ValueError("Bundled SQLite does not match its sealed provenance")
     return paths
 
 

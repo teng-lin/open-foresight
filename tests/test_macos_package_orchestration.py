@@ -31,6 +31,7 @@ def packaging(tmp_path, monkeypatch):
         "services/inference/foresight-query",
         "services/helper/ForesightHelper",
         "native/libforesight_native.dylib",
+        "macos/libforesight_sqlite3.dylib",
         "native/foresight-audio",
         "macos/foresight-notifications",
         "macos/foresight-file-parser",
@@ -39,6 +40,10 @@ def packaging(tmp_path, monkeypatch):
         "application/foresight-mcp",
     ):
         put(build / relative, relative.encode())
+    put(
+        build / "macos/foresight-sqlite3.json",
+        json.dumps({"version": "3.54.1", "archive_sha256": "fixture-source"}).encode(),
+    )
     put(flutter / "Contents/MacOS/open-foresight")
     put(
         flutter / "Contents/Info.plist",
@@ -101,6 +106,10 @@ def packaging(tmp_path, monkeypatch):
     monkeypatch.setattr(package.subprocess, "run", launch)
 
     def sign(app, identity, entitlements, *, before_seal):
+        put(
+            app / "Contents/Resources/lib/libforesight_sqlite3.dylib",
+            b"relocated signed sqlite",
+        )
         before_seal()
         # Receipts describe the library bytes at sealing time.
         receipt = json.loads((app / "Contents/Resources/manifest.json").read_text())
@@ -130,6 +139,7 @@ def test_package_assembles_relative_runtime_config_licenses_and_sealed_receipts(
     args, app, whisper, license, sdk, commands, launches, _ = packaging
     archive = app.parent / "application.zip"
     monkeypatch.setenv("FORESIGHT_QUERY_TERMS_URL", "https://example.invalid/terms")
+    monkeypatch.setenv("FORESIGHT_SQLITE_LIBRARY", str(app.parent / "external.dylib"))
     if release:
         args += [
             "--identity",
@@ -162,6 +172,28 @@ def test_package_assembles_relative_runtime_config_licenses_and_sealed_receipts(
     assert (
         service.parent.parent / "Resources" / nested["FORESIGHT_HELPER"]
     ).resolve() == (resources / config["FORESIGHT_HELPER"]).resolve()
+    sqlite_library = resources / config["FORESIGHT_SQLITE_LIBRARY"]
+    assert config["FORESIGHT_SQLITE_LIBRARY"] == "lib/libforesight_sqlite3.dylib"
+    assert sqlite_library.read_bytes() == b"relocated signed sqlite"
+    assert (Path(args[1]) / "macos/libforesight_sqlite3.dylib").read_bytes() == (
+        b"macos/libforesight_sqlite3.dylib"
+    )
+    assert (
+        service.parent.parent / "Resources" / nested["FORESIGHT_SQLITE_LIBRARY"]
+    ).resolve() == sqlite_library.resolve()
+    assert not Path(nested["FORESIGHT_SQLITE_LIBRARY"]).is_absolute()
+    assert sqlite_library.resolve().is_relative_to(app.resolve())
+    assert (resources / "licenses/sqlite-LICENSE").read_bytes() == (
+        package.ROOT / "packaging/notices/sqlite-LICENSE"
+    ).read_bytes()
+    assert json.loads((resources / "licenses/sqlite-provenance.json").read_text()) == {
+        "version": "3.54.1",
+        "archive_sha256": "fixture-source",
+        "bundled_library": {
+            "path": "lib/libforesight_sqlite3.dylib",
+            "sha256": hashlib.sha256(b"relocated signed sqlite").hexdigest(),
+        },
+    }
     info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
     assert info["LSMinimumSystemVersion"] == "15.0"
     assert all(key in info for key in package.PURPOSES)
@@ -191,6 +223,8 @@ def test_package_assembles_relative_runtime_config_licenses_and_sealed_receipts(
         "missing-whisper",
         "missing-notices",
         "missing-component",
+        "missing-sqlite",
+        "missing-sqlite-provenance",
         "sdk-manifest",
     ],
 )
@@ -215,11 +249,17 @@ def test_packaging_rejects_incomplete_release_inputs(packaging, monkeypatch, pro
         ]
     elif problem == "missing-component":
         (Path(args[1]) / "native/foresight-audio").unlink()
+    elif problem == "missing-sqlite":
+        (Path(args[1]) / "macos/libforesight_sqlite3.dylib").unlink()
+    elif problem == "missing-sqlite-provenance":
+        (Path(args[1]) / "macos/foresight-sqlite3.json").unlink()
     else:
         (sdk / "foresight-sdk.json").unlink()
         args += ["--sdk", str(sdk)]
     with pytest.raises(SystemExit, match="2"):
         package.main(args)
+    if problem in ("missing-sqlite", "missing-sqlite-provenance"):
+        assert not app.exists()
 
 
 @pytest.mark.parametrize("problem", ["notary", "existing-archive"])

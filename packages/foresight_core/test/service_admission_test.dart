@@ -22,7 +22,8 @@ void main() {
   setUp(() async {
     environment = Map.of(runtimeConfiguration.environment);
     runtimeConfiguration.environment.removeWhere(
-      (key, _) => key.startsWith('FORESIGHT_'),
+      (key, _) =>
+          key.startsWith('FORESIGHT_') && key != 'FORESIGHT_SQLITE_LIBRARY',
     );
     runtimeConfiguration.environment['FORESIGHT_HELPER'] = '';
     root = createTestTempDirectorySync('admit-');

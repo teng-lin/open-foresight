@@ -1,6 +1,6 @@
 # Core service and desktop feature refactoring execution plan
 
-Revision 14, 2026-10-21. Reviewer verdicts and scope of convergence are recorded in the companion
+Revision 15, 2026-10-22. Reviewer verdicts and scope of convergence are recorded in the companion
 review record. This is the execution specification for planned PRs 6 and 7 in [audit plan
 3](../audit/2026-10-18-implementation-plan-3.md), not GitHub pull requests #6 and #7. The [review
 record](2026-10-20-core-desktop-refactor-reviews.md) records frozen revisions and finding
@@ -38,22 +38,25 @@ Owner delivery direction (2026-10-21): execute the complete PR 6 and PR 7 scope 
 internal dependency order; they do not require separate PRs or an intervening merge. Keep
 independently testable commits, integrate the core interfaces before migrating their desktop
 consumers, and preserve both work packages' complete acceptance criteria. Coordinate exact-source
-Mac verification on HanSolo in a dedicated worktree. The owner's subsequent direction makes
-the complete final-source HanSolo matrix a prerequisite to creating the PR. After implementation,
-run native-team and Claude CLI implementation reviews, revise until those converge, create the PR and drive its
-required checks and reviews to merge. The plan-review rounds recorded here precede implementation
+Mac verification on HanSolo in a dedicated worktree. The owner's latest direction (2026-10-22)
+is to create a draft PR soon, with remaining implementation and validation disclosed. This
+supersedes the earlier requirement to finish the final HanSolo matrix before PR creation;
+complete final-source Mac acceptance remains required before merge. Run native-team and Claude
+CLI implementation reviews, revise until those converge, and drive the PR's required checks and
+reviews to merge. The plan-review rounds recorded here precede implementation
 review and cannot substitute for it.
 
 Owner coverage direction (2026-10-21): improve measured Dart core and desktop line
 coverage to at least 95%, while keeping the enforced Linux minimum at 90%.
-Reach the core target at the core checkpoint and both targets at the final
-combined head; desktop characterization and extraction supply its additional
-behavioral tests. Python retains its existing 95% gate. Use the actual CI
+Reach the core target at the core checkpoint and final combined head. The owner
+subsequently accepted the current desktop coverage for now (2026-10-22), so its
+95% improvement target no longer blocks delivery. Preserve its enforced 90%
+minimum and meaningful desktop characterization/extraction tests. Python retains its existing 95% gate. Use the actual CI
 coverage commands and unchanged inclusion/exclusion rules. Record covered/total
 lines, exact source, skips and uncovered behavior; add tests for meaningful
 success, failure, stale-publication and cleanup paths rather than mirrored
 implementation assertions. A 90% gate pass alone does not complete the requested
-95% improvement. Do not raise the minimum, exclude files or branches, or count
+core 95% improvement. Do not raise the minimum, exclude files or branches, or count
 unexecuted platform/model cases to reach the target.
 
 No production behavior change is hidden in a mechanical extraction. Error classification,
@@ -84,7 +87,15 @@ future refactor. `docs/architecture/schema-migrations.md` currently stops at 14 
 PR 8 remains deferred, including backend removal, wholesale native splitting and question-detector
 consolidation. Native changes here are limited to helper schema integrity and any separately
 characterized join/liveness repair needed by PR 6. Windows support, resident model unloading,
-background-sync product policy, new dependency versions and CI restructuring are outside scope.
+background-sync product policy and CI restructuring are outside scope. The Mac compatibility
+follow-up is a narrow dependency exception: build application-owned SQLite 3.54.1 from its
+checksum-pinned upstream amalgamation and select it through the protected runtime map for Dart
+service/read isolates and desktop. Keep sqlite3's Dart API package at 2.9.4 and retain the existing
+Dart/Flutter, helper SQLite, SDKs and toolchains. Preserve every original-source qualification,
+future-version and read-only WAL guard. Package and sign the library with source/build provenance
+and a checksum of its signed bytes; validate actual loaded identity, subprocesses and relocated UI.
+This replaces the rejected writable PERSIST_WAL cleanup experiment, which broke Apple's live
+read-only reopen semantics. It does not assert the cause of Apple's intermittent SHM ctime change.
 
 ## Execution status and checkpoint corrections
 
@@ -735,7 +746,7 @@ for every test-only edit.
   ledger. Run the full applicable Linux matrix below at that exact commit, including the adapted
   existing desktop, and preserve this work package's acceptance and metric evidence. Core line
   coverage reaches the requested 95% target with the enforced minimum still 90%; desktop keeps
-  its existing minimum here and reaches its 95% target during PR7 (7A/7B) before final acceptance. This replaces
+  its existing 90% minimum through final acceptance; the owner waived the desktop 95% target on 2026-10-22. This replaces
   the old intermediate PR's final-head gate; interface compilation alone is insufficient. HanSolo's
   complete Mac matrix is required at the final combined head, not this intermediate commit.
   Explicitly inventory Linux gates that require hosted execution and cannot run on this host; record
@@ -976,7 +987,7 @@ unrelated check is not verification.
 | Static/contracts | Dart/Flutter analyze and format, operation registry/MCP schemas/literal guard, bindings and source-boundary guards; Python contracts and migration fixtures. Use the pinned CI Python environment; `python -m pytest --cov --cov-config=.coveragerc --cov-report=term --cov-report=xml --durations=20 --junitxml=coverage/python/junit.xml` is Quality's baseline command. Enforce its current 95% Python threshold; Linux core/desktop enforced minimums remain 90%, with the separate 95% improvement target above. |
 | Native | Root CMake/CTest inventory, all native/helper/inference tests, `tools/run_native_sanitizers.sh` and `tools/run_thread_sanitizers.sh` where applicable; GCC/libstdc++ and Clang/libc++ for stream/shutdown changes. Reuse verified SDKs/toolchains; report omitted or unsupported targets. |
 | Dart core | Entire `packages/foresight_core` suite, current native/helper paths configured. `FORESIGHT_CORE_COVERAGE_MIN=90 bash tools/coverage_core.sh` collects and enforces Linux core coverage. Reach at least 95% measured coverage at the core checkpoint and final head without raising the 90% minimum. No skipped native integration due to missing binary paths. |
-| Desktop | Entire Flutter desktop suite with current binaries, coverage using the current CI command/90% minimum, rebuild/feature isolation/query cancellation tests and full `integration_test` target. Reach at least 95% measured coverage at final head. Retain skip inventory and counts. |
+| Desktop | Entire Flutter desktop suite with current binaries, coverage using the current CI command/90% minimum, rebuild/feature isolation/query cancellation tests and full `integration_test` target. Keep the enforced 90% minimum; the owner waived the desktop 95% target for now. Retain skip inventory and counts. |
 | Compiled boundaries | Compile current service and MCP executables, then run `tests/service/test_service_process.py` and the current MCP process suite through the CI service stage; run actual desktop/service integration on an isolated display. Record binary paths and source identity. Capture fixtures write raw PCM to the owned FIFO and diagnostics to stdout. |
 | Lifetime/ownership | Source-compiler tests with test hooks explicitly enabled, ordinary tests with hooks disabled, release builds ignoring hooks even after cached development configuration; ADR-0007 idle/grace/busy and structured close/resend/ownership/adoption matrix. |
 | Schema/data | Frozen checksummed source/database fixtures without deep Git dependency; fresh/legacy/current/future/corrupt/partial and rollback/retry cases for application and helper databases; real hot-journal/attached-commit/WAL preflight and refusal-without-mutation fixtures from 6D; durable label ordering and Google repair identity/content assertions. |

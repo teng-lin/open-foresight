@@ -9,6 +9,7 @@ import 'package:analyzer/src/dart/analysis/analysis_context_collection.dart';
 import 'package:analyzer/src/dart/analysis/byte_store.dart';
 // ignore: implementation_imports
 import 'package:analyzer/src/dart/analysis/file_byte_store.dart';
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
 
 class _ObservedStore implements ByteStore {
@@ -93,9 +94,7 @@ const _conditional = {
 };
 
 class _BoundaryFixture {
-  final Directory root = Directory.systemTemp.createTempSync(
-    'boundary-analysis-test-',
-  );
+  final Directory root = createTestTempDirectorySync('boundary-analysis-test-');
   late final Directory cache = Directory('${root.path}/cache')..createSync();
   late final File entry = File('${root.path}/entry.dart');
   late final File leaf = File('${root.path}/leaf.dart');

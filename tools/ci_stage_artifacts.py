@@ -11,7 +11,9 @@ digest = ci_git.digest
 source_times = ci_git.source_times
 restore_source_times = ci_git.restore_source_times
 
-retained = importlib.import_module("tools.ci_build_artifacts" if __package__ else "ci_build_artifacts")
+retained = importlib.import_module(
+    "tools.ci_build_artifacts" if __package__ else "ci_build_artifacts"
+)
 roots = retained.roots
 allowed = retained.allowed
 entry = retained.entry
@@ -54,6 +56,8 @@ NATIVE_RUNTIME_PATHS = (
     "build/macos/foresight-notifications",
     "build/macos/foresight-file-parser",
     "build/macos/foresight-model-crypto",
+    "build/macos/libforesight_sqlite3.dylib",
+    "build/macos/foresight-sqlite3.json",
     "build/sdk/foresight-sdk.json",
     "build/sdk/share/foresight-sdk/licenses",
 )

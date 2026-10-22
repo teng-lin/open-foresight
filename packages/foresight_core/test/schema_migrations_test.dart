@@ -5,7 +5,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:foresight_core/src/store.dart';
-import 'package:sqlite3/sqlite3.dart';
+import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -204,6 +204,60 @@ void main() {
       store.close();
     }
   });
+
+  test('a reader opened after writer close follows later WAL commits', () {
+    var writer = Store(path);
+    addTearDown(() => writer.close());
+    final id = writer.saveNote(null, 'Kept', 'First body');
+    writer.close();
+    final reader = Store.readOnly(path);
+    addTearDown(reader.close);
+    expect(reader.rows('SELECT body FROM notes').single['body'], 'First body');
+    writer = Store(path);
+    writer.saveNote(id, 'Kept', 'Latest body');
+    expect(reader.rows('SELECT body FROM notes').single['body'], 'Latest body');
+  });
+
+  for (final writerClosesFirst in [false, true]) {
+    test(
+      'WAL readers retain committed data with writer first=$writerClosesFirst',
+      () {
+        final writer = Store(path);
+        addTearDown(writer.close);
+        final id = writer.saveNote(null, 'Kept', 'First body');
+        final reader = Store.readOnly(path);
+        addTearDown(reader.close);
+        reader.db.execute('BEGIN');
+        expect(
+          reader.rows('SELECT body FROM notes').single['body'],
+          'First body',
+        );
+        writer.saveNote(id, 'Kept', 'Latest body');
+        if (writerClosesFirst) {
+          writer.close();
+          expect(File('$path-wal').existsSync(), isTrue);
+        }
+        // A pinned reader keeps its original snapshot through writer close.
+        expect(
+          reader.rows('SELECT body FROM notes').single['body'],
+          'First body',
+        );
+        reader.db.execute('COMMIT');
+        expect(
+          reader.rows('SELECT body FROM notes').single['body'],
+          'Latest body',
+        );
+        reader.close();
+        if (!writerClosesFirst) writer.close();
+        final reopened = Store(path);
+        addTearDown(reopened.close);
+        expect(
+          reopened.rows('SELECT body FROM notes').single['body'],
+          'Latest body',
+        );
+      },
+    );
+  }
 
   test('fresh and current profiles support concurrent read-only connections', () {
     var publication = 0;

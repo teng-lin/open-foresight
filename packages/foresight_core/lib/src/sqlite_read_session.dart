@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-import 'package:sqlite3/sqlite3.dart';
+import 'persistence/sqlite_runtime.dart';
 
 import 'desktop_read_models.dart';
 import 'graph_persistence.dart';

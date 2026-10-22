@@ -11,7 +11,7 @@ import 'package:foresight_core/src/application.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/remote_domain.dart';
 import 'package:foresight_core/src/service.dart';
-import 'package:sqlite3/sqlite3.dart';
+import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
 import 'package:test/test.dart';
 
 const clearedMessage = 'This item was removed when the workspace was cleared.';

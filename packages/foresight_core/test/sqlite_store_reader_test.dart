@@ -7,6 +7,7 @@ import 'package:foresight_core/src/desktop_read_models.dart';
 import 'package:foresight_core/src/persistence/read_schema_guard.dart';
 import 'package:foresight_core/src/read_coordinator.dart';
 import 'package:foresight_core/src/rpc_error.dart';
+import 'package:foresight_core/src/platform_services.dart';
 import 'package:foresight_core/src/sqlite_read_session.dart';
 import 'package:foresight_core/src/sqlite_read_worker.dart';
 import 'package:foresight_core/src/sqlite_store_reader.dart';
@@ -397,6 +398,7 @@ void main() {
       final worker = SqliteReadWorker(
         path,
         environment: {
+          ...runtimeConfiguration.environment,
           'FORESIGHT_STARTUP_ENV': '/already-consumed/startup.json',
           'FORESIGHT_INSTALL_ROOT': runner.parent.path,
           'FORESIGHT_LITERT_RUNNER': runner.path,

@@ -70,7 +70,10 @@ void main() {
     privateDirectory(profile.runtime);
     final saved = Map.of(runtimeConfiguration.environment);
     runtimeConfiguration.environment.removeWhere(
-      (key, _) => key.startsWith('FORESIGHT_') && key != 'FORESIGHT_NATIVE',
+      (key, _) =>
+          key.startsWith('FORESIGHT_') &&
+          key != 'FORESIGHT_NATIVE' &&
+          key != 'FORESIGHT_SQLITE_LIBRARY',
     );
     addTearDown(() {
       runtimeConfiguration.environment

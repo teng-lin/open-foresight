@@ -1,9 +1,9 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:sqlite3/sqlite3.dart';
+import 'sqlite_runtime.dart';
 
-import '../service_socket.dart' show fileIdentitySync;
+import '../service_socket.dart' show fileMetadataSync;
 import '../platform_services.dart' show protectPrivateFile;
 
 /// Qualifies existing bytes before any live writable connection is opened.
@@ -23,13 +23,12 @@ class SqlitePreflight {
   );
 
   Object? _identity(String path) {
-    final identity = fileIdentitySync(path);
-    if (identity == null) return null;
-    final stat = File(path).statSync();
-    if (stat.type != FileSystemEntityType.file) {
+    final metadata = fileMetadataSync(path);
+    if (metadata == null) return null;
+    if (metadata.mode & 0xf000 != 0x8000) {
       _refuse('database or sidecar is not a regular file');
     }
-    return (identity, stat.size, stat.modified, stat.changed, stat.mode);
+    return metadata;
   }
 
   Map<String, Object?> _identities() {

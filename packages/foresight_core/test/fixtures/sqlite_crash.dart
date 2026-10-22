@@ -1,7 +1,7 @@
 // Runs in a separate source-compiler process. exit deliberately bypasses SQLite
 // close/checkpoint; journals and WAL are produced by SQLite itself.
 import 'dart:io';
-import 'package:sqlite3/sqlite3.dart';
+import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
 
 void main(List<String> args) {
   final db = sqlite3.open(args[0]);
