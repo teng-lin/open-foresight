@@ -684,3 +684,114 @@ measured pre-existing P2-4 residual, rather than claiming it repaired. Independe
 verification checked raw timings, active native state, source/blob equality,
 binary/harness digests and limitations; its review converged. It does not replace
 warm RPC comparisons, native cleanup tests or final Linux/HanSolo acceptance.
+
+
+## Renewed plan review round 13, implementation findings
+
+The owner renewed native-team plus Claude CLI plan review. Fresh main remains
+`3fb259243a99137e3cba1d5e795c44100f42e688`; the code reviewed is frozen
+`4bd2c75d5890399f03d57ce8a46788da2dfcc623`. The three native reviewers and
+Read/Glob/Grep-only Claude independently reviewed the complete revision-11 plan,
+progress and relevant implementation/evidence. Frozen inputs, hashes, original
+findings, CLI prompt/command/transcript and narrow follow-up proposals are retained
+in `/var/tmp/foresight-plan-r13-review/`. Planning verdict: changes required.
+The preceding round-12 convergence remains historical.
+
+| Finding | Disposition in revision 12 |
+| --- | --- |
+| Native core C1: journal-exists probe rule absent from normative prose | Accepted. Existing journals, including empty ones, require private read-only DB+journal probes across all three implementations; original checksum/version/identity checks remain strict. Architecture prose now matches production. |
+| Native verification V13-1: canonical schedule and resource profile | Accepted. Next acceptance uses existing default schedule1; record actual CPU/cgroup/memory/swap/concurrency/load. Schedule0 is also parallel and its failed local results remain separately identified. No resource cause is assumed. |
+| Native verification V13-2: failed4bd and keyed label assertions | Accepted. Full counts/downstream NOT RUN and isolated diagnostics are recorded. Correct keyed associations, per-document position and both deterministic global ID orders, preserving all metadata/revision/cascade assertions. |
+| Native desktop D13-1: connection versus feature worker ownership | Accepted. Connection owns coordinator/actual-read joins; features own requests/subscriptions/publication resources. No duplicate scheduler or shared-reader close on feature disposal. |
+| Native desktop D13-2: stable Stats identity versus actual-dispatch time | Accepted. Complete the additive core seam before the freeze; retain exact now cutoff, captured labels/period, calendar/DST/timezone/resume and settlement tests. |
+| Native desktop D13-3: same-path/same-epoch client replacement | Accepted. Observable opaque client-session generation retires feature work; distinguish it from authoritative SQLite read identity. Complete before feature fakes/moves and the core freeze. |
+| Native desktop D13-4: bypassed legacy query spies | Accepted. Typed read/watch admissions and worker projections are counted separately from feature notifications/builds; equal immutable projections do not notify. Preserve semantic and real-worker/process assertions. |
+| Claude1: full-schedule-only failure protocol | Accepted in part: failed canonical gate remains failed; record isolation/full-command timing/resource evidence and require complete semantic parity for context changes. Rejected parse-only namespace replacement and mandatory stage relocation: neither is needed to preserve the analyzer contract, and a custom parser would expand/alter it. No timeout, assertion, coverage or canonical concurrency relaxation. |
+| Claude2: consumer seams before core freeze | Accepted for session and Stats prerequisites and a new full checkpoint if later core contract/ownership/scheduling work is needed. Rejected conflating client generation with SQLite ReadIdentity or requiring a new full checkpoint for every test-support edit; affected checks/final full acceptance and original source labels remain mandatory. |
+| Claude3: fixture order | Accepted as above. Complete keyed sets and ordered per-document assertions remain, with deterministic cross-document fixtures. |
+| Claude4: Mac readiness/substitution/cache misses | Accepted prerequisites and explicit HanSolo requirement; verified misses may require private pinned component compilation under AGENTS. Prepare setup alongside Linux work. Rejected an arbitrary new pre-7B readiness gate; final actual HanSolo acceptance remains required and owner license cannot be accepted by an agent. Hosted Mac checks do not silently substitute. |
+| Claude5: standalone note editor ownership | Accepted. Move editor/New Note request-key ownership into Sources/Notes before Sources extraction, rebinding composition drain/reset and preserving exact retry/epoch assertions. |
+| Claude6: run downstream after each failed gate | Optional diagnostic only, not a new mandatory run of already-superseded candidates. Follow AGENTS: inspect/retry failed cases first, batch valid related fixes, preserve all failures and require one complete passing acceptance driver. |
+
+Claude's narrative inferred the default schedule from repository code; the actual
+4bd local adapter explicitly selected0, as the native verification inspection
+established. Both are parallel. Its broad statement that all earlier failures
+were load-only is not accepted: the root journal case was a reproduced metadata
+mutation with an implemented fix. Settings' existing revision tag uses week start;
+the exact-time key gap is in StoreReadQueries/ReadQuery. These corrections do not
+dismiss the valid scheduling/consumer-seam findings.
+
+Revision12/progress/architecture amendments will be frozen together for complete
+round14 review. No core acceptance SHA, desktop extraction or runtime approval is
+established by this planning work. The final combined implementation still needs
+native-team/Claude review and Linux/HanSolo/PR/merge acceptance.
+
+
+## Round 14: revision 12 corrections and bounded final amendments
+
+All reviewers read the same frozen revision12 at
+`/var/tmp/foresight-plan-r14-review/`: plan SHA256
+`6220abe10fbf9e4417b47786349b6b138b0b8ea5cac538192669701bc3f412e8`,
+progress `e8df480e96c1da0272c5ead3e98f1c82dcdd409b505980ec057a74949a220ffa`,
+schema documentation `3206437b7341a0d13caeea0f132dee63f5a595001282533fbf80937a69ba6788`,
+and unchanged inventory `29fbbf912ba00d73398f5790f7db2d878a574bd69a4ff12450415ea0f896e3c9`.
+Native core and desktop converge. Native verification and Claude identify only
+bounded remaining amendments; revision12 is not claimed converged.
+
+| Finding | Disposition in revision13 |
+| --- | --- |
+| Verification V14-1: next-Monday/resume misses timezone change in an awake app | Accepted. Require observable timezone/calendar invalidation or bounded identity recheck, rearm calendar boundaries, reject held old-period replies and test no-resume/no-service-event replacement/coalescing. Keep the same core coordinator. |
+| Verification V14-2: missing historical audit-input links | Accepted. Three references become plain dated provenance; authoritative tracked links remain. Old original-workspace validation did not prove those targets existed in the frozen export. Importing unrelated historical audits is unnecessary. Deferred PR8/process/Windows content is unchanged. |
+| Claude1: leftover instruction to add Stats seam during7B | Accepted. 7B consumes the seam already landed in6E; if insufficient, stop and apply the explicit renewed checkpoint rule. The implementation is still pending, not retrospectively approved. |
+| Claude2 optional: inventory6.5 summary omits seams | Accepted. One summary sentence aligns opaque session generation and Stats scheduling/dispatch prerequisites with6E. |
+
+Document checks on revision12 preserve the actual failure: its three historical
+inventory targets were absent. Changed plan/progress/architecture links, shell
+syntax, whitespace and frozen hashes pass; revision13 reruns exported-link checks
+after the narrow provenance correction. Author and all native reviewers verify
+input hashes; Claude's read-only tools cannot compute them, so its verdict does
+not claim independent hashing. Native and Claude reviews ran no runtime gates.
+The graph fixture's separately authorized host/root diagnostics remain labeled
+as live test-only evidence, without changing frozen review inputs or acceptance.
+
+The complete revision13 inputs are next submitted to all reviewers. Full Linux
+checkpoint, pre-freeze consumer seams, feature extraction, final HanSolo/combined
+implementation review, PR and merge remain outstanding.
+
+
+## Round 15: revision 13 planning convergence
+
+All three native reviewers and Claude CLI converge on the same complete frozen
+revision13. Inputs, hash manifest, independent reports, own-prior-report Claude
+prompt, restricted CLI command/transcript and complete Git-free review overlay
+validation are preserved in `/var/tmp/foresight-plan-r15-review/`.
+
+| Input | SHA256 |
+| --- | --- |
+| Plan revision13 | `eee299d12483f30ad1c8fca12f4230976ab321d45f935e698af4944f3be61e21` |
+| Progress | `9b59fd5a9d93665517bea33e98dded6e70f0c078965287f674ab944d9171c3cb` |
+| Schema documentation | `3206437b7341a0d13caeea0f132dee63f5a595001282533fbf80937a69ba6788` |
+| Inventory | `53735af9a13cc67f8d2af912254c49b33a85c2d1be4c880893f52340527dbccd` |
+
+| Reviewer | Verdict |
+| --- | --- |
+| Native core | CONVERGED FOR PLAN REVIEW |
+| Native desktop | CONVERGED FOR PLAN REVIEW |
+| Native verification | CONVERGED FOR PLAN REVIEW |
+| Claude CLI | CONVERGED FOR PLAN REVIEW |
+
+Native/author before-and-after SHA checks pass for every frozen input. Complete
+Git-free overlay links, shell syntax, whitespace and unchanged deferred tail pass.
+Main was fetched again and remains3fb. Claude confirms every prior disposition;
+its restricted tools do not independently compute SHA256 or read main. Its broad
+grep incidentally matched report/record lines; it states those opinions were not
+opened or used. Its graph diagnostic count rests on the progress record, while
+the author/native verifier separately inspected the real7/7 host/root evidence.
+These limits remain distinct from the full plan-text review verdict.
+
+Planning convergence resolves the renewed review request after rounds13–15.
+Implementation continues with the required pre-freeze6E session and Stats seams,
+then the complete exact-source Linux checkpoint before7A. No core acceptance SHA,
+feature extraction, final Linux/HanSolo acceptance, combined implementation review,
+PR or merge is complete. Earlier failed full gates and all scoped diagnostic
+results retain their original source/producer identities.

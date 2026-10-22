@@ -1,6 +1,6 @@
 # Core service and desktop feature refactoring execution plan
 
-Revision 11, 2026-10-21. Reviewer verdicts and scope of convergence are recorded in the companion
+Revision 13, 2026-10-21. Reviewer verdicts and scope of convergence are recorded in the companion
 review record. This is the execution specification for planned PRs 6 and 7 in [audit plan
 3](../audit/2026-10-18-implementation-plan-3.md), not GitHub pull requests #6 and #7. The [review
 record](2026-10-20-core-desktop-refactor-reviews.md) records frozen revisions and finding
@@ -72,6 +72,44 @@ PR 8 remains deferred, including backend removal, wholesale native splitting and
 consolidation. Native changes here are limited to helper schema integrity and any separately
 characterized join/liveness repair needed by PR 6. Windows support, resident model unloading,
 background-sync product policy, new dependency versions and CI restructuring are outside scope.
+
+## Execution status and checkpoint corrections
+
+The renewed review uses core candidate `4bd2c75d5890399f03d57ce8a46788da2dfcc623`;
+a fresh main fetch still resolves to `3fb259243a99137e3cba1d5e795c44100f42e688`.
+The initial core implementation exists; the focused 6E consumer seams below remain pending.
+There is no accepted checkpoint. The complete container attempt passes
+30/30 native targets, then fails the namespace guard at the unchanged 30-second deadline and one
+graph-label fixture assertion: core 1,821 passed/14 skipped/one error; desktop 285 passed/17
+skipped/one failure. Service, fast integration and platform Python do not run after those failures.
+Both failed cases pass unchanged in isolation; these diagnostics neither resolve the complete gate
+nor establish a cause for the timeout. Historical host passes remain bound to their original source.
+The progress record retains exact attempts, counts, skipped cases and failed output.
+
+Before freezing the next core candidate, diagnose the namespace guard using the actual required
+container schedule and resource profile below. Preserve semantic transitive export/conditional
+resolution, both entry points and every required/forbidden/import assertion. Any context or query
+change needs complete namespace-set parity and the full required gate, not only an isolated pass.
+Correct graph-label fixtures by source ID and `(documentId, labelName)`: opaque SHA256 IDs derived
+from title and time do not sort by creation order. Retain per-document durable position, both
+metadata/color associations, reopen, source revision/changed, JSON projection and deletion/cascade
+assertions; test any global document order with explicit deterministic IDs in both lexical orders.
+Do not change production ordering or ID generation to satisfy a global `.first` assumption.
+Batch verified related corrections, freeze the actual source and rerun its complete applicable
+Linux matrix before recording `core_acceptance_sha` or starting 7A production extraction.
+
+HanSolo's original main compiler SDK has been provenance- and checksum-qualified without a rebuild.
+This is setup evidence only. Final combined-source Mac acceptance still requires owner completion
+of the full Xcode license prerequisite, qualification of runtime/development dependency closure
+(including ICU headers, FlatBuffers and SentencePiece), locked pub/Pod resolution, actual
+application configuration/dependency reuse checks, and fresh current native/core/desktop/process/
+UI/installer gates. Prepare non-license prerequisites alongside Linux work before the final Mac
+gate. Seek existing qualified outputs first; a verified content-addressed miss permits necessary
+private compilation of pinned components with the reason/source/inputs recorded, as AGENTS allows.
+An incomplete runtime bundle alone is not proof that a compiler-SDK rebuild is needed. Hosted Mac
+checks do not substitute for the requested HanSolo matrix without an explicit owner change. CLT discovery,
+original producer reports and cached runtime bytes are not application test results. Preserve the
+original checkouts and verified dependency bytes; never accept the owner's license on their behalf.
 
 ## Contracts that must survive every commit
 
@@ -531,8 +569,14 @@ Finish with the complete ownership/close/crash suite before claiming the touched
    changing original file sets, bytes or identities. Only after whole-set compatibility and a final
    source-identity recheck may SQLite open/create the writable set. Use this grounded protocol:
 
-   - Healthy rollback-mode members may use direct read-only/no-create inspection only where that
-     path is demonstrably non-mutating. A genuine hot journal can make this fail with
+   - An existing rollback journal, including an empty journal, requires a source-stable private
+     DB+journal copy for the read-only SQLite probe in C++, Dart and Python. SQLite may change an
+     original journal's ctime through `fchown` even on a read-only open as UID 0. Preserve original
+     raw page-1 bounds, checksum/version walking, copy-time and final whole-set identity checks,
+     including ownership, mode and ctime; do not relax identity verification. Direct original
+     read-only/no-create inspection remains permitted only when the journal is absent and that
+     path is demonstrably non-mutating. The private probe never performs recovery or follows
+     absolute original superjournal paths. A genuine hot journal can make this fail with
      `SQLITE_READONLY_ROLLBACK` both before and after the attached commit point; that error cannot
      decide whether rollback should occur. Qualify such members conservatively with a bounded,
      read-only modern-format journal walker: validate the current DB header and every applicable
@@ -557,7 +601,9 @@ Finish with the complete ownership/close/crash suite before claiming the touched
      success and failure. Distinguish a torn/unreadable/unstable copy from a proven future version.
      A short immutable version probe is allowed only for a source-stable, sidecar-free qualified
      image or private snapshot, never as authority for a live WAL or hot journal.
-   - Permanent real-SQLite tests cover ordinary hot journals, abrupt attached transactions both
+   - Permanent real-SQLite tests cover journal-absent and empty-journal paths, UID 0 and ordinary
+     user qualification with independent nanosecond metadata/content snapshots, metadata-only
+     original-source changes, ordinary hot journals, abrupt attached transactions both
      immediately before and after actual superjournal deletion, hidden future rollback page-1
      versions, WAL-only future versions with absent/existing SHM, future versions in each of the
      three members, source changes during qualification, rollback/retry and exact original
@@ -621,6 +667,22 @@ guard reading both grpc and http2 from the resolved `packages/foresight_core/pub
 against the documented exact pubspec pins. Prepare an upstream issue draft if no matching report is
 found; publishing it needs separate authorization to message others. Remove the workaround only
 after a verified upstream fix passes the EOF/write-race regressions.
+
+The read-only 7A consumer inventory identifies two additive core seams that must land before
+freezing the core checkpoint, without starting desktop feature extraction. Expose a narrow opaque
+read-only client-session generation/notification at the desktop connection boundary: every actual
+client/service replacement, even at the same path and epoch, advances it. Keep that feature/RPC
+session generation distinct from the authoritative SQLite reader's owner/connection/data token;
+retain the existing reader where valid without admitting retired feature work. Separately split
+Stats' immutable scheduling identity from its fresh dispatch-time argument snapshot, with an
+injected clock and unchanged defaults for other queries. Test replacement/late-result refusal,
+ordinary same-session preview/coalescing, exact Stats cutoffs and scheduler settlement before the
+freeze. These are focused consumer prerequisites within 6E, not authority to move feature owners.
+If a later migration discovers another core interface/ownership/read-scheduling change required
+for the desktop contract, stop moves, review that change and establish the updated core checkpoint
+with its full Linux matrix. Routine fixture adaptation does not retroactively relabel an earlier
+pass; it needs affected checks and the final combined matrix, without inventing a full checkpoint
+for every test-only edit.
 
 ### PR 6 acceptance
 
@@ -686,9 +748,17 @@ features.
 
 Specify ownership before extraction: composition owns the service connection, read-only reader and
 helper status proxy; the Workspace drains pending note saves before disconnect; each feature owns
-subscriptions, timers, text/scroll/focus controllers, query workers and notifiers it creates. It
-disposes them exactly once and ignores late results using a feature/request/connection/epoch
-identity. Preserve window close/detach and settings persistence sequencing.
+subscriptions, timers, text/scroll/focus controllers, view-model requests and notifiers it creates.
+The connection owns the persistent read worker/coordinator and joins actual reads on close;
+features own their subscriptions and presentation generations, without duplicating that scheduler.
+Dispose each owned resource exactly once and ignore late results using a
+feature/request/connection/epoch identity. Preserve window close/detach and settings persistence
+sequencing. Consume the core session-generation contract completed before the checkpoint. Same-path,
+same-epoch client/service replacement must remain observable and retire old feature actions/results;
+a retained valid SQLite reader is not evidence that the feature session survived. Feature
+client-session generation is distinct from the authoritative SQLite connection/token; never
+compare foreign data tokens. Do not infer identity from socket paths or cast back to a concrete
+transport client.
 
 Invalidation starts conservatively. A change with known scope invalidates that feature's cached read
 models; an unknown/coarse service event invalidates all affected data consumers as today, until
@@ -709,6 +779,23 @@ manual/automatic answer
 view and retrieval/history identity; unknown/reconnect/clear → all. A source change may legitimately
 invalidate a meetings dependency;
 test an unrelated screen rather than assert that meetings never rebuilds.
+
+Before the first feature move, fill the characterized gaps with held producers/replies: Summary
+and actions/preparation across selection, clear/ID reuse, same-epoch connection replacement and
+disposal; task edits/completion and local source-picker/preference writes across those boundaries;
+same-conversation answer-scope changes with late text/history/citations; cancellation retaining
+accepted artifacts and manual task metadata; and a held note save proving Workspace drains before
+connection disconnect. Reuse the strong existing startup, pending-create/idempotency, clear/offline,
+accepted-history and capture-level fixtures. Characterizations pass before a mechanical move;
+if a stale generic preference write is reproduced, record a separate behavioral regression/fix.
+Freeze query admissions at the typed StoreReader/read/watch boundary and worker projections,
+then count feature notifications and widget builds separately. Legacy Store.rows overrides can
+be bypassed by current typed db.select queries: retain their semantic/large-source assertions,
+but supplement or replace those spies instead of treating zero calls as proof of zero SQL or
+isolate placement. Newly allocated value-equal DTO/list projections must not notify; relevant
+coarse events still refresh every dependent consumer, while capture ticks and graph frames cause
+no persistence admissions. Retain real worker/snapshot tests and actual process/UI integration
+as separate acceptance.
 
 ### 7B. Move one feature at a time
 
@@ -732,6 +819,11 @@ revision changes: same-identity previews may refresh the view without being mark
 identity results are always rejected. Preserve `resetWorkspaceViews` dropping drafts/IDs before
 `adoptWorkspace`, `rowsAreCurrent` dialog guards and `PendingRequestKey` reuse on retries with reset
 after workspace clear. Debounce/coalesce without dropping required invalidation or autosave.
+Before moving Sources, relocate standalone note-editor state and its New Note PendingRequestKey
+into Sources/Notes ownership in a separate mechanical commit; rebind composition's note-save
+drain, navigation and reset. Do not expose Meetings' mutable editor/controller as a cross-feature
+port. Preserve pending-create exact payload/idempotency-key and workspace-epoch assertions,
+including lost-reply retry, held save and reset-before-adopt behavior.
 
 Extract large builders into widgets with explicit state/actions. Use feature notifiers and small
 selectors; capture meters listen only to their existing level notifier. Scope loading/error state to
@@ -743,7 +835,22 @@ a scope change advances query generation and always rejects the old result, rath
 it as a preview. A stable scheduling key covers
 profile/connection/epoch/projection/filters/selection;
 ordinary data-revision changes affect freshness/cache tags but do not create a new scheduler or
-retire a valid active query. Preserve `answerScope.meeting:<id>` versus `proactiveScope.<id>`, their
+retire a valid active query. For Stats, consume the scheduling/dispatch seam completed before the
+core checkpoint: use a stable calendar-week/timezone scheduling identity while freezing a fresh exact
+`now` cutoff for each actual worker dispatch, preserving exclusion of future-created rows. Values
+and chart labels share the same captured period. Rearm a calendar-based next-Monday timer on
+period change and check calendar identity on resume. Also detect timezone/calendar changes while
+the app remains awake and focused, without a service event, through a reliable existing platform
+notification or a bounded clock/zone-identity recheck; resume alone is insufficient. Capture the
+effective zone and calendar identity, recompute boundaries on change, and reject any held
+prior-period reply rather than labeling it with the new period. Consume the typed scheduling/
+dispatch seam landed in 6E; 7B adds no core change for Stats. If that seam is insufficient, stop
+moves and apply 6E's review/re-checkpoint rule instead of extending core during the feature move.
+Retain one-active/one-pending and actual-settlement rules. Tests cover
+held refreshes, exact cutoffs, Monday/DST rollover and a midweek timezone change with neither
+resume nor a service event: one coalesced replacement uses the new boundaries/cutoff, and stable
+same-period updates do not create a second coordinator.
+Preserve `answerScope.meeting:<id>` versus `proactiveScope.<id>`, their
 selected-source keys and preparation selection. Local source pickers are not network authorization.
 Snapshot task/source dialogs and pending preference commands against their original meeting/epoch;
 current generic `preferences.set` is not epoch-scoped, so test for stale-dialog writes and fix an
@@ -850,6 +957,19 @@ unrelated check is not verification.
 | Schema/data | Frozen checksummed source/database fixtures without deep Git dependency; fresh/legacy/current/future/corrupt/partial and rollback/retry cases for application and helper databases; real hot-journal/attached-commit/WAL preflight and refusal-without-mutation fixtures from 6D; durable label ordering and Google repair identity/content assertions. |
 | Complete source export | Applicable archive/container/fixture checks from a full export without `.git`; explicit fixture CI metadata under unrelated PR, main and unset refs if these fixtures are touched. Preserve provenance/checksum assertions. |
 | Platform acceptance | Linux compiled desktop/service smoke and installer acceptance; macOS native/Flutter/process/installer smoke and cold-start/responsiveness observations. Preserve #168's independent real DMG fixture contracts, including owned-attachment cleanup; fixture success is not a Mac application pass. Docker/Apple paths unavailable locally remain required hosted checks, explicitly unexecuted locally. |
+
+The canonical container schedule is the required CI owner's current invocation. At reviewed main,
+`tools/linux_container_test.sh` defaults `FORESIGHT_LINUX_TEST_SCHEDULE` to 1: native first, then
+core/desktop/platform Python branches concurrently, then compiled service. Schedule 0 instead uses
+`build.sh --test-only` followed by fast/platform Python; it still enables parallel Dart gates.
+The external local adapter selected 0 for the failed 4bd attempt. Record this difference and use
+the required default schedule 1 for the next acceptance attempt; alternate or isolated invocations
+remain diagnostic. Before that attempt record outer workloads, inner test/gate concurrency,
+compiler jobs, visible CPUs, CPU quota/cpuset, memory/swap limits and current host load/memory/swap.
+No CPU, memory or swap cause is established merely by observing a timeout or an isolated pass.
+Do not silently serialize the canonical gate, raise deadlines, exclude architecture coverage or
+alter hosted routing to obtain a pass. Preserve inventory, thresholds, original logs and every
+namespace assertion; a deliberate gate change requires its own review and complete validation.
 
 Concrete Linux gate invocations at the frozen baseline (set task-specific absolute paths first;
 inspect scripts again after reconciliation):

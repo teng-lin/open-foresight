@@ -13,20 +13,21 @@ Original runtime baseline/compiled outputs remain labeled c28a1561; no 3fb full 
 | Requirement | State | Evidence |
 | --- | --- | --- |
 | Revision 11 plan review | Complete | Three native agents and Claude CLI converged through renewed rounds 9–12, including moved-main 3fb refresh; frozen hashes/findings are in the companion review record. |
-| Core completion commit and full Linux checkpoint | Pending | Freeze core_acceptance_sha after 6A–6E/main refresh and before desktop feature extraction; final combined Linux/HanSolo gates remain required. |
+| Renewed plan review | Verdict recorded separately | Rounds13 onward assess current implementation findings; the companion record identifies frozen revisions and latest native/Claude verdicts. Planning never grants runtime acceptance. |
+| Core completion commit and full Linux checkpoint | Pending, latest container failed | No core_acceptance_sha. Exact 4bd container: native30/30; core1821/14skip/1error; desktop285/17skip/1failure. Later service/fast/platform stages did not run. Full current-source Linux matrix remains required before7A. |
 | Phase 0 characterization/inventory | In progress | Frozen complete c28 source export without `.git`; 83-operation/32-MCP inventory, desktop consumer inventory, current schema fixtures, generation-settlement and workspace-clear characterizations. Regular baseline gates passed below; remaining baseline obligations are explicit. |
 | 6A operation descriptors/typed boundary/errors/compatibility | Implemented, full gates pending | Actual 75+8 typed registry partition (9 tests), descriptor/MCP projection (187), complete service owner split, API compatibility, decode-first admission and Exception-based errors are live. Startup/registry batch260 passes; exact frozen full acceptance remains pending. |
-| 6B Application/services/answer phases | Implemented, full gates pending | All reviewed owners and typed dispatch are live; Application533 lines before final formatting. Three ownership regressions fixed with7 permanent held-producer tests; embedding RPC shutdown separately passes its real-gRPC test. SQL boundary cleanup and complete Linux checkpoint pending. |
-| 6C relay/service split/read coordination/responsiveness | Live integration in progress | Persistent lazy read isolate, guarded worker/authority/session/StoreReader, immutable DTOs/status: 26 initial cases pass plus regression expansion underway. Actual warm c28 RPC baseline completed; service extraction and final-head comparisons remain pending. |
-| 6D migrations/Store/helper schema | Final integration in progress | Frozen1–15, appended16/17, Store modularization, typed reads, document parser, label domain service and genuine helper preflight are live (189 persistence tests; helper8 standalone CTest targets). Independent main/ancestor CI guard is wired and live-main verified. Domain/Google/Proactive SQL boundaries and full export acceptance remain pending. |
-| 6E narrow APIs/core hygiene | Live integration in progress | DesktopConnection/RemoteDomain migrated to StoreReader, immutable HelperStatus and explicit close lifecycle; current desktop library analyzer clean, 53 RemoteDomain cases pass. Minimal consumer/fixture regression runs ongoing; final public-boundary and dependency gates pending. |
+| 6B Application/services/answer phases | Implemented, full gates pending | Explicit domain owners, phased answers and typed persistence boundaries are complete; real held-producer/RPC joins and child-gap regressions are retained. Scoped implementation reviews converge. No full current-source acceptance. |
+| 6C relay/service split/read coordination/responsiveness | Implemented, full gates pending | One service lifetime authority; persistent guarded read workers, schema retirement and conservative previews. Exact214 real-model RPC passed100 samples/workload below50ms p95; native-close residual documented separately. Current-source process/RPC/sanitizer gates remain pending. |
+| 6D migrations/Store/helper schema | Implemented, full gates pending | Frozen1–15, appended16/17, typed reads/label ordering and whole-helper-set preflight. Existing rollback journals use private readonly probes in all3 implementations; exact4bd root native30/30 passes. Full schema/runtime/platform matrix remains required. |
+| 6E narrow APIs/core hygiene | Focused consumer seams and full gates pending | Curated APIs/external consumers are migrated; The current plan requires opaque client-session generation and Stats stable-key/fresh-dispatch seams before the checkpoint. Exact4bd namespace guard still times out in the complete container. |
 | 7A composition/contracts/invalidation | Pending | |
 | 7B independent feature modules/read models | Pending | |
 | 7C public boundary/platform/disposal | Pending | |
-| Complete native/core/desktop/coverage/process/UI gates | Baseline only | Root native 29/29; core 1464 pass/12 skip, 92.73%; desktop 282 pass/17 skip, 91.19%; Python 5126 pass/30 skip, 96.06%; compiled service/MCP and isolated real UI 32/32, no skips. Changed implementation acceptance remains pending. |
-| Git-free export/fixture CI metadata matrix | Partial baseline evidence | Regular baseline matrix ran from complete `git archive c28a1561` export without `.git`; new guard/ref matrix and full changed-source export remain pending. |
-| Exact-source HanSolo Mac gates | Pending | Dedicated detached c28 worktree `/Users/tenglin/src/ofs-core-desktop-mac`; full Xcode exits 69 until owner reviews/accepts its license. CLT Git/Clang usable. No Mac runtime gate claimed. |
-| Native-team and Claude CLI implementation review | Incremental core review active | Native reviews and first Claude core pass identified corrected lifecycle/typed persistence findings. Final whole combined implementation review remains required after7. |
+| Complete native/core/desktop/coverage/process/UI gates | Partial changed-source evidence, no checkpoint | Exact2d host native30, core1825/12skip/92.04%, desktop286/17skip/91.33%; exact214 compiled process/UI32 and fast2 with zero skips. Exact4bd complete container fails. Each original source retains its own results; no carry-forward acceptance. |
+| Git-free export/fixture CI metadata matrix | Partial changed-source evidence | Exact4bd export verifies1321 blobs/modes; exact214 explicit93-module provenance matrix passes3707 tests/1270subtests/3skips per unrelated-PR/main/unset context. Current-source full fixture matrix and actual Docker-cache gate remain pending. |
+| Exact-source HanSolo Mac gates | Pending; compiler SDK setup qualified | Original main compiler SDK1564files qualifies without rebuild; pinned Flutter/Dart/Python found. Runtime/development dependency closure and final exact-source app gates remain required. Full Xcode exits69 pending owner license acceptance; no Mac runtime gate claimed. |
+| Native-team and Claude CLI implementation review | Scoped core reviews converged, final review pending | Native core corrections and Claude incremental rounds1–6 assessed frozen deltas; round6 converges on4bd semantic namespace delta only. Final whole combined implementation review remains required after7. |
 | PR/CI/reviews/merge | Pending | Create after implementation reviews and applicable local gates. |
 
 This ledger does not substitute for the plan's detailed acceptance criteria. Attach exact commands,
@@ -479,3 +480,55 @@ Flutter/Dart and Python 3.13 environment are available. No SDK is rebuilt, no
 application test is claimed, and full Xcode license acceptance is still required.
 No core acceptance SHA, desktop extraction, PR or merge is complete; the next
 frozen source still needs independent Claude delta review and the full matrix.
+
+## Core candidate 4bd2 and renewed plan review
+
+`4bd2c75d5890399f03d57ce8a46788da2dfcc623` is a complete 1,321-blob/mode
+export. Its full container attempt `logs/container-attempt.wkETgt` exits 1:
+native 30/30; core 1,821 passed, 14 skipped and one namespace-timeout error;
+desktop 285 passed, 17 skipped and one graph-label assertion failure. The later
+compiled service, fast-integration and platform-Python stages do not run. There
+is no canonical accepted output link. Private-journal native regressions pass;
+this does not establish the failed Dart or remaining container gates.
+
+The namespace guard still exceeds its unchanged 30-second deadline under the
+full parallel run; teardown produces `UnspecifiedInvalidResult`. Its unchanged
+isolated retry passes 1/1 in six seconds with coverage and the same deadline.
+The graph-label case also passes unchanged in isolation. Both diagnostic logs
+are retained in that attempt's `failed-case-triage/`; neither retry changes the
+failed complete result or proves a resource cause. Source inspection confirms
+that the fixture updates `(a, Planning)` but asserts a global first label/source.
+Opaque SHA256 IDs derived from title and microsecond time are not creation-order
+sortable. The planned correction preserves keyed associations and per-document
+order, with explicit lexical-order fixtures where global order is asserted.
+
+The external adapter uses schedule 0, while the repository container runner
+defaults to schedule 1; both enable parallel Dart gates. The next acceptance
+attempt must use the required existing default schedule with a recorded CPU/
+cgroup/memory/swap/load and inner/outer concurrency profile. Isolated or alternate
+schedule diagnostics remain labeled separately. No timeout increase, architecture
+coverage reduction, production ordering change or hosted-routing change has been
+made. The exact exported source/context inventory remains intact after both real
+dependency-verifier invocations; the external blob-cache fix works.
+
+Claude implementation round 6 converges on the semantic namespace delta at4bd;
+this is static delta review, not full-gate or combined-implementation approval.
+The renewed native-team and independent Claude plan review records bounded
+protocol/runbook/desktop-interface amendments in the companion review record.
+No source change, planned fixture correction, prepared driver or review result
+creates an acceptance SHA. All remaining current-source host/Python/provenance/
+sanitizer/release-hook/process/UI/RPC/container/model/audio/installer gates remain
+required. Feature extraction, final HanSolo gates, PR publication and merge have
+not started.
+
+
+The graph-label test-only correction is now diagnostic-tested with explicit
+Apollo-first and Borealis-first lexical IDs. Complete keyed colors/provenance/
+rationale, durable positions before/after reopen, both sources' revision/changed/
+JSON projections, removal and cascade assertions are retained. The full file
+passes 7/7 on the host and as UID 0, zero skips; analyzer/format pass, independent
+native verification review converges. Evidence:
+`4bd2c75d5890/logs/graph-label-fixture-correction/`; corrected file SHA256
+`2ae1a49619f78f819c38f97055508b4876d882f6e05a26f28a65c8709e48f3c7`.
+This is an uncommitted live fixture proof against the preserved4bd environment,
+not a new frozen-source acceptance or a passed complete container.

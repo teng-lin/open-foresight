@@ -13,13 +13,19 @@ that private directory, and remove scratch on success or failure. Scratch uses
 0700 directories and 0600 files. This copy is a startup qualification cost; live
 readers never copy or use immutable and retain ordinary WAL visibility.
 
-Healthy DELETE profiles use direct read-only qualification. If SQLite requires
-hot-journal recovery, a conservative read-only verifier checks the current header
-and every applicable rollback page-1 version, including record checksums and
-recognized segment geometry. It never rewrites journals, follows superjournal
-paths, or implements recovery. Unsupported or uncertain layouts fail actionably;
-only after compatibility and final file-identity checks may SQLite recover the
-original files. The format authority is SQLite's [file format](https://sqlite.org/fileformat.html)
+DELETE profiles without a rollback journal use direct read-only qualification.
+When a journal exists, including an empty journal, the helper, application and
+profile-copy tool probe a source-stable private DB+journal copy read-only. SQLite
+can fchown an original journal under root and advance ctime even on a read-only
+open; original ownership, mode, timestamps and bytes remain protected by copy-time
+and final whole-set identity checks. Private copies retain original journal bytes
+and absolute superjournal footers unchanged and never perform recovery. On
+`SQLITE_READONLY_ROLLBACK`, a conservative read-only verifier checks the original
+current header and every applicable original rollback page-1 version, including
+record checksums and recognized segment geometry. It never rewrites journals,
+follows superjournal paths or decides attached commit state. Unsupported or
+uncertain layouts fail actionably; only after compatibility and final
+file-identity checks may SQLite recover the original files. The format authority is SQLite's [file format](https://sqlite.org/fileformat.html)
 and `pager.c` (`readJournalHdr`, `pager_cksum`, `pager_playback_one_page`).
 
 Writable opens hold `BEGIN IMMEDIATE` while re-reading the version and applying

@@ -15,9 +15,9 @@ Claude CLI review. This refreshed inventory replaces the pre-lifecycle specifica
 7 below; PR 8's deferral is unchanged. Line references in the retained PR 8, process and Windows
 sections remain historical audit references and must be refreshed when their work resumes.
 
-This continues [plan 1](2026-10-18-implementation-plan.md) and [plan
-2](2026-10-18-implementation-plan-2.md), addressing the [P2 maintainability
-backlog](2026-10-18-consolidated.md#p2-maintainability-backlog). Fetch main before starting and
+Historical local review inputs were the 2026-10-18 implementation plans 1 and 2 and that date's
+consolidated P2 maintainability backlog; they are provenance, not dependencies of the exported
+execution plan. Fetch main before starting and
 assess any further delta; do not replay ADR-0007 or other fixes
 already delivered. Preserve
 [AGENTS.md](../../AGENTS.md) and the current lifecycle matrix.
@@ -168,7 +168,8 @@ inheritance and desktop construction of a write-capable gRPC client. PR 6 must a
 current desktop consumers to compile; include background queries, export, model setup and
 model-terms writes plus typed task/evidence/manifest/history reads, not just controllers. Do not
 export the mixed read/write MeetingWorkflowStore extension as a reader. PR 7 reorganizes the adapted
-consumers.
+consumers. Complete the opaque client-session generation and Stats scheduling/dispatch seams
+required by 6E before freezing the core checkpoint; retain the reader's separate authority.
 
 Retain the scoped trace/cancellation/digest/protocol/getter cleanups and grpc workaround
 regression/version guards. Prepare any upstream issue as a draft unless publishing is separately

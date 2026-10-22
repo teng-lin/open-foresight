@@ -51,14 +51,18 @@ void main() {
   test(
     'curated public namespaces do not export implementation capabilities',
     () async {
+      const entries = ['desktop.dart', 'desktop_bootstrap.dart'];
       final contexts = AnalysisContextCollection(
-        includedPaths: ['${package.path}/lib'],
+        // Referenced libraries still participate in transitive export linking.
+        includedPaths: [
+          for (final entry in entries) '${package.path}/lib/$entry',
+        ],
       );
       addTearDown(contexts.dispose);
       final forbidden = RegExp(
         r'^(Store|Helper|Domain|RemoteDomain|RemoteHelper|NativeRuntime|NativeConversation|Recording|ServiceClient|RagServiceClient|HelperChannel|HelperTransportConnector|GraphPersistence|MeetingWorkflowStore|Database|RuntimeConfiguration|GoogleAuth|GoogleConnections|SecretStore|PlatformSecretStore|configureGeneration|configureSpeech|configureDedicatedQuery|configureEncryptedDedicatedQuery|registerInstalledModels|retrieveAnswerPassages)$',
       );
-      for (final entry in ['desktop.dart', 'desktop_bootstrap.dart']) {
+      for (final entry in entries) {
         final path = '${package.path}/lib/$entry';
         final session = contexts.contextFor(path).currentSession;
         final uri = session.uriConverter.pathToUri(path);
