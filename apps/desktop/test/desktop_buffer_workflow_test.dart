@@ -682,6 +682,9 @@ void main() {
       final previous = f.store.db.lastInsertRowId;
       f.store.artifact(id, 'summary', 'Current summary', 'fixture');
       final latest = f.store.db.lastInsertRowId;
+      final summaryEpoch = f.connection.workspaceEpoch;
+      expect(summaryEpoch, f.store.workspaceEpoch);
+      expect(summaryEpoch, isNotEmpty);
       f.shell.update(() {
         f.shell.meetingFeature.meetingId = id;
         f.shell.meetingFeature.meetingPanel = 'Summary';
@@ -716,7 +719,11 @@ void main() {
       await tester.tap(find.byTooltip('Generate Summary'));
       await tester.pumpAndSettle();
       expect(f.connection.calls.last.$1, Operation.meetingsGenerate);
-      expect(f.connection.calls.last.$2, {'id': id, 'kind': 'summary'});
+      expect(f.connection.calls.last.$2, {
+        'id': id,
+        'kind': 'summary',
+        'workspace_epoch': summaryEpoch,
+      });
     },
   );
 

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/foresight_core.dart';
@@ -12,6 +13,7 @@ import 'package:foresight_core/src/sqlite_read_session.dart';
 import 'package:foresight_core/src/sqlite_store_reader.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/main.dart';
+import 'package:open_foresight/desktop_settings.dart';
 import 'controller_fixture.dart' show ControllerConnection;
 import 'meeting_setup_test.dart' show OfflineHelper;
 import 'pump_until.dart';
@@ -93,6 +95,15 @@ class _GraphFixture {
     int heldRead,
     RpcError? failure,
   ) async {
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(DesktopSettings.channel, (call) async {
+      expect(call.method, 'login.get');
+      return true;
+    });
+    addTearDown(
+      () => messenger.setMockMethodCallHandler(DesktopSettings.channel, null),
+    );
     final root = createTestTempDirectorySync('graph-read-retry-');
     final store = Store('${root.path}/app.db');
     final a = store.importText('Apollo', 'Launch', 'text/plain', 'fixture:a');
@@ -168,6 +179,21 @@ class _GraphFixture {
       await pumpUntil(tester, () => closed);
       await tester.binding.setSurfaceSize(null);
     });
+    // Initial statistics and the Mac login-item reply can each rebuild the
+    // workspace. Settle their publications and the statistics 100 ms relay
+    // before measuring graph-only error rebuilds.
+    shell.settingsFeature.localWords();
+    await pumpUntil(
+      tester,
+      () =>
+          shell.onboardingFeature.ready &&
+          shell.settingsFeature.sourceCount == 2 &&
+          (!Platform.isMacOS ||
+              shell.integrationFeature.desktopSettings.openAtLogin),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pumpAndSettle();
+    expect(shell.serviceUiTimer, isNull);
     shell.update(() {
       shell.tab = 0;
       shell.sourceFeature.graphAnimationPaused = true;
@@ -287,6 +313,7 @@ void main() {
             failure,
           );
           final key = f.feature.graphLayoutKey;
+          final revision = f.shell.serviceUiRevision.value;
           f.worker.release.complete();
           await pumpUntil(tester, () => f.feature.graphLayoutError.isNotEmpty);
           await tester.pump();
@@ -298,9 +325,13 @@ void main() {
           );
           expect(f.feature.graphOrganizing, false);
           expect(f.feature.graphLayoutError, failure.message);
+          expect(f.shell.serviceUiRevision.value, revision);
           expect(tester.takeException(), isNull);
           // A separate refresh retries the exact same model/documents/labels.
-          f.shell.update(() {});
+          f.connection.domain.helper.changed?.call();
+          expect(f.shell.serviceUiTimer, isNotNull);
+          expect(f.worker.reads, heldRead);
+          await tester.pump(const Duration(milliseconds: 100));
           await pumpUntil(tester, () => f.worker.reads == heldRead + 1);
           await tester.pump();
           await tester.pump();
@@ -311,7 +342,8 @@ void main() {
             reason: 'Repeated failures remain bounded',
           );
           f.worker.rejectFollowing = false;
-          f.shell.update(() {});
+          f.connection.domain.helper.changed?.call();
+          await tester.pump(const Duration(milliseconds: 100));
           await pumpUntil(
             tester,
             () =>
