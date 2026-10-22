@@ -185,7 +185,7 @@ def restore(
             checksum,
             destination,
             component=component,
-            producer_wait=producer_wait,
+            **({} if producer_wait is None else {"producer_wait": producer_wait}),
             **options,
         )
     return payload, destination, result
@@ -522,6 +522,87 @@ def test_pending_direct_endpoint_waits_only_until_exact_producer_is_visible(
     refreshes = iter([dict(producer[5]), complete])
     restore(tmp_path, producer, refresh=lambda: next(refreshes), producer_wait=60)
     assert visibility_clock[1] == [5]
+
+
+@pytest.mark.parametrize("ref", ["refs/pull/98765/merge", "refs/heads/main", None])
+def test_default_visibility_budget_restores_after_two_minute_api_lag(
+    tmp_path, producer, visibility_clock, monkeypatch, ref
+):
+    if ref is None:
+        monkeypatch.delenv("GITHUB_REF", raising=False)
+    else:
+        monkeypatch.setenv("GITHUB_REF", ref)
+    complete = dict(producer[5])
+    producer[5].update(status="in_progress", conclusion=None, completed_at=None)
+    now, sleeps = visibility_clock
+    visible_at = now[0] + 135
+
+    def refresh():
+        return complete if now[0] >= visible_at else producer[5]
+
+    original, restored, qualification = restore(
+        tmp_path, producer, refresh=refresh, producer_wait=None
+    )
+    assert sleeps == [5] * 27
+    assert qualification["producer_job"] == JOB
+    assert qualification["producer_attempt"] == 1
+    assert qualification["artifact_digest"] == "sha256:" + producer[2]
+    assert (restored / "application.tar.gz").read_bytes() == (
+        original / "application.tar.gz"
+    ).read_bytes()
+
+
+@pytest.mark.parametrize("final_state", ["failed", "invalid-window", "pending"])
+def test_default_visibility_budget_keeps_producer_proof_mandatory(
+    tmp_path, producer, visibility_clock, final_state
+):
+    final = dict(producer[5])
+    if final_state == "failed":
+        final["conclusion"] = "failure"
+    elif final_state == "invalid-window":
+        final["completed_at"] = "2025-01-01T00:00:30Z"
+    producer[5].update(status="in_progress", conclusion=None, completed_at=None)
+    now, sleeps = visibility_clock
+    visible_at = now[0] + 135
+
+    def refresh():
+        return (
+            final if final_state != "pending" and now[0] >= visible_at else producer[5]
+        )
+
+    reason = {
+        "failed": "completed with 'failure'",
+        "invalid-window": "not created during",
+        "pending": "still in_progress after 300s",
+    }[final_state]
+    with pytest.raises(ValueError, match=reason):
+        restore(tmp_path, producer, refresh=refresh, producer_wait=None)
+    assert sleeps == [5] * (60 if final_state == "pending" else 27)
+    assert not (tmp_path / "restored").exists()
+
+
+def test_default_original_producer_budget_is_shared_by_handoff_consumers(
+    producer, visibility_clock
+):
+    complete = dict(producer[5])
+    producer[5].update(status="in_progress", conclusion=None, completed_at=None)
+    now, sleeps = visibility_clock
+    visible_at = now[0] + 135
+    with (
+        patch.object(artifacts, "dependency_jobs", return_value=[producer[5]]),
+        patch.object(
+            artifacts,
+            "api",
+            side_effect=lambda repository, route: (
+                complete if now[0] >= visible_at else producer[5]
+            ),
+        ),
+    ):
+        assert (
+            application.original_producer(REPOSITORY, SOURCE, RUN, 1, producer[4])
+            == complete
+        )
+    assert sleeps == [5] * 27
 
 
 @pytest.mark.parametrize("location", ["list", "direct"])

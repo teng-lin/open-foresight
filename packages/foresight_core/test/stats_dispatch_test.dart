@@ -279,20 +279,36 @@ void main() {
   test(
     'calendar capture preserves DST boundaries and detects awake zone change',
     () async {
+      final compiled = createTestTempDirectorySync('stats-calendar-');
+      final kernel = '${compiled.path}/stats_calendar.dill';
+      // Compile once; each fresh VM still initializes its own TZ below.
+      final compilation = await Process.run(Platform.resolvedExecutable, [
+        'compile',
+        'kernel',
+        '--packages=.dart_tool/package_config.json',
+        'test/fixtures/stats_calendar.dart',
+        '-o',
+        kernel,
+      ]);
+      expect(
+        compilation.exitCode,
+        0,
+        reason:
+            'Stats calendar fixture compilation:\n'
+            '${compilation.stdout}\n${compilation.stderr}',
+      );
       Future<Map<String, dynamic>> capture(String zone, String instant) async {
         final result = await Process.run(
           Platform.resolvedExecutable,
-          [
-            '--packages=.dart_tool/package_config.json',
-            'test/fixtures/stats_calendar.dart',
-            instant,
-          ],
+          [kernel, instant],
           environment: {'TZ': zone},
         );
         expect(
           result.exitCode,
           0,
-          reason: '${result.stdout}\n${result.stderr}',
+          reason:
+              'Stats calendar capture for $zone at $instant:\n'
+              '${result.stdout}\n${result.stderr}',
         );
         return jsonDecode(result.stdout as String) as Map<String, dynamic>;
       }
