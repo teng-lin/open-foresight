@@ -3,6 +3,7 @@
 library;
 
 export 'src/desktop_connection.dart';
+export 'src/desktop_status.dart';
 export 'src/desktop_read_models.dart';
 export 'src/helper_status.dart';
 export 'src/recording_status.dart' show RecordingSnapshot;

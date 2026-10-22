@@ -3,6 +3,21 @@ import 'dart:io';
 import 'helper_status.dart';
 import 'store_reader.dart';
 import 'google_auth.dart';
+import 'desktop_status.dart';
+
+/// Additive typed access during the feature migration. Extensions keep existing
+/// connection implementations and test doubles source compatible.
+extension DesktopPresentation on DesktopConnection {
+  CapturePresentation get capturePresentation =>
+      CapturePresentation.fromWire(capture);
+  GooglePresentation get googlePresentation =>
+      GooglePresentation.fromWire(googleStatus);
+}
+
+extension GenerationPresentationValue on GenerationStatus {
+  GenerationPresentation get presentation =>
+      GenerationPresentation.fromWire(effectiveState);
+}
 
 /// Capabilities exposed to a desktop. Worker mutation and credentials stay in
 /// the application service; proxies only implement these client operations.
