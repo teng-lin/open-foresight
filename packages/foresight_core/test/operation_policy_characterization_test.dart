@@ -6,14 +6,31 @@ import 'package:test/test.dart';
 
 void main() {
   test(
-    'reviewed operation and MCP policies retain their frozen wire contract',
+    'reviewed policies retain their contract with explicit MCP schema corrections',
     () {
       // Captured from reviewed main c28a1561 before descriptor extraction. This
       // fixture protects policy and tool exposure independently of how they are
-      // implemented; updating it requires an intentional contract change.
-      final expected = jsonDecode(
-        File('test/fixtures/operation_policy_baseline.json').readAsStringSync(),
-      );
+      // implemented. Keep the historical fixture unchanged; intentional schema
+      // corrections below are literal expectations independent of live metadata.
+      final expected =
+          jsonDecode(
+                File(
+                  'test/fixtures/operation_policy_baseline.json',
+                ).readAsStringSync(),
+              )
+              as Map<String, dynamic>;
+      final preparation =
+          (expected['meetings.prepare']['tools'] as List).single;
+      final sourceIds =
+          preparation['schema']['properties']['source_ids']
+              as Map<String, dynamic>;
+      expect(sourceIds, {
+        'type': 'array',
+        'items': {'type': 'string'},
+      });
+      // The decoder already enforces these limits. Publish them to MCP clients
+      // while retaining every frozen approval, exposure and ownership assertion.
+      sourceIds.addAll({'minItems': 1, 'maxItems': 100, 'uniqueItems': true});
       final actual = <String, Object?>{};
       for (final operation in Operation.values) {
         actual[operation.wire] = {
