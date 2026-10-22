@@ -872,7 +872,7 @@ canonical run was launched. Its seven static commands pass, and the subsequent
 test-only correction still requires affected checks and native/Claude review.
 Report: `/var/tmp/foresight-core-implementation-review-r9/{claude.md,result.json}`.
 
-## Revision14 owner coverage amendment: review pending
+## Revision14 owner coverage amendment and round10 convergence
 
 Revision13's whole-plan convergence remains scoped to its frozen document bytes.
 The owner subsequently requests a95% coverage target while retaining the90%
@@ -880,5 +880,59 @@ enforced minimum. Revision14 applies that target to Dart core at the core
 checkpoint and both Dart suites at final combined acceptance, without changing
 Python's95% gate, coverage exclusions, native requirements or real platform/skip
 obligations. Current-source reports drive meaningful additional behavior tests;
-historical coverage is labeled by its actual source. Native/Claude review of this
-amendment and the pending-write correction remains pending.
+historical coverage is labeled by its actual source.
+
+The independent native review and Claude round10 converge on the narrow
+revision14 amendment and c492 pending-write correction. This supplements the
+frozen revision13 whole-plan verdict; it does not claim a whole revision14 reread.
+Claude's optional `phase7` wording correction is adopted as `PR7 (7A/7B)`.
+Reports are retained in
+`/var/tmp/foresight-core-desktop/core-contracts/c492-pending-write-coverage-amendment-native-review.{md,json}`
+and `/var/tmp/foresight-core-implementation-review-r10/{claude.md,result.json}`.
+
+At Claude's inspection time the fault-injection execution receipt and complete
+c492 canonical run did not yet exist. Those limits remain part of its report.
+Root subsequently retained the actual before/after fault driver and logs under
+`63fc4a80546a/logs/cache-teardown-r9/` in the checkpoint evidence tree: the old
+test emits the deliberate primary failure plus a secondary teardown error; the
+new test emits only the deliberate primary failure. The missing historical
+metadata-finalization script remains unrecovered; the fully retained c492 driver
+supersedes it without claiming historical reconstruction.
+
+The c492 canonical container later passes all stages with core91.97% and
+desktop91.33%, below the owner's95% targets. Its actual four cache-test intervals
+are21.779s,7.967s,7.857s and10.816s under the unchanged30s test bounds; the semantic
+guard passes in9.155s. No core checkpoint, feature extraction, Mac acceptance or
+merge readiness follows from this scoped review or the passing baseline.
+
+The owner's latest direction explicitly requires complete final-source HanSolo
+Mac verification before PR creation. A fresh read-only probe at
+2026-10-22T03:30:08Z still returns xcrun69 for the unaccepted full-Xcode license.
+Dependency qualification and any portable tests remain separately scoped setup
+or focused evidence. This delivery-order clarification does not weaken the
+final-source Mac matrix.
+
+The owner subsequently records acceptance personally. A read-only probe at
+2026-10-22T03:56:52.849660Z confirms the selected full Xcode now reports SDK27.0,
+exit0. The license blocker is cleared; compiler/dependency compatibility and full
+current-source Mac acceptance remain separate requirements.
+
+## Coverage contract reviews before the next source freeze
+
+Independent native reviews cover the new reader/recovery, service ownership,
+transport/filesystem, graph/schema and meeting contract tests. Accepted findings
+strengthen the actual assertions and cleanup: capture the exact adopted failed
+socket before an endpoint probe; hold the HTTP body tail behind observed
+progress/cancellation and join the peer; resolve a portable executable for a
+Mac speech fixture; compare canonical profile parents; require every action
+window fragment to occur in its original source. No production source, coverage
+exclusion, enforced minimum or ordinary test deadline changes for these fixes.
+
+Source hashes, actual focused commands and retained original failures are in
+`/var/tmp/foresight-core-desktop/coverage-independent-review/`,
+`coverage-review-a-b2-adoption-z2hc7zfo/`, `coverage-work-session-adoption/`,
+`coverage-batch-a2/mac-parent-fix/`, `coverage-b2/portability-fix/`,
+`coverage-b2-transport/review-fix/` and `coverage-meeting-contracts/review-fix/`
+under that evidence root. The new complete source freeze still needs its actual
+combined tests, CI coverage, full applicable matrix and Claude delta review;
+focused review does not establish95%, core acceptance or final Mac readiness.

@@ -38,8 +38,9 @@ Owner delivery direction (2026-10-21): execute the complete PR 6 and PR 7 scope 
 internal dependency order; they do not require separate PRs or an intervening merge. Keep
 independently testable commits, integrate the core interfaces before migrating their desktop
 consumers, and preserve both work packages' complete acceptance criteria. Coordinate exact-source
-Mac verification on HanSolo in a dedicated worktree. After implementation, run native-team and
-Claude CLI implementation reviews, revise until those converge, create the PR and drive its
+Mac verification on HanSolo in a dedicated worktree. The owner's subsequent direction makes
+the complete final-source HanSolo matrix a prerequisite to creating the PR. After implementation,
+run native-team and Claude CLI implementation reviews, revise until those converge, create the PR and drive its
 required checks and reviews to merge. The plan-review rounds recorded here precede implementation
 review and cannot substitute for it.
 
@@ -724,7 +725,7 @@ for every test-only edit.
   ledger. Run the full applicable Linux matrix below at that exact commit, including the adapted
   existing desktop, and preserve this work package's acceptance and metric evidence. Core line
   coverage reaches the requested 95% target with the enforced minimum still 90%; desktop keeps
-  its existing minimum here and reaches its 95% target during phase7 before final acceptance. This replaces
+  its existing minimum here and reaches its 95% target during PR7 (7A/7B) before final acceptance. This replaces
   the old intermediate PR's final-head gate; interface compilation alone is insufficient. HanSolo's
   complete Mac matrix is required at the final combined head, not this intermediate commit.
   Explicitly inventory Linux gates that require hosted execution and cannot run on this host; record

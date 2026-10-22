@@ -246,6 +246,62 @@ void main() {
     },
   );
 
+  test(
+    'status decode failure retires and notifies the adopted session',
+    () async {
+      final original = f.remote.clientSessionGeneration;
+      final reader = f.remote.store;
+      final revision = reader.dataRevision;
+      final generation = f.status['generation'];
+      final retry = Completer<void>();
+      var paused = false;
+      f.remote.reconnectPause = (_) {
+        paused = true;
+        return retry.future;
+      };
+      addTearDown(() {
+        f.status['generation'] = generation;
+        if (!retry.isCompleted) retry.complete();
+      });
+      final failedNotifications = <Object>[];
+      Socket? failedSocket;
+      final changes = f.remote.changes.listen((_) {
+        if (f.remote.helper.state.startsWith(
+          'application service reconnect failed:',
+        )) {
+          failedNotifications.add(f.remote.clientSessionGeneration);
+          // Changes are synchronous; capture this transport before the
+          // reconnect pause opens a separate endpoint-liveness probe.
+          failedSocket ??= f.sockets.last;
+        }
+      });
+      addTearDown(changes.cancel);
+
+      // The profile/API probe succeeds; decoding the newly adopted status fails.
+      f.status['generation'] = 17;
+      f.sockets.last.destroy();
+      await eventually(() => paused && failedNotifications.isNotEmpty);
+      final failedSession = f.remote.clientSessionGeneration;
+      expect(failedSession, isNot(same(original)));
+      expect(failedNotifications, everyElement(same(failedSession)));
+      expect(f.remote.client.isClosed, isTrue);
+      expect(f.remote.runtime.client, same(f.remote.client));
+      expect(f.remote.store, same(reader));
+      expect(reader.dataRevision, revision);
+      expect(failedSocket, isNotNull);
+      await eventually(() => f.ended.contains(failedSocket));
+
+      f.status['generation'] = generation;
+      retry.complete();
+      await eventually(
+        () => !f.remote.client.isClosed && !f.remote.reconnecting,
+      );
+      expect(f.remote.clientSessionGeneration, isNot(same(failedSession)));
+      expect(f.remote.store, same(reader));
+      expect(reader.dataRevision, revision);
+    },
+  );
+
   for (final fail in [false, true]) {
     test(
       'retired plain action ${fail ? 'error' : 'success'} settles but cannot publish',

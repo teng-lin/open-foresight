@@ -1,7 +1,7 @@
 # Core/desktop refactor implementation progress
 
 Owner objective: execute the complete reviewed plan as one PR, coordinate exact-source Mac testing
-on HanSolo, obtain native-agent and Claude CLI implementation review, create the PR and drive it
+on HanSolo before creating the PR, obtain native-agent and Claude CLI implementation review, and drive it
 to merge. Deferred PR 8 remains outside scope.
 
 Implementation base: 3fb259243a99137e3cba1d5e795c44100f42e688 (#168). Integration branch:
@@ -14,25 +14,58 @@ Original runtime baseline/compiled outputs remain labeled c28a1561; no 3fb full 
 | --- | --- | --- |
 | Revision 11 plan review | Complete | Three native agents and Claude CLI converged through renewed rounds 9–12, including moved-main 3fb refresh; frozen hashes/findings are in the companion review record. |
 | Renewed plan review | Verdict recorded separately | Rounds13 onward assess current implementation findings; the companion record identifies frozen revisions and latest native/Claude verdicts. Planning never grants runtime acceptance. |
-| Core completion commit and full Linux checkpoint | Pending, latest container failed | No core_acceptance_sha. Exact 4bd container: native30/30; core1821/14skip/1error; desktop285/17skip/1failure. Later service/fast/platform stages did not run. Full current-source Linux matrix remains required before7A. |
+| Core completion commit and full Linux checkpoint | Pending, c492 canonical container passes | No core_acceptance_sha. Exact c492 container: native30/30; core1848/14skip/91.97%; desktop287/17skip/91.33%; compiled service/MCP32/0skip. Core95% and the remaining full current-source Linux matrix are required before7A. Prior failed runs remain recorded below. |
 | Phase 0 characterization/inventory | In progress | Frozen complete c28 source export without `.git`; 83-operation/32-MCP inventory, desktop consumer inventory, current schema fixtures, generation-settlement and workspace-clear characterizations. Regular baseline gates passed below; remaining baseline obligations are explicit. |
 | 6A operation descriptors/typed boundary/errors/compatibility | Implemented, full gates pending | Actual 75+8 typed registry partition (9 tests), descriptor/MCP projection (187), complete service owner split, API compatibility, decode-first admission and Exception-based errors are live. Startup/registry batch260 passes; exact frozen full acceptance remains pending. |
 | 6B Application/services/answer phases | Implemented, full gates pending | Explicit domain owners, phased answers and typed persistence boundaries are complete; real held-producer/RPC joins and child-gap regressions are retained. Scoped implementation reviews converge. No full current-source acceptance. |
 | 6C relay/service split/read coordination/responsiveness | Implemented, full gates pending | One service lifetime authority; persistent guarded read workers, schema retirement and conservative previews. Exact214 real-model RPC passed100 samples/workload below50ms p95; native-close residual documented separately. Current-source process/RPC/sanitizer gates remain pending. |
 | 6D migrations/Store/helper schema | Implemented, full gates pending | Frozen1–15, appended16/17, typed reads/label ordering and whole-helper-set preflight. Existing rollback journals use private readonly probes in all3 implementations; exact4bd root native30/30 passes. Full schema/runtime/platform matrix remains required. |
-| 6E narrow APIs/core hygiene | Implemented, full gates pending | Curated APIs/external consumers and both pre-freeze seams are implemented; focused source tests and independent native reviews pass. Exact4bd container remains failed; next frozen source needs its complete matrix. |
+| 6E narrow APIs/core hygiene | Implemented, full gates pending | Curated APIs/external consumers and both pre-freeze seams are implemented; focused source tests and independent native reviews pass. Exact c492 canonical container passes; complete matrix and core95% remain pending. |
 | 7A composition/contracts/invalidation | Pending | |
 | 7B independent feature modules/read models | Pending | |
 | 7C public boundary/platform/disposal | Pending | |
-| Complete native/core/desktop/coverage/process/UI gates | Partial changed-source evidence, no checkpoint | Exact2d host native30, core1825/12skip/92.04%, desktop286/17skip/91.33%; exact214 compiled process/UI32 and fast2 with zero skips. Exact4bd complete container fails. Each original source retains its own results; no carry-forward acceptance. |
+| Complete native/core/desktop/coverage/process/UI gates | Partial changed-source evidence, no checkpoint | Exact c492 host/root native30 and canonical native/core/desktop/compiled service32/fast2 pass; coverage remains below95%. Current host UI, remaining platform/sanitizer/provenance matrices and final combined-head gates remain required. Each original source retains its own results; no carry-forward acceptance. |
 | Git-free export/fixture CI metadata matrix | Partial changed-source evidence | Exact4bd export verifies1321 blobs/modes; exact214 explicit93-module provenance matrix passes3707 tests/1270subtests/3skips per unrelated-PR/main/unset context. Current-source full fixture matrix and actual Docker-cache gate remain pending. |
-| Exact-source HanSolo Mac gates | Pending; compiler SDK setup qualified | Original main compiler SDK1564files qualifies without rebuild; pinned Flutter/Dart/Python found. Runtime/development dependency closure and final exact-source app gates remain required. Full Xcode exits69 pending owner license acceptance; no Mac runtime gate claimed. |
-| Native-team and Claude CLI implementation review | Scoped core reviews converged, final review pending | Native core corrections and Claude incremental rounds1–6 assessed frozen deltas; round6 converges on4bd semantic namespace delta only. Final whole combined implementation review remains required after7. |
-| PR/CI/reviews/merge | Pending | Create after implementation reviews and applicable local gates. |
+| Exact-source HanSolo Mac gates | Pending; pre-PR prerequisite | Owner license acceptance verified at2026-10-22T03:56:52Z: selected full Xcode reports SDK27.0, exit0. Portable Mac46/0skip passes from a complete1357-file exact snapshot. Original dependency/toolchain compatibility admission and full final-source native/core/desktop/process/installer Mac acceptance remain required before PR creation. |
+| Native-team and Claude CLI implementation review | Scoped core reviews converged, final review pending | Native corrections and Claude incremental rounds through10 assess frozen deltas; round10 converges on c492 pending-write correction and revision14 coverage amendment. Final whole combined implementation review remains required after7. |
+| PR/CI/reviews/merge | Pending | Create after implementation reviews, applicable local gates and complete final-source HanSolo Mac verification. |
 
 This ledger does not substitute for the plan's detailed acceptance criteria. Attach exact commands,
 source identities, counts/skip reasons and logs as each requirement is verified. Do not mark a row
 complete from unrelated green checks or mocked boundaries.
+
+## Latest exact-source baseline and Mac coordination, 2026-10-22
+
+Frozen `c4923b5e64719c5ab610af4e0e3768582bfccd80` has1329 tracked blobs/modes
+and no `.git` in its source export. Canonical attempt `EGWEBY` exits0: root
+native30/0skip; core1848/14skip; separately enabled source-compiler hook1;
+desktop287/17skip; fast integration2/0skip; platform host462/3skip/1deselected;
+compiled service/MCP32/0skip. Core coverage is15106/16425 (91.97%) and desktop
+6103/6682 (91.33%). Both unchanged90% gates pass; neither result establishes95%.
+The full current-source host/sanitizer/provenance/package/model/installer matrix
+remains pending, and no core_acceptance_sha is recorded.
+
+Evidence root: `/var/tmp/foresight-core-desktop/core-checkpoint/c4923b5e6471/`.
+See `logs/root-container-result.json`,
+`logs/container-attempt.EGWEBY/CORE-CENSUS.{md,json}` and the actual LCOV files
+under that attempt's `output/evidence/coverage/`. Current host native qualification
+also passes all30 root tests, with original dependency provenance retained;
+seven static commands pass. These results retain c492 as their source identity.
+
+New test-only coverage work is under independent native review and focused
+execution. Incremental LCOV unions are planning diagnostics, never a full-suite
+95% result or reusable stage receipt. A new frozen source needs its actual CI
+coverage command, complete source-export checks and applicable full matrix.
+Desktop7A/7B/7C extraction has not started.
+
+HanSolo coordination is active. At2026-10-22T03:30:08Z its selected full Xcode
+still returns69 from `xcrun --show-sdk-version` with the license message. No
+license acceptance, sudo or developer-directory change was performed. Receipt:
+`/var/tmp/foresight-core-desktop/mac-portable-readiness-zq2bu2ku/readiness-2.json`.
+Portable direct-Dart/SQLite checks are being assessed against a complete exact
+snapshot; they cannot substitute for native/application acceptance. The owner
+explicitly requires final-source HanSolo verification before creating the PR.
+No PR has been created. A fresh fetch still resolves main to3fb25924.
 
 ## Baseline execution evidence, 2026-10-21
 
@@ -690,11 +723,54 @@ checkpoint and both suites to reach 95% at the final combined head. CI minima,
 coverage inclusions/exclusions and skip requirements remain unchanged. Native
 tests do not acquire an invented percentage requirement.
 
-The latest completed core coverage measurement is historical2d (92.04%,
+At amendment time the latest completed core coverage measurement was historical2d (92.04%,
 15,053/16,354); subsequent failed canonical runs did not complete core coverage.
 The authentic278 desktop measurement is91.35% (6,104/6,682). These are diagnostic
 starting points, not new-source results. Native agents are mapping meaningful
 uncovered success/error/stale-publication/cleanup behavior. The next actual full
 run must supply current core coverage before choosing its additional tests.
-The coverage amendment and pending-write follow-up require independent review;
-reaching the existing 90% gate alone does not complete this requested improvement.
+The subsequent c492 canonical result and independent review convergence are
+recorded above. Reaching the existing90% gate alone does not complete the
+requested improvement.
+
+## Focused coverage contracts and HanSolo readiness follow-up
+
+Twenty-eight new test files and one additional session-adoption case cover typed
+reader values, private SQLite recovery, schema/argument admission, graph worker
+behavior, real service/socket ownership, filesystem publication, model/network/
+OAuth failures and meeting budget/cancellation/artifact contracts. Production
+source, coverage rules and enforced minima are unchanged. The focused batches
+pass with zero skips, but their tests still need a combined frozen-source run.
+Root's planning-only normalized LCOV union adds501 unique c492 misses, equivalent
+to95.0198% if the full denominator and baseline hits remain fixed. This narrow
+margin is not a full-suite95% result. Retained driver and input hashes:
+`/var/tmp/foresight-core-desktop/recount-coverage-batches.py` and
+`coverage-batches-diagnostic-union-v2.json` in the same evidence root.
+
+Independent native review found and corrected a progress/cancellation fixture
+race by holding actual network tail bytes behind observed progress and joining
+the owned peer; the original failed diagnostic variants remain retained. A
+second review strengthened each action-window fragment's source-substring
+assertion. Real Mac execution found a nonportable `/bin/true` fixture path;
+the test now resolves the available true executable. Review also corrected the
+profile-boundary expected parent to its actual canonical path on macOS.
+The session-adoption regression now captures the exact failed socket in the
+synchronous failure notification; all14 session tests and analyzer pass against
+that source, closing the assertion-target finding.
+
+HanSolo's final scoped portable attempt passes46/0skip plus offline enforced
+lockfile resolution, analyzer and format. Its complete1357-file source snapshot
+and6433 private dependency paths retain hashes/modes before and after; native/
+helper project binaries are not used. Evidence:
+`/var/tmp/foresight-core-desktop/mac-portable-readiness-zq2bu2ku/REPORT.md`.
+Earlier44/2failed and46-pass/format-failed attempts remain retained.
+This focused snapshot predates the final two review-only assertion corrections;
+the final-source Mac matrix must execute the final bytes.
+
+The owner personally accepted the Xcode license. At
+2026-10-22T03:56:52.849660Z the selected full developer directory
+`/Applications/Xcode.app/Contents/Developer` returns macOS SDK27.0, exit0, from
+`/usr/bin/xcrun --show-sdk-version`. No agent accepted a license or used sudo.
+Receipt: `/var/tmp/foresight-core-desktop/mac-owner-accepted-readiness-f2khdk10/readiness.json`.
+Full-Xcode compiler/dependency compatibility admission and a fresh current-source
+Mac build are next; dependency setup and portable tests are not app acceptance.
