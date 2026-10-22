@@ -936,3 +936,45 @@ Source hashes, actual focused commands and retained original failures are in
 under that evidence root. The new complete source freeze still needs its actual
 combined tests, CI coverage, full applicable matrix and Claude delta review;
 focused review does not establish95%, core acceptance or final Mac readiness.
+
+## Coverage-contract review round11 and real connection-race correction
+
+Claude independently reads the entire frozen94deb delta and relevant production
+consumers. It confirms the five previous native corrections, but withholds
+convergence for one P2: invalid credential-registry fixture directories default
+to0755, so the private-directory guard refuses before token-file/content checks.
+The accepted correction makes each fixture directory explicitly private, adds a
+valid private-registry control, preserves original token bytes/modes and requires
+actual LCOV hits on the intended refusal branches. Optional notes are recorded
+without raising deadlines or changing production source.
+Report: `/var/tmp/foresight-core-implementation-review-r11/{claude.md,result.json}`.
+
+The full94deb Linux run, completed after the review started, fails one separate
+existing real socket test. Both native reviewers verify that POLLIN does not
+order the VM's asynchronous connect completion. The test now retains the real
+Linux backlog-close contract with two valid outcomes: errno104 reset, or a
+successful client that must naturally disconnect and then refuse a request as
+notSent. Two separately controlled pending-completion cases prove bare-OSError
+normalization with original error/address and SocketException identity
+passthrough. Matchers attach before release, fixture arguments are captured
+before assertions, and actual cleanup is joined. No production hook or timeout
+change is introduced. All31 tests in the affected file pass with zero skips;
+analyzer/format and independent source/hash-bound review pass.
+Evidence: `94deb4cfdb8f/logs/connect-race-diagnostic/` under the checkpoint root.
+
+Claude's round11 evidence limit says no full new-source run existed when it
+inspected the receipts. The subsequent failed canonical result is retained
+separately, without rewriting its report. Its manifest copy includes both Git
+blob IDs and SHA256 fields; the reviewer still did not execute hash computation.
+The next frozen correction requires another scoped native/Claude review and
+complete applicable runtime matrix, with no95% or checkpoint claim from these
+focused results.
+
+The credential correction subsequently passes13 focused cases without skips,
+clean analyzer/format and independent native source review. Actual LCOV hits
+google_auth.dart149/158/161/174; private directory/token modes and bytes are
+asserted before/after, and a valid registry returns its exact cached token with
+zero HTTP requests. Final receipt:
+`/var/tmp/foresight-core-desktop/coverage-b2/registry-permission-fix/result-final.json`.
+The next Claude round assesses this exact correction, the socket fixture change
+and the updated execution-status prose; round11 itself remains not converged.

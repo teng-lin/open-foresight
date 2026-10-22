@@ -88,10 +88,12 @@ background-sync product policy, new dependency versions and CI restructuring are
 
 ## Execution status and checkpoint corrections
 
-The renewed review uses core candidate `4bd2c75d5890399f03d57ce8a46788da2dfcc623`;
-a fresh main fetch still resolves to `3fb259243a99137e3cba1d5e795c44100f42e688`.
-The initial core implementation exists; the focused 6E consumer seams below remain pending.
-There is no accepted checkpoint. The complete container attempt passes
+The renewed review originally used core candidate `4bd2c75d5890399f03d57ce8a46788da2dfcc623`;
+main resolved to `3fb259243a99137e3cba1d5e795c44100f42e688`.
+At that review the initial core implementation existed and the focused6E seams were pending.
+The following failure/correction requirements preserve that historical review input;
+current source-bound execution status is in the companion progress record.
+That complete container attempt passes
 30/30 native targets, then fails the namespace guard at the unchanged 30-second deadline and one
 graph-label fixture assertion: core 1,821 passed/14 skipped/one error; desktop 285 passed/17
 skipped/one failure. Service, fast integration and platform Python do not run after those failures.
@@ -111,10 +113,18 @@ Do not change production ordering or ID generation to satisfy a global `.first` 
 Batch verified related corrections, freeze the actual source and rerun its complete applicable
 Linux matrix before recording `core_acceptance_sha` or starting 7A production extraction.
 
+The namespace/graph corrections and both6E seams have since landed. The c492
+canonical baseline passes, below95% coverage; the subsequent94deb coverage-test
+candidate fails one existing Linux connection-race assertion, so core acceptance
+remains pending. Preserve the requirements above and the actual failure evidence.
+
 HanSolo's original main compiler SDK has been provenance- and checksum-qualified without a rebuild.
-This is setup evidence only. Final combined-source Mac acceptance still requires owner completion
-of the full Xcode license prerequisite, qualification of runtime/development dependency closure
-(including ICU headers, FlatBuffers and SentencePiece), locked pub/Pod resolution, actual
+The owner personally completed the Xcode license prerequisite; selected full
+Xcode reports SDK27.0. Original dependency compatibility checks and a fresh94deb
+native build pass all33 root cases. These results retain their source identity.
+Final combined-source Mac acceptance still requires qualification of its full
+runtime/development dependency closure (including ICU headers, FlatBuffers and
+SentencePiece), locked pub/Pod resolution, actual
 application configuration/dependency reuse checks, and fresh current native/core/desktop/process/
 UI/installer gates. Prepare non-license prerequisites alongside Linux work before the final Mac
 gate. Seek existing qualified outputs first; a verified content-addressed miss permits necessary

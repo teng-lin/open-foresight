@@ -42,6 +42,22 @@ class _MediaAuth extends GoogleAuth {
   }
 }
 
+class _RegistryOnlyHttp implements HttpClient {
+  int requests = 0;
+
+  @override
+  Future<HttpClientRequest> openUrl(String method, Uri url) {
+    requests++;
+    throw StateError('Saved registry validation must not use HTTP');
+  }
+
+  @override
+  void close({bool force = false}) {}
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
 void main() {
   late Directory root;
   late GoogleFixture fixture;
@@ -313,6 +329,53 @@ void main() {
         'account_sub': 'local-account',
         'expires_at': 4102444800000,
       };
+      Future<Directory> privateCase(String name) async {
+        final directory = Directory('${root.path}/$name')..createSync();
+        expect(
+          (await Process.run('/bin/chmod', ['700', directory.path])).exitCode,
+          0,
+        );
+        expect(directory.statSync().mode & 0x1ff, 0x1c0);
+        return directory;
+      }
+
+      final clientConfiguration = File('${root.path}/registry-client.json')
+        ..writeAsStringSync(
+          jsonEncode({
+            'installed': {'client_id': 'fixture.apps.googleusercontent.com'},
+          }),
+        );
+      final admittedDirectory = await privateCase('valid-private-registry');
+      final admittedTokens = File('${admittedDirectory.path}/tokens.json')
+        ..writeAsStringSync(jsonEncode(valid));
+      expect(
+        (await Process.run('/bin/chmod', [
+          '600',
+          admittedTokens.path,
+        ])).exitCode,
+        0,
+      );
+      expect(admittedTokens.statSync().mode & 0x1ff, 0x180);
+      final admittedBytes = admittedTokens.readAsBytesSync();
+      final admittedHttp = _RegistryOnlyHttp();
+      final admitted = GoogleAuth(
+        admittedDirectory,
+        defaultClient: clientConfiguration,
+        secretStore: const UnavailableSecretStore(),
+        endpoints: fixture.endpoints,
+        http: admittedHttp,
+      );
+      try {
+        expect(admitted.loadError, isEmpty);
+        expect(admitted.connected, isTrue);
+        expect(await admitted.accessToken(), 'local-fixture');
+        expect(admittedHttp.requests, 0);
+        expect(admittedTokens.readAsBytesSync(), admittedBytes);
+        expect(admittedDirectory.statSync().mode & 0x1ff, 0x1c0);
+        expect(admittedTokens.statSync().mode & 0x1ff, 0x180);
+      } finally {
+        await admitted.close();
+      }
       final cases = <Map<String, Object?>>[
         {},
         {...valid, 'provider': 'granola'},
@@ -330,45 +393,60 @@ void main() {
         },
       ];
       for (var index = 0; index < cases.length; index++) {
-        final directory = Directory('${root.path}/invalid-$index')
-          ..createSync();
+        final directory = await privateCase('invalid-$index');
         final tokens = File('${directory.path}/tokens.json')
           ..writeAsStringSync(jsonEncode(cases[index]));
         expect(
           (await Process.run('/bin/chmod', ['600', tokens.path])).exitCode,
           0,
         );
+        expect(tokens.statSync().mode & 0x1ff, 0x180);
         final previous = tokens.readAsBytesSync();
+        final localHttp = _RegistryOnlyHttp();
         final local = GoogleAuth(
           directory,
+          defaultClient: clientConfiguration,
           endpoints: fixture.endpoints,
           secretStore: const UnavailableSecretStore(),
+          http: localHttp,
         );
         try {
           expect(local.loadError, isNotEmpty);
           await expectLater(local.accessToken(), throwsStateError);
           expect(local.connected, isFalse);
           expect(tokens.readAsBytesSync(), previous);
+          expect(localHttp.requests, 0);
+          expect(directory.statSync().mode & 0x1ff, 0x1c0);
+          expect(tokens.statSync().mode & 0x1ff, 0x180);
         } finally {
           await local.close();
         }
       }
-      final directory = Directory('${root.path}/public-tokens')..createSync();
+      final directory = await privateCase('public-tokens');
       final tokens = File('${directory.path}/tokens.json')
         ..writeAsStringSync(jsonEncode(valid));
       expect(
         (await Process.run('/bin/chmod', ['644', tokens.path])).exitCode,
         0,
       );
+      expect(tokens.statSync().mode & 0x1ff, 0x1a4);
+      final previous = tokens.readAsBytesSync();
+      final localHttp = _RegistryOnlyHttp();
       final local = GoogleAuth(
         directory,
+        defaultClient: clientConfiguration,
         secretStore: const UnavailableSecretStore(),
         endpoints: fixture.endpoints,
+        http: localHttp,
       );
       try {
         expect(local.loadError, isNotEmpty);
         await expectLater(local.accessToken(), throwsStateError);
         expect(local.connected, isFalse);
+        expect(tokens.readAsBytesSync(), previous);
+        expect(localHttp.requests, 0);
+        expect(directory.statSync().mode & 0x1ff, 0x1c0);
+        expect(tokens.statSync().mode & 0x1ff, 0x1a4);
       } finally {
         await local.close();
       }

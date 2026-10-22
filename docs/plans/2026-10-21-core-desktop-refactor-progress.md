@@ -14,7 +14,7 @@ Original runtime baseline/compiled outputs remain labeled c28a1561; no 3fb full 
 | --- | --- | --- |
 | Revision 11 plan review | Complete | Three native agents and Claude CLI converged through renewed rounds 9–12, including moved-main 3fb refresh; frozen hashes/findings are in the companion review record. |
 | Renewed plan review | Verdict recorded separately | Rounds13 onward assess current implementation findings; the companion record identifies frozen revisions and latest native/Claude verdicts. Planning never grants runtime acceptance. |
-| Core completion commit and full Linux checkpoint | Pending, c492 canonical container passes | No core_acceptance_sha. Exact c492 container: native30/30; core1848/14skip/91.97%; desktop287/17skip/91.33%; compiled service/MCP32/0skip. Core95% and the remaining full current-source Linux matrix are required before7A. Prior failed runs remain recorded below. |
+| Core completion commit and full Linux checkpoint | Pending, latest94deb core fails one existing race test | No core_acceptance_sha. Exact94deb container: native30/30; core1965/14skip/1failure; desktop287/17skip/91.35%; platform host462 pass. Core coverage and downstream service stage did not run. Core95% and full Linux matrix remain required before7A; historical c492 passes remain source-bound. |
 | Phase 0 characterization/inventory | In progress | Frozen complete c28 source export without `.git`; 83-operation/32-MCP inventory, desktop consumer inventory, current schema fixtures, generation-settlement and workspace-clear characterizations. Regular baseline gates passed below; remaining baseline obligations are explicit. |
 | 6A operation descriptors/typed boundary/errors/compatibility | Implemented, full gates pending | Actual 75+8 typed registry partition (9 tests), descriptor/MCP projection (187), complete service owner split, API compatibility, decode-first admission and Exception-based errors are live. Startup/registry batch260 passes; exact frozen full acceptance remains pending. |
 | 6B Application/services/answer phases | Implemented, full gates pending | Explicit domain owners, phased answers and typed persistence boundaries are complete; real held-producer/RPC joins and child-gap regressions are retained. Scoped implementation reviews converge. No full current-source acceptance. |
@@ -26,7 +26,7 @@ Original runtime baseline/compiled outputs remain labeled c28a1561; no 3fb full 
 | 7C public boundary/platform/disposal | Pending | |
 | Complete native/core/desktop/coverage/process/UI gates | Partial changed-source evidence, no checkpoint | Exact c492 host/root native30 and canonical native/core/desktop/compiled service32/fast2 pass; coverage remains below95%. Current host UI, remaining platform/sanitizer/provenance matrices and final combined-head gates remain required. Each original source retains its own results; no carry-forward acceptance. |
 | Git-free export/fixture CI metadata matrix | Partial changed-source evidence | Exact4bd export verifies1321 blobs/modes; exact214 explicit93-module provenance matrix passes3707 tests/1270subtests/3skips per unrelated-PR/main/unset context. Current-source full fixture matrix and actual Docker-cache gate remain pending. |
-| Exact-source HanSolo Mac gates | Pending; pre-PR prerequisite | Owner license acceptance verified at2026-10-22T03:56:52Z: selected full Xcode reports SDK27.0, exit0. Portable Mac46/0skip passes from a complete1357-file exact snapshot. Original dependency/toolchain compatibility admission and full final-source native/core/desktop/process/installer Mac acceptance remain required before PR creation. |
+| Exact-source HanSolo Mac gates | Native94deb passes; full pre-PR matrix pending | Owner license acceptance verified at2026-10-22T03:56:52Z, SDK27.0. Fresh94deb native33/33 passes with original dependencies and qualified ICU headers/libraries. Portable46 also passes at its own snapshot. Full final-source core/desktop/process/installer Mac acceptance remains required before PR creation. |
 | Native-team and Claude CLI implementation review | Scoped core reviews converged, final review pending | Native corrections and Claude incremental rounds through10 assess frozen deltas; round10 converges on c492 pending-write correction and revision14 coverage amendment. Final whole combined implementation review remains required after7. |
 | PR/CI/reviews/merge | Pending | Create after implementation reviews, applicable local gates and complete final-source HanSolo Mac verification. |
 
@@ -774,3 +774,81 @@ The owner personally accepted the Xcode license. At
 Receipt: `/var/tmp/foresight-core-desktop/mac-owner-accepted-readiness-f2khdk10/readiness.json`.
 Full-Xcode compiler/dependency compatibility admission and a fresh current-source
 Mac build are next; dependency setup and portable tests are not app acceptance.
+
+## Exact94deb canonical failure and first full-Xcode Mac native pass
+
+Committed source `94deb4cfdb8f192d2066c0934ea62a962953087d` freezes1357
+tracked files/modes without `.git`; archive SHA256
+`f4b3e29143b4f251242196b1f0eb07175dad13590018548f1f2acda6eebf993a`,
+manifest `47b77474eff0c122e78c6d61ef391520dd65ff28aff0cf15bb801ae03f3f2829`.
+Its Linux native qualification passes30 distinct root cases. The actual canonical
+container attempt `jZOc1t` exits1: core1965/14skip/1failure; desktop287/17skip
+and6104/6682 coverage (91.35%); fast2/0skip; platform host462/3skip/1deselected;
+root native30/0skip. No core LCOV is produced because the test command fails;
+the separate enabled-hook and compiled service/MCP stages do not run. No
+canonical output link or checkpoint acceptance is published.
+
+The sole failure is the existing Linux backlog-close test in
+`service_connection_test.dart`: it expects SocketException errno104 but receives
+a ServiceClient. A failed-only diagnostic passes1/1, which does not establish a
+fix. Independent source reviewers identify the invalid assumption: a queued
+kernel connection does not prove the VM has not already completed connect.
+The correction retains real socket disconnect evidence while independently
+controlling pending bare-OSError normalization and SocketException identity.
+Production transport and deadlines remain unchanged. Original assertion output,
+raw events, skips and diagnostics are retained; the audit driver is
+`94deb4cfdb8f/audit-failed-canonical.py` in the checkpoint evidence root, with
+`logs/container-attempt.jZOc1t/CORE-CENSUS.{md,json}` and
+`logs/connect-race-diagnostic/`. Current host/remaining driver preparations pass,
+but their heavier runtime stages are held for the corrected source.
+
+HanSolo now completes real full-Xcode compilation of the94deb native project:
+Apple clang21/libc++, Xcode27.1, SDK27.0, arm64, deployment target15.0. All33 root
+CTest cases pass with zero failures/skips/disabled, including probe failures,
+schema preflight and three Mac-specific contracts. Configure/cache-root guards
+and actual full-application Ninja dry-run pass without dependency compilation,
+archive or relink. Project compilation takes24.1s; results finish at
+2026-10-22T04:13:56Z. Before/after1357 source paths,1564 original SDK paths and124
+selected original dependency paths retain their verified hashes/modes.
+
+Homebrew ICU libraries require macOS26, so the build consumes unchanged original
+main-produced ICU78.3 libraries supporting macOS15. All205 consumed public
+headers match the official checksum-pinned78.3 source. Separate smoke probes
+follow actual inference versus helper link graphs; the earlier artificial
+combined probe's duplicate protobuf-symbol failure remains retained as a harness
+issue. Current SDK, FlatBuffers, SentencePiece, ICU, protobuf and gRPC checks pass
+without SDK rebuilds or an ABI waiver. Report:
+`/var/tmp/foresight-core-desktop/mac-owner-accepted-readiness-f2khdk10/native-current-94deb/REPORT.json`.
+These binaries/results retain94deb as their source; full corrected-source core,
+desktop, process/UI and installer Mac acceptance is still pending before PR.
+
+HanSolo's94deb language/application prerequisites subsequently pass: private
+pinned Flutter3.35.7/Dart3.9.2, core/desktop offline enforced-lockfile resolution,
+service AOT4.16s, MCP AOT2.36s, deployment-locked CocoaPods1.17.0 resolution and
+fresh desktop Release compilation31.79s. Original1357 source hashes/modes remain
+unchanged after each command; generated files are inventoried separately. These
+are current94deb compiler/setup results, not core/desktop/process acceptance.
+Reports under `mac-owner-accepted-readiness-f2khdk10/` retain native,
+`language-preparation-94deb/` and `application-compilation-94deb/` evidence.
+No Mac setup blocker remains; full tests await the corrected-source freeze.
+
+The connection fixture correction passes the entire affected31-case file,
+analyzer/format and independent native review. It retains the real Linux
+disconnect contract and separately proves pending error normalization/identity
+without production hooks. Claude round11 also finds one valid fixture P2 in the
+new credential-registry tests: nonprivate directories refuse before registry
+validation. The correction passes13 focused cases with zero skips, clean
+analyzer/format and native source review: explicit private permissions, a valid
+private-registry control, zero-request transport and actual LCOV hits on all four
+intended refusal branches. Bytes and modes remain unchanged after operations.
+Its original focused
+passes remain retained and are not presented as proof of those content checks.
+The corrected freeze still needs scoped review and a complete successful run.
+
+Final credential correction receipt:
+`/var/tmp/foresight-core-desktop/coverage-b2/registry-permission-fix/result-final.json`.
+It binds source SHA58732abedfbd30855ef9503e32aac64a2745d659b56657de2c41fabf5813eabe
+and hits on google_auth.dart149/158/161/174. The socket correction binds
+SHA5981a7c8419036f33f73009f81f0308e4311b9be843e4366c6116fbdbfae69f4
+and31 affected-file passes. These are focused checks using94deb native/helper
+bytes, not a new whole-source gate,95% result or checkpoint acceptance.
