@@ -12,7 +12,11 @@ PINS = json.loads((ROOT / "tools/pins.json").read_text())
 
 
 def test_workflow_flutter_dart_and_protoc_literals_match_shared_pins():
-    for path in (ROOT / ".github/workflows").glob("*.yml"):
+    paths = [
+        *(ROOT / ".github/workflows").glob("*.yml"),
+        *(ROOT / ".github/actions").glob("*/action.yml"),
+    ]
+    for path in paths:
         source = path.read_text()
         for version in re.findall(
             r"--branch (\d+\.\d+\.\d+) https://github.com/flutter/flutter.git", source

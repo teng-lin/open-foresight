@@ -121,12 +121,16 @@ class Domain {
 
   /// Durable deletes survive helper downtime and are retried on reconnect.
   Future<void> retryPendingHelperDeletes() => _serialize(() async {
+    final generation = workspaceGeneration;
     for (final id in _queries.pendingHelperDeletes()) {
       try {
+        checkWorkspace(generation);
         final result = await helper.client.deleteDocument(
           DeleteRequest(documentId: id, userId: helperUserId),
           options: CallOptions(timeout: const Duration(seconds: 5)),
         );
+        // The owner may have closed its Store or cleared again during the RPC.
+        checkWorkspace(generation);
         if (result.success) {
           _queries.acknowledgeHelperDelete(id);
         }

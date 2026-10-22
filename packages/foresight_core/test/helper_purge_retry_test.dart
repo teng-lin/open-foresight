@@ -46,6 +46,93 @@ class PurgeService extends RagServiceBase {
 }
 
 void main() {
+  for (final interruption in [
+    'closed',
+    'disposed',
+    'cleared',
+    'closed after document error',
+  ]) {
+    test('late helper delete keeps its durable queue when $interruption', () async {
+      final directory = createTestTempDirectorySync('purge-interrupted-');
+      final path = '${directory.path}/app.db';
+      var store = Store(path);
+      final service = PurgeService()
+        ..fail = false
+        ..deleteGate = Completer<void>()
+        ..deleteEntered = Completer<void>();
+      final server = Server.create(services: [service]);
+      final socket = '${directory.path}/helper.sock';
+      await server.serve(
+        address: InternetAddress(socket, type: InternetAddressType.unix),
+        port: 0,
+      );
+      final helper = Helper(
+        socket,
+        '${directory.path}/helper',
+        manageProcess: false,
+      );
+      final domain = Domain(store, helper);
+      Domain? replacement;
+      try {
+        store.db.execute(
+          "INSERT INTO pending_helper_deletes(document_id,queued_at) "
+          "VALUES('first',1),('second',1)",
+        );
+        final retry = domain.retryPendingHelperDeletes();
+        await service.deleteEntered!.future;
+        if (interruption == 'cleared') {
+          domain.invalidateWorkspace();
+          // A later clear can queue the same document ID for a new workspace.
+          store.db.execute(
+            "UPDATE pending_helper_deletes SET queued_at=2 WHERE document_id='first'",
+          );
+        } else {
+          domain.close();
+        }
+        if (interruption == 'disposed') {
+          store.close();
+          store = Store(path);
+        }
+        if (interruption == 'closed after document error') {
+          service.invalidDocument = 'first';
+        }
+        service.deleteGate!.complete();
+        await retry;
+        expect(service.requested, ['first']);
+        expect(
+          store.rows(
+            'SELECT document_id,queued_at FROM pending_helper_deletes ORDER BY document_id',
+          ),
+          [
+            {
+              'document_id': 'first',
+              'queued_at': interruption == 'cleared' ? 2 : 1,
+            },
+            {'document_id': 'second', 'queued_at': 1},
+          ],
+        );
+        expect(domain.mutating, 0);
+        domain.close();
+        store.close();
+        store = Store(path);
+        service.deleteGate = null;
+        service.invalidDocument = null;
+        replacement = Domain(store, helper);
+        await replacement.retryPendingHelperDeletes();
+        expect(store.rows('SELECT * FROM pending_helper_deletes'), isEmpty);
+        expect(service.requested, ['first', 'first', 'second']);
+      } finally {
+        final gate = service.deleteGate;
+        if (gate != null && !gate.isCompleted) gate.complete();
+        domain.close();
+        replacement?.close();
+        await helper.close();
+        await server.shutdown();
+        store.close();
+      }
+    });
+  }
+
   test('failed helper deletes remain queued until an acknowledged retry', () async {
     final directory = createTestTempDirectorySync('purge-retry-');
     final store = Store('${directory.path}/app.db');

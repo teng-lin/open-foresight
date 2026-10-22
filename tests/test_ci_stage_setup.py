@@ -55,6 +55,60 @@ def test_macos_setup_fetches_one_verified_sdk_without_stage_roles():
             assert step["if"] == "inputs.stage != 'native'"
 
 
+@pytest.mark.parametrize("download_exit", [0, 9])
+def test_linux_descriptor_compiler_rejects_failed_or_corrupt_download(
+    tmp_path, download_exit
+):
+    step = step_named("linux", "Install pinned descriptor compiler")
+    assert step["if"] == "inputs.stage == 'native'"
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    curl = binary / "curl"
+    curl.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, pathlib, sys\n"
+        "pathlib.Path(sys.argv[sys.argv.index('-o') + 1]).write_bytes(b'corrupt')\n"
+        "sys.exit(int(os.environ['DOWNLOAD_EXIT']))\n"
+    )
+    curl.chmod(0o755)
+    # The Linux action uses GNU sha256sum; exercise its real checksum contract
+    # with Python's hash implementation on hosts that do not ship that command.
+    checksum = binary / "sha256sum"
+    checksum.write_text(
+        "#!/usr/bin/env python3\n"
+        "import hashlib, pathlib, sys\n"
+        "expected, path = sys.stdin.readline().rstrip('\\n').split('  ', 1)\n"
+        "actual = hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()\n"
+        "print(f'{path}: ' + ('OK' if actual == expected else 'FAILED'))\n"
+        "sys.exit(0 if actual == expected else 1)\n"
+    )
+    checksum.chmod(0o755)
+    unzip = binary / "unzip"
+    marker = tmp_path / "unzip-was-run"
+    unzip.write_text('#!/bin/sh\ntouch "$UNZIP_MARKER"\nexit 1\n')
+    unzip.chmod(0o755)
+    github_path = tmp_path / "github-path"
+    result = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", step["run"]],
+        env={
+            **os.environ,
+            "PATH": str(binary) + os.pathsep + os.environ["PATH"],
+            "RUNNER_TEMP": str(tmp_path),
+            "GITHUB_PATH": str(github_path),
+            "DOWNLOAD_EXIT": str(download_exit),
+            "UNZIP_MARKER": str(marker),
+        },
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode != 0
+    assert not marker.exists(), result.stdout + result.stderr
+    assert not github_path.exists()
+    if download_exit == 0:
+        assert "FAILED" in result.stdout + result.stderr
+
+
 @pytest.mark.parametrize(
     "platform,role",
     [("linux", role) for role in ("core", "desktop", "service")],

@@ -14,7 +14,8 @@ void main() {
   late ProfilePaths profile;
   late Map<String, String> saved;
   setUp(() {
-    root = createTestTempDirectorySync('startup-boundary-');
+    final temporary = createTestTempDirectorySync('startup-boundary-');
+    root = Directory(temporary.resolveSymbolicLinksSync());
     profile = ProfilePaths('${root.path}/data', '${root.path}/run');
     privateDirectory(profile.data);
     privateDirectory(profile.runtime);
