@@ -569,6 +569,64 @@ void main() {
   );
 
   test(
+    'nine additional typed factories round-trip through the read worker',
+    () async {
+      final workspace = _Workspace();
+      final reader = workspace.reader();
+      final notes = (await reader.read(StoreReadQueries.notes())).value!;
+      expect(notes.single.id, workspace.note);
+      expect(notes.single.title, 'Private note');
+      expect(() => notes.clear(), throwsUnsupportedError);
+      expect(
+        (await reader.read(StoreReadQueries.noteBody(workspace.note))).value,
+        'Keep the original notes',
+      );
+      final missingNote = await reader.read(StoreReadQueries.noteBody(404));
+      expect(missingNote.freshness, ReadFreshness.failed);
+      expect(missingNote.value, isNull);
+      final mimes = (await reader.read(StoreReadQueries.sourceMimes())).value!;
+      expect(mimes, {workspace.source: 'application/google-doc'});
+      expect(() => mimes.clear(), throwsUnsupportedError);
+      final labels = (await reader.read(StoreReadQueries.labels())).value!;
+      expect(labels.single.documentId, workspace.source);
+      expect(labels.single.name, 'Space');
+      expect(labels.single.colorHex, '#123456');
+      expect(() => labels.clear(), throwsUnsupportedError);
+      final clusters = (await reader.read(StoreReadQueries.clusters())).value!;
+      expect(clusters.single.id, 4);
+      expect(clusters.single.label, 'Space');
+      expect(clusters.single.x, 1.25);
+      expect(() => clusters.clear(), throwsUnsupportedError);
+      final names = (await reader.read(StoreReadQueries.clusterNames())).value!;
+      expect(names, ['Space']);
+      expect(() => names.clear(), throwsUnsupportedError);
+      final labelSet = (await reader.read(
+        StoreReadQueries.graphLabelSet(),
+      )).value!;
+      expect(labelSet, reader.graphLabelSet());
+      expect((await reader.read(StoreReadQueries.meetingRevision(7))).value, 3);
+      expect(
+        (await reader.read(StoreReadQueries.meetingRevision(404))).value,
+        isNull,
+      );
+      expect(
+        (await reader.read(StoreReadQueries.enhancedNotes(7))).value,
+        'Edited enhanced notes',
+      );
+      expect(
+        (await reader.read(StoreReadQueries.enhancedNotes(404))).value,
+        '',
+      );
+      workspace.writer.saveNote(workspace.note, 'Updated note', 'Updated body');
+      expect(
+        (await reader.read(StoreReadQueries.noteBody(workspace.note))).value,
+        'Updated body',
+      );
+      expect(notes.single.title, 'Private note');
+    },
+  );
+
+  test(
     'typed async source/model/meeting queries and close retain the last immutable values',
     () async {
       final workspace = _Workspace();

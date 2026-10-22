@@ -5,6 +5,7 @@ import 'dart:io';
 import 'store.dart';
 import 'persistence/domain_queries.dart';
 import 'store_reader.dart';
+import 'desktop_read_models.dart';
 import 'model_asset_lifecycle.dart';
 import 'model_acquisition.dart' show ForesightSharedConfig;
 import 'native.dart';
@@ -284,7 +285,11 @@ Future<String> _prepareDedicatedQuery(
 String? dedicatedQuerySetupProblem(Store store) =>
     _dedicatedQuerySetupProblem(store.model(dedicatedQueryModelKind));
 String? readerDedicatedQuerySetupProblem(StoreReader store) =>
-    _dedicatedQuerySetupProblem(store.model(dedicatedQueryModelKind)?.toRow());
+    preparedDedicatedQuerySetupProblem(store.model(dedicatedQueryModelKind));
+
+/// Validate a registration prepared with an asynchronous model read.
+String? preparedDedicatedQuerySetupProblem(ModelRegistration? model) =>
+    _dedicatedQuerySetupProblem(model?.toRow());
 String? _dedicatedQuerySetupProblem(Map<String, Object?>? model) {
   if (model == null) {
     return 'Import the supported dedicated question model to enable automatic questions.';
@@ -379,7 +384,11 @@ Future<int> registerInstalledModels(Store store, String manifestPath) async {
 String? speechSetupProblem(Store store) =>
     _speechSetupProblem(store.model('speech'));
 String? readerSpeechSetupProblem(StoreReader store) =>
-    _speechSetupProblem(store.model('speech')?.toRow());
+    preparedSpeechSetupProblem(store.model('speech'));
+
+/// Validate a registration prepared with an asynchronous model read.
+String? preparedSpeechSetupProblem(ModelRegistration? model) =>
+    _speechSetupProblem(model?.toRow());
 String? _speechSetupProblem(Map<String, Object?>? model) {
   if (model == null) {
     return 'Set up a speech model and runner before recording.';
@@ -404,9 +413,13 @@ bool needsModel(Store store, String kind) {
 }
 
 bool readerNeedsModel(StoreReader store, String kind) =>
+    preparedNeedsModel(store.model(kind), kind);
+
+/// Inspect a prepared registration without issuing a synchronous store read.
+bool preparedNeedsModel(ModelRegistration? model, String kind) =>
     kind == dedicatedQueryModelKind
-    ? readerDedicatedQuerySetupProblem(store) != null
-    : _needsModel(store.model(kind)?.toRow(), kind);
+    ? preparedDedicatedQuerySetupProblem(model) != null
+    : _needsModel(model?.toRow(), kind);
 
 bool _needsModel(Map<String, Object?>? model, String kind) {
   if (model == null) return true;

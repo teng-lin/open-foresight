@@ -49,6 +49,9 @@ export 'src/graph_persistence.dart'
         graphSceneSources;
 export 'src/model_setup.dart'
     show
+        preparedNeedsModel,
+        preparedSpeechSetupProblem,
+        preparedDedicatedQuerySetupProblem,
         readerNeedsModel,
         readerSpeechSetupProblem,
         readerDedicatedQuerySetupProblem,
