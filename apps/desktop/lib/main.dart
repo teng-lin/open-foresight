@@ -6,6 +6,7 @@ import 'background_store.dart';
 import 'desktop_reader_adapters.dart';
 import 'service_edit_dialog.dart';
 import 'failure_text.dart';
+import 'feature_request_identity.dart';
 
 import 'dart:async';
 import 'dart:convert';
@@ -313,6 +314,7 @@ class _WorkspaceState extends State<Workspace>
       if (mounted) setState(() => error = failure.message);
       return;
     }
+    if (mounted && chatFeature.retireChangedAnswer()) setState(() {});
     // Another client cleared the workspace: views must not keep editing IDs
     // that the service may hand to new items.
     if (mounted && d.workspaceReplaced) {
@@ -485,6 +487,7 @@ class _WorkspaceState extends State<Workspace>
 
   @override
   void dispose() {
+    chatFeature.retireAnswer();
     desktopMenu.close();
     WidgetsBinding.instance.removeObserver(this);
     calendarAuthLinks.close();
@@ -574,6 +577,7 @@ class _WorkspaceState extends State<Workspace>
   /// Drop every view and draft that holds an ID from the cleared workspace,
   /// then let by-ID edits name the new one.
   void resetWorkspaceViews() {
+    chatFeature.retireAnswer();
     meetingFeature.meetingNoteSaves.discardAll();
     meetingFeature.meetingId = null;
     meetingFeature.meetingPreviewId = null;

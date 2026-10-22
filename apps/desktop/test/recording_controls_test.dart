@@ -1,3 +1,5 @@
+import '../test_support/reader_admissions.dart';
+import 'store_reader_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
 import 'package:foresight_core/remote.dart' show CaptureLevelEvents;
@@ -75,6 +77,8 @@ void main() {
         store,
         OfflineHelper('${directory.path}/socket', '${directory.path}/helper'),
       );
+      final admissions = ReaderAdmissions();
+      fixtureReader(store, admissions: admissions);
       final app = Application(domain);
       final connection = _LevelConnection(app);
       final id = store.meeting('Meter fixture');
@@ -93,11 +97,18 @@ void main() {
         final oldMeter = tester.widget<CustomPaint>(
           find.byKey(const ValueKey('capture-waveform')),
         );
+        final readsBeforeLevels = admissions.snapshot();
         for (var i = 0; i < 10; i++) {
           connection.levels.add([i / 10, 0.0]);
         }
         await tester.pump();
         await tester.pump();
+        expect(
+          admissions.snapshot(),
+          readsBeforeLevels,
+          reason:
+              'Capture levels admit no typed reads, async reads, watches or worker projections',
+        );
         final meter = tester.widget<CustomPaint>(
           find.byKey(const ValueKey('capture-waveform')),
         );

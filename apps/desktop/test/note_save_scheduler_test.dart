@@ -1,3 +1,4 @@
+import 'pump_until.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/operations.dart';
@@ -14,7 +15,7 @@ import 'meeting_setup_test.dart' show OfflineHelper;
 
 class GatedNoteDomain extends CommandFixtureDomain {
   GatedNoteDomain(super.store, super.helper);
-  Completer<void>? saveGate;
+  Completer<void>? saveGate, saveEntered;
   bool rejectNotes = false;
   Map<String, dynamic>? artifactEdit;
   @override
@@ -25,13 +26,88 @@ class GatedNoteDomain extends CommandFixtureDomain {
     if (operation == Operation.meetingsNotes && rejectNotes)
       throw StateError('Service disconnected');
     if (operation == Operation.artifactsEdit) artifactEdit = Map.of(args);
-    if (operation == Operation.meetingsNotes && saveGate != null)
+    if (operation == Operation.meetingsNotes && saveGate != null) {
+      if (saveEntered?.isCompleted == false) saveEntered!.complete();
       await saveGate!.future;
+    }
     return super.command(operation, args);
   }
 }
 
+class _SaveClosingConnection extends TestDesktopConnection {
+  int closes = 0;
+  String? bodyBeforeClose;
+  _SaveClosingConnection(super.application);
+  @override
+  void close() {
+    closes++;
+    bodyBeforeClose =
+        domain.store.rows('SELECT body FROM meeting_notes').single['body']
+            as String;
+    super.close();
+  }
+}
+
 void main() {
+  testWidgets(
+    'Workspace joins a held note save before disconnecting its connection',
+    (tester) async {
+      final directory = createTestTempDirectorySync('note-save-disconnect-');
+      final path = '${directory.path}/app.db';
+      final store = Store(path);
+      store.setPreference('liveEnhance', 'false');
+      final id = store.meeting('Pending final note');
+      store.saveMeetingNotes(id, 'Before the final keystroke');
+      final domain = GatedNoteDomain(
+        store,
+        OfflineHelper('${directory.path}/socket', '${directory.path}/helper'),
+      );
+      final connection = _SaveClosingConnection(Application(domain));
+      await tester.pumpWidget(
+        Foresight(connection, deviceLoader: () async => []),
+      );
+      await tester.pumpAndSettle();
+      final dynamic shell = tester.state(find.byType(Workspace));
+      shell.update(() => shell.meetingFeature.meetingId = id);
+      await tester.pumpAndSettle();
+      final gate = domain.saveGate = Completer<void>();
+      final entered = domain.saveEntered = Completer<void>();
+      await tester.enterText(
+        find.byKey(const ValueKey('meeting-notes-editor')),
+        'Last unsaved keystrokes',
+      );
+      final manualEdit = shell.meetingFeature.meetingNoteManualEdit;
+      await tester.pumpWidget(const SizedBox.shrink());
+      await pumpUntil(tester, () => entered.isCompleted);
+      expect(
+        connection.closes,
+        0,
+        reason: 'The connection remains owned until its actual write settles',
+      );
+      expect(
+        store.meetingNoteRows(id).single['body'],
+        'Before the final keystroke',
+      );
+      gate.complete();
+      await pumpUntil(tester, () => connection.closes == 1);
+      expect(connection.bodyBeforeClose, 'Last unsaved keystrokes');
+      final reopened = Store(path);
+      try {
+        expect(
+          reopened
+              .rows('SELECT body,last_manual_edit FROM meeting_notes')
+              .single,
+          {'body': 'Last unsaved keystrokes', 'last_manual_edit': manualEdit},
+        );
+      } finally {
+        reopened.close();
+      }
+      await tester.pumpAndSettle();
+      expect(connection.closes, 1);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   test(
     'discard prevents failed drafts from reaching a reused meeting ID',
     () async {
