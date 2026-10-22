@@ -1,14 +1,45 @@
 # Core/desktop refactor implementation progress
 
 Owner objective: execute the complete reviewed plan as one PR, coordinate exact-source Mac testing
-on HanSolo before creating the PR, obtain native-agent and Claude CLI implementation review, and drive it
-to merge. Deferred PR 8 remains outside scope.
+on HanSolo, obtain native-agent and Claude CLI implementation review, and drive it to merge.
+The owner subsequently authorized opening a draft before final acceptance. PR #170 now exists;
+desktop extraction and final acceptance remain required before merge. Deferred PR 8 remains outside scope.
 
 Implementation base: 3fb259243a99137e3cba1d5e795c44100f42e688 (#168). Integration branch:
 refactor/core-desktop, fast-forwarded to that source with its local foundation patch preserved.
-Original runtime baseline/compiled outputs remain labeled c28a1561; no 3fb full gate is claimed.
+Original runtime baseline/compiled outputs remain labeled c28a1561. The reviewed host matrix remains
+bound to fb925644. The narrow CI correction is committed at 36756534; later core/desktop corrections
+have not inherited those earlier test results.
 
-## Requirement evidence ledger
+## Current execution status, 2026-10-22
+
+The authoritative current evidence supersedes the historical ledger entries below. There is still
+no `core_acceptance_sha`: the next core candidate must include the reviewed resume-discovery
+lifetime correction and the missing typed answer-scope projection, then pass its complete Linux
+checkpoint. Mechanical desktop extraction has not started. Work-package 7A characterization is
+active and records typed reader admissions, worker queries and widget builds separately.
+
+| Requirement | Current evidence and remaining work |
+| --- | --- |
+| Core structure, contracts, migrations and metrics | Native audit verifies 6A–6D at fb925644. Application is 540 lines, service authority 923, persistence maximum 537. The plan records the unchanged ranking/declarative-MCP function exceptions. Frozen migrations 1–15 and appended 16/17 remain intact. |
+| Linux host matrix at fb925644 | Native 30; core 1,984 passed/16 expected skips, 15,652/16,464 lines (95.07%); desktop 287/17, 6,103/6,682 (91.33%); current AOT service/MCP and Release desktop; compiled process 32/0, real isolated UI 59 observations, fast 2/0, both hook modes and six real-model cases. |
+| HanSolo matrix at fb925644 | Native 33; core 1,984/14, 15,703/16,464 (95.38%); desktop 289/13, 6,093/6,679 (91.23%); current AOT service/MCP, Release desktop, process 32/0 and real UI 59 observations. The exact 1,361-file/mode snapshot matches Linux and Python exports. Qualified native/helper/SQLite bytes retain their original provenance; current Dart applications were compiled. |
+| Quality and review at fb925644 | Python 5,187/31 expected skips, 95.91%; Ruff, mypy, subprocess guard, actionlint with ShellCheck and explicit composite shell checks pass. Native-agent review and Claude CLI closure review converge on that delta. These are not implementation reviews of unfinished desktop extraction. |
+| Hosted checks at fb925644 | Actual ASan/UBSan and TSan jobs each pass all 30 root tests. Mac desktop/Release passes; one calendar fixture exceeds its unchanged 30-second deadline while compiling the same source four times. Linux consumers reject stale GitHub producer status beyond their 60-second visibility budget, despite the original producer completing successfully. Original failed output and job/artifact timing are retained. Neither failure is reported as a passing gate. |
+| CI correction at 36756534 | Exact complete Git-free export: Python 5,201 passed/31 expected skips, 95.91%; Ruff, mypy and subprocess guard pass. All 1,361 committed files/modes match the tested and reviewed export. The 300-second producer visibility budget preserves all mandatory original-success/attempt/source/upload/checksum proofs; original and saved-copy receipt fixtures pass unrelated PR/main/unset-ref contexts, with all 14 additions failing against the old default. Unchanged Stats timezone source compiles once then runs four fresh VMs, retaining the 30-second deadline and assertions; whole file 9/0 on Linux and HanSolo. Independent native and Claude CLI review converge on this three-file correction. Hosted checks are pending. |
+| Current core/desktop corrections | Resume discovery retains a candidate locally and rejects/cleans late results before Store access/adoption. The immutable answer-scope query resolves authoritative identity in one SQLite snapshot. Focused core tests and independent native review pass. Desktop fixes reject retired answer chunks/history, dialog continuations, render-captured task/scope/preparation actions and retired command errors while retaining current failure/outcomeUnknown behavior. Characterization adds 33 tests plus typed graph/capture admission assertions; the combined 66-case batch and 19-case dialog/existing-AI batch pass. These results precede the updated complete-source matrix and do not establish a core checkpoint or completed extraction. |
+| Core checkpoint and desktop 7A–7C | Pending the updated core freeze and full matrix. Held-reply characterizations precede feature moves. Composition, independent feature libraries, prepared asynchronous read models, public-import closure and injected platform policy remain undelivered. |
+| Container/installer obligations | Docker access was restored using the account's existing docker-group membership with newgrp; no membership or host configuration changed. The next checkpoint can run the canonical container schedule and portable/installer acceptance locally. Earlier statements that the socket was unavailable describe those prior process groups, not a permanent waiver. |
+| PR, conflicts and merge | PR #170 tracks the one combined delivery. The latest fetch still resolves main to 3fb25924; branch 36756534 is pushed and no conflict or review thread was present. Required checks, remaining implementation, final Linux/HanSolo matrices and full native/Claude implementation reviews must finish before merging. |
+
+Evidence is under `/var/tmp/foresight-core-desktop/pr170-ci-fix/`, including `FINAL-AUDIT.json`,
+`cross-platform-source-proof.json`, the Linux and Mac `final` audits, and
+`core-acceptance-audit/`. Current hosted failures and polling regressions are under
+`/var/tmp/foresight-core-desktop/pr170-fb-ci/`. Original failed attempts remain preserved.
+Coverage minimums remain 90%; the requested core 95% target remains mandatory, while the owner
+waived the desktop 95% improvement target. Python retains its existing 95% threshold.
+
+## Historical requirement evidence ledger
 
 | Requirement | State | Evidence |
 | --- | --- | --- |
@@ -34,7 +65,7 @@ This ledger does not substitute for the plan's detailed acceptance criteria. Att
 source identities, counts/skip reasons and logs as each requirement is verified. Do not mark a row
 complete from unrelated green checks or mocked boundaries.
 
-## Latest exact-source baseline and Mac coordination, 2026-10-22
+## Historical c492 baseline and Mac coordination, 2026-10-22
 
 Frozen `c4923b5e64719c5ab610af4e0e3768582bfccd80` has1329 tracked blobs/modes
 and no `.git` in its source export. Canonical attempt `EGWEBY` exits0: root

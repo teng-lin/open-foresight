@@ -133,8 +133,11 @@ again through SQLite itself.
 
 Record the loaded SQLite library and version for each acceptance runtime. Host
 Linux uses host SQLite; packaged Linux must exercise its bundled library, and
-HanSolo must exercise the macOS system library. Host passes establish neither
-packaged nor Apple acceptance.
+HanSolo's Dart application uses the signed application-owned SQLite 3.54.1
+selected through its protected runtime map. Its source identity is checked before
+opening connections, with no fallback to Apple's system SQLite. The helper's
+SQLite dependency remains unchanged. Host passes establish neither packaged nor
+Mac application acceptance.
 
 `test/schema_migrations_test.dart` exercises old-profile upgrades, refusal of
 future profiles, rollback after DDL followed by a failed data backfill, successful

@@ -144,6 +144,21 @@ abstract final class StoreReadQueries {
         List.unmodifiable((value as List).cast<MeetingQuestion>()),
   );
 
+  /// Resolve preferences before preparing a history query with its scope identity.
+  static ReadQuery<AnswerScopeSnapshot> answerScope(
+    String conversation, {
+    int? meeting,
+    bool automatic = false,
+  }) => ReadQuery(
+    projection: 'answer_scope',
+    arguments: {
+      'conversation': conversation,
+      'meeting': meeting,
+      'automatic': automatic,
+    },
+    decode: (value) => value as AnswerScopeSnapshot,
+  );
+
   /// Scope is part of query identity, never an ordinary freshness invalidation.
   static ReadQuery<List<SavedAnswer>> answers(
     int? meeting, {

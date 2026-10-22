@@ -21,6 +21,13 @@ import 'web_search.dart';
 import 'web_content.dart';
 import 'generated/rag_service.pbgrpc.dart';
 
+typedef GenerationRuntimeDiscovery =
+    Future<NativeRuntime?> Function(
+      Store store,
+      String library, {
+      bool Function()? current,
+    });
+
 class Domain {
   final Store store;
   final Helper helper;
@@ -28,6 +35,7 @@ class Domain {
   NativeRuntime? generator;
   final Clock clock;
   final Timer Function(Duration, void Function()) createTimer;
+  final GenerationRuntimeDiscovery _discoverGeneration;
   Domain(
     this.store,
     this.helper, {
@@ -35,10 +43,12 @@ class Domain {
     ModelGate? modelGate,
     Clock? clock,
     Timer Function(Duration, void Function())? createTimer,
+    GenerationRuntimeDiscovery? discoverGeneration,
   }) : modelGate = modelGate ?? const IdleModelGate(),
        _webSearch = webSearch,
        clock = clock ?? const Clock(),
-       createTimer = createTimer ?? Timer.new;
+       createTimer = createTimer ?? Timer.new,
+       _discoverGeneration = discoverGeneration ?? discoverGenerationRuntime;
   ModelGate modelGate;
   SearchCallbacks? _webSearch;
   WebContentService? _ownedWebContent;
@@ -480,11 +490,16 @@ class Domain {
       }
     }
     if (generator == null && !_queries.hasModel('generation')) {
-      generator = await discoverGenerationRuntime(
+      final candidate = await _discoverGeneration(
         store,
         runtimeConfiguration.nativeLibrary,
         current: () => !_closed,
       );
+      if (_closed) {
+        candidate?.close();
+        _checkOpen();
+      }
+      generator = candidate;
     }
     if (generator == null) {
       final gen = _queries.generationRegistration();

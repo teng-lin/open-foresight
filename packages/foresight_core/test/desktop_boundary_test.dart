@@ -94,6 +94,8 @@ void main() {
               'ReadResult',
               'OutputStatsPeriod',
               'OutputStatsWeek',
+              'AnswerScopeSnapshot',
+              'StoreReadQueries',
               'Operation',
             ]),
           );

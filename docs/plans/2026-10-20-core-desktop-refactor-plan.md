@@ -1,6 +1,6 @@
 # Core service and desktop feature refactoring execution plan
 
-Revision 15, 2026-10-22. Reviewer verdicts and scope of convergence are recorded in the companion
+Revision 16, 2026-10-22. Reviewer verdicts and scope of convergence are recorded in the companion
 review record. This is the execution specification for planned PRs 6 and 7 in [audit plan
 3](../audit/2026-10-18-implementation-plan-3.md), not GitHub pull requests #6 and #7. The [review
 record](2026-10-20-core-desktop-refactor-reviews.md) records frozen revisions and finding
@@ -98,6 +98,16 @@ This replaces the rejected writable PERSIST_WAL cleanup experiment, which broke 
 read-only reopen semantics. It does not assert the cause of Apple's intermittent SHM ctime change.
 
 ## Execution status and checkpoint corrections
+
+The current execution record includes PR #170 and exact fb925644 Linux/HanSolo host
+matrices, with core coverage above 95% and both hosted native sanitizer jobs passing. That is not
+the core checkpoint: a subsequently reviewed resume-discovery lifetime correction and a required
+typed answer-scope projection must land and pass the updated full Linux matrix first. The latter
+keeps the service's canonical scope digest authoritative when preparing scoped desktop history;
+features must not copy the digest algorithm or import writable core implementation types.
+Desktop characterizations are active; 7A production extraction and 7B/7C remain outstanding.
+The progress record identifies actual hosted failures, source-bound evidence and the recovered
+local Docker access. No historical failure or intermediate review verdict is final acceptance.
 
 The renewed review originally used core candidate `4bd2c75d5890399f03d57ce8a46788da2dfcc623`;
 main resolved to `3fb259243a99137e3cba1d5e795c44100f42e688`.
@@ -589,8 +599,9 @@ Finish with the complete ownership/close/crash suite before claiming the touched
    SQLite 3.35+ `DROP COLUMN` support on every supported runtime; preserve IDs, foreign keys, indexes
    and constraints, and assert referential integrity in upgrade fixtures. Record the actual SQLite
    versions and loaded library paths as migration evidence: Linux host tests use the host SQLite
-   library, packaged Linux acceptance uses its bundled library, and HanSolo uses the macOS system
-   library. Verify each exercised runtime instead of inferring the bundle version from the host. Update all serializers, queries, imports/exports,
+   library, packaged Linux acceptance uses its bundled library, and HanSolo's Dart application
+   uses the protected application-owned SQLite 3.54.1 runtime described above; helper SQLite is
+   unchanged. Verify each exercised runtime instead of inferring the bundle version from the host. Update all serializers, queries, imports/exports,
    graph/auto-label paths and fixtures together. Test fresh schema, every supported upgrade path,
    repeated open, failure rollback, clear/delete and newer-version refusal. Old application readers
    must refuse the newer schema before issuing incompatible queries; do not imply downgrade
@@ -739,6 +750,11 @@ for every test-only edit.
   service-level lifetime authority; any residual size miss after that split needs a documented
   justification. Record justified misses with concrete retained responsibilities; do not add
   arbitrary forwarding layers or weaken contracts to reach a count.
+  The current AST inventory retains two justified function-size exceptions:
+  `rankAnswerPassages` is 164 lines with its existing ranking algorithm unchanged from main;
+  `rpcTools` is a 170-line declarative list preserving the explicit published MCP subset,
+  descriptions and descriptor-derived schemas. Neither contains an extracted business-service
+  owner; splitting their declarations solely for line counts would obscure those contracts.
 - All applicable verification gates below pass. Report any measured P2-4 residual explicitly;
   deferred native redesign is not completion evidence.
 - Before 7A production extraction, complete 6A–6E, refresh/rebase reviewed main and assess any

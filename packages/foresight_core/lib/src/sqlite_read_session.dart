@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'persistence/sqlite_runtime.dart';
 
+import 'answer_source_scope.dart';
 import 'desktop_read_models.dart';
 import 'graph_persistence.dart';
 import 'persistence/meeting_queries.dart';
@@ -175,16 +176,16 @@ final class SqliteReadSession {
         return meetings.tasks(id());
       case 'questions':
         return meetings.questions(id());
+      case 'answer_scope':
+        final scope = AnswerSourceScope.read(
+          _store,
+          args['conversation'] as String,
+          meeting: args['meeting'] as int?,
+          automatic: args['automatic'] == true,
+        );
+        return AnswerScopeSnapshot(mode: scope.mode, ids: scope.ids);
       case 'answers':
-        final answers = meetings.conversationAnswers(args['meeting'] as int?);
-        if (args['private_scope'] != true) return answers;
-        final scope = args['scope_identity'] as String;
-        return answers
-            .where(
-              (answer) =>
-                  sources.preference('answerScope.v1.${answer.id}') == scope,
-            )
-            .toList();
+        return _answers(args, meetings, sources);
       case 'export_notes':
         return meetings.exportNotes();
       case 'attachments':
@@ -232,6 +233,22 @@ final class SqliteReadSession {
           'Unknown read projection: $projection',
         );
     }
+  }
+
+  List<SavedAnswer> _answers(
+    Map<String, Object?> args,
+    MeetingQueries meetings,
+    SourceQueries sources,
+  ) {
+    final answers = meetings.conversationAnswers(args['meeting'] as int?);
+    if (args['private_scope'] != true) return answers;
+    final scope = args['scope_identity'] as String;
+    return answers
+        .where(
+          (answer) =>
+              sources.preference('answerScope.v1.${answer.id}') == scope,
+        )
+        .toList();
   }
 
   void close() {

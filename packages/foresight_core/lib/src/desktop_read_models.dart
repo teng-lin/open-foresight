@@ -2,7 +2,57 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'output_stats_period.dart';
+import 'summary_generator.dart' show summaryDigest;
 export 'output_stats_period.dart';
+
+/// Scope resolved by core in one read snapshot, before querying saved answers.
+/// A null ID set is workspace-wide; an empty set remains a private selection.
+final class AnswerScopeSnapshot {
+  final String mode;
+  final Set<String>? ids;
+
+  AnswerScopeSnapshot({required this.mode, required Set<String>? ids})
+    : ids = ids == null ? null : Set.unmodifiable(ids);
+
+  String get identity => summaryDigest(
+    jsonEncode([mode, ids == null ? null : (ids!.toList()..sort())]),
+  );
+
+  /// Resolve already captured preferences without storage or default policy.
+  /// Callers retain their lifetime/epoch checks; this identity authorizes no write.
+  factory AnswerScopeSnapshot.fromPreferences({
+    required String mode,
+    String selectedJson = '[]',
+    int? meeting,
+  }) {
+    if (mode == 'workspace') return AnswerScopeSnapshot(mode: mode, ids: null);
+    if (mode == 'meeting' && meeting != null) {
+      return AnswerScopeSnapshot(
+        mode: mode,
+        ids: {
+          'meeting-$meeting',
+          'meeting-summary-$meeting',
+          'meeting-actions-$meeting',
+          'meeting-enhanced_notes-$meeting',
+          'meeting-preparation-$meeting',
+        },
+      );
+    }
+    if (mode == 'selected') {
+      final decoded = jsonDecode(selectedJson);
+      if (decoded is! List ||
+          decoded.length > 100 ||
+          decoded.any((id) => id is! String)) {
+        throw StateError('Invalid selected answer sources');
+      }
+      return AnswerScopeSnapshot(
+        mode: mode,
+        ids: decoded.cast<String>().toSet(),
+      );
+    }
+    throw StateError('Invalid answer source scope');
+  }
+}
 
 /// Immutable persistence projections shared by core queries and desktop views.
 ///
