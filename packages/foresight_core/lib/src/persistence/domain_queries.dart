@@ -1,6 +1,6 @@
 import 'package:sqlite3/sqlite3.dart';
 
-import '../desktop_read_models.dart';
+import '../read_models.dart';
 import '../store.dart';
 import 'model_store.dart';
 import 'read_schema_guard.dart';

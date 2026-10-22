@@ -11,6 +11,50 @@ void main() {
   final package = Directory.current.absolute;
   final desktop = Directory('${package.path}/../../apps/desktop/lib');
 
+  test('desktop import closure does not reach the MCP implementation', () {
+    final pending = [
+      File('${package.path}/lib/desktop.dart'),
+      File('${package.path}/lib/desktop_bootstrap.dart'),
+    ];
+    final visited = <String>{};
+    final violations = <String>[];
+    while (pending.isNotEmpty) {
+      final file = pending.removeLast();
+      if (!visited.add(file.absolute.path)) continue;
+      final unit = parseString(
+        content: file.readAsStringSync(),
+        path: file.path,
+      ).unit;
+      for (final directive in unit.directives.whereType<UriBasedDirective>()) {
+        final uri = directive.uri.stringValue ?? '';
+        if (uri.startsWith('package:mcp_dart/')) {
+          violations.add('${file.path}: $uri');
+        } else if (uri.startsWith('package:foresight_core/')) {
+          pending.add(
+            File('${package.path}/lib/${uri.split('/').skip(1).join('/')}'),
+          );
+        } else if (!uri.contains(':')) {
+          pending.add(File.fromUri(file.uri.resolve(uri)));
+        }
+      }
+    }
+    expect(visited, contains(endsWith('/src/remote_domain.dart')));
+    expect(visited, contains(endsWith('/src/application_service.dart')));
+    expect(violations, isEmpty);
+  });
+
+  test('persistence uses shared filesystem and read primitives', () {
+    for (final name in ['sqlite_preflight.dart', 'source_store.dart']) {
+      final file = File('${package.path}/lib/src/persistence/$name');
+      final unit = parseString(content: file.readAsStringSync()).unit;
+      final dependencies = unit.directives.whereType<UriBasedDirective>().map(
+        (directive) => directive.uri.stringValue ?? '',
+      );
+      expect(dependencies, isNot(contains('../service_socket.dart')));
+      expect(dependencies, isNot(contains('../operations.dart')));
+    }
+  });
+
   test('production desktop imports only the curated core entry points', () {
     final violations = <String>[];
     for (final file in desktop.listSync(recursive: true).whereType<File>()) {

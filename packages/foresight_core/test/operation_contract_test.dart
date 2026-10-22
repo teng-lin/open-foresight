@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/mcp/rpc_tools.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -5,7 +6,7 @@ import 'package:foresight_core/src/application.dart' as legacy;
 import 'package:foresight_core/src/operation_argument_schema.dart';
 import 'package:foresight_core/src/operation_descriptor.dart';
 import 'package:foresight_core/src/operation_requests.dart';
-import 'package:foresight_core/src/operation_tool_projection.dart';
+import 'package:foresight_core/src/mcp/operation_tool_projection.dart';
 import 'package:foresight_core/src/operations.dart';
 import 'package:foresight_core/src/request_fingerprint.dart';
 import 'package:foresight_core/src/rpc_error.dart';

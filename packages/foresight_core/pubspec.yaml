@@ -5,6 +5,8 @@ version: 0.1.3
 environment:
   sdk: '>=3.8.0 <4.0.0'
 dependencies:
+  # Declare the annotation dependency used to confine recording mutation to tests.
+  meta: ^1.16.0
   clock: ^1.1.2
   mcp_dart: 2.4.3
   grpc: 4.3.1

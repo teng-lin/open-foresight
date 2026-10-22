@@ -1,4 +1,4 @@
-import 'desktop_read_models.dart';
+import 'read_models.dart';
 import 'graph_labels.dart';
 import 'read_coordinator.dart';
 import 'rpc_error.dart';

@@ -1,5 +1,5 @@
 import 'package:sqlite3/sqlite3.dart';
-import '../desktop_read_models.dart';
+import '../read_models.dart';
 import '../graph_labels.dart';
 import '../label_organization.dart';
 import 'label_store.dart';

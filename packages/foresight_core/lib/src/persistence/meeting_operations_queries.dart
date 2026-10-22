@@ -1,4 +1,4 @@
-import '../desktop_read_models.dart';
+import '../read_models.dart';
 import '../meeting_actions.dart';
 import '../meeting_workflow_store.dart';
 import '../rpc_error.dart';

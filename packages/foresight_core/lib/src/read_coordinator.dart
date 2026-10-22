@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'desktop_read_models.dart';
+import 'read_models.dart';
 import 'persistence/read_schema_guard.dart';
 import 'rpc_error.dart';
 

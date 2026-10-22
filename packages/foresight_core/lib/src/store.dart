@@ -1,5 +1,5 @@
 import 'label_organization.dart';
-import 'desktop_read_models.dart';
+import 'read_models.dart';
 import 'persistence/label_organization_store.dart';
 export 'persistence/output_statistics.dart' show outputWeekStart;
 import 'persistence/output_statistics.dart';

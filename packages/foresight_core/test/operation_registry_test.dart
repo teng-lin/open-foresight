@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/mcp/rpc_tools.dart';
 import 'package:foresight_core/src/service.dart';
 import 'package:foresight_core/src/platform_services.dart';
 import 'package:foresight_core/src/profile_paths.dart';

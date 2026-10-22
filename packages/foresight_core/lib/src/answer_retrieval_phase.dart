@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'answer_phase_values.dart';
 import 'native.dart';
-import 'desktop_read_models.dart';
+import 'read_models.dart';
 import 'persistence/conversation_queries.dart';
 import 'answer_contract.dart';
 import 'answer_retrieval.dart';

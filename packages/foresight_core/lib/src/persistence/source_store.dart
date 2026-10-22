@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:sqlite3/sqlite3.dart';
-import '../operations.dart' show Operation;
 import '../rpc_error.dart';
 import 'read_schema_guard.dart';
 
@@ -80,7 +79,7 @@ class SourceStore {
     // No idempotency digest of the deleted text outlives the delete. (The
     // tombstoned row itself keeps its content, as it always has.)
     db.execute('DELETE FROM request_keys WHERE operation=? AND result=?', [
-      Operation.sourcesImport.wire,
+      'sources.import',
       jsonEncode({'id': id}),
     ]);
   }

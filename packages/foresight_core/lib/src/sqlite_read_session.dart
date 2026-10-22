@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'persistence/sqlite_runtime.dart';
 
 import 'answer_source_scope.dart';
-import 'desktop_read_models.dart';
+import 'read_models.dart';
 import 'graph_persistence.dart';
 import 'persistence/meeting_queries.dart';
 import 'persistence/conversation_queries.dart';

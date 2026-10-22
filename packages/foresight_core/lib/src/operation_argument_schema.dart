@@ -1,5 +1,3 @@
-import 'package:mcp_dart/mcp_dart.dart';
-
 import 'operation_requests/graph_inputs.dart';
 import 'rpc_error.dart';
 
@@ -159,18 +157,16 @@ class OperationArgumentSchema {
         for (final field in fields) field.name: field.decode(raw),
       });
 
-  JsonSchema get schema => JsonSchema.object(
-    properties: {
-      for (final field in fields)
-        field.name: JsonSchema.fromJson(field.schemaJson),
-    },
-    required: fields
+  Map<String, dynamic> get schemaJson => {
+    'type': 'object',
+    'properties': {for (final field in fields) field.name: field.schemaJson},
+    'required': fields
         .where((field) => field.required)
         .map((field) => field.name)
         .toList(),
     // v1 service maps accept additive fields; MCP projects a closed subset.
-    additionalProperties: true,
-  );
+    'additionalProperties': true,
+  };
 }
 
 Never invalidArgument(String field, String message) =>

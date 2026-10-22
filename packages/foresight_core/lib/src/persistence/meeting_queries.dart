@@ -1,5 +1,5 @@
 import 'package:sqlite3/sqlite3.dart';
-import '../desktop_read_models.dart';
+import '../read_models.dart';
 import 'read_schema_guard.dart';
 
 /// Named immutable reads; the writer owns this connection.

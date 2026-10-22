@@ -1,4 +1,4 @@
-import 'desktop_read_models.dart' show AnswerScopeSnapshot;
+import 'read_models.dart' show AnswerScopeSnapshot;
 import 'store.dart';
 
 class AnswerSourceScope {

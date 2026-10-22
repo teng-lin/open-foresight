@@ -1,5 +1,5 @@
 import 'desktop_connection.dart';
-import 'desktop_read_models.dart';
+import 'read_models.dart';
 
 /// Immutable capture presentation state; owns no recorder or native handle.
 final class RecordingSnapshot implements RecordingStatus {

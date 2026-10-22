@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/mcp/rpc_tools.dart';
 import 'dart:convert';
 import 'dart:io';
 

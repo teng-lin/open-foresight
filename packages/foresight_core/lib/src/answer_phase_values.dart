@@ -1,7 +1,7 @@
 import 'native.dart';
 import 'web_search.dart';
 import 'answer_source_scope.dart';
-import 'desktop_read_models.dart';
+import 'read_models.dart';
 import 'persistence/conversation_queries.dart';
 import 'generated/rag_service.pbgrpc.dart';
 

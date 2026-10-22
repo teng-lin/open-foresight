@@ -1,6 +1,6 @@
 import 'package:mcp_dart/mcp_dart.dart';
-import 'operation_argument_schema.dart';
-import 'operations.dart';
+import '../operation_argument_schema.dart';
+import '../operations.dart';
 
 /// An explicit, closed MCP subset of the service argument contract.
 class OperationToolProjection {
