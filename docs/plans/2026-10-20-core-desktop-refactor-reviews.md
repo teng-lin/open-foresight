@@ -830,3 +830,24 @@ default-schedule1 core namespace failure remains unresolved and is not overridde
 by this review. Final combined implementation review remains a separate gate.
 Report and exact-source receipt:
 `/var/tmp/foresight-core-implementation-review-r7/{claude.md,result.json}`.
+
+## Namespace compiler-bundle delta review, round8
+
+Frozen source `27887f8ecdec002a443c8435a4befaa9c4e61005`, compared with1ac,
+receives **CONVERGED FOR NAMESPACE CACHE DELTA REVIEW** from Claude CLI; the
+independent native review also converges. These reviews cover private invocation
+ownership, actual semantic linking and assertions, compiler-bundle invalidation,
+natural warmer exit, unchanged coverage/runner behavior and meaningful real cache
+regressions. Both distinguish focused evidence from complete acceptance. The
+internal analyzer API remains a pinned test-tooling maintenance obligation.
+The documentation signature wording and an explicit zero-hit corruption assertion
+are accepted nonblocking follow-ups.
+
+The subsequent complete 278 run passes the original semantic guard but fails the
+new compound cache regression at its existing timeout. That failure is preserved;
+neither review overrides it. Splitting independent cache behaviors into separate
+fresh-fixture tests requires affected checks, independent delta review and another
+complete frozen-source run. No checkpoint acceptance or feature extraction is
+claimed. Reports and exact-source evidence:
+`/var/tmp/foresight-core-implementation-review-r8/{claude.md,result.json}` and
+`/var/tmp/foresight-core-desktop/core-contracts/namespace-cache-implementation-review-native.md`.

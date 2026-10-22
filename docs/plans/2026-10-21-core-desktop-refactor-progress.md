@@ -637,3 +637,36 @@ frozen 1ac. Transitive additions, show/hide, conditional switching and damaged
 compiler bundles are exercised by real analyzer tests. Isolated timings are
 diagnostic; the next frozen candidate still needs Claude delta review and the
 complete canonical/local matrix before any 7A extraction.
+
+## 27887f8e full-container attempt and cache-test follow-up
+
+Claude CLI converged on the namespace compiler-bundle delta, with no blocking
+finding. Its optional observations are recorded separately from runtime results;
+the documentation now names the actual source, language-feature, SDK and
+declared-variable signatures rather than implying every analyzer option is a
+compiler-bundle input. Evidence: `/var/tmp/foresight-core-implementation-review-r8/`.
+
+The exact 278 source fails complete default-schedule-1 attempt
+`container-attempt.c216Zl`: native 30/30; core 1,844 passed / 14 skipped /
+1 timeout; desktop 287 passed / 17 skipped with 91.35% coverage and fast
+integration 2/2; Linux platform contracts 462 passed / 3 skipped / 1 deselected.
+The original semantic namespace guard passes under the actual full load.
+The newly added compound cache regression case exceeds its unchanged default
+30 second timeout. Core coverage and the later compiled-service stage do not
+complete; this failed attempt publishes no canonical output or acceptance SHA.
+The corrected owned CID profiler records the real container without errors.
+Evidence: `27887f8ecdec/logs/container-attempt.c216Zl/`.
+
+The follow-up separates warm reuse, transitive-source invalidation,
+declared-variable invalidation and damaged-bundle recovery into four independent
+tests. Each owns a fresh fixture/cache and waits for real disk writes before
+cleanup; every original semantic assertion, default 30 second timeout and
+5 second disk-write bound remains. Damaged bundles additionally require zero
+cache hits. The actual guard, warmer, cache helper and runner remain unchanged.
+All six actual boundary/cache cases pass with zero skips from a complete
+1,329-file Git-free source export; targeted analyzer and formatting also pass.
+Evidence: `27887f8ecdec/logs/cache-case-granularity/`. The exported test/tool bytes
+match this follow-up; later progress/review prose edits are separate documentation
+changes. Independent native/Claude delta review and another complete frozen-source
+canonical run remain required before checkpoint acceptance.
+Freshly fetched main remains `3fb259243a99137e3cba1d5e795c44100f42e688`.
