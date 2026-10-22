@@ -1,15 +1,21 @@
 import 'dart:io';
+import 'desktop_environment.dart';
 import 'package:flutter/services.dart';
 
 /// Native macOS login items or a managed Freedesktop autostart entry.
 class DesktopSettings {
   final Directory config;
+  final DesktopEnvironment environment;
   final String launcher;
   final bool macOS;
   static const channel = MethodChannel('foresight/desktop');
   bool _macOpenAtLogin = false;
-  DesktopSettings(this.config, this.launcher, {bool? macOS})
-    : macOS = macOS ?? Platform.isMacOS;
+  DesktopSettings(
+    this.config,
+    this.launcher, {
+    bool? macOS,
+    this.environment = const DesktopEnvironment(),
+  }) : macOS = macOS ?? Platform.isMacOS;
   Future<void> refresh() async {
     if (macOS)
       _macOpenAtLogin = await channel.invokeMethod<bool>('login.get') ?? false;
@@ -28,8 +34,7 @@ class DesktopSettings {
     if (macOS) return;
     if (!File(launcher).existsSync())
       throw StateError('Enable global shortcuts from the packaged Linux app.');
-    final home = Platform.environment['HOME']!;
-    final data = Platform.environment['XDG_DATA_HOME'] ?? '$home/.local/share';
+    final data = environment.dataDirectory;
     final application = File('$data/applications/io.openforesight.App.desktop');
     await application.parent.create(recursive: true);
     await application.writeAsString(

@@ -1,24 +1,26 @@
 part of 'main.dart';
 
 extension _MeetingAiViews on _MeetingsController {
-  bool _meetingActionCurrent(int id, FeatureRequestIdentity identity) =>
-      meetingId == id && identity.isCurrent(d, alive: mounted);
+  bool _meetingActionCurrent(
+    int id,
+    FeatureRequestIdentity identity, {
+    bool preview = false,
+  }) =>
+      (preview
+          ? meetingId == null && meetingPreviewId == id
+          : meetingId == id) &&
+      identity.isCurrent(d, alive: mounted);
 
   Future<void> _runMeetingAction(
     int id,
     FeatureRequestIdentity identity,
-    Future<void> Function(bool Function() current) action,
-  ) async {
-    bool current() => _meetingActionCurrent(id, identity);
+    Future<void> Function(bool Function() current) action, {
+    bool preview = false,
+  }) async {
+    bool current() => _meetingActionCurrent(id, identity, preview: preview);
     // An input event can already be queued when its rendered view retires.
     if (!current()) return;
-    await shell.run(() async {
-      try {
-        await action(current);
-      } catch (_) {
-        if (current()) rethrow;
-      }
-    });
+    await runAction(() => action(current), selectionCurrent: current);
   }
 
   Widget meetingAnswerScope(int id, {required bool automatic}) {
@@ -192,6 +194,7 @@ extension _MeetingAiViews on _MeetingsController {
                           (versions.first['edited'] ??
                                   versions.first['generated'])
                               as String,
+                          openLink: widget.environment.openUri,
                         ),
                       )
               : ListView(
@@ -285,6 +288,7 @@ extension _MeetingAiViews on _MeetingsController {
                               title: GeneratedContent(
                                 (version['edited'] ?? version['generated'])
                                     as String,
+                                openLink: widget.environment.openUri,
                               ),
                             ),
                         ],
@@ -517,6 +521,7 @@ extension _MeetingAiViews on _MeetingsController {
                             ? preview
                             : (artifact!['edited'] ?? artifact['generated'])
                                   as String,
+                        openLink: widget.environment.openUri,
                       ),
                       if (artifact != null)
                         TextButton(
@@ -536,6 +541,7 @@ extension _MeetingAiViews on _MeetingsController {
                             for (final old in versions.skip(1))
                               GeneratedContent(
                                 (old['edited'] ?? old['generated']) as String,
+                                openLink: widget.environment.openUri,
                               ),
                           ],
                         ),

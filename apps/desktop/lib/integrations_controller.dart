@@ -4,11 +4,9 @@ class _IntegrationsController extends _FeatureController {
   _IntegrationsController(super.shell);
 
   late final DesktopSettings desktopSettings = DesktopSettings(
-    Directory(
-      Platform.environment['XDG_CONFIG_HOME'] ??
-          '${Platform.environment['HOME']}/.config',
-    ),
-    '${File(Platform.resolvedExecutable).parent.parent.path}/open-foresight',
+    Directory(widget.environment.configDirectory),
+    widget.environment.launcher,
+    environment: widget.environment,
   );
 
   bool notifications = false;
@@ -92,8 +90,11 @@ class _IntegrationsController extends _FeatureController {
     return 'Request access for audio playing on your Mac.';
   }
 
-  HyprShortcuts get hyprShortcuts =>
-      HyprShortcuts(desktopSettings.config, desktopSettings.launcher);
+  HyprShortcuts get hyprShortcuts => HyprShortcuts(
+    desktopSettings.config,
+    desktopSettings.launcher,
+    environment: widget.environment,
+  );
 
   Future<void> activateWindow(String? token) async {
     if (!mounted) return;
@@ -105,14 +106,14 @@ class _IntegrationsController extends _FeatureController {
       /* pure widget tests */
     }
     if (!Platform.isMacOS &&
-        Platform.environment['HYPRLAND_INSTANCE_SIGNATURE'] != null) {
-      final active = await Process.run('/usr/bin/hyprctl', [
+        widget.environment.variables['HYPRLAND_INSTANCE_SIGNATURE'] != null) {
+      final active = await widget.environment.run('/usr/bin/hyprctl', [
         'activewindow',
         '-j',
       ]);
       if (active.exitCode == 0 &&
           (jsonDecode(active.stdout as String) as Map)['pid'] != pid) {
-        await Process.run('/usr/bin/hyprctl', [
+        await widget.environment.run('/usr/bin/hyprctl', [
           'eval',
           'hl.dispatch(hl.dsp.focus({window="pid:$pid"}))',
         ]);
@@ -160,7 +161,7 @@ class _IntegrationsController extends _FeatureController {
 
   Future<void> enableGlobalShortcuts() async {
     if (!Platform.isMacOS &&
-        Platform.environment['HYPRLAND_INSTANCE_SIGNATURE'] != null) {
+        widget.environment.variables['HYPRLAND_INSTANCE_SIGNATURE'] != null) {
       await hyprShortcuts.install(
         d.store.preference('quickShortcut', 'CTRL + SHIFT + F'),
       );
@@ -196,7 +197,7 @@ class _IntegrationsController extends _FeatureController {
 
   Future<void> disableGlobalShortcuts() async {
     if (!Platform.isMacOS &&
-        Platform.environment['HYPRLAND_INSTANCE_SIGNATURE'] != null &&
+        widget.environment.variables['HYPRLAND_INSTANCE_SIGNATURE'] != null &&
         hyprShortcuts.installed)
       await hyprShortcuts.remove();
     await globalShortcuts?.disable();
@@ -322,7 +323,8 @@ class _IntegrationsController extends _FeatureController {
         readCapabilities: () async => Map<String, dynamic>.from(
           await d.command(Operation.audioCapabilities) as Map,
         ),
-        openSettings: openSystemAudioSettings,
+        openSettings: (uri) =>
+            openSystemAudioSettings(uri, environment: widget.environment),
         capabilitiesChanged: (result) {
           if (mounted)
             setState(
@@ -367,7 +369,7 @@ class _IntegrationsController extends _FeatureController {
       barrierDismissible: false,
       builder: (_) => GoogleSignInDialog(
         auth: googleAuth,
-        openBrowser: openPlatformUri,
+        openBrowser: widget.environment.openUri,
         returnToApp: () => activateWindow(null),
         addAccount: addAccount,
         calendarThroughGranola: granolaCalendar,
@@ -480,7 +482,7 @@ class _IntegrationsController extends _FeatureController {
   Future<void> notify(String message) async {
     if (!notifications) return;
     try {
-      await platformNotification('Open Foresight', message);
+      await widget.environment.notify('Open Foresight', message);
     } catch (e) {
       if (mounted)
         setState(() => notificationState = 'notification unavailable: $e');
@@ -609,7 +611,9 @@ class _IntegrationsController extends _FeatureController {
           await globalShortcuts!.enable(
             preferredTrigger: normalized.replaceAll(' ', ''),
           );
-        } else if (Platform.environment['HYPRLAND_INSTANCE_SIGNATURE'] !=
+        } else if (widget
+                .environment
+                .variables['HYPRLAND_INSTANCE_SIGNATURE'] !=
             null) {
           await hyprShortcuts.install(normalized);
         } else {
@@ -663,7 +667,7 @@ class _IntegrationsController extends _FeatureController {
       ],
       onChanged: meetingFeature.recording != null
           ? null
-          : (value) => settingsFeature.preference(key, value!),
+          : (value) => runAction(() => settingsFeature.preference(key, value!)),
     );
   }
 }

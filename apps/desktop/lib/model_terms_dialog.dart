@@ -1,3 +1,4 @@
+import 'desktop_environment.dart';
 import 'package:flutter/material.dart';
 import 'package:foresight_core/desktop.dart';
 
@@ -10,6 +11,7 @@ Future<bool> confirmModelTerms(
   StoreReader store,
   GemmaModel model, {
   required ModelPreferenceWriter savePreference,
+  Future<void> Function(Uri)? openUri,
 }) async {
   final key = 'modelTerms.${model.repository}.${model.revision}';
   if (store.preference(key) == 'accepted') return true;
@@ -39,14 +41,16 @@ Future<bool> confirmModelTerms(
               ),
               const SizedBox(height: 12),
               TextButton(
-                onPressed: () => openPlatformUri(license),
+                onPressed: () =>
+                    (openUri ?? const DesktopEnvironment().openUri)(license),
                 child: Text(
                   whisper ? 'Read MIT License' : 'Read publisher model terms',
                 ),
               ),
               if (whisper) ...[
                 TextButton(
-                  onPressed: () => openPlatformUri(card),
+                  onPressed: () =>
+                      (openUri ?? const DesktopEnvironment().openUri)(card),
                   child: const Text('Model source and conversion'),
                 ),
               ],
@@ -76,8 +80,9 @@ Future<bool> confirmModelTerms(
 Future<bool> confirmQueryModelTerms(
   BuildContext context,
   Uri terms,
-  String revision,
-) async =>
+  String revision, {
+  Future<void> Function(Uri)? openUri,
+}) async =>
     await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -93,7 +98,8 @@ Future<bool> confirmQueryModelTerms(
                   'Review the distribution provider’s model license and usage terms before downloading this revision.',
                 ),
                 TextButton(
-                  onPressed: () => openPlatformUri(terms),
+                  onPressed: () =>
+                      (openUri ?? const DesktopEnvironment().openUri)(terms),
                   child: const Text('Read model terms'),
                 ),
                 SelectableText(terms.toString()),

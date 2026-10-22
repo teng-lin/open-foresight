@@ -1,3 +1,4 @@
+import 'fixtures/setup_process.dart';
 import 'store_reader_fixture.dart';
 import 'dart:async';
 import 'dart:io';
@@ -107,6 +108,7 @@ void main() {
                 installed: () => installed++,
               )
             : GemmaSetupDialog(
+                environment: setupEnvironment(),
                 store: fixtureReader(store),
                 savePreference: (key, value) async =>
                     store.setPreference(key, value),

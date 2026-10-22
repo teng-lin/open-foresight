@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'desktop_environment.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 
@@ -12,7 +13,10 @@ final systemAudioSettingsUri = Uri.parse(
 
 /// Settings navigation is a trusted app action. The general source-link opener
 /// deliberately rejects custom schemes and must remain strict for imports.
-Future<void> openSystemAudioSettings(Uri settings) async {
+Future<void> openSystemAudioSettings(
+  Uri settings, {
+  DesktopEnvironment environment = const DesktopEnvironment(),
+}) async {
   if (settings != systemAudioSettingsUri) {
     throw ArgumentError.value(
       settings,
@@ -22,7 +26,7 @@ Future<void> openSystemAudioSettings(Uri settings) async {
   }
   if (!Platform.isMacOS)
     throw UnsupportedError('macOS System Settings is unavailable');
-  final result = await Process.run('/usr/bin/open', [settings.toString()]);
+  final result = await environment.run('/usr/bin/open', [settings.toString()]);
   if (result.exitCode != 0) {
     throw StateError(
       'Could not open System Settings. Open Privacy & Security > Screen & System Audio Recording > System Audio Recording Only.',

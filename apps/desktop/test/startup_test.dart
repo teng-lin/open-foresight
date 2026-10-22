@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/commands.dart';
 import 'package:open_foresight/main.dart';
+import 'package:open_foresight/desktop_environment.dart';
 import 'package:foresight_core/src/profile_paths.dart';
 
 void main() {
@@ -23,6 +24,9 @@ void main() {
       await tester.runAsync(() async {
         await tester.pumpWidget(
           DesktopStartup(
+            environment: DesktopEnvironment(
+              run: DesktopEnvironment.production().run,
+            ),
             profile: profile,
             // Native inference configuration is outside this connection test.
             configureRuntime: (_) {},
@@ -75,6 +79,9 @@ void main() {
       await tester.runAsync(() async {
         final replacement = await AppCommands.bind(
           '${profile.runtime}/commands.sock',
+          environment: DesktopEnvironment(
+            run: DesktopEnvironment.production().run,
+          ),
         );
         await replacement.close();
       });

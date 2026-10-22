@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'desktop_environment.dart';
 
 /// Managed Omarchy user-config block; never replaces an unrelated binding.
 class HyprShortcuts {
@@ -8,7 +9,12 @@ class HyprShortcuts {
   final Future<ProcessResult> Function(String, List<String>) run;
   static const begin = '-- BEGIN FORESIGHT GLOBAL SHORTCUT';
   static const end = '-- END FORESIGHT GLOBAL SHORTCUT';
-  HyprShortcuts(this.config, this.launcher, {this.run = Process.run});
+  HyprShortcuts(
+    this.config,
+    this.launcher, {
+    DesktopProcessRunner? run,
+    DesktopEnvironment environment = const DesktopEnvironment(),
+  }) : run = run ?? environment.run;
   File get bindings => File('${config.path}/hypr/bindings.lua');
   bool get installed =>
       bindings.existsSync() && bindings.readAsStringSync().contains(begin);

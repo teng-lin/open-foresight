@@ -7,6 +7,7 @@ import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/commands.dart';
 import 'package:foresight_core/src/domain.dart';
 import 'package:open_foresight/main.dart';
+import 'package:open_foresight/desktop_environment.dart';
 import 'package:foresight_core/src/profile_paths.dart';
 import 'package:foresight_core/src/store.dart';
 import 'controller_fixture.dart';
@@ -44,6 +45,9 @@ void main() {
       await tester.runAsync(
         () => tester.pumpWidget(
           DesktopStartup(
+            environment: DesktopEnvironment(
+              run: DesktopEnvironment.production().run,
+            ),
             profile: profile,
             deviceLoader: () async => [],
             configureRuntime: (_) {},
@@ -84,6 +88,9 @@ void main() {
       await tester.runAsync(
         () => tester.pumpWidget(
           DesktopStartup(
+            environment: DesktopEnvironment(
+              run: DesktopEnvironment.production().run,
+            ),
             profile: profile,
             configureRuntime: (_) {},
             connect: (_) {
@@ -98,7 +105,10 @@ void main() {
       ready.complete(connected);
       await pumpUntil(tester, () => connected.closes == 1);
       final rebound = await tester.runAsync(
-        () => AppCommands.bind('${profile.runtime}/commands.sock'),
+        () => AppCommands.bind(
+          '${profile.runtime}/commands.sock',
+          environment: DesktopEnvironment.production(),
+        ),
       );
       await tester.runAsync(() => rebound!.close());
       expect(tester.takeException(), isNull);
@@ -111,6 +121,9 @@ void main() {
       await tester.runAsync(
         () => tester.pumpWidget(
           DesktopStartup(
+            environment: DesktopEnvironment(
+              run: DesktopEnvironment.production().run,
+            ),
             profile: profile,
             arguments: const ['--stop-meeting'],
             configureRuntime: (_) {},

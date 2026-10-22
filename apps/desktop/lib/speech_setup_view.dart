@@ -1,3 +1,4 @@
+import 'desktop_environment.dart';
 import 'model_setup_surface.dart';
 import 'dart:io';
 import 'dart:async';
@@ -6,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:foresight_core/desktop.dart';
 
 class SpeechSetupDialog extends StatefulWidget {
+  final DesktopEnvironment environment;
   final VoidCallback? onDone;
   bool get embedded => onDone != null;
   final StoreReader store;
@@ -19,6 +21,7 @@ class SpeechSetupDialog extends StatefulWidget {
   final VoidCallback installed;
   const SpeechSetupDialog({
     super.key,
+    this.environment = const DesktopEnvironment(),
     this.onDone,
     required this.store,
     required this.savePreference,
@@ -124,6 +127,7 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
             widget.store,
             model,
             savePreference: widget.savePreference,
+            openUri: widget.environment.openUri,
           ))
         return;
       if (!mounted || cancelled) return;

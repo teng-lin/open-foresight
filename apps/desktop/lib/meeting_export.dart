@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'desktop_environment.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -116,9 +117,11 @@ class MeetingExportDialog extends StatefulWidget {
   const MeetingExportDialog({
     super.key,
     required this.store,
+    this.environment = const DesktopEnvironment(),
     required this.save,
     this.now,
   });
+  final DesktopEnvironment environment;
   final StoreReader store;
   final Future<bool> Function(String) save;
   final DateTime? now;
@@ -289,6 +292,7 @@ class _MeetingExportDialogState extends State<MeetingExportDialog> {
                       )
                     : GeneratedContent(
                         content.markdown,
+                        openLink: widget.environment.openUri,
                         key: const ValueKey('meeting-export-preview'),
                       ),
               ),

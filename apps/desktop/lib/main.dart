@@ -1,3 +1,4 @@
+import 'desktop_environment.dart';
 import 'system_audio_setup_dialog.dart';
 import 'onboarding_view.dart';
 import 'model_terms_dialog.dart';
@@ -58,7 +59,12 @@ part 'integrations_controller.dart';
 
 Future<void> main([List<String> arguments = const []]) async {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(DesktopStartup(arguments: arguments));
+  runApp(
+    DesktopStartup(
+      arguments: arguments,
+      environment: DesktopEnvironment.production(),
+    ),
+  );
 }
 
 Future<DesktopConnection> connectDesktopDomain(ProfilePaths profile) =>
@@ -68,6 +74,7 @@ void quitDesktop() => exit(0);
 /// Mount before connecting so service/profile failures remain visible and can
 /// be retried without retaining the failed attempt's activation socket.
 class DesktopStartup extends StatefulWidget {
+  final DesktopEnvironment environment;
   final List<String> arguments;
   final ProfilePaths? profile;
   final Future<DesktopConnection> Function(ProfilePaths) connect;
@@ -76,6 +83,7 @@ class DesktopStartup extends StatefulWidget {
   final Future<List<AudioDevice>> Function() deviceLoader;
   const DesktopStartup({
     super.key,
+    required this.environment,
     this.arguments = const [],
     this.profile,
     this.connect = connectDesktopDomain,
@@ -107,7 +115,7 @@ class _DesktopStartupState extends State<DesktopStartup> {
     AppCommands? ownedCommands;
     try {
       final profile =
-          widget.profile ?? ProfilePaths.resolve(Platform.environment);
+          widget.profile ?? ProfilePaths.resolve(widget.environment.variables);
       privateDirectory(profile.data, repairOwnedPermissions: true);
       privateRuntime(profile);
       widget.configureRuntime(profile.data);
@@ -129,7 +137,7 @@ class _DesktopStartupState extends State<DesktopStartup> {
         commandPath,
         command: launchCommand,
         authUrl: authUrl,
-        activationToken: Platform.environment['XDG_ACTIVATION_TOKEN'],
+        activationToken: widget.environment.variables['XDG_ACTIVATION_TOKEN'],
       )) {
         widget.quit();
         return;
@@ -141,7 +149,10 @@ class _DesktopStartupState extends State<DesktopStartup> {
         return;
       }
       try {
-        ownedCommands = await AppCommands.bind(commandPath);
+        ownedCommands = await AppCommands.bind(
+          commandPath,
+          environment: widget.environment,
+        );
       } catch (error) {
         if (error is! SocketException && error is! FileSystemException) rethrow;
         if (await AppCommands.forward(commandPath, command: launchCommand)) {
@@ -161,6 +172,7 @@ class _DesktopStartupState extends State<DesktopStartup> {
         () => application = Foresight(
           domain,
           commands: ownedCommands,
+          environment: widget.environment,
           deviceLoader: widget.deviceLoader,
           quickOnLaunch: widget.arguments.contains('--quick-meeting'),
         ),
@@ -235,21 +247,21 @@ class _DesktopStartupState extends State<DesktopStartup> {
       );
 }
 
-Future<void> openSourceLink(Uri uri) => openPlatformUri(uri);
-
 class Foresight extends StatelessWidget {
   final DesktopConnection domain;
   final AppCommands? commands;
   final bool quickOnLaunch;
   final Future<List<AudioDevice>> Function() deviceLoader;
-  final Future<void> Function(Uri) sourceLinkOpener;
+  final Future<void> Function(Uri)? sourceLinkOpener;
+  final DesktopEnvironment environment;
   const Foresight(
     this.domain, {
     super.key,
     this.commands,
     this.quickOnLaunch = false,
     this.deviceLoader = audioDevices,
-    this.sourceLinkOpener = openSourceLink,
+    this.sourceLinkOpener,
+    this.environment = const DesktopEnvironment(),
   });
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -262,6 +274,7 @@ class Foresight extends StatelessWidget {
       quickOnLaunch: quickOnLaunch,
       deviceLoader: deviceLoader,
       sourceLinkOpener: sourceLinkOpener,
+      environment: environment,
     ),
   );
 }
@@ -271,14 +284,16 @@ class Workspace extends StatefulWidget {
   final AppCommands? commands;
   final bool quickOnLaunch;
   final Future<List<AudioDevice>> Function() deviceLoader;
-  final Future<void> Function(Uri) sourceLinkOpener;
+  final Future<void> Function(Uri)? sourceLinkOpener;
+  final DesktopEnvironment environment;
   const Workspace(
     this.domain, {
     super.key,
     this.commands,
     this.quickOnLaunch = false,
     this.deviceLoader = audioDevices,
-    this.sourceLinkOpener = openSourceLink,
+    this.sourceLinkOpener,
+    this.environment = const DesktopEnvironment(),
   });
   @override
   State<Workspace> createState() => _WorkspaceState();
@@ -397,7 +412,7 @@ class _WorkspaceState extends State<Workspace>
       WidgetsBinding.instance.addPostFrameCallback(
         (_) => unawaited(
           integrationFeature.activateQuickMeeting(
-            Platform.environment['XDG_ACTIVATION_TOKEN'],
+            widget.environment.variables['XDG_ACTIVATION_TOKEN'],
           ),
         ),
       );
@@ -589,6 +604,7 @@ class _WorkspaceState extends State<Workspace>
     sourceFeature.sourceSearchController.clear();
     meetingFeature.meetingQuery = '';
     sourceFeature.labelFilter = '';
+    meetingFeature.noteEditorGeneration++;
     meetingFeature.noteId = null;
     meetingFeature.noteTitle.clear();
     meetingFeature.noteBody.clear();
@@ -720,6 +736,7 @@ class _WorkspaceState extends State<Workspace>
         meta: Platform.isMacOS,
       ): () => update(() {
         tab = 2;
+        meetingFeature.noteEditorGeneration++;
         meetingFeature.noteId = null;
         meetingFeature.noteBaseline = ('', '');
         meetingFeature.newNoteKey.reset();

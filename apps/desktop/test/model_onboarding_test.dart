@@ -1,3 +1,4 @@
+import 'fixtures/setup_process.dart';
 import 'store_reader_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_test_support/poll.dart';
@@ -85,6 +86,7 @@ void main() {
                   onPressed: () => showDialog<void>(
                     context: context,
                     builder: (_) => GemmaSetupDialog(
+                      environment: setupEnvironment(),
                       store: fixtureReader(store),
                       savePreference: (key, value) async =>
                           store.setPreference(key, value),

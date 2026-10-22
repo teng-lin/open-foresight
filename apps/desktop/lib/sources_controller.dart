@@ -232,6 +232,7 @@ class _SourcesController extends _FeatureController {
             FilledButton(
               onPressed: () {
                 setState(() {
+                  meetingFeature.noteEditorGeneration++;
                   meetingFeature.noteId = null;
                   meetingFeature.noteBaseline = ('', '');
                   meetingFeature.newNoteKey.reset();
@@ -251,6 +252,7 @@ class _SourcesController extends _FeatureController {
                         onTap: () => setState(() {
                           // Opening a note abandons an unconfirmed new one.
                           meetingFeature.newNoteKey.reset();
+                          meetingFeature.noteEditorGeneration++;
                           meetingFeature.noteId = n['id'] as int;
                           meetingFeature.noteTitle.text = n['title'] as String;
                           meetingFeature.noteBody.text = d.store.noteBody(
@@ -294,7 +296,13 @@ class _SourcesController extends _FeatureController {
                 // reply that arrives after a reset is not shown: it names an
                 // ID the views have dropped.
                 final epoch = d.workspaceEpoch;
-                bool current() => mounted && d.workspaceEpoch == epoch;
+                final identity = FeatureRequestIdentity.capture(d);
+                var originalId = meetingFeature.noteId;
+                final editorGeneration = meetingFeature.noteEditorGeneration;
+                bool current() =>
+                    identity.isCurrent(d, alive: mounted) &&
+                    meetingFeature.noteId == originalId &&
+                    meetingFeature.noteEditorGeneration == editorGeneration;
                 Map<String, dynamic> scoped(Map<String, dynamic> args) => {
                   ...args,
                   if (epoch != null) 'workspace_epoch': epoch,
@@ -326,7 +334,10 @@ class _SourcesController extends _FeatureController {
                           amend: (first, edited) async {
                             final id = (first as Map)['id'] as int;
                             if (current()) {
-                              setState(() => meetingFeature.noteId = id);
+                              setState(() {
+                                originalId = id;
+                                meetingFeature.noteId = id;
+                              });
                             }
                             return d.command(
                               Operation.notesSave,
@@ -369,7 +380,10 @@ class _SourcesController extends _FeatureController {
       builder: (_) => FileDiscoverySheet(
         initialFolders:
             roots ??
-            LocalFileDiscovery.defaultFolders(Platform.environment['HOME']!),
+            LocalFileDiscovery.defaultFolders(
+              widget.environment.variables['HOME'] ??
+                  widget.environment.dataDirectory,
+            ),
         excludedPaths: excluded,
         pickFolder: () => getDirectoryPath(),
       ),
@@ -2061,7 +2075,8 @@ class _SourcesController extends _FeatureController {
                       final uri = Uri.tryParse(sourceUri);
                       if (uri == null || !allowedSourceUri(uri)) return;
                       try {
-                        await widget.sourceLinkOpener(uri);
+                        await (widget.sourceLinkOpener ??
+                            widget.environment.openUri)(uri);
                       } catch (_) {
                         if (context.mounted)
                           ScaffoldMessenger.of(context).showSnackBar(

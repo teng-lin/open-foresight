@@ -45,6 +45,7 @@ class _SettingsController extends _FeatureController {
     bool embeddingOnly = false,
     VoidCallback? onDone,
   }) => GemmaSetupDialog(
+    environment: widget.environment,
     store: d.store,
     savePreference: saveModelPreference,
     onDone: onDone,
@@ -112,6 +113,7 @@ class _SettingsController extends _FeatureController {
   Widget speechSetup({VoidCallback? onDone}) {
     final registration = d.store.model('speech')?.toRow();
     return SpeechSetupDialog(
+      environment: widget.environment,
       store: d.store,
       savePreference: saveModelPreference,
       onDone: onDone,
@@ -220,6 +222,7 @@ class _SettingsController extends _FeatureController {
                                 context,
                                 terms,
                                 dedicatedQueryModelDigest,
+                                openUri: widget.environment.openUri,
                               ))
                                 return;
                               await d.command(Operation.preferencesSet, {
@@ -834,7 +837,7 @@ class _SettingsController extends _FeatureController {
               ),
             )
             .toList(),
-        onChanged: (v) => preference('serviceIdleMinutes', v!),
+        onChanged: (v) => runAction(() => preference('serviceIdleMinutes', v!)),
       ),
     );
   }
@@ -987,7 +990,8 @@ class _SettingsController extends _FeatureController {
                     ),
                   ],
                   selected: {d.store.preference('noteStyle', 'Standard')},
-                  onSelectionChanged: (v) => preference('noteStyle', v.first),
+                  onSelectionChanged: (v) =>
+                      runAction(() => preference('noteStyle', v.first)),
                 ),
               ),
               const Divider(height: 1),
@@ -1011,7 +1015,8 @@ class _SettingsController extends _FeatureController {
                         ),
                       )
                       .toList(),
-                  onChanged: (v) => preference('inactivity', v!),
+                  onChanged: (v) =>
+                      runAction(() => preference('inactivity', v!)),
                 ),
               ),
               const Divider(height: 1),
@@ -1312,11 +1317,13 @@ class _SettingsController extends _FeatureController {
                               ),
                             )
                             .toList(),
-                    onChanged: (value) => preference(
-                      integrationFeature.granolaCalendar
-                          ? 'granolaCalendarRefreshMinutes'
-                          : 'googleRefreshHours',
-                      value!,
+                    onChanged: (value) => runAction(
+                      () => preference(
+                        integrationFeature.granolaCalendar
+                            ? 'granolaCalendarRefreshMinutes'
+                            : 'googleRefreshHours',
+                        value!,
+                      ),
                     ),
                   ),
                 ),

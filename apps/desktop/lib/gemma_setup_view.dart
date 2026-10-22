@@ -1,3 +1,4 @@
+import 'desktop_environment.dart';
 import 'model_setup_surface.dart';
 import 'dart:io';
 import 'dart:async';
@@ -6,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:foresight_core/desktop.dart';
 
 class GemmaSetupDialog extends StatefulWidget {
+  final DesktopEnvironment environment;
   final VoidCallback? onDone;
   bool get embedded => onDone != null;
   final StoreReader store;
@@ -23,6 +25,7 @@ class GemmaSetupDialog extends StatefulWidget {
   installGeneration;
   const GemmaSetupDialog({
     super.key,
+    this.environment = const DesktopEnvironment(),
     this.onDone,
     required this.store,
     required this.savePreference,
@@ -195,14 +198,16 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
           widget.store,
           termsModel,
           savePreference: widget.savePreference,
+          openUri: widget.environment.openUri,
         ))
           return;
         if (!mounted || cancelled) return;
       }
       download = widget.createDownload?.call() ?? GemmaDownload();
-      final process = preflight = await Process.start(widget.runner, [
-        '--check',
-      ]);
+      final process = preflight = await widget.environment.start(
+        widget.runner,
+        ['--check'],
+      );
       final out = process.stdout.listen((_) {}),
           err = process.stderr.listen((_) {});
       try {

@@ -1,3 +1,4 @@
+import 'fixtures/setup_process.dart';
 import 'store_reader_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'fixtures/verified_model_files.dart';
@@ -31,6 +32,7 @@ void main() {
         MaterialApp(
           home: Scaffold(
             body: GemmaSetupDialog(
+              environment: setupEnvironment(),
               findLocalModel: verifiedFixtureModelFile,
               store: fixtureReader(store),
               savePreference: (key, value) async =>
@@ -81,6 +83,7 @@ void main() {
           MaterialApp(
             home: Scaffold(
               body: GemmaSetupDialog(
+                environment: setupEnvironment(),
                 findLocalModel: verifiedFixtureModelFile,
                 store: fixtureReader(store),
                 savePreference: (key, value) async =>
@@ -128,6 +131,7 @@ void main() {
         MaterialApp(
           home: Scaffold(
             body: GemmaSetupDialog(
+              environment: setupEnvironment(),
               findLocalModel: verifiedFixtureModelFile,
               store: fixtureReader(store),
               savePreference: (key, value) async =>
@@ -204,6 +208,7 @@ void main() {
                   onPressed: () => showDialog<void>(
                     context: context,
                     builder: (_) => GemmaSetupDialog(
+                      environment: setupEnvironment(),
                       findLocalModel: verifiedFixtureModelFile,
                       store: fixtureReader(store),
                       savePreference: (key, value) async =>
@@ -267,6 +272,7 @@ void main() {
         MaterialApp(
           home: Scaffold(
             body: GemmaSetupDialog(
+              environment: setupEnvironment(),
               findLocalModel: verifiedFixtureModelFile,
               store: fixtureReader(store),
               savePreference: (key, value) async =>

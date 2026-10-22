@@ -88,7 +88,17 @@ class _GoogleSignInDialogState extends State<GoogleSignInDialog> {
       );
     }
     finished = true;
-    if (mounted) Navigator.of(context).pop(outcome);
+    if (mounted) {
+      final route = ModalRoute.of(context);
+      if (route != null && route.isActive) {
+        final navigator = Navigator.of(context);
+        if (route.isCurrent) {
+          navigator.pop(outcome);
+        } else {
+          navigator.removeRoute(route, outcome);
+        }
+      }
+    }
   }
 
   Future<void> submitReturn() async {

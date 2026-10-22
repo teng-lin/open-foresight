@@ -1,3 +1,4 @@
+import 'package:open_foresight/desktop_environment.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:foresight_core/remote.dart' show StoreReader;
 import 'store_reader_fixture.dart';
@@ -146,7 +147,10 @@ void main() {
       OfflineHelper('${root.path}/sock', '${root.path}/helper'),
     );
     final commands = await tester.runAsync(
-      () => AppCommands.bind('${root.path}/cmd'),
+      () => AppCommands.bind(
+        '${root.path}/cmd',
+        environment: DesktopEnvironment.production(),
+      ),
     );
     await tester.binding.setSurfaceSize(const Size(1280, 1100));
     addTearDown(() => tester.binding.setSurfaceSize(null));

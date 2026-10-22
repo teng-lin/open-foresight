@@ -246,8 +246,10 @@ class _OnboardingController extends _FeatureController {
     runtimeError: shell.error,
     retryRuntime: () async {
       setState(() => shell.error = '');
+      final identity = FeatureRequestIdentity.capture(d);
       await d.initialize();
       await d.resume();
+      if (identity.isCurrent(d, alive: mounted)) setState(() => ready = true);
     },
     saveStep: (step) async {
       await d.command(Operation.preferencesSet, {

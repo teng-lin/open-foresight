@@ -263,6 +263,14 @@
       ],
       "gate": "platform",
       "reason": "The regular macOS core gate runs production query acquisition cancellation through its native factory with held metadata transport and no model download. Linux skips this macOS-only factory contract."
+    },
+    {
+      "path": "apps/desktop/test/desktop_environment_test.dart",
+      "conditions": [
+        "Platform.isMacOS"
+      ],
+      "gate": "platform",
+      "reason": "Hyprland behavior currently checks the host platform; plan 7C-2 removes this skip when platform capabilities are injected."
     }
   ]
 }

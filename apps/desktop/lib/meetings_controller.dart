@@ -27,6 +27,8 @@ class _MeetingsController extends _FeatureController {
 
   int? noteId;
 
+  int noteEditorGeneration = 0;
+
   int? meetingId;
 
   int? recordingMeeting;
@@ -665,6 +667,7 @@ class _MeetingsController extends _FeatureController {
     await showDialog<void>(
       context: context,
       builder: (_) => MeetingExportDialog(
+        environment: widget.environment,
         store: d.store,
         save: (markdown) async {
           final location = await getSaveLocation(
@@ -1354,7 +1357,10 @@ class _MeetingsController extends _FeatureController {
                         )
                       : SingleChildScrollView(
                           padding: const EdgeInsets.all(20),
-                          child: GeneratedContent(enhancedText),
+                          child: GeneratedContent(
+                            enhancedText,
+                            openLink: widget.environment.openUri,
+                          ),
                         ),
                 ),
                 if (meetingNotesController.text.isNotEmpty)
@@ -1467,10 +1473,8 @@ class _MeetingsController extends _FeatureController {
                             (s) => DropdownMenuItem(value: s, child: Text(s)),
                           )
                           .toList(),
-                      onChanged: (style) => shell.update(
-                        () => unawaited(
-                          settingsFeature.preference('noteStyle', style!),
-                        ),
+                      onChanged: (style) => runAction(
+                        () => settingsFeature.preference('noteStyle', style!),
                       ),
                     ),
                     const SizedBox(width: 18),
@@ -1493,13 +1497,15 @@ class _MeetingsController extends _FeatureController {
                         key: const ValueKey('meeting-live-enhance'),
                         onPressed: () => shell.update(() {
                           unawaited(
-                            settingsFeature.preference(
-                              'liveEnhance',
-                              (!live).toString(),
+                            runAction(
+                              () => settingsFeature.preference(
+                                'liveEnhance',
+                                (!live).toString(),
+                              ),
                             ),
                           );
                           meetingEnhancedVisible = !live;
-                          if (!live) unawaited(saveMeetingNotes());
+                          if (!live) unawaited(runAction(saveMeetingNotes));
                         }),
                         style: FilledButton.styleFrom(
                           backgroundColor: const Color(0xffdce9ff),
@@ -1635,8 +1641,9 @@ class _MeetingsController extends _FeatureController {
             'Detect questions and answer with your local model.',
           ),
           value: automatic,
-          onChanged: (enabled) =>
-              settingsFeature.preference('proactiveAnswers', '$enabled'),
+          onChanged: (enabled) => runAction(
+            () => settingsFeature.preference('proactiveAnswers', '$enabled'),
+          ),
         ),
         if ((pipeline['running'] == true && pipeline['active_meeting'] == id) ||
             (pipeline['pending_meetings'] as List? ?? []).contains(id))
@@ -1702,6 +1709,7 @@ class _MeetingsController extends _FeatureController {
                               if (item['body'] != null)
                                 GeneratedContent(
                                   item['body'] as String,
+                                  openLink: widget.environment.openUri,
                                   fontSize: chatFeature.answerFontSize,
                                 ),
                               if (item['body'] != null)
@@ -1928,6 +1936,7 @@ class _MeetingsController extends _FeatureController {
   Widget meetingSummaryPanel(int id, {bool actions = false}) {
     if (actions) return meetingActionsPanel(id);
     final identity = FeatureRequestIdentity.capture(d);
+    final fromPreview = meetingId == null;
     final kind = actions ? 'actions' : 'summary';
     final title = actions ? 'Action items' : 'Summary';
     final versions = readRows(d.store.meetingArtifacts(id, kind));
@@ -1970,6 +1979,7 @@ class _MeetingsController extends _FeatureController {
                           workspaceEpoch: identity.workspaceEpoch,
                           current: current,
                         ),
+                        preview: fromPreview,
                       ),
                 icon: const Icon(Icons.auto_awesome),
               ),
@@ -2036,6 +2046,7 @@ class _MeetingsController extends _FeatureController {
                   padding: const EdgeInsets.all(20),
                   child: GeneratedContent(
                     preview,
+                    openLink: widget.environment.openUri,
                     fontSize: chatFeature.answerFontSize,
                   ),
                 )
@@ -2067,6 +2078,7 @@ class _MeetingsController extends _FeatureController {
                         ),
                       GeneratedContent(
                         (artifact['edited'] ?? artifact['generated']) as String,
+                        openLink: widget.environment.openUri,
                         fontSize: chatFeature.answerFontSize,
                       ),
                       if (versions.length > 1)
@@ -2078,6 +2090,7 @@ class _MeetingsController extends _FeatureController {
                                 title: GeneratedContent(
                                   (previous['edited'] ?? previous['generated'])
                                       as String,
+                                  openLink: widget.environment.openUri,
                                 ),
                                 trailing: IconButton(
                                   tooltip: 'Edit previous version',

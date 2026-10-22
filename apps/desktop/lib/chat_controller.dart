@@ -64,7 +64,7 @@ class _ChatController extends _FeatureController {
               uri.host.isEmpty) {
             throw StateError('This citation has no valid web address.');
           }
-          await openPlatformUri(uri);
+          await widget.environment.openUri(uri);
         }),
       );
       return;
@@ -232,6 +232,7 @@ class _ChatController extends _FeatureController {
                               ),
                               GeneratedContent(
                                 a['body'] as String,
+                                openLink: widget.environment.openUri,
                                 fontSize: answerFontSize,
                               ),
                               if (a['status'] != 'completed')
@@ -262,6 +263,7 @@ class _ChatController extends _FeatureController {
                                     : 'Searching your knowledge…'
                               : answer,
                           fontSize: answerFontSize,
+                          openLink: widget.environment.openUri,
                         ),
                     ],
                   ),
