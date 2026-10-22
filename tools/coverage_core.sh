@@ -10,7 +10,7 @@ task_raw=$(mktemp -d "$task_output/raw.XXXXXX")
 trap 'rm -rf -- "$task_raw"' EXIT
 cd "$task_root/packages/foresight_core"
 # JSON coverage otherwise collects dependencies before the formatter drops them.
-"$task_dart" test --coverage="$task_raw" --coverage-package='^foresight_core$' "$@"
+"$task_root/tools/run_core_tests.sh" --coverage="$task_raw" --coverage-package='^foresight_core$' "$@"
 "$task_dart" run coverage:format_coverage --lcov --in="$task_raw" \
   --out="$task_output/lcov.info" --report-on=lib \
   --ignore-files='**/generated/**' --base-directory="$task_root"

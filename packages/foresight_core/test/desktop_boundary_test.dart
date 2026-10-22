@@ -1,10 +1,11 @@
 import 'dart:io';
 
-import 'package:analyzer/dart/analysis/analysis_context_collection.dart';
 import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/analysis/utilities.dart';
 import 'package:test/test.dart';
+
+import 'support/boundary_analysis.dart';
 
 void main() {
   final package = Directory.current.absolute;
@@ -51,18 +52,13 @@ void main() {
   test(
     'curated public namespaces do not export implementation capabilities',
     () async {
-      const entries = ['desktop.dart', 'desktop_bootstrap.dart'];
-      final contexts = AnalysisContextCollection(
-        // Referenced libraries still participate in transitive export linking.
-        includedPaths: [
-          for (final entry in entries) '${package.path}/lib/$entry',
-        ],
-      );
+      // Referenced libraries still participate in transitive export linking.
+      final contexts = desktopBoundaryContexts(package);
       addTearDown(contexts.dispose);
       final forbidden = RegExp(
         r'^(Store|Helper|Domain|RemoteDomain|RemoteHelper|NativeRuntime|NativeConversation|Recording|ServiceClient|RagServiceClient|HelperChannel|HelperTransportConnector|GraphPersistence|MeetingWorkflowStore|Database|RuntimeConfiguration|GoogleAuth|GoogleConnections|SecretStore|PlatformSecretStore|configureGeneration|configureSpeech|configureDedicatedQuery|configureEncryptedDedicatedQuery|registerInstalledModels|retrieveAnswerPassages)$',
       );
-      for (final entry in entries) {
+      for (final entry in desktopBoundaryEntries) {
         final path = '${package.path}/lib/$entry';
         final session = contexts.contextFor(path).currentSession;
         final uri = session.uriConverter.pathToUri(path);

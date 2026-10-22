@@ -59,7 +59,7 @@ case "$task_gate" in
       printf 'Core benchmark order: %s then %s (run %s, attempt %s)\n' "${task_benchmark_modes[0]}" "${task_benchmark_modes[1]}" "$task_benchmark_run" "$task_benchmark_attempt"
       for task_benchmark_mode in "${task_benchmark_modes[@]}"; do
         if [[ "$task_benchmark_mode" == plain ]]; then
-          ci_timed "core benchmark without coverage" "${FORESIGHT_DART:-dart}" test --file-reporter="json:$task_reports/plain.events.jsonl"
+          ci_timed "core benchmark without coverage" "$task_root/tools/run_core_tests.sh" --file-reporter="json:$task_reports/plain.events.jsonl"
         else
           FORESIGHT_PYTHON="$task_python" ci_timed "core benchmark with coverage" "$task_root/tools/coverage_core.sh" --file-reporter="json:$task_reports/coverage.events.jsonl"
         fi
@@ -68,7 +68,7 @@ case "$task_gate" in
     elif [[ "${FORESIGHT_COVERAGE:-0}" == 1 ]]; then
       ci_timed "core tests and coverage" "$task_root/tools/coverage_core.sh" --file-reporter="json:$task_reports/core.events.jsonl"
     else
-      ci_timed "core tests" dart test --file-reporter="json:$task_reports/core.events.jsonl"
+      ci_timed "core tests" "$task_root/tools/run_core_tests.sh" --file-reporter="json:$task_reports/core.events.jsonl"
     fi
     ci_timed "core enabled-hook regression" dart -DFORESIGHT_ENABLE_TEST_HOOKS=true test --compiler=source test/platform_services_test.dart --name 'crash and delay hooks'
     fi

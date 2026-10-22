@@ -583,3 +583,57 @@ independent Claude implementation delta review and the entire applicable local
 Linux matrix. Native dependencies/protocol/SDK inputs have not changed. Desktop
 feature extraction, final Linux/HanSolo matrices, combined implementation review,
 PR checks and merge remain pending.
+
+## 1ac62bb0 full-container attempt and follow-up
+
+Claude CLI independently converged on the complete 4bd→1ac consumer-seam and
+fixture delta, with no actionable defect. Exact frozen source admission passed
+after review. Its verdict does not establish complete checkpoint acceptance;
+feature period timers/session retirement and final combined implementation review
+remain pending. Evidence: `/var/tmp/foresight-core-implementation-review-r7/`.
+
+The exact1ac source passes all seven local static commands: Ruff, mypy, subprocess
+timeouts, Dart/C++ formatting, actionlint and ShellCheck. All seven SDK component
+identities match freshly fetched main 3fb; no SDK build is justified by this delta.
+
+The complete default schedule 1 container attempt `container-attempt.zvcQdH` fails:
+native 30/30; core 1,843 passed / 14 skipped / 1 namespace timeout;
+desktop 287 passed / 17 skipped with 91.35% coverage and fast integration 2/2;
+Linux platform contracts 458 passed / 3 skipped / 1 deselected.
+The later compiled service stage did not run. Core coverage did not
+complete and no canonical output or core acceptance SHA was published. The
+narrow included-files change alone does not resolve the loaded semantic guard.
+The actual resource/event observations show a 52.06 second namespace interval for
+the configured 30 second timeout; these observations do not establish its cause.
+
+The first owned profiler failed when Docker exposed an empty CID file before
+writing its identifier. Tests continued unchanged; a separately identified late
+monitor supplied diagnostics only. Both the failed monitor and original complete
+gate failure remain preserved. A private versioned readiness fix passes21
+synthetic cases, retains exact CID/image verification, and leaves the original
+run/tool bytes untouched. Actual corrected Docker readiness remains unverified.
+
+HanSolo's original runtime requalification passes the unchanged pull and runtime
+verifier, including actual Whisper `--help`, with source and runtime bytes
+unchanged. Two original reusable full-native receipts have also been located
+through approved-final source/main-reach proofs. Preferred original artifact
+12257494567 is now quarantined and byte-qualified on HanSolo: exact original
+receipt, ZIP/payload checksums, all 3,240 paths/types/modes/links and 124 candidate
+dependency files pass verification. Current compiler compatibility, actual
+consumption and the full Mac application matrix remain unqualified; the owner's
+full-Xcode license prerequisite is still outstanding. None is a Mac application
+or model-inference acceptance result.
+
+The subsequent namespace correction reuses analyzer compiler bundles within a
+single private test invocation. The warmer and guard share the same context
+configuration; the guard still resolves actual linked library namespaces and
+retains every assertion, its default 30 second timeout and normal concurrency.
+No namespace/assertion result is persisted. All 8 runtime/fixture files pass an
+independent native review. A complete 1,329 file Git-free export passes 48 Python
+runner fixtures under each unrelated-PR/main/no-ref context, 3 actual cached-boundary
+tests, 2 direct no-cache guard tests, analyzer/format/Ruff/ShellCheck and explicit
+actionlint on all 22 workflows. Exact 134 + 5 namespace sets equal the public factory and
+frozen 1ac. Transitive additions, show/hide, conditional switching and damaged
+compiler bundles are exercised by real analyzer tests. Isolated timings are
+diagnostic; the next frozen candidate still needs Claude delta review and the
+complete canonical/local matrix before any 7A extraction.

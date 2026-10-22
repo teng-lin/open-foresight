@@ -238,6 +238,16 @@ compiler hook regression and service/MCP compilation. Reports are retained as
 `plain.events.jsonl` and `coverage.events.jsonl`. Any test, coverage or comparison
 failure stops the gate. Ordinary CI does not enable the extra benchmark run.
 
+Plain and covered core suites use `tools/run_core_tests.sh`. Each invocation
+creates a private temporary analyzer bundle store and links the two curated
+desktop entry points before test fanout. The warmer exits naturally so pending
+compiler-bundle writes finish before tests start. The semantic boundary test
+still resolves current library elements and evaluates every namespace assertion.
+Analyzer source/options/SDK signatures invalidate compiler bundles; damaged
+entries become misses. The wrapper removes its own store on exit, and each
+benchmark suite gets a fresh store. The analyzer 12.1.0 internal API is confined
+to test tooling and requires review when that dependency changes.
+
 The benchmark logs its execution order and alternates which suite runs first
 using the parity of `GITHUB_RUN_NUMBER` and `GITHUB_RUN_ATTEMPT`. Consecutive runs
 at the same attempt number reverse the order, as do retries of one run. Intervening
