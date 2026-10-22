@@ -3,7 +3,7 @@ import 'dart:io';
 
 import 'package:clock/clock.dart';
 import 'package:foresight_core/foresight_core.dart';
-import 'package:foresight_core/src/desktop_read_models.dart';
+import 'package:foresight_core/src/read_models.dart';
 import 'package:foresight_core/src/read_coordinator.dart';
 import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
 import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
