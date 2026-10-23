@@ -6,6 +6,53 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/commands.dart';
 
 void main() {
+  for (final failure in ['runner throws', 'hermetic default', 'chmod fails']) {
+    test('failed activation setup closes its listener: $failure', () async {
+      final directory = createTestTempDirectorySync('command-bind-');
+      final path = '${directory.path}/commands.sock';
+      final error = StateError('Injected chmod failure');
+      final environment = switch (failure) {
+        'runner throws' => DesktopEnvironment(run: (_, _) async => throw error),
+        'chmod fails' => DesktopEnvironment(
+          run: (_, _) async => ProcessResult(1, 1, '', 'Denied'),
+        ),
+        _ => const DesktopEnvironment(),
+      };
+      await expectLater(
+        AppCommands.bind(path, environment: environment),
+        switch (failure) {
+          'runner throws' => throwsA(same(error)),
+          'hermetic default' => throwsUnsupportedError,
+          _ => throwsA(isA<StateError>()),
+        },
+      );
+      // Check the original socket before bind can unlink it. Rebinding alone
+      // can conceal a leaked listener whose pathname has been removed.
+      Socket? unexpectedConnection;
+      try {
+        await expectLater(
+          () async => unexpectedConnection = await Socket.connect(
+            InternetAddress(path, type: InternetAddressType.unix),
+            0,
+            timeout: const Duration(seconds: 1),
+          ),
+          throwsA(isA<SocketException>()),
+        );
+      } finally {
+        unexpectedConnection?.destroy();
+      }
+      final owner = await AppCommands.bind(
+        path,
+        environment: DesktopEnvironment(
+          run: (_, _) async => ProcessResult(1, 0, '', ''),
+        ),
+        action: (_, _) async {},
+      );
+      addTearDown(owner.close);
+      expect(await AppCommands.forward(path), isTrue);
+    });
+  }
+
   test(
     'calendar return forwards to the owner and foreign schemes are rejected',
     () async {

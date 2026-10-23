@@ -13,6 +13,7 @@ Notable changes to Open Foresight are recorded here. Versions follow
 - Generate summaries from meeting-list previews, retain the selected note when a save finishes late, and finish runtime setup after an onboarding retry.
 - Show failures from settings and meeting controls, and dismiss the sign-in dialog without closing another dialog above it.
 - Keep desktop widget tests isolated from desktop shortcuts, application configuration, URI launchers and notifications.
+- Release the activation listener when desktop startup cannot protect its socket.
 
 ## [0.1.3] - 2026-10-21
 
