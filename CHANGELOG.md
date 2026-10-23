@@ -15,6 +15,7 @@ Notable changes to Open Foresight are recorded here. Versions follow
 - Keep using the bundled LiteRT worker when generation setup or registration names a retired runner.
 - Clear the approval warning after the visible desktop successfully reconnects.
 - Generate summaries from meeting-list previews, retain the selected note when a save finishes late, and finish runtime setup after an onboarding retry.
+- Keep existing notes unsavable until their body loads successfully, and preserve editor drafts when retrying a failed load.
 - Show failures from settings and meeting controls, and dismiss the sign-in dialog without closing another dialog above it.
 - Keep desktop widget tests isolated from desktop shortcuts, application configuration, URI launchers and notifications.
 - Release the activation listener when desktop startup cannot protect its socket.
