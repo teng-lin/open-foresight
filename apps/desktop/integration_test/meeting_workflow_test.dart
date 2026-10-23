@@ -13,6 +13,7 @@ import 'package:integration_test/integration_test.dart';
 import 'package:foresight_test_support/capture_poll.dart';
 import 'package:foresight_test_support/capture_process.dart';
 import 'package:open_foresight/main.dart' as app;
+import 'package:open_foresight/features/onboarding/onboarding_view.dart';
 import 'package:foresight_core/desktop.dart';
 import '../test_support/integration_persistence.dart';
 import 'package:open_foresight/features/sources/graph_rendering.dart';
@@ -113,7 +114,11 @@ Future<app.WorkspaceTestAccess> startedWorkspace(WidgetTester tester) async {
           : tester.widget<SelectableText>(details).data;
       return true;
     }
-    return find.byType(app.Workspace).evaluate().isNotEmpty;
+    // Workspace mounts before its asynchronous onboarding preferences load.
+    // Keep the same startup deadline while waiting for the actual first screen.
+    return find.byType(app.Workspace).evaluate().isNotEmpty &&
+        (find.byType(OnboardingView).evaluate().isNotEmpty ||
+            find.text('Meetings').evaluate().isNotEmpty);
   });
   if (startupFailure != null) {
     throw StateError('Desktop did not start: $startupFailure');
