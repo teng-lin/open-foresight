@@ -386,24 +386,33 @@ def test_mac_semantics_bootstrap_is_owned_verified_and_precedes_snapshot(owned):
     }
 
 
-@pytest.mark.parametrize("failure", ["refused", "unacknowledged", "replaced"])
+@pytest.mark.parametrize(
+    "failure", ["refused", "unacknowledged", "replaced", "replaced_refused"]
+)
 def test_mac_semantics_bootstrap_failure_never_reaches_ui(owned, monkeypatch, failure):
     calls = []
 
     def run(command, **_):
         calls.append(command)
-        if failure == "replaced":
+        if failure.startswith("replaced"):
             monkeypatch.setattr(gui, "process_path", lambda _: Path("/different"))
         return SimpleNamespace(
-            returncode=1 if failure == "refused" else 0,
+            returncode=1 if failure in {"refused", "replaced_refused"} else 0,
             stdout="wrong" if failure == "unacknowledged" else "ENABLED",
-            stderr="not settable" if failure == "refused" else "",
+            stderr="not settable" if failure == "refused" else "owned process changed",
         )
 
     monkeypatch.setattr(gui.subprocess, "run", run)
     with pytest.raises(RuntimeError):
         owned.host.start()
     assert len(calls) == 1 and calls[0][2] == gui.SEMANTICS_SCRIPT
+    saved = json.loads((owned.host.output / "gui-approval.json").read_text())
+    assert saved["owned_semantics_bootstrap"] == {
+        "pid": 123,
+        "exit": 1 if failure in {"refused", "replaced_refused"} else 0,
+        "stdout": "wrong" if failure == "unacknowledged" else "ENABLED",
+        "stderr": "not settable" if failure == "refused" else "owned process changed",
+    }
     assert owned.host.log.closed
     owned.host.process = None  # A replaced PID must never be used by fixture teardown.
 
@@ -489,14 +498,32 @@ def test_startup_model_setup_refusals_never_approve_an_operation(
     assert clicks == (["Cancel"] if unsafe == "no_ack" else [])
 
 
-def test_snapshot_rejects_process_replacement_after_os_call(owned, monkeypatch):
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_snapshot_rejects_process_replacement_after_os_call(
+    owned, monkeypatch, returncode
+):
     host = owned.host.start()
     gui.subprocess.run.side_effect = lambda *args, **kwargs: (
         monkeypatch.setattr(gui, "process_path", lambda _: Path("/different"))
-        or SimpleNamespace(returncode=0, stdout="BUTTON:Allow once", stderr="")
+        or SimpleNamespace(
+            returncode=returncode,
+            stdout="BUTTON:Allow once",
+            stderr="owned process vanished during OS call",
+        )
     )
     with pytest.raises(RuntimeError, match="identity"):
         host._ui()
+    saved = json.loads((host.output / "gui-approval.json").read_text())
+    assert saved["last_accessibility_result"] == {
+        "pid": 123,
+        "exit": returncode,
+        "stdout": "BUTTON:Allow once",
+        "stderr": "owned process vanished during OS call",
+    }
+    assert saved["approvals"] == []
+    if returncode:
+        assert saved["accessibility_error"] == "owned process vanished during OS call"
+        assert saved["accessibility_stdout"] == "BUTTON:Allow once"
     host.process = None
     host.log.close()
 

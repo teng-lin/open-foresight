@@ -387,11 +387,18 @@ class InstalledDesktop:
             text=True,
             timeout=min(5, self.timeout),
         )
-        self._identity()
+        self.evidence["last_accessibility_result"] = {
+            "pid": process.pid,
+            "exit": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }
         if result.returncode:
             self.evidence["accessibility_error"] = result.stderr
             self.evidence["accessibility_stdout"] = result.stdout
-            self._save()
+        self._save()
+        self._identity()
+        if result.returncode:
             raise RuntimeError(
                 "Production GUI automation unavailable: " + result.stderr.strip()
             )
@@ -406,7 +413,6 @@ class InstalledDesktop:
             text=True,
             timeout=min(5, self.timeout),
         )
-        self._identity()
         self.evidence["owned_semantics_bootstrap"] = {
             "pid": process.pid,
             "exit": result.returncode,
@@ -414,6 +420,7 @@ class InstalledDesktop:
             "stderr": result.stderr,
         }
         self._save()
+        self._identity()
         if result.returncode or result.stdout.strip() != "ENABLED":
             raise RuntimeError(
                 "Owned macOS accessibility bootstrap failed: " + result.stderr
