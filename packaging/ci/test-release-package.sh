@@ -57,7 +57,7 @@ case "$task_format" in
 esac
 install -d -o acceptance -g acceptance /home/acceptance/.local/share/open-foresight
 chown -R acceptance:acceptance /reports
-runuser -u acceptance -- python3 /work/tools/test_installed_persistence.py \
+runuser -u acceptance -- xvfb-run -a dbus-run-session -- python3 /work/tools/test_installed_persistence.py \
   --bundle /opt/open-foresight --profile /home/acceptance/.local/share/open-foresight/upgrade \
   --state /reports/upgrade-persistence.json --phase create
 case "$task_format" in
@@ -96,7 +96,7 @@ runuser -u acceptance -- xvfb-run -a dbus-run-session -- \
   python3 /work/tools/test_installed_release.py --bundle /opt/open-foresight \
   --models /models --output /reports \
   --expected-revision "$(python3 -c 'import json; print(json.load(open("/assets/installer.json"))["source_commit"])')"
-runuser -u acceptance -- python3 /work/tools/test_installed_persistence.py \
+runuser -u acceptance -- xvfb-run -a dbus-run-session -- python3 /work/tools/test_installed_persistence.py \
   --bundle /opt/open-foresight --profile /home/acceptance/.local/share/open-foresight \
   --state /reports/persistence.json --phase create
 case "$task_format" in

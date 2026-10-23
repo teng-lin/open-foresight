@@ -290,3 +290,20 @@ def test_rpm_recovery_preserves_other_formats_and_uses_current_preflight():
     assert "gh workflow run" not in source
     assert "actions/attest-build-provenance@" in source
     assert "actions/attest-sbom@" in source
+
+
+def test_persistence_creation_has_an_isolated_production_gui_session():
+    import shlex
+
+    source = (ROOT / "packaging/ci/test-release-package.sh").read_text()
+    commands = [
+        shlex.split(line)
+        for line in source.replace("\\\n", " ").splitlines()
+        if line.startswith("runuser ") and "test_installed_persistence.py" in line
+    ]
+    creates = [args for args in commands if args[-1] == "create"]
+    verifies = [args for args in commands if args[-1] == "verify"]
+    assert len(creates) == len(verifies) == 2
+    for args in creates:
+        assert args[:4] == ["runuser", "-u", "acceptance", "--"]
+        assert args[4:9] == ["xvfb-run", "-a", "dbus-run-session", "--", "python3"]
