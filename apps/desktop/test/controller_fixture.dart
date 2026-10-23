@@ -48,7 +48,29 @@ class ControllerConnection extends TestDesktopConnection {
   @override
   GoogleAccount get googleAuth => account ?? super.googleAuth;
   @override
-  Map<String, dynamic> get googleStatus => googleState ?? super.googleStatus;
+  Map<String, dynamic> get googleStatus {
+    if (googleState case final status?) return status;
+    final status = super.googleStatus;
+    // Substituted account ports must also appear in the service snapshot.
+    if (account case final current?) {
+      return {
+        ...status,
+        'connected': current.connected,
+        'configured': current.client != null,
+        'signingIn': current.signingIn,
+        'email': current.email,
+        'displayName': current.displayName,
+        'photoUrl': current.photoUrl,
+        'account': current.account,
+        'accounts': current.accounts,
+        'loadError': current.loadError,
+        if (connectedSources case final sources?)
+          'lastRefresh': sources.lastCompletedRefreshMs,
+      };
+    }
+    return status;
+  }
+
   @override
   void close() {
     closes++;
