@@ -23,12 +23,32 @@ write the database. Read-only SQLite observations acknowledge actual onboarding
 writes and verify persisted content. GUI logs and per-request approval evidence
 are retained outside disposable profiles.
 
+## Linux isolated display
+
+Linux packaging acceptance runs the installed `app/open-foresight` executable
+inside its existing isolated Xvfb and D-Bus session. The helper owns an additional
+private accessibility bus and AT-SPI registry under the disposable profile, then
+uses public libatspi observations and actions for only the verified GUI PID.
+The `at-spi2-core` distribution package supplies the registry; missing libraries,
+registry, display or session bus fail the gate. No user desktop settings change.
+
+Each observation/action runs in a bounded subprocess and rechecks the canonical
+GUI executable and same-user PID. Only the named onboarding controls and a single
+unambiguous enabled **Allow once** button can be activated. Other applications,
+pre-existing approval dialogs and capture consent are refused. Owned registry and
+bus processes are verified again before bounded shutdown; forced cleanup fails
+acceptance. Their logs and process identities remain with the GUI evidence.
+
+A successful accessibility snapshot alone establishes neither onboarding nor
+consent acceptance. Qualify those behaviors with the actual current installed
+package through the document and persistence gates.
+
 ## macOS permission prerequisite
 
 No helper changes OS Accessibility, Automation, TCC, or host configuration.
 Missing permission is a failed/unexecuted production GUI gate, never a skip or
-synthetic success. Linux production GUI automation is not implemented by this
-Mac helper and is reported explicitly as unsupported.
+synthetic success. The Linux backend above uses its private test session; it
+does not establish macOS Accessibility permission.
 
 On HanSolo, a read-only controlled query against owned Release app PID 44332 on
 2026-10-22 failed with exit 1:

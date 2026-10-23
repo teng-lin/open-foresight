@@ -119,7 +119,11 @@ def test_desktop_first_start_waits_for_delayed_service_and_retains_failures(
     owned.host.start()
     assert command.call_count == 3
     assert owned.host.evidence["service_startup_errors"] == [
-        {"returncode": 1, "stdout": f"starting {attempt}", "stderr": f"no owner {attempt}"}
+        {
+            "returncode": 1,
+            "stdout": f"starting {attempt}",
+            "stderr": f"no owner {attempt}",
+        }
         for attempt in range(2)
     ]
 
@@ -137,7 +141,9 @@ def test_service_startup_retries_share_the_original_deadline(owned, monkeypatch)
         owned.host.start()
     assert command.call_count == 2
     assert owned.host.evidence["status"] == "closed_after_failure"
-    assert owned.host.evidence["service_startup_errors"][-1]["stdout"] == "still starting"
+    assert (
+        owned.host.evidence["service_startup_errors"][-1]["stdout"] == "still starting"
+    )
     owned.process.terminate.assert_called_once()
 
 
@@ -172,7 +178,7 @@ def test_refuse_unqualified_platform_profile_environment_and_image(
     owned, monkeypatch, change
 ):
     if change == "platform":
-        monkeypatch.setattr(gui.sys, "platform", "linux")
+        monkeypatch.setattr(gui.sys, "platform", "win32")
     elif change == "public":
         owned.profile.chmod(0o755)
     elif change == "environment":
@@ -463,3 +469,96 @@ def test_private_import_roots_are_displayed_for_consent(owned):
         "preferences.set",
         {"key": "importRoots", "value": json.dumps([str(fixture)])},
     )
+
+
+@pytest.fixture
+def linux_owned(owned, monkeypatch):
+    monkeypatch.setattr(gui.sys, "platform", "linux")
+    bundle = owned.bundle.parent / "LinuxBundle"
+    (bundle / "app").mkdir(parents=True)
+    executable = bundle / "app/open-foresight"
+    executable.write_bytes(b"selected Linux fixture")
+    environment = dict(
+        owned.env, DISPLAY=":77", DBUS_SESSION_BUS_ADDRESS="unix:path=/private/session"
+    )
+    monkeypatch.setattr(gui, "process_path", lambda _: executable)
+    monkeypatch.setattr(
+        gui,
+        "service_command",
+        lambda *args: {
+            "pid": 456,
+            "installation_root": str(bundle),
+            "profile_id": hashlib.sha256(
+                str(owned.profile / "data").encode()
+            ).hexdigest()[:24],
+        },
+    )
+    accessibility = SimpleNamespace(
+        evidence={"backend": "linux_atspi"},
+        start=Mock(
+            return_value=dict(environment, AT_SPI_BUS_ADDRESS="unix:path=/private/a11y")
+        ),
+        check=Mock(),
+        close=Mock(),
+    )
+    monkeypatch.setattr(
+        gui,
+        "LinuxAccessibilitySession",
+        Mock(return_value=accessibility),
+        raising=False,
+    )
+    host = gui.InstalledDesktop(
+        bundle, owned.profile, environment, owned.host.output / "linux", timeout=0.5
+    )
+    yield host, accessibility, owned.process
+    accessibility.close.side_effect = None
+    if host.process is not None:
+        host.close()
+
+
+def test_linux_installed_gui_uses_owned_atspi_backend(linux_owned):
+    host, accessibility, _ = linux_owned
+    host.start()
+    command = gui.subprocess.run.call_args.args[0]
+    assert command == [
+        sys.executable,
+        str(Path(gui.__file__).with_name("linux_desktop_accessibility.py")),
+        "--pid",
+        "123",
+        "--executable",
+        str(host.executable),
+        "--button",
+        "",
+    ]
+    assert (
+        gui.subprocess.run.call_args.kwargs["env"]["AT_SPI_BUS_ADDRESS"]
+        == "unix:path=/private/a11y"
+    )
+    accessibility.check.assert_called()
+    host.close()
+    accessibility.close.assert_called_once()
+    assert host.evidence["accessibility"]["backend"] == "linux_atspi"
+
+
+def test_linux_accessibility_cleanup_failure_cannot_be_a_pass(linux_owned):
+    host, accessibility, _ = linux_owned
+    host.start()
+    accessibility.close.side_effect = RuntimeError("Owned a11y cleanup failed")
+    with pytest.raises(RuntimeError, match="a11y cleanup"):
+        host.close()
+    assert host.evidence["status"] == "closed_after_failure"
+    assert host.log.closed
+
+
+def test_linux_accessibility_cleanup_preserves_original_failure(linux_owned):
+    host, accessibility, process = linux_owned
+    host.start()
+    process.wait.side_effect = [subprocess.TimeoutExpired("desktop", 15), -9]
+    accessibility.close.side_effect = RuntimeError("Owned a11y cleanup failed")
+    with pytest.raises(
+        RuntimeError, match="Installed desktop required forced cleanup"
+    ) as failure:
+        host.close()
+    assert "Owned a11y cleanup failed" in failure.value.__notes__
+    assert host.evidence["status"] == "closed_after_failure"
+    host.process = None

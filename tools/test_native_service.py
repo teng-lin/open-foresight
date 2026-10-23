@@ -32,9 +32,9 @@ def main():
     args = p.parse_args()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     bundle = args.bundle.resolve()
-    if sys.platform != "darwin" or bundle.suffix != ".app":
+    if sys.platform not in ("darwin", "linux"):
         p.error(
-            "Installed GUI approvals currently require a macOS application and existing OS Accessibility permission. Linux production GUI automation is not implemented; no acceptance was run."
+            "Installed GUI approvals require Linux AT-SPI or macOS Accessibility; no acceptance was run."
         )
     protocol.MCP, service = layout(bundle)
     bundled_runner, _, _ = packaged_paths(bundle)
@@ -142,6 +142,7 @@ def main():
             ), answer
             mcp.close()
             mcp = None
+            assert desktop is not None
             desktop.close()
             desktop = None
             process.send_signal(signal.SIGTERM)

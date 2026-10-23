@@ -1,4 +1,4 @@
-"""Approve explicit disposable acceptance requests through the installed Mac GUI.
+"""Approve explicit disposable acceptance requests through the installed GUI.
 
 The Python RPC client remains external. Only the unchanged bundled desktop owns
 its approval capability. This module never reads that capability or grants OS
@@ -20,6 +20,7 @@ import sys
 import time
 
 from installed_runtime import layout, process_path, service_command
+from linux_desktop_accessibility import LinuxAccessibilitySession
 
 # These are the exact non-capture operations used by installed acceptance probes.
 APPROVABLE = frozenset(
@@ -87,9 +88,9 @@ class InstalledDesktop:
     def __init__(
         self, bundle, profile, environment, output, *, timeout: float = 30
     ) -> None:
-        if sys.platform != "darwin":
+        if sys.platform not in ("darwin", "linux"):
             raise RuntimeError(
-                "Installed GUI approval currently requires macOS Accessibility; Linux automation is not implemented"
+                "Installed GUI approval requires Linux AT-SPI or macOS Accessibility"
             )
         self.bundle: Path = Path(bundle).resolve(strict=True)
         self.profile: Path = Path(profile).resolve(strict=True)
@@ -100,6 +101,7 @@ class InstalledDesktop:
         self.timeout: float = timeout
         self.process: subprocess.Popen[bytes] | None = None
         self.log: BinaryIO | None = None
+        self.accessibility: LinuxAccessibilitySession | None = None
         self.evidence: dict[str, Any] = {
             "mode": "actual_installed_desktop_os_accessibility",
             "approvals": [],
@@ -123,14 +125,21 @@ class InstalledDesktop:
             selected = Path(self.environment.get(key, ""))
             if not selected.is_absolute() or selected.resolve() != self.profile / name:
                 raise ValueError("GUI environment does not name its private profile")
-        info = plistlib.loads((self.bundle / "Contents/Info.plist").read_bytes())
-        self.executable: Path = (
-            self.bundle / "Contents/MacOS" / info["CFBundleExecutable"]
-        ).resolve(strict=True)
-        if (
-            not self.executable.is_relative_to(self.bundle)
-            or self.bundle.suffix != ".app"
-        ):
+        if sys.platform == "darwin":
+            info = plistlib.loads((self.bundle / "Contents/Info.plist").read_bytes())
+            selected = self.bundle / "Contents/MacOS" / info["CFBundleExecutable"]
+            if self.bundle.suffix != ".app":
+                raise ValueError("Mac GUI acceptance requires its application bundle")
+        else:
+            selected = self.bundle / "app/open-foresight"
+            if not self.environment.get("DISPLAY") or not self.environment.get(
+                "DBUS_SESSION_BUS_ADDRESS"
+            ):
+                raise ValueError(
+                    "Linux GUI acceptance needs a display and D-Bus session"
+                )
+        self.executable: Path = selected.resolve(strict=True)
+        if not self.executable.is_relative_to(self.bundle):
             raise ValueError("GUI executable must belong to the selected application")
         with self.executable.open("rb") as stream:
             self.evidence["executable_sha256"] = hashlib.file_digest(
@@ -157,14 +166,32 @@ class InstalledDesktop:
 
     def _ui(self, button=""):
         process = self._identity()
+        if self.accessibility is not None:
+            self.accessibility.check()
+        command = (
+            ["/usr/bin/osascript", "-e", SCRIPT, str(process.pid), button]
+            if sys.platform == "darwin"
+            else [
+                sys.executable,
+                str(Path(__file__).with_name("linux_desktop_accessibility.py")),
+                "--pid",
+                str(process.pid),
+                "--executable",
+                str(self.executable),
+                "--button",
+                button,
+            ]
+        )
         result = subprocess.run(
-            ["/usr/bin/osascript", "-e", SCRIPT, str(process.pid), button],
+            command,
+            env=self.environment if sys.platform == "linux" else None,
             capture_output=True,
             text=True,
             timeout=min(5, self.timeout),
         )
         if result.returncode:
             self.evidence["accessibility_error"] = result.stderr
+            self.evidence["accessibility_stdout"] = result.stdout
             self._save()
             raise RuntimeError(
                 "Production GUI automation unavailable: " + result.stderr.strip()
@@ -176,6 +203,12 @@ class InstalledDesktop:
             raise RuntimeError("Installed desktop already started")
         self.log = (self.output / "desktop.log").open("wb")
         try:
+            if sys.platform == "linux":
+                self.accessibility = LinuxAccessibilitySession(
+                    self.profile, self.environment, self.output, self.timeout
+                )
+                self.evidence["accessibility"] = self.accessibility.evidence
+                self.environment = self.accessibility.start()
             self.process = subprocess.Popen(
                 [str(self.executable)],
                 cwd="/",
@@ -370,9 +403,22 @@ class InstalledDesktop:
                 "closed_after_failure" if "failure" in self.evidence else "closed"
             )
         finally:
-            if self.log is not None:
-                self.log.close()
-            self._save()
+            original = sys.exception()
+            try:
+                if self.accessibility is not None:
+                    self.accessibility.close()
+            except Exception as error:
+                self.evidence["accessibility_cleanup_error"] = str(error)
+                self.evidence.setdefault("failure", str(error))
+                self.evidence["status"] = "closed_after_failure"
+                if original is not None:
+                    original.add_note(str(error))
+                else:
+                    raise
+            finally:
+                if self.log is not None:
+                    self.log.close()
+                self._save()
 
 
 class ApprovedApplicationPeer:

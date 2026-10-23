@@ -13,17 +13,17 @@ bash /work/packaging/ci/prepare-document-sandbox.sh "$task_format" acceptance
 case "$task_format" in
   deb)
     export DEBIAN_FRONTEND=noninteractive
-    apt-get install -y --no-install-recommends python3 xvfb xauth dbus-x11 libgl1-mesa-dri libegl-mesa0 libglx-mesa0 desktop-file-utils procps
+    apt-get install -y --no-install-recommends python3 xvfb xauth dbus-x11 at-spi2-core libgl1-mesa-dri libegl-mesa0 libglx-mesa0 desktop-file-utils procps
     task_packages=(/assets/*.deb)
     [[ ${#task_packages[@]} == 1 && -f "${task_packages[0]}" ]]
     ;;
   rpm)
-    dnf install -y python3 xorg-x11-server-Xvfb xorg-x11-xauth dbus-x11 mesa-dri-drivers mesa-libEGL mesa-libGL desktop-file-utils procps-ng shadow-utils
+    dnf install -y python3 xorg-x11-server-Xvfb xorg-x11-xauth dbus-x11 at-spi2-core mesa-dri-drivers mesa-libEGL mesa-libGL desktop-file-utils procps-ng shadow-utils
     task_packages=(/assets/*.rpm)
     [[ ${#task_packages[@]} == 1 && -f "${task_packages[0]}" ]]
     ;;
   arch)
-    pacman -S --noconfirm --needed python xorg-server-xvfb xorg-xauth dbus mesa desktop-file-utils procps-ng
+    pacman -S --noconfirm --needed python xorg-server-xvfb xorg-xauth dbus at-spi2-core mesa desktop-file-utils procps-ng
     task_packages=(/assets/*.pkg.tar.zst)
     [[ ${#task_packages[@]} == 1 && -f "${task_packages[0]}" ]]
     ;;
