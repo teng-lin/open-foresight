@@ -199,7 +199,7 @@ class Recording implements RecordingStatus {
     String playbackTarget = 'auto',
     bool echoCancellation = false,
   }) {
-    requireInstalledRuntime(runtime);
+    runtime = requireInstalledRuntime(runtime);
     if (captures.isNotEmpty ||
         speeches.isNotEmpty ||
         paused ||

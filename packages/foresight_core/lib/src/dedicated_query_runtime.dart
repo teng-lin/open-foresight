@@ -89,11 +89,11 @@ class DedicatedQueryRuntime
 
   Future<void> _start() async {
     if (_process != null) return;
-    requireInstalledRuntime(python);
-    requireInstalledRuntime(worker);
+    final executable = requireInstalledRuntime(python);
+    final selectedWorker = requireInstalledRuntime(worker);
     final epoch = _epoch;
-    final process = await _startProcess(python, [
-      if (python != worker) ...['-I', '-B', worker],
+    final process = await _startProcess(executable, [
+      if (executable != selectedWorker) ...['-I', '-B', selectedWorker],
       '--model',
       model,
     ]);

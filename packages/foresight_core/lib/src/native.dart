@@ -25,7 +25,9 @@ Future<int> probeNativeModel(
   String backend = 'llama_cpp',
   int modelType = 0,
 }) async {
-  requireInstalledRuntime(runtime);
+  runtime = requireInstalledRuntime(
+    backend == 'litert_lm' ? liteRtRunner(runtime) : runtime,
+  );
   return Isolate.run(
     () => _createAndProbe(libraryPath, runtime, model, backend, modelType),
   );
@@ -243,7 +245,7 @@ class NativeRuntime implements GenerationStatus {
     String backend = 'llama_cpp',
   }) async {
     if (backend == 'litert_lm') runtime = liteRtRunner(runtime);
-    requireInstalledRuntime(runtime);
+    runtime = requireInstalledRuntime(runtime);
     if (!['llama_cpp', 'litert_lm'].contains(backend)) {
       throw ArgumentError.value(backend);
     }

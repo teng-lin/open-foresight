@@ -29,7 +29,7 @@ Future<void> configureSpeech(
   required bool Function() current,
   void Function(Process)? onProcess,
 }) async {
-  requireInstalledRuntime(runner);
+  runner = requireInstalledRuntime(runner);
   final executable = File(runner);
   if (!executable.existsSync() || (executable.statSync().mode & 0x49) == 0) {
     throw StateError('The whisper.cpp runner is missing or not executable.');

@@ -12,14 +12,16 @@ String canonicalRuntimePath(String path) =>
 /// Packaged executable selection belongs to the installation. Model data may
 /// live in the profile; executable files and Python workers may not escape the
 /// installed root through registration, stored settings or symbolic links.
-void requireInstalledRuntime(String runtime) {
+String requireInstalledRuntime(String runtime) {
   final root = configuredInstallationRoot;
-  if (root == null || runtime.trim().isEmpty) return;
-  if (!canonicalRuntimePath(runtime).startsWith('$root/')) {
+  if (root == null || runtime.trim().isEmpty) return runtime;
+  final selected = canonicalRuntimePath(runtime);
+  if (!selected.startsWith('$root/')) {
     throw RpcError(
       RpcErrorCode.denied,
       'Runtime is outside this installation. Choose the bundled runtime in '
       'model settings before retrying: $runtime',
     );
   }
+  return selected;
 }

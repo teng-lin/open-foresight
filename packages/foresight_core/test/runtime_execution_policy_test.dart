@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/dedicated_query_runtime.dart';
@@ -43,6 +44,47 @@ void main() {
       throwsA(denied),
     );
   });
+
+  test(
+    'installed query processes execute canonical runtime and worker paths',
+    () async {
+      runtimeConfiguration.environment['FORESIGHT_INSTALL_ROOT'] = root.path;
+      final report = File('${root.path}/paths');
+      final python = File('${root.path}/python')
+        ..writeAsStringSync('''#!/bin/sh
+printf '%s\\n' "\$0" > ${jsonEncode(report.path)}
+exec python3 "\$@"
+''');
+      final worker = File('${root.path}/worker.py')
+        ..writeAsStringSync('''
+import json,sys
+with open(${jsonEncode(report.path)},'a') as output: output.write(sys.argv[0]+'\\n')
+print('{"type":"ready"}',flush=True)
+for line in sys.stdin:
+ request=json.loads(line)
+ print(json.dumps({'type':'result','id':request['id'],'text':'selected'}),flush=True)
+''');
+      expect(
+        (await Process.run('/bin/chmod', ['700', python.path])).exitCode,
+        0,
+      );
+      final pythonAlias = Link('${root.path}/python-alias')
+        ..createSync(python.path);
+      final workerAlias = Link('${root.path}/worker-alias.py')
+        ..createSync(worker.path);
+      final runtime = DedicatedQueryRuntime(
+        python: pythonAlias.path,
+        worker: workerAlias.path,
+        model: '/data-only',
+      );
+      addTearDown(runtime.close);
+      expect(await runtime.complete('question', 'canonical'), 'selected');
+      expect(report.readAsLinesSync(), [
+        python.resolveSymbolicLinksSync(),
+        worker.resolveSymbolicLinksSync(),
+      ]);
+    },
+  );
 
   test(
     'restored query registrations refuse execution before spawning',

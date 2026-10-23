@@ -33,12 +33,14 @@ args=sys.argv[1:]
 with wave.open(args[args.index('-f')+1], 'rb') as wav:
  info=[wav.getnchannels(),wav.getsampwidth(),wav.getframerate(),wav.getnframes()]
 with open(${jsonEncode(report.path)},'w') as output:
- json.dump({'args':args,'audio':info},output)
+ json.dump({'args':args,'audio':info,'runner':sys.argv[0]},output)
 ''');
         expect(
           (await Process.run('/bin/chmod', ['700', runner.path])).exitCode,
           0,
         );
+        final alias = Link('${root.path}/probe-alias')..createSync(runner.path);
+        runtimeConfiguration.environment['FORESIGHT_INSTALL_ROOT'] = root.path;
         runtimeConfiguration.environment.remove('FORESIGHT_WHISPER_BACKEND');
         runtimeConfiguration.environment.remove('FORESIGHT_WHISPER_DEVICE');
         if (cpu) {
@@ -51,7 +53,7 @@ with open(${jsonEncode(report.path)},'w') as output:
         await configureSpeech(
           store,
           asset,
-          runner.path,
+          alias.path,
           sha256.convert(asset.readAsBytesSync()).toString(),
           current: () => true,
           onProcess: (process) => owned = process,
@@ -60,6 +62,11 @@ with open(${jsonEncode(report.path)},'w') as output:
         expect(await owned!.exitCode, 0);
         final observed = jsonDecode(report.readAsStringSync()) as Map;
         expect(observed['audio'], [1, 2, 16000, 16000]);
+        expect(observed['runner'], runner.resolveSymbolicLinksSync());
+        expect(
+          store.model('speech')!['runtime'],
+          runner.resolveSymbolicLinksSync(),
+        );
         final args = (observed['args'] as List).cast<String>();
         expect(
           args,
