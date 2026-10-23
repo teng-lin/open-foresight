@@ -1,3 +1,4 @@
+import 'package:open_foresight/features/sources/source_painters.dart';
 import 'package:foresight_test_support/macos_integration_runtime.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/remote.dart' show RemoteDomain;
@@ -19,8 +20,7 @@ import '../test_support/meeting_panel.dart';
 import '../test_support/file_manager_fixture.dart';
 import '../test_support/onboarding.dart';
 
-StoreReader readerFor(dynamic workspace) =>
-    (workspace.d as DesktopConnection).store;
+StoreReader readerFor(app.WorkspaceTestAccess workspace) => (workspace.d).store;
 List<Map<String, Object?>> sourceRows(StoreReader reader) => [
   for (final source in reader.sourceSummaries)
     {...source.toRow(), ...reader.sourceById(source.id)!.toRow()},
@@ -46,7 +46,7 @@ Future<void> waitUntil(
     }
     final workspaces = find.byType(app.Workspace);
     if (workspaces.evaluate().isNotEmpty) {
-      final dynamic workspace = tester.state(workspaces);
+      final workspace = tester.state(workspaces) as app.WorkspaceTestAccess;
       // Capture before the status RPC: pending work can finish while that
       // request runs, making a post-failure database artifact look successful.
       final observedAt = DateTime.now().toUtc().toIso8601String();
@@ -84,7 +84,7 @@ Future<void> waitUntil(
 /// Desktop startup connects the service before it mounts [app.Workspace].
 /// One frame is still the "Starting…" screen, so a state lookup there throws
 /// "Bad state: No element" and hides the real connection error.
-Future<dynamic> startedWorkspace(WidgetTester tester) async {
+Future<app.WorkspaceTestAccess> startedWorkspace(WidgetTester tester) async {
   await app.main();
   String? startupFailure;
   await waitUntil(tester, () {
@@ -101,12 +101,15 @@ Future<dynamic> startedWorkspace(WidgetTester tester) async {
     throw StateError('Desktop did not start: $startupFailure');
   }
   await finishOnboarding(tester);
-  return tester.state(find.byType(app.Workspace));
+  return tester.state(find.byType(app.Workspace)) as app.WorkspaceTestAccess;
 }
 
 /// Unmount first so disposal owns the pending note save and recording stop.
 /// Join its existing cleanup work instead of guessing when the next launch is safe.
-Future<void> closeWorkspace(WidgetTester tester, dynamic workspace) async {
+Future<void> closeWorkspace(
+  WidgetTester tester,
+  app.WorkspaceTestAccess workspace,
+) async {
   final saves = workspace.meetingFeature.meetingNoteSaves;
   final connection = workspace.d as RemoteDomain;
   final client = connection.client;
@@ -320,7 +323,7 @@ void main() {
       }
       final sink = env['FORESIGHT_PLAYBACK_TARGET']!;
       final fixture = env['FORESIGHT_AUDIO_FIXTURE']!;
-      final dynamic workspace = await startedWorkspace(tester);
+      final workspace = await startedWorkspace(tester);
       final receipts = IntegrationPersistenceReceipts(env['FORESIGHT_DATA']!);
       addTearDown(receipts.close);
       await waitUntil(
@@ -329,10 +332,10 @@ void main() {
             workspace.d.generator?.effectiveState['state'] == 'ready' &&
             workspace.d.helper.snapshot?.pipeline == 'ready',
       );
-      final embeddingIdentity = workspace.d.helper.snapshot.model;
-      final embeddingBackend = embeddingIdentity.backend as String;
+      final embeddingIdentity = workspace.d.helper.snapshot!.model;
+      final embeddingBackend = embeddingIdentity.backend;
       final generationBackend =
-          workspace.d.generator.effectiveState['backend'] as String;
+          workspace.d.generator!.effectiveState['backend'] as String;
       if (env['FORESIGHT_EXPECT_EMBEDDING_BACKEND'] != null)
         expect(embeddingBackend, env['FORESIGHT_EXPECT_EMBEDDING_BACKEND']);
       if (env['FORESIGHT_EXPECT_GENERATION_BACKEND'] != null)
@@ -378,7 +381,7 @@ void main() {
         tester,
         () =>
             workspace.meetingFeature.recording?.sampleCounts.length == 2 &&
-            workspace.meetingFeature.recording.sampleCounts.every(
+            workspace.meetingFeature.recording!.sampleCounts.every(
               (int n) => n > 0,
             ),
       );
@@ -402,7 +405,7 @@ void main() {
       player.stderr.drain<void>();
       await waitUntil(
         tester,
-        () => workspace.meetingFeature.recording.peakVolumes[1] > 0,
+        () => workspace.meetingFeature.recording!.peakVolumes[1] > 0,
       );
       expect(await player.exitCode, 0);
       await waitUntil(
@@ -410,7 +413,7 @@ void main() {
         () =>
             workspace.meetingFeature.recording != null &&
             (workspace.meetingFeature.provisionalTranscript.values.any(
-                  (text) => (text as String).toLowerCase().contains('country'),
+                  (text) => (text).toLowerCase().contains('country'),
                 ) ||
                 readerFor(workspace)
                     .meetingTranscript(meeting, finalOnly: true)
@@ -443,10 +446,10 @@ void main() {
         '$screenshotDirectory/09-live-transcription.png',
       );
       final counts = List<int>.from(
-        workspace.meetingFeature.recording.sampleCounts,
+        workspace.meetingFeature.recording!.sampleCounts,
       );
       final peaks = List<double>.from(
-        workspace.meetingFeature.recording.peakVolumes,
+        workspace.meetingFeature.recording!.peakVolumes,
       );
       expect(counts[0], greaterThan(0));
       expect(counts[1], greaterThan(48000));
@@ -488,12 +491,10 @@ void main() {
       );
       await tester.tap(find.text('Meetings').first);
       await tester.pumpAndSettle();
-      final transcripts =
-          readerFor(workspace)
-                  .meetingTranscript(meeting, finalOnly: true)
-                  .map((row) => row.toRow())
-                  .toList()
-              as List;
+      final transcripts = readerFor(workspace)
+          .meetingTranscript(meeting, finalOnly: true)
+          .map((row) => row.toRow())
+          .toList();
       expect(transcripts, isNotEmpty);
       final text = transcripts.map((t) => t['text']).join('\n').toLowerCase();
       expect(text, contains('country'));
@@ -588,7 +589,7 @@ void main() {
       expect(enhanced.toLowerCase(), contains('country'));
       // Release the actual widget/domain and launch a fresh one against the saved profile.
       await closeWorkspace(tester, workspace);
-      final dynamic reopened = await startedWorkspace(tester);
+      final reopened = await startedWorkspace(tester);
       await waitUntil(
         tester,
         () =>
@@ -672,11 +673,12 @@ void main() {
       await tester.pumpAndSettle();
       await waitUntil(tester, () => true);
       await captureWindow(tester, env['FORESIGHT_COPILOT_SCREENSHOT']!);
-      final cited = jsonDecode(answer['citations'] as String) as List;
+      final cited = (jsonDecode(answer['citations'] as String) as List)
+          .cast<Map>();
       final transcriptCitation = cited.firstWhere(
         (citation) => citation['document_id'] == 'meeting-$meeting',
       );
-      final citedRevision = transcriptCitation['revision'];
+      final citedRevision = transcriptCitation['revision'] as int;
       await openMeetingCitation(
         tester,
         meeting,
@@ -722,7 +724,7 @@ void main() {
         tester,
         () =>
             reopened.meetingFeature.recording?.sampleCounts.length == 2 &&
-            reopened.meetingFeature.recording.sampleCounts.every(
+            reopened.meetingFeature.recording!.sampleCounts.every(
               (int n) => n > 0,
             ),
       );
@@ -745,7 +747,7 @@ void main() {
       );
       await closeWorkspace(tester, reopened);
       expect(tester.takeException(), isNull);
-      dynamic afterCancellation = await startedWorkspace(tester);
+      var afterCancellation = await startedWorkspace(tester);
       await waitUntil(
         tester,
         () => afterCancellation.d.generator?.effectiveState['state'] == 'ready',
@@ -791,8 +793,7 @@ void main() {
       );
       final silentMeeting = afterCancellation.meetingFeature.meetingId as int;
       final activityAtStart =
-          afterCancellation.meetingFeature.recording.lastAudioActivity
-              as DateTime;
+          afterCancellation.meetingFeature.recording!.lastAudioActivity;
       var nextCheckpoint = 60;
       await waitUntil(tester, () {
         final elapsed = DateTime.now().difference(activityAtStart).inSeconds;
@@ -801,19 +802,19 @@ void main() {
             elapsed < 300 &&
             afterCancellation.meetingFeature.recording != null) {
           expect(
-            afterCancellation.meetingFeature.recording.lastAudioActivity,
+            afterCancellation.meetingFeature.recording!.lastAudioActivity,
             activityAtStart,
           );
-          expect(afterCancellation.meetingFeature.recording.finishing, false);
+          expect(afterCancellation.meetingFeature.recording!.finishing, false);
           inactivityObservations.add({
             'elapsed_seconds': elapsed,
             'recording_active': true,
             'activity_timestamp_unchanged': true,
             'sample_counts': List<int>.from(
-              afterCancellation.meetingFeature.recording.sampleCounts as List,
+              afterCancellation.meetingFeature.recording!.sampleCounts as List,
             ),
             'peak_volumes': List<double>.from(
-              afterCancellation.meetingFeature.recording.peakVolumes as List,
+              afterCancellation.meetingFeature.recording!.peakVolumes as List,
             ),
           });
           debugPrint(
@@ -1014,10 +1015,7 @@ void main() {
       // A pending source is automatically indexed when the desktop reconnects.
       // Seed a failed source in this disposable fixture profile so the graph
       // restoration check retains a text node without an embedding.
-      seedMissingGraphVector(
-        env['FORESIGHT_DATA']!,
-        unindexedGraphSource as String,
-      );
+      seedMissingGraphVector(env['FORESIGHT_DATA']!, unindexedGraphSource);
       final labelledSources = sourceRows(readerFor(afterCancellation));
       await afterCancellation.d.command(Operation.labelsSet, {
         'id': labelledSources[0]['id'],
@@ -1053,9 +1051,9 @@ void main() {
         false,
       );
       final semanticGraphPointCount =
-          afterCancellation.sourceFeature.graphPoints.length as int;
+          afterCancellation.sourceFeature.graphPoints.length;
       final semanticGraphEdgeCount =
-          afterCancellation.sourceFeature.graphEdges.length as int;
+          afterCancellation.sourceFeature.graphEdges.length;
       expect(semanticGraphEdgeCount, greaterThan(0));
       final expectedGraphEdges = <String, double>{};
       for (final edge in afterCancellation.sourceFeature.graphEdges) {
@@ -1063,7 +1061,7 @@ void main() {
         expect(edge.similarity, greaterThanOrEqualTo(.2));
         expect(edge.similarity.isFinite, true);
         expectedGraphEdges[jsonEncode([edge.source, edge.target])] =
-            edge.similarity as double;
+            edge.similarity;
       }
       expect(expectedGraphEdges.length, semanticGraphEdgeCount);
       final viewer = tester.widget<InteractiveViewer>(
@@ -1075,12 +1073,16 @@ void main() {
         tester.getSize(find.byKey(const ValueKey('source-graph-links'))),
         const Size(3000, 3000),
       );
-      final dynamic unselectedLinks = tester
-          .widget<CustomPaint>(find.byKey(const ValueKey('source-graph-links')))
-          .painter;
+      final unselectedLinks =
+          tester
+                  .widget<CustomPaint>(
+                    find.byKey(const ValueKey('source-graph-links')),
+                  )
+                  .painter
+              as SourceLinks;
       expect(unselectedLinks.edges, isEmpty);
       final persistedLayoutIdentity =
-          jsonDecode(
+          (jsonDecode(
                 receipts.graphModelIdentities
                         .map(
                           (identity) => <String, Object?>{
@@ -1091,7 +1093,7 @@ void main() {
                         .single['model_identity']
                     as String,
               )
-              as List;
+              as List);
       expect(persistedLayoutIdentity.first, graphLayoutAlgorithmVersion);
       await captureWindow(tester, '$screenshotDirectory/03-sources-graph.png');
       final graphNodes = find.byWidgetPredicate(
@@ -1156,7 +1158,7 @@ void main() {
         );
         final id = afterCancellation.sourceFeature.graphSelectedDocument;
         if (id == null) continue;
-        final rows = sourceRows(readerFor(afterCancellation)) as List;
+        final rows = sourceRows(readerFor(afterCancellation));
         selectedUri =
             rows.singleWhere((row) => row['id'] == id)['source_uri'] as String;
         if (Uri.tryParse(selectedUri)?.scheme == 'file' &&
@@ -1221,9 +1223,13 @@ void main() {
           await fileManager.close();
         }
       }
-      final dynamic selectedLinks = tester
-          .widget<CustomPaint>(find.byKey(const ValueKey('source-graph-links')))
-          .painter;
+      final selectedLinks =
+          tester
+                  .widget<CustomPaint>(
+                    find.byKey(const ValueKey('source-graph-links')),
+                  )
+                  .painter
+              as SourceLinks;
       expect(selectedLinks.edges, isNotEmpty);
       for (final edge in selectedLinks.edges) {
         expect(
@@ -1238,8 +1244,7 @@ void main() {
         expectGraphSelection: true,
       );
       final beforeInlineOrganization = {
-        for (final entry
-            in (afterCancellation.sourceFeature.graphPoints as Map).entries)
+        for (final entry in afterCancellation.sourceFeature.graphPoints.entries)
           entry.key: [entry.value.x, entry.value.y, entry.value.z],
       };
       await tester.tap(find.byKey(const ValueKey('inspector-add-label')));
@@ -1267,7 +1272,7 @@ void main() {
       expect(afterCancellation.error, isEmpty);
       expect(afterCancellation.sourceFeature.graphLabelInput.text, isEmpty);
       expect(
-        (afterCancellation.sourceFeature.graphPoints as Map).entries.any(
+        afterCancellation.sourceFeature.graphPoints.entries.any(
           (entry) =>
               (entry.value.x - beforeInlineOrganization[entry.key]![0]).abs() >
                   1e-6 ||
@@ -1325,7 +1330,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(afterCancellation.error, isEmpty);
-      final organizationRows = receipts.labels(name: 'Apollo') as List;
+      final organizationRows = receipts.labels(name: 'Apollo');
       expect(organizationRows, isNotEmpty);
       expect(
         organizationRows.any((row) => row['label_source'] == 'user_defined'),
@@ -1354,7 +1359,7 @@ void main() {
       await tester.pumpAndSettle();
       final expectedClusters = receipts.clusters();
       final expectedLabels = receipts.labels();
-      final savedGraphRows = receipts.graphEmbeddingReceipts as List;
+      final savedGraphRows = receipts.graphEmbeddingReceipts;
       expect(savedGraphRows.length, semanticGraphPointCount);
       expect(
         savedGraphRows.every(
@@ -1420,7 +1425,7 @@ void main() {
       expect(receipts.labels(), expectedLabels);
       expect(receipts.clusters(), expectedClusters);
       for (final entry in expectedGraph.entries) {
-        final point = afterCancellation.sourceFeature.graphPoints[entry.key];
+        final point = afterCancellation.sourceFeature.graphPoints[entry.key]!;
         expect([point.x, point.y, point.z], entry.value);
       }
       expect(

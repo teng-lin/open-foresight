@@ -6,8 +6,7 @@ import 'package:foresight_core/remote.dart'
     show StoreReader, HelperStatus, DesktopModelAssets;
 import 'dart:async';
 import 'package:foresight_core/foresight_core.dart';
-import 'package:foresight_core/src/application.dart';
-import 'package:foresight_core/src/rpc_error.dart';
+import '../test_support/core_fixture.dart';
 
 /// Explicit test adapter for the desktop capability contract. Production only
 /// constructs RemoteDomain; widget fixtures can control core services directly.

@@ -1,13 +1,12 @@
-import 'package:foresight_core/src/application.dart';
+import '../test_support/core_fixture.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/remote.dart';
 import 'package:foresight_test_support/test_paths.dart';
-import 'package:foresight_core/src/domain.dart';
-import 'package:foresight_core/src/audio_devices.dart';
+
 import 'package:open_foresight/main.dart';
-import 'package:foresight_core/src/store.dart';
+
 import 'desktop_connection_fixture.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
@@ -164,7 +163,7 @@ class ControllerFixture {
   final Directory root;
   final Store store;
   final ControllerConnection connection;
-  final dynamic shell;
+  final WorkspaceTestAccess shell;
   ControllerFixture(this.root, this.store, this.connection, this.shell);
   static Future<ControllerFixture> mount(
     WidgetTester tester, {
@@ -189,7 +188,7 @@ class ControllerFixture {
       root,
       store,
       connection,
-      tester.state(find.byType(Workspace)),
+      tester.state(find.byType(Workspace)) as WorkspaceTestAccess,
     );
     addTearDown(() async {
       await tester.pumpWidget(const SizedBox());

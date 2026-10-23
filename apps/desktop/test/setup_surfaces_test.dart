@@ -129,7 +129,7 @@ void main() {
     'onboarding errors retain progress, reject concurrent actions and expose source status',
     (tester) async {
       final f = await ControllerFixture.mount(tester);
-      final dynamic onboarding = f.shell.onboardingFeature;
+      final onboarding = f.shell.onboardingFeature;
       for (final (state, expected) in [
         ('pending', 'Waiting for model setup'),
         ('indexing', 'Indexing…'),
@@ -161,7 +161,7 @@ void main() {
         'Waiting to index',
       );
       final gate = Completer<void>();
-      final action = onboarding.perform(() => gate.future) as Future<void>;
+      final action = onboarding.perform(() => gate.future);
       var concurrent = false;
       await onboarding.perform(() async {
         concurrent = true;

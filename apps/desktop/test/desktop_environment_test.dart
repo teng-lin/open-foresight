@@ -1,10 +1,8 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/desktop.dart';
-import 'package:foresight_core/src/application.dart';
-import 'package:foresight_core/src/domain.dart';
-import 'package:foresight_core/src/store.dart';
+import '../test_support/core_fixture.dart';
+
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/desktop_environment.dart';
 import 'package:open_foresight/features/sources/file_discovery_sheet.dart';
@@ -213,7 +211,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    final dynamic shell = tester.state(find.byType(Workspace));
+    final shell = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
     final discovery = shell.sourceFeature.findFilesOnComputer();
     // Selecting real folders starts asynchronous filesystem scanning. Inspect
     // the selected roots without waiting on its animated progress indicator.
@@ -281,7 +279,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      final dynamic shell = tester.state(find.byType(Workspace));
+      final shell = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       await tester.runAsync(() async {
         await shell.integrationFeature.activateWindow(null);
         await shell.integrationFeature.enableGlobalShortcuts();

@@ -22,7 +22,7 @@ void main() {
       final refresh = RefreshStatusSources();
       f.connection.connectedSources = refresh;
       f.connection.googleState = {'syncing': true};
-      final dynamic integration = f.shell.integrationFeature;
+      final integration = f.shell.integrationFeature;
       expect(integration.googleSyncStatus(), 'Syncing…');
       f.connection.googleState = {};
       expect(integration.googleSyncStatus(), 'Not synced yet');
@@ -70,7 +70,7 @@ void main() {
     'capability refresh and microphone requests report denial, malformed bundle and retry',
     (tester) async {
       final f = await ControllerFixture.mount(tester);
-      final dynamic integration = f.shell.integrationFeature;
+      final integration = f.shell.integrationFeature;
       for (final (code, label) in [
         ('authorized', 'Allowed'),
         ('denied', 'Denied'),
@@ -113,7 +113,7 @@ void main() {
         'request disconnected',
       );
       await expectLater(
-        integration.requestMicrophoneAccess() as Future<void>,
+        integration.requestMicrophoneAccess(),
         throwsStateError,
       );
       expect(
@@ -151,17 +151,15 @@ void main() {
       f.connection.replies[Operation.audioRequestSystem] = {
         'system_audio_request': 'completed',
       };
-      final dynamic integration = f.shell.integrationFeature;
-      final setup = integration.setupSystemAudioAccess() as Future<bool>;
+      final integration = f.shell.integrationFeature;
+      final setup = integration.setupSystemAudioAccess();
       await tester.pumpAndSettle();
       await tester.tap(find.text('Done'));
       await tester.pumpAndSettle();
       expect(await setup, true);
       expect(f.store.preference('audio.systemSetupReviewed'), 'true');
       expect(integration.systemAudioSetupComplete, true);
-      final again =
-          integration.setupSystemAudioAccess(forRecording: true)
-              as Future<bool>;
+      final again = integration.setupSystemAudioAccess(forRecording: true);
       await tester.pumpAndSettle();
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
@@ -172,7 +170,7 @@ void main() {
     'notification preferences persist and unavailable service errors remain visible',
     (tester) async {
       final f = await ControllerFixture.mount(tester);
-      final dynamic integration = f.shell.integrationFeature;
+      final integration = f.shell.integrationFeature;
       await integration.setNotifications(true);
       expect(f.store.preference('notifications'), 'true');
       expect(integration.notifications, true);
@@ -208,7 +206,7 @@ void main() {
     'menu navigation, shortcut editing and activation errors are controlled',
     (tester) async {
       final f = await ControllerFixture.mount(tester);
-      final dynamic integration = f.shell.integrationFeature;
+      final integration = f.shell.integrationFeature;
       final messenger =
           TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
       const channel = MethodChannel('foresight/window');
@@ -225,7 +223,7 @@ void main() {
       }
       await integration.activateMenuCommand('unknown');
       expect(f.shell.tab, WorkspaceTab.meetings);
-      var editing = integration.changeQuickShortcut() as Future<void>;
+      var editing = integration.changeQuickShortcut();
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField).last, 'alt+shift+2');
       await tester.tap(find.text('Save shortcut'));
@@ -233,7 +231,7 @@ void main() {
       await editing;
       expect(f.store.preference('quickShortcut'), 'ALT + SHIFT + 2');
       expect(integration.quickActivator.alt, true);
-      editing = integration.changeQuickShortcut() as Future<void>;
+      editing = integration.changeQuickShortcut();
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField).last, 'CTRL+F');
       await tester.tap(find.text('Save shortcut'));
@@ -241,7 +239,7 @@ void main() {
       await editing;
       expect(f.shell.error, contains('at least two modifiers'));
       expect(f.store.preference('quickShortcut'), 'ALT + SHIFT + 2');
-      editing = integration.changeQuickShortcut() as Future<void>;
+      editing = integration.changeQuickShortcut();
       await tester.pumpAndSettle();
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
@@ -266,7 +264,7 @@ void main() {
           return [];
         },
       );
-      final dynamic integration = f.shell.integrationFeature;
+      final integration = f.shell.integrationFeature;
       await integration.refreshAudioDevices();
       expect(
         integration.audioDeviceState,

@@ -1,15 +1,14 @@
-import 'package:foresight_core/src/application.dart';
+import '../test_support/core_fixture.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/commands.dart';
-import 'package:foresight_core/src/domain.dart';
+
 import 'package:open_foresight/main.dart';
 import 'package:open_foresight/desktop_environment.dart';
-import 'package:foresight_core/src/profile_paths.dart';
-import 'package:foresight_core/src/store.dart';
+
 import 'controller_fixture.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 import 'pump_until.dart';
@@ -65,7 +64,7 @@ void main() {
       );
       expect(attempts, 1);
       expect(connected.closes, 0);
-      final dynamic shell = tester.state(find.byType(Workspace));
+      final shell = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       expect(shell.integrationFeature.commands, isNotNull);
       await tester.runAsync(
         () => AppCommands.forward(

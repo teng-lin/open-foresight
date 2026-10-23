@@ -50,7 +50,8 @@ class HyprShortcuts {
           (mask, key) =>
               mask | {'SHIFT': 1, 'CTRL': 4, 'ALT': 8, 'SUPER': 64}[key]!,
         );
-    for (final bind in jsonDecode(live.stdout as String) as List) {
+    for (final bind
+        in (jsonDecode(live.stdout as String) as List).cast<Map>()) {
       if (bind['modmask'] == mask &&
           (bind['key'] as String).toUpperCase() == parts.last &&
           bind['description'] != 'Foresight quick meeting')

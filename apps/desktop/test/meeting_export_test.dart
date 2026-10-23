@@ -1,7 +1,7 @@
 import 'store_reader_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
-import 'package:foresight_core/src/application.dart';
+import '../test_support/core_fixture.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,8 +10,7 @@ import 'package:intl/date_symbol_data_local.dart';
 import 'package:intl/intl.dart';
 import 'package:open_foresight/features/meetings/meeting_export.dart';
 import 'package:open_foresight/generated_content.dart';
-import 'package:foresight_core/src/store.dart';
-import 'package:foresight_core/src/domain.dart';
+
 import 'package:open_foresight/main.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
@@ -572,10 +571,12 @@ void main() {
     () async {
       await initializeDateFormatting('fr_FR');
       meeting('Réunion', DateTime(2026, 10, 12, 15, 19), notes: 'Compte rendu');
-      final result = Intl.withLocale(
-        'fr_FR',
-        () => composeMeetingExport(fixtureReader(store)),
-      );
+      final result =
+          Intl.withLocale<MeetingExportContent>(
+                'fr_FR',
+                () => composeMeetingExport(fixtureReader(store)),
+              )
+              as MeetingExportContent;
       expect(
         result.markdown,
         '## Réunion\noct. 12, 2026 3:19pm\n\nCompte rendu\n',
@@ -805,7 +806,7 @@ void main() {
         expect(call.method, 'getSavePath');
         final args = call.arguments as Map;
         expect(args['suggestedName'], 'meeting_notes.md');
-        final types = args['acceptedTypeGroups'] as List;
+        final types = (args['acceptedTypeGroups'] as List).cast<Map>();
         expect(types.single['label'], 'Markdown');
         expect(types.single['extensions'], ['md']);
         calls++;

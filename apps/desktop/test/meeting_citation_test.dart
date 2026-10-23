@@ -1,11 +1,8 @@
 import 'package:foresight_test_support/test_paths.dart';
-import 'package:foresight_core/src/application.dart';
+import '../test_support/core_fixture.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/src/domain.dart';
-import 'package:foresight_core/src/helper.dart';
-import 'package:foresight_core/src/store.dart';
 
 void main() {
   test(

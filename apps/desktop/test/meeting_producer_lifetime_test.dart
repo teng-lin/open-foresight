@@ -3,10 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/foresight_core.dart';
-import 'package:foresight_core/src/application.dart';
-import 'package:foresight_core/remote.dart'
-    show Operation, RpcError, RpcErrorCode;
+import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/main.dart';
 import 'package:open_foresight/generated_content.dart';
@@ -124,7 +121,8 @@ void main() {
           await tester.pumpWidget(
             Foresight(connection, deviceLoader: () async => []),
           );
-          final dynamic shell = tester.state(find.byType(Workspace));
+          final shell =
+              tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
           final panel = {
             'summary': 'Summary',
             'actions': 'Action items',

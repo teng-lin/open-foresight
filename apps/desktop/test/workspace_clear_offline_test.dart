@@ -4,11 +4,10 @@ import 'package:foresight_test_support/remote_service.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/src/application.dart';
-import 'package:foresight_core/src/domain.dart';
-import 'package:foresight_core/src/google_auth.dart';
+import '../test_support/core_fixture.dart';
+
 import 'package:open_foresight/main.dart';
-import 'package:foresight_core/src/store.dart';
+
 import 'desktop_connection_fixture.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
@@ -44,13 +43,13 @@ void main() {
       Foresight(fixture.remote, deviceLoader: () async => []),
     );
     await tester.pumpAndSettle();
-    final dynamic state = tester.state(find.byType(Workspace));
+    final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
     state.sourceFeature.noteTitle.text = 'Local title';
     state.sourceFeature.noteBody.text = 'Local body';
     state.meetingFeature.meetingNotesController.text = 'Local meeting notes';
     state.sourceFeature.sourceSearchController.text = 'Local search';
     state.chatFeature.answer = 'Local answer';
-    final clear = state.settingsFeature.clearWorkspace() as Future<void>;
+    final clear = state.settingsFeature.clearWorkspace();
     await tester.pumpAndSettle();
     await tester.tap(find.text('Delete workspace'));
     await tester.pump();
@@ -82,8 +81,8 @@ void main() {
       Foresight(TestDesktopConnection(app), deviceLoader: () async => []),
     );
     await tester.pumpAndSettle();
-    final dynamic state = tester.state(find.byType(Workspace));
-    final clear = state.settingsFeature.clearWorkspace() as Future<void>;
+    final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
+    final clear = state.settingsFeature.clearWorkspace();
     await tester.pumpAndSettle();
     await tester.tap(find.text('Delete workspace'));
     await tester.pumpAndSettle();

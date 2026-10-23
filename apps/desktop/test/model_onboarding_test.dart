@@ -5,10 +5,9 @@ import 'package:foresight_test_support/poll.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/src/gemma_download.dart';
+import '../test_support/core_fixture.dart';
 import 'package:open_foresight/features/settings/gemma_setup_view.dart';
 import 'package:open_foresight/model_setup.dart';
-import 'package:foresight_core/src/store.dart';
 
 class LocalDownload extends GemmaDownload {
   final File asset;

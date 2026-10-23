@@ -2,8 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/remote.dart';
-import 'package:foresight_core/src/answer_source_scope.dart';
+import '../test_support/core_fixture.dart';
 import 'controller_fixture.dart';
 import 'pump_until.dart';
 
@@ -22,8 +21,7 @@ void main() {
         final response = StreamController<String>(sync: true);
         f.connection.answerStream = (_, __, ___) => response.stream;
         f.shell.chatFeature.questionFor(id).text = 'Original question';
-        final work =
-            f.shell.chatFeature.askQuestion(meetingScope: id) as Future<void>;
+        final work = f.shell.chatFeature.askQuestion(meetingScope: id);
         var settled = false;
         unawaited(
           work.then<void>((_) {

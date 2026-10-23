@@ -4,7 +4,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:foresight_core/src/platform_services.dart';
+import 'core_fixture.dart';
 
 import 'file_manager_fixture.dart';
 

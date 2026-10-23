@@ -3,9 +3,8 @@ import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/src/gemma_download.dart';
+import '../test_support/core_fixture.dart';
 import 'package:open_foresight/features/settings/gemma_setup_view.dart';
-import 'package:foresight_core/src/store.dart';
 
 void main() {
   for (final generation in [false, true]) {

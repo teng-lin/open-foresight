@@ -1,14 +1,15 @@
-import 'package:foresight_core/src/application.dart';
+import 'package:open_foresight/features/sources/source_painters.dart';
+import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/src/graph_layout.dart';
+
 import 'package:open_foresight/features/sources/graph_rendering.dart';
 import 'package:open_foresight/main.dart';
-import 'package:foresight_core/src/store.dart';
-import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
+
+import '../test_support/core_fixture.dart' as control;
 import 'graph_workflow_test.dart' show GraphDomain;
 import 'meeting_setup_test.dart' show OfflineHelper;
 
@@ -84,7 +85,7 @@ void main() {
           ),
         unrelated: [-1, ...List.filled(7, 0)],
       });
-      final dynamic state = tester.state(find.byType(Workspace));
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       Future<void> waitUntil(bool Function() ready) async {
         for (
           final pollingClock = Stopwatch()..start();
@@ -113,12 +114,14 @@ void main() {
       });
       await tester.pumpAndSettle();
       List<GraphEdge> visibleEdges() {
-        final dynamic painter = tester
-            .widget<CustomPaint>(
-              find.byKey(const ValueKey('source-graph-links')),
-            )
-            .painter;
-        return (painter.edges as List).cast<GraphEdge>();
+        final painter =
+            tester
+                    .widget<CustomPaint>(
+                      find.byKey(const ValueKey('source-graph-links')),
+                    )
+                    .painter
+                as SourceLinks;
+        return painter.edges;
       }
 
       bool dimmed(String id) =>
@@ -200,7 +203,7 @@ void main() {
       await tester.tap(find.byTooltip('Resume graph animation'));
       await tester.pump();
       await tester.pump();
-      final before = state.sourceFeature.graphYaw as double;
+      final before = state.sourceFeature.graphYaw;
       await tester.pump(const Duration(seconds: 1));
       expect(state.sourceFeature.graphYaw - before, closeTo(.025, 1e-6));
       await tester.tapAt(
@@ -209,7 +212,7 @@ void main() {
       await tester.pump();
       await tester.pump();
       expect(state.sourceFeature.graphSelectedDocument, center);
-      final selectedYaw = state.sourceFeature.graphYaw as double;
+      final selectedYaw = state.sourceFeature.graphYaw;
       await tester.pump(const Duration(seconds: 1));
       expect(state.sourceFeature.graphYaw - selectedYaw, closeTo(.00125, 1e-6));
       await tester.tapAt(

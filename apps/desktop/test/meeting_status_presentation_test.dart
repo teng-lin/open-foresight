@@ -10,7 +10,7 @@ void main() {
     'capture elapsed fallback distinguishes missing time from an explicit zero',
     (tester) async {
       final f = await ControllerFixture.mount(tester);
-      final dynamic feature = f.shell.meetingFeature;
+      final feature = f.shell.meetingFeature;
       final began = DateTime.now().subtract(const Duration(seconds: 10));
       f.connection.captureState = {
         'active': true,
@@ -21,7 +21,7 @@ void main() {
         feature.recordingElapsed,
         Duration(
           milliseconds:
-              (feature.recordingElapsedAt as DateTime).millisecondsSinceEpoch -
+              (feature.recordingElapsedAt).millisecondsSinceEpoch -
               began.millisecondsSinceEpoch,
         ),
       );
@@ -45,7 +45,7 @@ void main() {
       final id = f.store.meeting('Typed notes');
       f.store.artifact(id, 'enhanced_notes', 'Accepted notes', 'fixture');
       f.store.saveMeetingNotes(id, 'Raw notes');
-      final dynamic feature = f.shell.meetingFeature;
+      final feature = f.shell.meetingFeature;
       Future<void> publish(Map<String, Object?> preview) async {
         f.connection.captureState = {
           'note_enhancements': {'$id': preview},

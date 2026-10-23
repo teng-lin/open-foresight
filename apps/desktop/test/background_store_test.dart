@@ -3,7 +3,7 @@ import 'package:foresight_test_support/test_paths.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/features/settings/output_statistics.dart';
 import 'package:open_foresight/features/sources/background_store.dart';
-import 'package:foresight_core/src/store.dart';
+import '../test_support/core_fixture.dart';
 
 void main() {
   test(

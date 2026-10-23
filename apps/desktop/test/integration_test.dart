@@ -1,16 +1,11 @@
 import 'package:foresight_test_support/test_paths.dart';
-import 'package:foresight_core/src/application.dart';
+import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/poll.dart';
 import 'dart:io';
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/src/store.dart';
-import 'package:foresight_core/src/domain.dart';
-import 'package:foresight_core/src/helper.dart';
-import 'package:foresight_core/src/native.dart';
-import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
-import 'package:foresight_core/src/generated/helper_control.pbgrpc.dart'
-    as control;
+
+import '../test_support/core_fixture.dart' as control;
 
 void main() {
   test(
@@ -75,8 +70,8 @@ void main() {
         );
         expect(answer['body'], contains('May'));
         expect(
-          (jsonDecode(answer['citations'] as String) as List)
-              .single['document_id'],
+          ((jsonDecode(answer['citations'] as String) as List).single
+              as Map)['document_id'],
           id,
         );
         store.saveNote(null, 'Review', 'User edits survive');

@@ -1,15 +1,13 @@
-import 'package:foresight_core/src/application.dart';
+import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
-import 'package:foresight_core/src/operations.dart';
-import 'package:foresight_core/src/agent_access.dart';
-import 'package:foresight_core/src/rpc_error.dart';
+
 import 'desktop_connection_fixture.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/main.dart';
-import 'package:foresight_core/src/store.dart';
+
 import 'package:open_foresight/features/settings/speech_setup_view.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 import 'package:open_foresight/commands.dart';
@@ -245,7 +243,7 @@ void main() {
       await tester.tap(find.text('Start transcribing'));
       await tester.pumpAndSettle();
       expect(find.byType(SpeechSetupDialog), findsOneWidget);
-      final dynamic state = tester.state(find.byType(Workspace));
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       start();
       expect(find.byType(SpeechSetupDialog), findsOneWidget);
       expect(store.rows('SELECT * FROM meetings'), isEmpty);
@@ -283,7 +281,7 @@ void main() {
         1,
       );
       expect(store.rows('SELECT * FROM meetings').length, 1);
-      final dynamic state = tester.state(find.byType(Workspace));
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       expect(state.busy, false);
       expect(tester.takeException(), isNull);
       await dispose(tester);
@@ -296,7 +294,7 @@ void main() {
       await tester.runAsync(registerSpeech);
       final meeting = store.meeting('Existing meeting');
       await show(tester);
-      final dynamic state = tester.state(find.byType(Workspace));
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       state.update(() => state.meetingFeature.meetingId = meeting);
       await tester.pumpAndSettle();
       await tester.tap(find.text('Start transcribing'));
@@ -321,7 +319,7 @@ void main() {
       await show(tester);
       await tester.tap(find.text('Start transcribing'));
       await tester.pumpAndSettle();
-      final dynamic state = tester.state(find.byType(Workspace));
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       expect(state.error, contains('disconnected'));
       expect(domain.operations, isNot(contains('meetings.start')));
       await tester.tap(find.text('Start transcribing'));
@@ -358,10 +356,10 @@ void main() {
         await tester.runAsync(registerSpeech);
         final meeting = store.meeting('Existing meeting');
         await show(tester);
-        final dynamic state = tester.state(find.byType(Workspace));
+        final state =
+            tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
         // As the Start button does; it stops at the access check.
-        final started =
-            state.meetingFeature.recordExistingMeeting(meeting) as Future<void>;
+        final started = state.meetingFeature.recordExistingMeeting(meeting);
         expect(state.meetingFeature.meetingId, meeting);
         if (closedBy == 'a workspace clear') {
           // Another client clears the workspace; this desktop resets.
@@ -400,7 +398,7 @@ void main() {
           .onPressed!;
       await tester.tap(find.text('Start transcribing'));
       await tester.pump();
-      final dynamic state = tester.state(find.byType(Workspace));
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       start();
       expect(
         domain.operations
@@ -439,7 +437,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(store.rows('SELECT id FROM meetings').single['id'], meeting);
       expect(domain.operations, isNot(contains('meetings.start')));
-      final dynamic state = tester.state(find.byType(Workspace));
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       expect(state.busy, false);
       expect(tester.takeException(), isNull);
       await dispose(tester);
@@ -496,7 +494,7 @@ void main() {
       );
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
-      final dynamic state = tester.state(find.byType(Workspace));
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       expect(state.busy, false);
       expect(store.rows('SELECT * FROM meetings'), isEmpty);
       domain.systemGate!.complete({
@@ -521,7 +519,7 @@ void main() {
       await tester.tap(find.text('Start transcribing'));
       await tester.pumpAndSettle();
 
-      final dynamic state = tester.state(find.byType(Workspace));
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       expect(
         state.integrationFeature.captureCapabilities.microphone,
         'authorized',

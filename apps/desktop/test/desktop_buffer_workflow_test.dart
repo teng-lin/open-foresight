@@ -7,9 +7,9 @@ import 'package:flutter/gestures.dart' show kDoubleTapTimeout;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/remote.dart';
-import 'package:foresight_core/src/google_auth.dart';
+import '../test_support/core_fixture.dart';
 import 'package:open_foresight/features/meetings/meeting_export.dart';
-import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
+import '../test_support/core_fixture.dart' as control;
 import 'controller_fixture.dart';
 import 'pump_until.dart';
 
@@ -584,15 +584,11 @@ void main() {
           f.connection.fileFailures[paths[1]] = StateError(
             'Parser rejected file',
           );
-        final pending =
-            f.shell.run(
-                  () =>
-                      f.shell.sourceFeature.findLocalFiles(
-                            roots: <String>[selected.path],
-                          )
-                          as Future<void>,
-                )
-                as Future<void>;
+        final pending = f.shell.run(
+          () => f.shell.sourceFeature.findLocalFiles(
+            roots: <String>[selected.path],
+          ),
+        );
         await tester.pump();
         await pumpUntil(
           tester,

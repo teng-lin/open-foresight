@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/desktop.dart';
-import 'package:foresight_core/src/application.dart';
-import 'package:foresight_core/src/domain.dart';
-import 'package:foresight_core/src/store.dart';
+import '../test_support/core_fixture.dart';
+
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/main.dart';
 import 'package:open_foresight/shell/workspace_tab.dart';
@@ -66,7 +65,8 @@ void main() {
           Foresight(connection, deviceLoader: () async => []),
         );
         await tester.pumpAndSettle();
-        final dynamic shell = tester.state(find.byType(Workspace));
+        final shell =
+            tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
         shell.update(() => shell.navigate(WorkspaceTab.models));
         await tester.pumpAndSettle();
         expect(

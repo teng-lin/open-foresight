@@ -1,5 +1,5 @@
 import 'package:foresight_core/remote.dart';
-import 'package:foresight_core/src/graph_labels.dart';
+import 'core_fixture.dart';
 
 /// Counts typed boundary admissions. Fixture worker counts do not prove isolate placement.
 final class ReaderAdmissions {

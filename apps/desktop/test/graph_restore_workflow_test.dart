@@ -1,12 +1,11 @@
-import 'package:foresight_core/src/application.dart';
+import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/main.dart';
-import 'package:foresight_core/src/store.dart';
-import 'package:foresight_core/src/graph_labels.dart';
-import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
+
+import '../test_support/core_fixture.dart' as control;
 import 'graph_workflow_test.dart' show GraphDomain;
 import 'meeting_setup_test.dart' show OfflineHelper;
 
@@ -102,7 +101,8 @@ void main() {
           final pollingClock = Stopwatch()..start();
           pollingClock.elapsed < const Duration(seconds: 5);
         ) {
-          final dynamic state = tester.state(find.byType(Workspace));
+          final state =
+              tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
           if (!state.sourceFeature.graphOrganizing &&
               state.sourceFeature.graphPoints.length == count)
             return;
@@ -120,7 +120,8 @@ void main() {
         b: [.8, .6, 0],
       });
       await waitForPoints(2);
-      final dynamic firstState = tester.state(find.byType(Workspace));
+      final firstState =
+          tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       expect(firstState.sourceFeature.graphEdges.length, 1);
       expect(store.rows('SELECT * FROM graph_documents').length, 2);
       final beforeLabelChanges = store.rows(
@@ -181,7 +182,7 @@ void main() {
       second.helper.snapshot = control.State(pipeline: 'failed');
       await showGraph(second);
       await waitForPoints(2);
-      final dynamic state = tester.state(find.byType(Workspace));
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       expect(state.sourceFeature.graphOrganizing, false);
       expect(second.requests, isEmpty);
       expect(state.sourceFeature.graphPoints.length, 2);
@@ -191,7 +192,7 @@ void main() {
         closeTo(.8, 1e-6),
       );
       for (final entry in expected.entries) {
-        expect(state.sourceFeature.graphPoints[entry.key].x, entry.value);
+        expect(state.sourceFeature.graphPoints[entry.key]!.x, entry.value);
       }
       // Cached rendering works without a live engine; readiness still validates
       // the backend/preprocessing identity before any new organization.
@@ -211,7 +212,7 @@ void main() {
       state.update(() {});
       await tester.pumpAndSettle();
       expect(second.requestedIds.single, [c]);
-      expect(state.sourceFeature.graphPoints[a].x, expected[a]);
+      expect(state.sourceFeature.graphPoints[a]!.x, expected[a]);
       second.requests.single.complete({
         c: [0, 0, 1],
       });

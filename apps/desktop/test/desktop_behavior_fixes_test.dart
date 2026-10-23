@@ -1,12 +1,13 @@
+import 'package:open_foresight/desktop_visuals.dart';
+import 'package:open_foresight/features/integrations/widgets.dart';
+import 'package:open_foresight/features/onboarding/onboarding_view.dart';
 import 'package:open_foresight/shell/workspace_tab.dart';
 import 'dart:async';
 import 'account_menu_workflow_test.dart' show SignedInAccount;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/desktop.dart';
-import 'package:foresight_core/src/application.dart';
-import 'package:foresight_core/src/domain.dart';
-import 'package:foresight_core/src/store.dart';
+import '../test_support/core_fixture.dart';
+
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/main.dart';
 import 'package:open_foresight/features/integrations/google_sign_in_dialog.dart';
@@ -53,7 +54,7 @@ class _HeldConnection extends ControllerConnection {
 }
 
 void main() {
-  Future<(_HeldConnection, dynamic, Store)> mount(
+  Future<(_HeldConnection, WorkspaceTestAccess, Store)> mount(
     WidgetTester tester, {
     bool failInitialize = false,
   }) async {
@@ -78,13 +79,17 @@ void main() {
       await tester.pumpAndSettle();
       await tester.binding.setSurfaceSize(null);
     });
-    return (connection, tester.state(find.byType(Workspace)), store);
+    return (
+      connection,
+      tester.state(find.byType(Workspace)) as WorkspaceTestAccess,
+      store,
+    );
   }
 
   testWidgets('meeting-list preview Generate sends the preview meeting', (
     tester,
   ) async {
-    final (connection, dynamic shell, store) = await mount(tester);
+    final (connection, WorkspaceTestAccess shell, store) = await mount(tester);
     final id = store.meeting('Preview meeting');
     shell.update(() {
       shell.meetingFeature.meetingPreviewId = id;
@@ -110,7 +115,9 @@ void main() {
       testWidgets(
         'slow ${create ? 'create' : 'save'} reply cannot retarget $target',
         (tester) async {
-          final (connection, dynamic shell, store) = await mount(tester);
+          final (connection, WorkspaceTestAccess shell, store) = await mount(
+            tester,
+          );
           final first = store.saveNote(null, 'First note', 'First body');
           final second = store.saveNote(null, 'Second note', 'Second body');
           shell.update(() {
@@ -150,13 +157,13 @@ void main() {
   testWidgets('successful onboarding retry marks the runtime ready', (
     tester,
   ) async {
-    final (connection, dynamic shell, _) = await mount(
+    final (connection, WorkspaceTestAccess shell, _) = await mount(
       tester,
       failInitialize: true,
     );
     expect(shell.onboardingFeature.ready, isFalse);
     expect(shell.error, contains('First initialization failed'));
-    final dynamic view = shell.onboardingFeature.build();
+    final view = shell.onboardingFeature.build() as OnboardingView;
     await view.retryRuntime();
     await tester.pumpAndSettle();
     expect(shell.onboardingFeature.ready, isTrue);
@@ -167,13 +174,13 @@ void main() {
   testWidgets('onboarding retry becomes ready after reconnecting its client', (
     tester,
   ) async {
-    final (connection, dynamic shell, _) = await mount(
+    final (connection, WorkspaceTestAccess shell, _) = await mount(
       tester,
       failInitialize: true,
     );
     connection.replaceOnResume = true;
     final original = connection.clientSessionGeneration;
-    final dynamic view = shell.onboardingFeature.build();
+    final view = shell.onboardingFeature.build() as OnboardingView;
     await view.retryRuntime();
     await tester.pumpAndSettle();
     expect(connection.clientSessionGeneration, isNot(same(original)));
@@ -185,7 +192,7 @@ void main() {
     testWidgets('settings callback reports failed $key requests', (
       tester,
     ) async {
-      final (connection, dynamic shell, _) = await mount(tester);
+      final (connection, WorkspaceTestAccess shell, _) = await mount(tester);
       shell.update(() => shell.navigate(WorkspaceTab.settings));
       await tester.pumpAndSettle();
       connection.failures[Operation.preferencesSet] = StateError(
@@ -197,8 +204,10 @@ void main() {
         );
         widget.onSelectionChanged!({'Concise'});
       } else {
-        final dynamic widget = tester.widget(find.byKey(Key(key)));
-        widget.onChanged('60');
+        final widget = tester.widget<DesktopSettingSelect<String>>(
+          find.byKey(Key(key)),
+        );
+        widget.onChanged!('60');
       }
       await tester.pumpAndSettle();
       expect(shell.error, contains('Preference rejected'));
@@ -216,14 +225,16 @@ void main() {
     testWidgets('held callback failure respects $boundary ownership', (
       tester,
     ) async {
-      final (connection, dynamic shell, store) = await mount(tester);
+      final (connection, WorkspaceTestAccess shell, store) = await mount(
+        tester,
+      );
       shell.update(() => shell.navigate(WorkspaceTab.settings));
       await tester.pumpAndSettle();
       connection.holdPreference = true;
-      final dynamic control = tester.widget(
+      final control = tester.widget<DesktopSettingSelect<String>>(
         find.byKey(const Key('serviceIdleMinutes')),
       );
-      control.onChanged('60');
+      control.onChanged!('60');
       await tester.pump();
       expect(connection.entered.isCompleted, isTrue);
       switch (boundary) {
@@ -258,7 +269,9 @@ void main() {
     'automatic answers',
   ]) {
     testWidgets('$action callback reports request failures', (tester) async {
-      final (connection, dynamic shell, store) = await mount(tester);
+      final (connection, WorkspaceTestAccess shell, store) = await mount(
+        tester,
+      );
       final id = store.meeting('Callback meeting');
       connection.account = SignedInAccount(
         createTestTempDirectorySync('account-'),
@@ -280,21 +293,20 @@ void main() {
       );
       switch (action) {
         case 'google refresh':
-          final dynamic control = tester
-              .widgetList(
-                find.byWidgetPredicate((widget) {
-                  try {
-                    return (widget as dynamic).value == '4';
-                  } catch (_) {
-                    return false;
-                  }
-                }),
+          final control = tester
+              .widgetList<DropdownButton<String>>(
+                find.byWidgetPredicate(
+                  (widget) =>
+                      widget is DropdownButton<String> && widget.value == '4',
+                ),
               )
               .first;
-          control.onChanged('8');
+          control.onChanged!('8');
         case 'device':
-          final dynamic control = shell.integrationFeature.deviceChoice(false);
-          control.onChanged('auto');
+          final control =
+              shell.integrationFeature.deviceChoice(false)
+                  as IntegrationDeviceChoice;
+          control.onChanged!('auto');
         case 'meeting style':
           final control = tester
               .widgetList<DropdownButton<String>>(

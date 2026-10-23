@@ -1,15 +1,14 @@
 import 'pump_until.dart';
-import 'package:foresight_core/src/application.dart';
+import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
-import 'package:foresight_core/src/operations.dart';
+
 import 'desktop_connection_fixture.dart';
 import 'dart:async';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/main.dart';
-import 'package:foresight_core/src/domain.dart';
-import 'package:foresight_core/src/store.dart';
+
 import 'package:open_foresight/features/meetings/note_save_scheduler.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
@@ -67,7 +66,7 @@ void main() {
         Foresight(connection, deviceLoader: () async => []),
       );
       await tester.pumpAndSettle();
-      final dynamic shell = tester.state(find.byType(Workspace));
+      final shell = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       shell.update(() => shell.meetingFeature.meetingId = id);
       await tester.pumpAndSettle();
       final gate = domain.saveGate = Completer<void>();
@@ -196,11 +195,13 @@ void main() {
           deviceLoader: () async => [],
         ),
       );
-      final dynamic state = tester.state(find.byType(Workspace));
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       state.update(() => state.meetingFeature.meetingId = id);
       await tester.pumpAndSettle();
-      state.meetingFeature.editArtifact(
-        store.rows('SELECT * FROM artifacts').single,
+      unawaited(
+        state.meetingFeature.editArtifact(
+          store.rows('SELECT * FROM artifacts').single,
+        ),
       );
       await tester.pumpAndSettle();
       final before = DateTime.now().millisecondsSinceEpoch;
@@ -222,8 +223,10 @@ void main() {
             .single,
         {'last_manual_edit': captured, 'last_enhanced': enhancedDate},
       );
-      state.meetingFeature.editArtifact(
-        store.rows('SELECT * FROM artifacts').single,
+      unawaited(
+        state.meetingFeature.editArtifact(
+          store.rows('SELECT * FROM artifacts').single,
+        ),
       );
       await tester.pumpAndSettle();
       await tester.tap(find.text('Save edit'));
@@ -259,7 +262,7 @@ void main() {
           deviceLoader: () async => [],
         ),
       );
-      final dynamic state = tester.state(find.byType(Workspace));
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       state.update(() => state.meetingFeature.meetingId = id);
       await tester.pumpAndSettle();
       domain.rejectNotes = true;
@@ -322,7 +325,7 @@ void main() {
           deviceLoader: () async => [],
         ),
       );
-      final dynamic state = tester.state(find.byType(Workspace));
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       state.update(() => state.meetingFeature.meetingId = id);
       await tester.pumpAndSettle();
       final editor = find.byKey(const ValueKey('meeting-notes-editor'));
@@ -366,7 +369,7 @@ void main() {
         {'body': 'Local draft', 'last_manual_edit': captured},
       );
       expect(
-        state.meetingFeature.loadedMeetingNoteSnapshot.body,
+        state.meetingFeature.loadedMeetingNoteSnapshot!.body,
         'Local draft',
       );
       expect(state.meetingFeature.meetingNoteSaves.isDirty(id), isFalse);
@@ -396,7 +399,7 @@ void main() {
           deviceLoader: () async => [],
         ),
       );
-      final dynamic state = tester.state(find.byType(Workspace));
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       state.update(() => state.meetingFeature.meetingId = id);
       await tester.pumpAndSettle();
       domain.saveGate = Completer<void>();
@@ -558,7 +561,7 @@ void main() {
         deviceLoader: () async => [],
       ),
     );
-    final dynamic state = tester.state(find.byType(Workspace));
+    final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
     state.update(() => state.meetingFeature.meetingId = first);
     await tester.pumpAndSettle();
     final editor = find.byKey(const ValueKey('meeting-notes-editor'));

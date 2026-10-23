@@ -64,7 +64,7 @@ void main() {
         final f = await ControllerFixture.mount(tester);
         final id = f.store.meeting('Toolbar formatting');
         f.store.saveMeetingNotes(id, 'Selected words');
-        final dynamic meeting = f.shell.meetingFeature;
+        final meeting = f.shell.meetingFeature;
         if (preview) {
           f.shell.update(() {
             meeting.meetingPreviewId = id;
@@ -76,8 +76,7 @@ void main() {
           });
         }
         await tester.pumpAndSettle();
-        final controller =
-            meeting.meetingNotesController as TextEditingController;
+        final controller = meeting.meetingNotesController;
         for (final (label, expected) in [
           ('Bold', '**Selected words**'),
           ('Italic', '*Selected words*'),
@@ -121,13 +120,12 @@ void main() {
       final f = await ControllerFixture.mount(tester);
       final id = f.store.meeting('Formatting fixture');
       f.store.saveMeetingNotes(id, 'Hello world');
-      final dynamic meeting = f.shell.meetingFeature;
+      final meeting = f.shell.meetingFeature;
       f.shell.update(() {
         meeting.meetingId = id;
       });
       await tester.pumpAndSettle();
-      final controller =
-          meeting.meetingNotesController as TextEditingController;
+      final controller = meeting.meetingNotesController;
       controller.selection = const TextSelection(
         baseOffset: 6,
         extentOffset: 11,
@@ -154,14 +152,12 @@ void main() {
       expect(f.connection.calls.last.$2, {'id': id, 'kind': 'summary'});
       await meeting.indexMeeting(id);
       expect(f.connection.calls.last.$1, Operation.meetingsIndex);
-      final imported =
-          await meeting.importText(
-                'Meeting text',
-                'Saved evidence',
-                'text/plain',
-                'fixture',
-              )
-              as String;
+      final imported = await meeting.importText(
+        'Meeting text',
+        'Saved evidence',
+        'text/plain',
+        'fixture',
+      );
       expect(f.store.sourceById(imported).single['content'], 'Saved evidence');
       expect(meeting.exportMeetingMarkdown(), contains('Hello **world**'));
       await tester.pumpAndSettle();
@@ -171,7 +167,7 @@ void main() {
     'echo cancellation status distinguishes pending, paused, fallback and active capture',
     (tester) async {
       final f = await ControllerFixture.mount(tester);
-      final dynamic meeting = f.shell.meetingFeature;
+      final meeting = f.shell.meetingFeature;
       final cases = [
         (<String, dynamic>{}, 'Reduce system playback'),
         ({'active': true, 'paused': true}, 'apply when recording resumes'),
@@ -217,7 +213,7 @@ void main() {
     (tester) async {
       final f = await ControllerFixture.mount(tester);
       final id = f.store.meeting('Imported transcript');
-      final dynamic meeting = f.shell.meetingFeature;
+      final meeting = f.shell.meetingFeature;
       final transcript = File('${f.root.path}/transcript.txt')
         ..writeAsStringSync('Speaker: What is the deadline?\nNext Friday.');
       f.connection.replies[Operation.meetingsTranscript] = null;
@@ -236,9 +232,7 @@ void main() {
       await meeting.importMeetingTranscript(id);
       expect(f.store.meetingTranscript(id), isEmpty);
       selected = transcript.path;
-      await tester.runAsync(
-        () => meeting.importMeetingTranscript(id) as Future<void>,
-      );
+      await tester.runAsync(() => meeting.importMeetingTranscript(id));
       expect(f.connection.calls.last.$1, Operation.meetingsTranscript);
       expect(f.connection.calls.last.$2, {
         'id': id,
@@ -261,8 +255,8 @@ void main() {
         'SELECT * FROM artifacts WHERE meeting_id=?',
         [id],
       ).single;
-      final dynamic meeting = f.shell.meetingFeature;
-      var edit = meeting.editArtifact(artifact) as Future<void>;
+      final meeting = f.shell.meetingFeature;
+      var edit = meeting.editArtifact(artifact);
       await tester.pumpAndSettle();
       await tester.enterText(
         find.descendant(
@@ -280,9 +274,7 @@ void main() {
         ]).single['edited'],
         'User summary',
       );
-      edit =
-          meeting.editArtifact({...artifact, 'edited': 'User summary'})
-              as Future<void>;
+      edit = meeting.editArtifact({...artifact, 'edited': 'User summary'});
       await tester.pumpAndSettle();
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();

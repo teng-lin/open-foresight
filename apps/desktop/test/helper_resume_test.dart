@@ -2,11 +2,9 @@ import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:grpc/grpc.dart';
-import 'package:foresight_core/src/domain.dart';
-import 'package:foresight_core/src/helper.dart';
-import 'package:foresight_core/src/store.dart';
-import 'package:foresight_core/src/generated/helper_control.pbgrpc.dart'
-    as control;
+import '../test_support/core_fixture.dart';
+
+import '../test_support/core_fixture.dart' as control;
 import 'package:foresight_test_support/delayed_index_service.dart'
     show DelayedIndexService;
 

@@ -1,14 +1,13 @@
-import 'package:foresight_core/src/application.dart';
+import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
-import 'package:foresight_core/src/domain.dart';
+
 import 'package:open_foresight/main.dart';
-import 'package:foresight_core/src/store.dart';
+
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 class BrowsingStore extends Store {
@@ -60,10 +59,10 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      final dynamic state = tester.state(find.byType(Workspace));
-      final pending =
-          state.sourceFeature.findFilesOnComputer(roots: <String>[root.path])
-              as Future<void>;
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
+      final pending = state.sourceFeature.findFilesOnComputer(
+        roots: <String>[root.path],
+      );
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.text('Find files on this computer'), findsOneWidget);
@@ -112,7 +111,7 @@ void main() {
       );
       await tester.tap(find.text('Sources'));
       await tester.pumpAndSettle();
-      final dynamic state = tester.state(find.byType(Workspace));
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       Future<void> waitForSearch(int count) async {
         final deadline = DateTime.now().add(const Duration(seconds: 5));
         while (state.sourceFeature.sourceSearchMatches.length != count &&

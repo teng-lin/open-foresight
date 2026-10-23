@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/remote.dart';
 import 'package:foresight_test_support/remote_service.dart';
 import 'package:open_foresight/main.dart';
-import 'package:foresight_core/src/store.dart';
+import '../test_support/core_fixture.dart';
 import 'controller_fixture.dart';
 import 'pump_until.dart';
 
@@ -52,7 +51,7 @@ void main() {
         Foresight(fixture.remote, deviceLoader: () async => []),
       );
       await tester.pumpAndSettle();
-      final dynamic state = tester.state(find.byType(Workspace));
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       state.update(() {
         state.sourceFeature.noteId = 3;
         state.sourceFeature.noteTitle.text = 'Note 3';

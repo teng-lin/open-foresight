@@ -44,7 +44,7 @@ void main() {
     lifecycle.setClearingWorkspace(false);
     expect(lifecycle.clearingWorkspace, isFalse);
 
-    final preferences = fixture.shell.preferenceCommands as PreferenceCommands;
+    final preferences = fixture.shell.preferenceCommands;
     await preferences.preference('serviceIdleMinutes', '45');
     expect(fixture.store.preference('serviceIdleMinutes'), '45');
     final meetings = fixture.shell.meetingPorts as MeetingActivity;
@@ -62,7 +62,7 @@ void main() {
     meetingCommands.setSystemAudioSetupReviewed(true);
     expect(meetings.systemAudioSetupReviewed, isTrue);
     expect(fixture.shell.meetingFeature.systemAudioSetupReviewed, isTrue);
-    final onboarding = fixture.shell.onboardingActivity as OnboardingActivity;
+    final onboarding = fixture.shell.onboardingActivity;
     expect(onboarding.active, fixture.shell.onboardingFeature.active);
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);

@@ -1,3 +1,4 @@
+import 'package:open_foresight/features/sources/sources_controller.dart';
 import 'package:open_foresight/shell/workspace_tab.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -8,11 +9,9 @@ import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/desktop.dart' show SourceSummary;
 import 'package:foresight_core/remote.dart'
     show StoreReader, RpcError, RpcErrorCode;
-import 'package:foresight_core/src/application.dart';
-import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
-import 'package:foresight_core/src/read_coordinator.dart';
-import 'package:foresight_core/src/sqlite_read_session.dart';
-import 'package:foresight_core/src/sqlite_store_reader.dart';
+import '../test_support/core_fixture.dart';
+import '../test_support/core_fixture.dart' as control;
+
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/main.dart';
 import 'package:open_foresight/features/integrations/desktop_settings.dart';
@@ -87,9 +86,9 @@ class _GraphFixture {
   final Store store;
   final _HeldGraphRead worker;
   final _GraphConnection connection;
-  final dynamic shell;
+  final WorkspaceTestAccess shell;
   final Map<String, GraphPoint> points;
-  dynamic get feature => shell.sourceFeature;
+  SourcesController get feature => shell.sourceFeature;
 
   static Future<_GraphFixture> mount(
     WidgetTester tester,
@@ -168,7 +167,7 @@ class _GraphFixture {
       Foresight(connection, deviceLoader: () async => []),
     );
     await tester.pumpAndSettle();
-    final dynamic shell = tester.state(find.byType(Workspace));
+    final shell = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
     final fixture = _GraphFixture(store, worker, connection, shell, points);
     addTearDown(() async {
       if (!worker.release.isCompleted) worker.release.complete();
@@ -206,7 +205,7 @@ class _GraphFixture {
   }
 
   void expectGeometry() {
-    final actual = feature.graphPoints as Map<String, GraphPoint>;
+    final actual = feature.graphPoints;
     expect(actual.keys, unorderedEquals(points.keys));
     for (final id in points.keys) {
       expect(

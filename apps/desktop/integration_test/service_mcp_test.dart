@@ -1,5 +1,5 @@
 import 'package:foresight_test_support/macos_integration_runtime.dart';
-import 'package:foresight_core/src/operations.dart';
+import '../test_support/core_fixture.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -102,7 +102,10 @@ class Mcp {
   }
 }
 
-Future<void> closeDesktop(WidgetTester tester, dynamic workspace) async {
+Future<void> closeDesktop(
+  WidgetTester tester,
+  app.WorkspaceTestAccess workspace,
+) async {
   final connection = workspace.d as RemoteDomain;
   final client = connection.client;
   final saves = workspace.meetingFeature.meetingNoteSaves;
@@ -132,7 +135,8 @@ void main() {
     (tester) async {
       await startDesktop(tester);
       await finishOnboarding(tester);
-      dynamic workspace = tester.state(find.byType(app.Workspace));
+      app.WorkspaceTestAccess workspace =
+          tester.state(find.byType(app.Workspace)) as app.WorkspaceTestAccess;
       await waitFor(
         tester,
         () =>
@@ -153,13 +157,14 @@ void main() {
       final mcpStatus = await mcp.tool('get_status');
       observed.expect(
         'desktop_and_mcp_same_owner',
-        mcpStatus['structuredContent']['result']['pid'],
+        ((mcpStatus['structuredContent'] as Map)['result'] as Map)['pid'],
         initial['pid'],
       );
       final created = await mcp.tool('create_meeting', {
         'title': 'Shared MCP planning',
       });
-      final id = created['structuredContent']['result']['id'] as int;
+      final id =
+          ((created['structuredContent'] as Map)['result'] as Map)['id'] as int;
       await tester.tap(find.text('Meetings').first);
       await tester.pumpAndSettle();
       await waitFor(
@@ -192,8 +197,8 @@ void main() {
       );
       observed.expect(
         'recording_denial_left_capture_inactive',
-        (await workspace.d.command(Operation.status)
-            as Map)['capture']['active'],
+        ((await workspace.d.command(Operation.status) as Map)['capture']
+            as Map)['active'],
         false,
       );
       final afterDenial =
@@ -220,33 +225,34 @@ void main() {
         tester,
         () =>
             workspace.meetingFeature.recording != null &&
-            workspace.meetingFeature.recording.sampleCounts.length == 2,
+            workspace.meetingFeature.recording!.sampleCounts.length == 2,
       );
       await waitFor(
         tester,
-        () => workspace.meetingFeature.recording.sampleCounts.every(
+        () => workspace.meetingFeature.recording!.sampleCounts.every(
           (int n) => n > 0,
         ),
       );
       await mcp.close();
       observed.expect(
         'recording_survived_mcp_close',
-        (await workspace.d.command(Operation.status)
-            as Map)['capture']['active'],
+        ((await workspace.d.command(Operation.status) as Map)['capture']
+            as Map)['active'],
         true,
       );
       // Closing the desktop removes its visible indicator and must stop capture.
       await closeDesktop(tester, workspace);
       await startDesktop(tester);
-      workspace = tester.state(find.byType(app.Workspace));
+      workspace =
+          tester.state(find.byType(app.Workspace)) as app.WorkspaceTestAccess;
       await waitFor(tester, () => workspace.meetingFeature.recording == null);
       // Final transcription persists independently of desktop startup. Wait for this
       // client's restore/reconciliation to finish before requesting generation.
       await workspace.d.resume();
       observed.expect(
         'recording_stopped_when_desktop_indicator_closed',
-        (await workspace.d.command(Operation.status)
-            as Map)['capture']['active'],
+        ((await workspace.d.command(Operation.status) as Map)['capture']
+            as Map)['active'],
         false,
       );
       observed.expect(
@@ -261,8 +267,9 @@ void main() {
       observed.expect(
         'transcript_persisted',
         (meeting['transcript'] as List).where(
-          (dynamic t) =>
-              t['final'] == 1 && (t['text'] as String).contains('Mira'),
+          (t) =>
+              (t as Map)['final'] == 1 &&
+              ((t)['text'] as String).contains('Mira'),
         ),
         isNotEmpty,
       );
@@ -274,13 +281,15 @@ void main() {
           await workspace.d.command(Operation.meetingsGet, {'id': id}) as Map;
       observed.expect(
         'artifact_persisted',
-        (content['artifacts'] as List).single['generated'],
+        ((content['artifacts'] as List).single as Map)['generated'],
         contains('Mira'),
       );
       observed.expect(
         'desktop_database_read_only',
         // The public reader has no writer capability; exercise the actual
         // connected facade, without granting it an inspection/write escape.
+        // Deliberately attack the runtime read-only facade with a missing writer.
+        // ignore: avoid_dynamic_calls
         () => ((workspace.d as RemoteDomain).store as dynamic).saveNote(
           null,
           'forbidden',
@@ -323,13 +332,13 @@ void main() {
             await workspace.d.command(Operation.meetingsGet, {'id': id}) as Map;
         observed.expect(
           'capture_denial_persisted_interruption',
-          failed['meeting']['state'],
+          (failed['meeting'] as Map)['state'],
           'interrupted',
         );
         observed.expect(
           'capture_denial_preserved_transcript',
           (failed['transcript'] as List)
-              .where((dynamic row) => savedIds.contains(row['id']))
+              .where((row) => savedIds.contains((row as Map)['id']))
               .toList(),
           savedTranscript,
         );
@@ -341,14 +350,16 @@ void main() {
         tester,
         () =>
             workspace.meetingFeature.recording != null &&
-            workspace.meetingFeature.recording.sampleCounts.length == 2 &&
-            workspace.meetingFeature.recording.sampleCounts.every(
+            workspace.meetingFeature.recording!.sampleCounts.length == 2 &&
+            workspace.meetingFeature.recording!.sampleCounts.every(
               (int n) => n > 0,
             ),
       );
       observed.expect(
         'capture_recovered_after_permission_fixture_restored',
-        workspace.meetingFeature.recording.sampleCounts.every((int n) => n > 0),
+        workspace.meetingFeature.recording!.sampleCounts.every(
+          (int n) => n > 0,
+        ),
         true,
       );
       await tester.tap(find.byTooltip('Stop transcribing'));

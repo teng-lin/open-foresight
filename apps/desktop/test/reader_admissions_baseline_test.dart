@@ -4,8 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/foresight_core.dart';
-import 'package:foresight_core/src/application.dart';
+import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/main.dart';
 import 'package:open_foresight/commands.dart';
@@ -22,7 +21,7 @@ final _measurements = <String, Object?>{};
 Future<void> _measure(
   WidgetTester tester,
   String label,
-  dynamic shell,
+  WorkspaceTestAccess shell,
   OfflineHelper helper,
   ReaderAdmissions admissions,
 ) async {
@@ -95,7 +94,7 @@ void main() {
         Foresight(connection, deviceLoader: () async => []),
       );
       await tester.pumpAndSettle();
-      final dynamic shell = tester.state(find.byType(Workspace));
+      final shell = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       for (final (label, tab) in [
         ('Sources', WorkspaceTab.sources),
         ('Chat', WorkspaceTab.chat),
@@ -168,7 +167,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(OnboardingView), findsOneWidget);
     expect(find.text('Documents added (1)'), findsOneWidget);
-    final dynamic shell = tester.state(find.byType(Workspace));
+    final shell = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
     await _measure(tester, 'Onboarding', shell, helper, admissions);
     expect(admissions.synchronous['sourceSummaries'] ?? 0, 0);
     expect(admissions.watches['sources'], greaterThan(0));

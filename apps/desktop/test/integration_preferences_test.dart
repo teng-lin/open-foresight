@@ -1,11 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:foresight_core/src/application.dart';
-import 'package:foresight_core/src/domain.dart';
-import 'package:foresight_core/src/store.dart';
+import '../test_support/core_fixture.dart';
+
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/features/integrations/integrations_controller.dart';
 import 'package:open_foresight/features/integrations/widgets.dart';
 import '../test_support/reader_admissions.dart';
 import 'controller_fixture.dart';
@@ -103,8 +101,8 @@ void main() {
       Foresight(connection, deviceLoader: () async => []),
     );
     await tester.pumpAndSettle();
-    final dynamic shell = tester.state(find.byType(Workspace));
-    final controller = shell.integrationFeature as IntegrationsController;
+    final shell = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
+    final controller = shell.integrationFeature;
     try {
       final before = admissions.snapshot();
       for (var i = 0; i < 20; i++) {

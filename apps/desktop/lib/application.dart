@@ -78,6 +78,34 @@ class Workspace extends StatefulWidget {
   State<Workspace> createState() => _WorkspaceState();
 }
 
+/// Typed access for workflow fixtures while features retain their public ports.
+/// Production composition never discovers features through this interface.
+@visibleForTesting
+abstract interface class WorkspaceTestAccess
+    implements
+        FeatureHost,
+        WorkspaceNavigation,
+        OperationGate,
+        WorkspaceLifecycle {
+  DesktopConnection get d;
+  SourcesController get sourceFeature;
+  MeetingsController get meetingFeature;
+  ChatController get chatFeature;
+  SettingsController get settingsFeature;
+  IntegrationsController get integrationFeature;
+  OnboardingController get onboardingFeature;
+  MeetingPortsBridge get meetingPorts;
+  PreferenceCommands get preferenceCommands;
+  OnboardingActivity get onboardingActivity;
+  WorkspaceTab get tab;
+  set tab(WorkspaceTab value);
+  set busy(bool value);
+  set error(String value);
+  Timer? get serviceUiTimer;
+  @override
+  ValueNotifier<int> get serviceUiRevision;
+}
+
 class _WorkspaceState extends State<Workspace>
     with TickerProviderStateMixin, WidgetsBindingObserver
     implements
@@ -85,8 +113,10 @@ class _WorkspaceState extends State<Workspace>
         WorkspaceNavigation,
         OperationGate,
         WorkspaceDialogs,
-        WorkspaceLifecycle {
+        WorkspaceLifecycle,
+        WorkspaceTestAccess {
   final calendarAuthLinks = CalendarAuthLinks();
+  @override
   late final OnboardingController onboardingFeature = OnboardingController(
     host: this,
     navigation: this,
@@ -96,6 +126,7 @@ class _WorkspaceState extends State<Workspace>
     sources: sourceFeature,
     integrations: integrationFeature,
   );
+  @override
   late final SourcesController sourceFeature = SourcesController(
     host: this,
     navigation: this,
@@ -103,6 +134,7 @@ class _WorkspaceState extends State<Workspace>
     dialogs: this,
     integrations: integrationFeature,
   );
+  @override
   late final ChatController chatFeature = ChatController(
     host: this,
     navigation: this,
@@ -110,6 +142,7 @@ class _WorkspaceState extends State<Workspace>
     meetings: meetingPorts,
     sources: sourceFeature,
   );
+  @override
   late final MeetingsController meetingFeature = MeetingsController(
     host: this,
     navigation: this,
@@ -121,6 +154,7 @@ class _WorkspaceState extends State<Workspace>
     chat: chatFeature,
     chatCommands: chatFeature,
   );
+  @override
   late final SettingsController settingsFeature = SettingsController(
     host: this,
     navigation: this,
@@ -130,6 +164,7 @@ class _WorkspaceState extends State<Workspace>
     integrationCommands: integrationFeature,
     meetings: meetingPorts,
   );
+  @override
   late final IntegrationsController integrationFeature = IntegrationsController(
     host: this,
     navigation: this,
@@ -141,17 +176,21 @@ class _WorkspaceState extends State<Workspace>
     onboarding: onboardingActivity,
   );
 
+  @override
   late final PreferenceCommands preferenceCommands = PreferenceCommandBridge(
     (key, value) => settingsFeature.preference(key, value),
   );
+  @override
   late final MeetingPortsBridge meetingPorts = MeetingPortsBridge(
     () => meetingFeature,
     () => meetingFeature,
   );
+  @override
   late final OnboardingActivity onboardingActivity = OnboardingActivityBridge(
     () => onboardingFeature.active,
   );
 
+  @override
   DesktopConnection get d => widget.domain;
 
   @override
@@ -180,6 +219,7 @@ class _WorkspaceState extends State<Workspace>
   StreamSubscription<void>? connectionChanges;
   late final DesktopMenu desktopMenu;
 
+  @override
   Timer? serviceUiTimer;
 
   /// Set while this desktop clears the workspace itself.
@@ -221,6 +261,7 @@ class _WorkspaceState extends State<Workspace>
     });
   }
 
+  @override
   WorkspaceTab tab = WorkspaceTab.meetings;
 
   @override

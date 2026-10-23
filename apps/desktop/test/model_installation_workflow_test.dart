@@ -5,11 +5,10 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_test_support/test_paths.dart';
-import 'package:foresight_core/src/gemma_download.dart';
+import '../test_support/core_fixture.dart';
 import 'package:open_foresight/features/settings/gemma_setup_view.dart';
 import 'package:open_foresight/features/settings/speech_setup_view.dart';
-import 'package:foresight_core/src/speech_models.dart';
-import 'package:foresight_core/src/store.dart';
+
 import 'controller_fixture.dart' show ReadyGeneration;
 import 'pump_until.dart';
 
@@ -191,10 +190,10 @@ void main() {
           download.failure = ModelDownloadCancelled();
           await mount(tester);
           await start(tester);
-          final dynamic state = tester.state(
-            find.byType(speech ? SpeechSetupDialog : GemmaSetupDialog),
+          await pumpUntil(
+            tester,
+            () => find.byType(LinearProgressIndicator).evaluate().isEmpty,
           );
-          await pumpUntil(tester, () => !state.working);
           expect(installed, 0);
           expect(finished, 0);
           download.failure = null;

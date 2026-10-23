@@ -1,12 +1,11 @@
+import 'package:open_foresight/features/settings/settings_controller.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/remote.dart';
-import 'package:foresight_core/src/application.dart';
-import 'package:foresight_core/src/domain.dart';
-import 'package:foresight_core/src/graph_labels.dart';
-import 'package:foresight_core/src/store.dart';
+import '../test_support/core_fixture.dart';
+
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/main.dart';
 
@@ -126,7 +125,7 @@ class _StatsConnection extends ControllerConnection {
 
 Future<
   ({
-    dynamic feature,
+    SettingsController feature,
     _StatsReader reader,
     _StatsConnection connection,
     Store store,
@@ -147,7 +146,7 @@ _mount(WidgetTester tester) async {
   await tester.pumpAndSettle();
   await tester.tap(find.text('Stats').first);
   await tester.pumpAndSettle();
-  final dynamic shell = tester.state(find.byType(Workspace));
+  final shell = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
   expect(reader.requests, hasLength(1));
   addTearDown(() async {
     await tester.pumpWidget(const SizedBox());

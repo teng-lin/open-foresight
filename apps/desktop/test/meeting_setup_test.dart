@@ -1,16 +1,15 @@
 import 'package:open_foresight/shell/workspace_tab.dart';
-import 'package:foresight_core/src/application.dart';
+import '../test_support/core_fixture.dart';
 import 'store_reader_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/src/domain.dart';
-import 'package:foresight_core/src/helper.dart';
+
 import 'package:open_foresight/main.dart';
 import 'package:open_foresight/model_setup.dart';
-import 'package:foresight_core/src/store.dart';
+
 import 'package:open_foresight/features/settings/speech_setup_view.dart';
 import '../test_support/meeting_panel.dart';
 
@@ -43,7 +42,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    final dynamic state = tester.state(find.byType(Workspace));
+    final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
     state.update(() {
       state.navigate(WorkspaceTab.meetings);
       state.meetingFeature.meetingId = id;
@@ -79,7 +78,8 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('New meeting'));
       await tester.pumpAndSettle();
-      final dynamic workspace = tester.state(find.byType(Workspace));
+      final workspace =
+          tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       final meeting = workspace.meetingFeature.meetingId as int;
       expect(find.text('Summary'), findsNothing);
       await selectMeetingPanel(tester, 'Summary');

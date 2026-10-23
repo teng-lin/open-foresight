@@ -10,3 +10,4 @@ linter:
     cancel_subscriptions: true
     close_sinks: true
     avoid_void_async: true
+    avoid_dynamic_calls: true

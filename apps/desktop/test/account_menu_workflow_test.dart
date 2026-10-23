@@ -1,13 +1,13 @@
-import 'package:foresight_core/src/application.dart';
+import '../test_support/core_fixture.dart';
 import 'dart:io';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_test_support/test_paths.dart';
-import 'package:foresight_core/src/google_auth.dart';
+
 import 'package:open_foresight/features/integrations/google_sign_in_dialog.dart';
 import 'package:open_foresight/main.dart';
-import 'package:foresight_core/src/store.dart';
+
 import 'desktop_connection_fixture.dart';
 import 'google_setup_ui_test.dart' show BundledGoogleDomain;
 import 'meeting_setup_test.dart' show OfflineHelper;

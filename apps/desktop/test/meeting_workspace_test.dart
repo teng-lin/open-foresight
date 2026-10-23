@@ -1,16 +1,15 @@
 import 'package:foresight_test_support/test_paths.dart';
-import 'package:foresight_core/src/operations.dart';
-import 'package:foresight_core/src/application.dart';
+import '../test_support/core_fixture.dart';
+
 import 'desktop_connection_fixture.dart';
 import 'pump_until.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/src/domain.dart';
+
 import 'package:open_foresight/main.dart';
-import 'package:foresight_core/src/native.dart';
-import 'package:foresight_core/src/store.dart';
+
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 class NotesRuntime extends NativeRuntime {
@@ -85,7 +84,7 @@ void main() {
       await tester.pumpWidget(
         Foresight(TestDesktopConnection(app), deviceLoader: () async => []),
       );
-      final dynamic state = tester.state(find.byType(Workspace));
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       state.update(() => state.meetingFeature.meetingId = id);
       await tester.pumpAndSettle();
       domain.generator = generator;
@@ -140,7 +139,7 @@ void main() {
       );
       final snapshot =
           await app.call(Operation.meetingsGet.wire, {'id': id}) as Map;
-      final transcript = snapshot['transcript'] as List;
+      final transcript = (snapshot['transcript'] as List).cast<Map>();
       expect(transcript.map((t) => t['speaker_id']), [0, 1, null]);
       expect(transcript.map((t) => t['speaker_label']), [
         'Microphone',
@@ -206,7 +205,7 @@ void main() {
           ),
         ),
       );
-      final dynamic state = tester.state(find.byType(Workspace));
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       state.update(() => state.meetingFeature.meetingId = id);
       for (final size in [
         const Size(1952, 1226),
@@ -282,7 +281,8 @@ void main() {
             deviceLoader: () async => [],
           ),
         );
-        final dynamic state = tester.state(find.byType(Workspace));
+        final state =
+            tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
         state.update(() {
           state.meetingFeature.meetingId = id;
           state.meetingFeature.meetingPanel = 'Transcript';
@@ -370,7 +370,8 @@ void main() {
               deviceLoader: () async => [],
             ),
           );
-          final dynamic state = tester.state(find.byType(Workspace));
+          final state =
+              tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
           state.update(() => state.meetingFeature.meetingId = id);
           await tester.pumpAndSettle();
           final notes = find.byKey(const ValueKey('meeting-notes-editor'));

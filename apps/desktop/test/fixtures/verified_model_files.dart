@@ -1,5 +1,5 @@
 import 'dart:io';
-import 'package:foresight_core/src/gemma_download.dart';
+import '../../test_support/core_fixture.dart';
 
 // UI-only fixtures replace the byte verifier; downloader tests authenticate real
 // small assets. These sparse files must never be hashed as multi-GB models.

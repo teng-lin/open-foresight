@@ -6,11 +6,9 @@ import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/src/domain.dart';
+import '../test_support/core_fixture.dart';
 import 'package:open_foresight/main.dart';
-import 'package:foresight_core/src/store.dart';
-import 'package:foresight_core/src/google_auth.dart';
-import 'package:foresight_core/src/application.dart';
+
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 class BundledGoogleAuth extends GoogleAuth {
@@ -211,7 +209,8 @@ void main() {
         expect(find.text('Set up Google Drive and Calendar'), findsNothing);
         expect(find.text('Import client JSON'), findsNothing);
         expect(find.text('Import Desktop client configuration'), findsNothing);
-        final dynamic state = tester.state(find.byType(Workspace));
+        final state =
+            tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
         expect(
           state.error,
           contains('Google sign-in is unavailable in this build.'),

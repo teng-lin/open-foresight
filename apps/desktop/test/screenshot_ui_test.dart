@@ -1,13 +1,13 @@
-import 'package:foresight_core/src/application.dart';
+import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/src/domain.dart';
+
 import 'package:open_foresight/main.dart';
-import 'package:foresight_core/src/store.dart';
-import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
+
+import '../test_support/core_fixture.dart' as control;
 import 'meeting_setup_test.dart' show OfflineHelper;
 import 'package:foresight_test_support/google_connections.dart'
     show AdapterDomain;
@@ -37,7 +37,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(domain.sourcesPaused, true);
     expect(find.text('Paused'), findsOneWidget);
-    final dynamic state = tester.state(find.byType(Workspace));
+    final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
     await tester.runAsync(() async {
       final importing = state.run(() async {
         await state.sourceFeature.importFolderPath(folder.path);
@@ -108,10 +108,10 @@ void main() {
       await tester.pump();
       await tester.tap(find.byTooltip('Pause graph animation'));
       await tester.pumpAndSettle();
-      final dynamic graphState = tester.state(find.byType(Workspace));
-      final fittedScale =
-          graphState.sourceFeature.graphTransform.value.getMaxScaleOnAxis()
-              as double;
+      final graphState =
+          tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
+      final fittedScale = graphState.sourceFeature.graphTransform.value
+          .getMaxScaleOnAxis();
       for (final id in [apollo, borealis]) {
         final panel = tester.getRect(
           find.byKey(const ValueKey('source-graph-canvas')),
@@ -208,7 +208,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Start transcribing'));
       await tester.pumpAndSettle();
-      final dynamic state = tester.state(find.byType(Workspace));
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       expect(state.meetingFeature.meetingPreviewId, existing);
       expect(state.meetingFeature.meetingId, isNull);
       expect(store.rows('SELECT * FROM meetings').length, 1);
@@ -322,7 +322,8 @@ void main() {
       await tester.tap(find.text('Close'));
       await tester.pumpAndSettle();
       helper.snapshot = control.State(pipeline: 'ready', index: 'ready');
-      final dynamic workspace = tester.state(find.byType(Workspace));
+      final workspace =
+          tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       workspace.update(() {});
       await tester.pumpAndSettle();
       expect(
@@ -392,7 +393,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      final dynamic state = tester.state(find.byType(Workspace));
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       await tester.runAsync(
         () async => await state.sourceFeature.importFolderPath(tmp.path),
       );

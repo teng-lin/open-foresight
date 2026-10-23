@@ -1,9 +1,6 @@
 import '../test_support/reader_admissions.dart';
-import 'package:foresight_core/foresight_core.dart' show Store;
 import 'package:foresight_core/remote.dart' show StoreReader;
-import 'package:foresight_core/src/read_coordinator.dart';
-import 'package:foresight_core/src/sqlite_read_session.dart';
-import 'package:foresight_core/src/sqlite_store_reader.dart';
+import '../test_support/core_fixture.dart';
 
 final _readers = Expando<StoreReader>();
 final _admissions = Expando<ReaderAdmissions>();

@@ -2,9 +2,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/features/sources/cluster_rendering.dart';
-import 'package:foresight_core/src/graph_clusters.dart';
-import 'package:foresight_core/src/graph_layout.dart';
-import 'package:foresight_core/src/graph_labels.dart';
+import '../test_support/core_fixture.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

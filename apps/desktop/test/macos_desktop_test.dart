@@ -1,8 +1,8 @@
 import 'package:open_foresight/shell/workspace_tab.dart';
 import 'package:foresight_test_support/test_paths.dart';
-import 'package:foresight_core/src/operations.dart';
+import '../test_support/core_fixture.dart';
 import 'desktop_connection_fixture.dart';
-import 'package:foresight_core/src/application.dart';
+
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,7 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/features/integrations/desktop_settings.dart';
 import 'package:open_foresight/features/integrations/global_shortcuts.dart';
 import 'package:open_foresight/main.dart';
-import 'package:foresight_core/src/store.dart';
+
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 class PermissionDomain extends CommandFixtureDomain {
@@ -162,7 +162,8 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.keyN);
       await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
       await tester.pump();
-      final dynamic workspace = tester.state(find.byType(Workspace));
+      final workspace =
+          tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       expect(workspace.tab, WorkspaceTab.notes);
       await tester.tap(find.text('Settings'));
       await tester.pumpAndSettle();

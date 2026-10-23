@@ -10,7 +10,7 @@ import 'application.dart';
 import 'commands.dart';
 import 'desktop_environment.dart';
 
-export 'application.dart' show Foresight, Workspace;
+export 'application.dart' show Foresight, Workspace, WorkspaceTestAccess;
 
 Future<void> main([List<String> arguments = const []]) async {
   WidgetsFlutterBinding.ensureInitialized();
