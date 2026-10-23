@@ -8,7 +8,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/model_setup.dart';
+import 'package:foresight_core/desktop.dart'
+    show StoreReadQueries, preparedSpeechSetupProblem;
+import '../test_support/current_read.dart';
 
 import 'package:open_foresight/features/settings/speech_setup_view.dart';
 import '../test_support/meeting_panel.dart';
@@ -201,7 +203,12 @@ void main() {
         '${directory.path}/missing-runner',
       );
       expect(
-        speechSetupProblem(fixtureReader(store)),
+        preparedSpeechSetupProblem(
+          await currentRead(
+            fixtureReader(store),
+            StoreReadQueries.model('speech'),
+          ),
+        ),
         contains('runner is missing'),
       );
       store.close();

@@ -52,9 +52,6 @@ export 'src/model_setup.dart'
         preparedNeedsModel,
         preparedSpeechSetupProblem,
         preparedDedicatedQuerySetupProblem,
-        readerNeedsModel,
-        readerSpeechSetupProblem,
-        readerDedicatedQuerySetupProblem,
         dedicatedQueryModelDigest;
 export 'src/dedicated_query_acquisition.dart'
     show dedicatedQueryTermsKey, dedicatedQueryTermsUri;

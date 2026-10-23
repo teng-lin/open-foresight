@@ -1,10 +1,11 @@
 import 'package:foresight_test_support/macos_integration_runtime.dart';
 import '../test_support/core_fixture.dart';
 import 'dart:async';
+import 'package:foresight_core/remote.dart' show RemoteDomain;
+import '../test_support/current_read.dart';
 import 'dart:convert';
 import 'dart:io';
-import 'package:foresight_core/desktop.dart' show StoreReader;
-import 'package:foresight_core/remote.dart' show RemoteDomain;
+import 'package:foresight_core/desktop.dart' show StoreReader, StoreReadQueries;
 import 'package:foresight_test_support/observed_expectations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -14,12 +15,17 @@ import '../test_support/onboarding.dart';
 
 final observed = ObservedExpectations();
 
-Future<void> waitFor(WidgetTester tester, bool Function() ready) async {
+Future<void> waitFor(
+  WidgetTester tester,
+  FutureOr<bool> Function() ready,
+) async {
   final deadline = DateTime.now().add(const Duration(seconds: 30));
-  while (!ready() && DateTime.now().isBefore(deadline)) {
+  var settled = await currentReadCondition(ready, deadline: deadline);
+  while (!settled && DateTime.now().isBefore(deadline)) {
     await tester.pump(const Duration(milliseconds: 100));
+    settled = await currentReadCondition(ready, deadline: deadline);
   }
-  observed.expect('wait-ready', ready(), true);
+  observed.expect('wait-ready', settled, true);
   observed.expect('framework-exception', tester.takeException(), isNull);
 }
 
@@ -175,11 +181,13 @@ void main() {
         'title': 'MCP note',
         'body': 'Visible through the desktop reader',
       });
-      final StoreReader reader = (workspace.d as RemoteDomain).store;
-      bool mcpNoteVisible() =>
-          reader.noteSummaries.any((note) => note.title == 'MCP note');
+      final StoreReader reader = workspace.d.store;
+      Future<bool> mcpNoteVisible() async => (await currentRead(
+        reader,
+        StoreReadQueries.notes(),
+      )).any((note) => note.title == 'MCP note');
       await waitFor(tester, mcpNoteVisible);
-      observed.expect('mcp_changes_visible', mcpNoteVisible(), true);
+      observed.expect('mcp_changes_visible', await mcpNoteVisible(), true);
       // Exercise denial through the visible desktop and the real MCP/service
       // boundary before allowing a fresh request. A previous denial must not
       // create capture handles, transcripts, or an implicit future grant.
@@ -290,11 +298,7 @@ void main() {
         // connected facade, without granting it an inspection/write escape.
         // Deliberately attack the runtime read-only facade with a missing writer.
         // ignore: avoid_dynamic_calls
-        () => ((workspace.d as RemoteDomain).store as dynamic).saveNote(
-          null,
-          'forbidden',
-          '',
-        ),
+        () => (workspace.d.store as dynamic).saveNote(null, 'forbidden', ''),
         throwsA(isA<NoSuchMethodError>()),
       );
       // The Python driver owns this executable. Simulate an OS capture denial

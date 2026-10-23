@@ -56,64 +56,6 @@ class _StatsReader implements StoreReader {
   String get workspaceEpoch => epoch ?? delegate.workspaceEpoch;
   @override
   String get dataRevision => delegate.dataRevision;
-  @override
-  String preference(String key, [String fallback = '']) =>
-      delegate.preference(key, fallback);
-  @override
-  ModelRegistration? model(String kind) => delegate.model(kind);
-  @override
-  List<ModelRegistration> get models => delegate.models;
-  @override
-  List<SourceSummary> get sourceSummaries => delegate.sourceSummaries;
-  @override
-  SourceDocument? sourceById(String id, {bool includeDeleted = false}) =>
-      delegate.sourceById(id, includeDeleted: includeDeleted);
-  @override
-  List<NoteSummary> get noteSummaries => delegate.noteSummaries;
-  @override
-  String noteBody(int id) => delegate.noteBody(id);
-  @override
-  Map<String, String> get googleSourceMimes => delegate.googleSourceMimes;
-  @override
-  List<DocumentLabel> get documentLabels => delegate.documentLabels;
-  @override
-  List<DocumentCluster> get documentClusters => delegate.documentClusters;
-  @override
-  List<String> get documentClusterNames => delegate.documentClusterNames;
-  @override
-  String graphLabelSet() => delegate.graphLabelSet();
-  @override
-  List<MeetingCollectionEntry> get meetingCollection =>
-      delegate.meetingCollection;
-  @override
-  MeetingNoteData? meetingNote(int id) => delegate.meetingNote(id);
-  @override
-  MeetingDetails? meetingPreview(int id) => delegate.meetingPreview(id);
-  @override
-  MeetingDetails? meetingWorkspace(int id) => delegate.meetingWorkspace(id);
-  @override
-  int? meetingRevision(int id) => delegate.meetingRevision(id);
-  @override
-  List<MeetingQuestion> meetingQuestions(int id) =>
-      delegate.meetingQuestions(id);
-  @override
-  List<TranscriptSegment> meetingTranscript(int id, {bool finalOnly = false}) =>
-      delegate.meetingTranscript(id, finalOnly: finalOnly);
-  @override
-  List<MeetingArtifact> meetingArtifacts(int id, String kind) =>
-      delegate.meetingArtifacts(id, kind);
-  @override
-  String meetingEnhancedNotes(int id) => delegate.meetingEnhancedNotes(id);
-  @override
-  List<MeetingTask> meetingTasks(int id) => delegate.meetingTasks(id);
-  @override
-  List<SavedAnswer> conversationAnswers(int? meeting) =>
-      delegate.conversationAnswers(meeting);
-  @override
-  List<ExportNote> get exportNotes => delegate.exportNotes;
-  @override
-  List<CalendarAttachment> calendarAttachments(int meeting) =>
-      delegate.calendarAttachments(meeting);
 }
 
 class _StatsConnection extends ControllerConnection {

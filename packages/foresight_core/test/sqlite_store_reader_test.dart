@@ -154,7 +154,7 @@ void main() {
   );
 
   test(
-    'sync adapter failure retires every caller but joins actual reads',
+    'identity failure retires every caller but joins actual reads',
     () async {
       final worker = GatedWorker();
       final reader = gated(worker);
@@ -165,7 +165,7 @@ void main() {
       await started;
       futureSchema();
       expect(
-        () => reader.preference('example'),
+        () => reader.workspaceEpoch,
         throwsA(isA<IncompatibleReadSchema>()),
       );
       for (final failure in await Future.wait([first, second])) {
@@ -245,7 +245,12 @@ void main() {
       expect(fresh.current, isTrue);
       expect(fresh.value!.single.title, 'After');
       expect(fresh.value!.single.revision, 2);
-      expect(reader.preference('workspaceEpoch'), writer.workspaceEpoch);
+      expect(
+        (await reader.read(
+          StoreReadQueries.preference('workspaceEpoch'),
+        )).value,
+        writer.workspaceEpoch,
+      );
       expect(
         writer.rows('PRAGMA user_version').single.values.single,
         Store.schemaVersion,

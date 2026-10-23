@@ -61,8 +61,6 @@ class SettingsSources implements ConnectedSources {
   }
 
   @override
-  List<Map<String, dynamic>> attachments(int meeting) => [];
-  @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 

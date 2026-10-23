@@ -4,7 +4,6 @@ import 'dart:async';
 import 'dart:io';
 import 'store.dart';
 import 'persistence/domain_queries.dart';
-import 'store_reader.dart';
 import 'read_models.dart';
 import 'model_asset_lifecycle.dart';
 import 'model_acquisition.dart' show ForesightSharedConfig;
@@ -284,8 +283,6 @@ Future<String> _prepareDedicatedQuery(
 
 String? dedicatedQuerySetupProblem(Store store) =>
     _dedicatedQuerySetupProblem(store.model(dedicatedQueryModelKind));
-String? readerDedicatedQuerySetupProblem(StoreReader store) =>
-    preparedDedicatedQuerySetupProblem(store.model(dedicatedQueryModelKind));
 
 /// Validate a registration prepared with an asynchronous model read.
 String? preparedDedicatedQuerySetupProblem(ModelRegistration? model) =>
@@ -383,8 +380,6 @@ Future<int> registerInstalledModels(Store store, String manifestPath) async {
 
 String? speechSetupProblem(Store store) =>
     _speechSetupProblem(store.model('speech'));
-String? readerSpeechSetupProblem(StoreReader store) =>
-    preparedSpeechSetupProblem(store.model('speech'));
 
 /// Validate a registration prepared with an asynchronous model read.
 String? preparedSpeechSetupProblem(ModelRegistration? model) =>
@@ -411,9 +406,6 @@ bool needsModel(Store store, String kind) {
   }
   return _needsModel(store.model(kind), kind);
 }
-
-bool readerNeedsModel(StoreReader store, String kind) =>
-    preparedNeedsModel(store.model(kind), kind);
 
 /// Inspect a prepared registration without issuing a synchronous store read.
 bool preparedNeedsModel(ModelRegistration? model, String kind) =>

@@ -1,5 +1,8 @@
 import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
+import 'support/current_read.dart';
+import 'package:foresight_core/desktop.dart'
+    show StoreReadQueries, ReadFreshness;
 import 'dart:convert';
 import 'dart:io';
 
@@ -462,12 +465,24 @@ void main() {
         }
         f.reply(socket, request, null);
       };
-      expect(f.remote.store.sourceById(id)!.content, 'committed body');
+      expect(
+        (await currentRead(
+          f.remote.store,
+          StoreReadQueries.source(id),
+        ))!.content,
+        'committed body',
+      );
       await f.remote.index(id);
-      expect(f.remote.store.sourceById(id)!.state, 'indexed');
+      expect(
+        (await currentRead(f.remote.store, StoreReadQueries.source(id)))!.state,
+        'indexed',
+      );
       expect(
         await f.remote.graphEmbeddings([
-          f.remote.store.sourceById(id)!.toRow(),
+          (await currentRead(
+            f.remote.store,
+            StoreReadQueries.source(id),
+          ))!.toRow(),
         ]),
         {
           id: [1.0, 2.5],
@@ -475,7 +490,10 @@ void main() {
       );
       await f.remote.resume();
       await f.remote.delete(id);
-      expect(f.remote.store.sourceSummaries, isEmpty);
+      expect(
+        (await currentRead(f.remote.store, StoreReadQueries.sources())),
+        isEmpty,
+      );
       expect(
         f.requests.where((r) => r['method'] == 'application.resume'),
         hasLength(1),
@@ -753,7 +771,10 @@ void main() {
         'id': 19,
         'workspace_epoch': f.owner.workspaceEpoch,
       });
-      expect(connection.attachments(19), isEmpty);
+      expect(
+        (await currentRead(f.remote.store, StoreReadQueries.attachments(19))),
+        isEmpty,
+      );
       f.owner.db.execute(
         "INSERT INTO meetings(id,title,state) VALUES(19,'Fixture','ready')",
       );
@@ -768,7 +789,13 @@ void main() {
           }),
         ],
       );
-      expect(connection.attachments(19).single['fileId'], 'doc');
+      expect(
+        (await currentRead(
+          f.remote.store,
+          StoreReadQueries.attachments(19),
+        )).single.fileId,
+        'doc',
+      );
       await connection.reminders(DateTime.now(), (_) async {
         fail('Service owns reminders');
       });
@@ -1225,7 +1252,12 @@ void main() {
     );
     expect(created, isNotNull);
     await created!.closed;
-    expect(() => created!.store.preference('unused'), throwsA(anything));
+    final retired = await created!.store.read(
+      StoreReadQueries.preference('unused'),
+    );
+    expect(retired.freshness, ReadFreshness.cancelled);
+    expect(retired.error!.code, RpcErrorCode.cancelled);
+    expect(retired.value, isNull);
     expect(created!.client.isClosed, isTrue);
     expect(f.sockets.length, greaterThan(connections));
   });

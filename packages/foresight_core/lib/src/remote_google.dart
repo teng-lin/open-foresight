@@ -158,18 +158,6 @@ class RemoteGoogleConnections implements ConnectedSources {
     await domain.command(Operation.googleAttachments, {'id': meeting});
   }
 
-  @override
-  List<Map<String, dynamic>> attachments(int meeting) {
-    return List.unmodifiable(
-      domain.store
-          .calendarAttachments(meeting)
-          .map(
-            (attachment) =>
-                Map<String, dynamic>.unmodifiable(attachment.toRow()),
-          ),
-    );
-  }
-
   Future<void> reminders(
     DateTime now,
     Future<void> Function(String) deliver,

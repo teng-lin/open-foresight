@@ -67,7 +67,6 @@ abstract interface class ConnectedSources {
   Future<void> syncCalendar({String calendarId = 'primary', DateTime? now});
   Future<void> refresh();
   Future<void> importAttachments(int meeting);
-  List<Map<String, dynamic>> attachments(int meeting);
 }
 
 /// Optional high-frequency telemetry, independent of workspace changes.
