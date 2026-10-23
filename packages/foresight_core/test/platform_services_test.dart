@@ -208,6 +208,78 @@ void main() {
   );
 
   test(
+    'direct Linux package roles derive the root and reject launcher overrides',
+    () {
+      final root = Directory('${scratch.path}/Linux bundle')..createSync();
+      for (final name in ['app', 'bin', 'lib', 'share/open-foresight']) {
+        Directory('${root.path}/$name').createSync(recursive: true);
+      }
+      final file = File('${root.path}/share/open-foresight/runtime.json');
+      file.writeAsStringSync(
+        jsonEncode({
+          'FORESIGHT_INSTALL_ROOT': '/untrusted/config/root',
+          'FORESIGHT_NATIVE': '../../lib/native.so',
+          'FORESIGHT_RUNTIME_REVISION': 'package-revision',
+        }),
+      );
+      final injected = {
+        'FORESIGHT_INSTALL_ROOT': '/untrusted/env/root',
+        'FORESIGHT_NATIVE': '/untrusted/env/library.so',
+        'FORESIGHT_RESOURCES': '/untrusted/env/resources',
+        'FORESIGHT_RUNTIME_REVISION': 'untrusted-revision',
+        'FORESIGHT_DEVELOPMENT_DESKTOP_EXECUTABLES': '["/untrusted/desktop"]',
+      };
+      for (final role in [
+        'bin/foresight-service',
+        'bin/foresight-mcp',
+        'app/open-foresight',
+      ]) {
+        final entry = File('${root.path}/$role')
+          ..writeAsStringSync('native role fixture');
+        final config = RuntimeConfiguration.resolve(
+          environment: injected,
+          executable: entry.path,
+        );
+        expect(
+          config['FORESIGHT_INSTALL_ROOT'],
+          root.resolveSymbolicLinksSync(),
+        );
+        expect(config['FORESIGHT_RUNTIME_REVISION'], 'package-revision');
+        expect(
+          config.nativeLibrary,
+          '${root.path}/share/open-foresight/../../lib/native.so',
+        );
+        expect(config['FORESIGHT_DEVELOPMENT_DESKTOP_EXECUTABLES'], isNull);
+      }
+      file.deleteSync();
+      expect(
+        () => RuntimeConfiguration.resolve(
+          environment: injected,
+          executable: '${root.path}/bin/foresight-service',
+        ),
+        throwsStateError,
+      );
+      file.writeAsStringSync(
+        jsonEncode({'FORESIGHT_NATIVE': '../../lib/native.so'}),
+      );
+      expect(
+        () => RuntimeConfiguration.resolve(
+          environment: injected,
+          executable: '${root.path}/bin/foresight-service',
+        ),
+        throwsStateError,
+      );
+      expect(
+        RuntimeConfiguration.resolve(
+          environment: injected,
+          executable: '${scratch.path}/build/application/foresight-service',
+        )['FORESIGHT_DEVELOPMENT_DESKTOP_EXECUTABLES'],
+        injected['FORESIGHT_DEVELOPMENT_DESKTOP_EXECUTABLES'],
+      );
+    },
+  );
+
+  test(
     'bundle resource lookup survives spaces, nested service and minimal environment',
     () {
       final app = '${scratch.path}/Open Foresight.app';

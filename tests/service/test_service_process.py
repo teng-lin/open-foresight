@@ -181,13 +181,13 @@ class ApprovalDesktop:
 
 
 class McpPeer:
-    def __init__(self, env):
+    def __init__(self, env, *, executable=None):
         self.runtime = Path(env["FORESIGHT_RUNTIME"])
         self.service_pid = None
         self.previous_reply = None
         self.previous_error = None
         self.process = subprocess.Popen(
-            [str(MCP)],
+            [str(executable or MCP)],
             env=env,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -298,6 +298,90 @@ class McpPeer:
                 self.process.wait(timeout=30)
             self.process.stdout.close()
             self.process.stderr.close()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux native package layout")
+@pytest.mark.parametrize("entrypoint", ["service", "mcp"])
+def test_direct_packaged_entrypoints_enforce_identity_without_launcher(tmp_path, entrypoint):
+    from package import write_runtime_configuration
+
+    bundle = tmp_path / "package"
+    for name in ("app", "bin", "lib", "share/open-foresight"):
+        (bundle / name).mkdir(parents=True, exist_ok=True)
+    for source, name in ((SERVICE, "bin/foresight-service"), (MCP, "bin/foresight-mcp"),
+                         (NATIVE, "lib/libforesight_native.so"), (HELPER, "bin/ForesightHelper")):
+        shutil.copy2(source, bundle / name)
+    desktop = bundle / "app/open-foresight"
+    subprocess.run([os.environ.get("CXX", "c++"), "-std=c++17",
+                    str(ROOT / "packages/foresight_core/test/fixtures/desktop_peer.cpp"),
+                    "-o", str(desktop)], check=True, capture_output=True, text=True, timeout=60)
+    impostor = tmp_path / "untrusted-desktop"
+    shutil.copy2(desktop, impostor)
+    write_runtime_configuration(bundle, "a" * 40, "cpu", 0)
+    # No launcher-selected resources, code paths, installation root or revision.
+    env = {key: value for key, value in os.environ.items() if not key.startswith("FORESIGHT_")}
+    env.update(FORESIGHT_DATA=str(tmp_path / "data"), FORESIGHT_RUNTIME=str(tmp_path / "r"),
+               FORESIGHT_DEVELOPMENT_DESKTOP_EXECUTABLES=json.dumps([str(impostor)]),
+               LD_LIBRARY_PATH=str(bundle / "lib") + os.pathsep + env.get("LD_LIBRARY_PATH", ""))
+    log = (tmp_path / "packaged-service.log").open("w+")
+    owner = None
+    mcp = None
+    peers = []
+    try:
+        if entrypoint == "service":
+            owner = subprocess.Popen([str(bundle / "bin/foresight-service")], env=env,
+                                     stdout=log, stderr=subprocess.STDOUT)
+        else:
+            mcp = McpPeer(env, executable=bundle / "bin/foresight-mcp")
+            mcp.initialize()
+        socket_path = tmp_path / "r/application.sock"
+        deadline = time.monotonic() + 20
+        while not socket_path.exists():
+            assert time.monotonic() < deadline, "packaged service did not publish its endpoint"
+            assert owner is None or owner.poll() is None, "packaged service exited"
+            time.sleep(.02)
+        peer = Peer(socket_path)
+        peers.append(peer)
+        status = peer.call("status")
+        assert status["installation_root"] == str(bundle.resolve())
+        assert status["runtime_revision"] == "a" * 40
+        thief = DesktopPeer(impostor, socket_path)
+        peers.append(thief)
+        token = tmp_path / "data/.desktop-capability"
+        with pytest.raises(RuntimeError, match="verified desktop"):
+            thief.call("security.attach_desktop", {"token": token.read_text(), "visible": True})
+        trusted = DesktopPeer(desktop, socket_path)
+        peers.append(trusted)
+        assert trusted.call("security.attach_desktop", {"token": token.read_text(), "visible": True}) is True
+        model = tmp_path / "model"
+        model.write_text("unused model")
+        with pytest.raises(RuntimeError, match="outside this installation"):
+            trusted.call("models.generation", {"path": str(model), "runtime": "/usr/bin/true"})
+    finally:
+        for peer in peers:
+            if isinstance(peer, DesktopPeer):
+                peer.shutdown()
+            peer.close()
+        stopped = subprocess.run([str(bundle / "bin/foresight-service"), "--stop"], env=env,
+                                 capture_output=True, text=True, timeout=30)
+        print(stopped.stdout, stopped.stderr)
+        if mcp is not None:
+            mcp.close()
+        if owner is not None:
+            try:
+                owner.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                owner.kill()
+                owner.wait(timeout=10)
+        log.seek(0)
+        print(log.read())
+        log.close()
+    if entrypoint == "service":
+        (bundle / "share/open-foresight/runtime.json").unlink()
+        missing = subprocess.run([str(bundle / "bin/foresight-service"), "--status"],
+                                 env=env, capture_output=True, text=True, timeout=30)
+        assert missing.returncode != 0
+        assert "runtime configuration is missing" in missing.stderr
 
 
 @pytest.fixture

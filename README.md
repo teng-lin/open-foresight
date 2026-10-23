@@ -269,6 +269,30 @@ native stop-sequence extension required by note enhancement. Use the container
 build for the source-built runtime and bundled Whisper. See
 [native inference](services/inference/README.md) for runtime details.
 
+For Linux Flutter development, first build the native library, helper and service
+with the command above. From the repository root, start the debug desktop with an
+explicit native executable allowlist and a separate development profile:
+
+```sh
+task_root="$PWD"
+export FORESIGHT_NATIVE="$task_root/build/native/libforesight_native.so"
+export FORESIGHT_HELPER="$task_root/build/services/helper/ForesightHelper"
+export FORESIGHT_SERVICE="$task_root/build/application/foresight-service"
+export FORESIGHT_DATA="$task_root/build/development-data"
+export FORESIGHT_RUNTIME="$(mktemp -d /var/tmp/of-dev.XXXXXX)"
+export FORESIGHT_DEVELOPMENT_DESKTOP_EXECUTABLES="$(.venv/bin/python -c 'import json,pathlib; print(json.dumps([str(pathlib.Path("apps/desktop/build/linux/x64/debug/bundle/open-foresight").absolute())]))')"
+unset FORESIGHT_INSTALL_ROOT FORESIGHT_RUNTIME_REVISION
+cd apps/desktop
+flutter run -d linux
+```
+
+The service verifies the debug runner's actual Unix peer and native executable;
+the allowlist cannot authorize a Dart script or interpreter. Keep these variables
+in the service's launch environment. A packaged installation ignores the
+development allowlist, including when its native service or MCP binary is invoked
+directly. Use the [macOS build guide](docs/platforms/macos-support.md) for the
+supported Mac application bundle path.
+
 The host-built bundle is written to `dist/open-foresight/` and contains three programs:
 
 - `open-foresight`: the desktop app

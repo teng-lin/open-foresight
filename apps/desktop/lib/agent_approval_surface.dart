@@ -50,7 +50,8 @@ class _AgentApprovalSurfaceState extends State<AgentApprovalSurface>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
+    if (state == AppLifecycleState.resumed ||
+        state == AppLifecycleState.inactive) {
       unawaited(
         widget.domain.setDesktopVisible(true).catchError((Object error) {
           if (mounted)
@@ -58,6 +59,7 @@ class _AgentApprovalSurfaceState extends State<AgentApprovalSurface>
         }),
       );
     } else if (state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
       unawaited(
         widget.domain.setDesktopVisible(false).catchError((Object _) {}),

@@ -1,5 +1,12 @@
 # Linux packages and CI
 
+The native desktop, service and MCP entrypoints derive their installation root
+from the canonical executable and package layout. They load
+`share/open-foresight/runtime.json` even when invoked directly without a shell
+launcher. Its relative code paths and revision are authoritative, and a missing
+configuration fails with reinstall guidance. Packaged processes ignore the
+development desktop executable allowlist.
+
 Main CI builds and tests one portable x86-64 application bundle for its in-run
 checks. Release candidates are produced on demand through `release.yml`;
 `.github/workflows/linux-packages.yml` retrieves the exact tested release-tier

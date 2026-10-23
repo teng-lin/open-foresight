@@ -18,7 +18,7 @@ const _testHookKeys = {
 };
 
 /// The same immutable resource map is used by Finder, MCP and detached workers.
-/// Paths in runtime.json are relative to Contents/Resources, never the cwd.
+/// Paths in runtime.json are relative to the bundle's resources, never the cwd.
 const _scalarRuntimeKeys = {
   'FORESIGHT_LITERT_BACKEND',
   'FORESIGHT_RUNTIME_REVISION',
@@ -38,6 +38,28 @@ const _bundledAuthoritativeScalarKeys = {
   'FORESIGHT_QUERY_TERMS_URL',
 };
 
+String? _linuxBundleRoot(String executable) {
+  final file = File(executable);
+  final path = file.existsSync()
+      ? file.resolveSymbolicLinksSync()
+      : file.absolute.path;
+  final entry = File(path);
+  final directory = entry.parent.path.split(Platform.pathSeparator).last;
+  final name = entry.uri.pathSegments.last;
+  if (!((directory == 'bin' &&
+          {'foresight-service', 'foresight-mcp'}.contains(name)) ||
+      (directory == 'app' && name == 'open-foresight'))) {
+    return null;
+  }
+  final root = entry.parent.parent;
+  if (!Directory('${root.path}/app').existsSync() ||
+      !Directory('${root.path}/lib').existsSync() ||
+      !Directory('${root.path}/share/open-foresight').existsSync()) {
+    return null;
+  }
+  return root.resolveSymbolicLinksSync();
+}
+
 class RuntimeConfiguration {
   final Map<String, String> environment;
   RuntimeConfiguration(this.environment);
@@ -54,16 +76,22 @@ class RuntimeConfiguration {
     }
     final path = executable ?? Platform.resolvedExecutable;
     final marker = path.lastIndexOf('.app/Contents/');
-    final bundled = marker >= 0;
+    final linuxRoot = _linuxBundleRoot(path);
+    final bundled = marker >= 0 || linuxRoot != null;
+    // Keep Linux's existing scalar opt-ins; this boundary owns code paths and
+    // the installation revision. Mac's distribution-owned terms stay sealed.
+    final authoritativeScalars = linuxRoot == null
+        ? _bundledAuthoritativeScalarKeys
+        : const {'FORESIGHT_RUNTIME_REVISION'};
     if (bundled) {
-      // Resource/code selection belongs to the signed application. A private
+      // Resource/code selection belongs to the installed application. A private
       // handoff authenticates file ownership, not the supplied library paths.
       values.removeWhere(
         (key, _) =>
             key.startsWith('FORESIGHT_') &&
             !{
               ..._scalarRuntimeKeys.where(
-                (key) => !_bundledAuthoritativeScalarKeys.contains(key),
+                (key) => !authoritativeScalars.contains(key),
               ),
               'FORESIGHT_DATA',
               'FORESIGHT_RUNTIME',
@@ -75,7 +103,9 @@ class RuntimeConfiguration {
     }
     final resources =
         (bundled ? null : values['FORESIGHT_RESOURCES']) ??
-        (marker < 0
+        (linuxRoot != null
+            ? '$linuxRoot/share/open-foresight'
+            : marker < 0
             ? null
             : '${path.substring(0, marker + 4)}/Contents/Resources');
     if (resources != null) {
@@ -103,7 +133,7 @@ class RuntimeConfiguration {
               : '$resources/$relative';
           if (bundled &&
               (!_scalarRuntimeKeys.contains(entry.key) ||
-                  _bundledAuthoritativeScalarKeys.contains(entry.key))) {
+                  authoritativeScalars.contains(entry.key))) {
             values[entry.key] = value;
           } else {
             values.putIfAbsent(entry.key, () => value);
@@ -114,6 +144,19 @@ class RuntimeConfiguration {
       if (bundled && !values.containsKey('FORESIGHT_NATIVE')) {
         throw StateError(
           'The application native runtime is missing. Reinstall Open Foresight.',
+        );
+      }
+      if (linuxRoot != null) {
+        values['FORESIGHT_INSTALL_ROOT'] = linuxRoot;
+        if ((values['FORESIGHT_RUNTIME_REVISION'] ?? '').isEmpty) {
+          throw StateError(
+            'The application runtime revision is missing. Reinstall Open Foresight.',
+          );
+        }
+      }
+      if (bundled) {
+        values.removeWhere(
+          (key, _) => key.startsWith('FORESIGHT_DEVELOPMENT_'),
         );
       }
     }

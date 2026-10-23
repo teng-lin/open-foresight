@@ -31,6 +31,7 @@ class ApprovalDomain implements RemoteDomain {
   void Function(Map<String, dynamic>)? events;
   bool attached = false;
   bool visible = true;
+  final visibility = <bool>[];
   bool failAttach = false;
   @override
   Future<void> enableDesktopApprovals(
@@ -49,6 +50,7 @@ class ApprovalDomain implements RemoteDomain {
   @override
   Future<void> setDesktopVisible(bool value) async {
     visible = value;
+    visibility.add(value);
   }
 
   @override
@@ -61,6 +63,38 @@ class ApprovalDomain implements RemoteDomain {
 }
 
 void main() {
+  testWidgets('visibility treats inactive consistently after a hidden window', (
+    tester,
+  ) async {
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    addTearDown(
+      () => tester.binding.handleAppLifecycleStateChanged(
+        AppLifecycleState.resumed,
+      ),
+    );
+    final domain = ApprovalDomain();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AgentApprovalSurface(domain: domain, child: const Scaffold()),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(domain.visibility, [true]);
+    for (final state in [
+      AppLifecycleState.hidden,
+      AppLifecycleState.inactive,
+      AppLifecycleState.resumed,
+      AppLifecycleState.paused,
+      AppLifecycleState.detached,
+    ]) {
+      tester.binding.handleAppLifecycleStateChanged(state);
+      await tester.pumpAndSettle();
+    }
+    expect(domain.visibility, [true, false, true, true, false, false]);
+    expect(domain.attached, true);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('an approval dialog closes when its service connection drops', (
     tester,
   ) async {

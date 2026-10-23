@@ -210,6 +210,14 @@ def test_complete_gpu_bundle_keeps_dependency_closure_and_receipts(
     assert manifest["query_detector_runtime"]["bundled"] is True
     assert manifest["whisper_runtime"] == "vulkan"
     assert manifest["revision"] == "a" * 40
+    configuration = json.loads((case.output / "share/open-foresight/runtime.json").read_text())
+    assert configuration["FORESIGHT_INSTALL_ROOT"] == "../.."
+    assert configuration["FORESIGHT_RUNTIME_REVISION"] == manifest["revision"]
+    assert configuration["FORESIGHT_NATIVE"] == "../../lib/libforesight_native.so"
+    assert configuration["FORESIGHT_LITERT_BACKEND"] == "gpu"
+    assert configuration["FORESIGHT_WHISPER_RUNTIME"] == "../../bin/whisper-cli-vulkan"
+    assert configuration["FORESIGHT_LITERT_PYTHON"] == "../../bin/query-python"
+    assert "share/open-foresight/runtime.json" in {entry["path"] for entry in manifest["files"]}
     assert set(manifest["bundled_libraries"]) == {"libgrpc.so", "libsqlite3.so.0"}
     assert (case.output / "lib/libsqlite3.so").is_symlink()
     assert (case.output / "bin/query-python").stat().st_mode & 0o111
