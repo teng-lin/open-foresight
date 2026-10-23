@@ -1,4 +1,4 @@
-part of 'main.dart';
+part of 'application.dart';
 
 class _OnboardingController extends _FeatureController {
   _OnboardingController(super.shell);

@@ -1,4 +1,4 @@
-part of 'main.dart';
+part of 'application.dart';
 
 class _ChatController extends _FeatureController {
   _ChatController(super.shell);

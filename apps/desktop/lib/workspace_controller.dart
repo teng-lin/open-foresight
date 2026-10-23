@@ -1,4 +1,4 @@
-part of 'main.dart';
+part of 'application.dart';
 
 /// Feature controllers own their state. The host supplies lifecycle and the
 /// single UI update boundary; cross-feature work names the receiving feature.

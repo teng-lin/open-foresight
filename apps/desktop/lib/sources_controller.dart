@@ -1,4 +1,4 @@
-part of 'main.dart';
+part of 'application.dart';
 
 // Each graph.embeddings reply must fit the service's 16 MiB frame limit.
 const _graphEmbeddingBatch = 128;

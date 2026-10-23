@@ -1,4 +1,4 @@
-part of 'main.dart';
+part of 'application.dart';
 
 class _IntegrationsController extends _FeatureController {
   _IntegrationsController(super.shell);

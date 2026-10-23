@@ -1,4 +1,4 @@
-part of 'main.dart';
+part of 'application.dart';
 
 class _SettingsController extends _FeatureController {
   _SettingsController(super.shell);

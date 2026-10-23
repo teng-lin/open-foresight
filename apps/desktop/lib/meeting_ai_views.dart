@@ -1,4 +1,4 @@
-part of 'main.dart';
+part of 'application.dart';
 
 extension _MeetingAiViews on _MeetingsController {
   bool _meetingActionCurrent(

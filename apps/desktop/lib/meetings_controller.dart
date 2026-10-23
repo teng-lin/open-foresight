@@ -1,4 +1,4 @@
-part of 'main.dart';
+part of 'application.dart';
 
 const _meetingAssistantMinWidth = 760.0;
 
