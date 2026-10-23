@@ -118,6 +118,8 @@ APPROVAL_ACTIONS = {
     "sources.import": "Import or replace text",
     "sources.import_file": "Import a local file",
     "preferences.set": "Change an application setting",
+    "labels.set": "Change source labels",
+    "graph.save": "Save source graph data",
 }
 
 

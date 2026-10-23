@@ -35,6 +35,49 @@ def framed(text):
     return text.replace("\\", "\\\\").replace("\r", "\\r").replace("\n", "\\n")
 
 
+SOURCE_GRAPH_APPROVALS = [
+    (
+        "labels.set",
+        {"id": "source-alpha", "labels": ["Bundle Smoke"]},
+        "Change source labels",
+        "id: source-alpha\nlabels: [Bundle Smoke]",
+    ),
+    (
+        "graph.save",
+        {
+            "identity": "bundle-storage-smoke",
+            "sources": [{"id": "source-alpha", "revision": 2}],
+            "vectors": {},
+            "points": {"source-alpha": [-0.5, 0.25, 0.0]},
+        },
+        "Save source graph data",
+        "identity: bundle-storage-smoke\n"
+        "sources: [{id: source-alpha, revision: 2}]\n"
+        "vectors: {}\npoints: {source-alpha: [-0.5, 0.25, 0.0]}",
+    ),
+]
+
+
+@pytest.mark.parametrize("method,args,caption,details", SOURCE_GRAPH_APPROVALS)
+def test_source_graph_consent_uses_complete_method_and_nested_argument_facts(
+    method, args, caption, details
+):
+    facts = gui.approval_facts(method, args)
+    assert facts == (
+        "Allow this operation?",
+        caption,
+        "External client (identity unverified)",
+        details,
+    )
+    assert gui.matches_approval(approval_dialog(details, action=caption), facts)
+    assert not gui.matches_approval(
+        approval_dialog(
+            details, action="Change application data or access a connected service"
+        ),
+        facts,
+    )
+
+
 @pytest.mark.parametrize(
     "details",
     [
@@ -349,6 +392,62 @@ def test_non_capture_request_needs_actual_correlated_gui_click(owned):
     ) == {"id": "saved"}
     assert host.evidence["approvals"][0]["clicked"]
     peer.close.assert_not_called()
+
+
+@pytest.mark.parametrize("method,args,caption,details", SOURCE_GRAPH_APPROVALS)
+@pytest.mark.parametrize(
+    "mismatch", [None, "action", "arguments", "requester", "argument_frames", "risk"]
+)
+def test_source_graph_request_only_clicks_its_complete_visible_facts(
+    owned, method, args, caption, details, mismatch
+):
+    host = owned.host.start()
+    pending, released = threading.Event(), threading.Event()
+    clicks = []
+    shown_caption = "Import or replace text" if mismatch == "action" else caption
+    shown_details = (
+        "id: unrelated-source"
+        if mismatch == "arguments"
+        else "unrelated: prefixTEXT:" + details
+        if mismatch == "argument_frames"
+        else details
+    )
+    snapshot = approval_dialog(shown_details, action=shown_caption)
+    if mismatch == "requester":
+        snapshot = snapshot.replace(
+            "External client (identity unverified)",
+            "Desktop connection (identity unverified)",
+        )
+    if mismatch == "risk":
+        snapshot += "\nTEXT:Private network access requested"
+
+    def ui(button="", **kwargs):
+        if button:
+            assert kwargs["expected_snapshot"] == snapshot
+            clicks.append(button)
+            released.set()
+            return "CLICKED:" + button
+        return snapshot if pending.is_set() and not released.is_set() else ""
+
+    def call(actual_method, actual_args):
+        assert actual_method == method and actual_args == args
+        pending.set()
+        assert released.wait(1)
+        return "request settled"
+
+    host._ui = ui
+    peer = SimpleNamespace(call=call, close=Mock(side_effect=released.set))
+    if mismatch is None:
+        assert host.call(peer, method, args) == "request settled"
+        assert clicks == ["Allow once"]
+        assert host.evidence["approvals"][-1]["dialog_closed"] is True
+        peer.close.assert_not_called()
+    else:
+        with pytest.raises(RuntimeError, match="does not match"):
+            host.call(peer, method, args)
+        assert clicks == []
+        assert host.evidence["approvals"][-1]["clicked"] is False
+        peer.close.assert_called_once()
 
 
 @pytest.mark.parametrize(

@@ -118,6 +118,8 @@ class _AgentApprovalSurfaceState extends State<AgentApprovalSurface>
       'google.sign_in': 'Connect a Google account',
       'google.configure': 'Configure a Google account',
       'preferences.set': 'Change an application setting',
+      'labels.set': 'Change source labels',
+      'graph.save': 'Save source graph data',
       'answer.stream': 'Send a question to web search',
       'answer': 'Send a question to web search',
     };

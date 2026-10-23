@@ -74,6 +74,77 @@ class HeldVisibilityDomain extends ApprovalDomain {
 }
 
 void main() {
+  for (final (method, caption, args) in [
+    (
+      'labels.set',
+      'Change source labels',
+      <String, dynamic>{
+        'id': 'source-alpha',
+        'labels': ['Bundle Smoke'],
+      },
+    ),
+    (
+      'graph.save',
+      'Save source graph data',
+      <String, dynamic>{
+        'identity': 'bundle-storage-smoke',
+        'sources': [
+          {'id': 'source-alpha', 'revision': 2},
+        ],
+        'vectors': <String, dynamic>{},
+        'points': {
+          'source-alpha': [-0.5, 0.25, 0.0],
+        },
+      },
+    ),
+  ]) {
+    testWidgets('$method approval names its action before consent', (
+      tester,
+    ) async {
+      final domain = ApprovalDomain();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: AgentApprovalSurface(domain: domain, child: const Scaffold()),
+        ),
+      );
+      await tester.pumpAndSettle();
+      domain.events!({
+        'event': 'approval',
+        'approval_id': 'named-operation',
+        'method': method,
+        'args': args,
+        'requester': 'External client (identity unverified)',
+        'risk_flags': <String>[],
+      });
+      await tester.pumpAndSettle();
+      expect(find.text(caption), findsOneWidget);
+      expect(
+        find.text('Change application data or access a connected service'),
+        findsNothing,
+      );
+      expect(
+        find.text('External client (identity unverified)'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining(
+          method == 'labels.set'
+              ? 'id: source-alpha\nlabels: [Bundle Smoke]'
+              : 'sources: [{id: source-alpha, revision: 2}]',
+        ),
+        findsOneWidget,
+      );
+      expect(domain.client.decisions, isEmpty);
+      await tester.tap(find.text('Allow once'));
+      await tester.pumpAndSettle();
+      expect(domain.client.decisions, [
+        {'approval_id': 'named-operation', 'allow': true},
+      ]);
+      await tester.pumpWidget(const SizedBox.shrink());
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   testWidgets('a visible retry clears a failed initial approval attachment', (
     tester,
   ) async {
