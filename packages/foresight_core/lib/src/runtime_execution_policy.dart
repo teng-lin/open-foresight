@@ -14,7 +14,7 @@ String canonicalRuntimePath(String path) =>
 /// installed root through registration, stored settings or symbolic links.
 String requireInstalledRuntime(String runtime) {
   final root = configuredInstallationRoot;
-  if (root == null || runtime.trim().isEmpty) return runtime;
+  if (root == null || runtime.isEmpty) return runtime;
   final selected = canonicalRuntimePath(runtime);
   if (!selected.startsWith('$root/')) {
     throw RpcError(

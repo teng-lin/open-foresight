@@ -46,6 +46,81 @@ void main() {
   });
 
   test(
+    'empty and unbundled runtime selections keep their existing meaning',
+    () {
+      runtimeConfiguration.environment['FORESIGHT_INSTALL_ROOT'] = root.path;
+      expect(requireInstalledRuntime(''), '');
+      final bundledWhitespace = File('${root.path}/ ')
+        ..writeAsStringSync('data');
+      expect(
+        requireInstalledRuntime(bundledWhitespace.path),
+        bundledWhitespace.resolveSymbolicLinksSync(),
+      );
+      runtimeConfiguration.environment.remove('FORESIGHT_INSTALL_ROOT');
+      expect(requireInstalledRuntime(' '), ' ');
+      expect(requireInstalledRuntime(''), '');
+    },
+  );
+
+  test(
+    'whitespace query runtime cannot execute outside the installation',
+    () async {
+      final installed = Directory('${root.path}/installed')..createSync();
+      final outside = Directory('${root.path}/outside')..createSync();
+      final marker = File('${outside.path}/executed');
+      final executable = File('${outside.path}/ ')
+        ..writeAsStringSync('''#!/bin/sh
+printf executed > ${jsonEncode(marker.path)}
+printf '%s\\n' '{"type":"ready"}'
+while IFS= read -r request; do
+  printf '%s\\n' '{"type":"result","id":"request","text":"outside"}'
+done
+''');
+      expect(
+        (await Process.run('/bin/chmod', ['700', executable.path])).exitCode,
+        0,
+      );
+      final childEnvironment = {'PATH': outside.path};
+      // This is a real executable name, not an absent/default runtime value.
+      final control = await Process.run(
+        ' ',
+        [],
+        environment: childEnvironment,
+        workingDirectory: outside.path,
+      ).timeout(const Duration(seconds: 3));
+      expect(control.exitCode, 0, reason: '${control.stderr}');
+      expect(marker.readAsStringSync(), 'executed');
+      marker.deleteSync();
+
+      runtimeConfiguration.environment['FORESIGHT_INSTALL_ROOT'] =
+          installed.path;
+      var spawned = false;
+      final runtime = DedicatedQueryRuntime(
+        python: ' ',
+        worker: ' ',
+        model: '/model-data',
+        timeout: const Duration(seconds: 3),
+        startProcess: (program, arguments) {
+          spawned = true;
+          return Process.start(
+            program,
+            arguments,
+            environment: childEnvironment,
+            workingDirectory: outside.path,
+          );
+        },
+      );
+      addTearDown(runtime.close);
+      await expectLater(
+        runtime.complete('question', 'request'),
+        throwsA(denied),
+      );
+      expect(spawned, false);
+      expect(marker.existsSync(), false);
+    },
+  );
+
+  test(
     'installed query processes execute canonical runtime and worker paths',
     () async {
       runtimeConfiguration.environment['FORESIGHT_INSTALL_ROOT'] = root.path;
