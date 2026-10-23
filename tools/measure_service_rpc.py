@@ -14,13 +14,15 @@ Tracked files are NEVER exempted by the generated-output allowance.
 The workload uses pinned local models, real CPU inference and an owned service.
 Capture uses deterministic synthetic PCM through the production FIFO protocol;
 it proves progressing samples, not microphone or transcription quality. Timing
-does not replace deterministic liveness tests. Reports retain all 100 samples
-per condition, including incomplete/failed runs and the service's full log.
+does not replace deterministic liveness tests. Completed conditions retain all 100 samples. Incomplete runs retain every
+attempt collected before failure and the service's full log. A dedicated Linux
+supervisor pins each owned process group until service descendants settle.
 """
 
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import importlib
 import json
@@ -37,6 +39,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 from typing import Any, Callable
 
 _pins = importlib.import_module("tools.model_pins" if __package__ else "model_pins")
@@ -235,12 +238,26 @@ def capture_active(status: dict[str, Any]) -> bool:
     )
 
 
-def sample(peer: Peer, *, delay: float = .01) -> dict[str, Any]:
-    rows, states = [], []
-    for _ in range(100):
+def sample(peer: Peer, *, delay: float = .01,
+           evidence: dict[str, Any] | None = None) -> dict[str, Any]:
+    result = evidence if evidence is not None else {}
+    rows: list[float] = []
+    states: list[dict[str, Any]] = []
+    attempts: list[dict[str, Any]] = []
+    result.update(n=0, raw_ms=rows, state_evidence=states, attempts=attempts, status="incomplete")
+    for index in range(100):
         started = time.perf_counter_ns()
-        status = peer.call("status")
-        rows.append((time.perf_counter_ns() - started) / 1e6)
+        try:
+            status = peer.call("status")
+        except BaseException as error:
+            attempts.append({"index": index, "elapsed_ms": (time.perf_counter_ns() - started) / 1e6,
+                             "error": repr(error)})
+            result["error"] = repr(error)
+            raise
+        elapsed = (time.perf_counter_ns() - started) / 1e6
+        rows.append(elapsed)
+        attempts.append({"index": index, "elapsed_ms": elapsed})
+        result["n"] = len(rows)
         generation, capture = status.get("generation") or {}, status.get("capture") or {}
         states.append({
             "generation_generating": bool(generation.get("generating")),
@@ -251,12 +268,12 @@ def sample(peer: Peer, *, delay: float = .01) -> dict[str, Any]:
         if delay:
             time.sleep(delay)
     p95 = sorted(rows)[math.ceil(.95 * len(rows)) - 1]
-    return {"n": len(rows), "p50_ms": statistics.median(rows), "p95_ms": p95,
-            "max_ms": max(rows), "raw_ms": rows, "state_evidence": states,
-            "generation_active_count": sum(s["generation_generating"] for s in states),
-            "native_active_count": sum(s["native_active"] for s in states),
-            "capture_active_count": sum(s["capture_active"] for s in states),
-            "target_p95_ms": 50, "target_met": p95 < 50, "load": os.getloadavg()}
+    result.update(status="complete", p50_ms=statistics.median(rows), p95_ms=p95,
+                  max_ms=max(rows), generation_active_count=sum(s["generation_generating"] for s in states),
+                  native_active_count=sum(s["native_active"] for s in states),
+                  capture_active_count=sum(s["capture_active"] for s in states),
+                  target_p95_ms=50, target_met=p95 < 50, load=os.getloadavg())
+    return result
 
 
 def validate_sample(label: str, result: dict[str, Any]) -> None:
@@ -318,6 +335,68 @@ def host_state() -> dict[str, Any]:
             "cpu_stat": read("/proc/stat")}
 
 
+def group_members(group: int) -> list[int]:
+    """Inspect Linux membership while the supervisor pins the session/group ID."""
+    members = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdecimal() or int(entry.name) == group:
+            continue
+        try:
+            # comm is parenthesized and may itself contain spaces or ')'.
+            fields = (entry / "stat").read_text().rpartition(")")[2].split()
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        if int(fields[2]) == group and int(fields[3]) == group:
+            members.append(int(entry.name))
+    return members
+
+
+def service_supervisor(service: Path, state: Path) -> None:
+    """Keep a live session leader until the service and orphan descendants settle.
+
+    The supervisor is a Linux child subreaper. Even when the service exits first,
+    its group cannot be reused while this process remains alive (or unreaped).
+    TERM asks the group to stop; the owner can KILL the same pinned group after
+    its deadline. Unexpected supervisor errors kill that group before exiting.
+    """
+    if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "Cannot establish owned child subreaper")
+    stopping = False
+
+    def stop(_signal: int, _frame: Any) -> None:
+        nonlocal stopping
+        stopping = True
+
+    signal.signal(signal.SIGTERM, stop)
+    try:
+        child = subprocess.Popen([str(service)])
+        details = {"pid": child.pid, "exit_code": None}
+        written: dict[str, Any] | None = None
+        while True:
+            code = child.poll()
+            details["exit_code"] = code
+            if written != details:
+                temporary = state.with_suffix(".tmp")
+                temporary.write_text(json.dumps(details))
+                temporary.replace(state)
+                written = details.copy()
+            if code is not None:
+                # Reap descendants adopted after the service exited. Do not
+                # reap the direct child before Popen has recorded its status.
+                try:
+                    while os.waitpid(-1, os.WNOHANG)[0]:
+                        pass
+                except ChildProcessError:
+                    pass
+                if stopping and not group_members(os.getpid()):
+                    return
+            time.sleep(.02)
+    except BaseException:
+        traceback.print_exc()
+        os.killpg(os.getpid(), signal.SIGKILL)
+        raise
+
+
 class Measurement:
     def __init__(self, args: argparse.Namespace, run: Path, report: dict[str, Any]):
         self.args, self.run, self.report = args, run, report
@@ -325,6 +404,7 @@ class Measurement:
         self.process: subprocess.Popen[bytes] | None = None
         self.thread: threading.Thread | None = None
         self.stream_failures: list[str] = []
+        self.cleanup_timeout = 30.0
 
     def connect(self) -> Peer:
         peer = Peer(self.run / "run/application.sock")
@@ -332,8 +412,9 @@ class Measurement:
         return peer
 
     def record(self, label: str, peer: Peer) -> None:
-        result = sample(peer)
+        result: dict[str, Any] = {}
         self.report["samples"][label] = result
+        result.update(sample(peer, evidence=result))
         # Retain raw failing qualifications before raising.
         validate_sample(label, result)
 
@@ -341,12 +422,18 @@ class Measurement:
         started = time.monotonic()
         with (self.run / "service.log").open("wb") as log:
             self.process = subprocess.Popen(
-                [str(self.args.service)], cwd=self.args.source,
+                [sys.executable, str(Path(__file__).resolve()), "_supervise",
+                 str(self.args.service), str(self.run / "service-state.json")], cwd=self.args.source,
                 env=environment(self.args, self.run), stdout=log, stderr=log,
                 start_new_session=True,
             )
 
+        self.report["owned_supervisor_pid"] = self.process.pid
+
         def ready() -> bool:
+            state = self.service_state()
+            if state.get("exit_code") is not None:
+                raise RuntimeError("Service exited during startup; see retained service.log")
             try:
                 self.connect()
                 return True
@@ -356,6 +443,7 @@ class Measurement:
                 return False
 
         wait_until(ready)
+        self.service_state()
         control = self.peers[0]
         control.call("status")
         self.report["startup_seconds"] = time.monotonic() - started
@@ -417,27 +505,38 @@ class Measurement:
         )
         self.report["status"] = "passed" if self.report["performance_target_met"] else "performance_target_missed"
 
+    def service_state(self) -> dict[str, Any]:
+        state = self.run / "service-state.json"
+        if not state.exists():
+            return {}
+        details: dict[str, Any] = json.loads(state.read_text())
+        self.report["owned_service_pid"] = details["pid"]
+        self.report["owned_service_exit_code"] = details["exit_code"]
+        return details
+
     def close(self) -> None:
         for peer in self.peers:
             peer.interrupt()
         process = self.process
         if process is not None:
             if process.poll() is None:
-                # The service and its capture/inference descendants share this
-                # invocation's new session. Never signal another service owner.
+                # The supervisor pins this invocation's session/group until its
+                # service and descendants settle. A timed-out wait has not reaped
+                # that leader, so escalation cannot target a reused group ID.
                 try:
                     os.killpg(process.pid, signal.SIGTERM)
                 except ProcessLookupError:
                     pass  # The owned process can exit between poll and signal.
                 try:
-                    process.wait(timeout=30)
+                    process.wait(timeout=self.cleanup_timeout)
                 except subprocess.TimeoutExpired:
                     try:
                         os.killpg(process.pid, signal.SIGKILL)
                     except ProcessLookupError:
                         pass
-                    process.wait(timeout=30)
-            self.report["owned_service_exit_code"] = process.returncode
+                    process.wait(timeout=self.cleanup_timeout)
+            self.report["owned_supervisor_exit_code"] = process.returncode
+            self.service_state()
         if self.thread is not None:
             self.thread.join(5)
             self.report["stream_thread_settled"] = not self.thread.is_alive()
@@ -484,6 +583,11 @@ def measure(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv and argv[0] == "_supervise":
+        service_supervisor(Path(argv[1]), Path(argv[2]))
+        return 0
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     verify = commands.add_parser("verify-export", help="run immediately after export, before compilation")

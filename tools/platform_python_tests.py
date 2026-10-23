@@ -40,7 +40,9 @@ SHARED = (
     "tests/inference/test_legacy_query_executor.py",
 )
 PLATFORM = {
-    "linux": (),
+    "linux": (
+        "tests/test_measure_service_rpc.py",
+    ),
     # These execute Apple tools/metadata APIs rather than portable mocks.
     "macos": (
         "tests/test_macos_bundle.py",

@@ -4,6 +4,8 @@ import argparse
 import hashlib
 import io
 import json
+import os
+import sys
 from pathlib import Path
 import shutil
 import socket
@@ -413,14 +415,14 @@ def test_full_workload_records_warm_stream_and_pcm_conditions_and_cleans_up(work
     assert all(row["n"] == 100 for row in workload.report["samples"].values())
     assert workload.peers[0].calls[-1] == ("meetings.stop", {})
     workload.close()
-    assert workload.report["owned_service_exit_code"] == -15
+    assert workload.report["owned_supervisor_exit_code"] == -15
     assert workload.report["stream_thread_settled"] is True
     assert all(peer.closed and peer.interrupted for peer in workload.peers)
 
 
 def test_workload_keeps_performance_target_miss_honest(workload, monkeypatch):
     original = rpc.sample
-    monkeypatch.setattr(rpc, "sample", lambda peer: {**original(peer, delay=0), "target_met": False})
+    monkeypatch.setattr(rpc, "sample", lambda peer, **_kwargs: {**original(peer, delay=0), "target_met": False})
     workload.workload()
     assert workload.report["status"] == "performance_target_missed"
     workload.close()
@@ -439,7 +441,7 @@ def test_workload_retries_connect_and_reports_early_process_exit(workload, monke
     assert len(calls) == 3
     workload.close()
     monkeypatch.setattr(workload, "connect", lambda: (_ for _ in ()).throw(ConnectionRefusedError()))
-    monkeypatch.setattr(rpc.subprocess, "Popen", lambda *a, **kw: SimpleNamespace(poll=lambda: 2))
+    monkeypatch.setattr(rpc.subprocess, "Popen", lambda *a, **kw: SimpleNamespace(pid=12345, poll=lambda: 2))
     with pytest.raises(RuntimeError, match="exited during startup"):
         workload.workload()
 
@@ -486,7 +488,7 @@ def test_capture_waits_for_active_state_before_counting_progress(workload, monke
 
 
 def test_failed_qualification_retains_all_raw_samples(workload, monkeypatch):
-    monkeypatch.setattr(rpc, "sample", lambda peer: {"native_active_count": 0, "raw_ms": [1] * 100})
+    monkeypatch.setattr(rpc, "sample", lambda peer, **_kwargs: {"native_active_count": 0, "raw_ms": [1] * 100})
     with pytest.raises(RuntimeError, match="native generation"):
         workload.record("warmed_streaming", WorkPeer(Path("fixture")))
     assert len(workload.report["samples"]["warmed_streaming"]["raw_ms"]) == 100
@@ -508,7 +510,7 @@ def test_close_kills_only_owned_group_on_deadline_and_joins_thread(workload, mon
     workload.close()
     assert calls == [(process.pid, rpc.signal.SIGTERM), (process.pid, rpc.signal.SIGKILL)]
     assert waits == [30, 30]
-    assert workload.report["owned_service_exit_code"] == -9
+    assert workload.report["owned_supervisor_exit_code"] == -9
 
 
 
@@ -526,7 +528,7 @@ def test_close_tolerates_process_exit_between_poll_and_signals(workload, monkeyp
         raise ProcessLookupError("already exited")
     monkeypatch.setattr(rpc.os, "killpg", gone)
     workload.close()
-    assert workload.report["owned_service_exit_code"] == 0
+    assert workload.report["owned_supervisor_exit_code"] == 0
 
 def test_close_leaves_already_exited_process_alone(workload, monkeypatch):
     process = FakeProcess()
@@ -534,7 +536,7 @@ def test_close_leaves_already_exited_process_alone(workload, monkeypatch):
     workload.process = process
     monkeypatch.setattr(rpc.os, "killpg", lambda *args: pytest.fail("must not signal exited PID"))
     workload.close()
-    assert workload.report["owned_service_exit_code"] == 3
+    assert workload.report["owned_supervisor_exit_code"] == 3
 
 
 def test_host_records_resource_limits_and_absent_optional_proc_files(monkeypatch):
@@ -640,3 +642,124 @@ def test_real_socket_peer_receives_interleaved_status_events_and_reply(private):
         listener.close()
     assert not thread.is_alive()
     assert not failures
+
+
+def test_partial_sampling_retains_successes_and_failed_attempt_in_report(inputs, private, monkeypatch):
+    inputs.temp_root = private
+    calls = 0
+
+    def call(_method):
+        nonlocal calls
+        calls += 1
+        if calls == 4:
+            raise RuntimeError("status transport failed mid-condition")
+        return status(generating=True, state="loading", samples=calls)
+
+    def workload(measurement):
+        measurement.record("warmed_streaming", SimpleNamespace(call=call))
+
+    monkeypatch.setattr(rpc.Measurement, "workload", workload)
+    monkeypatch.setattr(rpc.time, "sleep", lambda _delay: None)
+    with pytest.raises(RuntimeError, match="mid-condition"):
+        rpc.measure(inputs)
+    report = json.loads((inputs.output / "rpc-responsiveness.json").read_text())
+    assert report["status"] == "incomplete"
+    sample = report["samples"]["warmed_streaming"]
+    assert sample["status"] == "incomplete"
+    assert sample["n"] == len(sample["raw_ms"]) == len(sample["state_evidence"]) == 3
+    assert len(sample["attempts"]) == 4
+    assert sample["attempts"][-1]["index"] == 3
+    assert sample["attempts"][-1]["elapsed_ms"] >= 0
+    assert "mid-condition" in sample["attempts"][-1]["error"]
+    assert [row["samples"] for row in sample["state_evidence"]] == [[1], [2], [3]]
+    assert "p95_ms" not in sample
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Owned process-session supervision uses Linux child subreaping and /proc")
+@pytest.mark.parametrize("ignore_term", [False, True])
+def test_real_supervisor_cleans_descendant_after_service_exits(private, ignore_term):
+    descendant = private / "descendant.pid"
+    child_script = "import time; time.sleep(20)"
+    if ignore_term:
+        child_script = "import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(20)"
+    # The service waits for its descendant to install signal policy before exit.
+    ready = private / "ready"
+    child_script = child_script.replace("time.sleep(20)", f"open({str(ready)!r},'w').close(); time.sleep(20)")
+    service = private / "service"
+    service.write_text(f"#!{sys.executable}\nimport subprocess,time\n"
+                       f"child=subprocess.Popen([{sys.executable!r},'-c',{child_script!r}])\n"
+                       f"open({str(descendant)!r},'w').write(str(child.pid))\n"
+                       f"while not __import__('os').path.exists({str(ready)!r}): time.sleep(.01)\n")
+    service.chmod(0o700)
+    state = private / "service-state.json"
+    process = subprocess.Popen([sys.executable, str(Path(rpc.__file__).resolve()),
+                                "_supervise", str(service), str(state)],
+                               start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    measurement = rpc.Measurement(SimpleNamespace(), private, {})
+    measurement.process = process
+    measurement.cleanup_timeout = .5
+    try:
+        rpc.wait_until(lambda: state.exists() and json.loads(state.read_text())["exit_code"] is not None, timeout=5)
+        service_state = json.loads(state.read_text())
+        assert service_state["exit_code"] == 0
+        assert service_state["pid"] != process.pid
+        child = int(descendant.read_text())
+        assert child in rpc.group_members(process.pid)
+        assert process.poll() is None, "Supervisor must retain group ownership after service exits"
+        measurement.close()
+        assert measurement.report["owned_service_exit_code"] == 0
+        assert measurement.report["owned_service_pid"] == service_state["pid"]
+        assert measurement.report["owned_supervisor_exit_code"] == (-9 if ignore_term else 0)
+        # The supervisor reaps on graceful exit; after SIGKILL, init may still
+        # own a dead zombie briefly. Neither case leaves an executing child.
+        def stopped():
+            path = Path(f"/proc/{child}/stat")
+            return not path.exists() or path.read_text().rpartition(")")[2].split()[0] == "Z"
+        rpc.wait_until(stopped, timeout=5)
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, rpc.signal.SIGKILL)
+        out, err = process.communicate(timeout=5)
+        assert process.returncode in {0, -9}, (out, err)
+
+
+def test_supervisor_membership_ignores_disappearing_process_and_parses_comm(monkeypatch):
+    entries = [SimpleNamespace(name="self"), SimpleNamespace(name="10"),
+               SimpleNamespace(name="11"), SimpleNamespace(name="12"), SimpleNamespace(name="13")]
+    monkeypatch.setattr(Path, "iterdir", lambda _path: entries)
+    def stat(entry, _name):
+        if entry.name == "11":
+            raise FileNotFoundError("exited")
+        if entry.name == "12":
+            raise ProcessLookupError("exited")
+        return SimpleNamespace(read_text=lambda: "13 (name with ) spaces) S 1 10 10 0")
+    # SimpleNamespace cannot overload '/', so adapt the numeric fixture entries.
+    class Entry:
+        def __init__(self, name):
+            self.name = name
+        def __truediv__(self, name):
+            return stat(self, name)
+    monkeypatch.setattr(Path, "iterdir", lambda _path: [Entry(row.name) for row in entries])
+    assert rpc.group_members(10) == [13]
+
+
+def test_supervisor_refuses_missing_subreaper_before_launch(monkeypatch):
+    monkeypatch.setattr(rpc.ctypes, "CDLL", lambda *args, **kwargs: SimpleNamespace(prctl=lambda *args: -1))
+    monkeypatch.setattr(rpc.ctypes, "get_errno", lambda: 1)
+    monkeypatch.setattr(rpc.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("must not launch without ownership"))
+    with pytest.raises(OSError, match="subreaper"):
+        rpc.service_supervisor(Path("unused"), Path("unused"))
+
+
+def test_unexpected_supervisor_error_kills_its_still_owned_group(monkeypatch, capsys):
+    signals = []
+    handlers = {}
+    monkeypatch.setattr(rpc.ctypes, "CDLL", lambda *args, **kwargs: SimpleNamespace(prctl=lambda *args: 0))
+    monkeypatch.setattr(rpc.signal, "signal", lambda kind, handler: handlers.update({kind: handler}))
+    monkeypatch.setattr(rpc.os, "killpg", lambda group, kind: signals.append((group, kind)))
+    monkeypatch.setattr(rpc.subprocess, "Popen", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("exec failed")))
+    with pytest.raises(OSError, match="exec failed"):
+        rpc.service_supervisor(Path("missing-service"), Path("unused"))
+    assert signals == [(os.getpid(), rpc.signal.SIGKILL)]
+    assert rpc.signal.SIGTERM in handlers
+    assert "exec failed" in capsys.readouterr().err
