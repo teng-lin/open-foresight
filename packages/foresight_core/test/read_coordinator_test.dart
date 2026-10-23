@@ -9,6 +9,7 @@ final class GatedReadWorker implements ReadWorker {
   final requests = <ReadWorkerRequest>[];
   final pending = <Completer<ReadWorkerReply>>[];
   int closes = 0;
+  Object? closeError;
   @override
   Future<ReadWorkerReply> read(ReadWorkerRequest request) {
     requests.add(request);
@@ -21,7 +22,10 @@ final class GatedReadWorker implements ReadWorker {
       pending[index].complete(ReadWorkerReply(epoch, value));
 
   @override
-  Future<void> close() async => closes++;
+  Future<void> close() async {
+    closes++;
+    if (closeError != null) throw closeError!;
+  }
 }
 
 void main() {
@@ -492,6 +496,74 @@ void main() {
       });
     },
   );
+
+  test('failed worker teardown still retires the reader exactly once', () {
+    fakeAsync((clock) {
+      final worker = GatedReadWorker();
+      var closedOwners = 0, activityClosed = false;
+      final coordinator = ReadCoordinator(
+        identity: _identity,
+        worker: worker,
+        onClosed: () => closedOwners++,
+      );
+      final activity = coordinator.activityChanges.listen(
+        (_) {},
+        onDone: () => activityClosed = true,
+      );
+      final received = <ReadResult<String>>[];
+      var readerClosed = false;
+      final subscription = coordinator
+          .watch(query)
+          .listen(received.add, onDone: () => readerClosed = true);
+      clock.flushMicrotasks();
+      worker.complete(0, 'epoch', 'accepted before shutdown');
+      clock.flushMicrotasks();
+      expect(received.single.value, 'accepted before shutdown');
+      expect(coordinator.trackedQueries, 1);
+
+      final failure = StateError('worker teardown failed');
+      worker.closeError = failure;
+      Object? reported;
+      final closing = coordinator.close();
+      unawaited(
+        closing.then<void>(
+          (_) => fail('Worker teardown failure must reach the owner'),
+          onError: (Object error) {
+            reported = error;
+          },
+        ),
+      );
+      expect(coordinator.close(), same(closing));
+      clock.flushMicrotasks();
+      expect(reported, same(failure));
+      expect(worker.closes, 1);
+      expect(closedOwners, 1);
+      expect(activityClosed, isTrue);
+      expect(readerClosed, isTrue);
+      expect(received.map((value) => value.freshness), [
+        ReadFreshness.current,
+        ReadFreshness.cancelled,
+      ]);
+      expect(received.last.value, isNull);
+      expect(coordinator.trackedQueries, 0);
+      expect(coordinator.activeReads, 0);
+
+      ReadResult<String>? retired;
+      unawaited(coordinator.read(query).then((value) => retired = value));
+      clock.flushMicrotasks();
+      expect(retired!.freshness, ReadFreshness.cancelled);
+      expect(retired!.value, isNull);
+      expect(retired!.error!.code, RpcErrorCode.cancelled);
+      expect(worker.requests, hasLength(1));
+      expect(coordinator.close(), same(closing));
+      expect(worker.closes, 1);
+      expect(closedOwners, 1);
+      expect(clock.nonPeriodicTimerCount, 0);
+      unawaited(subscription.cancel());
+      unawaited(activity.cancel());
+      clock.flushMicrotasks();
+    });
+  });
 }
 
 ReadIdentity _identity({
