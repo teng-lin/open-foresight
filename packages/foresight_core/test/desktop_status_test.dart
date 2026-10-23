@@ -5,6 +5,54 @@ import 'package:test/test.dart';
 
 void main() {
   test(
+    'typed status preserves missing versus explicit zero and empty values',
+    () {
+      final missing = CapturePresentation.fromWire({'began': 1000});
+      final nullElapsed = CapturePresentation.fromWire({
+        'began': 1000,
+        'elapsed_ms': null,
+      });
+      final zero = CapturePresentation.fromWire({
+        'began': 1000,
+        'elapsed_ms': 0,
+      });
+      expect(missing.elapsedMilliseconds, 0);
+      expect(missing.elapsedMillisecondsProvided, false);
+      expect(nullElapsed, missing);
+      expect(zero.elapsedMilliseconds, 0);
+      expect(zero.elapsedMillisecondsProvided, true);
+      expect(zero, isNot(missing));
+      final noBody = NoteEnhancementPresentation.fromWire({'active': true});
+      final nullBody = NoteEnhancementPresentation.fromWire({
+        'active': true,
+        'body': null,
+      });
+      final emptyBody = NoteEnhancementPresentation.fromWire({
+        'active': true,
+        'body': '',
+      });
+      expect(noBody.body, '');
+      expect(noBody.bodyProvided, false);
+      expect(nullBody, noBody);
+      expect(emptyBody.body, '');
+      expect(emptyBody.bodyProvided, true);
+      expect(emptyBody, isNot(noBody));
+      expect(
+        CapturePresentation.fromWire(
+          jsonDecode(jsonEncode({'elapsed_ms': 0})),
+        ).elapsedMillisecondsProvided,
+        true,
+      );
+      expect(
+        NoteEnhancementPresentation.fromWire(
+          jsonDecode(jsonEncode({'body': ''})),
+        ).bodyProvided,
+        true,
+      );
+    },
+  );
+
+  test(
     'v1 capture snapshot decodes progress and isolates mutable wire data',
     () {
       final pending = [3];

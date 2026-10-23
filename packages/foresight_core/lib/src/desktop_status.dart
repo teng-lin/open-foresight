@@ -111,17 +111,20 @@ final class NoteEnhancementPresentation extends _Presentation {
   NoteEnhancementPresentation._(Map<String, Object?> value)
     : requestId = _text(value, 'request_id'),
       body = _text(value, 'body'),
+      bodyProvided = value['body'] != null,
       status = _text(value, 'status'),
       active = _flag(value, 'active'),
       cancelRequested = _flag(value, 'cancel_requested'),
       activeIndex = value['active_index'] as int?;
   final String requestId, body, status;
-  final bool active, cancelRequested;
+  // Retain the legacy missing-body fallback separately from an empty preview.
+  final bool active, cancelRequested, bodyProvided;
   final int? activeIndex;
   @override
   List<Object?> get _fields => [
     requestId,
     body,
+    bodyProvided,
     status,
     active,
     cancelRequested,
@@ -182,6 +185,7 @@ final class CapturePresentation extends _Presentation {
       paused = _flag(value, 'paused'),
       beganMilliseconds = value['began'] as int?,
       elapsedMilliseconds = _int(value, 'elapsed_ms'),
+      elapsedMillisecondsProvided = value['elapsed_ms'] != null,
       state = _text(value, 'state', 'idle'),
       samples = _list(value['samples'], (item) => item as int),
       peaks = _list(value['peaks'], (item) => (item as num).toDouble()),
@@ -208,7 +212,8 @@ final class CapturePresentation extends _Presentation {
         NoteEnhancementPresentation.fromWire,
       );
   final int? meetingId, beganMilliseconds, lastAudioMilliseconds;
-  final bool active, finishing, paused;
+  // Missing elapsed time uses the consumer's began-time fallback; zero does not.
+  final bool active, finishing, paused, elapsedMillisecondsProvided;
   final int elapsedMilliseconds;
   final String state;
   final List<int> samples;
@@ -234,6 +239,7 @@ final class CapturePresentation extends _Presentation {
     finishing,
     paused,
     elapsedMilliseconds,
+    elapsedMillisecondsProvided,
     state,
     samples,
     peaks,
