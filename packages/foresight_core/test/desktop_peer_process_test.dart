@@ -9,6 +9,33 @@ import 'package:foresight_test_support/native_fixture.dart';
 import 'package:foresight_test_support/poll.dart';
 import 'package:test/test.dart';
 
+const _interpreterProbe = r'''
+import 'dart:io';
+import 'dart:convert';
+Future<void> main(List<String> args) async {
+  final peer = await Socket.connect(InternetAddress(args[0], type: InternetAddressType.unix), 0);
+  try {
+    peer.writeln(jsonEncode({'id':1,'method':'security.attach_desktop','args':{'token':args[1],'visible':true}}));
+    final reply = await peer.cast<List<int>>().transform(utf8.decoder).transform(const LineSplitter())
+        .map((line) => jsonDecode(line) as Map)
+        .firstWhere((frame) => frame['id'] == 1 && (frame.containsKey('error') || frame['done'] == true))
+        .timeout(const Duration(seconds: 5));
+    print(jsonEncode(reply));
+  } finally {
+    peer.destroy();
+  }
+}
+''';
+
+void _expectInterpreterDenied(ProcessResult result) {
+  expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+  final reply = jsonDecode(result.stdout.toString()) as Map;
+  expect(reply['id'], 1, reason: result.stdout.toString());
+  expect(reply['error'], isNotNull, reason: result.stdout.toString());
+  expect((reply['error'] as Map)['code'], 'denied');
+  expect((reply['error'] as Map)['message'], contains('verified desktop'));
+}
+
 final class _DesktopProcess {
   _DesktopProcess._(this.process) {
     frames = StreamIterator(
@@ -368,22 +395,71 @@ void main() {
   );
 
   test(
+    'interpreter probe ignores events and replies for another request',
+    () async {
+      final script = File('${directory.path}/correlated-probe.dart')
+        ..writeAsStringSync(_interpreterProbe);
+      final endpoint = '${directory.path}/probe.sock';
+      final server = await ServerSocket.bind(
+        InternetAddress(endpoint, type: InternetAddressType.unix),
+        0,
+      );
+      addTearDown(server.close);
+      final served = Completer<void>();
+      final listener = server.listen((socket) async {
+        try {
+          final request =
+              jsonDecode(
+                    await socket
+                        .cast<List<int>>()
+                        .transform(utf8.decoder)
+                        .transform(const LineSplitter())
+                        .first
+                        .timeout(const Duration(seconds: 5)),
+                  )
+                  as Map;
+          expect(request['id'], 1);
+          expect(request['method'], 'security.attach_desktop');
+          for (final frame in [
+            {'event': 'changed', 'workspace_epoch': 'fixture-epoch'},
+            {'id': 999, 'result': true, 'done': true},
+            {
+              'id': 1,
+              'error': {'code': 'denied', 'message': 'Verified peer required'},
+              'done': true,
+            },
+          ]) {
+            socket.writeln(jsonEncode(frame));
+          }
+          await socket.flush();
+          served.complete();
+        } catch (error, stack) {
+          served.completeError(error, stack);
+        } finally {
+          socket.destroy();
+        }
+      });
+      addTearDown(listener.cancel);
+      final result = await Process.run(Platform.resolvedExecutable, [
+        script.path,
+        endpoint,
+        'fixture-token',
+      ]);
+      await served.future;
+      expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+      final reply = jsonDecode(result.stdout.toString()) as Map;
+      expect(reply['id'], 1, reason: result.stdout.toString());
+      expect((reply['error'] as Map)['code'], 'denied');
+    },
+  );
+
+  test(
     'developer allowlists cannot substitute a generic interpreter or script',
     () async {
       await service.close();
       runtimeConfiguration.environment.remove('FORESIGHT_INSTALL_ROOT');
       final script = File('${directory.path}/script.dart')
-        ..writeAsStringSync(r'''
-import 'dart:io';
-import 'dart:convert';
-Future<void> main(List<String> args) async {
-  final peer = await Socket.connect(InternetAddress(args[0], type: InternetAddressType.unix), 0);
-  peer.writeln(jsonEncode({'id':1,'method':'security.attach_desktop','args':{'token':args[1],'visible':true}}));
-  final reply = await peer.cast<List<int>>().transform(utf8.decoder).transform(const LineSplitter()).first;
-  print(reply);
-  peer.destroy();
-}
-''');
+        ..writeAsStringSync(_interpreterProbe);
       runtimeConfiguration
               .environment['FORESIGHT_DEVELOPMENT_DESKTOP_EXECUTABLES'] =
           jsonEncode([Platform.resolvedExecutable, script.path]);
@@ -393,8 +469,7 @@ Future<void> main(List<String> args) async {
         serviceEndpoint(profile),
         token(),
       ]);
-      expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
-      expect((jsonDecode(result.stdout.toString()) as Map)['error'], isNotNull);
+      _expectInterpreterDenied(result);
       final kernel = '${directory.path}/script.dill';
       final compile = await Process.run(Platform.resolvedExecutable, [
         'compile',
@@ -420,8 +495,7 @@ Future<void> main(List<String> args) async {
         serviceEndpoint(profile),
         token(),
       ]);
-      expect(copied.exitCode, 0, reason: '${copied.stdout}\n${copied.stderr}');
-      expect((jsonDecode(copied.stdout.toString()) as Map)['error'], isNotNull);
+      _expectInterpreterDenied(copied);
     },
   );
 }
