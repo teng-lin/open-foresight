@@ -2,6 +2,8 @@ import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/application.dart';
 import 'dart:async';
+import 'dart:convert';
+import 'package:foresight_core/desktop.dart' show CapturePresentation;
 import 'dart:io';
 import 'package:fake_async/fake_async.dart';
 import 'package:foresight_core/foresight_core.dart';
@@ -430,10 +432,18 @@ void main() {
   test(
     'initial raw copy precedes the producer prior-map preview and draft save',
     () async {
-      final work = app.enhanceNotes(id);
+      final work = app.enhanceNotes(id, requestId: 'typed-note-request');
       expect(progress()['body'], 'Raw notes');
       await generator.entered.future;
       expect(progress()['body'], '- Prior');
+      final active = CapturePresentation.fromWire(
+        jsonDecode(jsonEncode(app.captureState)),
+      ).noteEnhancement(id)!;
+      expect(active.requestId, 'typed-note-request');
+      expect(active.active, isTrue);
+      expect(active.activeIndex, 0);
+      expect(active.body, '- Prior');
+      expect(active.status, 'Structuring notes...');
       time.elapse(const Duration(seconds: 1));
       expect(domain.store.meetingEnhancedNotes(id), '- Prior');
       expect(
@@ -446,9 +456,19 @@ void main() {
         'id': id,
         'request_id': progress()['request_id'],
       });
+      final cancelling = CapturePresentation.fromWire(
+        jsonDecode(jsonEncode(app.captureState)),
+      ).noteEnhancement(id)!;
+      expect(cancelling.requestId, 'typed-note-request');
+      expect(cancelling.cancelRequested, isTrue);
       await emit('unread event');
       await work;
       expect(progress()['body'], priorEnhanced);
+      final settled = CapturePresentation.fromWire(
+        jsonDecode(jsonEncode(app.captureState)),
+      ).noteEnhancement(id)!;
+      expect(settled.active, isFalse);
+      expect(settled.body, priorEnhanced);
     },
   );
 

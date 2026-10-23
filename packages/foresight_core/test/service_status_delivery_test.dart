@@ -401,6 +401,15 @@ void main() {
       first.fire();
       await eventually(() => changes == 1);
       expect(remoteState()['preview'], '# Overview\nPreview 200');
+      final activeWire =
+          jsonDecode(jsonEncode(await client.call('status'))) as Map;
+      final active = CapturePresentation.fromWire(
+        activeWire['capture'],
+      ).summary(meeting)!;
+      expect(active.active, isTrue);
+      expect(active.phase, 'summarizing');
+      expect(active.preview, '# Overview\nPreview 200');
+      expect(remote.capturePresentation.summary(meeting), active);
       expect(snapshots, hasLength(1));
       runtime.chunks.add({
         'type': 'preview',
@@ -429,6 +438,15 @@ void main() {
       await runtime.chunks.close();
       await work;
       await eventually(() => changes == 3);
+      final settledWire =
+          jsonDecode(jsonEncode(await client.call('status'))) as Map;
+      final settled = CapturePresentation.fromWire(
+        settledWire['capture'],
+      ).summary(meeting)!;
+      expect(settled.phase, 'completed');
+      expect(settled.active, isFalse);
+      expect(settled.preview, isEmpty);
+      expect(remote.capturePresentation.summary(meeting), settled);
       expect(remoteState()['active'], isFalse);
       expect(remoteState().containsKey('preview'), isFalse);
       expect(

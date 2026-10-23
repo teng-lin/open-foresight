@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:foresight_core/desktop.dart'
+    show CapturePresentation, MeetingRunPresentation;
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:foresight_core/src/rpc_error.dart';
@@ -372,6 +374,53 @@ void main() {
       expect(store.meetingArtifacts(meeting, 'preparation'), hasLength(2));
     },
   );
+  test(
+    'typed preparation JSON retains document progress and synthesis preview',
+    () async {
+      final long = store.importText(
+        'Design',
+        'Document content ' * 300,
+        'text/plain',
+        'fixture',
+      );
+      final short = store.importText(
+        'Schedule',
+        'Launch Friday.',
+        'text/plain',
+        'fixture',
+      );
+      final states = <MeetingRunPresentation>[];
+      final changes = app.changes.stream.listen((_) {
+        final capture = CapturePresentation.fromWire(
+          jsonDecode(jsonEncode(app.captureState)),
+        );
+        final preparation = capture.workflow(meeting, 'preparation');
+        if (preparation != null) states.add(preparation);
+      });
+      addTearDown(changes.cancel);
+      await app.prepareMeeting(meeting, [long, short]);
+      final documents = states.firstWhere(
+        (state) =>
+            state.active && state.phase == 'documents' && state.completed > 0,
+      );
+      expect(documents.total, greaterThan(1));
+      final synthesis = states.firstWhere(
+        (state) =>
+            state.active &&
+            state.phase == 'synthesizing' &&
+            state.preview.isNotEmpty,
+      );
+      expect(synthesis.preview, 'Document fact: launch Friday.');
+      final settled = CapturePresentation.fromWire(
+        jsonDecode(jsonEncode(app.captureState)),
+      ).workflow(meeting, 'preparation')!;
+      expect(settled.phase, 'completed');
+      expect(settled.active, isFalse);
+      expect(settled.preview, isEmpty);
+      expect(store.meetingArtifacts(meeting, 'preparation'), hasLength(1));
+    },
+  );
+
   test(
     'empty and short documents avoid inference; Unicode windows retain end evidence',
     () async {

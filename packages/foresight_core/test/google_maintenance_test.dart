@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
+
+import 'package:foresight_core/desktop.dart' show GooglePresentation;
 import 'dart:io';
 
 import 'package:foresight_core/src/application_services/google_maintenance.dart';
@@ -88,6 +91,16 @@ void main() {
     () async {
       maintenance.initialize();
       await auth.signIn(fixture.consent);
+      final google = GooglePresentation.fromWire(
+        jsonDecode(jsonEncode(await invoke(Operation.googleStatus, {}))),
+      );
+      expect(google.connected, isTrue);
+      expect(google.configured, isTrue);
+      expect(google.account, 'fixture-account');
+      expect(google.email, 'fixture@example.test');
+      expect(google.accounts.single.id, 'fixture-account');
+      expect(google.accounts.single.email, 'fixture@example.test');
+      expect(google.accounts.single.current, isTrue);
       final result = await invoke(Operation.googleDriveFiles, {
         'parent': 'nested',
         'query': 'Apollo',
