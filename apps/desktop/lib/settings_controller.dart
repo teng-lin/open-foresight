@@ -326,7 +326,7 @@ class _SettingsController extends _FeatureController {
           'Speech: ${speechSetupProblem(d.store) ?? 'Ready for live transcription'}',
         ),
         SelectableText(
-          'Generator: ${d.generator?.effectiveState ?? {'state': 'unconfigured'}}',
+          'Generator: ${d.generator?.presentation.diagnosticText ?? '{state: unconfigured}'}',
         ),
         CheckboxListTile(
           value: integrationFeature.notifications,
@@ -377,7 +377,7 @@ class _SettingsController extends _FeatureController {
       ),
       title: const Text('Local helper'),
       content: SelectableText(
-        'Connection: ${d.helper.state}\nEmbedding: ${d.helper.snapshot?.pipeline ?? 'unconfigured'}\nBackend: ${d.helper.snapshot?.model.backend ?? 'unconfigured'}\nDimensions: ${d.helper.snapshot?.model.dimensions ?? 0}\nIndex: ${d.helper.snapshot?.index ?? 'empty'}\nLast error: ${d.helper.snapshot?.lastError.isNotEmpty == true ? d.helper.snapshot!.lastError : 'None'}\nGeneration: ${d.generator?.effectiveState}\nSpeech: ${speechSetupProblem(d.store) ?? 'Ready'}',
+        'Connection: ${d.helper.state}\nEmbedding: ${d.helper.snapshot?.pipeline ?? 'unconfigured'}\nBackend: ${d.helper.snapshot?.model.backend ?? 'unconfigured'}\nDimensions: ${d.helper.snapshot?.model.dimensions ?? 0}\nIndex: ${d.helper.snapshot?.index ?? 'empty'}\nLast error: ${d.helper.snapshot?.lastError.isNotEmpty == true ? d.helper.snapshot!.lastError : 'None'}\nGeneration: ${d.generator?.presentation.diagnosticText}\nSpeech: ${speechSetupProblem(d.store) ?? 'Ready'}',
       ),
       actions: [
         TextButton(
