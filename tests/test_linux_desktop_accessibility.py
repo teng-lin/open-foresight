@@ -329,3 +329,18 @@ def test_native_state_and_action_interfaces_are_released():
     with pytest.raises(RuntimeError, match="Action disappeared"):
         api.press(1)
     api.release.assert_called_with(22)
+
+
+def test_flutter_public_tap_action_is_supported_but_focus_is_not_activation():
+    api = object.__new__(linux.AtSpi)
+    api.atspi = SimpleNamespace(atspi_accessible_get_action_iface=lambda _: 22)
+    api.release = Mock()
+    api.checked = Mock(side_effect=[2, True])
+    api.text = Mock(side_effect=["Focus", "Tap"])
+    assert api.press(1)
+    api.checked.assert_called_with("atspi_action_do_action", 22, 1)
+    api.release.assert_called_once_with(22)
+    api.checked = Mock(return_value=1)
+    api.text = Mock(return_value="Focus")
+    assert not api.press(1)
+    api.checked.assert_called_once_with("atspi_action_get_n_actions", 22)

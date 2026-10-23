@@ -236,7 +236,7 @@ class AtSpi:
                 count = self.checked("atspi_action_get_n_actions", action)
                 for index in range(min(count, 16)):
                     name = self.text("atspi_action_get_action_name", action, index)
-                    if name.lower() in {"click", "press", "activate"}:
+                    if name.lower() in {"click", "press", "activate", "tap"}:
                         return bool(
                             self.checked("atspi_action_do_action", action, index)
                         )
