@@ -3,6 +3,7 @@
 from contextlib import closing
 import hashlib
 import json
+import os
 from pathlib import Path
 import plistlib
 import socket
@@ -478,6 +479,9 @@ def linux_owned(owned, monkeypatch):
     (bundle / "app").mkdir(parents=True)
     executable = bundle / "app/open-foresight"
     executable.write_bytes(b"selected Linux fixture")
+    (bundle / "open-foresight").write_text(
+        "#!/usr/bin/env bash\nexec app/open-foresight\n"
+    )
     environment = dict(
         owned.env, DISPLAY=":77", DBUS_SESSION_BUS_ADDRESS="unix:path=/private/session"
     )
@@ -519,6 +523,9 @@ def linux_owned(owned, monkeypatch):
 def test_linux_installed_gui_uses_owned_atspi_backend(linux_owned):
     host, accessibility, _ = linux_owned
     host.start()
+    assert gui.subprocess.Popen.call_args.args[0] == [
+        str(host.bundle / "open-foresight")
+    ]
     command = gui.subprocess.run.call_args.args[0]
     assert command == [
         sys.executable,
@@ -561,4 +568,79 @@ def test_linux_accessibility_cleanup_preserves_original_failure(linux_owned):
         host.close()
     assert "Owned a11y cleanup failed" in failure.value.__notes__
     assert host.evidence["status"] == "closed_after_failure"
+    host.process = None
+
+
+def test_linux_launcher_is_only_a_transient_identity_before_native_exec(
+    linux_owned, monkeypatch
+):
+    host, accessibility, _ = linux_owned
+    image = {"value": Path("/usr/bin/bash").resolve()}
+    monkeypatch.setattr(gui, "process_path", lambda _: image["value"])
+    original_stat = Path.stat
+    monkeypatch.setattr(
+        Path,
+        "stat",
+        lambda path, *args, **kwargs: (
+            SimpleNamespace(st_uid=os.geteuid())
+            if str(path) == "/proc/123"
+            else original_stat(path, *args, **kwargs)
+        ),
+    )
+    reads = Mock(return_value=b"bash\0" + os.fsencode(host.launcher) + b"\0")
+    monkeypatch.setattr(Path, "read_bytes", reads)
+    assert host._owned_launcher() is False  # No owned process exists yet.
+
+    def exec_native(_):
+        accessibility.check.assert_not_called()
+        image["value"] = host.executable
+
+    monkeypatch.setattr(gui.time, "sleep", exec_native)
+    host.start()
+    assert host.evidence["startup"] == "passed_actual_gui"
+    accessibility.check.assert_called()
+    host.close()
+
+
+def test_linux_stalled_owned_launcher_is_reaped_without_accessibility(
+    linux_owned, monkeypatch
+):
+    host, accessibility, process = linux_owned
+    monkeypatch.setattr(gui, "process_path", lambda _: Path("/usr/bin/bash").resolve())
+    monkeypatch.setattr(
+        Path, "read_bytes", lambda _: b"bash\0" + os.fsencode(host.launcher) + b"\0"
+    )
+    original_stat = Path.stat
+    monkeypatch.setattr(
+        Path,
+        "stat",
+        lambda path, *args, **kwargs: (
+            SimpleNamespace(st_uid=os.geteuid())
+            if str(path) == "/proc/123"
+            else original_stat(path, *args, **kwargs)
+        ),
+    )
+    clock = iter([0, 1])
+    monkeypatch.setattr(gui.time, "monotonic", lambda: next(clock))
+    with pytest.raises(TimeoutError, match="launcher did not exec"):
+        host.start()
+    process.terminate.assert_called_once()
+    accessibility.check.assert_not_called()
+    host.process = None
+
+
+@pytest.mark.parametrize(
+    "arguments", [b"bash\0/another/launcher\0", b"bash\0-c\0anything\0"]
+)
+def test_linux_launcher_cleanup_rejects_other_interpreter_commands(
+    linux_owned, monkeypatch, arguments
+):
+    host, _, process = linux_owned
+    host.process = process
+    monkeypatch.setattr(gui, "process_path", lambda _: Path("/usr/bin/bash").resolve())
+    monkeypatch.setattr(Path, "read_bytes", lambda _: arguments)
+    assert not host._owned_launcher()
+    with pytest.raises(RuntimeError, match="process identity"):
+        host.close()
+    process.terminate.assert_not_called()
     host.process = None

@@ -141,6 +141,13 @@ class InstalledDesktop:
         self.executable: Path = selected.resolve(strict=True)
         if not self.executable.is_relative_to(self.bundle):
             raise ValueError("GUI executable must belong to the selected application")
+        self.launcher = self.executable
+        if sys.platform == "linux":
+            self.launcher = (self.bundle / "open-foresight").resolve(strict=True)
+            if not self.launcher.is_relative_to(self.bundle):
+                raise ValueError(
+                    "GUI launcher must belong to the selected installation"
+                )
         with self.executable.open("rb") as stream:
             self.evidence["executable_sha256"] = hashlib.file_digest(
                 stream, "sha256"
@@ -163,6 +170,26 @@ class InstalledDesktop:
             )
 
         return self.process
+
+    def _owned_launcher(self):
+        # The product wrapper execs the native GUI in the same owned PID. A
+        # pending wrapper may only be observed/cleaned up, never approve a call.
+        if sys.platform != "linux" or self.process is None:
+            return False
+        if process_path(self.process.pid) != Path("/usr/bin/bash").resolve():
+            return False
+        try:
+            arguments = (
+                Path(f"/proc/{self.process.pid}/cmdline").read_bytes().split(b"\0")
+            )
+            return (
+                Path(f"/proc/{self.process.pid}").stat().st_uid == os.geteuid()
+                and len(arguments) == 3
+                and arguments[-1] == b""
+                and Path(os.fsdecode(arguments[1])).resolve() == self.launcher
+            )
+        except OSError:
+            return False
 
     def _ui(self, button=""):
         process = self._identity()
@@ -210,7 +237,7 @@ class InstalledDesktop:
                 self.evidence["accessibility"] = self.accessibility.evidence
                 self.environment = self.accessibility.start()
             self.process = subprocess.Popen(
-                [str(self.executable)],
+                [str(self.launcher)],
                 cwd="/",
                 env=self.environment,
                 stdout=self.log,
@@ -218,6 +245,15 @@ class InstalledDesktop:
             )
             self.evidence["pid"] = self.process.pid
             deadline = time.monotonic() + self.timeout
+            if sys.platform == "linux":
+                while process_path(self.process.pid) != self.executable:
+                    if self.process.poll() is not None or not self._owned_launcher():
+                        self._identity()
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(
+                            "Installed launcher did not exec its native GUI"
+                        )
+                    time.sleep(0.01)
             while not (self.profile / "run/commands.sock").exists():
                 self._identity()
                 if time.monotonic() >= deadline:
@@ -389,7 +425,8 @@ class InstalledDesktop:
     def close(self):
         try:
             if self.process is not None and self.process.poll() is None:
-                self._identity()
+                if not self._owned_launcher():
+                    self._identity()
                 self.process.terminate()
                 try:
                     self.evidence["exit"] = self.process.wait(timeout=15)

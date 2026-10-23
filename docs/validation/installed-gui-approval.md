@@ -25,8 +25,14 @@ are retained outside disposable profiles.
 
 ## Linux isolated display
 
-Linux packaging acceptance runs the installed `app/open-foresight` executable
-inside its existing isolated Xvfb and D-Bus session. The helper owns an additional
+Linux packaging acceptance invokes the installed `open-foresight` launcher
+inside its existing isolated Xvfb and D-Bus session. The unchanged launcher binds
+private libraries before GTK loads, then execs `app/open-foresight` in the same
+owned PID. The helper requires the canonical native image before service or GUI
+interaction. Its bounded startup wait only recognizes the exact same-user owned
+launcher argv; a pending launcher can be cleaned up but cannot approve requests.
+Invoking the native desktop binary directly bypasses that library setup and is
+not this production entrypoint qualification path. The helper owns an additional
 private accessibility bus and AT-SPI registry under the disposable profile, then
 uses public libatspi observations and actions for only the verified GUI PID.
 The `at-spi2-core` distribution package supplies the registry; missing libraries,
