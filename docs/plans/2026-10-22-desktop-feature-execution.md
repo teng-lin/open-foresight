@@ -1,10 +1,60 @@
 # Desktop feature refactor execution
 
-The source of requirements is revision 23 of
+The source of requirements is revision 24 of
 [the plan](2026-10-20-core-desktop-refactor-plan.md). This record does not replace
 its acceptance criteria. PR 8 and the follow-ups explicitly marked separate
 remain outside the feature moves. All desktop extraction, final Linux and
 HanSolo matrices, reviews, hosted checks and PR publication remain outstanding.
+
+## Owner delivery update and parallel 7A work
+
+The owner requested one final PR and parallel implementation on 2026-10-22.
+The plan now treats its former PR labels as commit stages. The separate-PR,
+intermediate-main-merge and file-budget delivery requirements are superseded;
+implementation contracts and final combined acceptance remain required.
+
+At `40271fd9`, the integration branch contains the core and desktop prerequisites,
+the P0.1 production fixes including the admission/banner follow-ups, the residual
+selection/admission characterizations and the navigation enum declaration.
+`origin/main` was fetched again and remains `75898380`. Separate worktrees now
+implement navigation conversion and shell ports/shared presentation, while a
+third updates installed acceptance probes to use actual GUI approval. Root owns
+composition integration and current-source characterization measurements.
+
+The frozen core checkpoint `44a91b5e` passed fresh root CTest 30/30; full core
+2,030 passed / 16 skipped at 95.22%; desktop 394 / 17 at 92.47%; fresh AOT service,
+MCP and Release desktop; compiled service/real isolated-X11 UI 32/0; and fast
+integration 2/0. An initial abbreviated build-revision input was caught and
+retained separately, then the helper was rebuilt with the full SHA before these
+accepted gates. The final matching head responsiveness measurement is running.
+The baseline at `75898380` passed with the final runner: generation status p95
+1.61 ms and synthetic-capture p95 2.09 ms, all 100 samples overlapping each
+workload, qualified mapped inputs and clean service/supervisor exits. Raw reports
+and audits are under `/var/tmp/of-pr7/rpc-baseline-final` and `rpc-audit`.
+
+Earlier canonical attempts at `dc4439bb` remain failed evidence: one unchanged
+analyzer-cache case timed out, then the retry exposed a lifetime fixture that
+mistook the shared factory's 100 ms broadcast timer for the active 30-second idle
+timer. Both failed-only cases passed unchanged. `1bdbcee2`, integrated as
+`40c1dde6`, records actual active/cancelled/fired timers, preserves the idle-period
+and zero-spin assertions and all deadlines, and deterministically interleaves the
+broadcast timer. Full file 50/1 existing Mac-only skip; wrong-period and zero-spin
+mutations both fail. Root and external source reviews converged. Full canonical
+acceptance will run on the final combined head.
+
+HanSolo's complete `98bbea2d` checkpoint passed native 33/0, core 2,030/14 at
+95.52%, desktop 426/14 at 92.29%, compiled service/real UI 32/0, platform Python
+512/9 with one Arch-only deselection, and DMG 4/0, plus packaging, relocation,
+live private SQLite and cleanup. Its initial harness Git-environment pin failure
+is retained. The updated `77e9c96a` checkpoint is running separately; neither
+checkpoint is final P0 or combined extraction acceptance.
+
+Production-bundle acceptance probes still need actual desktop approval under
+P0.1. A controlled HanSolo query confirms `osascript is not allowed assistive
+access (-25211)`; no Accessibility grants or host configuration were changed.
+The actual-GUI harness is being prepared and reviewed before requesting that
+external permission. Offline harness tests do not establish production GUI
+acceptance.
 
 ## Starting point
 

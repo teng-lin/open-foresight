@@ -1,6 +1,6 @@
 # Core service and desktop feature refactoring execution plan
 
-Revision 23, 2026-10-22. This revision refreshes the plan after #170 merged the core work package, and incorporates rounds 1 to 6 of its review.
+Revision 24, 2026-10-22. This revision records the owner's single-PR delivery decision. Revision 23 refreshed the plan after #170 merged the core work package and incorporated rounds 1 to 6 of its review.
 
 - **Revision 16**, the pre-merge specification, is preserved at
   [`75898380`](https://github.com/teng-lin/open-foresight/blob/75898380ac68a0a98dc4a9fdcfc38afc99d133d5/docs/plans/2026-10-20-core-desktop-refactor-plan.md).
@@ -12,17 +12,36 @@ A plan review does not establish that implementation tests ran.
 
 "PR 6" and "PR 7" name work packages from [audit plan 3](../audit/2026-10-18-implementation-plan-3.md), not GitHub PRs #6 and #7.
 
+## Current delivery decision
+
+During execution on 2026-10-22, the owner requested collapsing the planned PRs
+and minimizing their number, followed by parallel implementation with sub-agents.
+This execution therefore ships **one final PR**, with separate reviewable commits
+for 7.0, 7.1, P0.1, 7A, the six 7B moves and the 7C cleanup stages. This supersedes
+the earlier separate-PR, intermediate-main-merge and approximately 100-file
+delivery requirements below. Stage names and dependency order remain useful;
+the implementation scope and acceptance criteria remain in force.
+
+Prerequisites integrate locally before their dependent stages. Run relevant
+checks during each stage, including the full desktop suite and compiled boundary
+gate required for feature moves. Run the complete applicable Linux and HanSolo
+matrices, canonical container schedule, sanitizer checks, integration acceptance
+and independent native-agent/Claude reviews on the final combined head before
+opening the final PR. Scoped worktrees may proceed in parallel where ownership
+and dependencies permit; merge and resolve their changes on the integration
+branch before validating the combined result.
+
 ## Status
 
 | Work package | State |
 |---|---|
 | Phase 0: baseline and inventories | Done for core and for the desktop consumer inventory. Most per-feature desktop characterization exists; see [7A](#7a-establish-composition-ports-and-invalidation) for the residual gaps |
 | PR 6 (6A–6E): core service structure | **Merged** in #170 as `75898380` on 2026-10-22, from head `0f24e09c` (tree-identical to `75898380`) |
-| Core follow-ups found after the merge | Open; see [Core follow-ups](#core-follow-ups) |
-| PR 7 (7A–7C): desktop feature modules | **Not started.** #170 delivered 6E's desktop consumer migration (54 desktop `lib` files: the `StoreReader` boundary, `desktop_reader_adapters.dart`, `feature_request_identity.dart`, removal of 30 re-export shims) plus characterization tests and retired-action guards. No feature has moved out of the `main.dart` library |
+| Core follow-ups found after the merge | Implemented locally with focused reviews and checkpoint evidence; final combined acceptance remains pending. See the [execution record](2026-10-22-desktop-feature-execution.md) |
+| PR 7 (7A–7C): desktop feature modules | **7A in progress.** Navigation and shell-port/shared-presentation work run in separate worktrees. Residual characterizations are integrated and require the current-source baseline run. Feature moves have not started; no feature has moved out of the `main.dart` library |
 | PR 8: native split, backend removal, detector consolidation | Deferred by the owner; unchanged |
 
-#170 merged the core work on its own. Revision 16 and #170's description both required the desktop work (7A–7C) to land in the same PR; the merge superseded that delivery plan. PR 7 now lands on `main` as a series of smaller PRs (see [Delivery](#delivery)).
+#170 merged the core work on its own. Revision 16 and #170's description both required the desktop work (7A–7C) to land in the same PR. The owner has now selected one final PR for the remaining implementation; see [Current delivery decision](#current-delivery-decision).
 
 ## Baseline at 75898380
 
@@ -150,7 +169,9 @@ The remaining defects are outside this plan: DART-N1, DART-N2, DART-N10 and CDX-
 
 ## Delivery
 
-PR 7 lands as a series of PRs against `main`. Each stays under about 100 files ([AGENTS.md](../../AGENTS.md)), test files and fixtures included, and is independently reviewable and revertible.
+The table retains the original stage names. The owner's [current delivery
+decision](#current-delivery-decision) combines them in one final PR; keep each
+stage independently reviewable in its commits.
 
 | PR | Content | Notes |
 |---|---|---|
@@ -248,7 +269,7 @@ Record the evidence (source SHA, counts, skip reasons, coverage) in the PR descr
 
 ### 7A. Establish composition, ports and invalidation
 
-**Start condition.** Start after 7.0, 7.1 and P0.1 merge (or as owner decision 3 sets). Record the `main` SHA and the actual public interfaces.
+**Start condition.** Under the current single-PR decision, start after 7.0, 7.1 and P0.1 production changes integrate locally with their focused checks and reviews. Record the fetched `main` SHA and the actual integrated public interfaces. Final combined platform acceptance remains required before publication.
 
 **What to freeze and preserve.**
 - Commit the admission, notification and build numbers that `reader_admissions_baseline_test.dart` measures for Sources, Chat, Meetings and Stats, and add baselines for Settings, Integrations and Onboarding. "Freeze" means these committed numbers.
