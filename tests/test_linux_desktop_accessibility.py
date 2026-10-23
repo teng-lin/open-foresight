@@ -105,6 +105,15 @@ def test_observation_preserves_text_without_inventing_action_controls(identify):
     assert not tree.pressed
 
 
+def test_observation_distinguishes_literal_escapes_from_line_breaks(identify):
+    tree = Tree([Node(r"first\nTEXT:value"), Node("first\nTEXT:value")])
+    snapshot = linux.observe(tree, 123, Path("/selected"))
+    assert set(snapshot.split("\n")) == {
+        r"TEXT:first\\nTEXT:value",
+        r"TEXT:first\nTEXT:value",
+    }
+
+
 def test_shared_accessible_proxy_is_visited_once_but_each_reference_released(identify):
     button = Node("Allow once", "button")
     tree = Tree([button, button])

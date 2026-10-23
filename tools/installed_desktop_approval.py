@@ -48,7 +48,22 @@ ONBOARDING = (
     "Skip for now",
     "Get started",
 )
-SCRIPT = """on run argv
+SCRIPT = r"""on replaceText(needle, replacement, original)
+ set oldDelimiters to AppleScript's text item delimiters
+ set AppleScript's text item delimiters to needle
+ set pieces to text items of original
+ set AppleScript's text item delimiters to replacement
+ set resultText to pieces as text
+ set AppleScript's text item delimiters to oldDelimiters
+ return resultText
+end replaceText
+on framedText(original)
+ set resultText to my replaceText("\\", "\\\\", original)
+ set resultText to my replaceText(return, "\\r", resultText)
+ return my replaceText(linefeed, "\\n", resultText)
+end framedText
+on run argv
+ considering case
  set targetPid to item 1 of argv as integer
  set wanted to item 2 of argv
  tell application "System Events"
@@ -65,11 +80,11 @@ SCRIPT = """on run argv
       set elementName to name of uiElement as text
       if elementRole is "AXStaticText" or elementRole is "AXTextArea" or elementRole is "AXTextField" then
        try
-        set observed to observed & "TEXT:" & value of uiElement & linefeed
+        set observed to observed & "TEXT:" & my framedText(value of uiElement as text) & linefeed
        end try
       end if
       if elementRole is "AXButton" and enabled of uiElement then
-       set observed to observed & "BUTTON:" & elementName & linefeed
+       set observed to observed & "BUTTON:" & my framedText(elementName) & linefeed
        if wanted is not "" and elementName is wanted then
         set end of matchingButtons to uiElement
        end if
@@ -92,6 +107,7 @@ SCRIPT = """on run argv
   end if
   return observed
  end tell
+ end considering
 end run"""
 
 
@@ -141,23 +157,47 @@ def approval_facts(method, args):
     rendered = "\n".join(details)
     if len(rendered) > 4000 or not rendered:
         raise ValueError("Production GUI approval requires complete visible arguments")
+    flags = []
+    if args.get("allow_private_network") is True:
+        flags.append("Private network access requested")
+    if method == "sources.import" and args.get("id") is not None:
+        flags.append("Replaces source " + _dart_display(args["id"]))
     return (
         "Allow this operation?",
         APPROVAL_ACTIONS[method],
         "External client (identity unverified)",
         rendered,
+        *flags,
     )
 
 
 def matches_approval(snapshot, facts):
-    # Linux escapes line breaks in each accessible name; AppleScript returns
-    # real line breaks. Exact TEXT blocks prevent a button/argument substring
-    # from supplying missing approval facts.
-    text = snapshot.replace("\\n", "\n").replace("\\r", "\r")
-    blocks = text.split("TEXT:")
-    observed = {block.rstrip("\n") for block in blocks[1:]}
-    observed = {block.split("\nBUTTON:", 1)[0] for block in observed}
-    return all(fact in observed for fact in facts)
+    # Decode only after separating backend-generated frames. Delimiter-looking
+    # text and escaped line breaks inside an element remain that element's data.
+    observed = set()
+    for line in snapshot.split("\n"):
+        if not line:
+            continue
+        prefix, separator, encoded = line.partition(":")
+        if not separator or prefix not in {"TEXT", "BUTTON"}:
+            return False
+        decoded = []
+        index = 0
+        while index < len(encoded):
+            character = encoded[index]
+            if character == "\\":
+                index += 1
+                if index == len(encoded) or encoded[index] not in "\\nr":
+                    return False
+                character = {"\\": "\\", "n": "\n", "r": "\r"}[encoded[index]]
+            decoded.append(character)
+            index += 1
+        value = "".join(decoded)
+        if prefix == "BUTTON":
+            continue
+        elif value not in {"Open Foresight", "Alert"}:
+            observed.add(value)
+    return observed == set(facts)
 
 
 class InstalledDesktop:

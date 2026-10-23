@@ -321,7 +321,11 @@ def observe(api, pid, executable, button="", *, reveal=False, expected_snapshot=
                 targets.append((node, ancestors))
             if 25 in states and 30 in states:
                 if name:
-                    label = name.replace("\r", "\\r").replace("\n", "\\n")
+                    label = (
+                        name.replace("\\", "\\\\")
+                        .replace("\r", "\\r")
+                        .replace("\n", "\\n")
+                    )
                     lines.append(("BUTTON:" if enabled_button else "TEXT:") + label)
                     if enabled_button and name == button:
                         candidates.append(node)

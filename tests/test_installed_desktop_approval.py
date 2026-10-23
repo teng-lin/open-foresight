@@ -26,8 +26,65 @@ def approval_dialog(details, action="Import or replace text"):
         "TEXT:Allow this operation?\nTEXT:"
         + action
         + "\nTEXT:External client (identity unverified)\nTEXT:"
-        + details
+        + framed(details)
         + "\nBUTTON:Deny\nBUTTON:Allow once"
+    )
+
+
+def framed(text):
+    return text.replace("\\", "\\\\").replace("\r", "\\r").replace("\n", "\\n")
+
+
+@pytest.mark.parametrize(
+    "details",
+    [
+        "title: other\ntext: xTEXT:title: private\ntext: fixture",
+        "title: other\ntext: x\nTEXT:title: private\ntext: fixture",
+    ],
+)
+def test_text_frame_markers_inside_arguments_cannot_supply_expected_facts(details):
+    facts = gui.approval_facts(
+        "sources.import", {"title": "private", "text": "fixture"}
+    )
+    assert not gui.matches_approval(approval_dialog(details), facts)
+
+
+def test_framing_preserves_multiline_text_and_literal_backslashes():
+    args = {"title": "fixture", "text": "first\nTEXT:value\rpath: /private/a\\b"}
+    facts = gui.approval_facts("sources.import", args)
+    snapshot = approval_dialog(facts[3])
+    assert gui.matches_approval(snapshot, facts)
+    assert gui.matches_approval("TEXT:Open Foresight\nTEXT:Alert\n" + snapshot, facts)
+    assert not gui.matches_approval(snapshot + "\nTEXT:Unexpected action", facts)
+
+
+@pytest.mark.parametrize("suffix", ["\nTEXT:bad\\", "\nTEXT:bad\\q", "\nTEXT:extra"])
+def test_unknown_or_malformed_text_frames_are_refused(suffix):
+    facts = gui.approval_facts("sources.import", {"text": "fixture"})
+    assert not gui.matches_approval(approval_dialog(facts[3]) + suffix, facts)
+
+
+def test_only_risk_facts_predicted_from_requested_arguments_are_accepted():
+    facts = gui.approval_facts(
+        "sources.import",
+        {"text": "fixture", "id": "source-1", "allow_private_network": True},
+    )
+    snapshot = approval_dialog(facts[3])
+    for flag in facts[4:]:
+        snapshot += "\nTEXT:" + framed(flag)
+    assert gui.matches_approval(snapshot, facts)
+    assert not gui.matches_approval(
+        snapshot, gui.approval_facts("sources.import", {"text": "fixture"})
+    )
+
+
+def test_mac_snapshot_and_button_comparisons_consider_case():
+    assert "considering case" in gui.SCRIPT
+    assert "end considering" in gui.SCRIPT
+    assert (
+        gui.SCRIPT.index("considering case")
+        < gui.SCRIPT.index("if observed is not expectedSnapshot")
+        < gui.SCRIPT.index("end considering")
     )
 
 
@@ -812,7 +869,9 @@ def test_owned_launcher_samples_coherent_image_and_argv_across_exec(
     host.process = None
 
 
-@pytest.mark.parametrize("mismatch", ["action", "arguments", "requester"])
+@pytest.mark.parametrize(
+    "mismatch", ["action", "arguments", "argument_frames", "requester"]
+)
 def test_unrelated_approval_dialog_is_refused_before_click(owned, mismatch):
     host = owned.host.start()
     pending, released = threading.Event(), threading.Event()
@@ -822,9 +881,10 @@ def test_unrelated_approval_dialog_is_refused_before_click(owned, mismatch):
         "arguments": "title: private\ntext: fixture",
         "requester": "External client (identity unverified)",
     }
-    lines[mismatch] = {
+    lines["arguments" if mismatch == "argument_frames" else mismatch] = {
         "action": "Clear all workspace data and disconnect Google",
         "arguments": "title: someone else\ntext: unrelated",
+        "argument_frames": "title: someone else\ntext: xTEXT:title: private\ntext: fixture",
         "requester": "Desktop connection (identity unverified)",
     }[mismatch]
 
@@ -840,7 +900,7 @@ def test_unrelated_approval_dialog_is_refused_before_click(owned, mismatch):
                 "TEXT:Allow this operation?",
                 "TEXT:" + lines["action"],
                 "TEXT:" + lines["requester"],
-                "TEXT:" + lines["arguments"],
+                "TEXT:" + framed(lines["arguments"]),
                 "BUTTON:Allow once",
             ]
         )
