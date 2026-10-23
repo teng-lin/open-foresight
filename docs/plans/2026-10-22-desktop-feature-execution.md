@@ -334,3 +334,22 @@ not isolate its GNU unique process globals. Logs remain under
 These remain checkpoint results. The final combined source, fresh builds,
 platform matrices, installed-package acceptance and final external CLI review
 are still pending. Delivery remains one final PR, with no intermediate PRs.
+
+The first combined Claude CLI review at `f803bfdc` found a workspace-adoption
+ordering bug (`228480ed`, actual single-event remote regression), a second note
+overwrite window during successful slow reads (`c3934c2f`, 58 focused passes),
+and destructive Chat history remounts during scope verification (`e8273512`,
+13 focused passes). Chat now retains its hidden scroll/render state while the
+scope is uncertain; it still hides old content from pixels, semantics, pointer
+and keyboard access until scope verification finishes. Scope or session changes
+retire the retained state. Independent native-agent source reviews cleared all
+three corrections; the final CLI convergence round remains pending.
+
+The installed GUI harness now matches supported visible action, arguments and
+requester class before consent, rechecks the snapshot at activation, observes
+unnamed accessibility Text values, and rejects unexpected already-exited desktop
+processes (`5da70779`, 104 focused passes). Generic, truncated or otherwise
+unmatchable requests fail closed. Identical visible facts cannot establish the
+identity of distinct external clients. Fresh actual GUI acceptance is required
+for the new accessibility observation; earlier button-only snapshots do not
+establish that matching ran.
