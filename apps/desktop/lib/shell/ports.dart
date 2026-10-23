@@ -1,3 +1,4 @@
+export '../features/meetings/ports.dart';
 export '../features/settings/ports.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
@@ -57,18 +58,3 @@ abstract interface class WorkspaceLifecycle {
   void serviceChanged();
 }
 
-// Outward feature contracts live here until their owner's 7B move. Dependants
-// receive each required port separately; the host is not a feature locator.
-abstract interface class MeetingActivity {
-  int? get selectedMeetingId;
-  int? get previewMeetingId;
-  RecordingSnapshot? get recording;
-  bool get meetingEnhancing;
-  bool get systemAudioSetupReviewed;
-  String get echoCancellationDescription;
-}
-
-abstract interface class MeetingCommands {
-  Future<void> quickStart();
-  void setSystemAudioSetupReviewed(bool reviewed);
-}
