@@ -381,7 +381,7 @@ class _SourcesController extends _FeatureController {
         initialFolders:
             roots ??
             LocalFileDiscovery.defaultFolders(
-              widget.environment.variables['HOME'] ??
+              widget.environment.homeDirectory ??
                   widget.environment.dataDirectory,
             ),
         excludedPaths: excluded,

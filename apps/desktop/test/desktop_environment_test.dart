@@ -7,6 +7,7 @@ import 'package:foresight_core/src/domain.dart';
 import 'package:foresight_core/src/store.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/desktop_environment.dart';
+import 'package:open_foresight/file_discovery_sheet.dart';
 import 'package:open_foresight/main.dart';
 import 'controller_fixture.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
@@ -59,6 +60,7 @@ void main() {
   test('widget environment defaults cannot spawn a process', () async {
     const environment = DesktopEnvironment();
     expect(environment.variables, isEmpty);
+    expect(environment.homeDirectory, isNull);
     await expectLater(
       environment.run('/usr/bin/hyprctl', []),
       throwsUnsupportedError,
@@ -87,6 +89,7 @@ void main() {
       runSync: (_, _) => throw StateError('No host probe on Linux'),
     );
     expect(environment.variables['HOME'], '');
+    expect(environment.homeDirectory, isNull);
     expect(environment.configDirectory, '/dev/null/foresight-config');
     expect(environment.dataDirectory, '/dev/null/foresight-data');
   });
@@ -111,10 +114,26 @@ void main() {
         },
       );
       expect(calls, ['/usr/bin/id', '/usr/bin/dscl']);
+      expect(environment.homeDirectory, '/Users/fixture');
       expect(environment.configDirectory, '/Users/fixture/.config');
       expect(environment.dataDirectory, '/Users/fixture/.local/share');
     },
   );
+
+  test('fake account home stays inside the injected environment', () {
+    expect(
+      const DesktopEnvironment(variables: {'HOME': '/fixture'}).homeDirectory,
+      '/fixture',
+    );
+    expect(
+      const DesktopEnvironment(variables: {'HOME': ''}).homeDirectory,
+      isNull,
+    );
+    expect(
+      const DesktopEnvironment(homeDirectory: '/account').homeDirectory,
+      '/account',
+    );
+  });
 
   testWidgets('default device discovery uses the injected process runner', (
     tester,
@@ -147,6 +166,61 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
     await tester.pumpAndSettle();
+  });
+
+  testWidgets('Finder account home supplies the default discovery folders', (
+    tester,
+  ) async {
+    final root = createTestTempDirectorySync('finder-discovery-');
+    final folders = [
+      for (final name in ['Documents', 'Downloads', 'Desktop'])
+        (Directory('${root.path}/$name')..createSync()).path,
+    ];
+    final environment = DesktopEnvironment.production(
+      variables: const {},
+      macOS: true,
+      runSync: (executable, _) => ProcessResult(
+        1,
+        0,
+        executable == '/usr/bin/id'
+            ? 'fixture\n'
+            : 'NFSHomeDirectory: ${root.path}\n',
+        '',
+      ),
+    );
+    final connection = ControllerConnection(
+      Application(
+        Domain(
+          Store('${root.path}/app.db'),
+          OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+        ),
+      ),
+    );
+    await tester.binding.setSurfaceSize(const Size(1400, 1000));
+    addTearDown(() async {
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+      await tester.binding.setSurfaceSize(null);
+    });
+    await tester.pumpWidget(
+      Foresight(
+        connection,
+        environment: environment,
+        deviceLoader: () async => [],
+      ),
+    );
+    await tester.pumpAndSettle();
+    final dynamic shell = tester.state(find.byType(Workspace));
+    final discovery = shell.sourceFeature.findFilesOnComputer();
+    // Selecting real folders starts asynchronous filesystem scanning. Inspect
+    // the selected roots without waiting on its animated progress indicator.
+    await tester.pump();
+    final sheet = find.byType(FileDiscoverySheet);
+    expect(tester.widget<FileDiscoverySheet>(sheet).initialFolders, folders);
+    Navigator.of(tester.element(sheet)).pop();
+    await tester.pumpAndSettle();
+    await discovery;
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets(

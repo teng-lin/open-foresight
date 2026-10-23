@@ -14,6 +14,7 @@ Notable changes to Open Foresight are recorded here. Versions follow
 - Show failures from settings and meeting controls, and dismiss the sign-in dialog without closing another dialog above it.
 - Keep desktop widget tests isolated from desktop shortcuts, application configuration, URI launchers and notifications.
 - Release the activation listener when desktop startup cannot protect its socket.
+- Discover the usual account folders when macOS launches without a HOME environment variable.
 
 ## [0.1.3] - 2026-10-21
 

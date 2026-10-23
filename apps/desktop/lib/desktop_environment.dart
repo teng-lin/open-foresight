@@ -12,6 +12,7 @@ typedef DesktopProcessStarter =
 class DesktopEnvironment {
   const DesktopEnvironment({
     this.variables = const {},
+    String? homeDirectory,
     this.configDirectory = '/dev/null/foresight-config',
     this.dataDirectory = '/dev/null/foresight-data',
     this.launcher = '/dev/null/open-foresight',
@@ -19,7 +20,7 @@ class DesktopEnvironment {
     this.start = _noStart,
     this.openUri = _noUri,
     this.notify = _noNotification,
-  });
+  }) : _homeDirectory = homeDirectory;
 
   factory DesktopEnvironment.production({
     Map<String, String>? variables,
@@ -39,6 +40,7 @@ class DesktopEnvironment {
     final hasHome = home != null && home.isNotEmpty;
     return DesktopEnvironment(
       variables: values,
+      homeDirectory: home,
       configDirectory:
           values['XDG_CONFIG_HOME'] ??
           (hasHome ? '$home/.config' : '/dev/null/foresight-config'),
@@ -74,6 +76,12 @@ class DesktopEnvironment {
   }
 
   final Map<String, String> variables;
+  final String? _homeDirectory;
+  String? get homeDirectory {
+    final home = _homeDirectory ?? variables['HOME'];
+    return home == null || home.isEmpty ? null : home;
+  }
+
   final String configDirectory, dataDirectory, launcher;
   final DesktopProcessRunner run;
   final DesktopProcessStarter start;
