@@ -71,6 +71,17 @@ class _Reader implements StoreReader {
 }
 
 class _Connection implements DesktopConnection {
+  final writes = <Map<String, dynamic>>[];
+  @override
+  Future<Object?> command(
+    Operation operation, [
+    Map<String, dynamic> args = const {},
+  ]) async {
+    expect(operation, Operation.notesSave);
+    writes.add(Map.of(args));
+    return {'id': args['id'] ?? 8};
+  }
+
   @override
   final _Reader store = _Reader();
   @override
@@ -307,6 +318,259 @@ void main() {
       controller.dispose();
       connection.store.complete(4, 'after dispose');
       await disposed;
+    },
+  );
+  testWidgets('failed note body never enables a placeholder overwrite', (
+    tester,
+  ) async {
+    final opening = controller.openNote(note(8));
+    final failed = expectLater(opening, throwsA(isA<RpcError>()));
+    connection.store.complete(
+      0,
+      null,
+      error: RpcError(RpcErrorCode.unavailable, 'body read failed'),
+    );
+    await failed;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StatefulBuilder(
+          builder: (context, rebuild) {
+            host.context = context;
+            host.rebuild = rebuild;
+            return Scaffold(body: controller.notes());
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final save = find.widgetWithText(FilledButton, 'Save note');
+    expect(tester.widget<FilledButton>(save).onPressed, isNull);
+    expect(connection.writes, isEmpty);
+  });
+  for (final retry in ['button', 'reselection']) {
+    testWidgets('note $retry retains intentional draft after failed load', (
+      tester,
+    ) async {
+      final opening = controller.openNote(note(8));
+      controller.noteBody.text = 'Draft before failure';
+      final failed = expectLater(opening, throwsA(isA<RpcError>()));
+      connection.store.complete(
+        0,
+        null,
+        error: RpcError(RpcErrorCode.unavailable, 'body read failed'),
+      );
+      await failed;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: StatefulBuilder(
+            builder: (context, rebuild) {
+              host.context = context;
+              host.rebuild = rebuild;
+              return Scaffold(body: controller.notes());
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      controller.noteTitle.text = 'Draft title';
+      controller.noteBody.text = 'Draft after failure';
+      Future<void>? reselected;
+      if (retry == 'button') {
+        await tester.tap(find.text('Retry loading note'));
+      } else {
+        reselected = controller.openNote(note(8));
+      }
+      await tester.pump();
+      expect(controller.noteLoading, isTrue);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.widgetWithText(FilledButton, 'Save note'),
+            )
+            .onPressed,
+        isNull,
+      );
+      connection.store.complete(1, 'Persisted body');
+      if (reselected != null) await reselected;
+      await tester.pumpAndSettle();
+      expect(controller.noteBodyReady, isTrue);
+      expect(controller.noteBody.text, 'Draft after failure');
+      expect(controller.noteTitle.text, 'Draft title');
+      expect(controller.noteBaseline, ('Note 8', 'Persisted body'));
+      await tester.tap(find.text('Save note'));
+      await tester.pumpAndSettle();
+      expect(
+        connection.writes.single,
+        containsPair('body', 'Draft after failure'),
+      );
+      expect(connection.writes.single, containsPair('id', 8));
+    });
+  }
+
+  testWidgets(
+    'empty accepted body permits saving; New note clears a failed load',
+    (tester) async {
+      final opening = controller.openNote(note(8));
+      final failed = expectLater(opening, throwsA(isA<RpcError>()));
+      connection.store.complete(
+        0,
+        null,
+        error: RpcError(RpcErrorCode.unavailable, 'body read failed'),
+      );
+      await failed;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: StatefulBuilder(
+            builder: (context, rebuild) {
+              host.context = context;
+              host.rebuild = rebuild;
+              return Scaffold(body: controller.notes());
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Retry loading note'));
+      await tester.pump();
+      connection.store.complete(1, '');
+      await tester.pumpAndSettle();
+      expect(controller.noteBodyReady, isTrue);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.widgetWithText(FilledButton, 'Save note'),
+            )
+            .onPressed,
+        isNotNull,
+      );
+      final another = controller.openNote(note(9));
+      final anotherFailed = expectLater(another, throwsA(isA<RpcError>()));
+      connection.store.complete(
+        2,
+        null,
+        error: RpcError(RpcErrorCode.unavailable, 'second body failure'),
+      );
+      await anotherFailed;
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('New note'));
+      await tester.pumpAndSettle();
+      expect(controller.noteId, isNull);
+      expect(find.text('Retry loading note'), findsNothing);
+      controller.noteBody.text = 'New draft';
+      await tester.tap(find.text('Save note'));
+      await tester.pumpAndSettle();
+      expect(connection.writes.single, containsPair('body', 'New draft'));
+      expect(connection.writes.single.containsKey('id'), isFalse);
+      expect(controller.noteBodyReady, isTrue);
+    },
+  );
+
+  for (final boundary in ['session', 'epoch']) {
+    testWidgets(
+      'held note retry cannot authorize saving after $boundary replacement',
+      (tester) async {
+        final opening = controller.openNote(note(8));
+        final failed = expectLater(opening, throwsA(isA<RpcError>()));
+        connection.store.complete(
+          0,
+          null,
+          error: RpcError(RpcErrorCode.unavailable, 'body read failed'),
+        );
+        await failed;
+        await tester.pumpWidget(
+          MaterialApp(
+            home: StatefulBuilder(
+              builder: (context, rebuild) {
+                host.context = context;
+                host.rebuild = rebuild;
+                return Scaffold(body: controller.notes());
+              },
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Retry loading note'));
+        await tester.pump();
+        if (boundary == 'session') {
+          connection.clientSessionGeneration = Object();
+        } else {
+          connection.workspaceEpoch = connection.store.workspaceEpoch =
+              'replacement';
+        }
+        connection.events.add(null);
+        connection.store.complete(1, 'Retired body');
+        await tester.pumpAndSettle();
+        expect(controller.noteBodyReady, isFalse);
+        expect(controller.noteBody.text, '');
+        expect(
+          tester
+              .widget<FilledButton>(
+                find.widgetWithText(FilledButton, 'Save note'),
+              )
+              .onPressed,
+          isNull,
+        );
+        expect(connection.writes, isEmpty);
+        await tester.tap(find.text('Retry loading note'));
+        await tester.pump();
+        connection.store.complete(2, 'Current body');
+        await tester.pumpAndSettle();
+        expect(controller.noteBodyReady, isTrue);
+        final save = tester
+            .widget<FilledButton>(
+              find.widgetWithText(FilledButton, 'Save note'),
+            )
+            .onPressed!;
+        connection.clientSessionGeneration = Object();
+        // An already built callback independently checks body ownership.
+        save();
+        await tester.pumpAndSettle();
+        expect(connection.writes, isEmpty);
+        controller.dispose();
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
+  testWidgets(
+    'retained note retry and save callbacks admit nothing after disposal',
+    (tester) async {
+      final opening = controller.openNote(note(8));
+      final failed = expectLater(opening, throwsA(isA<RpcError>()));
+      connection.store.complete(
+        0,
+        null,
+        error: RpcError(RpcErrorCode.unavailable, 'body read failed'),
+      );
+      await failed;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: StatefulBuilder(
+            builder: (context, rebuild) {
+              host.context = context;
+              host.rebuild = rebuild;
+              return Scaffold(body: controller.notes());
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final retry = tester
+          .widget<TextButton>(
+            find.widgetWithText(TextButton, 'Retry loading note'),
+          )
+          .onPressed!;
+      await tester.tap(find.text('New note'));
+      await tester.pumpAndSettle();
+      final save = tester
+          .widget<FilledButton>(find.widgetWithText(FilledButton, 'Save note'))
+          .onPressed!;
+      controller.dispose();
+      await tester.pumpWidget(const SizedBox());
+      retry();
+      save();
+      await tester.pump();
+      expect(connection.store.pending, hasLength(1));
+      expect(connection.writes, isEmpty);
     },
   );
 }

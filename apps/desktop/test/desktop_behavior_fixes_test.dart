@@ -12,6 +12,8 @@ import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/main.dart';
 import 'package:open_foresight/features/integrations/google_sign_in_dialog.dart';
 import 'controller_fixture.dart';
+import 'pump_until.dart';
+import 'package:foresight_core/desktop.dart' show NoteSummary;
 import 'google_sign_in_workflow_test.dart' show PendingGoogleAuth;
 import 'meeting_setup_test.dart' show OfflineHelper;
 
@@ -120,8 +122,20 @@ void main() {
           );
           final first = store.saveNote(null, 'First note', 'First body');
           final second = store.saveNote(null, 'Second note', 'Second body');
+          shell.update(() => shell.navigate(WorkspaceTab.notes));
+          if (!create) {
+            await pumpUntilCompleted(
+              tester,
+              shell.sourceFeature.openNote(
+                NoteSummary.fromRow({
+                  'id': first,
+                  'title': 'First note',
+                  'revision': 1,
+                }),
+              ),
+            );
+          }
           shell.update(() {
-            shell.navigate(WorkspaceTab.notes);
             shell.sourceFeature.noteId = create ? null : first;
             shell.sourceFeature.noteTitle.text = 'Saved first';
             shell.sourceFeature.noteBody.text = 'Saved body';

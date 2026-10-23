@@ -341,8 +341,14 @@ class SourcesController implements SourceCommands {
   Future<void> editSource(Map<String, Object?> s) => _featureEditSource(s);
 
   FeatureRequestIdentity? _noteLoadOwner;
-  int _noteDraftRevision = 0;
+  int _noteDraftRevision = 0, _noteBodyLoadRevision = 0;
+  (int, int)? _acceptedNoteBody;
+  String _noteLoadError = '';
   bool noteLoading = false;
+  bool get noteBodyReady =>
+      noteId == null ||
+      (_acceptedNoteBody == (noteId, noteEditorGeneration) &&
+          (_noteLoadOwner?.isCurrent(d, alive: mounted) ?? false));
   Future<void> openNote(NoteSummary note) => _featureOpenNote(note);
 
   void showSource(String id) => _featureShowSource(id);
