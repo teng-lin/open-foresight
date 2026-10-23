@@ -18,7 +18,7 @@ import 'package:foresight_core/src/speech_models.dart';
 import 'package:open_foresight/features/settings/speech_setup_view.dart';
 import 'package:open_foresight/features/settings/model_terms_dialog.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/onboarding_view.dart';
+import 'package:open_foresight/features/onboarding/onboarding_view.dart';
 import 'package:foresight_core/src/store.dart';
 import 'desktop_connection_fixture.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;

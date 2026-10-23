@@ -1,11 +1,50 @@
-part of 'application.dart';
+import 'dart:io';
+import 'dart:math' as math;
+import 'package:flutter/material.dart';
+import 'package:foresight_core/desktop.dart';
+import '../../desktop_reader_adapters.dart';
+import '../../shell/ports.dart';
+import '../../shell/workspace_tab.dart';
+import 'onboarding_view.dart';
 
-class _OnboardingController extends _FeatureController {
-  _OnboardingController(super.shell);
+class OnboardingController implements OnboardingActivity {
+  OnboardingController({
+    required FeatureHost host,
+    required WorkspaceNavigation navigation,
+    required OperationGate operations,
+    required WorkspaceLifecycle lifecycle,
+    required SettingsCommands settings,
+    required SourceCommands sources,
+    required IntegrationsPort integrations,
+  }) : _host = host,
+       _navigation = navigation,
+       _operations = operations,
+       _lifecycle = lifecycle,
+       settingsFeature = settings,
+       sourceFeature = sources,
+       integrationFeature = integrations;
+
+  final FeatureHost _host;
+  final WorkspaceNavigation _navigation;
+  final OperationGate _operations;
+  final WorkspaceLifecycle _lifecycle;
+  final SettingsCommands settingsFeature;
+  final SourceCommands sourceFeature;
+  final IntegrationsPort integrationFeature;
+  bool _disposed = false;
+  DesktopConnection get d => _host.connection;
+  bool get mounted => !_disposed && _host.mounted;
+  BuildContext get context => _host.context;
+  void setState(VoidCallback action) {
+    if (mounted) _host.update(action);
+  }
+
+  void dispose() => _disposed = true;
   bool finished = false, ready = false, working = false;
   String failure = '';
+  @override
   bool get active =>
-      widget.commands != null &&
+      _host.commands != null &&
       !finished &&
       d.store.preference('onboarding.complete') != 'true';
 
@@ -141,7 +180,7 @@ class _OnboardingController extends _FeatureController {
   );
 
   Widget library(BuildContext context) => ValueListenableBuilder<int>(
-    valueListenable: shell.serviceUiRevision,
+    valueListenable: _host.serviceUiRevision,
     builder: (_, __, ___) {
       final sources = readRows(d.store.sourceSummaries);
       final indexed = sources.where((s) => s['state'] == 'indexed').length;
@@ -204,7 +243,7 @@ class _OnboardingController extends _FeatureController {
                                 await d.command(Operation.sourcesDelete, {
                                   'id': source['id'],
                                 });
-                                shell.serviceChanged();
+                                _lifecycle.serviceChanged();
                               }),
                         icon: const Icon(Icons.delete_outline),
                       ),
@@ -241,9 +280,9 @@ class _OnboardingController extends _FeatureController {
     initialStep: int.tryParse(d.store.preference('onboarding.step', '0')) ?? 0,
     runtimeReady: ready,
     externalBusy: working,
-    runtimeError: shell.error,
+    runtimeError: _operations.error,
     retryRuntime: () async {
-      setState(() => shell.error = '');
+      _operations.setError('');
       final connection = d;
       await connection.initialize();
       await connection.resume();
@@ -266,7 +305,7 @@ class _OnboardingController extends _FeatureController {
       if (mounted)
         setState(() {
           finished = true;
-          shell.navigate(WorkspaceTab.sources);
+          _navigation.navigate(WorkspaceTab.sources);
         });
     },
     generation: (done) =>

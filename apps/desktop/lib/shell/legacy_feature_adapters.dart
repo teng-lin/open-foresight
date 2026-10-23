@@ -48,10 +48,10 @@ final class _LegacyMeetingPorts implements MeetingActivity, MeetingCommands {
       owner.update(() => owner.systemAudioSetupReviewed = reviewed);
 }
 
-final class _LegacyOnboardingActivity implements OnboardingActivity {
-  const _LegacyOnboardingActivity(this.owner);
-  final _OnboardingController owner;
+final class _OnboardingActivity implements OnboardingActivity {
+  const _OnboardingActivity(this.readActive);
+  final bool Function() readActive;
 
   @override
-  bool get active => owner.active;
+  bool get active => readActive();
 }

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/onboarding_view.dart';
+import 'package:open_foresight/features/onboarding/onboarding_view.dart';
 
 /// Workspace acceptance starts with a fresh profile, just like a first launch.
 /// Use the real skip/complete actions; model fixtures are installed separately.

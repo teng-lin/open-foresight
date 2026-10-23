@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'app_theme.dart';
+import '../../app_theme.dart';
 
 /// First-run navigation. Model installers retain their Settings behavior,
 /// including checksum verification, cancellation, and local-file reuse.

@@ -6,7 +6,7 @@ import 'shell/ports.dart';
 import 'features/settings/settings_controller.dart';
 import 'features/sources/sources_controller.dart';
 import 'presentation/workspace_presentation.dart';
-import 'onboarding_view.dart';
+import 'features/onboarding/onboarding_controller.dart';
 
 import 'desktop_reader_adapters.dart';
 import 'service_edit_dialog.dart';
@@ -34,7 +34,6 @@ import 'meeting_note_state.dart';
 import 'generated_content.dart';
 import 'agent_approval_surface.dart';
 
-part 'onboarding_controller.dart';
 part 'workspace_controller.dart';
 part 'workspace_visuals.dart';
 
@@ -103,7 +102,15 @@ class _WorkspaceState extends State<Workspace>
         WorkspaceDialogs,
         WorkspaceLifecycle {
   final calendarAuthLinks = CalendarAuthLinks();
-  late final onboardingFeature = _OnboardingController(this);
+  late final onboardingFeature = OnboardingController(
+    host: this,
+    navigation: this,
+    operations: this,
+    lifecycle: this,
+    settings: settingsFeature,
+    sources: sourceFeature,
+    integrations: integrationFeature,
+  );
   late final sourceFeature = SourcesController(
     host: this,
     navigation: this,
@@ -143,8 +150,8 @@ class _WorkspaceState extends State<Workspace>
     (key, value) => settingsFeature.preference(key, value),
   );
   late final meetingPorts = _LegacyMeetingPorts(meetingFeature);
-  late final OnboardingActivity onboardingActivity = _LegacyOnboardingActivity(
-    onboardingFeature,
+  late final OnboardingActivity onboardingActivity = _OnboardingActivity(
+    () => onboardingFeature.active,
   );
 
   DesktopConnection get d => widget.domain;
@@ -393,6 +400,7 @@ class _WorkspaceState extends State<Workspace>
           },
         ),
       );
+    onboardingFeature.dispose();
     settingsFeature.dispose();
     integrationFeature.dispose();
     sourceFeature.dispose();

@@ -10,6 +10,7 @@ import 'workspace_tab.dart';
 export '../features/integrations/ports.dart';
 export '../features/sources/ports.dart';
 export '../features/chat/ports.dart';
+export '../features/onboarding/ports.dart';
 
 /// Host capabilities shared by features, without access to other controllers.
 /// [update] preserves the shell rebuild bridge while feature readers migrate.
@@ -70,8 +71,4 @@ abstract interface class MeetingActivity {
 abstract interface class MeetingCommands {
   Future<void> quickStart();
   void setSystemAudioSetupReviewed(bool reviewed);
-}
-
-abstract interface class OnboardingActivity {
-  bool get active;
 }
