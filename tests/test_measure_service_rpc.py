@@ -423,6 +423,7 @@ def workload(inputs, private, monkeypatch):
     inputs.temp_root = private
     state = {}
     monkeypatch.setattr(rpc.Measurement, "capture_runtime_mappings", lambda self, condition: None)
+    monkeypatch.setattr(rpc.Measurement, "verify_service_image", lambda self: None)
     monkeypatch.setattr(rpc, "Peer", lambda path: WorkPeer(path, state))
     monkeypatch.setattr(rpc.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
     class PhaseThread(FakeThread):
@@ -759,8 +760,13 @@ def test_real_supervisor_cleans_descendant_after_service_exits(private, ignore_t
         if stop_supervisor:
             assert measurement.report["status"] == "incomplete"
             assert measurement.report["owned_session_survivors_before_supervisor_kill"] == []
+        elif ignore_term:
+            assert measurement.report["owned_session_escalated_to_kill"] is True
+            assert measurement.report["status"] == "incomplete"
+            assert measurement.report["graceful_shutdown"] is False
         else:
             assert measurement.report["owned_session_cleanup"] == "supervisor verified the session empty"
+            assert measurement.report["graceful_shutdown"] is True
         # The supervisor reaps on graceful exit; after SIGKILL, init may still
         # own a dead zombie briefly. Neither case leaves an executing child.
         def stopped():
@@ -1361,8 +1367,8 @@ def test_summary_workload_warms_then_regenerates_real_summary_contract(workload)
     assert all(method not in {"answer", "answer.stream"} for method, _ in calls)
     sample = workload.report["samples"]["warmed_streaming"]
     assert sample["native_active_count"] == 100
-    assert len(sample["stream_chunks_during_samples"]) == 100
-    assert sample["stream_chunks_during_samples"][0]["received_ns"] == sample["first_status_ns"]
+    assert len(sample["stream_chunks_during_samples"]) == 99
+    assert sample["stream_chunks_during_samples"][0]["received_ns"] > sample["first_status_ns"]
     assert sample["stream_chunks_during_samples"][-1]["received_ns"] == sample["last_status_ns"]
     workload.close()
 
@@ -1546,18 +1552,21 @@ def test_maps_snapshot_accounts_for_exited_and_moved_processes(private, monkeypa
 
 @pytest.mark.parametrize("mutable", [False, True])
 def test_maps_record_mutable_shared_data_and_refuse_changed_runtime(private, monkeypatch, mutable):
-    path = private / "mapped"
+    data = private / "data"
+    data.mkdir()
+    path = data / "mapped"
     path.write_bytes(b"before")
     fake_maps(monkeypatch, map_line(path, "rw-s" if mutable else "r-xp"))
     report = {}
-    inventory = rpc.RuntimeInventory(report)
+    inventory = rpc.RuntimeInventory(report, private_roots=(data,))
     inventory.capture(41, "before")
     pending = list(inventory.pending.values())
     path.write_bytes(b"after changed")
     if mutable:
         inventory.finish()
         assert report["mapped_runtime_files"][0]["changed_since_snapshot"]
-        assert report["mapped_runtime_files"][0]["sha256"] == hashlib.sha256(b"after changed").hexdigest()
+        assert "sha256" not in report["mapped_runtime_files"][0]
+        assert report["mapped_runtime_files"][0]["post_run_sha256"] == hashlib.sha256(b"after changed").hexdigest()
     else:
         with pytest.raises(ValueError, match="changed since snapshot"):
             inventory.finish()
@@ -1697,3 +1706,246 @@ def test_maps_reject_same_size_runtime_rewrite_even_when_mtime_restored(private,
         inventory.finish()
     assert report["status"] == "incomplete"
     assert all(stream.closed for stream in streams)
+
+
+def test_summary_change_only_in_first_sample_does_not_qualify_window(workload, monkeypatch):
+    original = WorkPeer.call
+    native_polls = 0
+    def call(self, method, arguments=None, **kwargs):
+        nonlocal native_polls
+        wire = original(self, method, arguments, **kwargs)
+        if method == "status" and rpc.native_active(wire):
+            native_polls += 1
+            wire["capture"]["meeting_summaries"]["7"]["preview"] = (
+                "Before sample window" if native_polls == 1 else "Changed before first reply"
+            )
+        return wire
+    monkeypatch.setattr(WorkPeer, "call", call)
+    with pytest.raises(RuntimeError, match="No changed non-empty native summary preview"):
+        workload.workload()
+    sample = workload.report["samples"]["warmed_streaming"]
+    assert sample["n"] == sample["native_active_count"] == 100
+    assert not sample["stream_chunks_during_samples"]
+    assert workload.stream_chunks[-1]["received_ns"] == sample["first_status_ns"]
+    workload.close()
+
+
+@pytest.mark.parametrize("kind", ["rewrite", "replace"])
+def test_declared_mapped_input_mutated_before_snapshot_is_refused(private, monkeypatch, kind):
+    path = private / "declared-model"
+    path.write_bytes(b"original")
+    report = {"status": "passed", "inputs": {"generation_model": rpc.file_identity(path)}}
+    if kind == "replace":
+        replacement = private / "replacement"
+        replacement.write_bytes(b"modified")
+        replacement.replace(path)
+    else:
+        metadata = path.stat()
+        path.write_bytes(b"modified")
+        os.utime(path, ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
+    fake_maps(monkeypatch, map_line(path))
+    inventory = rpc.RuntimeInventory(report)
+    with pytest.raises(ValueError, match="Declared input changed before mapping snapshot"):
+        inventory.capture(41, "before samples")
+    inventory.finish()
+    assert report["status"] == "incomplete"
+    assert "Declared input changed" in report["mapped_runtime_snapshots"][0]["error"]
+    assert not inventory.objects and not inventory.pending
+
+
+@pytest.mark.parametrize("mismatch", [False, True])
+def test_executed_service_image_is_bound_to_verified_input(private, mismatch):
+    declared = rpc.file_identity(Path(sys.executable).resolve())
+    if mismatch:
+        declared["sha256"] = "0" * 64
+    (private / "service-state.json").write_text(json.dumps({"pid": os.getpid(), "exit_code": None}))
+    report = {"inputs": {"service": declared}}
+    measurement = rpc.Measurement(SimpleNamespace(), private, report)
+    if mismatch:
+        with pytest.raises(ValueError, match="executed image differs"):
+            measurement.verify_service_image()
+    else:
+        measurement.verify_service_image()
+    assert report["executed_service_image"]["sha256"] == rpc.file_identity(Path("/proc/self/exe"))["sha256"]
+
+
+@pytest.mark.parametrize("alias", [False, True])
+def test_mutable_shared_file_outside_private_roots_is_refused(private, monkeypatch, alias):
+    data = private / "data"
+    data.mkdir()
+    outside = private / "external-runtime"
+    outside.write_bytes(b"before")
+    path = outside
+    if alias:
+        path = data / "escaped-link"
+        path.symlink_to(outside)
+    fake_maps(monkeypatch, map_line(path, "rw-s"))
+    report = {}
+    inventory = rpc.RuntimeInventory(report, private_roots=(data,))
+    inventory.capture(41, "before samples")
+    assert not report["mapped_runtime_files"][0]["mutable_shared_data"]
+    outside.write_bytes(b"changed runtime")
+    with pytest.raises(ValueError, match="Mapped runtime changed"):
+        inventory.finish()
+    assert report["status"] == "incomplete"
+
+
+def test_declared_input_in_private_root_cannot_gain_mutable_data_exemption(private, monkeypatch):
+    data = private / "data"
+    data.mkdir()
+    path = data / "declared-runtime"
+    path.write_bytes(b"before")
+    fake_maps(monkeypatch, map_line(path, "rw-s"))
+    report = {"inputs": {"runtime": rpc.file_identity(path)}}
+    inventory = rpc.RuntimeInventory(report, private_roots=(data,))
+    inventory.capture(41, "before samples")
+    path.write_bytes(b"after!")
+    with pytest.raises(ValueError, match="Mapped runtime changed"):
+        inventory.finish()
+    assert not report["mapped_runtime_files"][0]["mutable_shared_data"]
+
+
+def test_supervisor_lets_service_settle_its_own_child_without_term(private):
+    child_ready = private / "child.ready"
+    child_term = private / "child.received-term"
+    child_stop = private / "child.stop"
+    child_finished = private / "child.finished"
+    service_ready = private / "service.ready"
+    service_finished = private / "service.finished"
+    child_code = f'''import pathlib,signal,time
+stop = pathlib.Path({str(child_stop)!r})
+def term(kind, frame):
+    pathlib.Path({str(child_term)!r}).write_text('unexpected TERM')
+    raise SystemExit(3)
+signal.signal(signal.SIGTERM, term)
+pathlib.Path({str(child_ready)!r}).touch()
+while not stop.exists(): time.sleep(.01)
+time.sleep(.1)
+pathlib.Path({str(child_finished)!r}).touch()
+'''
+    service = private / "settling-service"
+    service.write_text(f'''#!{sys.executable}
+import pathlib,signal,subprocess,time
+stopping = False
+def term(kind, frame):
+    global stopping
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    stopping = True
+signal.signal(signal.SIGTERM, term)
+child = subprocess.Popen([{sys.executable!r}, '-c', {child_code!r}], process_group=0)
+while not pathlib.Path({str(child_ready)!r}).exists(): time.sleep(.01)
+pathlib.Path({str(service_ready)!r}).touch()
+while not stopping: time.sleep(.01)
+pathlib.Path({str(child_stop)!r}).touch()
+assert child.wait(timeout=2) == 0
+pathlib.Path({str(service_finished)!r}).touch()
+''')
+    service.chmod(0o700)
+    state = private / "service-state.json"
+    process = subprocess.Popen([sys.executable, str(Path(rpc.__file__).resolve()), "_supervise", str(service), str(state)],
+                               start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    report = {"status": "passed"}
+    measurement = rpc.Measurement(SimpleNamespace(), private, report)
+    measurement.process, measurement.cleanup_timeout = process, 2
+    try:
+        rpc.wait_until(lambda: service_ready.exists() and state.exists(), timeout=5)
+        measurement.close()
+        assert child_finished.exists() and service_finished.exists()
+        assert not child_term.exists(), "Supervisor interfered with service-owned child settlement"
+        assert report["owned_service_exit_code"] == report["owned_supervisor_exit_code"] == 0
+        assert report["graceful_shutdown"] is True and report["status"] == "passed"
+        assert not report.get("owned_session_escalated_to_kill")
+    finally:
+        if process.poll() is None:
+            rpc.signal_session_members(process.pid, rpc.signal.SIGKILL)
+            process.kill()
+        out, err = process.communicate(timeout=5)
+        assert process.returncode in {0, -9}, (out, err)
+
+
+@pytest.mark.parametrize("failure", ["ignores-term", "exit-three"])
+def test_real_service_forced_or_nonzero_shutdown_cannot_pass(private, failure):
+    ready = private / "failure.ready"
+    service = private / "failure-service"
+    policy = "signal.SIG_IGN" if failure == "ignores-term" else "lambda *args: sys.exit(3)"
+    service.write_text(f"#!{sys.executable}\nimport signal,sys,time\nsignal.signal(signal.SIGTERM,{policy})\nopen({str(ready)!r},'w').close()\ntime.sleep(20)\n")
+    service.chmod(0o700)
+    state = private / "service-state.json"
+    process = subprocess.Popen([sys.executable, str(Path(rpc.__file__).resolve()), "_supervise", str(service), str(state)],
+                               start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    report = {"status": "passed"}
+    measurement = rpc.Measurement(SimpleNamespace(), private, report)
+    measurement.process, measurement.cleanup_timeout = process, .2
+    try:
+        rpc.wait_until(lambda: ready.exists() and state.exists(), timeout=5)
+        measurement.close()
+        assert report["status"] == "incomplete" and report["graceful_shutdown"] is False
+        assert report["owned_service_exit_code"] == (-9 if failure == "ignores-term" else 3)
+        assert report["owned_supervisor_exit_code"] == 0
+        assert "forced or unsuccessful" in report["owned_session_cleanup"]
+        assert bool(report.get("owned_session_escalated_to_kill")) == (failure == "ignores-term")
+    finally:
+        if process.poll() is None:
+            rpc.signal_session_members(process.pid, rpc.signal.SIGKILL)
+            process.kill()
+        out, err = process.communicate(timeout=5)
+        assert process.returncode in {0, -9}, (out, err)
+
+
+@pytest.mark.parametrize("stopped", [False, True])
+def test_native_relay_nonzero_or_forced_exit_blocks_success(native_relay, relay_server, private, stopped):
+    service = relay_server(lambda connection, stop: stop.wait(3))
+    evidence = {}
+    peer = rpc.DesktopHostPeer(native_relay, service.path, private / "relay.log", evidence, {}, close_timeout=.1)
+    report = {"status": "passed"}
+    measurement = rpc.Measurement(SimpleNamespace(), private, report)
+    measurement.peers = [peer]
+    try:
+        assert service.entered.wait(2)
+        if stopped:
+            os.kill(peer.process.pid, rpc.signal.SIGSTOP)
+        else:
+            peer.process.terminate()
+            peer.process.wait(timeout=2)
+        measurement.close()
+        assert report["status"] == "incomplete" and report["graceful_shutdown"] is False
+        assert evidence["graceful_shutdown"] is False
+        assert evidence["exit_code"] == (-9 if stopped else -15)
+        assert bool(evidence.get("forced_kill")) == stopped
+    finally:
+        peer.close()
+
+
+def test_declared_input_hardlink_cannot_gain_private_mutable_exemption(private, monkeypatch):
+    path = private / "declared-runtime"
+    path.write_bytes(b"original")
+    data = private / "data"
+    data.mkdir()
+    alias = data / "private-alias"
+    alias.hardlink_to(path)
+    fake_maps(monkeypatch, map_line(alias, "rw-s"))
+    report = {"inputs": {"runtime": rpc.file_identity(path)}}
+    inventory = rpc.RuntimeInventory(report, private_roots=(data,))
+    inventory.capture(41, "before samples")
+    assert not report["mapped_runtime_files"][0]["mutable_shared_data"]
+    path.write_bytes(b"modified")
+    with pytest.raises(ValueError, match="Mapped runtime changed"):
+        inventory.finish()
+
+
+@pytest.mark.parametrize("inside_first", [False, True])
+def test_private_mutable_exemption_rejects_any_observed_external_hardlink(private, monkeypatch, inside_first):
+    outside = private / "external"
+    outside.write_bytes(b"before")
+    data = private / "data"
+    data.mkdir()
+    alias = data / "private-alias"
+    alias.hardlink_to(outside)
+    names = [alias, outside] if inside_first else [outside, alias]
+    fake_maps(monkeypatch, "".join(map_line(path, "rw-s") for path in names))
+    inventory = rpc.RuntimeInventory({}, private_roots=(data,))
+    inventory.capture(41, "before samples")
+    outside.write_bytes(b"modified")
+    with pytest.raises(ValueError, match="Mapped runtime changed"):
+        inventory.finish()
+    assert not inventory.report["mapped_runtime_files"][0]["mutable_shared_data"]

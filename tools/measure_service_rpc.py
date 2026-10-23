@@ -24,7 +24,9 @@ outside those directories may also be named with --runtime-file. In addition,
 /proc maps snapshots before/after each measured condition inventory actual
 file-backed mappings across the owned service session and optional native host.
 New mapped objects are pinned and hashed after workload/cleanup; snapshot and
-hashing costs are recorded outside RPC sample windows. Already qualified model
+hashing costs are recorded outside RPC sample windows. Deleted file/memfd
+mappings intentionally fail closed: generated executable-memory mappings are
+not silently exempted. Already qualified model
 hashes are reused only when full file identity metadata is unchanged.
 Child environment inheritance is allowlisted and loader injection is refused.
 --desktop-host opts into a hashed native stdio/socket relay for a synthetic visible
@@ -394,6 +396,7 @@ class DesktopHostPeer(Peer):
         finally:
             self.reader.close()
             self.evidence["exit_code"] = self.process.returncode
+            self.evidence["graceful_shutdown"] = self.process.returncode == 0 and not self.evidence.get("forced_kill", False)
             self.evidence["log"] = file_identity(self.log)
 
 
@@ -598,13 +601,15 @@ def service_supervisor(service: Path, state: Path) -> None:
 
     The supervisor is a Linux child subreaper. Even when the service exits first,
     its SID cannot be reused while this process remains alive (or unreaped).
-    TERM asks every session member to stop, including workers that create new
-    process groups. The owner escalates through verified pidfds after a deadline.
+    TERM first asks only the direct service to close its own children. After
+    that service exits, TERM settles any remaining orphans across process groups.
+    The owner escalates through verified pidfds after a deadline.
     """
     if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
         raise OSError(ctypes.get_errno(), "Cannot establish owned child subreaper")
     stopping = False
     terminated: set[tuple[int, str]] = set()
+    service_term_sent = False
 
     def stop(_signal: int, _frame: Any) -> None:
         nonlocal stopping
@@ -616,9 +621,13 @@ def service_supervisor(service: Path, state: Path) -> None:
         details = {"pid": child.pid, "exit_code": None}
         written: dict[str, Any] | None = None
         while True:
-            if stopping:
-                signal_session_members(os.getpid(), signal.SIGTERM, once=terminated)
             code = child.poll()
+            if stopping:
+                if code is None and not service_term_sent:
+                    child.terminate()
+                    service_term_sent = True
+                elif code is not None:
+                    signal_session_members(os.getpid(), signal.SIGTERM, once=terminated)
             details["exit_code"] = code
             if written != details:
                 temporary = state.with_suffix(".tmp")
@@ -662,8 +671,10 @@ class RuntimeInventory:
     mappings cannot silently qualify. Snapshots include all owned session PGIDs.
     """
 
-    def __init__(self, report: dict[str, Any]):
+    def __init__(self, report: dict[str, Any], *, private_roots: tuple[Path, ...] = ()):
         self.report = report
+        self.private_roots = tuple(path.absolute() for path in private_roots)
+        self.declared_paths: dict[str, dict[str, Any]] = {}
         self.objects: dict[tuple[int, ...], dict[str, Any]] = {}
         self.pending: dict[tuple[int, ...], BufferedReader] = {}
         self.known: dict[tuple[int, ...], dict[str, Any]] = {}
@@ -678,6 +689,7 @@ class RuntimeInventory:
         if isinstance(value, dict):
             if "sha256" in value and "device" in value:
                 self.known[self.key(value)] = value
+                self.declared_paths[value["resolved_path"]] = value
             else:
                 for child in value.values():
                     self.seed(child)
@@ -718,19 +730,30 @@ class RuntimeInventory:
                 actual_device != (major, minor) and mount is None
             ):
                 raise ValueError(f"Mapped file identity changed: {path}")
-            identity = {"path": str(path), "resolved_path": str(path.resolve()), **file_metadata(metadata)}
+            identity: dict[str, Any] = {"path": str(path), "resolved_path": str(path.resolve()), **file_metadata(metadata)}
             key = self.key(identity)
+            declared = self.declared_paths.get(identity["resolved_path"])
+            if declared is not None and key != self.key(declared):
+                raise ValueError(f"Declared input changed before mapping snapshot: {path}")
             if key not in self.objects:
                 if key in self.known:
                     identity.update(sha256=self.known[key]["sha256"], hash_source="qualified input with identical file metadata")
                 self.pending[key] = stream
-                identity.update(mapping_permissions=[], mutable_shared_data=False,
+                identity.update(mapping_permissions=[], mutable_shared_data=False, private_data_paths_only=True,
                                 mapped_device=[major, minor], btrfs_mount=mount)
                 self.objects[key] = identity
                 self.report.setdefault("mapped_runtime_files", []).append(identity)
             result = self.objects[key]
             result["mapping_permissions"] = sorted(set([*result["mapping_permissions"], permissions]))
-            result["mutable_shared_data"] = any(p.endswith("s") and "w" in p for p in result["mapping_permissions"]) and not any("x" in p for p in result["mapping_permissions"])
+            result["private_data_paths_only"] = result["private_data_paths_only"] and any(
+                path.resolve().is_relative_to(root) for root in self.private_roots
+            )
+            result["mutable_shared_data"] = (
+                declared is None and key not in self.known
+                and result["private_data_paths_only"]
+                and any(p.endswith("s") and "w" in p for p in result["mapping_permissions"])
+                and not any("x" in p for p in result["mapping_permissions"])
+            )
             return result
         finally:
             if stream not in self.pending.values():
@@ -811,7 +834,9 @@ class RuntimeInventory:
                 digest = hashlib.file_digest(stream, "sha256").hexdigest()
                 if before != file_metadata(os.fstat(stream.fileno())):
                     raise ValueError(f"Mapped file changed while hashing: {identity['path']}")
-                identity.update(sha256=digest, hash_source="pinned mapped file, hashed after workloads",
+                digest_field = "post_run_sha256" if identity["mutable_shared_data"] else "sha256"
+                identity.update({digest_field: digest},
+                                hash_source="private mutable shared data, post-run hash" if identity["mutable_shared_data"] else "pinned mapped file, hashed after workloads",
                                 hashed_metadata=before, changed_since_snapshot=self.key(before) != key)
         except BaseException as error:
             self.report["mapped_runtime_error"] = repr(error)
@@ -835,7 +860,7 @@ class Measurement:
         self.last_chunk: str | None = None
         self.summary_id: int | None = None
         self.cleanup_timeout = 30.0
-        self.runtime_inventory = RuntimeInventory(report)
+        self.runtime_inventory = RuntimeInventory(report, private_roots=tuple(run / name for name in ("data", "cache", "run", "litert-cache")))
 
     def connect(self) -> Peer:
         peer = Peer(self.run / "run/application.sock")
@@ -853,7 +878,7 @@ class Measurement:
         if label == "warmed_streaming":
             result["stream_chunks_during_samples"] = [
                 chunk for chunk in self.stream_chunks
-                if result["first_status_ns"] <= chunk["received_ns"] <= result["last_status_ns"]
+                if result["first_status_ns"] < chunk["received_ns"] <= result["last_status_ns"]
             ]
         # Retain raw failing qualifications before raising.
         validate_sample(label, result)
@@ -908,7 +933,7 @@ class Measurement:
                 return False
 
         wait_until(ready)
-        self.service_state()
+        self.verify_service_image()
         control = self.peers[0]
         if self.args.desktop_host is not None:
             evidence: dict[str, Any] = {}
@@ -997,14 +1022,22 @@ class Measurement:
         self.report["owned_service_exit_code"] = details["exit_code"]
         return details
 
+    def verify_service_image(self) -> None:
+        state = self.service_state()
+        image = file_identity(Path(f"/proc/{state['pid']}/exe"))
+        self.report["executed_service_image"] = image
+        declared = self.report["inputs"]["service"]
+        if image["sha256"] != declared["sha256"] or RuntimeInventory.key(image) != RuntimeInventory.key(declared):
+            raise ValueError("Owned service executed image differs from declared service input")
+
     def close(self) -> None:
         for peer in self.peers:
             peer.interrupt()
         process = self.process
         if process is not None:
             if process.poll() is None:
-                # TERM targets only the supervisor, which signals workers in
-                # other process groups through verified session-member pidfds.
+                # The supervisor asks the service to settle its own children,
+                # then signals remaining orphans through verified pidfds.
                 try:
                     process.terminate()
                 except ProcessLookupError:
@@ -1013,6 +1046,7 @@ class Measurement:
                     process.wait(timeout=self.cleanup_timeout)
                 except subprocess.TimeoutExpired:
                     self.report["owned_session_escalated_to_kill"] = True
+                    self.report["status"] = "incomplete"
                     # A timed-out wait has not reaped the session leader. Kill
                     # exact verified session members, repeatedly covering children
                     # forked while an earlier pass was stopping their parents.
@@ -1043,7 +1077,14 @@ class Measurement:
                 self.report["owned_session_cleanup"] = "not certified by a successful supervisor exit"
             else:
                 self.report["owned_session_cleanup"] = "supervisor verified the session empty"
-            self.service_state()
+            state = self.service_state()
+            graceful = (process.returncode == 0 and state.get("exit_code") == 0
+                        and not self.report.get("owned_session_escalated_to_kill"))
+            self.report["graceful_shutdown"] = graceful
+            if not graceful:
+                self.report["status"] = "incomplete"
+                if process.returncode == 0:
+                    self.report["owned_session_cleanup"] = "session empty after forced or unsuccessful service shutdown"
         if self.thread is not None:
             self.thread.join(5)
             self.report["stream_thread_settled"] = not self.thread.is_alive()
@@ -1051,6 +1092,11 @@ class Measurement:
                 self.report["status"] = "incomplete"
         for peer in self.peers:
             peer.close()
+            relay = getattr(peer, "evidence", None)
+            if isinstance(relay, dict) and "executable" in relay:
+                if relay.get("forced_kill") or relay.get("exit_code") != 0:
+                    self.report["status"] = "incomplete"
+                    self.report["graceful_shutdown"] = False
 
 
 def measure(args: argparse.Namespace) -> dict[str, Any]:
