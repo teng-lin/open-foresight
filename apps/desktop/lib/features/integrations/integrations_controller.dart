@@ -525,7 +525,7 @@ class IntegrationsController implements IntegrationsPort {
 
   @override
   Future<void> connectGoogle({bool addAccount = false}) async {
-    if (googleAuth.client == null) {
+    if (!googleAuth.configured) {
       throw StateError(
         'Google sign-in is unavailable in this build. Install a distribution with Google sign-in included.',
       );

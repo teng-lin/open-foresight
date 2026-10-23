@@ -420,7 +420,7 @@ void main() {
       expect(auth.displayName, 'Fixture Person');
       expect(auth.photoUrl, 'https://lh3.googleusercontent.com/fixture');
       expect(auth.account, 'account');
-      expect(auth.client, isNotNull);
+      expect(auth.configured, isTrue);
       expect(auth.signingIn, isTrue);
       expect(auth.loadError, 'refresh needed');
       expect(
@@ -430,7 +430,7 @@ void main() {
       f.event({'capture': {}, 'generation': {}, 'google': {}});
       await eventually(() => f.remote.generator == null);
       expect(f.remote.webSearchAvailable, isFalse);
-      expect(auth.client, isNull);
+      expect(auth.configured, isFalse);
       expect(auth.email, isEmpty);
       expect(auth.displayName, isEmpty);
       expect(auth.photoUrl, isEmpty);
@@ -718,11 +718,18 @@ void main() {
       final opened = <Uri>[];
       await auth.addAccount((uri) async => opened.add(uri));
       expect(opened.single.path, '/add');
-      expect(auth.accounts.map((account) => account['id']), [
+      expect(auth.accounts.map((account) => account.id), ['second', 'first']);
+      final previousAccounts = auth.accounts;
+      expect(previousAccounts.first.email, 'second@example.test');
+      expect(previousAccounts.first.current, isTrue);
+      expect(previousAccounts.last.displayName, isEmpty);
+      expect(() => previousAccounts.clear(), throwsUnsupportedError);
+      await auth.switchAccount('first');
+      expect(auth.accounts, isEmpty);
+      expect(previousAccounts.map((account) => account.id), [
         'second',
         'first',
       ]);
-      await auth.switchAccount('first');
       expect(auth.account, 'first');
       await auth.signOutAccount('second');
       expect(auth.connected, isTrue);

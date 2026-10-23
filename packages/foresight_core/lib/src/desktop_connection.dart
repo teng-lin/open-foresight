@@ -2,7 +2,6 @@ import 'operations.dart';
 import 'dart:io';
 import 'helper_status.dart';
 import 'store_reader.dart';
-import 'google_auth.dart';
 import 'desktop_status.dart';
 
 extension GenerationPresentationValue on GenerationStatus {
@@ -35,14 +34,14 @@ abstract interface class GoogleAccount {
   String get email;
   String get displayName;
   String get photoUrl;
-  List<Map<String, Object?>> get accounts;
+  List<GoogleAccountPresentation> get accounts;
   Future<void> addAccount(Future<void> Function(Uri) openBrowser);
   Future<void> switchAccount(String id);
   Future<void> signOutAccount(String id);
   String get account;
   String get loadError;
   bool get signingIn;
-  GoogleClient? get client;
+  bool get configured;
   Future<void> configure(File file);
   Future<void> signIn(Future<void> Function(Uri) openBrowser);
   void cancelSignIn();

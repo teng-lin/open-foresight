@@ -255,6 +255,13 @@ final class CapturePresentation extends _Presentation {
 }
 
 final class GoogleAccountPresentation extends _Presentation {
+  GoogleAccountPresentation({
+    required this.id,
+    this.email = '',
+    this.displayName = '',
+    this.photoUrl = '',
+    this.current = false,
+  });
   GoogleAccountPresentation.fromWire(Object? wire) : this._(_map(wire));
   GoogleAccountPresentation._(Map<String, Object?> value)
     : id = _text(value, 'id'),

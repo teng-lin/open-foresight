@@ -56,13 +56,22 @@ class ControllerConnection extends TestDesktopConnection {
       return {
         ...status,
         'connected': current.connected,
-        'configured': current.client != null,
+        'configured': current.configured,
         'signingIn': current.signingIn,
         'email': current.email,
         'displayName': current.displayName,
         'photoUrl': current.photoUrl,
         'account': current.account,
-        'accounts': current.accounts,
+        'accounts': [
+          for (final account in current.accounts)
+            {
+              'id': account.id,
+              'email': account.email,
+              'displayName': account.displayName,
+              'photoUrl': account.photoUrl,
+              'current': account.current,
+            },
+        ],
         'loadError': current.loadError,
         if (connectedSources case final sources?)
           'lastRefresh': sources.lastCompletedRefreshMs,

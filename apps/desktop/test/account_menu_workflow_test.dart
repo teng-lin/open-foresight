@@ -1,4 +1,5 @@
 import '../test_support/core_fixture.dart';
+import 'package:foresight_core/desktop.dart' show GoogleAccountPresentation;
 import 'dart:io';
 import 'dart:async';
 import 'package:flutter/material.dart';
@@ -29,15 +30,15 @@ class SignedInAccount extends GoogleAuth {
   @override
   String get photoUrl => '';
   @override
-  List<Map<String, Object?>> get accounts => [
+  List<GoogleAccountPresentation> get accounts => [
     for (final id in saved)
-      {
-        'id': id,
-        'email': '$id@example.test',
-        'displayName': id == 'alex' ? 'Alex Example' : 'Sam Example',
-        'photoUrl': '',
-        'current': id == selected,
-      },
+      GoogleAccountPresentation(
+        id: id,
+        email: '$id@example.test',
+        displayName: id == 'alex' ? 'Alex Example' : 'Sam Example',
+        photoUrl: '',
+        current: id == selected,
+      ),
   ];
   @override
   Future<void> refreshProfile() async {}

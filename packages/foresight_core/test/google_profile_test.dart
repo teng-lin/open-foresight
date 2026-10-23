@@ -289,12 +289,9 @@ void main() {
       };
       await auth.addAccount(fixture.consent);
       expect(auth.account, 'second-account');
-      expect(auth.accounts.map((a) => a['id']), ['second-account', first]);
-      expect(auth.accounts.where((a) => a['current'] == true), hasLength(1));
-      expect(
-        auth.accounts.every((a) => !a.containsKey('refresh_token')),
-        isTrue,
-      );
+      expect(auth.accounts.map((a) => a.id), ['second-account', first]);
+      expect(auth.accounts.where((a) => a.current), hasLength(1));
+      expect(() => auth.accounts.clear(), throwsUnsupportedError);
       expect(vault.values, hasLength(2));
       final saved = File('${root.path}/tokens.json');
       expect(saved.readAsStringSync(), isNot(contains('fixture-refresh')));
@@ -430,10 +427,7 @@ void main() {
       identityBarrier = null;
       await cancelled;
       expect(auth.account, first);
-      expect(
-        auth.accounts.map((a) => a['id']),
-        isNot(contains('third-account')),
-      );
+      expect(auth.accounts.map((a) => a.id), isNot(contains('third-account')));
       await auth.close();
       auth = createAuth();
       expect(auth.account, first);

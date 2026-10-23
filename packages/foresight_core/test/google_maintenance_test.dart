@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:foresight_core/desktop.dart' show GooglePresentation;
+import 'package:foresight_core/desktop.dart'
+    show GoogleAccount, GooglePresentation;
 import 'dart:io';
 
 import 'package:foresight_core/src/application_services/google_maintenance.dart';
@@ -87,13 +88,41 @@ void main() {
   });
 
   test(
+    'account capability reports configuration without exposing credentials',
+    () {
+      final GoogleAccount account = auth;
+      expect(account.configured, isTrue);
+      auth.client = null;
+      expect(account.configured, isFalse);
+      auth.client = GoogleClient('local-client', 'local-secret');
+      expect(account.configured, isTrue);
+      expect(jsonEncode(maintenance.state), isNot(contains('local-secret')));
+      expect(jsonEncode(maintenance.state), isNot(contains('local-client')));
+    },
+  );
+
+  test(
     'typed Drive query preserves parent, filter and modification date',
     () async {
       maintenance.initialize();
       await auth.signIn(fixture.consent);
-      final google = GooglePresentation.fromWire(
-        jsonDecode(jsonEncode(await invoke(Operation.googleStatus, {}))),
-      );
+      final wire =
+          jsonDecode(jsonEncode(await invoke(Operation.googleStatus, {})))
+              as Map<String, dynamic>;
+      // The account DTO replaces raw maps in the desktop API. The producer
+      // still emits exactly the original five public fields, never tokens.
+      expect(wire['accounts'], [
+        {
+          'id': 'fixture-account',
+          'email': 'fixture@example.test',
+          'displayName': '',
+          'photoUrl': '',
+          'current': true,
+        },
+      ]);
+      expect(jsonEncode(wire), isNot(contains('refresh_token')));
+      expect(jsonEncode(wire), isNot(contains('fixture-refresh')));
+      final google = GooglePresentation.fromWire(wire);
       expect(google.connected, isTrue);
       expect(google.configured, isTrue);
       expect(google.account, 'fixture-account');
