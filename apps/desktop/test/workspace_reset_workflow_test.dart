@@ -5,8 +5,85 @@ import 'package:open_foresight/main.dart';
 import '../test_support/core_fixture.dart';
 import 'controller_fixture.dart';
 import 'pump_until.dart';
+import 'dart:io';
+import 'package:open_foresight/commands.dart';
+import 'package:open_foresight/desktop_environment.dart';
+import 'package:open_foresight/desktop_visuals.dart';
+import 'package:open_foresight/shell/workspace_tab.dart';
 
 void main() {
+  testWidgets('one epoch event rebinds every prepared workspace owner', (
+    tester,
+  ) async {
+    late final RemoteFixture fixture;
+    fixture = RemoteFixture(
+      openStore: (path) {
+        final store = Store(path);
+        store.setPreference('onboarding.complete', 'true');
+        store.setPreference('inactivity', '30');
+        store.importText('Before epoch', 'before', 'text/plain', 'fixture');
+        fixture.status['workspace_epoch'] = store.workspaceEpoch;
+        fixture.status['revision'] = store.dataRevision;
+        return store;
+      },
+    );
+    await tester.runAsync(fixture.start);
+    final commands = await tester.runAsync(
+      () => AppCommands.bind(
+        '${fixture.root.path}/commands.sock',
+        environment: DesktopEnvironment(run: Process.run),
+      ),
+    );
+    addTearDown(() async {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await pumpUntilCompleted(tester, fixture.remote.closed);
+      await tester.runAsync(commands!.close);
+      await tester.runAsync(fixture.close);
+    });
+    fixture.handler = (socket, request) => fixture.reply(socket, request, null);
+    await tester.pumpWidget(
+      Foresight(
+        fixture.remote,
+        commands: commands,
+        deviceLoader: () async => [],
+      ),
+    );
+    final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
+    await pumpUntil(
+      tester,
+      () =>
+          !state.onboardingFeature.active &&
+          state.settingsFeature.sourceCount == 1,
+    );
+    fixture.owner.renewWorkspaceEpoch();
+    fixture.owner.importText('After epoch', 'after', 'text/plain', 'fixture');
+    fixture.status['workspace_epoch'] = fixture.owner.workspaceEpoch;
+    fixture.status['revision'] = fixture.owner.dataRevision;
+    fixture.event(fixture.status);
+    // No second service event or committing action is needed for recovery.
+    await pumpUntil(
+      tester,
+      () =>
+          !state.onboardingFeature.active &&
+          state.settingsFeature.sourceCount == 2,
+    );
+    expect(fixture.remote.workspaceEpoch, fixture.owner.workspaceEpoch);
+    state.update(() => state.tab = WorkspaceTab.settings);
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<DesktopSettingSelect<String>>(
+            find.byKey(const Key('inactivity')),
+          )
+          .value,
+      '30',
+    );
+    state.update(() => state.tab = WorkspaceTab.sources);
+    await tester.pumpAndSettle();
+    expect(find.text('After epoch'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'a queued meeting-notes save is not sent after another client\'s clear',
     (tester) async {

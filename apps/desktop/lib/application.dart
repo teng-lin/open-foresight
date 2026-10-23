@@ -276,6 +276,9 @@ class _WorkspaceState extends State<Workspace>
     // No view holds an ID yet, so a clear before startup needs no reset.
     if (d.workspaceReplaced) d.adoptWorkspace();
     WidgetsBinding.instance.addObserver(this);
+    // Adopt a replacement workspace before feature listeners capture their
+    // next read identity from this same synchronous connection event.
+    connectionChanges = d.changes.listen((_) => serviceChanged());
     desktopMenu = DesktopMenu(
       integrationFeature.activateMenuCommand,
       capabilities: environment.capabilities,
@@ -330,7 +333,6 @@ class _WorkspaceState extends State<Workspace>
         if (mounted) captureVolumes.value = volumes;
       });
     }
-    connectionChanges = d.changes.listen((_) => serviceChanged());
     integrationFeature.initialize();
     Future<void> initializeConnection() async {
       await d.initialize();
