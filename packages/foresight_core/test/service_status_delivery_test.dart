@@ -60,6 +60,13 @@ class _StreamingSummary extends NativeRuntime {
   // ignore: close_sinks
   final chunks = StreamController<Map<String, dynamic>>();
   final entered = Completer<void>();
+  var _processedPreviews = 0;
+  final _previewWaiters = <int, Completer<void>>{};
+
+  Future<void> previewsProcessed(int count) => count <= _processedPreviews
+      ? Future.value()
+      : _previewWaiters.putIfAbsent(count, Completer<void>.new).future;
+
   @override
   bool get generating => false;
   @override
@@ -73,9 +80,16 @@ class _StreamingSummary extends NativeRuntime {
     String prompt, {
     required String systemPrompt,
     int maxOutputTokens = 1024,
-  }) {
+  }) async* {
     entered.complete();
-    return chunks.stream;
+    await for (final event in chunks.stream) {
+      yield event;
+      // The coordinator asks for its next event only after handling this one.
+      // Acknowledgment counts delivery, independently of the preview's value.
+      if (event['type'] == 'preview') {
+        _previewWaiters.remove(++_processedPreviews)?.complete();
+      }
+    }
   }
 
   @override
@@ -390,7 +404,8 @@ void main() {
               as Map;
       Map remoteState() =>
           (remote.capture['meeting_summaries'] as Map)['$meeting'] as Map;
-      await eventually(() => state()['preview'] == '# Overview\nPreview 200');
+      await runtime.previewsProcessed(201);
+      expect(state()['preview'], '# Overview\nPreview 200');
       expect(snapshots, isEmpty);
       expect(
         timers.where(
@@ -418,9 +433,8 @@ void main() {
         'type': 'preview',
         'text': '# Overview\nLatest preview',
       });
-      await eventually(
-        () => state()['preview'] == '# Overview\nLatest preview',
-      );
+      await runtime.previewsProcessed(202);
+      expect(state()['preview'], '# Overview\nLatest preview');
       getBroadcastTimer().fire();
       await eventually(() => changes == 2);
       expect(remoteState()['preview'], '# Overview\nLatest preview');
