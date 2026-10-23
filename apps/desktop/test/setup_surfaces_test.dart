@@ -1,3 +1,4 @@
+import 'package:foresight_core/desktop.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -137,22 +138,26 @@ void main() {
         ('other', 'Saved'),
       ]) {
         expect(
-          onboarding.sourceStatus(<String, Object?>{'state': state}),
+          onboarding.sourceStatus(SourceSummary.fromRow({'state': state})),
           startsWith(expected),
         );
       }
       expect(
-        onboarding.sourceStatus(<String, Object?>{
-          'state': 'failed',
-          'error': 'Pipeline not initialized',
-        }),
+        onboarding.sourceStatus(
+          SourceSummary.fromRow({
+            'state': 'failed',
+            'error': 'Pipeline not initialized',
+          }),
+        ),
         'Waiting for model setup',
       );
       f.store.db.execute(
         "INSERT INTO models(kind,path,digest,runtime,backend) VALUES('embedding','fixture','fixture','','fixture')",
       );
+      f.connection.application.domain.helper.changed?.call();
+      await tester.pumpAndSettle();
       expect(
-        onboarding.sourceStatus(<String, Object?>{'state': 'pending'}),
+        onboarding.sourceStatus(SourceSummary.fromRow({'state': 'pending'})),
         'Waiting to index',
       );
       final gate = Completer<void>();
