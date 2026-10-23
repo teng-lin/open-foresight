@@ -1,6 +1,7 @@
 import 'desktop_environment.dart';
 import 'features/integrations/audio_access.dart';
 import 'shell/workspace_tab.dart';
+import 'shell/ports.dart';
 import 'presentation/workspace_presentation.dart';
 import 'system_audio_setup_dialog.dart';
 import 'onboarding_view.dart';
@@ -58,6 +59,7 @@ part 'meetings_controller.dart';
 part 'meeting_ai_views.dart';
 part 'settings_controller.dart';
 part 'integrations_controller.dart';
+part 'shell/legacy_feature_adapters.dart';
 
 class Foresight extends StatelessWidget {
   final DesktopConnection domain;
@@ -112,7 +114,13 @@ class Workspace extends StatefulWidget {
 }
 
 class _WorkspaceState extends State<Workspace>
-    with TickerProviderStateMixin, WidgetsBindingObserver {
+    with TickerProviderStateMixin, WidgetsBindingObserver
+    implements
+        FeatureHost,
+        WorkspaceNavigation,
+        OperationGate,
+        WorkspaceDialogs,
+        WorkspaceLifecycle {
   final calendarAuthLinks = CalendarAuthLinks();
   late final onboardingFeature = _OnboardingController(this);
   late final sourceFeature = _SourcesController(this);
@@ -121,12 +129,38 @@ class _WorkspaceState extends State<Workspace>
   late final settingsFeature = _SettingsController(this);
   late final integrationFeature = _IntegrationsController(this);
 
+  late final PreferenceCommands preferenceCommands = _LegacyPreferenceCommands(
+    settingsFeature,
+  );
+  late final meetingPorts = _LegacyMeetingPorts(meetingFeature);
+  late final OnboardingActivity onboardingActivity = _LegacyOnboardingActivity(
+    onboardingFeature,
+  );
+
   DesktopConnection get d => widget.domain;
 
+  @override
+  DesktopConnection get connection => d;
+  @override
+  DesktopEnvironment get environment => widget.environment;
+  @override
+  TickerProvider get vsync => this;
+  @override
+  Future<List<AudioDevice>> Function()? get deviceLoader => widget.deviceLoader;
+  @override
+  Future<void> Function(Uri) get sourceLinkOpener =>
+      widget.sourceLinkOpener ?? widget.environment.openUri;
+  @override
+  AppCommands? get commands => widget.commands;
+
+  @override
   void update(VoidCallback action) => setState(action);
 
-  final serviceUiRevision = ValueNotifier<int>(0);
-  final captureVolumes = ValueNotifier<List<double>>(const []);
+  @override
+  final ValueNotifier<int> serviceUiRevision = ValueNotifier<int>(0);
+  @override
+  final ValueNotifier<List<double>> captureVolumes =
+      ValueNotifier<List<double>>(const []);
   StreamSubscription<List<double>>? captureLevels;
   StreamSubscription<void>? connectionChanges;
   late final DesktopMenu desktopMenu;
@@ -134,8 +168,14 @@ class _WorkspaceState extends State<Workspace>
   Timer? serviceUiTimer;
 
   /// Set while this desktop clears the workspace itself.
+  @override
   bool clearingWorkspace = false;
 
+  @override
+  void setClearingWorkspace(bool value) =>
+      update(() => clearingWorkspace = value);
+
+  @override
   void serviceChanged() {
     if (d.store.failure case final failure?) {
       if (mounted) setState(() => error = failure.message);
@@ -169,15 +209,22 @@ class _WorkspaceState extends State<Workspace>
 
   WorkspaceTab tab = WorkspaceTab.meetings;
 
+  @override
   WorkspaceTab get selectedTab => tab;
 
+  @override
   void navigate(WorkspaceTab destination) => update(() => tab = destination);
 
+  @override
   bool busy = false;
 
   int _operations = 0;
 
+  @override
   String error = '';
+
+  @override
+  void setError(String message) => update(() => error = message);
 
   @override
   void initState() {
@@ -381,6 +428,7 @@ class _WorkspaceState extends State<Workspace>
   /// clear elsewhere can commit before its event resets the views; until
   /// then a row on screen may name an ID that the new workspace reuses, so
   /// a dialog that edits one is not opened.
+  @override
   bool rowsAreCurrent() {
     if (d.store.failure != null) return false;
     final stored = d.store.workspaceEpoch;
@@ -407,6 +455,7 @@ class _WorkspaceState extends State<Workspace>
 
   /// Drop every view and draft that holds an ID from the cleared workspace,
   /// then let by-ID edits name the new one.
+  @override
   void resetWorkspaceViews() {
     chatFeature.retireAnswer();
     meetingFeature.meetingNoteSaves.discardAll();
@@ -443,10 +492,12 @@ class _WorkspaceState extends State<Workspace>
     d.adoptWorkspace();
   }
 
+  @override
   void reportAsyncError(Object failure) {
     if (mounted) setState(() => error = failure.toString());
   }
 
+  @override
   Future<void> run(Future<void> Function() action) async {
     setState(() {
       _operations++;
@@ -466,6 +517,7 @@ class _WorkspaceState extends State<Workspace>
     }
   }
 
+  @override
   Future<T?> showInputDialog<T>({required WidgetBuilder builder}) async {
     final route = DialogRoute<T>(context: context, builder: builder);
     final result = await Navigator.of(context).push(route);
