@@ -39,6 +39,9 @@ void main() {
       () => store.contentHistory.row('notes', id),
       () => store.contentHistory.meetingArtifacts(1, 'summary'),
       () => store.contentHistory.artifactEdit(1),
+      () => store.contentHistory.meetingSource(1, 'summary'),
+      () => store.contentHistory.meetingReplacement(1, 'actions'),
+      () => store.contentHistory.taskEdit(1),
     ]) {
       expect(read, throwsA(isA<IncompatibleReadSchema>()));
     }

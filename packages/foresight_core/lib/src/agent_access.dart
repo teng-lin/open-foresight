@@ -228,7 +228,14 @@ class AgentAccessGate {
       final runtime = args['runtime'] as String;
       requireInstalledRuntime(generation ? liteRtRunner(runtime) : runtime);
     }
-    if (isHost(client) && hasVisibleHost) return;
+    // The owning desktop's content saves carry direct user consent even when
+    // a queued save arrives after its window was hidden.
+    if (isHost(client) &&
+        (hasVisibleHost ||
+            Operation.parse(method).descriptor.approval ==
+                ApprovalPolicy.overwrite)) {
+      return;
+    }
     final host = _host;
     if (host == null || !_visible) {
       throw RpcError(

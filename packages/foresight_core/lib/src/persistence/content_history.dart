@@ -61,18 +61,61 @@ final class ContentHistory {
       Map<String, Object?>.from(row),
   ];
 
-  /// Editing the newest enhanced artifact also replaces its live Note draft.
-  /// Include that state using the same latest-artifact rule as MeetingStore.
+  static const derivedKinds = {
+    'summary',
+    'actions',
+    'preparation',
+    'enhanced_notes',
+  };
+
+  /// Stable derived sources are independently editable. Bind consent to their
+  /// content, excluding background indexing state and already-deleted content.
+  List<Map<String, Object?>> meetingSource(int meeting, String kind) =>
+      derivedKinds.contains(kind)
+      ? _rows(
+          'SELECT id,title,content,mime,revision,deleted,provenance,locally_edited FROM sources WHERE id=? AND deleted=0',
+          ['meeting-$kind-$meeting'],
+        )
+      : [];
+
+  List<Map<String, Object?>> meetingReplacement(int meeting, String kind) => [
+    ...meetingArtifacts(meeting, kind),
+    if (kind == 'enhanced_notes')
+      ...row(
+        'meeting_notes',
+        meeting,
+      ).where((row) => row['enhanced_body'] != null),
+    if (kind == 'actions')
+      ..._rows('SELECT * FROM meeting_tasks WHERE meeting_id=? ORDER BY id', [
+        meeting,
+      ]),
+    ...meetingSource(meeting, kind),
+  ];
+
+  /// Latest-artifact edits also replace a stable source and, for enhanced
+  /// notes, the live draft. Historical edits replace only their artifact row.
   List<Map<String, Object?>> artifactEdit(int id) {
     final artifact = row('artifacts', id);
-    if (artifact.isEmpty || artifact.single['kind'] != 'enhanced_notes') {
-      return artifact;
-    }
+    if (artifact.isEmpty) return artifact;
+    final kind = artifact.single['kind'] as String;
     final meeting = artifact.single['meeting_id'] as int;
-    final latest = meetingArtifacts(meeting, 'enhanced_notes').last;
+    final latest = meetingArtifacts(meeting, kind).last;
+    if (latest['id'] != id) return artifact;
     return [
       ...artifact,
-      if (latest['id'] == id) ...row('meeting_notes', meeting),
+      if (kind == 'enhanced_notes') ...row('meeting_notes', meeting),
+      ...meetingSource(meeting, kind),
+    ];
+  }
+
+  List<Map<String, Object?>> taskEdit(int id) {
+    final task = row('meeting_tasks', id);
+    if (task.isEmpty) return task;
+    final meeting = task.single['meeting_id'] as int;
+    final artifact = meetingArtifacts(meeting, 'actions').lastOrNull;
+    return [
+      ...task,
+      if (artifact != null) ...artifactEdit(artifact['id'] as int),
     ];
   }
 }
