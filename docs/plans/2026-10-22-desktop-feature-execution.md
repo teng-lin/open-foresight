@@ -342,8 +342,9 @@ and destructive Chat history remounts during scope verification (`e8273512`,
 13 focused passes). Chat now retains its hidden scroll/render state while the
 scope is uncertain; it still hides old content from pixels, semantics, pointer
 and keyboard access until scope verification finishes. Scope or session changes
-retire the retained state. Independent native-agent source reviews cleared all
-three corrections; the final CLI convergence round remains pending.
+retire the retained state. Independent native-agent source reviews cleared the
+workspace and note corrections; Chat source review and the final CLI convergence
+round remain pending.
 
 The installed GUI harness now matches supported visible action, arguments and
 requester class before consent, rechecks the snapshot at activation, observes
