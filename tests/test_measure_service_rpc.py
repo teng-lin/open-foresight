@@ -60,7 +60,7 @@ def inputs(export, tmp_path):
     repository, commit, source = export
     args = argparse.Namespace(repository=repository, commit=commit, source=source,
                               output=tmp_path / "report", toolchain=["fixture=1"],
-                              generated_directory=[], library_path=[])
+                              generated_directory=[], library_path=[], runtime_file=[])
     for name in ("service", "helper", "native_library", "model_worker", "litert_library", "whisper_runtime"):
         path = tmp_path / name
         path.write_bytes(name.encode())
@@ -150,7 +150,7 @@ def test_unsupported_git_entry_is_refused(export, monkeypatch):
 
 def test_models_and_all_binary_inputs_are_hashed_directly_from_actual_bytes(inputs):
     result = rpc.verify_inputs(inputs)
-    assert len(result) == 9
+    assert len(result) == 10
     assert result["service"]["sha256"] == hashlib.sha256(b"service").hexdigest()
     assert result["speech_model"]["pin"]["filename"] == rpc.MODEL_NAMES["speech"]
     inputs.generation_model.write_bytes(b"wrong pinned model")
@@ -203,6 +203,7 @@ def test_native_overlap_and_capture_require_actual_workload_state(wire, native, 
 
 def test_sample_validation_requires_every_overlap_and_pcm_progress():
     result = {"native_active_count": 99, "capture_active_count": 100,
+              "generation_active_count": 0, "stream_chunks_during_samples": [1],
               "state_evidence": [{"samples": [5]}, {"samples": [5]}]}
     with pytest.raises(RuntimeError, match="native generation"):
         rpc.validate_sample("warmed_streaming", result)
@@ -346,17 +347,29 @@ def test_peer_closes_failed_connect_and_ignores_shutdown_of_closed_socket(monkey
 
 
 class WorkPeer:
-    def __init__(self, path):
+    def __init__(self, path, state=None):
         self.path = path
         self.calls = []
         self.samples = 0
+        self.state = state if state is not None else {}
         self.interrupted = self.closed = False
 
-    def call(self, method, arguments=None):
+    def call(self, method, arguments=None, *, on_result=None):
         self.calls.append((method, arguments))
         if method == "status":
             self.samples += 1
-            return status(generating=True, state="loading", capture=True, samples=self.samples)
+            if self.state.get("on_result") and self.state.get("generating"):
+                self.state["on_result"](f"Changed answer chunk {self.samples}")
+            return status(generating=self.state.get("generating", False),
+                          state="loading" if self.state.get("generating") else "ready",
+                          capture=self.state.get("capturing", False), samples=self.samples)
+        if method == "answer.stream":
+            self.state.update(generating=True, on_result=on_result)
+            on_result("Initial answer chunk")
+        if method == "meetings.start":
+            self.state["capturing"] = True
+        if method == "meetings.stop":
+            self.state["capturing"] = False
         if method == "meetings.create":
             return {"id": 7}
         return None
@@ -397,9 +410,15 @@ class FakeThread:
 @pytest.fixture
 def workload(inputs, private, monkeypatch):
     inputs.temp_root = private
-    monkeypatch.setattr(rpc, "Peer", WorkPeer)
+    state = {}
+    monkeypatch.setattr(rpc, "Peer", lambda path: WorkPeer(path, state))
     monkeypatch.setattr(rpc.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
-    monkeypatch.setattr(rpc.threading, "Thread", FakeThread)
+    class PhaseThread(FakeThread):
+        def join(self, timeout):
+            super().join(timeout)
+            if not self.alive:
+                state["generating"] = False
+    monkeypatch.setattr(rpc.threading, "Thread", PhaseThread)
     monkeypatch.setattr(rpc.time, "sleep", lambda seconds: None)
     monkeypatch.setattr(rpc.os, "killpg", lambda pid, sig: None)
     (private / "data").mkdir()
@@ -456,10 +475,10 @@ def test_generation_without_native_overlap_and_generation_failure_are_refused(wo
 
 def test_stream_exception_is_retained_and_refused_after_settlement(workload, monkeypatch):
     original = WorkPeer.call
-    def call(self, method, args=None):
+    def call(self, method, args=None, **kwargs):
         if method == "answer.stream":
             raise RuntimeError("native fixture failure")
-        return original(self, method, args)
+        return original(self, method, args, **kwargs)
     monkeypatch.setattr(WorkPeer, "call", call)
     with pytest.raises(RuntimeError, match="native fixture failure"):
         workload.workload()
@@ -488,7 +507,7 @@ def test_capture_waits_for_active_state_before_counting_progress(workload, monke
 
 
 def test_failed_qualification_retains_all_raw_samples(workload, monkeypatch):
-    monkeypatch.setattr(rpc, "sample", lambda peer, **_kwargs: {"native_active_count": 0, "raw_ms": [1] * 100})
+    monkeypatch.setattr(rpc, "sample", lambda peer, **_kwargs: {"native_active_count": 0, "raw_ms": [1] * 100, "first_status_ns": 0, "last_status_ns": 1})
     with pytest.raises(RuntimeError, match="native generation"):
         workload.record("warmed_streaming", WorkPeer(Path("fixture")))
     assert len(workload.report["samples"]["warmed_streaming"]["raw_ms"]) == 100
@@ -809,3 +828,147 @@ def test_session_signals_verify_sid_after_pidfd_open_and_ignore_pid_reuse(monkey
             expected.append(("signal", 71, rpc.signal.SIGKILL))
         expected.append(("close", 71))
     assert calls == expected
+
+
+def test_runtime_inventory_records_search_order_and_actual_dependency_bytes(inputs, tmp_path):
+    first, second = tmp_path / "first", tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    library = first / "libdependency.so.1"
+    library.write_bytes(b"runtime bytes")
+    (first / "libdependency.so").symlink_to(library.name)
+    nested = first / "nested"
+    nested.mkdir()
+    (nested / "not-searched.so").write_bytes(b"not in direct loader search")
+    explicit = second / "system-runtime.so"
+    explicit.write_bytes(b"explicit runtime")
+    inputs.library_path = [first]
+    inputs.runtime_file = [explicit]
+    result = rpc.verify_inputs(inputs)["runtime_libraries"]
+    assert result["LD_LIBRARY_PATH"] == str(first)
+    assert result["search_directories"] == [str(first)]
+    files = {row["path"]: row for row in result["files"]}
+    assert set(files) == {str(library), str(first / "libdependency.so"), str(explicit)}
+    assert files[str(first / "libdependency.so")]["resolved_path"] == str(library)
+    assert files[str(library)]["sha256"] == hashlib.sha256(b"runtime bytes").hexdigest()
+    assert files[str(explicit)]["sha256"] == hashlib.sha256(b"explicit runtime").hexdigest()
+
+
+@pytest.mark.parametrize("variable", ["LD_PRELOAD", "LD_AUDIT"])
+def test_child_environment_refuses_loader_injection_without_echoing_value(inputs, private, monkeypatch, variable):
+    monkeypatch.setenv(variable, "fixture-secret-loader")
+    with pytest.raises(ValueError, match=variable) as error:
+        rpc.environment(inputs, private)
+    assert "fixture-secret-loader" not in str(error.value)
+    assert not (private / "pw-record").exists()
+
+
+def test_child_environment_inherits_only_recordable_allowlist(inputs, private, monkeypatch):
+    monkeypatch.setenv("LANG", "C.UTF-8")
+    monkeypatch.setenv("HOME", "/unrelated/personal/home")
+    for variable in ["AWS_SECRET_ACCESS_KEY", "PYTHONPATH", "DBUS_SESSION_BUS_ADDRESS"]:
+        monkeypatch.setenv(variable, "fixture-private-value")
+    result = rpc.environment(inputs, private)
+    assert result["LANG"] == "C.UTF-8"
+    assert result["HOME"] == str(private / "home")
+    assert result["XDG_CONFIG_HOME"] == str(private / "config")
+    assert result["XDG_DATA_HOME"] == str(private / "data")
+    assert not {"AWS_SECRET_ACCESS_KEY", "PYTHONPATH", "DBUS_SESSION_BUS_ADDRESS"}.intersection(result)
+
+
+def test_peer_delivers_every_interleaved_stream_result_to_callback(monkeypatch):
+    sock = FakeSocket([b'{"event":"status"}\n', b'{"id":1,"result":"First"}\n',
+                       b'{"id":1,"result":"First second"}\n', b'{"id":1,"done":true}\n'])
+    monkeypatch.setattr(rpc.socket, "socket", lambda *args: sock)
+    peer = rpc.Peer(Path("/fixture.sock"))
+    received = []
+    assert peer.call("answer.stream", on_result=received.append) == "First second"
+    assert received == ["First", "First second"]
+    peer.close()
+
+
+def test_stream_evidence_only_counts_changed_nonempty_text(workload, monkeypatch):
+    times = iter([100, 200])
+    monkeypatch.setattr(rpc.time, "monotonic_ns", lambda: next(times))
+    for value in [None, {}, "", "First", "First", "First second"]:
+        workload.streamed(value)
+    assert workload.stream_chunks == [
+        {"received_ns": 100, "characters": 5, "sha256": hashlib.sha256(b"First").hexdigest()},
+        {"received_ns": 200, "characters": 12, "sha256": hashlib.sha256(b"First second").hexdigest()},
+    ]
+
+
+@pytest.mark.parametrize("inside", [False, True])
+def test_streaming_qualification_requires_a_chunk_inside_status_sample_window(workload, monkeypatch, inside):
+    workload.stream_chunks = [{"received_ns": 99}, {"received_ns": 201}]
+    if inside:
+        workload.stream_chunks.append({"received_ns": 150})
+    def sample(peer, *, evidence):
+        evidence.update(native_active_count=100, first_status_ns=100, last_status_ns=200)
+        return evidence
+    monkeypatch.setattr(rpc, "sample", sample)
+    if inside:
+        workload.record("warmed_streaming", None)
+    else:
+        with pytest.raises(RuntimeError, match="between first and last"):
+            workload.record("warmed_streaming", None)
+    assert workload.report["samples"]["warmed_streaming"]["stream_chunks_during_samples"] == (
+        [{"received_ns": 150}] if inside else []
+    )
+
+
+@pytest.mark.parametrize("label,generation,capture", [
+    ("idle_before_models", 1, 0), ("idle_before_models", 0, 1),
+    ("warmed_idle", 1, 0), ("warmed_idle", 0, 1), ("warmed_capture", 1, 100),
+])
+def test_idle_and_capture_conditions_reject_wrong_workload_overlap(label, generation, capture):
+    with pytest.raises(RuntimeError, match="condition contained active generation|Idle condition"):
+        rpc.validate_sample(label, {"generation_active_count": generation, "capture_active_count": capture})
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_complete_and_failed_reports_copy_and_hash_service_output(inputs, private, monkeypatch, failure):
+    inputs.temp_root = private
+    output = b"Full service output\nincluding arbitrary bytes: \xff\n"
+    def workload(measurement):
+        (measurement.run / "service.log").write_bytes(output)
+        if failure:
+            raise RuntimeError("workload failed after output")
+        measurement.report["status"] = "passed"
+    monkeypatch.setattr(rpc.Measurement, "workload", workload)
+    if failure:
+        with pytest.raises(RuntimeError, match="after output"):
+            rpc.measure(inputs)
+    else:
+        rpc.measure(inputs)
+    report = json.loads((inputs.output / "rpc-responsiveness.json").read_text())
+    assert (inputs.output / "service.log").read_bytes() == output
+    assert report["service_log"]["path"] == str(inputs.output / "service.log")
+    assert report["service_log"]["sha256"] == hashlib.sha256(output).hexdigest()
+    assert report["service_log_source"]["sha256"] == report["service_log"]["sha256"]
+    assert report["status"] == ("incomplete" if failure else "passed")
+
+
+def test_log_retention_failure_keeps_source_digest_and_incomplete_json(inputs, private, monkeypatch):
+    inputs.temp_root = private
+    def workload(measurement):
+        (measurement.run / "service.log").write_text("retained source log")
+        measurement.report["status"] = "passed"
+    monkeypatch.setattr(rpc.Measurement, "workload", workload)
+    monkeypatch.setattr(rpc.shutil, "copyfile", lambda *args: (_ for _ in ()).throw(OSError("copy storage failure")))
+    rpc.measure(inputs)
+    report = json.loads((inputs.output / "rpc-responsiveness.json").read_text())
+    assert report["status"] == "incomplete"
+    assert "copy storage failure" in report["log_error"]
+    assert report["service_log_source"]["sha256"] == hashlib.sha256(b"retained source log").hexdigest()
+
+
+def test_idle_refuses_paused_capture_even_without_progress():
+    peer = SimpleNamespace(call=lambda method: {
+        "capture": {"active": True, "state": "capturing", "paused": True},
+    })
+    result = rpc.sample(peer, delay=0)
+    assert result["capture_active_count"] == 0
+    assert result["capture_present_count"] == 100
+    with pytest.raises(RuntimeError, match="Idle condition"):
+        rpc.validate_sample("warmed_idle", result)

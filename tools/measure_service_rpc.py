@@ -16,7 +16,12 @@ Capture uses deterministic synthetic PCM through the production FIFO protocol;
 it proves progressing samples, not microphone or transcription quality. Timing
 does not replace deterministic liveness tests. Completed conditions retain all 100 samples. Incomplete runs retain every
 attempt collected before failure and the service's full log. A dedicated Linux
-supervisor pins each owned process group until service descendants settle.
+supervisor pins the owned session until service descendants settle.
+LD_LIBRARY_PATH is recorded. All regular files directly in its explicit search
+directories (including resolved symlinks), plus repeated --runtime-file inputs,
+are hashed; the directory scan is non-recursive. Default system-loader files
+outside those directories must be named with --runtime-file for this inventory.
+Child environment inheritance is allowlisted and loader injection is refused.
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ import os
 from pathlib import Path
 import platform
 import signal
+import shutil
 import socket
 import stat
 import statistics
@@ -163,6 +169,15 @@ def verify_inputs(args: argparse.Namespace) -> dict[str, Any]:
         "service", "helper", "native_library", "model_worker", "litert_library", "whisper_runtime",
     )}
     result = {name: file_identity(path) for name, path in paths.items()}
+    libraries = {path.absolute() for path in args.runtime_file}
+    for directory in args.library_path:
+        libraries.update(path.absolute() for path in directory.iterdir() if path.is_file())
+    result["runtime_libraries"] = {
+        "LD_LIBRARY_PATH": os.pathsep.join(map(str, args.library_path)),
+        "search_directories": list(map(str, args.library_path)),
+        "scope": "regular files directly in explicit search directories, plus --runtime-file inputs; symlinks resolved",
+        "files": [file_identity(path) for path in sorted(libraries)],
+    }
     pins = _pins.model_pins(args.source / "packages/foresight_core/lib/src/model_pins.dart")
     for kind, filename in MODEL_NAMES.items():
         path = getattr(args, kind + "_model")
@@ -189,7 +204,8 @@ class Peer:
         self.timeout = timeout
         self.sequence = 0
 
-    def call(self, method: str, arguments: dict[str, Any] | None = None) -> Any:
+    def call(self, method: str, arguments: dict[str, Any] | None = None, *,
+             on_result: Callable[[Any], None] | None = None) -> Any:
         self.sequence += 1
         request = self.sequence
         deadline = time.monotonic() + self.timeout
@@ -210,6 +226,8 @@ class Peer:
                 raise RuntimeError(f"RPC {method}: {row['error']}")
             if "result" in row:
                 result = row["result"]
+                if on_result is not None:
+                    on_result(result)
             if row.get("done"):
                 return result
 
@@ -259,10 +277,15 @@ def sample(peer: Peer, *, delay: float = .01,
         attempts.append({"index": index, "elapsed_ms": elapsed})
         result["n"] = len(rows)
         generation, capture = status.get("generation") or {}, status.get("capture") or {}
+        received = time.monotonic_ns()
+        result.setdefault("first_status_ns", received)
+        result["last_status_ns"] = received
         states.append({
+            "received_ns": received,
             "generation_generating": bool(generation.get("generating")),
             "generation_state": generation.get("state"), "native_active": native_active(status),
-            "capture_active": capture_active(status), "capture_state": capture.get("state"),
+            "capture_active": capture_active(status), "capture_present": bool(capture.get("active")),
+            "capture_state": capture.get("state"),
             "samples": capture.get("samples") or [],
         })
         if delay:
@@ -272,14 +295,23 @@ def sample(peer: Peer, *, delay: float = .01,
                   max_ms=max(rows), generation_active_count=sum(s["generation_generating"] for s in states),
                   native_active_count=sum(s["native_active"] for s in states),
                   capture_active_count=sum(s["capture_active"] for s in states),
+                  capture_present_count=sum(s["capture_present"] for s in states),
                   target_p95_ms=50, target_met=p95 < 50, load=os.getloadavg())
     return result
 
 
 def validate_sample(label: str, result: dict[str, Any]) -> None:
+    if label in {"idle_before_models", "warmed_idle"} and (
+        result["generation_active_count"] or result.get("capture_present_count", result["capture_active_count"])
+    ):
+        raise RuntimeError("Idle condition contained active generation or capture")
     if label == "warmed_streaming" and result["native_active_count"] != 100:
         raise RuntimeError("Not all 100 status samples overlapped native generation")
+    if label == "warmed_streaming" and not result["stream_chunks_during_samples"]:
+        raise RuntimeError("No changed non-empty streamed answer chunk arrived between first and last status samples")
     if label == "warmed_capture":
+        if result["generation_active_count"]:
+            raise RuntimeError("Capture condition contained active generation")
         states = result["state_evidence"]
         if result["capture_active_count"] != 100 or sum(states[-1]["samples"]) <= sum(states[0]["samples"]):
             raise RuntimeError("Capture did not progress PCM samples throughout measurement")
@@ -305,11 +337,17 @@ def private_root(path: Path) -> Path:
 
 
 def environment(args: argparse.Namespace, run: Path) -> dict[str, str]:
+    for variable in ("LD_PRELOAD", "LD_AUDIT"):
+        if os.environ.get(variable):
+            raise ValueError(f"Refuse loader injection through {variable}")
     capture = run / "pw-record"
     capture.write_text(f"#!{sys.executable}\n" + CAPTURE_SCRIPT)
     capture.chmod(0o700)
-    env = {k: v for k, v in os.environ.items() if not k.startswith("FORESIGHT_")}
+    inherited = {"PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR"}
+    env = {key: os.environ[key] for key in sorted(inherited) if key in os.environ}
     env.update({
+        "HOME": str(run / "home"), "XDG_CONFIG_HOME": str(run / "config"),
+        "XDG_CACHE_HOME": str(run / "cache"), "XDG_DATA_HOME": str(run / "data"),
         "TMPDIR": str(run.parent), "FORESIGHT_TEST_TEMP_ROOT": str(run.parent),
         "FORESIGHT_DATA": str(run / "data"), "FORESIGHT_RUNTIME": str(run / "run"),
         "FORESIGHT_SERVICE": str(args.service), "FORESIGHT_HELPER": str(args.helper),
@@ -438,6 +476,8 @@ class Measurement:
         self.process: subprocess.Popen[bytes] | None = None
         self.thread: threading.Thread | None = None
         self.stream_failures: list[str] = []
+        self.stream_chunks: list[dict[str, Any]] = []
+        self.last_chunk: str | None = None
         self.cleanup_timeout = 30.0
 
     def connect(self) -> Peer:
@@ -449,16 +489,33 @@ class Measurement:
         result: dict[str, Any] = {}
         self.report["samples"][label] = result
         result.update(sample(peer, evidence=result))
+        if label == "warmed_streaming":
+            result["stream_chunks_during_samples"] = [
+                chunk for chunk in self.stream_chunks
+                if result["first_status_ns"] <= chunk["received_ns"] <= result["last_status_ns"]
+            ]
         # Retain raw failing qualifications before raising.
         validate_sample(label, result)
 
+    def streamed(self, value: Any) -> None:
+        if not isinstance(value, str) or not value or value == self.last_chunk:
+            return
+        self.last_chunk = value
+        self.stream_chunks.append({
+            "received_ns": time.monotonic_ns(), "characters": len(value),
+            "sha256": hashlib.sha256(value.encode()).hexdigest(),
+        })
+
     def workload(self) -> None:
         started = time.monotonic()
+        child_environment = environment(self.args, self.run)
+        self.report["child_environment"] = child_environment
+        self.report["stream_chunks"] = self.stream_chunks
         with (self.run / "service.log").open("wb") as log:
             self.process = subprocess.Popen(
                 [sys.executable, str(Path(__file__).resolve()), "_supervise",
                  str(self.args.service), str(self.run / "service-state.json")], cwd=self.args.source,
-                env=environment(self.args, self.run), stdout=log, stderr=log,
+                env=child_environment, stdout=log, stderr=log,
                 start_new_session=True,
             )
 
@@ -494,7 +551,7 @@ class Measurement:
 
         def stream() -> None:
             try:
-                control.call("answer.stream", {"question": STREAM_QUESTION})
+                control.call("answer.stream", {"question": STREAM_QUESTION}, on_result=self.streamed)
             except BaseException as error:
                 self.stream_failures.append(repr(error))
 
@@ -502,7 +559,9 @@ class Measurement:
         self.thread.start()
 
         def generating() -> bool:
-            if native_active(observer.call("status")):
+            if self.stream_failures:
+                raise RuntimeError(f"Generation failed: {self.stream_failures}")
+            if native_active(observer.call("status")) and self.stream_chunks:
                 return True
             if self.thread is not None and not self.thread.is_alive():
                 raise RuntimeError(f"Generation settled before native overlap: {self.stream_failures}")
@@ -626,8 +685,18 @@ def measure(args: argparse.Namespace) -> dict[str, Any]:
             report["status"], report["cleanup_error"] = "incomplete", repr(error)
             raise
         finally:
-            report["host_after"] = host_state()
-            (args.output / "rpc-responsiveness.json").write_text(json.dumps(report, indent=2) + "\n")
+            try:
+                log = run / "service.log"
+                if log.exists():
+                    report["service_log_source"] = file_identity(log)
+                    retained = args.output / "service.log"
+                    shutil.copyfile(log, retained)
+                    report["service_log"] = file_identity(retained)
+            except OSError as error:
+                report["status"], report["log_error"] = "incomplete", repr(error)
+            finally:
+                report["host_after"] = host_state()
+                (args.output / "rpc-responsiveness.json").write_text(json.dumps(report, indent=2) + "\n")
     return report
 
 
@@ -650,6 +719,8 @@ def main(argv: list[str] | None = None) -> int:
     timed.add_argument("--generated-directory", action="append", default=[])
     timed.add_argument("--toolchain", action="append", required=True, metavar="NAME=VERSION")
     timed.add_argument("--library-path", type=Path, action="append", default=[])
+    timed.add_argument("--runtime-file", type=Path, action="append", default=[],
+                       help="additional concrete loaded library/runtime to hash, including system-loader dependencies")
     for name in ("service", "helper", "native-library", "model-worker", "litert-library", "whisper-runtime",
                  "generation-model", "embedding-model", "speech-model"):
         timed.add_argument("--" + name, type=Path, required=True)
@@ -666,6 +737,7 @@ def main(argv: list[str] | None = None) -> int:
                  "generation_model", "embedding_model", "speech_model"):
         setattr(args, name, getattr(args, name).resolve(strict=True))
     args.library_path = [path.resolve(strict=True) for path in args.library_path]
+    args.runtime_file = [path.resolve(strict=True) for path in args.runtime_file]
     result = measure(args)
     print(json.dumps({"status": result["status"], "report": str(args.output / "rpc-responsiveness.json")}))
     return 0 if result["status"] == "passed" else 1
