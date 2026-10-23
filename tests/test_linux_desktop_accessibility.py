@@ -21,6 +21,7 @@ class Node:
     states: set[int] = field(default_factory=lambda: {8, 24, 25, 30})
     children: list = field(default_factory=list)
     pid: int = 123
+    content: str = ""
 
 
 class Tree:
@@ -50,6 +51,9 @@ class Tree:
             if method.endswith("_name") and "role" not in method
             else node.role
         )
+
+    def content(self, node):
+        return node.content
 
     def state(self, node):
         return node.states
@@ -413,3 +417,54 @@ def test_native_scroll_action_uses_exact_public_flutter_action():
     assert api.scroll_up(1) is True
     api.checked.assert_called_with("atspi_action_do_action", 22, 1)
     api.release.assert_called_once_with(22)
+
+
+def test_approval_snapshot_is_rechecked_before_native_button_action(identify):
+    button = Node("Allow once", "button")
+    detail = Node("text: approved fixture")
+    tree = Tree([Node("Allow this operation?"), detail, button])
+    snapshot = linux.observe(tree, 123, Path("/selected"))
+    detail.name = "text: unrelated replacement"
+    with pytest.raises(RuntimeError, match="changed before action"):
+        linux.observe(
+            tree, 123, Path("/selected"), "Allow once", expected_snapshot=snapshot
+        )
+    assert tree.pressed == []
+    current = linux.observe(tree, 123, Path("/selected"))
+    assert (
+        linux.observe(
+            tree, 123, Path("/selected"), "Allow once", expected_snapshot=current
+        )
+        == "CLICKED:Allow once"
+    )
+    assert tree.pressed == [button]
+
+
+def test_unnamed_selectable_text_exposes_its_real_contents(identify):
+    tree = Tree(
+        [
+            Node(content="path: /private/fixture.pdf\nindex: true"),
+            Node(content="hidden contents", states=set()),
+        ]
+    )
+    snapshot = linux.observe(tree, 123, Path("/selected"))
+    assert "TEXT:path: /private/fixture.pdf\\nindex: true" in snapshot
+    assert "hidden contents" not in snapshot
+
+
+def test_text_interface_uses_bounded_native_contents_and_releases_reference():
+    api = object.__new__(linux.AtSpi)
+    api.atspi = SimpleNamespace(atspi_accessible_get_text_iface=lambda _: 11)
+    api.checked = Mock(return_value=42)
+    api.text = Mock(return_value="visible argument details")
+    api.release = Mock()
+    assert api.content(7) == "visible argument details"
+    api.checked.assert_called_once_with("atspi_text_get_character_count", 11)
+    api.text.assert_called_once_with("atspi_text_get_text", 11, 0, 42)
+    api.release.assert_called_once_with(11)
+    for count in [-1, 65537]:
+        api.checked.return_value = count
+        with pytest.raises(RuntimeError, match="text length"):
+            api.content(7)
+    api.atspi.atspi_accessible_get_text_iface = lambda _: None
+    assert api.content(7) == ""

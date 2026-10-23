@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import plistlib
 import sqlite3
+import signal
 import subprocess
 import sys
 import time
@@ -55,13 +56,14 @@ SCRIPT = """on run argv
   set targetProcess to first application process whose unix id is targetPid
   set frontmost of targetProcess to true
   set observed to ""
+ set matchingButtons to {}
   tell targetProcess
    repeat with targetWindow in windows
     repeat with uiElement in entire contents of targetWindow
      try
       set elementRole to role of uiElement
       set elementName to name of uiElement as text
-      if elementRole is "AXStaticText" then
+      if elementRole is "AXStaticText" or elementRole is "AXTextArea" or elementRole is "AXTextField" then
        try
         set observed to observed & "TEXT:" & value of uiElement & linefeed
        end try
@@ -69,17 +71,93 @@ SCRIPT = """on run argv
       if elementRole is "AXButton" and enabled of uiElement then
        set observed to observed & "BUTTON:" & elementName & linefeed
        if wanted is not "" and elementName is wanted then
-        perform action "AXPress" of uiElement
-        return "CLICKED:" & elementName
+        set end of matchingButtons to uiElement
        end if
       end if
      end try
     end repeat
    end repeat
   end tell
+  if wanted is not "" then
+   if observed contains "Allow microphone and system audio recording?" then error "GUI automation refuses a capture approval dialog"
+   if (count of argv) > 2 then
+    set expectedSnapshot to item 3 of argv
+    if observed is not expectedSnapshot and observed is not (expectedSnapshot & linefeed) then error "Production approval dialog changed before action"
+   end if
+   if (count of matchingButtons) > 1 then error "Refusing ambiguous installed desktop buttons"
+   if (count of matchingButtons) is 1 then
+    perform action "AXPress" of item 1 of matchingButtons
+    return "CLICKED:" & wanted
+   end if
+  end if
   return observed
  end tell
 end run"""
+
+
+# Match the current production dialog's user-facing facts. Generic actions do
+# not distinguish methods, so automation refuses those rather than inferring
+# consent from an Allow button. Requester text is explicitly unverified.
+APPROVAL_ACTIONS = {
+    "sources.import": "Import or replace text",
+    "sources.import_file": "Import a local file",
+    "preferences.set": "Change an application setting",
+}
+
+
+def _dart_display(value):
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, list):
+        return "[" + ", ".join(_dart_display(item) for item in value) + "]"
+    if isinstance(value, dict):
+        return (
+            "{"
+            + ", ".join(
+                str(key) + ": " + _dart_display(item) for key, item in value.items()
+            )
+            + "}"
+        )
+    return str(value)
+
+
+def approval_facts(method, args):
+    if method not in APPROVAL_ACTIONS:
+        raise ValueError(
+            "Production GUI cannot distinguish this approval method: " + method
+        )
+    details = []
+    for key, value in args.items():
+        if key in ("requestId", "conversation"):
+            continue
+        text = _dart_display(value)
+        if len(text) > 1000 or "\\n" in text or "\\r" in text:
+            raise ValueError(
+                "Production GUI approval arguments are not fully distinguishable"
+            )
+        details.append(str(key).replace("_", " ") + ": " + text)
+    rendered = "\n".join(details)
+    if len(rendered) > 4000 or not rendered:
+        raise ValueError("Production GUI approval requires complete visible arguments")
+    return (
+        "Allow this operation?",
+        APPROVAL_ACTIONS[method],
+        "External client (identity unverified)",
+        rendered,
+    )
+
+
+def matches_approval(snapshot, facts):
+    # Linux escapes line breaks in each accessible name; AppleScript returns
+    # real line breaks. Exact TEXT blocks prevent a button/argument substring
+    # from supplying missing approval facts.
+    text = snapshot.replace("\\n", "\n").replace("\\r", "\r")
+    blocks = text.split("TEXT:")
+    observed = {block.rstrip("\n") for block in blocks[1:]}
+    observed = {block.split("\nBUTTON:", 1)[0] for block in observed}
+    return all(fact in observed for fact in facts)
 
 
 class InstalledDesktop:
@@ -102,6 +180,7 @@ class InstalledDesktop:
         self.process: subprocess.Popen[bytes] | None = None
         self.log: BinaryIO | None = None
         self.accessibility: LinuxAccessibilitySession | None = None
+        self._closed = False
         self.evidence: dict[str, Any] = {
             "mode": "actual_installed_desktop_os_accessibility",
             "approvals": [],
@@ -210,7 +289,7 @@ class InstalledDesktop:
         except OSError:
             return False
 
-    def _ui(self, button="", *, reveal=False):
+    def _ui(self, button="", *, reveal=False, expected_snapshot=None):
         process = self._identity()
         if self.accessibility is not None:
             self.accessibility.check()
@@ -228,6 +307,11 @@ class InstalledDesktop:
                 button,
             ]
         )
+        if expected_snapshot is not None:
+            if sys.platform == "linux":
+                command.extend(["--expected-snapshot", expected_snapshot])
+            else:
+                command.append(expected_snapshot)
         if reveal:
             if sys.platform != "linux":
                 raise ValueError("This platform does not use onboarding reveal actions")
@@ -251,6 +335,7 @@ class InstalledDesktop:
     def start(self):
         if self.process is not None:
             raise RuntimeError("Installed desktop already started")
+        self._closed = False
         self.log = (self.output / "desktop.log").open("wb")
         try:
             if sys.platform == "linux":
@@ -391,6 +476,7 @@ class InstalledDesktop:
                 raise ValueError(
                     "Import approval roots must be disposable fixture directories"
                 )
+        expected = approval_facts(method, args)
         if "BUTTON:Allow once" in self._ui().splitlines():
             raise RuntimeError("Refusing a pre-existing approval dialog")
         row = {
@@ -413,7 +499,18 @@ class InstalledDesktop:
                     )
                 if not row["clicked"] and "BUTTON:Allow once" in snapshot.splitlines():
                     row["dialog_snapshot"] = snapshot[:8192]
-                    row["clicked"] = self._ui("Allow once") == "CLICKED:Allow once"
+                    if not matches_approval(snapshot, expected):
+                        raise RuntimeError(
+                            "Production approval dialog does not match the requested action, arguments and requester class"
+                        )
+                    row["matched_facts"] = list(expected)
+                    row["requester_scope"] = (
+                        "unverified external-client class; identical visible facts cannot distinguish clients"
+                    )
+                    row["clicked"] = (
+                        self._ui("Allow once", expected_snapshot=snapshot)
+                        == "CLICKED:Allow once"
+                    )
                 if time.monotonic() >= deadline:
                     raise TimeoutError(
                         "Installed GUI approval/request timed out: " + method
@@ -467,10 +564,13 @@ class InstalledDesktop:
             self._save()
 
     def close(self):
+        if self._closed:
+            return
         try:
             if self.process is not None and self.process.poll() is None:
                 if not self._owned_launcher():
                     self._identity()
+                self.evidence["termination_requested"] = True
                 self.process.terminate()
                 try:
                     self.evidence["exit"] = self.process.wait(timeout=15)
@@ -480,9 +580,27 @@ class InstalledDesktop:
                     raise RuntimeError(
                         "Installed desktop required forced cleanup"
                     ) from None
+            if self.process is not None:
+                code = self.process.poll()
+                if code is not None:
+                    self.evidence["exit"] = code
+                code = self.evidence.get("exit")
+                expected_exit = code == 0 or (
+                    self.evidence.get("termination_requested")
+                    and code == -signal.SIGTERM
+                )
+                if code is not None and not expected_exit:
+                    message = f"Installed desktop exited with unexpected code {code}"
+                    self.evidence.setdefault("failure", message)
+                    self.evidence["status"] = "closed_after_failure"
+                    raise RuntimeError(message)
             self.evidence["status"] = (
                 "closed_after_failure" if "failure" in self.evidence else "closed"
             )
+        except Exception as error:
+            self.evidence.setdefault("failure", str(error))
+            self.evidence["status"] = "closed_after_failure"
+            raise
         finally:
             original = sys.exception()
             try:
@@ -497,6 +615,7 @@ class InstalledDesktop:
                 else:
                     raise
             finally:
+                self._closed = True
                 if self.log is not None:
                     self.log.close()
                 self._save()

@@ -21,6 +21,16 @@ import installed_desktop_approval as gui
 import smoke_macos_bundle as smoke
 
 
+def approval_dialog(details, action="Import or replace text"):
+    return (
+        "TEXT:Allow this operation?\nTEXT:"
+        + action
+        + "\nTEXT:External client (identity unverified)\nTEXT:"
+        + details
+        + "\nBUTTON:Deny\nBUTTON:Allow once"
+    )
+
+
 @pytest.fixture
 def owned(tmp_path, monkeypatch):
     monkeypatch.setattr(gui.sys, "platform", "darwin")
@@ -227,7 +237,7 @@ def test_actual_onboarding_actions_acknowledged_by_read_only_state(owned):
         db.commit()
     clicked = []
 
-    def ui(button=""):
+    def ui(button="", **_):
         if button:
             clicked.append(button)
             with closing(sqlite3.connect(owned.profile / "data/application.db")) as db:
@@ -259,11 +269,13 @@ def test_non_capture_request_needs_actual_correlated_gui_click(owned):
     host = owned.host.start()
     clicked = threading.Event()
 
-    def ui(button=""):
+    def ui(button="", **_):
         if button:
             clicked.set()
             return "CLICKED:" + button
-        return "BUTTON:Allow once" if running.is_set() else ""
+        return (
+            approval_dialog("title: private\ntext: fixture") if running.is_set() else ""
+        )
 
     running = threading.Event()
 
@@ -305,12 +317,12 @@ def test_never_approves_capture_identity_arbitrary_preferences_or_owner_roots(
 def test_old_dialog_and_unobserved_or_capture_consent_are_rejected(owned):
     host = owned.host.start()
     peer = SimpleNamespace(call=Mock(return_value=True), close=Mock())
-    host._ui = lambda button="": "BUTTON:Allow once"
+    host._ui = lambda button="", **_: "BUTTON:Allow once"
     with pytest.raises(RuntimeError, match="pre-existing"):
-        host.call(peer, "graph.save", {})
-    host._ui = lambda button="": ""
+        host.call(peer, "sources.import", {"text": "fixture"})
+    host._ui = lambda button="", **_: ""
     with pytest.raises(RuntimeError, match="without observed"):
-        host.call(peer, "graph.save", {})
+        host.call(peer, "sources.import", {"text": "fixture"})
 
 
 def test_application_socket_shutdown_unblocks_pending_reader_before_close():
@@ -413,20 +425,24 @@ def test_failed_or_capture_dialog_closes_inflight_rpc(owned, kind):
         released.wait(2)
         raise EOFError("cancelled")
 
-    def ui(button=""):
+    def ui(button="", **_):
         if not running.is_set():
             return ""
         if kind == "capture":
             return (
                 "TEXT:Allow microphone and system audio recording?\nBUTTON:Allow once"
             )
-        return "BUTTON:Allow once" if kind == "click_failure" and not button else ""
+        return (
+            approval_dialog("text: fixture")
+            if kind == "click_failure" and not button
+            else ""
+        )
 
     host._ui = ui
     host.timeout = 0.07
     peer = SimpleNamespace(call=call, close=lambda: released.set())
     with pytest.raises((RuntimeError, TimeoutError)):
-        host.call(peer, "graph.save", {})
+        host.call(peer, "sources.import", {"text": "fixture"})
     assert released.wait(1)
     assert host.evidence["approvals"][0]["status"] == "failed"
 
@@ -455,10 +471,17 @@ def test_private_import_roots_are_displayed_for_consent(owned):
     clicked = threading.Event()
     fixture = owned.profile / "documents"
     fixture.mkdir()
-    host._ui = lambda button="": (
+    host._ui = lambda button="", **_: (
         (clicked.set() or "CLICKED:Allow once")
         if button
-        else ("BUTTON:Allow once" if ready.is_set() else "")
+        else (
+            approval_dialog(
+                "key: importRoots\nvalue: " + json.dumps([str(fixture)]),
+                "Change an application setting",
+            )
+            if ready.is_set()
+            else ""
+        )
     )
 
     def call(method, args):
@@ -700,7 +723,7 @@ def test_clicked_dialog_settles_before_return_including_rpc_failure(
             raise RuntimeError("Expected post-write indexing failure")
         return "done"
 
-    def ui(button=""):
+    def ui(button="", **_):
         if button:
             clicks.append(button)
             clicked.set()
@@ -711,7 +734,7 @@ def test_clicked_dialog_settles_before_return_including_rpc_failure(
             snapshots_after_click.append(True)
             if len(snapshots_after_click) > 2:
                 return "BUTTON:Sources\nBUTTON:Settings"
-        return "BUTTON:Allow once"
+        return approval_dialog("text: private fixture")
 
     host._ui = ui
     peer = SimpleNamespace(call=call, close=Mock())
@@ -733,11 +756,11 @@ def test_stuck_clicked_dialog_fails_and_preserves_original_rpc_error(
     host.timeout = 0.2
     pending, clicked = threading.Event(), threading.Event()
 
-    def ui(button=""):
+    def ui(button="", **_):
         if button:
             clicked.set()
             return "CLICKED:" + button
-        return "BUTTON:Allow once" if pending.is_set() else ""
+        return approval_dialog("text: fixture") if pending.is_set() else ""
 
     def call(method, args):
         pending.set()
@@ -749,7 +772,11 @@ def test_stuck_clicked_dialog_fails_and_preserves_original_rpc_error(
     host._ui = ui
     expected = RuntimeError if operation_fails else TimeoutError
     with pytest.raises(expected) as failure:
-        host.call(SimpleNamespace(call=call, close=Mock()), "sources.import", {})
+        host.call(
+            SimpleNamespace(call=call, close=Mock()),
+            "sources.import",
+            {"text": "fixture"},
+        )
     row = host.evidence["approvals"][-1]
     assert row["clicked"] and row["status"] == "failed"
     assert "did not close" in row["dialog_settlement_error"]
@@ -783,3 +810,86 @@ def test_owned_launcher_samples_coherent_image_and_argv_across_exec(
     )
     assert host._owned_launcher()
     host.process = None
+
+
+@pytest.mark.parametrize("mismatch", ["action", "arguments", "requester"])
+def test_unrelated_approval_dialog_is_refused_before_click(owned, mismatch):
+    host = owned.host.start()
+    pending, released = threading.Event(), threading.Event()
+    clicks = []
+    lines = {
+        "action": "Import or replace text",
+        "arguments": "title: private\ntext: fixture",
+        "requester": "External client (identity unverified)",
+    }
+    lines[mismatch] = {
+        "action": "Clear all workspace data and disconnect Google",
+        "arguments": "title: someone else\ntext: unrelated",
+        "requester": "Desktop connection (identity unverified)",
+    }[mismatch]
+
+    def ui(button="", **_):
+        if button:
+            clicks.append(button)
+            released.set()
+            return "CLICKED:" + button
+        if not pending.is_set() or released.is_set():
+            return ""
+        return "\n".join(
+            [
+                "TEXT:Allow this operation?",
+                "TEXT:" + lines["action"],
+                "TEXT:" + lines["requester"],
+                "TEXT:" + lines["arguments"],
+                "BUTTON:Allow once",
+            ]
+        )
+
+    def call(method, args):
+        pending.set()
+        assert released.wait(1)
+        return "submitted request settled"
+
+    host._ui = ui
+    peer = SimpleNamespace(call=call, close=Mock(side_effect=released.set))
+    with pytest.raises(RuntimeError, match="does not match"):
+        host.call(peer, "sources.import", {"title": "private", "text": "fixture"})
+    assert clicks == []
+    assert host.evidence["approvals"][-1]["clicked"] is False
+    peer.close.assert_called_once()
+
+
+def test_already_exited_nonzero_desktop_is_recorded_and_fails(owned):
+    host = owned.host.start()
+    owned.process.poll.return_value = 3
+    try:
+        with pytest.raises(RuntimeError, match="exited.*3"):
+            host.close()
+        report = json.loads((host.output / "gui-approval.json").read_text())
+        assert report["exit"] == 3
+        assert report["status"] == "closed_after_failure"
+        assert host.log.closed
+        owned.process.terminate.assert_not_called()
+    finally:
+        host.process = None
+
+
+@pytest.mark.parametrize("method", sorted(gui.APPROVABLE - gui.APPROVAL_ACTIONS.keys()))
+def test_generic_approval_labels_are_refused_without_submitting(owned, method):
+    peer = SimpleNamespace(call=Mock(), close=Mock())
+    args = (
+        {"kind": "generation"}
+        if method == "models.register"
+        else {"fixture": "private"}
+    )
+    with pytest.raises(ValueError, match="cannot distinguish"):
+        owned.host.call(peer, method, args)
+    peer.call.assert_not_called()
+
+
+@pytest.mark.parametrize("text", ["x" * 1001, r"escaped\ntext", r"escaped\rtext"])
+def test_unmatchable_argument_display_is_refused_without_submitting(owned, text):
+    peer = SimpleNamespace(call=Mock(), close=Mock())
+    with pytest.raises(ValueError, match="not fully distinguishable"):
+        owned.host.call(peer, "sources.import", {"text": text})
+    peer.call.assert_not_called()

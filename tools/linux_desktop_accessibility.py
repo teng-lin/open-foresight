@@ -158,6 +158,9 @@ class AtSpi:
             "atspi_accessible_get_child_at_index": (pointer, [pointer, integer, error]),
             "atspi_accessible_get_state_set": (pointer, [pointer]),
             "atspi_state_set_contains": (integer, [pointer, integer]),
+            "atspi_accessible_get_text_iface": (pointer, [pointer]),
+            "atspi_text_get_character_count": (integer, [pointer, error]),
+            "atspi_text_get_text": (pointer, [pointer, integer, integer, error]),
             "atspi_accessible_get_action_iface": (pointer, [pointer]),
             "atspi_action_get_n_actions": (integer, [pointer, error]),
             "atspi_action_get_action_name": (pointer, [pointer, integer, error]),
@@ -197,6 +200,18 @@ class AtSpi:
             return ctypes.string_at(value).decode("utf-8", errors="replace")
         finally:
             self.glib.g_free(value)
+
+    def content(self, node):
+        text = self.atspi.atspi_accessible_get_text_iface(node)
+        try:
+            if not text:
+                return ""
+            count = self.checked("atspi_text_get_character_count", text)
+            if count < 0 or count > 65536:
+                raise RuntimeError("Invalid or excessive AT-SPI text length")
+            return self.text("atspi_text_get_text", text, 0, count)
+        finally:
+            self.release(text)
 
     def release(self, value):
         if value:
@@ -267,7 +282,7 @@ def identity(pid, executable):
         raise RuntimeError("Owned installed desktop process identity is unavailable")
 
 
-def observe(api, pid, executable, button="", *, reveal=False):
+def observe(api, pid, executable, button="", *, reveal=False, expected_snapshot=None):
     if button and button not in BUTTONS:
         raise ValueError("Unsupported production GUI automation button")
     if reveal and (not button or button == "Allow once"):
@@ -299,6 +314,8 @@ def observe(api, pid, executable, button="", *, reveal=False):
             states = api.state(node)
             name = api.text("atspi_accessible_get_name", node)
             role = api.text("atspi_accessible_get_role_name", node)
+            if not name and 25 in states and 30 in states:
+                name = api.content(node)
             enabled_button = role in {"push button", "button"} and {8, 24} <= states
             if enabled_button and name == button:
                 targets.append((node, ancestors))
@@ -313,6 +330,8 @@ def observe(api, pid, executable, button="", *, reveal=False):
                 raise RuntimeError("Installed desktop accessibility tree is too large")
         snapshot = "\n".join(lines)
         if button:
+            if expected_snapshot is not None and snapshot != expected_snapshot:
+                raise RuntimeError("Production approval dialog changed before action")
             if CAPTURE in snapshot:
                 raise RuntimeError("GUI automation refuses a capture approval dialog")
             if reveal:
@@ -348,11 +367,21 @@ def main():
     parser.add_argument("--executable", type=Path, required=True)
     parser.add_argument("--button", default="")
     parser.add_argument("--reveal", action="store_true")
+    parser.add_argument("--expected-snapshot")
     args = parser.parse_args()
     executable = args.executable.resolve(strict=True)
     api = AtSpi()
     try:
-        print(observe(api, args.pid, executable, args.button, reveal=args.reveal))
+        print(
+            observe(
+                api,
+                args.pid,
+                executable,
+                args.button,
+                reveal=args.reveal,
+                expected_snapshot=args.expected_snapshot,
+            )
+        )
     finally:
         api.close()
 
