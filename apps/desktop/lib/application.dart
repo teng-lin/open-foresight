@@ -238,8 +238,7 @@ class _WorkspaceState extends State<Workspace>
     WidgetsBinding.instance.addObserver(this);
     desktopMenu = DesktopMenu(integrationFeature.activateMenuCommand);
     sourceFeature.initializeGraph();
-    settingsFeature.embeddingGpu =
-        d.store.model('embedding')?.backend == 'litert_lm_embedding_gpu';
+    settingsFeature.start();
     meetingFeature.systemAudioSetupReviewed =
         d.store.preference('audio.systemSetupReviewed') == 'true';
     integrationFeature.commands = widget.commands;

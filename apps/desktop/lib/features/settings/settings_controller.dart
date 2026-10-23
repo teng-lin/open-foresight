@@ -36,10 +36,20 @@ class SettingsController implements SettingsCommands {
        _integrationCommands = integrationCommands,
        _meetings = meetings;
 
+  bool _embeddingChoiceInitialized = false;
+
   late final SettingsReadModel _reads = SettingsReadModel(
     connection: () => d,
     changed: () {
-      if (mounted) _host.update(() {});
+      if (!mounted) return;
+      _host.update(() {
+        if (!_embeddingChoiceInitialized && _reads.modelsCurrent) {
+          _embeddingChoiceInitialized = true;
+          embeddingGpu =
+              _reads.currentModel('embedding')?.backend ==
+              'litert_lm_embedding_gpu';
+        }
+      });
     },
   );
   void start() => _reads.start();
