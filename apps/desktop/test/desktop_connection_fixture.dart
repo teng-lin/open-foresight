@@ -8,6 +8,10 @@ import 'dart:async';
 import 'package:foresight_core/foresight_core.dart';
 import '../test_support/core_fixture.dart';
 
+final _commandCurrentKey = Object();
+bool Function()? get _commandCurrent =>
+    Zone.current[_commandCurrentKey] as bool Function()?;
+
 /// Explicit test adapter for the desktop capability contract. Production only
 /// constructs RemoteDomain; widget fixtures can control core services directly.
 class TestDesktopConnection implements DesktopConnection {
@@ -124,7 +128,7 @@ class TestDesktopConnection implements DesktopConnection {
     args = operation.scopedToWorkspace(args, _workspaceEpoch);
     return domain is CommandFixtureDomain
         ? (domain as CommandFixtureDomain).command(operation, args)
-        : application.call(operation.wire, args);
+        : application.call(operation.wire, args, current: _commandCurrent);
   }
 
   @override
@@ -132,10 +136,12 @@ class TestDesktopConnection implements DesktopConnection {
     Operation operation,
     Map<String, dynamic> args,
     bool Function() current,
-  ) => application.call(
-    operation.wire,
-    operation.scopedToWorkspace(args, _workspaceEpoch),
-    current: current,
+  ) => runZoned(
+    () =>
+        command(operation, operation.scopedToWorkspace(args, _workspaceEpoch)),
+    // Retain fixture overrides and the predicate across their asynchronous
+    // holds, with a separate guard for every concurrent command.
+    zoneValues: {_commandCurrentKey: current},
   );
   @override
   Future<void> index(String id) => domain.index(id);
@@ -234,7 +240,7 @@ class CommandFixtureDomain extends Domain {
   Future<Object?> command(
     Operation operation, [
     Map<String, dynamic> args = const {},
-  ]) => application.call(operation.wire, args);
+  ]) => application.call(operation.wire, args, current: _commandCurrent);
 }
 
 class AnswerFixtureDomain extends Domain {

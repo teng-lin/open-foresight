@@ -22,6 +22,7 @@ class QuickStartDomain extends CommandFixtureDomain {
   bool loseCreateReply = false;
   final createKeys = <Object?>[];
   Completer<Map<String, dynamic>>? systemGate;
+  Completer<Map<String, dynamic>>? capabilitiesGate;
   Completer<void>? createGate;
   QuickStartDomain(super.store, super.helper);
   @override
@@ -30,6 +31,8 @@ class QuickStartDomain extends CommandFixtureDomain {
     Map<String, dynamic> args = const {},
   ]) async {
     operations.add(operation.wire);
+    if (operation == Operation.audioCapabilities && capabilitiesGate != null)
+      return capabilitiesGate!.future;
     if (operation == Operation.audioCapabilities)
       return {
         'microphone': denyMicrophone ? 'not_determined' : 'authorized',
@@ -129,13 +132,16 @@ void main() {
     await store.register('speech', model.path, runner.path);
   }
 
-  Future<void> show(WidgetTester tester) async {
+  Future<void> show(
+    WidgetTester tester, {
+    PlatformCapabilities? capabilities,
+  }) async {
     await tester.pumpWidget(
       Foresight(
         TestDesktopConnection(Application(domain)),
         deviceLoader: () async => [],
         environment: DesktopEnvironment(
-          capabilities: testHostPlatformCapabilities,
+          capabilities: capabilities ?? testHostPlatformCapabilities,
         ),
       ),
     );
@@ -368,11 +374,23 @@ void main() {
       (tester) async {
         await tester.runAsync(registerSpeech);
         final meeting = store.meeting('Existing meeting');
-        await show(tester);
+        await show(tester, capabilities: const PlatformCapabilities.macOS());
+        domain.capabilitiesGate = Completer<Map<String, dynamic>>();
+        final requests = domain.operations
+            .where((operation) => operation == 'audio.capabilities')
+            .length;
         final state =
             tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
         // As the Start button does; it stops at the access check.
         final started = state.meetingFeature.recordExistingMeeting(meeting);
+        await pumpUntil(
+          tester,
+          () =>
+              domain.operations
+                  .where((operation) => operation == 'audio.capabilities')
+                  .length >
+              requests,
+        );
         expect(state.meetingFeature.meetingId, meeting);
         if (closedBy == 'a workspace clear') {
           // Another client clears the workspace; this desktop resets.
@@ -381,6 +399,10 @@ void main() {
         } else {
           state.update(() => state.meetingFeature.meetingId = null);
         }
+        domain.capabilitiesGate!.complete({
+          'microphone': 'authorized',
+          'system_audio_request': 'completed',
+        });
         await tester.pumpAndSettle();
         await started;
         expect(state.error, message);

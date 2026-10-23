@@ -1,3 +1,4 @@
+import 'pump_until.dart';
 import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
@@ -203,6 +204,10 @@ void main() {
           TestDesktopConnection(Application(Domain(store, helper))),
           deviceLoader: () async => [],
         ),
+      );
+      await pumpUntil(
+        tester,
+        () => find.text('Existing meeting').evaluate().isNotEmpty,
       );
       await tester.tap(find.text('Existing meeting'));
       await tester.pumpAndSettle();
