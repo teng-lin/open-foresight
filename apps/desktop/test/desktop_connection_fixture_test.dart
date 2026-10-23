@@ -12,7 +12,10 @@ import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'store_reader_fixture.dart';
 import '../test_support/reader_admissions.dart';
-import 'package:foresight_core/desktop.dart' show StoreReadQueries;
+import 'package:foresight_core/desktop.dart' show StoreReadQueries, StoreReader;
+import 'package:foresight_core/src/sqlite_store_reader.dart';
+import 'package:foresight_core/src/sqlite_read_session.dart';
+import 'package:foresight_core/src/read_coordinator.dart';
 
 class ReadinessHelper extends Helper {
   ReadinessHelper(super.socket, super.storage, this.ready);
@@ -29,6 +32,27 @@ class ResumeDomain extends Domain {
   int resumes = 0;
   @override
   Future<void> resume() async => resumes++;
+}
+
+class _CustomReaderConnection extends TestDesktopConnection {
+  _CustomReaderConnection(super.application, this.reader);
+  final StoreReader reader;
+  @override
+  StoreReader get store => reader;
+}
+
+class _ReaderWorker implements ReadWorker {
+  _ReaderWorker(Store store) : session = SqliteReadSession.borrow(store);
+  final SqliteReadSession session;
+  int reads = 0;
+  @override
+  Future<ReadWorkerReply> read(ReadWorkerRequest request) async {
+    reads++;
+    return session.query(request.projection, request.arguments);
+  }
+
+  @override
+  Future<void> close() async => session.close();
 }
 
 void main() {
@@ -79,6 +103,52 @@ void main() {
         connection.close();
         await connection.closed;
         root.deleteSync(recursive: true);
+      }
+    },
+  );
+
+  test(
+    'durable events invalidate the overridden reader, not the writer reader',
+    () async {
+      final root = createTestTempDirectorySync('fixture-custom-');
+      final store = Store('${root.path}/application.db');
+      final worker = _ReaderWorker(store);
+      final reader = SqliteStoreReader.borrow(store, worker: worker);
+      final helper = ReadinessHelper(
+        '${root.path}/socket',
+        '${root.path}/helper',
+        true,
+      );
+      final connection = _CustomReaderConnection(
+        Application(Domain(store, helper)),
+        reader,
+      );
+      final values = StreamIterator(
+        reader.watch(StoreReadQueries.preference('fixture')),
+      );
+      try {
+        expect(await values.moveNext(), isTrue);
+        expect(values.current.value, '');
+        await Future<void>.delayed(Duration.zero);
+        expect(worker.reads, 1);
+        helper.changed?.call();
+        await Future<void>.delayed(Duration.zero);
+        expect(worker.reads, 1, reason: 'Status-only events do not refresh');
+        store.setPreference('fixture', 'custom');
+        helper.changed?.call();
+        expect(worker.reads, 2, reason: 'The overridden reader refreshes');
+        expect(await values.moveNext(), isTrue);
+        expect(values.current.value, 'custom');
+        await Future<void>.delayed(Duration.zero);
+        expect(worker.reads, 2);
+        helper.changed?.call();
+        await Future<void>.delayed(Duration.zero);
+        expect(worker.reads, 2);
+      } finally {
+        await values.cancel();
+        await reader.close();
+        connection.close();
+        await connection.closed;
       }
     },
   );

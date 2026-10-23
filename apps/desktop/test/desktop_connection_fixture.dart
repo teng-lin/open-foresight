@@ -64,8 +64,9 @@ class TestDesktopConnection implements DesktopConnection {
       (domain as AnswerFixtureDomain).application = application;
     }
     _workspaceEpoch = _serviceEpoch;
+    registerFixtureReader(store);
     domain.helper.changed = () {
-      invalidateFixtureReader(domain.store);
+      invalidateFixtureReader(store);
       _events.add(null);
     };
     _changes = application.changes.stream.listen(

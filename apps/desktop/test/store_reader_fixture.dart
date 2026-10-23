@@ -7,18 +7,29 @@ import 'package:foresight_core/src/sqlite_store_reader.dart';
 
 final _readers = Expando<StoreReader>();
 final _admissions = Expando<ReaderAdmissions>();
-final _sessions = Expando<SqliteStoreReader>();
 final _identities = Expando<(String, String)>();
 
 /// Match RemoteDomain's data invalidation without turning helper/status events
 /// into persistence admissions. The wrapped public reader remains countable.
-void invalidateFixtureReader(Store store) {
-  final reader = _sessions[store];
-  if (reader == null) return;
-  final identity = (reader.workspaceEpoch, reader.dataRevision);
-  if (identity == _identities[store]) return;
-  _identities[store] = identity;
-  reader.invalidate();
+SqliteStoreReader? _session(StoreReader reader) {
+  if (reader is CountingStoreReader) return _session(reader.delegate);
+  return reader is SqliteStoreReader ? reader : null;
+}
+
+void registerFixtureReader(StoreReader reader) {
+  final session = _session(reader);
+  if (session != null) {
+    _identities[session] = (session.workspaceEpoch, session.dataRevision);
+  }
+}
+
+void invalidateFixtureReader(StoreReader reader) {
+  final session = _session(reader);
+  if (session == null) return;
+  final identity = (session.workspaceEpoch, session.dataRevision);
+  if (identity == _identities[session]) return;
+  _identities[session] = identity;
+  session.invalidate();
 }
 
 StoreReader fixtureReader(Store store, {ReaderAdmissions? admissions}) {
@@ -38,8 +49,7 @@ StoreReader _createReader(Store store, ReaderAdmissions? admissions) {
     store,
     worker: _FixtureReadWorker(store, admissions),
   );
-  _sessions[store] = reader;
-  _identities[store] = (reader.workspaceEpoch, reader.dataRevision);
+  registerFixtureReader(reader);
   return admissions == null ? reader : CountingStoreReader(reader, admissions);
 }
 
