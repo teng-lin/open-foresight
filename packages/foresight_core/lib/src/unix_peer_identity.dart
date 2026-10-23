@@ -132,7 +132,7 @@ bool _nativeDesktopExecutable(String path) {
   if (file.statSync().mode & 0x49 == 0) return false;
   final handle = file.openSync();
   try {
-    final bytes = handle.readSync(65536);
+    var bytes = handle.readSync(65536);
     if (bytes.length < 4) return false;
     final magic = ByteData.sublistView(bytes).getUint32(0, Endian.big);
     if (!{
@@ -146,12 +146,21 @@ bool _nativeDesktopExecutable(String path) {
     }.contains(magic)) {
       return false;
     }
-    final symbols = latin1.decode(bytes);
-    // Reject generic SDK interpreters even when copied under another name.
-    if (symbols.contains('Dart_Initialize') ||
-        symbols.contains('Py_BytesMain') ||
-        symbols.contains('Py_Main')) {
-      return false;
+    // Mach-O symbol metadata can follow the executable sections, well beyond
+    // the first read. Inspect the whole image without loading it into memory.
+    // Keep enough overlap to recognize a marker split across two reads.
+    var overlap = '';
+    while (bytes.isNotEmpty) {
+      final symbols = overlap + latin1.decode(bytes);
+      if (symbols.contains('Dart_Initialize') ||
+          symbols.contains('Py_BytesMain') ||
+          symbols.contains('Py_Main')) {
+        return false;
+      }
+      overlap = symbols.length > 14
+          ? symbols.substring(symbols.length - 14)
+          : symbols;
+      bytes = handle.readSync(65536);
     }
     return true;
   } finally {
