@@ -42,9 +42,7 @@ void enforceOperationCapability(
       throw RpcError(RpcErrorCode.denied, 'Invalid desktop capability');
     case CapabilityPolicy.approvalHost:
       if (access.isHost(client) &&
-          (access.hasVisibleHost ||
-              request is SecurityDetachDesktopRequest ||
-              request is SecurityDesktopVisibilityRequest)) {
+          (request is! SecurityDecideRequest || access.hasVisibleHost)) {
         return;
       }
       throw RpcError(RpcErrorCode.denied, switch (request) {

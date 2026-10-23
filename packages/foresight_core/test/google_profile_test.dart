@@ -500,6 +500,28 @@ void main() {
     },
   );
 
+  test(
+    'initial journal storage failure still clears accounts and can retry',
+    () async {
+      await auth.close();
+      final vault = MemoryProfileSecrets();
+      secrets = vault;
+      auth = createAuth();
+      await auth.signIn(fixture.consent);
+      final journal = Directory('${root.path}/credential-cleanup.json')
+        ..createSync();
+      final forgetting = Future<void>.sync(auth.forget);
+      expect(auth.accounts, isEmpty);
+      expect(auth.connected, isFalse);
+      expect(File('${root.path}/tokens.json').existsSync(), isFalse);
+      await expectLater(forgetting, throwsA(isA<FileSystemException>()));
+      journal.deleteSync();
+      await auth.retryCredentialCleanup();
+      expect(vault.values, isEmpty);
+      expect(File(journal.path).existsSync(), isFalse);
+    },
+  );
+
   for (final corrupt in ['foreign key', 'version', 'public permissions']) {
     test(
       'cleanup refuses a journal with $corrupt before touching the keyring',

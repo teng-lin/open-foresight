@@ -189,6 +189,12 @@ void main() {
               ),
             ),
           );
+          // Observe each cancellation before opening another stream on the
+          // shared channel, then let that cancelled fixture handler settle.
+          await eventually(
+            () => fixture.calls.length == i + 1 && fixture.calls[i].isCanceled,
+          );
+          replies[i].complete(FetchExternalWebsiteResponse());
         }
         expect(fixture.calls, hasLength(3));
         await eventually(() => fixture.calls.every((call) => call.isCanceled));
@@ -201,7 +207,8 @@ void main() {
         );
       } finally {
         for (final reply in replies) {
-          reply.complete(FetchExternalWebsiteResponse());
+          if (!reply.isCompleted)
+            reply.complete(FetchExternalWebsiteResponse());
         }
       }
     });

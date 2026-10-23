@@ -854,14 +854,22 @@ class GoogleAuth implements GoogleAccount {
     if (existing != null) return existing;
     final saved = [if (_tokens != null) _tokens!, ..._savedAccounts.values];
     // Commit key-only retry work before discarding the account registry.
-    _cleanup.add({
+    final cleanupKeys = {
       for (final data in saved)
         _credentialKey(data): data['provider'] != 'granola',
       _secretKey: saved.any(
         (data) =>
             _credentialKey(data) == _secretKey && data['provider'] != 'granola',
       ),
-    });
+    };
+    Object? journalError;
+    try {
+      _cleanup.add(cleanupKeys);
+    } catch (error) {
+      // A storage failure must not leave cleared accounts usable in memory.
+      // Keep the known keys for another durable attempt on the credential queue.
+      journalError = error;
+    }
     final file = File('${directory.path}/tokens.json');
     if (file.existsSync()) file.deleteSync();
     _tokens = null;
@@ -875,6 +883,7 @@ class GoogleAuth implements GoogleAccount {
           await _revokeBestEffort(token);
         }
       }
+      if (journalError != null) _cleanup.add(cleanupKeys);
       await _cleanup.retry(
         revoke: _revokeBestEffort,
         activeKeys: _activeCredentialKeys,
