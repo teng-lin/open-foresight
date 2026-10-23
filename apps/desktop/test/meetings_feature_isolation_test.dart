@@ -133,7 +133,152 @@ class _SpeechReader implements StoreReader {
   );
 }
 
+class _BuildGuardConnection extends ControllerConnection {
+  _BuildGuardConnection(super.application);
+  _BuildGuardReader? _reader;
+  @override
+  _BuildGuardReader get store => _reader ??= _BuildGuardReader(super.store);
+}
+
+class _BuildGuardReader implements StoreReader {
+  _BuildGuardReader(this.delegate);
+  final StoreReader delegate;
+  bool rejectDuringBuild = false;
+  int buildAdmissions = 0;
+  void _guard() {
+    if (rejectDuringBuild &&
+        WidgetsBinding.instance.buildOwner!.debugBuilding) {
+      buildAdmissions++;
+      throw StateError('Persistence access during actual widget building');
+    }
+  }
+
+  @override
+  String get workspaceEpoch {
+    _guard();
+    return delegate.workspaceEpoch;
+  }
+
+  @override
+  String get dataRevision {
+    _guard();
+    return delegate.dataRevision;
+  }
+
+  @override
+  Future<ReadResult<T>> read<T>(ReadQuery<T> query) {
+    _guard();
+    return delegate.read(query);
+  }
+
+  @override
+  Stream<ReadResult<T>> watch<T>(ReadQuery<T> query) {
+    _guard();
+    return delegate.watch(query);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw StateError('Unexpected reader access ${invocation.memberName}');
+}
+
 void main() {
+  testWidgets(
+    'prepared meeting panels render without persistence and retired actions refuse',
+    (tester) async {
+      final root = createTestTempDirectorySync('meeting-render-');
+      final store = Store('${root.path}/app.db');
+      final id = store.meeting('Prepared meeting');
+      final connection = _BuildGuardConnection(
+        Application(
+          Domain(
+            store,
+            OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+          ),
+        ),
+      );
+      final host = _Host(connection),
+          integration = _Integration(),
+          chat = _Chat();
+      final controller = MeetingsController(
+        host: host,
+        navigation: host,
+        operations: host,
+        dialogs: host,
+        integrations: integration,
+        integrationCommands: integration,
+        settings: _Settings(),
+        chat: chat,
+        chatCommands: chat,
+      );
+      controller.meetingId = id;
+      controller.start();
+      await tester.binding.setSurfaceSize(const Size(1400, 1000));
+      addTearDown(() async {
+        await pumpUntilCompleted(tester, controller.dispose());
+        connection.close();
+        await pumpUntilCompleted(tester, connection.closed);
+        await tester.binding.setSurfaceSize(null);
+      });
+      await tester.pumpWidget(
+        MaterialApp(
+          home: StatefulBuilder(
+            builder: (context, rebuild) {
+              host.context = context;
+              host.rebuild = rebuild;
+              return Scaffold(body: MeetingsView(controller));
+            },
+          ),
+        ),
+      );
+      await pumpUntil(tester, () => controller.loadedMeetingNotes == id);
+      await tester.pumpAndSettle();
+      // Allow setup/read delivery before rejecting every admission made inside
+      // actual widget builds, including LayoutBuilder's later build scope.
+      connection.store.rejectDuringBuild = true;
+      for (final panel in [
+        'Summary',
+        'Action items',
+        'Preparation',
+        'Chat',
+        'Live Q&A',
+      ]) {
+        host.update(() => controller.meetingPanel = panel);
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull, reason: panel);
+      }
+      expect(connection.store.buildAdmissions, 0);
+      final generate = tester
+          .widget<IconButton>(
+            find.byWidgetPredicate(
+              (widget) =>
+                  widget is IconButton && widget.tooltip == 'Generate Summary',
+              skipOffstage: false,
+            ),
+          )
+          .onPressed!;
+      final originalEpoch = connection.workspaceEpoch;
+      await tester.runAsync(
+        () => connection.application.call(Operation.workspaceClear.wire, {}),
+      );
+      expect(
+        connection.workspaceEpoch,
+        originalEpoch,
+        reason: 'The service event has not been adopted by a shell',
+      );
+      expect(store.workspaceEpoch, isNot(originalEpoch));
+      expect(store.meeting('Replacement meeting'), id);
+      connection.calls.clear();
+      generate();
+      await tester.pumpAndSettle();
+      expect(connection.calls, isEmpty);
+      expect(host.error, isEmpty);
+      expect(connection.store.buildAdmissions, 0);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
   for (final boundary in ['session', 'selection', 'disposal', 'read failure']) {
     testWidgets(
       'fresh speech readiness respects $boundary before prompting or recording',

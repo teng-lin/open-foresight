@@ -3,7 +3,7 @@ part of 'meetings_controller.dart';
 extension _SummaryView on MeetingsController {
   Widget meetingSummaryPanel(int id, {bool actions = false}) {
     if (actions) return meetingActionsPanel(id);
-    final identity = FeatureRequestIdentity.capture(d);
+    final identity = _reads.presentationIdentity;
     final fromPreview = meetingId == null;
     final kind = actions ? 'actions' : 'summary';
     final title = actions ? 'Action items' : 'Summary';
@@ -115,7 +115,7 @@ extension _SummaryView on MeetingsController {
 
   Widget _meetingSummaryHeading(
     int id,
-    FeatureRequestIdentity identity, {
+    FeatureRequestIdentity? identity, {
     required bool fromPreview,
     required String kind,
     required String title,
@@ -131,7 +131,11 @@ extension _SummaryView on MeetingsController {
         IconButton(
           tooltip: 'Generate $title',
           onPressed:
-              active || _operations.busy || _chat.asking || meetingEnhancing
+              identity == null ||
+                  active ||
+                  _operations.busy ||
+                  _chat.asking ||
+                  meetingEnhancing
               ? null
               : () => _runMeetingAction(
                   id,

@@ -11,10 +11,32 @@ import 'package:open_foresight/shell/workspace_tab.dart';
 class _Reader implements StoreReader {
   int watches = 0;
   final pending = <Completer<ReadResult<Object?>>>[];
+  String _workspaceEpoch = 'workspace';
+  bool rejectIdentityDuringBuild = false;
+  int buildIdentityReads = 0;
   @override
-  String workspaceEpoch = 'workspace';
+  String get workspaceEpoch {
+    _guardBuild();
+    return _workspaceEpoch;
+  }
+
+  set workspaceEpoch(String value) => _workspaceEpoch = value;
+  void _guardBuild() {
+    if (rejectIdentityDuringBuild &&
+        WidgetsBinding.instance.buildOwner!.debugBuilding) {
+      buildIdentityReads++;
+      throw StateError('Persistence identity read during widget building');
+    }
+  }
+
+  String _dataRevision = '1';
   @override
-  String dataRevision = '1';
+  String get dataRevision {
+    _guardBuild();
+    return _dataRevision;
+  }
+
+  set dataRevision(String value) => _dataRevision = value;
   @override
   Stream<ReadResult<T>> watch<T>(ReadQuery<T> query) {
     watches++;
@@ -189,6 +211,142 @@ void main() {
   });
   NoteSummary note(int id) =>
       NoteSummary.fromRow({'id': id, 'title': 'Note $id', 'revision': 1});
+
+  testWidgets(
+    'note rendering never reads persistence identity and stale save stays refused',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final opening = controller.openNote(note(8));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: StatefulBuilder(
+            builder: (context, rebuild) {
+              host.context = context;
+              host.rebuild = rebuild;
+              return Scaffold(body: controller.notes());
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      // Preparation and subscriptions are established before guarding actual
+      // BuildOwner callbacks, including deferred child/layout builders.
+      connection.store.rejectIdentityDuringBuild = true;
+      host.update(() {});
+      await tester.pumpAndSettle();
+      final body = find.widgetWithText(TextField, 'Your editable note');
+      expect(tester.widget<TextField>(body).readOnly, isTrue);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.widgetWithText(FilledButton, 'Save note'),
+            )
+            .onPressed,
+        isNull,
+      );
+      connection.store.complete(0, 'Accepted persisted body');
+      await opening;
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(tester.widget<TextField>(body).readOnly, isFalse);
+      final save = tester
+          .widget<FilledButton>(find.widgetWithText(FilledButton, 'Save note'))
+          .onPressed!;
+      controller.noteBody.text = 'Edited accepted body';
+      // A durable replacement can precede its service event/client adoption.
+      // Rendering may retain its snapshot; sending must consult the old owner.
+      connection.store.workspaceEpoch = 'replacement';
+      expect(connection.workspaceEpoch, 'workspace');
+      host.update(() {});
+      await tester.pumpAndSettle();
+      save();
+      await tester.pumpAndSettle();
+      expect(connection.writes, isEmpty);
+      expect(controller.noteBodyReady, isFalse);
+      expect(controller.noteBody.text, 'Edited accepted body');
+      expect(connection.store.buildIdentityReads, 0);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets('diverged note review status uses prepared render facts', (
+    tester,
+  ) async {
+    final opening = controller.openNote(note(8));
+    controller.noteBody.text = 'Retained private draft';
+    connection.store.complete(0, 'Saved body requiring review');
+    await opening;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StatefulBuilder(
+          builder: (context, rebuild) {
+            host.context = context;
+            host.rebuild = rebuild;
+            return Scaffold(body: controller.notes());
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    connection.store.rejectIdentityDuringBuild = true;
+    host.update(() {});
+    await tester.pumpAndSettle();
+    expect(find.text('Review saved note'), findsOneWidget);
+    final review = tester
+        .widget<TextButton>(
+          find.widgetWithText(TextButton, 'Review saved note'),
+        )
+        .onPressed!;
+    connection.store.workspaceEpoch = 'replacement';
+    review();
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(connection.writes, isEmpty);
+    expect(controller.noteBody.text, 'Retained private draft');
+    expect(connection.store.buildIdentityReads, 0);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('failed note load status renders without persistence access', (
+    tester,
+  ) async {
+    final opening = controller.openNote(note(8));
+    final failure = expectLater(opening, throwsA(isA<RpcError>()));
+    connection.store.complete(
+      0,
+      null,
+      error: RpcError(RpcErrorCode.unavailable, 'Controlled note failure'),
+    );
+    await failure;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StatefulBuilder(
+          builder: (context, rebuild) {
+            host.context = context;
+            host.rebuild = rebuild;
+            return Scaffold(body: controller.notes());
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    connection.store.rejectIdentityDuringBuild = true;
+    host.update(() {});
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Controlled note failure'), findsOneWidget);
+    expect(
+      tester
+          .widget<FilledButton>(find.widgetWithText(FilledButton, 'Save note'))
+          .onPressed,
+      isNull,
+    );
+    expect(connection.store.buildIdentityReads, 0);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
 
   testWidgets(
     'Sources mounts with narrow ports and rebuilds without persistence admissions',

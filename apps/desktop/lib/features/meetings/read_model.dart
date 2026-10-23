@@ -24,6 +24,10 @@ class MeetingReadModel {
   final _slots = <String, _Slot>{};
   StreamSubscription<void>? _changes;
   FeatureRequestIdentity? _identity;
+
+  /// Captured while binding the read owner, before any widget is constructed.
+  /// Retained callbacks still validate its durable epoch before acting.
+  FeatureRequestIdentity? get presentationIdentity => _identity;
   int? _selected, _preview;
   int _generation = 0;
   bool _disposed = false,

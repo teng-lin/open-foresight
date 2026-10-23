@@ -16,14 +16,17 @@ final class FeatureRequestIdentity {
 
   String get workspaceEpoch => _clientEpoch ?? _storedEpoch;
 
+  /// In-memory ownership facts for already prepared presentation state.
+  /// Commands must use [isCurrent], which also checks the durable workspace.
+  bool matchesConnection(DesktopConnection connection, {required bool alive}) =>
+      alive &&
+      identical(connection, _connection) &&
+      identical(connection.clientSessionGeneration, _session) &&
+      connection.workspaceEpoch == _clientEpoch &&
+      (_storedEpoch.isEmpty || workspaceEpoch == _storedEpoch);
+
   bool isCurrent(DesktopConnection connection, {required bool alive}) {
-    if (!alive ||
-        !identical(connection, _connection) ||
-        !identical(connection.clientSessionGeneration, _session) ||
-        connection.workspaceEpoch != _clientEpoch ||
-        (_storedEpoch.isNotEmpty && workspaceEpoch != _storedEpoch)) {
-      return false;
-    }
+    if (!matchesConnection(connection, alive: alive)) return false;
     try {
       return connection.store.workspaceEpoch == _storedEpoch;
     } catch (_) {

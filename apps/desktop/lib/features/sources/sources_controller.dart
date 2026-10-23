@@ -353,6 +353,13 @@ class SourcesController implements SourceCommands {
   bool get _noteBodyAcceptedCurrent =>
       _acceptedNoteBody == (noteId, noteEditorGeneration) &&
       (_noteLoadOwner?.isCurrent(d, alive: mounted) ?? false);
+  // Rendering consumes accepted body/session facts only. All edit/save/review
+  // callbacks retain the authoritative durable-epoch check above.
+  bool get _noteBodyPreparedCurrent =>
+      _acceptedNoteBody == (noteId, noteEditorGeneration) &&
+      (_noteLoadOwner?.matchesConnection(d, alive: mounted) ?? false);
+  bool get _noteBodyPreparedReady =>
+      noteId == null || (_noteBodyPreparedCurrent && !_noteBodyNeedsReview);
   bool get noteBodyReady =>
       noteId == null || (_noteBodyAcceptedCurrent && !_noteBodyNeedsReview);
   Future<void> openNote(NoteSummary note) => _featureOpenNote(note);

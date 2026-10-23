@@ -24,7 +24,7 @@ extension _MeetingAiViews on MeetingsController {
   }
 
   Widget meetingAnswerScope(int id, {required bool automatic}) {
-    final identity = FeatureRequestIdentity.capture(d);
+    final identity = _reads.presentationIdentity;
     final key = automatic ? 'proactiveScope.$id' : 'answerScope.meeting:$id';
     final scope = _reads.preference(key, automatic ? 'meeting' : 'workspace');
     return Padding(
@@ -49,7 +49,7 @@ extension _MeetingAiViews on MeetingsController {
                   child: Text('Whole workspace'),
                 ),
               ],
-              onChanged: _operations.busy
+              onChanged: identity == null || _operations.busy
                   ? null
                   : (value) => _runMeetingAction(id, identity, (current) async {
                       if (value == 'selected') {
@@ -132,7 +132,7 @@ extension _MeetingAiViews on MeetingsController {
   }
 
   Widget meetingActionsPanel(int id) {
-    final identity = FeatureRequestIdentity.capture(d);
+    final identity = _reads.presentationIdentity;
     final tasks = _reads.tasks(id);
     final versions = _reads.artifacts(id, 'actions');
     final active = _workflow(id, 'actions')?.active == true;
@@ -147,7 +147,7 @@ extension _MeetingAiViews on MeetingsController {
               ),
               IconButton(
                 tooltip: 'Generate Action items',
-                onPressed: active || _operations.busy
+                onPressed: identity == null || active || _operations.busy
                     ? null
                     : () => _runMeetingAction(id, identity, (current) async {
                         await d.commandCurrent(Operation.meetingsGenerate, {
@@ -199,7 +199,10 @@ extension _MeetingAiViews on MeetingsController {
                                 children: [
                                   Checkbox(
                                     value: task.status == 'completed',
-                                    onChanged: active || _operations.busy
+                                    onChanged:
+                                        identity == null ||
+                                            active ||
+                                            _operations.busy
                                         ? null
                                         : (value) =>
                                               _runMeetingAction(id, identity, (
@@ -222,7 +225,10 @@ extension _MeetingAiViews on MeetingsController {
                                   Expanded(child: SelectableText(task.task)),
                                   IconButton(
                                     tooltip: 'Edit task',
-                                    onPressed: active || _operations.busy
+                                    onPressed:
+                                        identity == null ||
+                                            active ||
+                                            _operations.busy
                                         ? null
                                         : () => unawaited(
                                             editMeetingTask(
@@ -245,16 +251,7 @@ extension _MeetingAiViews on MeetingsController {
                                 ),
                               if (task.manual)
                                 const Text('Your edits are preserved'),
-                              ExpansionTile(
-                                title: const Text('Supporting evidence'),
-                                children: [
-                                  for (final quote in task.evidence)
-                                    ListTile(
-                                      title: SelectableText(quote.quote),
-                                      subtitle: Text(quote.id),
-                                    ),
-                                ],
-                              ),
+                              _taskEvidence(task),
                             ],
                           ),
                         ),
@@ -278,6 +275,14 @@ extension _MeetingAiViews on MeetingsController {
       ],
     );
   }
+
+  Widget _taskEvidence(MeetingTask task) => ExpansionTile(
+    title: const Text('Supporting evidence'),
+    children: [
+      for (final quote in task.evidence)
+        ListTile(title: SelectableText(quote.quote), subtitle: Text(quote.id)),
+    ],
+  );
 
   Future<void> editMeetingTask(
     MeetingTask task,
@@ -438,7 +443,7 @@ extension _MeetingAiViews on MeetingsController {
   }
 
   Widget meetingPreparationPanel(int id) {
-    final identity = FeatureRequestIdentity.capture(d);
+    final identity = _reads.presentationIdentity;
     final versions = _reads.artifacts(id, 'preparation');
     final active = _workflow(id, 'preparation')?.active == true;
     final preview = _workflow(id, 'preparation')?.preview ?? '';
@@ -458,7 +463,7 @@ extension _MeetingAiViews on MeetingsController {
               ),
               IconButton(
                 tooltip: 'Prepare from local documents',
-                onPressed: active || _operations.busy
+                onPressed: identity == null || active || _operations.busy
                     ? null
                     : () => _runMeetingAction(
                         id,

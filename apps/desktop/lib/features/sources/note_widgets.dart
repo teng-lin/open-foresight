@@ -132,13 +132,13 @@ extension _NoteWidgets on SourcesController {
             _noteLoadStatus(),
             TextField(
               controller: noteTitle,
-              readOnly: noteLoading || !noteBodyReady,
+              readOnly: noteLoading || !_noteBodyPreparedReady,
               decoration: const InputDecoration(labelText: 'Title'),
             ),
             Expanded(
               child: TextField(
                 controller: noteBody,
-                readOnly: noteLoading || !noteBodyReady,
+                readOnly: noteLoading || !_noteBodyPreparedReady,
                 maxLines: null,
                 expands: true,
                 decoration: const InputDecoration(
@@ -148,7 +148,7 @@ extension _NoteWidgets on SourcesController {
               ),
             ),
             FilledButton(
-              onPressed: noteLoading || !noteBodyReady
+              onPressed: noteLoading || !_noteBodyPreparedReady
                   ? null
                   : () {
                       // A callback built before a session/epoch replacement must
@@ -156,6 +156,7 @@ extension _NoteWidgets on SourcesController {
                       if (!mounted || noteLoading || !noteBodyReady) return;
                       unawaited(
                         _operations.run(() async {
+                          if (!mounted || noteLoading || !noteBodyReady) return;
                           // Every send names the workspace this save began in, and a
                           // reply that arrives after a reset is not shown: it names an
                           // ID the views have dropped.
@@ -234,9 +235,9 @@ extension _NoteWidgets on SourcesController {
 
   Widget _noteLoadStatus() {
     final id = noteId;
-    if (id == null || noteLoading || noteBodyReady)
+    if (id == null || noteLoading || _noteBodyPreparedReady)
       return const SizedBox.shrink();
-    if (_noteBodyAcceptedCurrent && _noteBodyNeedsReview) {
+    if (_noteBodyPreparedCurrent && _noteBodyNeedsReview) {
       final accepted = _acceptedNoteBody!;
       return ListTile(
         title: const Text(
@@ -252,7 +253,8 @@ extension _NoteWidgets on SourcesController {
         ),
       );
     }
-    final current = _noteLoadOwner?.isCurrent(d, alive: mounted) ?? false;
+    final current =
+        _noteLoadOwner?.matchesConnection(d, alive: mounted) ?? false;
     return ListTile(
       title: Text(
         current && _noteLoadError.isNotEmpty
