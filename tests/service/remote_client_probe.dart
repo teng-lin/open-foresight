@@ -14,7 +14,9 @@ String noteSnapshot(StoreReader reader) => jsonEncode([
     },
 ]);
 
-Future<void> main() async {
+Future<void> main() async => print(jsonEncode(await runRemoteClientProbe()));
+
+Future<Map<String, Object?>> runRemoteClientProbe() async {
   final profile = ProfilePaths.resolve(Platform.environment);
   final domain = await connectDesktop(profile);
   int? replacementPid;
@@ -100,18 +102,16 @@ Future<void> main() async {
       throw StateError('Data lost after service restart');
     if (noteSnapshot(domain.store) != beforeRestart)
       throw StateError('Reconnect replayed or changed a persisted mutation');
-    print(
-      jsonEncode({
-        'browser_invitation_received': browserInvited,
-        'oauth_cancelled_cleanly': oauthCancelled,
-        'read_only': true,
-        'changes': true,
-        'reconnected': true,
-        'no_mutation_replay': true,
-        'original_pid': firstPid,
-        'replacement_pid': replacementPid,
-      }),
-    );
+    return {
+      'browser_invitation_received': browserInvited,
+      'oauth_cancelled_cleanly': oauthCancelled,
+      'read_only': true,
+      'changes': true,
+      'reconnected': true,
+      'no_mutation_replay': true,
+      'original_pid': firstPid,
+      'replacement_pid': replacementPid,
+    };
   } finally {
     await changes?.cancel();
     domain.close();

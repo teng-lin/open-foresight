@@ -362,7 +362,7 @@ def test_direct_packaged_entrypoints_enforce_identity_without_launcher(tmp_path,
         model = tmp_path / "model"
         model.write_text("unused model")
         with pytest.raises(RuntimeError, match="outside this installation"):
-            trusted.call("models.generation", {"path": str(model), "runtime": "/usr/bin/true"})
+            trusted.call("models.generation", {"path": str(model), "runtime": "/usr/bin/true", "backend": "llama_cpp"})
     finally:
         for peer in peers:
             if isinstance(peer, DesktopPeer):
@@ -1079,25 +1079,27 @@ def test_granola_manual_return_requires_active_matching_attempt_without_network(
 def test_desktop_facade_reads_changes_and_reconnects_without_replaying_mutations(
     running,
 ):
-    import shutil
-
-    dart = os.environ.get("FORESIGHT_DART_EXECUTABLE") or shutil.which("dart")
-    if not dart:
-        pytest.skip("Dart executable required for the desktop facade integration probe")
-    result = subprocess.run(
-        [
-            dart,
-            "--packages="
-            + str(ROOT / "packages/foresight_core/.dart_tool/package_config.json"),
-            str(ROOT / "tests/service/remote_client_probe.dart"),
-        ],
-        env=running["env"],
-        capture_output=True,
-        text=True,
-        timeout=40,
+    flutter = os.environ.get("FORESIGHT_FLUTTER_EXECUTABLE")
+    platform = "macos" if sys.platform == "darwin" else "linux"
+    assert flutter, "The desktop facade probe requires the native Flutter runner"
+    assert os.environ.get("FORESIGHT_" + platform.upper() + "_UI_TEST") == "1", (
+        "Run the desktop facade probe on the configured isolated native display"
     )
-    assert result.returncode == 0, result.stdout + "\n" + result.stderr
-    report = json.loads(result.stdout)
+    report_path = running["root"] / "remote-facade.json"
+    env = {**running["env"], "FORESIGHT_REMOTE_FACADE_REPORT": str(report_path)}
+    if platform == "linux":
+        assert env.get("DISPLAY"), "An isolated X display is required"
+        env["GDK_BACKEND"] = "x11"
+    else:
+        env.pop("GDK_BACKEND", None)
+    # P0 requires a native desktop image for its lifetime reservation. The
+    # ordinary Dart interpreter is deliberately refused, even in development.
+    run_tests(
+        "desktop", ["integration_test/remote_facade_test.dart"], 1, env,
+        ROOT / "test-results/service/remote-facade", "remote-facade",
+        flutter=flutter, device=platform, timeout=300,
+    )
+    report = json.loads(report_path.read_text())
     assert report["read_only"] and report["changes"] and report["reconnected"]
     assert report["no_mutation_replay"]
     assert report["browser_invitation_received"] and report["oauth_cancelled_cleanly"]
