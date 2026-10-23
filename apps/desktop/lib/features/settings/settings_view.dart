@@ -484,7 +484,7 @@ extension _SettingsView on SettingsController {
       onPressed:
           _operations.busy ||
               _meetings.recording != null ||
-              !preparedNeedsModel(_reads.model('embedding'), 'embedding')
+              !preparedNeedsModel(_reads.currentModel('embedding'), 'embedding')
           ? null
           : () => chooseGemma(embeddingOnly: true),
       child: Text(

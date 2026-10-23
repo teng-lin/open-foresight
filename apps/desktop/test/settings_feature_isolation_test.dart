@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -125,7 +126,134 @@ class _MeetingFacts implements MeetingActivity {
       throw UnimplementedError('${invocation.memberName}');
 }
 
+class _ModelConnection extends ControllerConnection {
+  _ModelConnection(super.application);
+  _ModelReader? _reader;
+  @override
+  _ModelReader get store => _reader ??= _ModelReader(super.store);
+}
+
+class _ModelReader implements StoreReader {
+  _ModelReader(this.delegate);
+  final StoreReader delegate;
+  // Closed by the owning fixture.
+  // ignore: close_sinks
+  final modelsReply =
+      StreamController<ReadResult<List<ModelRegistration>>>.broadcast(
+        sync: true,
+      );
+  @override
+  String get workspaceEpoch => delegate.workspaceEpoch;
+  @override
+  String get dataRevision => delegate.dataRevision;
+  @override
+  Stream<ReadResult<T>> watch<T>(ReadQuery<T> query) =>
+      query.projection == 'models'
+      ? modelsReply.stream.map((result) => result.asType<T>())
+      : delegate.watch(query);
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw StateError(
+    'Unexpected synchronous model read ${invocation.memberName}',
+  );
+}
+
 void main() {
+  testWidgets(
+    'same-owner preview displays a model but cannot certify embedding readiness',
+    (tester) async {
+      final root = createTestTempDirectorySync('settings-preview-');
+      final model = File('${root.path}/embedding.litertlm')
+        ..writeAsStringSync('UI fixture');
+      final connection = _ModelConnection(
+        Application(
+          Domain(
+            Store('${root.path}/app.db'),
+            OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+          ),
+        ),
+      );
+      final host = _Host(connection), integrations = _IntegrationPorts();
+      final controller = SettingsController(
+        host: host,
+        navigation: host,
+        operations: host,
+        lifecycle: host,
+        integrations: integrations,
+        integrationCommands: integrations,
+        meetings: _MeetingFacts(),
+      );
+      controller.start();
+      await tester.binding.setSurfaceSize(const Size(1400, 1000));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: StatefulBuilder(
+            builder: (context, rebuild) {
+              host.context = context;
+              host.rebuild = rebuild;
+              return Scaffold(body: SettingsView(controller));
+            },
+          ),
+        ),
+      );
+      addTearDown(() async {
+        controller.dispose();
+        connection.close();
+        await connection.store.modelsReply.close();
+        host.serviceUiRevision.dispose();
+        host.captureVolumes.dispose();
+        await tester.binding.setSurfaceSize(null);
+      });
+      final registration = ModelRegistration.fromRow({
+        'kind': 'embedding',
+        'path': model.path,
+        'backend': 'litert_lm_embedding_cpu',
+      });
+      void publish(ReadFreshness freshness) => connection.store.modelsReply.add(
+        ReadResult(
+          freshness: freshness,
+          value: [registration],
+          requestTag: 'fixture',
+          sequence: 0,
+        ),
+      );
+      publish(ReadFreshness.preview);
+      await tester.pumpAndSettle();
+      expect(find.text('Download EmbeddingGemma 2'), findsOneWidget);
+      expect(
+        tester
+            .widget<OutlinedButton>(
+              find.widgetWithText(OutlinedButton, 'Download EmbeddingGemma 2'),
+            )
+            .onPressed,
+        isNotNull,
+      );
+      publish(ReadFreshness.current);
+      await tester.pumpAndSettle();
+      expect(find.text('Embedding model ready'), findsOneWidget);
+      expect(
+        tester
+            .widget<OutlinedButton>(
+              find.widgetWithText(OutlinedButton, 'Embedding model ready'),
+            )
+            .onPressed,
+        isNull,
+      );
+      publish(ReadFreshness.preview);
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<OutlinedButton>(
+              find.widgetWithText(OutlinedButton, 'Download EmbeddingGemma 2'),
+            )
+            .onPressed,
+        isNotNull,
+      );
+      controller.dispose();
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    },
+  );
+
   testWidgets(
     'Settings mounts with ports and owns setup state without a Workspace',
     (tester) async {
