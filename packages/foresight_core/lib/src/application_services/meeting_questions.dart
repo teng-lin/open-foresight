@@ -37,6 +37,9 @@ final class MeetingQuestions {
       throw RpcError(RpcErrorCode.cancelled, 'Generation cancelled');
     }
     final meeting = queries.meeting(id);
+    final previous = jsonEncode(
+      store.contentHistory.meetingArtifacts(id, kind),
+    );
     final text = meetings.finalTranscriptText(id).join('\n');
     if (text.isEmpty) throw StateError('No final transcript');
     final contextTokens =
@@ -61,6 +64,13 @@ final class MeetingQuestions {
         domain.checkWorkspace(generation);
         if (current != null && !current()) {
           throw RpcError(RpcErrorCode.cancelled, 'Generation cancelled');
+        }
+        if (jsonEncode(store.contentHistory.meetingArtifacts(id, kind)) !=
+            previous) {
+          throw RpcError(
+            RpcErrorCode.cancelled,
+            'Questions changed during generation; retry to review the current revision',
+          );
         }
         store.artifact(
           id,

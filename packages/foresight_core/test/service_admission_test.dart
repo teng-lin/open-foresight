@@ -144,6 +144,18 @@ void main() {
     },
   );
 
+  test('queued desktop saves preserve the newest owner write', () async {
+    final store = service.domain.store;
+    final id = store.saveNote(null, 'original', 'trusted');
+    await attach();
+    await Future.wait([
+      for (final body in ['first save', 'newest save'])
+        host.call('notes.save', {'id': id, 'title': 'desktop', 'body': body}),
+    ]);
+    expect(store.notes().single['body'], 'newest save');
+    expect(approvals, isEmpty);
+  });
+
   test(
     'a replacement approval cannot authorize bytes changed by the desktop',
     () async {

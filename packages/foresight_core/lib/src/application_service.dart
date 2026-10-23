@@ -687,7 +687,8 @@ class ApplicationService {
         // A request from a cleared workspace fails before it can
         // ask the desktop for approval.
         application.checkRequestWorkspaceEpoch(typed);
-        if (typed.operation.descriptor.approval == ApprovalPolicy.overwrite) {
+        if (typed.operation.descriptor.approval == ApprovalPolicy.overwrite &&
+            !access.isHost(client)) {
           final before = replacementSnapshot(
             domain.store.contentHistory,
             typed,

@@ -883,11 +883,26 @@ class GoogleAuth implements GoogleAccount {
           await _revokeBestEffort(token);
         }
       }
-      if (journalError != null) _cleanup.add(cleanupKeys);
-      await _cleanup.retry(
-        revoke: _revokeBestEffort,
-        activeKeys: _activeCredentialKeys,
-      );
+      if (journalError != null) {
+        try {
+          _cleanup.add(cleanupKeys);
+          journalError = null;
+        } catch (error) {
+          journalError = error;
+        }
+      }
+      // Even persistent journal I/O failure must not prevent local deletion.
+      // retry retains unsuccessful journal commits in memory for maintenance.
+      try {
+        await _cleanup.retry(
+          revoke: _revokeBestEffort,
+          activeKeys: _activeCredentialKeys,
+        );
+      } catch (_) {
+        if (journalError != null) throw journalError!;
+        rethrow;
+      }
+      if (journalError != null) throw journalError!;
     }).whenComplete(() => _forgetting = null);
   }
 

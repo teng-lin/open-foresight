@@ -508,6 +508,9 @@ void main() {
       secrets = vault;
       auth = createAuth();
       await auth.signIn(fixture.consent);
+      identity['sub'] = 'second-account';
+      await auth.addAccount(fixture.consent);
+      final keys = vault.values.keys.toList();
       final journal = Directory('${root.path}/credential-cleanup.json')
         ..createSync();
       final forgetting = Future<void>.sync(auth.forget);
@@ -515,6 +518,8 @@ void main() {
       expect(auth.connected, isFalse);
       expect(File('${root.path}/tokens.json').existsSync(), isFalse);
       await expectLater(forgetting, throwsA(isA<FileSystemException>()));
+      expect(vault.deleted, containsAll(keys));
+      expect(vault.values, isEmpty);
       journal.deleteSync();
       await auth.retryCredentialCleanup();
       expect(vault.values, isEmpty);
