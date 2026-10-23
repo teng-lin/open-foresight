@@ -23,6 +23,112 @@ void main() {
   tearDown(() => f.close());
 
   test(
+    'reenabling approvals waits for an obsolete failed attach then retries',
+    () async {
+      final entered = Completer<void>();
+      late Socket heldSocket;
+      late Map<String, dynamic> heldRequest;
+      var attaches = 0;
+      f.handler = (socket, request) {
+        if (request['method'] == Operation.securityAttachDesktop.wire &&
+            ++attaches == 1) {
+          heldSocket = socket;
+          heldRequest = request;
+          entered.complete();
+        } else {
+          f.reply(socket, request, true);
+        }
+      };
+      final old = f.remote.enableDesktopApprovals((_) {});
+      await entered.future;
+      await f.remote.disableDesktopApprovals();
+      final next = f.remote.enableDesktopApprovals((_) {});
+      final completed = expectLater(next, completes);
+      heldSocket.writeln(
+        jsonEncode({
+          'id': heldRequest['id'],
+          'error': RpcError(RpcErrorCode.denied, 'Obsolete attach').toJson(),
+        }),
+      );
+      await old;
+      await completed;
+      expect(attaches, 2);
+    },
+  );
+
+  test(
+    'concurrent current-generation attach failures remain observable',
+    () async {
+      final entered = Completer<void>();
+      late Socket heldSocket;
+      late Map<String, dynamic> heldRequest;
+      var attaches = 0;
+      f.handler = (socket, request) {
+        attaches++;
+        heldSocket = socket;
+        heldRequest = request;
+        if (!entered.isCompleted) entered.complete();
+      };
+      final first = f.remote.enableDesktopApprovals((_) {});
+      final firstError = expectLater(first, throwsRpcCode(RpcErrorCode.denied));
+      await entered.future;
+      final second = f.remote.enableDesktopApprovals((_) {});
+      final secondError = expectLater(
+        second,
+        throwsRpcCode(RpcErrorCode.denied),
+      );
+      heldSocket.writeln(
+        jsonEncode({
+          'id': heldRequest['id'],
+          'error': RpcError(RpcErrorCode.denied, 'Current attach').toJson(),
+        }),
+      );
+      await Future.wait([firstError, secondError]);
+      expect(attaches, 1);
+    },
+  );
+
+  test(
+    'new visibility ignores an obsolete failed update after reenable',
+    () async {
+      f.handler = (socket, request) => f.reply(socket, request, true);
+      await f.remote.enableDesktopApprovals((_) {});
+      final entered = Completer<void>();
+      late Socket heldSocket;
+      late Map<String, dynamic> heldRequest;
+      var updates = 0;
+      f.handler = (socket, request) {
+        if (request['method'] == Operation.securityDesktopVisibility.wire &&
+            ++updates == 1) {
+          heldSocket = socket;
+          heldRequest = request;
+          entered.complete();
+        } else {
+          f.reply(socket, request, true);
+        }
+      };
+      final old = f.remote.setDesktopVisible(true);
+      await entered.future;
+      await f.remote.disableDesktopApprovals();
+      await f.remote.enableDesktopApprovals((_) {});
+      final hidden = f.remote.setDesktopVisible(false);
+      final completed = expectLater(hidden, completes);
+      heldSocket.writeln(
+        jsonEncode({
+          'id': heldRequest['id'],
+          'error': RpcError(
+            RpcErrorCode.denied,
+            'Obsolete visibility',
+          ).toJson(),
+        }),
+      );
+      await old;
+      await completed;
+      expect(updates, 2);
+    },
+  );
+
+  test(
     'hiding during attachment reconciles the latest visibility once',
     () async {
       await f.remote.setDesktopVisible(true);

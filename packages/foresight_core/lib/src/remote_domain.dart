@@ -76,8 +76,10 @@ class RemoteDomain
   bool? _attachedVisible;
   bool _desktopDisplaced = false;
   int _approvalGeneration = 0;
-  final _attachments = <ServiceClient, Future<void>>{};
-  final _visibilityUpdates = <ServiceClient, Future<void>>{};
+  final _attachments =
+      <ServiceClient, ({int generation, Future<void> future})>{};
+  final _visibilityUpdates =
+      <ServiceClient, ({int generation, Future<void> future})>{};
   bool _approvalsCurrent(int generation) =>
       !_disposed &&
       _approvalEvents != null &&
@@ -113,15 +115,23 @@ class RemoteDomain
       // Reconnect and lifecycle callbacks share one token-consuming attach.
       final existing = _attachments[connection];
       if (existing != null) {
-        await existing;
+        try {
+          await existing.future;
+        } catch (_) {
+          // A disabled host's request must settle before consuming a fresh
+          // token, but its failure does not belong to the new host generation.
+          if (existing.generation == generation) rethrow;
+        }
         continue;
       }
       final pending = _performDesktopAttach(connection, generation);
-      _attachments[connection] = pending;
+      _attachments[connection] = (generation: generation, future: pending);
       try {
         await pending;
       } finally {
-        unawaited(_attachments.remove(connection));
+        if (identical(_attachments[connection]?.future, pending)) {
+          _attachments.remove(connection);
+        }
       }
     }
   }
@@ -153,7 +163,11 @@ class RemoteDomain
         _attachedVisible != _desktopVisible) {
       final existing = _visibilityUpdates[connection];
       if (existing != null) {
-        await existing;
+        try {
+          await existing.future;
+        } catch (_) {
+          if (existing.generation == generation) rethrow;
+        }
         continue;
       }
       final visible = _desktopVisible;
@@ -166,11 +180,13 @@ class RemoteDomain
           _attachedVisible = visible;
         }
       });
-      _visibilityUpdates[connection] = update;
+      _visibilityUpdates[connection] = (generation: generation, future: update);
       try {
         await update;
       } finally {
-        unawaited(_visibilityUpdates.remove(connection));
+        if (identical(_visibilityUpdates[connection]?.future, update)) {
+          _visibilityUpdates.remove(connection);
+        }
       }
     }
   }
