@@ -30,7 +30,8 @@ class _IntegrationsController extends _FeatureController {
 
   String audioDeviceState = '';
 
-  Map<String, dynamic> captureCapabilities = {};
+  AudioAccessPresentation captureCapabilities =
+      AudioAccessPresentation.fromWire(const {});
 
   String captureCapabilityError = '';
 
@@ -42,19 +43,17 @@ class _IntegrationsController extends _FeatureController {
         'denied': 'Denied',
         'restricted': 'Restricted by system policy',
         'not_determined': 'Not requested',
-      }[captureCapabilities['microphone']] ??
+      }[captureCapabilities.microphone] ??
       'Checking';
 
-  bool get granolaCalendar => d.googleStatus['provider'] == 'granola';
-  bool get driveAvailable => d.googleStatus['driveAvailable'] != false;
+  GooglePresentation get googlePresentation => d.googlePresentation;
+  bool get granolaCalendar => googlePresentation.provider == 'granola';
+  bool get driveAvailable => googlePresentation.driveAvailable;
 
   Future<void> connectGranolaCalendar() async {
-    final state =
-        await d.command(Operation.googleConfigure, {'provider': 'granola'})
-            as Map;
-    d.googleStatus
-      ..clear()
-      ..addAll(Map<String, dynamic>.from(state));
+    // The service flushes the provider status before the configure reply.
+    // The connection owns that snapshot; features only read its typed value.
+    await d.command(Operation.googleConfigure, {'provider': 'granola'});
     await connectGoogle();
   }
 
@@ -63,29 +62,29 @@ class _IntegrationsController extends _FeatureController {
     await activateWindow(null);
   }
 
-  bool get googleSyncing => d.googleStatus['syncing'] == true;
+  bool get googleSyncing => googlePresentation.syncing;
 
   bool get systemAudioSetupComplete =>
-      captureCapabilities['system_audio'] != 'denied' &&
-      captureCapabilities['system_audio_request'] != 'failed' &&
+      captureCapabilities.systemAudio != 'denied' &&
+      captureCapabilities.systemAudioRequest != 'failed' &&
       (meetingFeature.systemAudioSetupReviewed ||
-          captureCapabilities['permission_verified'] == true);
+          captureCapabilities.permissionVerified);
 
   String get systemAudioAccessLabel {
-    if (captureCapabilities['system_audio'] == 'denied') {
+    if (captureCapabilities.systemAudio == 'denied') {
       return 'Not allowed · Enable Open Foresight in System Settings.';
     }
-    if (captureCapabilities['system_audio_request'] == 'failed') {
+    if (captureCapabilities.systemAudioRequest == 'failed') {
       return 'Setup needs attention · Retry the access request.';
     }
-    if (captureCapabilities['permission_verified'] == true) return 'Allowed';
+    if (captureCapabilities.permissionVerified) return 'Allowed';
     if (meetingFeature.systemAudioSetupReviewed) {
       return 'Setup complete · Access is checked when recording starts.';
     }
-    if (captureCapabilities['system_audio_request'] == 'completed') {
+    if (captureCapabilities.systemAudioRequest == 'completed') {
       return 'Request completed · Finish system audio setup.';
     }
-    if (captureCapabilities['system_audio_request'] == 'requesting') {
+    if (captureCapabilities.systemAudioRequest == 'requesting') {
       return 'Waiting for the macOS access request…';
     }
     return 'Request access for audio playing on your Mac.';
@@ -273,13 +272,13 @@ class _IntegrationsController extends _FeatureController {
 
   Future<void> refreshCaptureCapabilities() async {
     try {
-      final result = await d.command(Operation.audioCapabilities) as Map;
+      final result = AudioAccessPresentation.fromWire(
+        await d.command(Operation.audioCapabilities) as Map,
+      );
       if (mounted)
         setState(() {
-          captureCapabilities = Map<String, dynamic>.from(result);
-          captureCapabilityError =
-              result['microphone_purpose_present'] == false ||
-                  result['system_audio_purpose_present'] == false
+          captureCapabilities = result;
+          captureCapabilityError = result.purposeMissing
               ? 'The recording service is missing audio access configuration. Reinstall Open Foresight.'
               : '';
         });
@@ -290,11 +289,13 @@ class _IntegrationsController extends _FeatureController {
 
   Future<void> requestMicrophoneAccess() async {
     try {
-      final result = await d.command(Operation.audioRequestMicrophone) as Map;
+      final result = AudioAccessPresentation.fromWire(
+        await d.command(Operation.audioRequestMicrophone) as Map,
+      );
       if (mounted)
         setState(() {
-          captureCapabilities = Map<String, dynamic>.from(result);
-          captureCapabilityError = result['granted'] == true
+          captureCapabilities = result;
+          captureCapabilityError = result.granted
               ? ''
               : 'Microphone access was denied. Enable Open Foresight in System Settings > Privacy & Security > Microphone, then refresh access status.';
         });
@@ -306,17 +307,18 @@ class _IntegrationsController extends _FeatureController {
 
   Future<bool> ensureRecordingAccess() async {
     if (!Platform.isMacOS) return true;
-    final capabilities = await d.command(Operation.audioCapabilities) as Map;
+    final capabilities = AudioAccessPresentation.fromWire(
+      await d.command(Operation.audioCapabilities) as Map,
+    );
     if (!mounted || !context.mounted) return false;
-    if (capabilities['microphone_purpose_present'] == false ||
-        capabilities['system_audio_purpose_present'] == false) {
+    if (capabilities.purposeMissing) {
       throw StateError(
         'The recording service is missing audio access configuration. Reinstall Open Foresight.',
       );
     }
-    if (capabilities['microphone'] == 'authorized') {
+    if (capabilities.microphoneAuthorized) {
       if (meetingFeature.systemAudioSetupReviewed ||
-          capabilities['system_audio_request'] == 'completed')
+          capabilities.systemAudioRequest == 'completed')
         return true;
       return setupSystemAudioAccess(forRecording: true);
     }
@@ -342,7 +344,7 @@ class _IntegrationsController extends _FeatureController {
     if (allow != true || !mounted) return false;
     await requestMicrophoneAccess();
     if (!mounted || !context.mounted) return false;
-    if (captureCapabilities['microphone'] != 'authorized') {
+    if (captureCapabilities.microphone != 'authorized') {
       throw StateError(
         captureCapabilityError.isNotEmpty
             ? captureCapabilityError
@@ -350,7 +352,7 @@ class _IntegrationsController extends _FeatureController {
       );
     }
     if (meetingFeature.systemAudioSetupReviewed ||
-        capabilities['system_audio_request'] == 'completed')
+        capabilities.systemAudioRequest == 'completed')
       return true;
     return setupSystemAudioAccess(forRecording: true);
   }
@@ -372,7 +374,7 @@ class _IntegrationsController extends _FeatureController {
         capabilitiesChanged: (result) {
           if (mounted)
             setState(
-              () => captureCapabilities = {...captureCapabilities, ...result},
+              () => captureCapabilities = captureCapabilities.merge(result),
             );
         },
       ),

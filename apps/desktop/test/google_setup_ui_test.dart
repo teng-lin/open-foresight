@@ -1,4 +1,6 @@
 import 'package:foresight_test_support/test_paths.dart';
+import 'package:foresight_core/desktop.dart'
+    show DesktopPresentation, Operation;
 import 'desktop_connection_fixture.dart';
 import 'pump_until.dart';
 import 'dart:io';
@@ -27,6 +29,26 @@ class BundledGoogleDomain extends Domain {
   BundledGoogleDomain(super.store, super.helper, this.auth);
 }
 
+// The remote decoder owns status. A configure reply must arrive after the
+// provider event; a feature must not make that snapshot writable to continue.
+class ReadonlyGoogleStatusConnection extends TestDesktopConnection {
+  ReadonlyGoogleStatusConnection(super.application);
+  bool configuredStatusBeforeReply = false;
+  @override
+  Map<String, dynamic> get googleStatus => Map.unmodifiable(super.googleStatus);
+  @override
+  Future<Object?> command(
+    Operation operation, [
+    Map<String, dynamic> args = const {},
+  ]) async {
+    final result = await super.command(operation, args);
+    if (operation == Operation.googleConfigure) {
+      configuredStatusBeforeReply = googlePresentation.provider == 'granola';
+    }
+    return result;
+  }
+}
+
 void main() {
   testWidgets(
     'Granola calendar option configures Calendar only and disables every Drive import',
@@ -40,8 +62,9 @@ void main() {
       );
       final domain = BundledGoogleDomain(store, helper, auth);
       final app = Application(domain, auth: domain.auth);
+      final connection = ReadonlyGoogleStatusConnection(app);
       await tester.pumpWidget(
-        Foresight(TestDesktopConnection(app), deviceLoader: () async => []),
+        Foresight(connection, deviceLoader: () async => []),
       );
       await tester.tap(find.text('Settings'));
       await tester.pumpAndSettle();
@@ -53,6 +76,7 @@ void main() {
       await tester.runAsync(() => tester.tap(connect));
       await pumpUntil(tester, () => auth.invitations == 1);
       await tester.pumpAndSettle();
+      expect(connection.configuredStatusBeforeReply, true);
       expect(auth.viaGranola, true);
       expect(auth.invitations, 1);
       expect(find.textContaining('Drive is unavailable.'), findsWidgets);

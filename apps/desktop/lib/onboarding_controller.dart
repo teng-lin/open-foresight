@@ -77,9 +77,7 @@ class _OnboardingController extends _FeatureController {
           'Microphone access',
           integrationFeature.requestMicrophoneAccess,
           subtitle: integrationFeature.microphoneAccessLabel,
-          complete:
-              integrationFeature.captureCapabilities['microphone'] ==
-              'authorized',
+          complete: integrationFeature.captureCapabilities.microphoneAuthorized,
         ),
         action(
           Icons.volume_up_outlined,

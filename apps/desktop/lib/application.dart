@@ -1,4 +1,5 @@
 import 'desktop_environment.dart';
+import 'features/integrations/audio_access.dart';
 import 'shell/workspace_tab.dart';
 import 'presentation/workspace_presentation.dart';
 import 'system_audio_setup_dialog.dart';

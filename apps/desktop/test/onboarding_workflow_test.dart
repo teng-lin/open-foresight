@@ -1,3 +1,4 @@
+import 'package:open_foresight/features/integrations/audio_access.dart';
 import 'package:open_foresight/desktop_environment.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:foresight_core/remote.dart' show StoreReader;
@@ -207,10 +208,11 @@ void main() {
       );
       final dynamic shell = tester.state(find.byType(Workspace));
       shell.update(
-        () => shell.integrationFeature.captureCapabilities = {
-          'system_audio': 'denied',
-          'system_audio_request': 'failed',
-        },
+        () => shell.integrationFeature.captureCapabilities =
+            AudioAccessPresentation.fromWire({
+              'system_audio': 'denied',
+              'system_audio_request': 'failed',
+            }),
       );
       await tester.pumpAndSettle();
       expect(

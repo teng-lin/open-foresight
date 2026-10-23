@@ -523,15 +523,15 @@ void main() {
 
       final dynamic state = tester.state(find.byType(Workspace));
       expect(
-        state.integrationFeature.captureCapabilities['microphone'],
+        state.integrationFeature.captureCapabilities.microphone,
         'authorized',
       );
       expect(
-        state.integrationFeature.captureCapabilities['system_audio_request'],
+        state.integrationFeature.captureCapabilities.systemAudioRequest,
         'completed',
       );
       expect(
-        state.integrationFeature.captureCapabilities['permission_verified'],
+        state.integrationFeature.captureCapabilities.permissionVerified,
         false,
       );
       expect(find.text('Open System Settings'), findsOneWidget);

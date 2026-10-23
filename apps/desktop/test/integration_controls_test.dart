@@ -1,3 +1,4 @@
+import 'package:open_foresight/features/integrations/audio_access.dart';
 import 'package:open_foresight/shell/workspace_tab.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -128,12 +129,16 @@ void main() {
         (<String, dynamic>{}, 'Request access', false),
       ];
       for (final (capabilities, label, complete) in cases) {
-        integration.captureCapabilities = capabilities;
+        integration.captureCapabilities = AudioAccessPresentation.fromWire(
+          capabilities,
+        );
         expect(integration.systemAudioAccessLabel, startsWith(label));
         expect(integration.systemAudioSetupComplete, complete);
       }
       f.shell.meetingFeature.systemAudioSetupReviewed = true;
-      integration.captureCapabilities = <String, dynamic>{};
+      integration.captureCapabilities = AudioAccessPresentation.fromWire(
+        const {},
+      );
       expect(integration.systemAudioAccessLabel, startsWith('Setup complete'));
       expect(integration.systemAudioSetupComplete, true);
       await tester.pumpAndSettle();
