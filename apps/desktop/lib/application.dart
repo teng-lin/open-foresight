@@ -1,45 +1,34 @@
 import 'desktop_environment.dart';
 import 'features/chat/chat_controller.dart';
+import 'features/meetings/meetings_controller.dart';
+import 'model_setup.dart';
+import 'shell/feature_bridges.dart';
 import 'features/integrations/integrations_controller.dart';
 import 'shell/workspace_tab.dart';
 import 'shell/ports.dart';
 import 'features/settings/settings_controller.dart';
 import 'features/sources/sources_controller.dart';
 import 'presentation/workspace_presentation.dart';
+
 import 'features/onboarding/onboarding_controller.dart';
 
-import 'desktop_reader_adapters.dart';
-import 'service_edit_dialog.dart';
 import 'failure_text.dart';
-import 'feature_request_identity.dart';
 
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
-import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:foresight_core/desktop.dart';
-import 'model_setup.dart';
 import 'app_theme.dart';
-import 'meeting_visuals.dart';
 import 'commands.dart';
 import 'calendar_auth_links.dart';
 import 'desktop_menu.dart';
 import 'account_button.dart';
-import 'meeting_export.dart';
-import 'note_save_scheduler.dart';
-import 'meeting_note_state.dart';
-import 'generated_content.dart';
 import 'agent_approval_surface.dart';
 
-part 'workspace_controller.dart';
-part 'workspace_visuals.dart';
-
-part 'meetings_controller.dart';
-part 'meeting_ai_views.dart';
-part 'shell/legacy_feature_adapters.dart';
+const _blue = workspaceBlue;
+const _ink = workspaceInk;
 
 class Foresight extends StatelessWidget {
   final DesktopConnection domain;
@@ -102,7 +91,7 @@ class _WorkspaceState extends State<Workspace>
         WorkspaceDialogs,
         WorkspaceLifecycle {
   final calendarAuthLinks = CalendarAuthLinks();
-  late final onboardingFeature = OnboardingController(
+  late final OnboardingController onboardingFeature = OnboardingController(
     host: this,
     navigation: this,
     operations: this,
@@ -111,22 +100,32 @@ class _WorkspaceState extends State<Workspace>
     sources: sourceFeature,
     integrations: integrationFeature,
   );
-  late final sourceFeature = SourcesController(
+  late final SourcesController sourceFeature = SourcesController(
     host: this,
     navigation: this,
     operations: this,
     dialogs: this,
     integrations: integrationFeature,
   );
-  late final chatFeature = ChatController(
+  late final ChatController chatFeature = ChatController(
     host: this,
     navigation: this,
     operations: this,
     meetings: meetingPorts,
     sources: sourceFeature,
   );
-  late final meetingFeature = _MeetingsController(this);
-  late final settingsFeature = SettingsController(
+  late final MeetingsController meetingFeature = MeetingsController(
+    host: this,
+    navigation: this,
+    operations: this,
+    dialogs: this,
+    integrations: integrationFeature,
+    integrationCommands: integrationFeature,
+    settings: settingsFeature,
+    chat: chatFeature,
+    chatCommands: chatFeature,
+  );
+  late final SettingsController settingsFeature = SettingsController(
     host: this,
     navigation: this,
     operations: this,
@@ -135,7 +134,7 @@ class _WorkspaceState extends State<Workspace>
     integrationCommands: integrationFeature,
     meetings: meetingPorts,
   );
-  late final integrationFeature = IntegrationsController(
+  late final IntegrationsController integrationFeature = IntegrationsController(
     host: this,
     navigation: this,
     operations: this,
@@ -146,11 +145,14 @@ class _WorkspaceState extends State<Workspace>
     onboarding: onboardingActivity,
   );
 
-  late final PreferenceCommands preferenceCommands = _PreferenceCommands(
+  late final PreferenceCommands preferenceCommands = PreferenceCommandBridge(
     (key, value) => settingsFeature.preference(key, value),
   );
-  late final meetingPorts = _LegacyMeetingPorts(meetingFeature);
-  late final OnboardingActivity onboardingActivity = _OnboardingActivity(
+  late final MeetingPortsBridge meetingPorts = MeetingPortsBridge(
+    () => meetingFeature,
+    () => meetingFeature,
+  );
+  late final OnboardingActivity onboardingActivity = OnboardingActivityBridge(
     () => onboardingFeature.active,
   );
 
@@ -377,15 +379,14 @@ class _WorkspaceState extends State<Workspace>
     unawaited(captureLevels?.cancel());
     unawaited(connectionChanges?.cancel());
     captureVolumes.dispose();
-    unawaited(meetingFeature.noteEnhancementChanges?.cancel());
     void releaseDomain() {
       d.close();
     }
 
     void closeDomain() => releaseDomain();
 
-    final hasPendingNoteSave = meetingFeature.meetingNoteSaves.hasWork;
-    final pendingNoteSave = meetingFeature.meetingNoteSaves.close();
+    final hasPendingNoteSave = meetingFeature.hasPendingNoteSave;
+    final pendingNoteSave = meetingFeature.dispose();
     if (!hasPendingNoteSave)
       closeDomain();
     else
@@ -405,13 +406,6 @@ class _WorkspaceState extends State<Workspace>
     integrationFeature.dispose();
     sourceFeature.dispose();
     chatFeature.dispose();
-    meetingFeature.recording?.dispose();
-    for (final c in [
-      meetingFeature.meetingNotesController,
-      meetingFeature.meetingSearchController,
-    ]) {
-      c.dispose();
-    }
     super.dispose();
   }
 
@@ -873,7 +867,7 @@ class _WorkspaceState extends State<Workspace>
                                 ),
                                 WorkspaceTab.chat => chatFeature.chat(),
                                 WorkspaceTab.notes => sourceFeature.notes(),
-                                WorkspaceTab.meetings => _MeetingsView(
+                                WorkspaceTab.meetings => MeetingsView(
                                   meetingFeature,
                                 ),
                                 WorkspaceTab.models => settingsFeature.models(),

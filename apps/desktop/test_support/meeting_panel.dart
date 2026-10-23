@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/meeting_visuals.dart';
+import 'package:open_foresight/features/meetings/meeting_visuals.dart';
 
 /// Use the same visible tab or overflow menu as a desktop user.
 Future<void> selectMeetingPanel(WidgetTester tester, String panel) async {

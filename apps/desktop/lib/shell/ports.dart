@@ -57,4 +57,3 @@ abstract interface class WorkspaceLifecycle {
   void resetWorkspaceViews();
   void serviceChanged();
 }
-

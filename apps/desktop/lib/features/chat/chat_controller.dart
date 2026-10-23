@@ -149,6 +149,7 @@ class ChatController extends ChangeNotifier implements ChatPort {
   @override
   void citation(Map<String, Object?> citation) =>
       cite(Citation.fromRow(citation));
+  @override
   void cite(Citation citation) {
     if (citation.kind == 'web') {
       unawaited(_operations.run(() => _openCitation(citation)));

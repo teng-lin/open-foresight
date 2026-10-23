@@ -10,7 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/main.dart';
 import 'package:foresight_core/src/domain.dart';
 import 'package:foresight_core/src/store.dart';
-import 'package:open_foresight/note_save_scheduler.dart';
+import 'package:open_foresight/features/meetings/note_save_scheduler.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 class GatedNoteDomain extends CommandFixtureDomain {

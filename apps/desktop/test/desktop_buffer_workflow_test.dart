@@ -8,7 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/remote.dart';
 import 'package:foresight_core/src/google_auth.dart';
-import 'package:open_foresight/meeting_export.dart';
+import 'package:open_foresight/features/meetings/meeting_export.dart';
 import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
 import 'controller_fixture.dart';
 import 'pump_until.dart';

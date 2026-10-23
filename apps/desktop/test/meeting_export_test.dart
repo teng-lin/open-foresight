@@ -8,7 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:intl/intl.dart';
-import 'package:open_foresight/meeting_export.dart';
+import 'package:open_foresight/features/meetings/meeting_export.dart';
 import 'package:open_foresight/generated_content.dart';
 import 'package:foresight_core/src/store.dart';
 import 'package:foresight_core/src/domain.dart';
