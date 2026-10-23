@@ -6,6 +6,23 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve Chat history scroll position while its source scope refreshes.
+
+- Refresh Stats at the local Monday boundary and after an awake timezone change, keeping chart labels aligned with the displayed calendar period.
+
+- Bind desktop approval to the verified local desktop executable, rotate its attach capability, and preserve its host slot while hidden. Hidden windows refuse new capture and finish active capture; requests through the quick-meeting socket require visible confirmation.
+- Packaged installations refuse model executables outside their installation directory, including saved runtimes restored after restart and direct Linux service/MCP launches. Select a bundled runtime in model settings to recover an older external registration.
+- Keep using the bundled LiteRT worker when generation setup or registration names a retired runner.
+- Clear the approval warning after the visible desktop successfully reconnects.
+- Generate summaries from meeting-list previews, retain the selected note when a save finishes late, and finish runtime setup after an onboarding retry.
+- Keep existing notes unsavable until their body loads successfully, and preserve editor drafts when retrying a failed load.
+- Show failures from settings and meeting controls, and dismiss the sign-in dialog without closing another dialog above it.
+- Keep desktop widget tests isolated from desktop shortcuts, application configuration, URI launchers and notifications.
+- Release the activation listener when desktop startup cannot protect its socket.
+- Discover the usual account folders when macOS launches without a HOME environment variable.
+
 ## [0.1.3] - 2026-10-21
 
 ### Added

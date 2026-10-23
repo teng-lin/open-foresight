@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:clock/clock.dart';
@@ -17,6 +18,32 @@ import 'application_operations_test.dart' show ArtifactGenerator;
 import 'note_transcript_cache_application_test.dart'
     show EmbeddingService, PromptRuntime;
 import 'package:test/test.dart';
+
+class RecordedTimer implements Timer {
+  RecordedTimer(this.delay, this.callback) {
+    timer = Timer(delay, () {
+      fired = true;
+      callback();
+    });
+  }
+  final Duration delay;
+  final void Function() callback;
+  late final Timer timer;
+  bool cancelled = false, fired = false;
+  @override
+  bool get isActive => timer.isActive;
+  @override
+  int get tick => timer.tick;
+  @override
+  void cancel() {
+    cancelled = true;
+    timer.cancel();
+  }
+
+  @override
+  String toString() =>
+      '$delay (active: $isActive, cancelled: $cancelled, fired: $fired)';
+}
 
 class ResumeRag extends HeldPing {
   final configuring = Completer<void>(), configured = Completer<void>();
@@ -113,7 +140,7 @@ void main() {
   late Map<String, String> environment;
   var now = DateTime.utc(2026, 10, 20);
   DateTime Function()? readClock;
-  Duration? lastTimerDelay;
+  final timers = <RecordedTimer>[];
   bool editingNotes = false;
   Timer? enhancementTimer;
   void Function()? fireEnhancement;
@@ -128,16 +155,17 @@ void main() {
     profile = ProfilePaths('${root.path}/d', '${root.path}/r');
     now = DateTime.utc(2026, 10, 20);
     readClock = null;
-    lastTimerDelay = null;
+    timers.clear();
     editingNotes = false;
     enhancementTimer = null;
     fireEnhancement = null;
     service = await ApplicationService.start(
       profile,
+      desktopPeerVerifier: trustInProcessDesktop,
       clock: Clock(() => readClock?.call() ?? now),
       createTimer: (delay, callback) {
-        lastTimerDelay = delay;
-        final timer = Timer(delay, callback);
+        final timer = RecordedTimer(delay, callback);
+        timers.add(timer);
         if (editingNotes &&
             enhancementTimer == null &&
             delay == const Duration(seconds: 30)) {
@@ -170,10 +198,40 @@ void main() {
     final client = await ServiceClient.connect(service.path);
     addTearDown(client.close);
     await client.call(host ? 'security.attach_desktop' : 'status', {
+      'visible': true,
       'desktop': true,
       'token': File('${profile.data}/.desktop-capability').readAsStringSync(),
     });
     return client;
+  }
+
+  List<RecordedTimer> activeLifetimeTimers() => timers
+      .where(
+        (timer) =>
+            timer.isActive && timer.delay != const Duration(milliseconds: 100),
+      )
+      .toList();
+
+  void expectPeriodicLifetimeCheck() {
+    expect(activeLifetimeTimers().map((timer) => timer.delay), [
+      const Duration(seconds: 30),
+    ], reason: '$timers');
+    expect(
+      timers.where((timer) => timer.delay <= Duration.zero),
+      isEmpty,
+      reason:
+          'Gated work must not schedule a zero-delay lifetime spin: $timers',
+    );
+  }
+
+  void interleaveStatusTimer() {
+    // Interleave the 100 ms timer used by heartbeat broadcasts after the
+    // lifetime check. The shared factory's last call cannot identify its owner.
+    final timer = service.domain.createTimer(
+      const Duration(milliseconds: 100),
+      () {},
+    );
+    addTearDown(timer.cancel);
   }
 
   Future<void> departed() =>
@@ -235,7 +293,11 @@ void main() {
       if (!rag.release.isCompleted) rag.release.complete();
       if (!rag.configured.isCompleted) rag.configured.complete();
     });
-    service = await ApplicationService.start(profile, clock: Clock(() => now));
+    service = await ApplicationService.start(
+      profile,
+      desktopPeerVerifier: trustInProcessDesktop,
+      clock: Clock(() => now),
+    );
     agent = await ServiceClient.connect(service.path);
     return body(rag);
   }
@@ -356,7 +418,7 @@ void main() {
       expect(service.desktopShutdownScheduled, isTrue);
       final departure = service.lastDesktopDeparture;
       final deadline = departure!.add(const Duration(seconds: 1));
-      final scheduled = lastTimerDelay;
+      final scheduled = activeLifetimeTimers().single.delay;
       now = now.add(const Duration(milliseconds: 200));
       await expectLater(
         agent.call('notes.save', {'title': 12, 'body': 'bad'}),
@@ -372,7 +434,7 @@ void main() {
       expect(service.lastAgentActivity, isNull);
       expect(service.lastDesktopDeparture, departure);
       expect(service.desktopShutdownScheduled, isTrue);
-      expect(lastTimerDelay, scheduled);
+      expect(activeLifetimeTimers().map((timer) => timer.delay), [scheduled]);
       expect((await lifetime())['exit_after'], deadline.millisecondsSinceEpoch);
       now = deadline;
       await tick();
@@ -733,7 +795,8 @@ void main() {
       await backgroundRefusal();
       // A passed grace with executing work retains the periodic check instead
       // of repeatedly scheduling a zero-delay timer while that work is gated.
-      expect(lastTimerDelay, const Duration(seconds: 30));
+      interleaveStatusTimer();
+      expectPeriodicLifetimeCheck();
       rag.release.complete();
       await work;
       await exited();
@@ -773,7 +836,8 @@ void main() {
       await lifetime();
       expect(service.domain.mutating, 1);
       expect(service.domain.store.sources.single['state'], 'indexing');
-      expect(lastTimerDelay, const Duration(seconds: 30));
+      interleaveStatusTimer();
+      expectPeriodicLifetimeCheck();
       rag.release.complete();
       await exited();
       final store = Store('${profile.data}/application.db');

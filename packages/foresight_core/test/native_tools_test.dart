@@ -3,6 +3,7 @@ import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ffi';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:test/test.dart';
 
@@ -112,6 +113,56 @@ print('answer '+json.dumps(answer),flush=True)
           await directory.delete(recursive: true);
         });
       });
+
+      test(
+        'installed LiteRT probe and load map legacy registrations to the canonical worker',
+        () async {
+          final environment = Map.of(runtimeConfiguration.environment);
+          addTearDown(
+            () => runtimeConfiguration.environment
+              ..clear()
+              ..addAll(environment),
+          );
+          runtimeConfiguration.environment['FORESIGHT_INSTALL_ROOT'] =
+              directory.path;
+          final report = File('${directory.path}/probe-paths');
+          final worker = File('${directory.path}/selected-worker')
+            ..writeAsStringSync('''#!/usr/bin/env python3
+import json,sys
+with open(${jsonEncode(report.path)},'a') as output: output.write(sys.argv[0]+'\\n')
+assert '--probe' in sys.argv
+print(json.dumps({'native_stop_token_sequences':True}))
+''');
+          expect(
+            (await Process.run('/bin/chmod', ['700', worker.path])).exitCode,
+            0,
+          );
+          final alias = Link('${directory.path}/worker-alias')
+            ..createSync(worker.path);
+          runtimeConfiguration.environment['FORESIGHT_LITERT_RUNNER'] =
+              alias.path;
+          final model = '${directory.path}/asset';
+          final address = await probeNativeModel(
+            library!,
+            '/outside/legacy-python',
+            model,
+            backend: 'litert_lm',
+          );
+          runtime.close();
+          runtime.engine = Pointer<Void>.fromAddress(address);
+          runtime.close();
+          await runtime.load(
+            '/outside/legacy-python',
+            model,
+            backend: 'litert_lm',
+          );
+          expect(runtime.loaded, true);
+          expect(report.readAsLinesSync(), [
+            worker.resolveSymbolicLinksSync(),
+            worker.resolveSymbolicLinksSync(),
+          ]);
+        },
+      );
 
       test(
         'dedicated summary keeps system rules separate and disables tools',

@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'desktop_read_models.dart';
+import 'read_models.dart';
 import 'persistence/read_schema_guard.dart';
 import 'rpc_error.dart';
 
@@ -147,9 +147,11 @@ final class ReadCoordinator {
   RpcError? get failure => _incompatibility?.rpcError;
   Stream<void> get activityChanges => _activity.stream;
 
-  Stream<ReadResult<T>> watch<T>(ReadQuery<T> query) {
+  Stream<ReadResult<T>> watch<T>(
+    ReadQuery<T> query,
+  ) => Stream<ReadResult<T>>.multi((subscriber) {
     if (_disposed) {
-      return Stream.value(
+      subscriber.add(
         ReadResult<T>(
           freshness: _incompatibility == null
               ? ReadFreshness.cancelled
@@ -162,15 +164,13 @@ final class ReadCoordinator {
               RpcError(RpcErrorCode.cancelled, 'Reader closed'),
         ),
       );
+      unawaited(subscriber.close());
+      return;
     }
     final entry = _entries.putIfAbsent(query.key, () {
       late _ReadEntry created;
       created = _ReadEntry(
         query,
-        onListen: () {
-          created.pending = true;
-          scheduleMicrotask(() => _pump(created));
-        },
         onCancel: () {
           // Leaving and revisiting the same query is a new request identity.
           created.generation++;
@@ -180,8 +180,50 @@ final class ReadCoordinator {
       );
       return created;
     });
-    return entry.events.stream.map((event) => event.asType<T>());
-  }
+    // Broadcast onListen runs only for the first listener. Every subscriber
+    // needs initial work and a deadline, even after active work timed out.
+    // No retained result is replayed: only validated worker results deliver
+    // projections, preserving the existing identity and freshness checks.
+    Timer? initialDeadline;
+    var delivered = false, cancelled = false;
+    final subscription = entry.events.stream.listen(
+      (event) {
+        delivered = true;
+        initialDeadline?.cancel();
+        subscriber.addSync(event.asType<T>());
+      },
+      onDone: () {
+        initialDeadline?.cancel();
+        subscriber.closeSync();
+      },
+    );
+    subscriber.onCancel = () {
+      cancelled = true;
+      initialDeadline?.cancel();
+      unawaited(subscription.cancel());
+    };
+    entry.pending = true;
+    scheduleMicrotask(() {
+      if (cancelled || _disposed) return;
+      // Install the shared execution deadline first, so an ordinary initial
+      // timeout is delivered once by the existing publication path.
+      _pump(entry);
+      if (delivered) return;
+      initialDeadline = _timer(deadline, () {
+        if (delivered || _disposed || cancelled) return;
+        delivered = true;
+        subscriber.addSync(
+          ReadResult<T>(
+            freshness: ReadFreshness.busy,
+            value: null,
+            requestTag: '',
+            sequence: _sequence,
+            error: RpcError(RpcErrorCode.busy, 'Read timed out; retry shortly'),
+          ),
+        );
+      });
+    });
+  }, isBroadcast: true);
 
   Future<ReadResult<T>> read<T>(ReadQuery<T> query) => watch(query).first;
 
@@ -405,13 +447,6 @@ final class _ReadEntry {
   int generation = 0;
   Object? lastValue;
   ReadIdentity? lastIdentity;
-  _ReadEntry(
-    this.query, {
-    required void Function() onListen,
-    required void Function() onCancel,
-  }) : events = StreamController.broadcast(
-         sync: true,
-         onListen: onListen,
-         onCancel: onCancel,
-       );
+  _ReadEntry(this.query, {required void Function() onCancel})
+    : events = StreamController.broadcast(sync: true, onCancel: onCancel);
 }

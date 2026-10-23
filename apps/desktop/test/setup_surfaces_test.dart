@@ -1,11 +1,12 @@
+import 'package:foresight_core/desktop.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/app_theme.dart';
-import 'package:open_foresight/file_discovery_sheet.dart';
-import 'package:open_foresight/model_terms_dialog.dart';
+import 'package:open_foresight/features/sources/file_discovery_sheet.dart';
+import 'package:open_foresight/features/settings/model_terms_dialog.dart';
 import 'controller_fixture.dart';
 import 'pump_until.dart';
 
@@ -128,7 +129,7 @@ void main() {
     'onboarding errors retain progress, reject concurrent actions and expose source status',
     (tester) async {
       final f = await ControllerFixture.mount(tester);
-      final dynamic onboarding = f.shell.onboardingFeature;
+      final onboarding = f.shell.onboardingFeature;
       for (final (state, expected) in [
         ('pending', 'Waiting for model setup'),
         ('indexing', 'Indexing…'),
@@ -137,26 +138,30 @@ void main() {
         ('other', 'Saved'),
       ]) {
         expect(
-          onboarding.sourceStatus(<String, Object?>{'state': state}),
+          onboarding.sourceStatus(SourceSummary.fromRow({'state': state})),
           startsWith(expected),
         );
       }
       expect(
-        onboarding.sourceStatus(<String, Object?>{
-          'state': 'failed',
-          'error': 'Pipeline not initialized',
-        }),
+        onboarding.sourceStatus(
+          SourceSummary.fromRow({
+            'state': 'failed',
+            'error': 'Pipeline not initialized',
+          }),
+        ),
         'Waiting for model setup',
       );
       f.store.db.execute(
         "INSERT INTO models(kind,path,digest,runtime,backend) VALUES('embedding','fixture','fixture','','fixture')",
       );
+      f.connection.application.domain.helper.changed?.call();
+      await tester.pumpAndSettle();
       expect(
-        onboarding.sourceStatus(<String, Object?>{'state': 'pending'}),
+        onboarding.sourceStatus(SourceSummary.fromRow({'state': 'pending'})),
         'Waiting to index',
       );
       final gate = Completer<void>();
-      final action = onboarding.perform(() => gate.future) as Future<void>;
+      final action = onboarding.perform(() => gate.future);
       var concurrent = false;
       await onboarding.perform(() async {
         concurrent = true;

@@ -1,16 +1,14 @@
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
-import 'package:foresight_core/src/application.dart';
+import '../test_support/core_fixture.dart';
 import 'pump_until.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/foresight_core.dart' show NativeRuntime;
 import 'package:open_foresight/main.dart';
-import 'package:foresight_core/src/domain.dart';
-import 'package:foresight_core/src/store.dart';
+
 import 'package:open_foresight/generated_content.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
@@ -79,7 +77,7 @@ void main() {
       await tester.pumpWidget(
         Foresight(TestDesktopConnection(app), deviceLoader: () async => []),
       );
-      final dynamic state = tester.state(find.byType(Workspace));
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       Future<void> waitForUi(bool Function() ready) async {
         final elapsed = Stopwatch()..start();
         while (!ready() && elapsed.elapsed < const Duration(seconds: 5)) {
@@ -148,8 +146,8 @@ void main() {
       await tester.tap(cancel);
       await tester.pump();
       expect(
-        (app.captureState['note_enhancements']
-            as Map)['$id']['cancel_requested'],
+        ((app.captureState['note_enhancements'] as Map)['$id']
+            as Map)['cancel_requested'],
         isTrue,
       );
       await tester.runAsync(() async {

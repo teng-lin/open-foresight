@@ -5,6 +5,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math' show Random;
 import 'profile_paths.dart';
+import 'runtime_execution_policy.dart';
+import 'native.dart' show liteRtRunner;
 
 /// Agent imports are limited to folders explicitly selected in the desktop.
 /// Canonical paths prevent both '..' and symlink escapes into private state.
@@ -95,7 +97,8 @@ enum EventDelivery {
 /// Approval decisions belong to a single live desktop connection and request.
 /// Tokens authenticate the desktop; they never grant agent connections rights.
 class AgentAccessGate {
-  final String desktopToken;
+  String desktopToken;
+  final void Function(String token)? rotateToken;
 
   /// Writes an event to the host's connection and says whether it got there.
   final EventDelivery Function(Object host, Map<String, Object?> event) send;
@@ -104,33 +107,66 @@ class AgentAccessGate {
   final _recent =
       Map<Object, List<({String fingerprint, DateTime at})>>.identity();
   Object? _host;
+  bool _visible = false;
   final _random = Random.secure();
   final _pending = <String, ({Object client, Completer<bool> done})>{};
   AgentAccessGate(
     this.desktopToken,
     this.send, {
     this.timeout = const Duration(minutes: 2),
+    this.rotateToken,
     DateTime Function()? now,
   }) : now = now ?? DateTime.now;
 
   bool get hasHost => _host != null;
+  bool get hasVisibleHost => hasHost && _visible;
   bool isHost(Object client) => identical(client, _host);
-  void attach(Object client, String token) {
+  void attach(
+    Object client,
+    String token, {
+    required bool verifiedDesktop,
+    bool visible = true,
+  }) {
+    if (!verifiedDesktop) {
+      throw RpcError(
+        RpcErrorCode.denied,
+        'Only the verified desktop process can attach',
+      );
+    }
     if (token != desktopToken || token.isEmpty) {
       throw RpcError(RpcErrorCode.denied, 'Invalid desktop capability');
     }
-    if (_host != null && !isHost(client)) {
+    final next = base64Url.encode(
+      List<int>.generate(32, (_) => _random.nextInt(256)),
+    );
+    rotateToken?.call(next);
+    if (_host case final previous?) detach(previous);
+    desktopToken = next;
+    _host = client;
+    _visible = visible;
+  }
+
+  void setVisible(Object client, bool visible) {
+    if (!isHost(client)) {
       throw RpcError(
-        RpcErrorCode.busy,
-        'A desktop approval window is already connected',
+        RpcErrorCode.denied,
+        'Only the desktop host can report window visibility',
       );
     }
-    _host = client;
+    _visible = visible;
+    if (!visible) {
+      for (final pending in _pending.values) {
+        if (!pending.done.isCompleted) pending.done.complete(false);
+      }
+    }
   }
 
   void detach(Object client) {
     _recent.remove(client);
-    if (isHost(client)) _host = null;
+    if (isHost(client)) {
+      _host = null;
+      _visible = false;
+    }
     for (final entry in _pending.entries.toList()) {
       if (_host == null || identical(entry.value.client, client)) {
         if (!entry.value.done.isCompleted) entry.value.done.complete(false);
@@ -140,7 +176,7 @@ class AgentAccessGate {
   }
 
   void decide(Object client, String id, bool allow) {
-    if (!isHost(client)) {
+    if (!isHost(client) || !_visible) {
       throw RpcError(
         RpcErrorCode.denied,
         'Only the visible desktop can approve requests',
@@ -168,9 +204,26 @@ class AgentAccessGate {
     if (!needsApproval(method, args)) return;
     // The authenticated desktop's Start/Resume controls are direct user
     // consent. External clients still require a per-operation desktop decision.
-    if (isHost(client)) return;
+    // Embedding's runtime field is tokenizer data, not executable code.
+    final embeddingData =
+        method == Operation.modelsEmbedding.wire ||
+        (method == Operation.modelsRegister.wire &&
+            args['kind'] == 'embedding');
+    if (method.startsWith('models.') &&
+        !embeddingData &&
+        args['runtime'] is String) {
+      final generation =
+          (method == Operation.modelsGeneration.wire &&
+              (args['backend'] ?? 'litert_lm') == 'litert_lm') ||
+          (method == Operation.modelsRegister.wire &&
+              args['kind'] == 'generation' &&
+              args['backend'] == 'litert_lm');
+      final runtime = args['runtime'] as String;
+      requireInstalledRuntime(generation ? liteRtRunner(runtime) : runtime);
+    }
+    if (isHost(client) && hasVisibleHost) return;
     final host = _host;
-    if (host == null) {
+    if (host == null || !_visible) {
       throw RpcError(
         RpcErrorCode.denied,
         'Open the desktop app to review this operation',

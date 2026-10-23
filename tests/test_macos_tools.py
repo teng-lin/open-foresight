@@ -1,7 +1,7 @@
 """Installer transaction and MCP transport tests; no release/signing claims."""
 
 import json
-from contextlib import closing, ExitStack
+from contextlib import ExitStack
 import os
 import shutil
 import subprocess
@@ -19,7 +19,6 @@ import build_macos_sdk as sdk
 import install_macos as installer
 import test_gemma_models as gemma_probe
 from smoke_macos_bundle import (
-    ApplicationPeer,
     McpPeer,
     main as smoke_main,
     verify_runtime_revision,
@@ -915,14 +914,45 @@ class CompiledMacComponentTests(unittest.TestCase):
             ExitStack() as connections,
         ):
             work = Path(temporary)
+            if ".app/Contents/" in str(service.resolve()):
+                self.fail(
+                    "Native synthetic desktop evidence is unbundled development only; packaged acceptance requires the actual GUI"
+                )
+            from tests.service.test_service_process import DesktopPeer
+
+            relay = work / "native-component-desktop"
+            subprocess.run(
+                [
+                    os.environ.get("CXX", "c++"),
+                    "-std=c++17",
+                    str(
+                        root / "packages/foresight_core/test/fixtures/desktop_peer.cpp"
+                    ),
+                    "-o",
+                    str(relay),
+                ],
+                check=True,
+                capture_output=True,
+                timeout=60,
+            )
             env = _compiled_service_environment(root, work, service)
+            env["FORESIGHT_DEVELOPMENT_DESKTOP_EXECUTABLES"] = json.dumps(
+                [str(relay.resolve())]
+            )
             peer = None
             owner = None
             try:
                 peer = McpPeer(mcp, env)
                 owner = peer.tool("get_status")["pid"]
-                graph_peer = connections.enter_context(
-                    closing(ApplicationPeer(work / "run/application.sock"))
+                graph_peer = DesktopPeer(relay, work / "run/application.sock")
+                connections.callback(graph_peer.close)
+                connections.callback(graph_peer.shutdown)
+                graph_peer.call(
+                    "security.attach_desktop",
+                    {
+                        "token": (work / "data/.desktop-capability").read_text(),
+                        "visible": True,
+                    },
                 )
                 evidence = source_graph_probe(
                     work / "run/application.sock",
@@ -932,7 +962,7 @@ class CompiledMacComponentTests(unittest.TestCase):
                 )
                 peer.close()
                 peer = None
-                # A graph probe is an authenticated desktop client. Retain it
+                # This explicit unbundled native component host pins the owner. Retain it
                 # past the real one-second desktop-close shutdown grace period.
                 time.sleep(1.25)
                 self.assertEqual(

@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:foresight_core/desktop.dart'
+    show CapturePresentation, MeetingRunPresentation;
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:foresight_core/src/rpc_error.dart';
@@ -117,6 +119,10 @@ void main() {
     'both action aliases share one typed artifact and preserve manual edits',
     () async {
       await app.generateMeeting(meeting, 'action_items');
+      expect(
+        (app.captureState['meeting_workflows'] as Map)['$meeting:actions'],
+        allOf(containsPair('active', false), isNot(contains('preview'))),
+      );
       expect(store.meetingArtifacts(meeting, 'action_items'), isEmpty);
       final task = store.meetingTasks(meeting).single;
       await app.call('meetings.edit_task', {
@@ -155,6 +161,14 @@ void main() {
       runtime.failCall = 2;
       await expectLater(app.generateActions(meeting), throwsStateError);
       expect(store.meetingTasks(meeting), before);
+      final failed = CapturePresentation.fromWire(
+        jsonDecode(jsonEncode(app.captureState)),
+      ).workflow(meeting, 'actions')!;
+      expect(failed.phase, 'failed');
+      expect(failed.error, contains('Meeting generation failed'));
+      expect(failed.active, isFalse);
+      expect(failed.cancelled, isFalse);
+      expect(failed.preview, isEmpty);
       runtime.failCall = null;
       store.db.execute(
         "CREATE TRIGGER fail_tasks BEFORE INSERT ON meeting_tasks BEGIN SELECT RAISE(ABORT,'fixture'); END",
@@ -182,6 +196,14 @@ void main() {
       await failed;
       expect(runtime.cancelled, contains('parent-actions-1'));
       expect(store.meetingTasks(meeting), isEmpty);
+      final cancelled = CapturePresentation.fromWire(
+        jsonDecode(jsonEncode(app.captureState)),
+      ).workflow(meeting, 'actions')!;
+      expect(cancelled.phase, 'failed');
+      expect(cancelled.cancelled, isTrue);
+      expect(cancelled.active, isFalse);
+      expect(cancelled.error, contains('cancelled'));
+      expect(cancelled.preview, isEmpty);
     },
   );
   test(
@@ -368,6 +390,53 @@ void main() {
       expect(store.meetingArtifacts(meeting, 'preparation'), hasLength(2));
     },
   );
+  test(
+    'typed preparation JSON retains document progress and synthesis preview',
+    () async {
+      final long = store.importText(
+        'Design',
+        'Document content ' * 300,
+        'text/plain',
+        'fixture',
+      );
+      final short = store.importText(
+        'Schedule',
+        'Launch Friday.',
+        'text/plain',
+        'fixture',
+      );
+      final states = <MeetingRunPresentation>[];
+      final changes = app.changes.stream.listen((_) {
+        final capture = CapturePresentation.fromWire(
+          jsonDecode(jsonEncode(app.captureState)),
+        );
+        final preparation = capture.workflow(meeting, 'preparation');
+        if (preparation != null) states.add(preparation);
+      });
+      addTearDown(changes.cancel);
+      await app.prepareMeeting(meeting, [long, short]);
+      final documents = states.firstWhere(
+        (state) =>
+            state.active && state.phase == 'documents' && state.completed > 0,
+      );
+      expect(documents.total, greaterThan(1));
+      final synthesis = states.firstWhere(
+        (state) =>
+            state.active &&
+            state.phase == 'synthesizing' &&
+            state.preview.isNotEmpty,
+      );
+      expect(synthesis.preview, 'Document fact: launch Friday.');
+      final settled = CapturePresentation.fromWire(
+        jsonDecode(jsonEncode(app.captureState)),
+      ).workflow(meeting, 'preparation')!;
+      expect(settled.phase, 'completed');
+      expect(settled.active, isFalse);
+      expect(settled.preview, isEmpty);
+      expect(store.meetingArtifacts(meeting, 'preparation'), hasLength(1));
+    },
+  );
+
   test(
     'empty and short documents avoid inference; Unicode windows retain end evidence',
     () async {

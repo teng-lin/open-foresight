@@ -11,6 +11,7 @@ import '../encrypted_query_runtime.dart';
 import '../gemma_download.dart' show ModelDownloadCancelled;
 import '../generated/rag_service.pb.dart';
 import '../model_setup.dart';
+import '../native.dart' show liteRtRunner;
 import '../operation_registry.dart';
 import '../operation_requests.dart';
 import '../operations.dart';
@@ -18,6 +19,7 @@ import '../platform_services.dart';
 import '../portable_query_setup.dart';
 import '../reference_query_detector.dart';
 import '../rpc_error.dart';
+import '../runtime_execution_policy.dart';
 import '../speech_models.dart';
 import '../store.dart';
 
@@ -209,10 +211,14 @@ final class ModelRegistry {
       );
       return;
     }
+    final runtime =
+        request.kind == 'generation' && request.backend == 'litert_lm'
+        ? requireInstalledRuntime(liteRtRunner(request.runtime ?? ''))
+        : request.runtime ?? '';
     await store.register(
       request.kind,
       request.path,
-      request.runtime ?? '',
+      runtime,
       backend: request.backend,
       expectedDigest: request.digest,
       modelType: request.modelType,

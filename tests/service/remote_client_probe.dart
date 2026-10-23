@@ -4,17 +4,72 @@ import 'dart:io';
 import 'package:foresight_core/desktop.dart';
 import 'package:foresight_core/desktop_bootstrap.dart';
 
-String noteSnapshot(StoreReader reader) => jsonEncode([
-  for (final note in reader.noteSummaries)
-    {
-      'id': note.id,
-      'title': note.title,
-      'revision': note.revision,
-      'body': reader.noteBody(note.id),
-    },
-]);
+/// A snapshot may span several typed reads, but never owners or revisions.
+/// Reuse the probe's five-second change-observation budget for fresh reads.
+Future<String> noteSnapshot(
+  DesktopConnection domain, {
+  DateTime? deadline,
+}) async {
+  final until = deadline ?? DateTime.now().add(const Duration(seconds: 5));
+  while (DateTime.now().isBefore(until)) {
+    final session = domain.clientSessionGeneration;
+    final epoch = domain.workspaceEpoch;
+    final reader = domain.store;
+    final revision = reader.dataRevision;
+    bool current() =>
+        identical(session, domain.clientSessionGeneration) &&
+        identical(reader, domain.store) &&
+        epoch == domain.workspaceEpoch &&
+        epoch == reader.workspaceEpoch &&
+        revision == reader.dataRevision;
+    final notes = await reader
+        .read(StoreReadQueries.notes())
+        .timeout(until.difference(DateTime.now()));
+    if (current() && notes.error != null) throw notes.error!;
+    if (current() && notes.current && notes.requestTag == revision) {
+      final rows = <Map<String, Object?>>[];
+      var complete = true;
+      for (final note in notes.value!) {
+        final remaining = until.difference(DateTime.now());
+        if (remaining <= Duration.zero) break;
+        final body = await reader
+            .read(StoreReadQueries.noteBody(note.id))
+            .timeout(remaining);
+        if (current() && body.error != null) throw body.error!;
+        if (!current() || !body.current || body.requestTag != revision) {
+          complete = false;
+          break;
+        }
+        rows.add({
+          'id': note.id,
+          'title': note.title,
+          'revision': note.revision,
+          'body': body.value,
+        });
+      }
+      if (current() && complete && rows.length == notes.value!.length)
+        return jsonEncode(rows);
+    }
+    final remaining = until.difference(DateTime.now());
+    if (remaining <= Duration.zero) break;
+    await Future<void>.delayed(
+      remaining < const Duration(milliseconds: 10)
+          ? remaining
+          : const Duration(milliseconds: 10),
+    );
+  }
+  throw TimeoutException('Desktop note snapshot did not become current');
+}
 
-Future<void> main() async {
+Future<String?> noteBody(DesktopConnection domain, int id) async {
+  final rows = jsonDecode(await noteSnapshot(domain)) as List;
+  return (rows.singleWhere((row) => (row as Map)['id'] == id) as Map)['body']
+      as String?;
+}
+
+Future<void> main() async => print(jsonEncode(await runRemoteClientProbe()));
+
+Future<Map<String, Object?>> runRemoteClientProbe() async {
   final profile = ProfilePaths.resolve(Platform.environment);
   final domain = await connectDesktop(profile);
   int? replacementPid;
@@ -29,9 +84,9 @@ Future<void> main() async {
             })
             as Map;
     final noteId = note['id'] as int;
-    if (domain.store.noteBody(noteId) != 'service-owned')
+    if (await noteBody(domain, noteId) != 'service-owned')
       throw StateError('UI read snapshot missed service write');
-    final beforeForbiddenWrite = noteSnapshot(domain.store);
+    final beforeForbiddenWrite = await noteSnapshot(domain);
     var rejected = false;
     try {
       // Deliberately probe the runtime capability boundary. The public reader
@@ -41,7 +96,7 @@ Future<void> main() async {
       rejected = true;
     }
     if (!rejected) throw StateError('Desktop connection can write');
-    if (noteSnapshot(domain.store) != beforeForbiddenWrite)
+    if (await noteSnapshot(domain) != beforeForbiddenWrite)
       throw StateError('Forbidden desktop write changed persisted notes');
     final auth = domain.googleAuth;
     final configuration = File('${profile.data}/oauth-fixture.json');
@@ -67,10 +122,22 @@ Future<void> main() async {
     if (!browserInvited || !oauthCancelled)
       throw StateError('Desktop did not receive/cancel the OAuth invitation');
     final update = Completer<void>();
-    final beforeChange = noteSnapshot(domain.store);
+    // A typed read can fail before the mutation reply; retain it for the await.
+    update.future.ignore();
+    final beforeChange = await noteSnapshot(domain);
+    final changeDeadline = DateTime.now().add(const Duration(seconds: 5));
+    Future<void> checkingChange = Future.value();
     changes = domain.changes.listen((_) {
-      if (!update.isCompleted && noteSnapshot(domain.store) != beforeChange)
-        update.complete();
+      checkingChange = checkingChange.then((_) async {
+        if (update.isCompleted) return;
+        try {
+          if (await noteSnapshot(domain, deadline: changeDeadline) !=
+              beforeChange)
+            update.complete();
+        } catch (error, stack) {
+          if (!update.isCompleted) update.completeError(error, stack);
+        }
+      });
     });
     // Unchanged service heartbeats no longer rebuild the desktop. Observe an
     // actual committed mutation after subscribing to the change callback.
@@ -80,7 +147,7 @@ Future<void> main() async {
       'body': 'service-owned',
     });
     await update.future.timeout(const Duration(seconds: 5));
-    final beforeRestart = noteSnapshot(domain.store);
+    final beforeRestart = await noteSnapshot(domain);
     Process.killPid(firstPid, ProcessSignal.sigterm);
     final deadline = DateTime.now().add(const Duration(seconds: 20));
     while (DateTime.now().isBefore(deadline)) {
@@ -96,22 +163,20 @@ Future<void> main() async {
       await Future<void>.delayed(const Duration(milliseconds: 100));
     }
     if (replacementPid == null) throw StateError('Desktop did not reconnect');
-    if (domain.store.noteBody(noteId) != 'service-owned')
+    if (await noteBody(domain, noteId) != 'service-owned')
       throw StateError('Data lost after service restart');
-    if (noteSnapshot(domain.store) != beforeRestart)
+    if (await noteSnapshot(domain) != beforeRestart)
       throw StateError('Reconnect replayed or changed a persisted mutation');
-    print(
-      jsonEncode({
-        'browser_invitation_received': browserInvited,
-        'oauth_cancelled_cleanly': oauthCancelled,
-        'read_only': true,
-        'changes': true,
-        'reconnected': true,
-        'no_mutation_replay': true,
-        'original_pid': firstPid,
-        'replacement_pid': replacementPid,
-      }),
-    );
+    return {
+      'browser_invitation_received': browserInvited,
+      'oauth_cancelled_cleanly': oauthCancelled,
+      'read_only': true,
+      'changes': true,
+      'reconnected': true,
+      'no_mutation_replay': true,
+      'original_pid': firstPid,
+      'replacement_pid': replacementPid,
+    };
   } finally {
     await changes?.cancel();
     domain.close();

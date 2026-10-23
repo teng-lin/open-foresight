@@ -5,11 +5,9 @@ import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/src/domain.dart';
+import '../test_support/core_fixture.dart';
 import 'package:open_foresight/main.dart';
-import 'package:foresight_core/src/store.dart';
-import 'package:foresight_core/src/google_auth.dart';
-import 'package:foresight_core/src/application.dart';
+
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 class BundledGoogleAuth extends GoogleAuth {
@@ -27,6 +25,26 @@ class BundledGoogleDomain extends Domain {
   BundledGoogleDomain(super.store, super.helper, this.auth);
 }
 
+// The remote decoder owns status. A configure reply must arrive after the
+// provider event; a feature must not make that snapshot writable to continue.
+class ReadonlyGoogleStatusConnection extends TestDesktopConnection {
+  ReadonlyGoogleStatusConnection(super.application);
+  bool configuredStatusBeforeReply = false;
+  @override
+  Map<String, dynamic> get googleStatus => Map.unmodifiable(super.googleStatus);
+  @override
+  Future<Object?> command(
+    Operation operation, [
+    Map<String, dynamic> args = const {},
+  ]) async {
+    final result = await super.command(operation, args);
+    if (operation == Operation.googleConfigure) {
+      configuredStatusBeforeReply = googlePresentation.provider == 'granola';
+    }
+    return result;
+  }
+}
+
 void main() {
   testWidgets(
     'Granola calendar option configures Calendar only and disables every Drive import',
@@ -40,8 +58,9 @@ void main() {
       );
       final domain = BundledGoogleDomain(store, helper, auth);
       final app = Application(domain, auth: domain.auth);
+      final connection = ReadonlyGoogleStatusConnection(app);
       await tester.pumpWidget(
-        Foresight(TestDesktopConnection(app), deviceLoader: () async => []),
+        Foresight(connection, deviceLoader: () async => []),
       );
       await tester.tap(find.text('Settings'));
       await tester.pumpAndSettle();
@@ -53,6 +72,7 @@ void main() {
       await tester.runAsync(() => tester.tap(connect));
       await pumpUntil(tester, () => auth.invitations == 1);
       await tester.pumpAndSettle();
+      expect(connection.configuredStatusBeforeReply, true);
       expect(auth.viaGranola, true);
       expect(auth.invitations, 1);
       expect(find.textContaining('Drive is unavailable.'), findsWidgets);
@@ -188,7 +208,8 @@ void main() {
         expect(find.text('Set up Google Drive and Calendar'), findsNothing);
         expect(find.text('Import client JSON'), findsNothing);
         expect(find.text('Import Desktop client configuration'), findsNothing);
-        final dynamic state = tester.state(find.byType(Workspace));
+        final state =
+            tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
         expect(
           state.error,
           contains('Google sign-in is unavailable in this build.'),

@@ -1,3 +1,4 @@
+import 'desktop_status.dart';
 import 'cancellation.dart';
 export 'recording_status.dart' show RemoteRecording;
 import 'rpc_error.dart';
@@ -48,7 +49,6 @@ class RemoteDomain
 
   void _notifyChanges() {
     if (_disposed) return;
-    _reader.invalidate();
     _changes.add(null);
   }
 
@@ -73,19 +73,32 @@ class RemoteDomain
   void Function(Map<String, dynamic>)? _approvalEvents;
   // The connection the desktop approval host is attached on.
   ServiceClient? _attached;
+  bool _desktopVisible = false;
+  bool? _attachedVisible;
+  bool _desktopDisplaced = false;
+  int _approvalGeneration = 0;
+  final _attachments =
+      <ServiceClient, ({int generation, Future<void> future})>{};
+  final _visibilityUpdates =
+      <ServiceClient, ({int generation, Future<void> future})>{};
+  bool _approvalsCurrent(int generation) =>
+      !_disposed &&
+      _approvalEvents != null &&
+      generation == _approvalGeneration;
   @override
   Future<void> enableDesktopApprovals(
     void Function(Map<String, dynamic>) events,
   ) async {
     _approvalEvents = events;
+    final generation = _approvalGeneration;
     for (var attempt = 0; ; attempt++) {
+      if (!_approvalsCurrent(generation)) return;
       final current = client;
-      // A reconnect attaches its new connection itself.
-      if (identical(_attached, current)) return;
       try {
         await _attachDesktop(current);
         return;
       } on RpcError catch (error) {
+        if (!_approvalsCurrent(generation)) return;
         if (attempt > 0 || !_resendable(error)) rethrow;
         await _awaitReconnect(current, error);
       }
@@ -93,10 +106,110 @@ class RemoteDomain
   }
 
   Future<void> _attachDesktop(ServiceClient connection) async {
+    final generation = _approvalGeneration;
+    while (_approvalsCurrent(generation) && identical(client, connection)) {
+      if (_desktopDisplaced && !_desktopVisible) return;
+      if (identical(_attached, connection)) {
+        await _syncDesktopVisibility(connection, generation);
+        return;
+      }
+      // Reconnect and lifecycle callbacks share one token-consuming attach.
+      final existing = _attachments[connection];
+      if (existing != null) {
+        try {
+          await existing.future;
+        } catch (_) {
+          // A disabled host's request must settle before consuming a fresh
+          // token, but its failure does not belong to the new host generation.
+          if (existing.generation == generation) rethrow;
+        }
+        continue;
+      }
+      final pending = _performDesktopAttach(connection, generation);
+      _attachments[connection] = (generation: generation, future: pending);
+      try {
+        await pending;
+      } finally {
+        if (identical(_attachments[connection]?.future, pending)) {
+          _attachments.remove(connection);
+        }
+      }
+    }
+  }
+
+  Future<void> _performDesktopAttach(
+    ServiceClient connection,
+    int generation,
+  ) async {
+    final visible = _desktopVisible;
     await connection.call(Operation.securityAttachDesktop.wire, {
       'token': File('${_profile.data}/.desktop-capability').readAsStringSync(),
+      'visible': visible,
     });
+    if (!_approvalsCurrent(generation) || !identical(client, connection)) {
+      return;
+    }
     _attached = connection;
+    _attachedVisible = visible;
+    _desktopDisplaced = false;
+    await _syncDesktopVisibility(connection, generation);
+  }
+
+  Future<void> _syncDesktopVisibility(
+    ServiceClient connection,
+    int generation,
+  ) async {
+    while (_approvalsCurrent(generation) &&
+        identical(_attached, connection) &&
+        _attachedVisible != _desktopVisible) {
+      final existing = _visibilityUpdates[connection];
+      if (existing != null) {
+        try {
+          await existing.future;
+        } catch (_) {
+          if (existing.generation == generation) rethrow;
+        }
+        continue;
+      }
+      final visible = _desktopVisible;
+      final pending = connection.call(
+        Operation.securityDesktopVisibility.wire,
+        {'visible': visible},
+      );
+      final update = pending.then<void>((_) {
+        if (_approvalsCurrent(generation) && identical(_attached, connection)) {
+          _attachedVisible = visible;
+        }
+      });
+      _visibilityUpdates[connection] = (generation: generation, future: update);
+      try {
+        await update;
+      } finally {
+        if (identical(_visibilityUpdates[connection]?.future, update)) {
+          _visibilityUpdates.remove(connection);
+        }
+      }
+    }
+  }
+
+  @override
+  Future<void> setDesktopVisible(bool visible) async {
+    _desktopVisible = visible;
+    if (_approvalEvents == null) return;
+    final generation = _approvalGeneration;
+    try {
+      await enableDesktopApprovals(_approvalEvents!);
+    } on RpcError catch (error) {
+      if (error.code != RpcErrorCode.denied) rethrow;
+      // Another verified desktop took the host while this window was hidden.
+      // A newly visible verified window can take ownership with the fresh token.
+      if (!_approvalsCurrent(generation)) return;
+      _attached = null;
+      _attachedVisible = null;
+      _desktopDisplaced = true;
+      if (!_desktopVisible) return;
+      await enableDesktopApprovals(_approvalEvents!);
+    }
   }
 
   @override
@@ -104,8 +217,11 @@ class RemoteDomain
     // The service denies the approvals still open, but their
     // approval_closed would find no listener; close their dialogs first.
     _closeOpenApprovals();
+    _approvalGeneration++;
     _approvalEvents = null;
     _attached = null;
+    _attachedVisible = null;
+    _desktopDisplaced = false;
     await client.call(Operation.securityDetachDesktop.wire);
   }
 
@@ -113,8 +229,13 @@ class RemoteDomain
   Future<void>? _reconnection;
   // Completes with the outcome of the current or next reconnect attempt.
   Completer<void>? _attempt;
-  @override
   Map<String, dynamic> capture = {};
+  @override
+  CapturePresentation get capturePresentation =>
+      CapturePresentation.fromWire(capture);
+  @override
+  GooglePresentation get googlePresentation =>
+      GooglePresentation.fromWire(googleStatus);
   @override
   Map<String, dynamic> googleStatus = {};
   bool _paused = false;
@@ -173,6 +294,8 @@ class RemoteDomain
   @override
   Stream<List<double>> get captureLevels => _captureLevels.stream;
   String? _eventSignature;
+  Object? _dataRevision;
+  Object? _readerSessionGeneration;
   void _apply(Map<String, dynamic> event, {bool forceNotify = false}) {
     if (event['event'] == 'capture_levels') {
       final volumes = (event['volumes'] as List)
@@ -196,12 +319,21 @@ class RemoteDomain
     final signature = jsonEncode(event);
     if (_eventSignature == signature && !forceNotify) return;
     _eventSignature = signature;
+    final previousEpoch = _serviceEpoch;
     final epoch = event['workspace_epoch'];
     if (epoch is String) {
       _observeEpoch(epoch);
       // The first epoch names the workspace the desktop starts in. A later one
       // waits for the desktop to drop views that hold older IDs.
       _workspaceEpoch ??= _serviceEpoch;
+    }
+    final revision = event['revision'];
+    if (_dataRevision != revision ||
+        previousEpoch != _serviceEpoch ||
+        !identical(_readerSessionGeneration, _clientSessionGeneration)) {
+      _dataRevision = revision;
+      _readerSessionGeneration = _clientSessionGeneration;
+      _reader.invalidate();
     }
     _webSearchAvailable = event['web_search_available'] == true;
     googleStatus = Map<String, dynamic>.from(event['google'] as Map? ?? {});
@@ -229,6 +361,7 @@ class RemoteDomain
     if (stored.isEmpty || stored == _serviceEpoch) return;
     _serviceEpoch = stored;
     _workspaceEpoch ??= stored;
+    _reader.invalidate();
     _notifyChanges();
   }
 

@@ -538,8 +538,7 @@ class GoogleConnections implements ConnectedSources {
     store.setPreference('googleLastSyncAccount', account);
   }
 
-  @override
-  List<Map<String, dynamic>> attachments(int meeting) =>
+  List<Map<String, dynamic>> _attachments(int meeting) =>
       _queries.attachments(meeting);
 
   @override
@@ -548,7 +547,7 @@ class GoogleConnections implements ConnectedSources {
     bool Function()? current,
   }) async {
     final failures = <String>[];
-    for (final attachment in attachments(meeting)) {
+    for (final attachment in _attachments(meeting)) {
       final id = attachment['fileId'] as String?;
       if (id == null) {
         failures.add('${attachment['title']}: no Drive file identifier');

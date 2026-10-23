@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/meeting_note_state.dart';
+import 'package:open_foresight/features/meetings/meeting_note_state.dart';
 
 void main() {
   bool reload(

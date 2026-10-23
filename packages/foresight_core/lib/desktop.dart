@@ -3,7 +3,8 @@
 library;
 
 export 'src/desktop_connection.dart';
-export 'src/desktop_read_models.dart';
+export 'src/desktop_status.dart';
+export 'src/read_models.dart';
 export 'src/helper_status.dart';
 export 'src/recording_status.dart' show RecordingSnapshot;
 export 'src/store_reader.dart';
@@ -48,9 +49,9 @@ export 'src/graph_persistence.dart'
         graphSceneSources;
 export 'src/model_setup.dart'
     show
-        readerNeedsModel,
-        readerSpeechSetupProblem,
-        readerDedicatedQuerySetupProblem,
+        preparedNeedsModel,
+        preparedSpeechSetupProblem,
+        preparedDedicatedQuerySetupProblem,
         dedicatedQueryModelDigest;
 export 'src/dedicated_query_acquisition.dart'
     show dedicatedQueryTermsKey, dedicatedQueryTermsUri;

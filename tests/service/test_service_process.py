@@ -94,18 +94,59 @@ class Peer:
         self.reader.close()
         self.socket.close()
 
+    def shutdown(self):
+        self.socket.shutdown(socket.SHUT_RDWR)
+
+
+class DesktopPeer(Peer):
+    """A distinct native executable, authenticated by real Unix credentials."""
+
+    def __init__(self, executable, path):
+        self.process = subprocess.Popen(
+            [str(executable), str(path)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.reader = self.process.stdout
+        self.sequence = 0
+        self.events = []
+
+    def send(self, method, args=None):
+        self.sequence += 1
+        self.process.stdin.write(
+            json.dumps({"id": self.sequence, "method": method, "args": args or {}})
+            + "\n"
+        )
+        self.process.stdin.flush()
+        return self.sequence
+
+    def shutdown(self):
+        self.process.stdin.close()
+
+    def close(self):
+        try:
+            self.process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.wait(timeout=3)
+        self.reader.close()
+        self.process.stderr.close()
+
 
 class ApprovalDesktop:
     """Explicit synthetic UI host for tests that exercise approved operations."""
 
     def __init__(self, path, profile, root, preferences=None):
-        self.peer = Peer(path)
+        self.peer = DesktopPeer(root / "fixtures/desktop-peer", path)
+        self.closed = False
         self.peer.call(
             "status"
         )  # Wait until service initialization publishes the capability.
         self.peer.call(
             "security.attach_desktop",
-            {"token": (profile / ".desktop-capability").read_text()},
+            {"token": (profile / ".desktop-capability").read_text(), "visible": True},
         )
         self.peer.call("security.allow_import_root", {"path": str(root)})
         # The review thread owns the reader after it starts. Set preferences
@@ -128,10 +169,11 @@ class ApprovalDesktop:
             pass
 
     def close(self):
-        if self.peer.socket.fileno() < 0:
+        if self.closed:
             return
+        self.closed = True
         try:
-            self.peer.socket.shutdown(socket.SHUT_RDWR)
+            self.peer.shutdown()
         except OSError:
             pass
         self.thread.join(timeout=3)
@@ -139,13 +181,13 @@ class ApprovalDesktop:
 
 
 class McpPeer:
-    def __init__(self, env):
+    def __init__(self, env, *, executable=None):
         self.runtime = Path(env["FORESIGHT_RUNTIME"])
         self.service_pid = None
         self.previous_reply = None
         self.previous_error = None
         self.process = subprocess.Popen(
-            [str(MCP)],
+            [str(executable or MCP)],
             env=env,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -258,6 +300,101 @@ class McpPeer:
             self.process.stderr.close()
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux native package layout")
+@pytest.mark.parametrize("entrypoint", ["service", "mcp"])
+def test_direct_packaged_entrypoints_enforce_identity_without_launcher(tmp_path, entrypoint):
+    from package import write_runtime_configuration
+
+    bundle = tmp_path / "package"
+    for name in ("app", "bin", "lib", "share/open-foresight"):
+        (bundle / name).mkdir(parents=True, exist_ok=True)
+    for source, name in ((SERVICE, "bin/foresight-service"), (MCP, "bin/foresight-mcp"),
+                         (NATIVE, "lib/libforesight_native.so"), (HELPER, "bin/ForesightHelper")):
+        shutil.copy2(source, bundle / name)
+    sqlite = Path(subprocess.run(["ldd", str(HELPER)], check=True, capture_output=True,
+                                 text=True, timeout=30).stdout.split("libsqlite3.so.0 => ", 1)[1].split()[0])
+    shutil.copy2(sqlite, bundle / "lib/libsqlite3.so.0")
+    (bundle / "lib/libsqlite3.so").symlink_to("libsqlite3.so.0")
+    desktop = bundle / "app/open-foresight"
+    subprocess.run([os.environ.get("CXX", "c++"), "-std=c++17",
+                    str(ROOT / "packages/foresight_core/test/fixtures/desktop_peer.cpp"),
+                    "-o", str(desktop)], check=True, capture_output=True, text=True, timeout=60)
+    impostor = tmp_path / "untrusted-desktop"
+    shutil.copy2(desktop, impostor)
+    write_runtime_configuration(bundle, "a" * 40, "cpu", 0)
+    # No launcher-selected resources, code paths, installation root or revision.
+    env = {key: value for key, value in os.environ.items() if not key.startswith("FORESIGHT_")}
+    env.pop("LD_LIBRARY_PATH", None)
+    env.update(FORESIGHT_DATA=str(tmp_path / "data"), FORESIGHT_RUNTIME=str(tmp_path / "r"),
+               FORESIGHT_DEVELOPMENT_DESKTOP_EXECUTABLES=json.dumps([str(impostor)]))
+    log = (tmp_path / "packaged-service.log").open("w+")
+    owner = None
+    mcp = None
+    peers = []
+    try:
+        if entrypoint == "service":
+            owner = subprocess.Popen([str(bundle / "bin/foresight-service")], env=env,
+                                     stdout=log, stderr=subprocess.STDOUT)
+        else:
+            mcp = McpPeer(env, executable=bundle / "bin/foresight-mcp")
+            mcp.initialize()
+        socket_path = tmp_path / "r/application.sock"
+        deadline = time.monotonic() + 20
+        while not socket_path.exists():
+            assert time.monotonic() < deadline, "packaged service did not publish its endpoint"
+            assert owner is None or owner.poll() is None, "packaged service exited"
+            time.sleep(.02)
+        peer = Peer(socket_path)
+        peers.append(peer)
+        status = peer.call("status")
+        assert status["installation_root"] == str(bundle.resolve())
+        assert status["runtime_revision"] == "a" * 40
+        mapped = Path(f"/proc/{status['pid']}/maps").read_text()
+        assert str((bundle / "lib/libsqlite3.so.0").resolve()) in mapped
+        thief = DesktopPeer(impostor, socket_path)
+        peers.append(thief)
+        token = tmp_path / "data/.desktop-capability"
+        with pytest.raises(RuntimeError, match="verified desktop"):
+            thief.call("security.attach_desktop", {"token": token.read_text(), "visible": True})
+        trusted = DesktopPeer(desktop, socket_path)
+        peers.append(trusted)
+        assert trusted.call("security.attach_desktop", {"token": token.read_text(), "visible": True}) is True
+        model = tmp_path / "model"
+        model.write_text("unused model")
+        with pytest.raises(RuntimeError, match="outside this installation"):
+            trusted.call("models.generation", {"path": str(model), "runtime": "/usr/bin/true", "backend": "llama_cpp"})
+    finally:
+        for peer in peers:
+            if isinstance(peer, DesktopPeer):
+                peer.shutdown()
+            peer.close()
+        stopped = subprocess.run([str(bundle / "bin/foresight-service"), "--stop"], env=env,
+                                 capture_output=True, text=True, timeout=30)
+        print(stopped.stdout, stopped.stderr)
+        if mcp is not None:
+            mcp.close()
+        if owner is not None:
+            try:
+                owner.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                owner.kill()
+                owner.wait(timeout=10)
+        log.seek(0)
+        print(log.read())
+        log.close()
+    if entrypoint == "service":
+        (bundle / "share/open-foresight/runtime.json").unlink()
+        missing = subprocess.run([str(bundle / "bin/foresight-service"), "--status"],
+                                 env=env, capture_output=True, text=True, timeout=30)
+        assert missing.returncode != 0
+        assert "runtime configuration is missing" in missing.stderr
+        (bundle / "share/open-foresight").rmdir()
+        no_directory = subprocess.run([str(bundle / "bin/foresight-service"), "--status"],
+                                      env=env, capture_output=True, text=True, timeout=30)
+        assert no_directory.returncode != 0
+        assert "runtime configuration is missing" in no_directory.stderr
+
+
 @pytest.fixture
 def running(tmp_path, request):
     assert SERVICE.is_file() and MCP.is_file(), (
@@ -271,6 +408,18 @@ def running(tmp_path, request):
             preferences["serviceIdleMinutes"] = option.removeprefix("idle=")
     fixtures = tmp_path / "fixtures"
     fixtures.mkdir(mode=0o700)
+    desktop_peer = fixtures / "desktop-peer"
+    subprocess.run(
+        [os.environ.get("CXX", "c++"), "-std=c++17",
+         str(ROOT / "packages/foresight_core/test/fixtures/desktop_peer.cpp"),
+         "-o", str(desktop_peer)],
+        check=True, capture_output=True, text=True, timeout=60,
+    )
+    flutter_desktop = (
+        ROOT / "apps/desktop/build/macos/Build/Products/Debug/Open Foresight.app/Contents/MacOS/Open Foresight"
+        if sys.platform == "darwin"
+        else ROOT / "apps/desktop/build/linux/x64/debug/bundle/open-foresight"
+    )
     model = fixtures / "model.litertlm"
     model.write_bytes(b"controlled embedding fixture")
     asset = fixtures / "asset.bin"
@@ -307,11 +456,18 @@ def running(tmp_path, request):
     capture.chmod(0o700)
     env = os.environ.copy()
     env.pop("FORESIGHT_MODEL_MANIFEST", None)
+    # This gate runs an unbundled development service. Production install-root
+    # identity acceptance lives in desktop_peer_process_test and package gates.
+    env.pop("FORESIGHT_INSTALL_ROOT", None)
+    env.pop("FORESIGHT_RUNTIME_REVISION", None)
     env.update(
         FORESIGHT_DATA=str(tmp_path / "data"),
         FORESIGHT_RUNTIME=str(tmp_path / "run"),
         FORESIGHT_SERVICE=str(SERVICE),
         FORESIGHT_SERVICE_TRACE="1",
+        FORESIGHT_DEVELOPMENT_DESKTOP_EXECUTABLES=json.dumps([
+            str(desktop_peer.resolve()), str(flutter_desktop.resolve()),
+        ]),
         FORESIGHT_HELPER=str(HELPER),
         FORESIGHT_NATIVE=str(NATIVE),
         FORESIGHT_CAPTURE_RUNTIME=str(capture),
@@ -923,25 +1079,27 @@ def test_granola_manual_return_requires_active_matching_attempt_without_network(
 def test_desktop_facade_reads_changes_and_reconnects_without_replaying_mutations(
     running,
 ):
-    import shutil
-
-    dart = os.environ.get("FORESIGHT_DART_EXECUTABLE") or shutil.which("dart")
-    if not dart:
-        pytest.skip("Dart executable required for the desktop facade integration probe")
-    result = subprocess.run(
-        [
-            dart,
-            "--packages="
-            + str(ROOT / "packages/foresight_core/.dart_tool/package_config.json"),
-            str(ROOT / "tests/service/remote_client_probe.dart"),
-        ],
-        env=running["env"],
-        capture_output=True,
-        text=True,
-        timeout=40,
+    flutter = os.environ.get("FORESIGHT_FLUTTER_EXECUTABLE")
+    platform = "macos" if sys.platform == "darwin" else "linux"
+    assert flutter, "The desktop facade probe requires the native Flutter runner"
+    assert os.environ.get("FORESIGHT_" + platform.upper() + "_UI_TEST") == "1", (
+        "Run the desktop facade probe on the configured isolated native display"
     )
-    assert result.returncode == 0, result.stdout + "\n" + result.stderr
-    report = json.loads(result.stdout)
+    report_path = running["root"] / "remote-facade.json"
+    env = {**running["env"], "FORESIGHT_REMOTE_FACADE_REPORT": str(report_path)}
+    if platform == "linux":
+        assert env.get("DISPLAY"), "An isolated X display is required"
+        env["GDK_BACKEND"] = "x11"
+    else:
+        env.pop("GDK_BACKEND", None)
+    # P0 requires a native desktop image for its lifetime reservation. The
+    # ordinary Dart interpreter is deliberately refused, even in development.
+    run_tests(
+        "desktop", ["integration_test/remote_facade_test.dart"], 1, env,
+        ROOT / "test-results/service/remote-facade", "remote-facade",
+        flutter=flutter, device=platform, timeout=300,
+    )
+    report = json.loads(report_path.read_text())
     assert report["read_only"] and report["changes"] and report["reconnected"]
     assert report["no_mutation_replay"]
     assert report["browser_invitation_received"] and report["oauth_cancelled_cleanly"]

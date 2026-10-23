@@ -1,4 +1,5 @@
-import 'package:foresight_core/src/application.dart';
+import 'package:open_foresight/shell/workspace_tab.dart';
+import '../test_support/core_fixture.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -7,8 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/failure_text.dart';
 import 'package:open_foresight/main.dart';
-import 'package:foresight_core/src/store.dart';
-import 'package:foresight_core/remote.dart';
+
 import 'desktop_connection_fixture.dart';
 import 'pump_until.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
@@ -61,14 +61,14 @@ void main() {
     app = Application(domain);
   });
 
-  Future<dynamic> show(WidgetTester tester) async {
+  Future<WorkspaceTestAccess> show(WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1400, 1000));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
       Foresight(TestDesktopConnection(app), deviceLoader: () async => []),
     );
     await tester.pumpAndSettle();
-    return tester.state(find.byType(Workspace));
+    return tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
   }
 
   List<Object?> keys(Operation operation) => [
@@ -79,8 +79,8 @@ void main() {
   testWidgets('saving a new note again after a lost reply creates it once', (
     tester,
   ) async {
-    final dynamic state = await show(tester);
-    state.update(() => state.tab = 2);
+    final state = await show(tester);
+    state.update(() => state.navigate(WorkspaceTab.notes));
     await tester.pumpAndSettle();
     await tester.tap(find.text('New note'));
     await tester.pumpAndSettle();
@@ -91,12 +91,12 @@ void main() {
     await tester.tap(find.text('Save note'));
     await tester.pumpAndSettle();
     expect(state.error, outcomeUnknownText);
-    expect(state.meetingFeature.noteId, isNull);
+    expect(state.sourceFeature.noteId, isNull);
     await tester.tap(find.text('Save note'));
     await tester.pumpAndSettle();
     final note = store.rows('SELECT id,title FROM notes').single;
     expect(note['title'], 'Kept once');
-    expect(state.meetingFeature.noteId, note['id']);
+    expect(state.sourceFeature.noteId, note['id']);
     final sent = keys(Operation.notesSave);
     expect(sent, hasLength(2));
     expect(sent.toSet(), hasLength(1));
@@ -114,7 +114,7 @@ void main() {
   testWidgets('pressing New meeting again after a lost reply creates once', (
     tester,
   ) async {
-    final dynamic state = await show(tester);
+    final state = await show(tester);
     domain.lose.add(Operation.meetingsCreate);
     await tester.tap(find.text('New meeting'));
     await tester.pumpAndSettle();
@@ -130,8 +130,8 @@ void main() {
   testWidgets('retrying a new note with edited text saves one note', (
     tester,
   ) async {
-    final dynamic state = await show(tester);
-    state.update(() => state.tab = 2);
+    final state = await show(tester);
+    state.update(() => state.navigate(WorkspaceTab.notes));
     await tester.pumpAndSettle();
     await tester.tap(find.text('New note'));
     await tester.pumpAndSettle();
@@ -147,7 +147,7 @@ void main() {
     await tester.pumpAndSettle();
     final note = store.rows('SELECT id,body FROM notes').single;
     expect(note['body'], 'Edited');
-    expect(state.meetingFeature.noteId, note['id']);
+    expect(state.sourceFeature.noteId, note['id']);
     expect(state.error, isEmpty);
     // The key only ever carried the first text; the edit went by ID.
     final saves = [
@@ -164,8 +164,8 @@ void main() {
   testWidgets('the reply to a new note after a workspace reset is dropped', (
     tester,
   ) async {
-    final dynamic state = await show(tester);
-    state.update(() => state.tab = 2);
+    final state = await show(tester);
+    state.update(() => state.navigate(WorkspaceTab.notes));
     await tester.pumpAndSettle();
     await tester.tap(find.text('New note'));
     await tester.pumpAndSettle();
@@ -183,15 +183,15 @@ void main() {
     final reused = store.saveNote(null, 'After the clear', '');
     reply.complete();
     await tester.pumpAndSettle();
-    expect(state.meetingFeature.noteId, isNull, reason: 'note $reused');
-    expect(state.meetingFeature.noteTitle.text, isEmpty);
+    expect(state.sourceFeature.noteId, isNull, reason: 'note $reused');
+    expect(state.sourceFeature.noteTitle.text, isEmpty);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
   testWidgets('importing a transcript again after a lost reply appends once', (
     tester,
   ) async {
-    final dynamic state = await show(tester);
+    final state = await show(tester);
     final id = store.meeting('Imported transcript');
     final directory = createTestTempDirectorySync('transcript-import-');
     final transcript = File('${directory.path}/transcript.txt')
@@ -211,10 +211,8 @@ void main() {
       ),
     );
     // As the Import transcript button runs it, with real file reads.
-    Future<void> action() =>
-        state.meetingFeature.importMeetingTranscript(id) as Future<void>;
-    Future<void> importChosen() =>
-        tester.runAsync(() => state.run(action) as Future<void>);
+    Future<void> action() => state.meetingFeature.importMeetingTranscript(id);
+    Future<void> importChosen() => tester.runAsync(() => state.run(action));
     List<Object?> segments() => [
       for (final row in store.meetingTranscript(id)) row['text'],
     ];
@@ -247,7 +245,7 @@ void main() {
   testWidgets('opening a meeting starts a new action for New meeting', (
     tester,
   ) async {
-    final dynamic state = await show(tester);
+    final state = await show(tester);
     domain.lose.add(Operation.meetingsCreate);
     await tester.tap(find.text('New meeting'));
     await tester.pumpAndSettle();

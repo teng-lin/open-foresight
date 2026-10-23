@@ -1,13 +1,13 @@
+import 'pump_until.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_test_support/remote_service.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/src/application.dart';
-import 'package:foresight_core/src/domain.dart';
-import 'package:foresight_core/src/google_auth.dart';
+import '../test_support/core_fixture.dart';
+
 import 'package:open_foresight/main.dart';
-import 'package:foresight_core/src/store.dart';
+
 import 'desktop_connection_fixture.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
@@ -43,28 +43,26 @@ void main() {
       Foresight(fixture.remote, deviceLoader: () async => []),
     );
     await tester.pumpAndSettle();
-    final dynamic state = tester.state(find.byType(Workspace));
-    state.meetingFeature.noteTitle.text = 'Local title';
-    state.meetingFeature.noteBody.text = 'Local body';
+    final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
+    state.sourceFeature.noteTitle.text = 'Local title';
+    state.sourceFeature.noteBody.text = 'Local body';
     state.meetingFeature.meetingNotesController.text = 'Local meeting notes';
     state.sourceFeature.sourceSearchController.text = 'Local search';
     state.chatFeature.answer = 'Local answer';
-    final clear = state.settingsFeature.clearWorkspace() as Future<void>;
+    final clear = state.settingsFeature.clearWorkspace();
     await tester.pumpAndSettle();
     await tester.tap(find.text('Delete workspace'));
     await tester.pump();
     await tester.runAsync(() async => clear);
     await tester.pumpAndSettle();
-    expect(state.meetingFeature.noteTitle.text, isEmpty);
-    expect(state.meetingFeature.noteBody.text, isEmpty);
+    expect(state.sourceFeature.noteTitle.text, isEmpty);
+    expect(state.sourceFeature.noteBody.text, isEmpty);
     expect(state.meetingFeature.meetingNotesController.text, isEmpty);
     expect(state.sourceFeature.sourceSearchController.text, isEmpty);
     expect(state.chatFeature.answer, isEmpty);
     expect(tester.takeException(), isNull);
-    await tester.runAsync(() async {
-      fixture.remote.close();
-      await fixture.remote.closed;
-    });
+    fixture.remote.close();
+    await pumpUntilCompleted(tester, fixture.remote.closed);
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pumpAndSettle();
   });
@@ -83,8 +81,8 @@ void main() {
       Foresight(TestDesktopConnection(app), deviceLoader: () async => []),
     );
     await tester.pumpAndSettle();
-    final dynamic state = tester.state(find.byType(Workspace));
-    final clear = state.settingsFeature.clearWorkspace() as Future<void>;
+    final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
+    final clear = state.settingsFeature.clearWorkspace();
     await tester.pumpAndSettle();
     await tester.tap(find.text('Delete workspace'));
     await tester.pumpAndSettle();

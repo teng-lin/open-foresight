@@ -1,3 +1,4 @@
+import 'package:open_foresight/desktop_environment.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
 import 'dart:io';
@@ -5,6 +6,53 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/commands.dart';
 
 void main() {
+  for (final failure in ['runner throws', 'hermetic default', 'chmod fails']) {
+    test('failed activation setup closes its listener: $failure', () async {
+      final directory = createTestTempDirectorySync('command-bind-');
+      final path = '${directory.path}/commands.sock';
+      final error = StateError('Injected chmod failure');
+      final environment = switch (failure) {
+        'runner throws' => DesktopEnvironment(run: (_, _) async => throw error),
+        'chmod fails' => DesktopEnvironment(
+          run: (_, _) async => ProcessResult(1, 1, '', 'Denied'),
+        ),
+        _ => const DesktopEnvironment(),
+      };
+      await expectLater(
+        AppCommands.bind(path, environment: environment),
+        switch (failure) {
+          'runner throws' => throwsA(same(error)),
+          'hermetic default' => throwsUnsupportedError,
+          _ => throwsA(isA<StateError>()),
+        },
+      );
+      // Check the original socket before bind can unlink it. Rebinding alone
+      // can conceal a leaked listener whose pathname has been removed.
+      Socket? unexpectedConnection;
+      try {
+        await expectLater(
+          () async => unexpectedConnection = await Socket.connect(
+            InternetAddress(path, type: InternetAddressType.unix),
+            0,
+            timeout: const Duration(seconds: 1),
+          ),
+          throwsA(isA<SocketException>()),
+        );
+      } finally {
+        unexpectedConnection?.destroy();
+      }
+      final owner = await AppCommands.bind(
+        path,
+        environment: DesktopEnvironment(
+          run: (_, _) async => ProcessResult(1, 0, '', ''),
+        ),
+        action: (_, _) async {},
+      );
+      addTearDown(owner.close);
+      expect(await AppCommands.forward(path), isTrue);
+    });
+  }
+
   test(
     'calendar return forwards to the owner and foreign schemes are rejected',
     () async {
@@ -12,7 +60,8 @@ void main() {
       final received = Completer<String>();
       final commands = await AppCommands.bind(
         '${directory.path}/commands.sock',
-        (command, url) async {
+        environment: DesktopEnvironment.production(),
+        action: (command, url) async {
           expect(command, 'calendar-auth');
           received.complete(url!);
         },
@@ -53,7 +102,8 @@ void main() {
       final failed = Completer<Object>();
       final commands = await AppCommands.bind(
         '${directory.path}/commands.sock',
-        (_, _) async {
+        environment: DesktopEnvironment.production(),
+        action: (_, _) async {
           throw StateError('Microphone unavailable');
         },
       );
@@ -79,10 +129,14 @@ void main() {
       final received = <String>[];
       final observed = StreamController<String>.broadcast();
       addTearDown(observed.close);
-      var owner = await AppCommands.bind(path, (command, token) async {
-        received.add('$command:$token');
-        observed.add(received.last);
-      });
+      var owner = await AppCommands.bind(
+        path,
+        environment: DesktopEnvironment.production(),
+        action: (command, token) async {
+          received.add('$command:$token');
+          observed.add(received.last);
+        },
+      );
       final quickMeeting = observed.stream.first;
       expect(
         await AppCommands.forward(path, activationToken: 'test-token'),
@@ -105,7 +159,11 @@ void main() {
       await owner.close();
       expect(owner.isClosed, true);
       expect(await AppCommands.forward(path), false);
-      owner = await AppCommands.bind(path, (_, _) async {});
+      owner = await AppCommands.bind(
+        path,
+        environment: DesktopEnvironment.production(),
+        action: (_, _) async {},
+      );
       expect(await AppCommands.forward(path), true);
       await owner.close();
       directory.deleteSync(recursive: true);

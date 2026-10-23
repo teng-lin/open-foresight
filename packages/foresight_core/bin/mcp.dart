@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/mcp/rpc_tools.dart';
 import 'dart:async';
 import 'package:foresight_core/src/operations.dart';
 import 'package:foresight_core/src/rpc_error.dart';

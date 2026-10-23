@@ -33,6 +33,36 @@ LITERT_VERSION = json.loads(Path(__file__).with_name("pins.json").read_text())[
 ]
 
 
+def write_runtime_configuration(bundle, revision, backend, whisper_device, web_keys=None):
+    """Bind direct native entrypoints to this relocatable installation."""
+    values = {
+        "FORESIGHT_INSTALL_ROOT": "../..",
+        "FORESIGHT_RUNTIME_REVISION": revision,
+        "FORESIGHT_SERVICE": "../../bin/foresight-service",
+        "FORESIGHT_HELPER": "../../bin/ForesightHelper",
+        "FORESIGHT_NATIVE": "../../lib/libforesight_native.so",
+        "FORESIGHT_SQLITE_LIBRARY": "../../lib/libsqlite3.so",
+        "FORESIGHT_MODEL_WORKER": "../../bin/foresight-model",
+        "FORESIGHT_LITERT_LIBRARY": "../../lib/liblitert-lm.so",
+        "FORESIGHT_LITERT_RUNNER": "../../bin/foresight-model",
+        "FORESIGHT_LITERT_BACKEND": backend,
+        "FORESIGHT_QUERY_WORKER": "adapters/legacy_query_worker.py",
+        **(web_keys or {}),
+    }
+    if (bundle / "bin/query-python").is_file():
+        values["FORESIGHT_LITERT_PYTHON"] = "../../bin/query-python"
+    if (bundle / "bin/whisper-cli-vulkan").is_file():
+        values.update(
+            FORESIGHT_WHISPER_RUNTIME="../../bin/whisper-cli-vulkan",
+            FORESIGHT_WHISPER_BACKEND="gpu",
+            FORESIGHT_WHISPER_DEVICE=str(whisper_device),
+        )
+    if (bundle / "share/open-foresight/google-client.json").is_file():
+        values["FORESIGHT_GOOGLE_CLIENT"] = "google-client.json"
+    path = bundle / "share/open-foresight/runtime.json"
+    path.write_text(json.dumps(values, indent=2) + "\n")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build", type=Path, default=ROOT / "build")
@@ -337,6 +367,10 @@ esac
             + '\nexec "$task_bundle/open-foresight" "$@"\n'
         )
         command.chmod(0o755)
+    write_runtime_configuration(
+        args.output, commit, args.generation_backend, args.whisper_gpu_device,
+        web_search_keys,
+    )
     files = [
         {
             "path": str(file.relative_to(args.output)),

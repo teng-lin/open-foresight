@@ -1,13 +1,15 @@
+import 'fixtures/setup_process.dart';
 import 'store_reader_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_test_support/poll.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/src/gemma_download.dart';
-import 'package:open_foresight/gemma_setup_view.dart';
-import 'package:open_foresight/model_setup.dart';
-import 'package:foresight_core/src/store.dart';
+import '../test_support/core_fixture.dart';
+import 'package:open_foresight/features/settings/gemma_setup_view.dart';
+import 'package:foresight_core/desktop.dart'
+    show StoreReadQueries, preparedNeedsModel;
+import '../test_support/current_read.dart';
 
 class LocalDownload extends GemmaDownload {
   final File asset;
@@ -41,9 +43,27 @@ void main() {
         final file = File('${root.path}/embedding.litertlm')
           ..writeAsStringSync('fixture');
         await store.register('embedding', file.path, '');
-        expect(needsModel(fixtureReader(store), 'embedding'), false);
+        expect(
+          preparedNeedsModel(
+            await currentRead(
+              fixtureReader(store),
+              StoreReadQueries.model('embedding'),
+            ),
+            'embedding',
+          ),
+          false,
+        );
         file.deleteSync();
-        expect(needsModel(fixtureReader(store), 'embedding'), true);
+        expect(
+          preparedNeedsModel(
+            await currentRead(
+              fixtureReader(store),
+              StoreReadQueries.model('embedding'),
+            ),
+            'embedding',
+          ),
+          true,
+        );
         expect(store.rows('SELECT * FROM models'), hasLength(1));
       } finally {
         store.close();
@@ -85,6 +105,7 @@ void main() {
                   onPressed: () => showDialog<void>(
                     context: context,
                     builder: (_) => GemmaSetupDialog(
+                      environment: setupEnvironment(),
                       store: fixtureReader(store),
                       savePreference: (key, value) async =>
                           store.setPreference(key, value),

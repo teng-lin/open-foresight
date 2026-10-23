@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:fake_async/fake_async.dart';
-import 'package:foresight_core/src/desktop_read_models.dart';
+import 'package:foresight_core/src/read_models.dart';
 import 'package:foresight_core/src/read_coordinator.dart';
 import 'package:foresight_core/src/persistence/read_schema_guard.dart';
 import 'package:foresight_core/src/rpc_error.dart';

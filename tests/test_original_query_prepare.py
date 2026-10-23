@@ -55,6 +55,8 @@ class PreparationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "root"
             root.mkdir(mode=0o755)
+            root.chmod(0o755)
+            self.assertEqual(root.stat().st_mode & 0o777, 0o755)
             with self.assertRaisesRegex(ValueError, "0700"):
                 module.private_root(root)
             link = Path(directory) / "link"

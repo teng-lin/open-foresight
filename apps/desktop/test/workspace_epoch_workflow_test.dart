@@ -1,12 +1,13 @@
-import 'package:foresight_core/src/application.dart';
+import 'package:foresight_core/desktop.dart' show MeetingArtifact;
+import 'package:open_foresight/shell/workspace_tab.dart';
+import '../test_support/core_fixture.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/remote.dart';
 import 'package:foresight_test_support/remote_service.dart';
 import 'package:foresight_test_support/test_paths.dart';
-import 'package:foresight_core/src/domain.dart';
+
 import 'package:open_foresight/main.dart';
-import 'package:foresight_core/src/store.dart';
+
 import 'desktop_connection_fixture.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 import 'controller_fixture.dart';
@@ -24,19 +25,19 @@ void main() {
       Foresight(fixture.remote, deviceLoader: () async => []),
     );
     await tester.pumpAndSettle();
-    final dynamic state = tester.state(find.byType(Workspace));
+    final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
     state.update(() {
-      state.meetingFeature.noteId = 3;
-      state.meetingFeature.noteTitle.text = 'Note 3';
-      state.meetingFeature.noteBody.text = 'Body of note 3';
+      state.sourceFeature.noteId = 3;
+      state.sourceFeature.noteTitle.text = 'Note 3';
+      state.sourceFeature.noteBody.text = 'Body of note 3';
     });
     // The clear commits to the profile before its event arrives.
     fixture.owner.renewWorkspaceEpoch();
     final cleared = fixture.owner.workspaceEpoch;
     fixture.event({...fixture.status, 'workspace_epoch': cleared});
-    await pumpUntil(tester, () => state.meetingFeature.noteId == null);
-    expect(state.meetingFeature.noteTitle.text, isEmpty);
-    expect(state.meetingFeature.noteBody.text, isEmpty);
+    await pumpUntil(tester, () => state.sourceFeature.noteId == null);
+    expect(state.sourceFeature.noteTitle.text, isEmpty);
+    expect(state.sourceFeature.noteBody.text, isEmpty);
     // The reset views now edit the new workspace.
     await tester.runAsync(
       () => fixture.remote.command(Operation.notesSave, {
@@ -49,10 +50,8 @@ void main() {
       fixture.requests.last['args'],
       containsPair('workspace_epoch', cleared),
     );
-    await tester.runAsync(() async {
-      fixture.remote.close();
-      await fixture.remote.closed;
-    });
+    fixture.remote.close();
+    await pumpUntilCompleted(tester, fixture.remote.closed);
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pumpAndSettle();
   });
@@ -64,7 +63,9 @@ void main() {
       final before = f.store.meeting('Before');
       f.store.artifact(before, 'summary', 'old summary', 'fixture');
       final row = f.store.rows('SELECT * FROM artifacts').single;
-      final editing = f.shell.meetingFeature.editArtifact(row) as Future<void>;
+      final editing = f.shell.meetingFeature.editArtifact(
+        MeetingArtifact.fromRow(row),
+      );
       await tester.pumpAndSettle();
       await tester.runAsync(
         () => f.connection.application.call(Operation.workspaceClear.wire, {}),
@@ -114,8 +115,8 @@ void main() {
       }
 
       f.shell.update(() {
-        f.shell.tab = 2;
-        f.shell.meetingFeature.noteTitle.text = 'private unsaved draft';
+        f.shell.navigate(WorkspaceTab.notes);
+        f.shell.sourceFeature.noteTitle.text = 'private unsaved draft';
       });
       await tester.pumpAndSettle();
       await clearElsewhere();
@@ -131,15 +132,15 @@ void main() {
       expect(find.text(notice), findsNothing);
       // This desktop's own clear discards edits on purpose.
       f.shell.update(
-        () => f.shell.meetingFeature.noteTitle.text = 'discarded on purpose',
+        () => f.shell.sourceFeature.noteTitle.text = 'discarded on purpose',
       );
-      final clear = f.shell.settingsFeature.clearWorkspace() as Future<void>;
+      final clear = f.shell.settingsFeature.clearWorkspace();
       await tester.pumpAndSettle();
       await tester.tap(find.text('Delete workspace'));
       await tester.pump();
       await tester.runAsync(() async => clear);
       await tester.pumpAndSettle();
-      expect(f.shell.meetingFeature.noteTitle.text, isEmpty);
+      expect(f.shell.sourceFeature.noteTitle.text, isEmpty);
       expect(find.text(notice), findsNothing);
     },
   );
@@ -154,7 +155,7 @@ void main() {
       // A clear has committed; its event has not reached the views yet.
       f.store.renewWorkspaceEpoch();
       expect(f.connection.workspaceReplaced, isTrue);
-      await (f.shell.meetingFeature.editArtifact(row) as Future<void>);
+      await (f.shell.meetingFeature.editArtifact(MeetingArtifact.fromRow(row)));
       await tester.pumpAndSettle();
       expect(find.byType(AlertDialog), findsNothing);
       expect(f.shell.error, contains('cleared elsewhere'));
@@ -217,7 +218,7 @@ void main() {
         'clear failed',
       );
       f.shell.meetingFeature.meetingNoteSaves.schedule(meeting, 'kept draft');
-      final clear = f.shell.settingsFeature.clearWorkspace() as Future<void>;
+      final clear = f.shell.settingsFeature.clearWorkspace();
       await tester.pumpAndSettle();
       await tester.tap(find.text('Delete workspace'));
       await tester.pump();
@@ -225,7 +226,7 @@ void main() {
       expect(f.shell.error, contains('clear failed'));
       await tester.pump(const Duration(seconds: 2));
       await tester.runAsync(
-        () => f.shell.meetingFeature.meetingNoteSaves.flush() as Future<void>,
+        () => f.shell.meetingFeature.meetingNoteSaves.flush(),
       );
       await tester.pumpAndSettle();
       expect(

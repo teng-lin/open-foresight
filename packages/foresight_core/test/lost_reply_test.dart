@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/desktop_identity.dart';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/service.dart';
@@ -31,7 +32,10 @@ void main() {
 
   test('a keyed save whose reply is lost after it committed is saved once on '
       'retry (LR-M1)', () async {
-    final service = await ApplicationService.start(profile);
+    final service = await ApplicationService.start(
+      profile,
+      desktopPeerVerifier: trustInProcessDesktop,
+    );
     final proxy = ServiceFaultProxy();
     final connection = ServiceConnection(profile);
     Future<Object?> save(Map<String, dynamic> args) =>

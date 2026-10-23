@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/src/recording.dart';
+import '../test_support/core_fixture.dart';
 import 'live_recording_test.dart' show waitFor;
 
 void main() {

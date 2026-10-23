@@ -21,11 +21,13 @@ class DocumentPeer:
         self.index_error = index_error
         self.adapter = adapter
 
+    def allow_import_root(self, path):
+        assert Path(path).is_dir()
+        self.calls.append(("actual_gui_approved_import_root", str(path)))
+        return True
+
     def call(self, method, args=None):
         self.calls.append((method, args))
-        if method == "security.allow_import_root":
-            assert Path(args["path"]).is_dir()
-            return True
         if method == "sources.list":
             return list(self.sources.values())
         if method == "sources.import_file":

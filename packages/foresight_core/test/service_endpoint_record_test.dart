@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -248,7 +249,10 @@ void main() {
           File('${profile.data}/owner.closed').existsSync,
           timeout: const Duration(seconds: 10),
         );
-        final service = await ApplicationService.start(profile);
+        final service = await ApplicationService.start(
+          profile,
+          desktopPeerVerifier: trustInProcessDesktop,
+        );
         try {
           expect(service.path, '${profile.runtime}/application.sock');
           expect(jsonDecode(record().readAsStringSync()), {
@@ -397,7 +401,10 @@ void main() {
       File('$base.invalid-3').writeAsStringSync('');
       File('$base.invalid-4').writeAsStringSync('');
       record().writeAsStringSync('null');
-      final service = await ApplicationService.start(profile);
+      final service = await ApplicationService.start(
+        profile,
+        desktopPeerVerifier: trustInProcessDesktop,
+      );
       try {
         final older = {
           '.application-endpoint.json.invalid-3',
@@ -421,7 +428,10 @@ void main() {
     File('$base.4194305').writeAsStringSync('');
     Directory('$base.12').createSync();
     File('$base.invalid-7').writeAsStringSync('');
-    final service = await ApplicationService.start(profile);
+    final service = await ApplicationService.start(
+      profile,
+      desktopPeerVerifier: trustInProcessDesktop,
+    );
     try {
       expect(entries(''), ['.application-endpoint.json.invalid-7']);
       expect(jsonDecode(record().readAsStringSync()), {
@@ -439,7 +449,10 @@ void main() {
       ..createSync(recursive: true);
     File('${locked.path}/child').writeAsStringSync('');
     expect(Process.runSync('/bin/chmod', ['500', locked.path]).exitCode, 0);
-    final service = await ApplicationService.start(profile);
+    final service = await ApplicationService.start(
+      profile,
+      desktopPeerVerifier: trustInProcessDesktop,
+    );
     try {
       expect(jsonDecode(record().readAsStringSync()), {
         'data': profile.data,
@@ -458,7 +471,10 @@ void main() {
       final temporary = '${record().path}.$pid';
       await expectLater(
         IOOverrides.runWithIOOverrides(
-          () => ApplicationService.start(profile),
+          () => ApplicationService.start(
+            profile,
+            desktopPeerVerifier: trustInProcessDesktop,
+          ),
           RenameFailureOverrides(temporary),
         ),
         throwsA(
@@ -471,7 +487,10 @@ void main() {
       );
       expect(File(temporary).existsSync(), isFalse);
       expect(record().existsSync(), isFalse);
-      final service = await ApplicationService.start(profile);
+      final service = await ApplicationService.start(
+        profile,
+        desktopPeerVerifier: trustInProcessDesktop,
+      );
       await service.close();
     },
   );
@@ -484,7 +503,10 @@ void main() {
       final capability = Link('${profile.data}/.desktop-capability')
         ..createSync('${root.path}/elsewhere');
       await expectLater(
-        ApplicationService.start(profile),
+        ApplicationService.start(
+          profile,
+          desktopPeerVerifier: trustInProcessDesktop,
+        ),
         throwsA(
           isA<StateError>().having(
             (error) => error.message,
@@ -500,7 +522,10 @@ void main() {
       );
       expect(quarantined(), hasLength(1));
       capability.deleteSync();
-      final service = await ApplicationService.start(profile);
+      final service = await ApplicationService.start(
+        profile,
+        desktopPeerVerifier: trustInProcessDesktop,
+      );
       await service.close();
     },
   );

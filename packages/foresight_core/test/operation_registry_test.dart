@@ -1,3 +1,5 @@
+import 'package:foresight_test_support/desktop_identity.dart';
+import 'package:foresight_core/src/mcp/rpc_tools.dart';
 import 'package:foresight_core/src/service.dart';
 import 'package:foresight_core/src/platform_services.dart';
 import 'package:foresight_core/src/profile_paths.dart';
@@ -218,6 +220,7 @@ void invalidCommands(DesktopConnection desktop) {
       try {
         service = await ApplicationService.start(
           ProfilePaths('${root.path}/d', '${root.path}/r'),
+          desktopPeerVerifier: trustInProcessDesktop,
         );
         final application = service.application.registeredOperations;
         final transport = service.registeredOperations;

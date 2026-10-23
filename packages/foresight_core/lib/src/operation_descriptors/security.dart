@@ -17,6 +17,7 @@ const securityAttachDesktopDescriptor = OperationDescriptor(
   createsLease: false,
   arguments: OperationArgumentSchema([
     ArgumentField("token", ArgumentKind.string),
+    ArgumentField('visible', ArgumentKind.trueSwitch),
   ]),
 );
 
@@ -35,6 +36,25 @@ const securityDetachDesktopDescriptor = OperationDescriptor(
   leaseBusy: true,
   createsLease: false,
   arguments: OperationArgumentSchema([]),
+);
+
+const securityDesktopVisibilityDescriptor = OperationDescriptor(
+  scope: OperationScope.service,
+  readOnly: false,
+  approval: ApprovalPolicy.desktop,
+  capability: CapabilityPolicy.approvalHost,
+  requiresHelper: false,
+  modelGate: ModelGatePolicy.none,
+  notifiesChanges: false,
+  response: ResponseShape.result,
+  carriesWorkspaceEpoch: false,
+  acceptsIdempotencyKey: false,
+  stampsAgentActivity: false,
+  leaseBusy: false,
+  createsLease: false,
+  arguments: OperationArgumentSchema([
+    ArgumentField('visible', ArgumentKind.trueSwitch),
+  ]),
 );
 
 const securityDecideDescriptor = OperationDescriptor(

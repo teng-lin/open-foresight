@@ -1,10 +1,57 @@
+import 'dart:async';
+import 'package:foresight_core/desktop.dart';
 import 'store_reader_fixture.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_test_support/test_paths.dart';
-import 'package:open_foresight/background_store.dart';
-import 'package:foresight_core/src/store.dart';
+import 'package:open_foresight/features/settings/output_statistics.dart';
+import '../test_support/core_fixture.dart';
 
 void main() {
+  test(
+    'a stable Stats period freezes a fresh exact cutoff for each actual worker dispatch',
+    () async {
+      final root = createTestTempDirectorySync('stats-period-cutoff-');
+      final store = Store('${root.path}/app.db');
+      addTearDown(store.close);
+      var now = DateTime(2026, 11, 2, 12);
+      store.answer('Past', 'three exact words', 'completed', [], 'fixture');
+      store.db.execute('UPDATE answers SET created=?', [
+        now.millisecondsSinceEpoch,
+      ]);
+      store.answer('Future', 'later output', 'completed', [], 'fixture');
+      store.db.execute('UPDATE answers SET created=? WHERE id=?', [
+        now.millisecondsSinceEpoch + 1,
+        store.db.lastInsertRowId,
+      ]);
+      final reader = fixtureReader(store);
+      final values = <OutputStats>[];
+      var delivered = Completer<void>();
+      final period = OutputStatsPeriod.capture(now);
+      final query = StoreReadQueries.outputStatsForPeriod(
+        period: period,
+        clock: () => now,
+      );
+      final subscription = reader.watch(query).listen((result) {
+        if (result.current) {
+          values.add(result.value!);
+          if (!delivered.isCompleted) delivered.complete();
+        }
+      });
+      addTearDown(subscription.cancel);
+      await delivered.future.timeout(const Duration(seconds: 5));
+      expect(values.last.words, 5); // Total retains all completed local output.
+      expect(values.last.weekly, [0, 0, 0, 0, 3]);
+      expect(values.last.period!.key, period.key);
+      now = now.add(const Duration(milliseconds: 1));
+      delivered = Completer<void>();
+      store.setPreference('stats.dispatch.fixture', 'refresh');
+      invalidateFixtureReader(store);
+      await delivered.future.timeout(const Duration(seconds: 5));
+      expect(values.last.weekly, [0, 0, 0, 0, 5]);
+      expect(values.last.period!.key, period.key);
+    },
+  );
+
   test(
     'answers and artifacts share local calendar weeks and generation dates',
     () async {

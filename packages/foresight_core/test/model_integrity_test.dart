@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:io';
 import 'package:foresight_core/src/platform_services.dart';
 import 'package:foresight_core/src/profile_paths.dart';
@@ -43,6 +44,7 @@ void main() {
       file.writeAsStringSync('changed bytes');
       final service = await ApplicationService.start(
         ProfilePaths(directory.path, directory.path),
+        desktopPeerVerifier: trustInProcessDesktop,
       );
       addTearDown(service.close);
       expect(service.domain.store.model('generation'), isNull);

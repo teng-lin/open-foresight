@@ -307,10 +307,15 @@ def test_audio_gate_uses_private_routes_and_clears_whisper_for_pcm_inspector(
     runner = tmp_path / "bin/whisper-cli-vulkan"
     runner.parent.mkdir()
     runner.touch()
+    service = runner.parent / "foresight-service"
+    service.write_bytes(b"fixture service")
+    service.chmod(0o755)
+    output = tmp_path.parent / (tmp_path.name + "-reports")
+    output.mkdir()
     args = SimpleNamespace(
         bundle=tmp_path,
         models=tmp_path,
-        output=tmp_path,
+        output=output,
         flutter="flutter",
         dart="dart",
     )
@@ -427,3 +432,76 @@ def test_model_fixture_requires_exact_hash(tmp_path, monkeypatch):
     (tmp_path / "model").write_bytes(b"corrupt")
     with pytest.raises(ValueError, match="digest"):
         gates.model_file(tmp_path, "tiny")
+
+
+def test_compiled_meeting_uses_identical_unbundled_service_and_exact_debug_peer(
+    tmp_path, monkeypatch
+):
+    bundle = tmp_path / "sealed-bundle"
+    original = bundle / "bin/foresight-service"
+    original.parent.mkdir(parents=True)
+    original.write_bytes(b"\x7fELFqualified service bytes")
+    original.chmod(0o751)
+    sealed = bundle / "share/open-foresight/runtime.json"
+    sealed.parent.mkdir(parents=True)
+    sealed.write_text('{"FORESIGHT_RUNTIME_REVISION":"sealed-revision"}')
+    output = tmp_path / "reports"
+    output.mkdir(mode=0o700)
+    before = {
+        str(p.relative_to(bundle)): (p.read_bytes(), p.stat().st_mode, p.stat().st_mtime_ns)
+        for p in bundle.rglob("*") if p.is_file()
+    }
+    args = SimpleNamespace(bundle=bundle, output=output, models=tmp_path)
+    monkeypatch.setattr(gates, "ROOT", tmp_path / "source")
+    monkeypatch.setattr(gates, "model_file", lambda directory, kind: str(tmp_path / kind))
+    private = {
+        "FORESIGHT_LIVE_SINK": "private-sink",
+        "FORESIGHT_DEVELOPMENT_DESKTOP_EXECUTABLES": '["/unrelated/native"]',
+    }
+    env = gates.meeting_environment(
+        args,
+        {"FORESIGHT_SPEECH_MODEL": "/speech", "FORESIGHT_SPEECH_RUNNER": "/whisper"},
+        private,
+    )
+    service = Path(env["FORESIGHT_SERVICE"])
+    assert not service.is_relative_to(bundle)
+    assert service.parent.name != "bin"
+    assert service.read_bytes() == original.read_bytes()
+    assert service.stat().st_mode & 0o777 == original.stat().st_mode & 0o777 == 0o751
+    expected_peer = str((tmp_path / "source/apps/desktop/build/linux/x64/debug/bundle/open-foresight").resolve())
+    assert json.loads(env["FORESIGHT_DEVELOPMENT_DESKTOP_EXECUTABLES"]) == [expected_peer]
+    identity = json.loads((output / "meeting-service-identity.json").read_text())
+    assert identity["source"] == str(original)
+    assert identity["copy"] == str(service)
+    assert identity["sha256"] == hashlib.sha256(original.read_bytes()).hexdigest()
+    assert identity["desktop"] == expected_peer
+    assert identity["mode"] == 0o751
+    assert "Unbundled" in identity["scope"]
+    assert before == {
+        str(p.relative_to(bundle)): (p.read_bytes(), p.stat().st_mode, p.stat().st_mtime_ns)
+        for p in bundle.rglob("*") if p.is_file()
+    }
+    assert private["FORESIGHT_DEVELOPMENT_DESKTOP_EXECUTABLES"] == '["/unrelated/native"]'
+
+
+@pytest.mark.parametrize("failure", ["inside-bundle", "not-executable", "existing-copy"])
+def test_compiled_meeting_refuses_unsafe_service_staging(tmp_path, monkeypatch, failure):
+    bundle = tmp_path / "bundle"
+    original = bundle / "bin/foresight-service"
+    original.parent.mkdir(parents=True)
+    original.write_bytes(b"original service")
+    original.chmod(0o600 if failure == "not-executable" else 0o700)
+    output = bundle / "reports" if failure == "inside-bundle" else tmp_path / "reports"
+    output.mkdir()
+    staged = output / "meeting-service"
+    if failure == "existing-copy":
+        staged.write_bytes(b"previous evidence")
+    monkeypatch.setattr(gates, "model_file", lambda *args: "/model")
+    args = SimpleNamespace(bundle=bundle, output=output, models=tmp_path)
+    with pytest.raises((ValueError, FileExistsError)):
+        gates.meeting_environment(args, {}, {})
+    assert original.read_bytes() == b"original service"
+    if failure == "existing-copy":
+        assert staged.read_bytes() == b"previous evidence"
+    else:
+        assert not staged.exists()

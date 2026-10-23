@@ -152,6 +152,14 @@
       "reason": "Regular core build supplies FORESIGHT_NATIVE_LIBRARY."
     },
     {
+      "path": "packages/foresight_core/test/service_model_runtime_admission_test.dart",
+      "conditions": [
+        "library == null ? 'Requires a built FORESIGHT_NATIVE_LIBRARY and its process supervisor' : false"
+      ],
+      "gate": "core-native",
+      "reason": "Regular core build supplies FORESIGHT_NATIVE_LIBRARY; these service-boundary cases execute the bundled worker through that actual native library."
+    },
+    {
       "path": "packages/foresight_core/test/platform_adapters_test.dart",
       "conditions": [
         "!Platform.isMacOS"

@@ -2,6 +2,7 @@ import 'rpc_error.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'runtime_execution_policy.dart';
 
 const dedicatedQueryModelKind = 'query-detection';
 const dedicatedQueryBackend = 'legacy_query_cpu';
@@ -88,9 +89,11 @@ class DedicatedQueryRuntime
 
   Future<void> _start() async {
     if (_process != null) return;
+    final executable = requireInstalledRuntime(python);
+    final selectedWorker = requireInstalledRuntime(worker);
     final epoch = _epoch;
-    final process = await _startProcess(python, [
-      if (python != worker) ...['-I', '-B', worker],
+    final process = await _startProcess(executable, [
+      if (executable != selectedWorker) ...['-I', '-B', selectedWorker],
       '--model',
       model,
     ]);

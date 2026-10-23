@@ -15,7 +15,8 @@ import time
 
 from install_macos import minimal_environment
 from installed_runtime import layout, process_path, service_command, wait_stopped
-from smoke_macos_bundle import ApplicationPeer, McpPeer
+from smoke_macos_bundle import McpPeer
+from installed_desktop_approval import ApprovedApplicationPeer, InstalledDesktop
 from test_packaged_model_runtime import (
     digest,
     packaged_paths,
@@ -91,7 +92,7 @@ def run(args):
         "scenario": "saved_transcript_Tuesday_to_Friday_without_force_regenerate",
     }
     profile = None
-    mcp = application = None
+    mcp = application = desktop = None
     owner = None
     env = None
     service = None
@@ -165,11 +166,12 @@ def run(args):
             raise AssertionError("MCP attached outside the requested bundle/profile")
         report["runtime_revision"] = state.get("runtime_revision")
         report["service_pid"] = owner
-        application = ApplicationPeer(runtime / "application.sock")
+        desktop = InstalledDesktop(
+            bundle, profile, env, output / "gui", timeout=args.timeout
+        ).start()
+        application = ApprovedApplicationPeer(runtime / "application.sock", desktop)
         application.socket.settimeout(args.timeout)
-        report["authenticated_synthetic_desktop"] = application.attach_test_desktop(
-            data
-        )
+        report["production_gui_approval"] = desktop.evidence
         for key in ("liveEnhance", "proactiveAnswers"):
             application.call("preferences.set", {"key": key, "value": "false"})
         report["stage"] = "model_configuration"
@@ -286,6 +288,8 @@ def run(args):
             application = None
             mcp.close()
             mcp = None
+            desktop.close()
+            desktop = None
             service_command(service, env, "--stop")
             wait_stopped(owner, service)
             previous_owner = owner
@@ -297,9 +301,10 @@ def run(args):
                 raise AssertionError(
                     "Restart did not create the requested installed service"
                 )
+            from smoke_macos_bundle import ApplicationPeer
+
             application = ApplicationPeer(runtime / "application.sock")
             application.socket.settimeout(args.timeout)
-            application.attach_test_desktop(data)
             restored = application.call("meetings.get", {"id": identifier})
             enhanced(restored, "Friday")
             if not any(
@@ -325,6 +330,11 @@ def run(args):
                     peer.close()
                 except Exception as error:
                     cleanup_errors.append(str(error))
+        if desktop is not None:
+            try:
+                desktop.close()
+            except Exception as error:
+                cleanup_errors.append(str(error))
         if service is not None and env is not None:
             try:
                 # Authenticate the disposable profile even if startup failed

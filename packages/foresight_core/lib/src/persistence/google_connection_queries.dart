@@ -1,5 +1,5 @@
 import 'dart:convert';
-import '../desktop_read_models.dart';
+import '../read_models.dart';
 import '../google_calendar_event.dart';
 import '../store.dart';
 import 'read_schema_guard.dart';

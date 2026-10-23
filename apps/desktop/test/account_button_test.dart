@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:foresight_core/desktop.dart' show GoogleAccountPresentation;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/account_button.dart';
 
@@ -19,21 +20,21 @@ void main() {
               displayName: 'Alex',
               email: 'alex@example.test',
               photoUrl: '',
-              accounts: const [
-                {
-                  'id': 'alex',
-                  'displayName': 'Alex',
-                  'email': 'alex@example.test',
-                  'photoUrl': '',
-                  'current': true,
-                },
-                {
-                  'id': 'sam',
-                  'displayName': 'Sam',
-                  'email': 'sam@example.test',
-                  'photoUrl': '',
-                  'current': false,
-                },
+              accounts: [
+                GoogleAccountPresentation(
+                  id: 'alex',
+                  displayName: 'Alex',
+                  email: 'alex@example.test',
+                  photoUrl: '',
+                  current: true,
+                ),
+                GoogleAccountPresentation(
+                  id: 'sam',
+                  displayName: 'Sam',
+                  email: 'sam@example.test',
+                  photoUrl: '',
+                  current: false,
+                ),
               ],
               onSignIn: () => fail('Already signed in'),
               onAddAccount: () => additions++,

@@ -9,6 +9,7 @@ final class GatedReadWorker implements ReadWorker {
   final requests = <ReadWorkerRequest>[];
   final pending = <Completer<ReadWorkerReply>>[];
   int closes = 0;
+  Object? closeError;
   @override
   Future<ReadWorkerReply> read(ReadWorkerRequest request) {
     requests.add(request);
@@ -21,7 +22,10 @@ final class GatedReadWorker implements ReadWorker {
       pending[index].complete(ReadWorkerReply(epoch, value));
 
   @override
-  Future<void> close() async => closes++;
+  Future<void> close() async {
+    closes++;
+    if (closeError != null) throw closeError!;
+  }
 }
 
 void main() {
@@ -29,6 +33,147 @@ void main() {
     projection: 'fixture',
     decode: (value) => value as String,
   );
+
+  test('late watchers and reads refresh an idle active key without replay', () {
+    fakeAsync((clock) {
+      final worker = GatedReadWorker();
+      var revision = 'one';
+      final coordinator = ReadCoordinator(
+        identity: () => _identity(revision: revision),
+        worker: worker,
+      );
+      final first = <ReadResult<String>>[];
+      final second = <ReadResult<String>>[];
+      final subscription = coordinator.watch(query).listen(first.add);
+      clock.flushMicrotasks();
+      worker.complete(0, 'epoch', 'old');
+      clock.flushMicrotasks();
+      revision = 'two';
+      final late = coordinator.watch(query).listen(second.add);
+      ReadResult<String>? read;
+      unawaited(coordinator.read(query).then((value) => read = value));
+      clock.flushMicrotasks();
+      expect(second, isEmpty);
+      expect(read, isNull);
+      expect(worker.requests, hasLength(2));
+      expect(coordinator.activeReads, 1);
+      expect(coordinator.pendingRefreshes, 0);
+      worker.complete(1, 'epoch', 'new');
+      clock.flushMicrotasks();
+      expect(second.single.value, 'new');
+      expect(second.single.current, isTrue);
+      expect(second.single.requestTag, 'two');
+      expect(read!.value, 'new');
+      expect(read!.current, isTrue);
+      unawaited(subscription.cancel());
+      unawaited(late.cancel());
+      unawaited(coordinator.close());
+      clock.flushMicrotasks();
+    });
+  });
+
+  test('late in-flight listeners share work and one pending refresh', () {
+    fakeAsync((clock) {
+      final worker = GatedReadWorker();
+      final coordinator = ReadCoordinator(identity: _identity, worker: worker);
+      final stream = coordinator.watch(query);
+      final first = <ReadResult<String>>[];
+      final second = <ReadResult<String>>[];
+      final initial = stream.listen(first.add);
+      clock.flushMicrotasks();
+      final late = stream.listen(second.add);
+      ReadResult<String>? result;
+      unawaited(coordinator.read(query).then((value) => result = value));
+      clock.flushMicrotasks();
+      expect(worker.requests, hasLength(1));
+      expect(coordinator.pendingRefreshes, 1);
+      worker.complete(0, 'epoch', 'shared');
+      clock.flushMicrotasks();
+      expect(first.single.value, 'shared');
+      expect(second.single.value, 'shared');
+      expect(result!.value, 'shared');
+      expect(worker.requests, hasLength(2));
+      unawaited(initial.cancel());
+      unawaited(late.cancel());
+      worker.complete(1, 'epoch', 'unused refresh');
+      clock.flushMicrotasks();
+      final revisited = <ReadResult<String>>[];
+      final revisit = stream.listen(revisited.add);
+      clock.flushMicrotasks();
+      expect(worker.requests, hasLength(3));
+      worker.complete(2, 'epoch', 'revisited');
+      clock.flushMicrotasks();
+      expect(revisited.single.value, 'revisited');
+      unawaited(revisit.cancel());
+      unawaited(coordinator.close());
+      clock.flushMicrotasks();
+    });
+  });
+
+  test('late subscribers to timed-out work have their own bounded wait', () {
+    fakeAsync((clock) {
+      final worker = GatedReadWorker();
+      final coordinator = ReadCoordinator(identity: _identity, worker: worker);
+      final first = <ReadResult<String>>[];
+      final subscription = coordinator.watch(query).listen(first.add);
+      clock.flushMicrotasks();
+      clock.elapse(const Duration(seconds: 30));
+      expect(first.single.freshness, ReadFreshness.busy);
+      ReadResult<String>? result;
+      unawaited(coordinator.read(query).then((value) => result = value));
+      final cancelledEvents = <ReadResult<String>>[];
+      final cancelled = coordinator.watch(query).listen(cancelledEvents.add);
+      clock.flushMicrotasks();
+      unawaited(cancelled.cancel());
+      clock.elapse(const Duration(seconds: 29));
+      expect(result, isNull);
+      expect(coordinator.activeReads, 1);
+      expect(coordinator.pendingRefreshes, 1);
+      clock.elapse(const Duration(seconds: 1));
+      expect(result!.freshness, ReadFreshness.busy);
+      expect(result!.value, isNull);
+      expect(result!.error!.code, RpcErrorCode.busy);
+      expect(cancelledEvents, isEmpty);
+      expect(worker.requests, hasLength(1));
+      worker.complete(0, 'epoch', 'expired');
+      clock.flushMicrotasks();
+      worker.complete(1, 'epoch', 'fresh');
+      clock.flushMicrotasks();
+      expect(first.last.value, 'fresh');
+      unawaited(subscription.cancel());
+      unawaited(coordinator.close());
+      clock.flushMicrotasks();
+      expect(clock.nonPeriodicTimerCount, 0);
+    });
+  });
+
+  test('a subscriber deadline bounds repeated discarded owner results', () {
+    fakeAsync((clock) {
+      var epoch = 'epoch';
+      final worker = GatedReadWorker();
+      final coordinator = ReadCoordinator(
+        identity: () => _identity(epoch: epoch),
+        worker: worker,
+      );
+      ReadResult<String>? result;
+      unawaited(coordinator.read(query).then((value) => result = value));
+      clock.flushMicrotasks();
+      for (var index = 0; index < 3; index++) {
+        clock.elapse(const Duration(seconds: 9));
+        epoch = 'epoch-$index';
+        worker.complete(index, 'retired', 'private body');
+        clock.flushMicrotasks();
+        expect(result, isNull);
+      }
+      clock.elapse(const Duration(seconds: 3));
+      expect(result!.freshness, ReadFreshness.busy);
+      expect(result!.value, isNull);
+      worker.complete(3, epoch, 'ignored after cancellation');
+      clock.flushMicrotasks();
+      unawaited(coordinator.close());
+      clock.flushMicrotasks();
+    });
+  });
 
   test(
     'retired query entries release cached projections after actual settlement',
@@ -351,6 +496,74 @@ void main() {
       });
     },
   );
+
+  test('failed worker teardown still retires the reader exactly once', () {
+    fakeAsync((clock) {
+      final worker = GatedReadWorker();
+      var closedOwners = 0, activityClosed = false;
+      final coordinator = ReadCoordinator(
+        identity: _identity,
+        worker: worker,
+        onClosed: () => closedOwners++,
+      );
+      final activity = coordinator.activityChanges.listen(
+        (_) {},
+        onDone: () => activityClosed = true,
+      );
+      final received = <ReadResult<String>>[];
+      var readerClosed = false;
+      final subscription = coordinator
+          .watch(query)
+          .listen(received.add, onDone: () => readerClosed = true);
+      clock.flushMicrotasks();
+      worker.complete(0, 'epoch', 'accepted before shutdown');
+      clock.flushMicrotasks();
+      expect(received.single.value, 'accepted before shutdown');
+      expect(coordinator.trackedQueries, 1);
+
+      final failure = StateError('worker teardown failed');
+      worker.closeError = failure;
+      Object? reported;
+      final closing = coordinator.close();
+      unawaited(
+        closing.then<void>(
+          (_) => fail('Worker teardown failure must reach the owner'),
+          onError: (Object error) {
+            reported = error;
+          },
+        ),
+      );
+      expect(coordinator.close(), same(closing));
+      clock.flushMicrotasks();
+      expect(reported, same(failure));
+      expect(worker.closes, 1);
+      expect(closedOwners, 1);
+      expect(activityClosed, isTrue);
+      expect(readerClosed, isTrue);
+      expect(received.map((value) => value.freshness), [
+        ReadFreshness.current,
+        ReadFreshness.cancelled,
+      ]);
+      expect(received.last.value, isNull);
+      expect(coordinator.trackedQueries, 0);
+      expect(coordinator.activeReads, 0);
+
+      ReadResult<String>? retired;
+      unawaited(coordinator.read(query).then((value) => retired = value));
+      clock.flushMicrotasks();
+      expect(retired!.freshness, ReadFreshness.cancelled);
+      expect(retired!.value, isNull);
+      expect(retired!.error!.code, RpcErrorCode.cancelled);
+      expect(worker.requests, hasLength(1));
+      expect(coordinator.close(), same(closing));
+      expect(worker.closes, 1);
+      expect(closedOwners, 1);
+      expect(clock.nonPeriodicTimerCount, 0);
+      unawaited(subscription.cancel());
+      unawaited(activity.cancel());
+      clock.flushMicrotasks();
+    });
+  });
 }
 
 ReadIdentity _identity({

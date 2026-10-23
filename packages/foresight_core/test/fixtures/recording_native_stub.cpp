@@ -16,7 +16,11 @@ static int fail_channel = -1;
 static std::string speech_event;
 static bool hold_speech = false;
 static int speech_creations = 0;
+static std::string speech_runtime;
 extern "C" {
+const char *fixture_speech_runtime() {
+  return speech_runtime.c_str();
+}
 int fixture_speech_creations() {
   return speech_creations;
 }
@@ -72,7 +76,8 @@ void fs_capture_stop(void *pointer) {
     channels[handle->channel] = nullptr;
   delete handle;
 }
-void *fs_speech_create(const char *, const char *) {
+void *fs_speech_create(const char *runtime, const char *) {
+  speech_runtime = runtime;
   ++speech_creations;
   return new Handle{true, -1};
 }

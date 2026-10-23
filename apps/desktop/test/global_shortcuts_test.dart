@@ -1,10 +1,11 @@
+import 'package:open_foresight/platform_capabilities.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:dbus/dbus.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/global_shortcuts.dart';
-import 'package:open_foresight/hypr_shortcuts.dart';
+import 'package:open_foresight/features/integrations/global_shortcuts.dart';
+import 'package:open_foresight/features/integrations/hypr_shortcuts.dart';
 
 class Portal extends DBusObject {
   final calls = <DBusMethodCall>[];
@@ -232,7 +233,7 @@ void main() {
       final activated = <String>[];
       final shortcuts = GlobalShortcuts(
         (id, _) => activated.add(id),
-        macOS: true,
+        capabilities: const PlatformCapabilities.macOS(),
       );
       Future<void> activate() async {
         await messenger.handlePlatformMessage(

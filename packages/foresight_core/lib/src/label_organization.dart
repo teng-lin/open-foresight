@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'desktop_read_models.dart';
+import 'read_models.dart';
 import 'graph_labels.dart';
 import 'graph_layout.dart';
 import 'label_propagation.dart';

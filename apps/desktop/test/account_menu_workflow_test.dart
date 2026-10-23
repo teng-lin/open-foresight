@@ -1,13 +1,14 @@
-import 'package:foresight_core/src/application.dart';
+import '../test_support/core_fixture.dart';
+import 'package:foresight_core/desktop.dart' show GoogleAccountPresentation;
 import 'dart:io';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_test_support/test_paths.dart';
-import 'package:foresight_core/src/google_auth.dart';
-import 'package:open_foresight/google_sign_in_dialog.dart';
+
+import 'package:open_foresight/features/integrations/google_sign_in_dialog.dart';
 import 'package:open_foresight/main.dart';
-import 'package:foresight_core/src/store.dart';
+
 import 'desktop_connection_fixture.dart';
 import 'google_setup_ui_test.dart' show BundledGoogleDomain;
 import 'meeting_setup_test.dart' show OfflineHelper;
@@ -29,15 +30,15 @@ class SignedInAccount extends GoogleAuth {
   @override
   String get photoUrl => '';
   @override
-  List<Map<String, Object?>> get accounts => [
+  List<GoogleAccountPresentation> get accounts => [
     for (final id in saved)
-      {
-        'id': id,
-        'email': '$id@example.test',
-        'displayName': id == 'alex' ? 'Alex Example' : 'Sam Example',
-        'photoUrl': '',
-        'current': id == selected,
-      },
+      GoogleAccountPresentation(
+        id: id,
+        email: '$id@example.test',
+        displayName: id == 'alex' ? 'Alex Example' : 'Sam Example',
+        photoUrl: '',
+        current: id == selected,
+      ),
   ];
   @override
   Future<void> refreshProfile() async {}

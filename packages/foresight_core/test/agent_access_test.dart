@@ -82,7 +82,7 @@ void main() {
         events.add(event);
         return EventDelivery.sent;
       }, now: () => now);
-      gate.attach(host, 'token');
+      gate.attach(host, 'token', verifiedDesktop: true);
       for (var i = 0; i < 3; i++) {
         final work = gate.authorize(client, 'sources.import_url', {
           'url': 'https://example.test',
@@ -148,7 +148,7 @@ void main() {
         (_, event) =>
             event['event'] == 'approval' ? delivery : EventDelivery.sent,
       );
-      gate.attach(host, 'token');
+      gate.attach(host, 'token', verifiedDesktop: true);
       await expectLater(
         gate.authorize(client, 'sources.delete', {
           'id': 'source',
@@ -172,7 +172,7 @@ void main() {
           if (event['event'] == 'approval') ids.add(event['approval_id']);
           return EventDelivery.sent;
         });
-        gate.attach(host, 'token');
+        gate.attach(host, 'token', verifiedDesktop: true);
         final work = gate.authorize(client, 'sources.delete', {
           'id': 'source',
         }, current: () => true);
@@ -238,7 +238,7 @@ void main() {
           );
         }
         expect(
-          () => gate.attach(agent, 'guessed-token'),
+          () => gate.attach(agent, 'guessed-token', verifiedDesktop: true),
           throwsA(
             isA<RpcError>().having(
               (error) => error.code,
@@ -250,7 +250,7 @@ void main() {
       },
     );
     test('approval is per operation and only desktop can decide', () async {
-      gate.attach(desktop, 'private-token');
+      gate.attach(desktop, 'private-token', verifiedDesktop: true);
       final pending = gate.authorize(
         agent,
         'workspace.clear',
@@ -286,7 +286,7 @@ void main() {
     test(
       'direct desktop start and resume use click consent; agent approval remains scoped',
       () async {
-        gate.attach(desktop, 'private-token');
+        gate.attach(desktop, 'private-token', verifiedDesktop: true);
         for (final method in ['meetings.start', 'meetings.resume']) {
           await gate.authorize(desktop, method, {'id': 1}, current: () => true);
         }
@@ -312,14 +312,14 @@ void main() {
     test(
       'denial, cancellation, timeout and connection replacement fail closed',
       () async {
-        gate.attach(desktop, 'private-token');
+        gate.attach(desktop, 'private-token', verifiedDesktop: true);
         expect(
-          () => gate.attach(stranger, 'private-token'),
+          () => gate.attach(stranger, 'private-token', verifiedDesktop: true),
           throwsA(
             isA<RpcError>().having(
               (error) => error.code,
               'code',
-              RpcErrorCode.busy,
+              RpcErrorCode.denied,
             ),
           ),
         );
@@ -367,7 +367,7 @@ void main() {
       },
     );
     test('private URL opt-in still requires visible agent approval', () async {
-      gate.attach(desktop, 'private-token');
+      gate.attach(desktop, 'private-token', verifiedDesktop: true);
       final pending = gate.authorize(agent, 'sources.import_url', {
         'url': 'http://127.0.0.1/private',
         'allow_private_network': true,

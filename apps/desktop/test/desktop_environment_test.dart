@@ -1,0 +1,312 @@
+import 'dart:io';
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import '../test_support/core_fixture.dart';
+
+import 'package:foresight_test_support/test_paths.dart';
+import 'package:open_foresight/desktop_environment.dart';
+import 'package:open_foresight/features/sources/file_discovery_sheet.dart';
+import 'package:open_foresight/main.dart';
+import 'controller_fixture.dart';
+import 'meeting_setup_test.dart' show OfflineHelper;
+
+void main() {
+  test('host effects occur only in the environment adapter', () {
+    final forbidden = RegExp(
+      r'Process\.\w+|\bPlatform\s*\.\s*\w+|\bdefaultTargetPlatform\b|\bkIsWeb\b|\bopenPlatformUri\b|\bplatformNotification\b',
+    );
+    for (final file
+        in Directory('lib')
+            .listSync(recursive: true)
+            .whereType<File>()
+            .where((file) => file.path.endsWith('.dart'))) {
+      if (file.path == 'lib/desktop_environment.dart') continue;
+      expect(
+        forbidden.allMatches(file.readAsStringSync()),
+        isEmpty,
+        reason: file.path,
+      );
+    }
+  });
+
+  test(
+    'main supplies the production environment and production binds real effects',
+    () {
+      final source = File('lib/main.dart').readAsStringSync();
+      expect(source, contains('environment: DesktopEnvironment.production()'));
+      expect(source, contains('required this.environment'));
+      expect(source, isNot(contains('this.deviceLoader = audioDevices')));
+      final environment = DesktopEnvironment.production();
+      expect(environment.run, Process.run);
+      expect(environment.start, Process.start);
+      expect(environment.openUri, openPlatformUri);
+      expect(environment.notify, platformNotification);
+      expect(environment.variables, Platform.environment);
+      expect(environment.capabilities.usesMetaShortcuts, Platform.isMacOS);
+      expect(
+        environment.configDirectory,
+        Platform.environment['XDG_CONFIG_HOME'] ??
+            '${Platform.environment['HOME']}/.config',
+      );
+      expect(
+        environment.dataDirectory,
+        Platform.environment['XDG_DATA_HOME'] ??
+            '${Platform.environment['HOME']}/.local/share',
+      );
+    },
+  );
+
+  test('widget environment defaults cannot spawn a process', () async {
+    const environment = DesktopEnvironment();
+    expect(environment.variables, isEmpty);
+    expect(environment.homeDirectory, isNull);
+    expect(environment.capabilities.supportsHyprland, isTrue);
+    expect(environment.capabilities.usesMetaShortcuts, isFalse);
+    await expectLater(
+      environment.run('/usr/bin/hyprctl', []),
+      throwsUnsupportedError,
+    );
+    await expectLater(
+      environment.start('/usr/bin/true', []),
+      throwsUnsupportedError,
+    );
+  });
+
+  test('missing HOME preserves the recoverable startup profile error', () {
+    final environment = DesktopEnvironment.production(
+      variables: const {},
+      macOS: false,
+      runSync: (_, _) => throw StateError('No host probe on Linux'),
+    );
+    expect(environment.variables, isEmpty);
+    expect(environment.configDirectory, '/dev/null/foresight-config');
+    expect(environment.dataDirectory, '/dev/null/foresight-data');
+  });
+
+  test('empty HOME cannot resolve host-effect paths under filesystem root', () {
+    final environment = DesktopEnvironment.production(
+      variables: const {'HOME': ''},
+      macOS: false,
+      runSync: (_, _) => throw StateError('No host probe on Linux'),
+    );
+    expect(environment.variables['HOME'], '');
+    expect(environment.homeDirectory, isNull);
+    expect(environment.configDirectory, '/dev/null/foresight-config');
+    expect(environment.dataDirectory, '/dev/null/foresight-data');
+  });
+
+  test(
+    'Finder without HOME uses the account directory through the adapter',
+    () {
+      final calls = <String>[];
+      final environment = DesktopEnvironment.production(
+        variables: const {},
+        macOS: true,
+        runSync: (executable, args) {
+          calls.add(executable);
+          return ProcessResult(
+            1,
+            0,
+            executable == '/usr/bin/id'
+                ? 'fixture\n'
+                : 'NFSHomeDirectory: /Users/fixture\n',
+            '',
+          );
+        },
+      );
+      expect(calls, ['/usr/bin/id', '/usr/bin/dscl']);
+      expect(environment.homeDirectory, '/Users/fixture');
+      expect(environment.configDirectory, '/Users/fixture/.config');
+      expect(environment.dataDirectory, '/Users/fixture/.local/share');
+    },
+  );
+
+  test('fake account home stays inside the injected environment', () {
+    expect(
+      const DesktopEnvironment(variables: {'HOME': '/fixture'}).homeDirectory,
+      '/fixture',
+    );
+    expect(
+      const DesktopEnvironment(variables: {'HOME': ''}).homeDirectory,
+      isNull,
+    );
+    expect(
+      const DesktopEnvironment(homeDirectory: '/account').homeDirectory,
+      '/account',
+    );
+  });
+
+  testWidgets('default device discovery uses the injected process runner', (
+    tester,
+  ) async {
+    final root = createTestTempDirectorySync('default-devices-');
+    final connection = ControllerConnection(
+      Application(
+        Domain(
+          Store('${root.path}/app.db'),
+          OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+        ),
+      ),
+    );
+    final calls = <String>[];
+    await tester.binding.setSurfaceSize(const Size(1400, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      Foresight(
+        connection,
+        environment: DesktopEnvironment(
+          run: (executable, arguments) async {
+            calls.add(executable);
+            return ProcessResult(1, 0, '[]', '');
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    if (!Platform.isMacOS) expect(calls, ['pw-dump']);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('Finder account home supplies the default discovery folders', (
+    tester,
+  ) async {
+    final root = createTestTempDirectorySync('finder-discovery-');
+    final folders = [
+      for (final name in ['Documents', 'Downloads', 'Desktop'])
+        (Directory('${root.path}/$name')..createSync()).path,
+    ];
+    final resolvedEnvironment = DesktopEnvironment.production(
+      variables: const {},
+      macOS: true,
+      runSync: (executable, _) => ProcessResult(
+        1,
+        0,
+        executable == '/usr/bin/id'
+            ? 'fixture\n'
+            : 'NFSHomeDirectory: ${root.path}\n',
+        '',
+      ),
+    );
+    final environment = DesktopEnvironment(
+      homeDirectory: resolvedEnvironment.homeDirectory,
+    );
+    final connection = ControllerConnection(
+      Application(
+        Domain(
+          Store('${root.path}/app.db'),
+          OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+        ),
+      ),
+    );
+    await tester.binding.setSurfaceSize(const Size(1400, 1000));
+    addTearDown(() async {
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+      await tester.binding.setSurfaceSize(null);
+    });
+    await tester.pumpWidget(
+      Foresight(
+        connection,
+        environment: environment,
+        deviceLoader: () async => [],
+      ),
+    );
+    await tester.pumpAndSettle();
+    final shell = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
+    final discovery = shell.sourceFeature.findFilesOnComputer();
+    // Selecting real folders starts asynchronous filesystem scanning. Inspect
+    // the selected roots without waiting on its animated progress indicator.
+    await tester.pump();
+    final sheet = find.byType(FileDiscoverySheet);
+    expect(tester.widget<FileDiscoverySheet>(sheet).initialFolders, folders);
+    Navigator.of(tester.element(sheet)).pop();
+    await tester.pumpAndSettle();
+    await discovery;
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'injected Hyprland activates and installs only through the fake host',
+    (tester) async {
+      final root = createTestTempDirectorySync('desktop-env-');
+      final config = Directory('${root.path}/config')..createSync();
+      final data = Directory('${root.path}/data')..createSync();
+      final outside = File('${root.path}/unrelated')
+        ..writeAsStringSync('Preserve this');
+      final bindings = File('${config.path}/hypr/bindings.lua')
+        ..createSync(recursive: true);
+      bindings.writeAsStringSync('-- Existing user bindings\n');
+      final launcher = File('${root.path}/open-foresight')
+        ..writeAsStringSync('fixture');
+      final calls = <(String, List<String>)>[];
+      final environment = DesktopEnvironment(
+        capabilities: const PlatformCapabilities.linux(),
+        variables: {
+          'HOME': root.path,
+          'HYPRLAND_INSTANCE_SIGNATURE': 'fake-instance',
+        },
+        configDirectory: config.path,
+        dataDirectory: data.path,
+        launcher: launcher.path,
+        run: (executable, arguments) async {
+          calls.add((executable, List.of(arguments)));
+          expect(executable, '/usr/bin/hyprctl');
+          return ProcessResult(1, 0, switch (arguments.first) {
+            'activewindow' => '{"pid":-1}',
+            'binds' => '[]',
+            _ => '',
+          }, '');
+        },
+      );
+      final store = Store('${root.path}/app.db');
+      final connection = ControllerConnection(
+        Application(
+          Domain(
+            store,
+            OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+          ),
+        ),
+      );
+      await tester.binding.setSurfaceSize(const Size(1400, 1000));
+      addTearDown(() async {
+        await tester.pumpWidget(const SizedBox());
+        await tester.pumpAndSettle();
+        await tester.binding.setSurfaceSize(null);
+      });
+      await tester.pumpWidget(
+        Foresight(
+          connection,
+          environment: environment,
+          deviceLoader: () async => [],
+        ),
+      );
+      await tester.pumpAndSettle();
+      final shell = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
+      await tester.runAsync(() async {
+        await shell.integrationFeature.activateWindow(null);
+        await shell.integrationFeature.enableGlobalShortcuts();
+      });
+      expect(
+        bindings.readAsStringSync(),
+        contains('FORESIGHT GLOBAL SHORTCUT'),
+      );
+      await tester.runAsync(
+        () async => await shell.integrationFeature.disableGlobalShortcuts(),
+      );
+      expect(bindings.readAsStringSync(), '-- Existing user bindings\n');
+      expect(calls.map((call) => call.$2.first), [
+        'activewindow',
+        'eval',
+        'binds',
+        'reload',
+        'configerrors',
+        'reload',
+        'configerrors',
+      ]);
+      expect(outside.readAsStringSync(), 'Preserve this');
+      expect(data.listSync(), isEmpty);
+    },
+  );
+}

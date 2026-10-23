@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'desktop_connection.dart';
-import 'google_auth.dart';
+import 'desktop_status.dart';
 import 'operations.dart';
 import 'store_reader.dart';
 
@@ -35,8 +35,7 @@ class RemoteGoogleAuth implements GoogleAccount {
   @override
   bool get signingIn => domain.googleStatus['signingIn'] == true;
   @override
-  GoogleClient? get client =>
-      domain.googleStatus['configured'] == true ? GoogleClient('', '') : null;
+  bool get configured => domain.googleStatus['configured'] == true;
   Future<void> _call(
     Operation operation, [
     Map<String, dynamic> a = const {},
@@ -56,10 +55,8 @@ class RemoteGoogleAuth implements GoogleAccount {
   Future<void> addAccount(Future<void> Function(Uri) openBrowser) =>
       _signIn(openBrowser, Operation.googleAddAccount);
   @override
-  List<Map<String, Object?>> get accounts =>
-      (domain.googleStatus['accounts'] as List? ?? [])
-          .map((value) => Map<String, Object?>.from(value as Map))
-          .toList();
+  List<GoogleAccountPresentation> get accounts =>
+      GooglePresentation.fromWire(domain.googleStatus).accounts;
   @override
   Future<void> switchAccount(String id) =>
       _call(Operation.googleSwitchAccount, {'id': id});
@@ -156,18 +153,6 @@ class RemoteGoogleConnections implements ConnectedSources {
   @override
   Future<void> importAttachments(int meeting) async {
     await domain.command(Operation.googleAttachments, {'id': meeting});
-  }
-
-  @override
-  List<Map<String, dynamic>> attachments(int meeting) {
-    return List.unmodifiable(
-      domain.store
-          .calendarAttachments(meeting)
-          .map(
-            (attachment) =>
-                Map<String, dynamic>.unmodifiable(attachment.toRow()),
-          ),
-    );
   }
 
   Future<void> reminders(

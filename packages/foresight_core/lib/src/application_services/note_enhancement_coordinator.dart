@@ -4,7 +4,7 @@ import 'dart:io';
 import 'package:grpc/grpc.dart';
 
 import '../domain.dart';
-import '../desktop_read_models.dart';
+import '../read_models.dart';
 import '../generated/rag_service.pb.dart';
 import '../meeting_speakers.dart';
 import '../meeting_workflow_store.dart';

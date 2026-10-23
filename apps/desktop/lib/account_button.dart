@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:foresight_core/desktop.dart' show GoogleAccountPresentation;
 
 enum _AccountAction { select, add }
 
@@ -12,7 +13,7 @@ class _AccountChoice {
 class AccountButton extends StatelessWidget {
   final bool connected, busy;
   final String account, displayName, email, photoUrl;
-  final List<Map<String, Object?>> accounts;
+  final List<GoogleAccountPresentation> accounts;
   final VoidCallback onSignIn, onAddAccount;
   final ValueChanged<String> onSwitchAccount, onSignOutAccount;
 
@@ -83,14 +84,14 @@ class AccountButton extends StatelessWidget {
     }
     final saved = accounts.isNotEmpty
         ? accounts
-        : <Map<String, Object?>>[
-            {
-              'id': account,
-              'email': email,
-              'displayName': displayName,
-              'photoUrl': photoUrl,
-              'current': true,
-            },
+        : [
+            GoogleAccountPresentation(
+              id: account,
+              email: email,
+              displayName: displayName,
+              photoUrl: photoUrl,
+              current: true,
+            ),
           ];
     return PopupMenuButton<_AccountChoice>(
       tooltip: 'Google account: ${email.isEmpty ? displayName : email}',
@@ -110,26 +111,21 @@ class AccountButton extends StatelessWidget {
       itemBuilder: (_) => [
         for (final savedAccount in saved)
           PopupMenuItem<_AccountChoice>(
-            value: _AccountChoice(
-              _AccountAction.select,
-              savedAccount['id'] as String,
-            ),
+            value: _AccountChoice(_AccountAction.select, savedAccount.id),
             padding: EdgeInsets.zero,
             height: 56,
             child: Container(
               padding: const EdgeInsets.fromLTRB(10, 8, 2, 8),
               decoration: BoxDecoration(
-                color: savedAccount['current'] == true
-                    ? const Color(0xffc3e7ff)
-                    : null,
+                color: savedAccount.current ? const Color(0xffc3e7ff) : null,
                 borderRadius: BorderRadius.circular(18),
               ),
               child: Row(
                 children: [
                   avatar(
-                    name: savedAccount['displayName'] as String? ?? '',
-                    address: savedAccount['email'] as String? ?? '',
-                    photo: savedAccount['photoUrl'] as String? ?? '',
+                    name: savedAccount.displayName,
+                    address: savedAccount.email,
+                    photo: savedAccount.photoUrl,
                     radius: 20,
                   ),
                   const SizedBox(width: 12),
@@ -139,24 +135,24 @@ class AccountButton extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          (savedAccount['displayName'] as String? ?? '').isEmpty
+                          savedAccount.displayName.isEmpty
                               ? 'Google account'
-                              : savedAccount['displayName'] as String,
+                              : savedAccount.displayName,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontWeight: FontWeight.w600,
-                            color: savedAccount['current'] == true
+                            color: savedAccount.current
                                 ? const Color(0xff004a6f)
                                 : null,
                           ),
                         ),
                         Text(
-                          savedAccount['email'] as String? ?? '',
+                          savedAccount.email,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                            color: savedAccount['current'] == true
+                            color: savedAccount.current
                                 ? const Color(0xff004a6f)
                                 : null,
                           ),
@@ -165,11 +161,11 @@ class AccountButton extends StatelessWidget {
                     ),
                   ),
                   IconButton(
-                    tooltip: 'Sign out of ${savedAccount['email']}',
+                    tooltip: 'Sign out of ${savedAccount.email}',
                     icon: const Icon(Icons.logout, size: 20),
                     onPressed: () {
                       Navigator.of(context).pop();
-                      onSignOutAccount(savedAccount['id'] as String);
+                      onSignOutAccount(savedAccount.id);
                     },
                   ),
                 ],

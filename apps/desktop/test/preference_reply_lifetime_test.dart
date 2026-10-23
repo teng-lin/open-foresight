@@ -1,8 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/foresight_core.dart';
-import 'package:foresight_core/src/application.dart';
+import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/main.dart';
 import '../test_support/meeting_panel.dart';
@@ -36,20 +35,6 @@ class _HeldPreferenceConnection extends TestDesktopConnection {
   ]) async {
     sent.add((operation, Map.of(args)));
     return _reply(operation, args, await super.command(operation, args));
-  }
-
-  @override
-  Future<Object?> commandCurrent(
-    Operation operation,
-    Map<String, dynamic> args,
-    bool Function() current,
-  ) async {
-    sent.add((operation, Map.of(args)));
-    return _reply(
-      operation,
-      args,
-      await super.commandCurrent(operation, args, current),
-    );
   }
 }
 
@@ -86,7 +71,8 @@ void main() {
         await tester.pumpWidget(
           Foresight(connection, deviceLoader: () async => []),
         );
-        final dynamic shell = tester.state(find.byType(Workspace));
+        final shell =
+            tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
         shell.update(() {
           shell.meetingFeature.meetingId = meeting;
           shell.meetingFeature.meetingPanel = 'Chat';

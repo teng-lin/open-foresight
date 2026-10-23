@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../domain.dart';
-import '../desktop_read_models.dart';
+import '../read_models.dart';
 import '../meeting_actions.dart';
 import '../meeting_preparation.dart';
 import '../meeting_workflow_store.dart';
@@ -25,7 +25,8 @@ class _MeetingWorkflowRun {
   String error = '';
   SummaryProgress progress = const SummaryProgress('planning');
   Map<String, Object?> get state => {
-    ...progress.json,
+    for (final entry in progress.json.entries)
+      if (active || entry.key != 'preview') entry.key: entry.value,
     'active': active,
     'cancelled': cancelled,
     'error': error,

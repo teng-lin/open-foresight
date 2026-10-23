@@ -1,8 +1,9 @@
+import 'package:open_foresight/desktop_environment.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
-import 'package:open_foresight/desktop_settings.dart';
+import 'package:open_foresight/features/integrations/desktop_settings.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -10,7 +11,13 @@ void main() {
     'macOS login state follows the native service, including null responses and failure',
     () async {
       final root = createTestTempDirectorySync('login-channel-');
-      final settings = DesktopSettings(root, '/unused', macOS: true);
+      final settings = DesktopSettings(
+        root,
+        '/unused',
+        environment: const DesktopEnvironment(
+          capabilities: PlatformCapabilities.macOS(),
+        ),
+      );
       final calls = <MethodCall>[];
       bool? native = true;
       final messenger =

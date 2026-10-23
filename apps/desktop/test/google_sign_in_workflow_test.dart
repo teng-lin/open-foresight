@@ -1,4 +1,4 @@
-import 'package:foresight_core/src/application.dart';
+import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:async';
@@ -8,12 +8,10 @@ import 'pump_until.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/src/domain.dart';
-import 'package:foresight_core/src/google_auth.dart';
-import 'package:open_foresight/google_sign_in_dialog.dart';
+
+import 'package:open_foresight/features/integrations/google_sign_in_dialog.dart';
 import 'package:open_foresight/main.dart';
-import 'package:foresight_core/src/store.dart';
-import 'package:foresight_core/remote.dart' show RpcError, RpcErrorCode;
+
 import 'google_setup_ui_test.dart' show BundledGoogleDomain;
 import 'meeting_setup_test.dart' show OfflineHelper;
 
@@ -199,7 +197,8 @@ void main() {
             deviceLoader: () async => [],
           ),
         );
-        final dynamic state = tester.state(find.byType(Workspace));
+        final state =
+            tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
         Future<void> cancel({bool keyboard = false}) async {
           await tester.pump();
           await tester.pump(const Duration(milliseconds: 300));
@@ -247,8 +246,7 @@ void main() {
         }
         expect(auth.invitations, 5);
         // Calendar sync stores meeting metadata and needs no embedding model.
-        final connecting =
-            state.run(state.integrationFeature.connectGoogle) as Future<void>;
+        final connecting = state.run(state.integrationFeature.connectGoogle);
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 300));
         auth.signedIn = true;

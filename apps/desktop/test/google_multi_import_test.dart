@@ -1,11 +1,11 @@
-import 'package:foresight_core/src/application.dart';
+import '../test_support/core_fixture.dart';
 import 'dart:io';
 import 'package:foresight_core/remote.dart' show ConnectedSources;
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/main.dart';
-import 'package:foresight_core/src/store.dart';
+
 import 'desktop_connection_fixture.dart';
 import 'google_picker_workflow_test.dart' show PendingDrive, file;
 import 'google_setup_ui_test.dart' show BundledGoogleDomain;
@@ -112,20 +112,19 @@ void main() {
             ),
           );
           await tester.pumpAndSettle();
-          final dynamic state = tester.state(find.byType(Workspace));
-          final importing =
-              state.run(() async {
-                    if (folder) {
-                      await state.integrationFeature.importDriveSelection([
-                        'First',
-                        'Second',
-                        'Third',
-                      ], folder: true);
-                    } else {
-                      await state.integrationFeature.chooseDrive();
-                    }
-                  })
-                  as Future<void>;
+          final state =
+              tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
+          final importing = state.run(() async {
+            if (folder) {
+              await state.integrationFeature.importDriveSelection([
+                'First',
+                'Second',
+                'Third',
+              ], folder: true);
+            } else {
+              await state.integrationFeature.chooseDrive();
+            }
+          });
           if (!folder) {
             await pumpUntil(
               tester,

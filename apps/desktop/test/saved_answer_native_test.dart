@@ -1,11 +1,7 @@
-import 'package:foresight_core/src/application.dart';
+import '../test_support/core_fixture.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/src/domain.dart';
-import 'package:foresight_core/src/helper.dart';
-import 'package:foresight_core/src/native.dart';
-import 'package:foresight_core/src/store.dart';
 
 void main() {
   test(
@@ -38,7 +34,8 @@ void main() {
         final answer = store
             .rows('SELECT * FROM answers ORDER BY id DESC LIMIT 1')
             .single;
-        final citations = jsonDecode(answer['citations'] as String) as List;
+        final citations = (jsonDecode(answer['citations'] as String) as List)
+            .cast<Map>();
         expect(answer['status'], 'completed', reason: result.last);
         expect(citations, isNotEmpty);
         if (env['FORESIGHT_ANSWER_EXPECT_SYNTHESIS'] == '1') {
@@ -63,7 +60,7 @@ void main() {
         );
         if (env['FORESIGHT_ANSWER_EXPECT_PROCEDURE'] == '1') {
           expect(citations.length, 1);
-          final excerpt = (citations.single as Map)['excerpt'] as String;
+          final excerpt = (citations.single)['excerpt'] as String;
           expect(
             RegExp(
               r'^#{1,6}\s+Step\s+\d+',

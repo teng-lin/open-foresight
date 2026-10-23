@@ -27,6 +27,7 @@ import 'rpc_error.dart';
 import 'request_errors.dart';
 import 'agent_access.dart';
 import 'dart:async';
+import 'package:meta/meta.dart';
 import 'dart:io';
 import 'domain.dart';
 import 'model_gate.dart';
@@ -58,14 +59,18 @@ class Application implements ModelGate, GenerationReservationGate {
   final captureLevelChanges = StreamController<void>.broadcast();
   final _capture = CaptureActivity();
   Recording? get recording => _recordingController.recording;
+  @visibleForTesting
   set recording(Recording? value) => _recordingController.recording = value;
   int? get recordingMeeting => _recordingController.recordingMeeting;
+  @visibleForTesting
   set recordingMeeting(int? value) =>
       _recordingController.recordingMeeting = value;
   DateTime? get recordingBegan => _recordingController.recordingBegan;
+  @visibleForTesting
   set recordingBegan(DateTime? value) =>
       _recordingController.recordingBegan = value;
   String get recordingState => _recordingController.recordingState;
+  @visibleForTesting
   set recordingState(String value) =>
       _recordingController.recordingState = value;
   Map<String, String> get provisionalTranscript =>

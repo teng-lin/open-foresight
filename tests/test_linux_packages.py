@@ -420,7 +420,21 @@ class LinuxDependencyCollectionTest(unittest.TestCase):
                 "-Wl,-rpath-link," + str(sdk),
             )
             worker = build / "services/inference/foresight-model"
-            compile("int main(void) { return 0; }", worker)
+            compile(r'''
+#include <stdio.h>
+#include <stdlib.h>
+int main(void) {
+  const char *keys[] = {"FORESIGHT_INSTALL_ROOT", "FORESIGHT_RUNTIME_REVISION",
+    "FORESIGHT_SERVICE", "FORESIGHT_HELPER", "FORESIGHT_NATIVE",
+    "FORESIGHT_MODEL_WORKER", "FORESIGHT_LITERT_LIBRARY", "FORESIGHT_LITERT_RUNNER",
+    "FORESIGHT_LITERT_BACKEND", "FORESIGHT_QUERY_WORKER", "LD_LIBRARY_PATH"};
+  for (unsigned i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i) {
+    const char *value = getenv(keys[i]);
+    printf("%s=%s\n", keys[i], value ? value : "");
+  }
+  return 0;
+}
+''', worker)
             for name in ("application/foresight-service", "application/foresight-mcp"):
                 target = build / name
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -484,6 +498,24 @@ class LinuxDependencyCollectionTest(unittest.TestCase):
             ):
                 package.main()
             manifest = json.loads((output / "manifest.json").read_text())
+            launcher_environment = {
+                key: value for key, value in os.environ.items()
+                if not key.startswith("FORESIGHT_") and key != "LD_LIBRARY_PATH"
+            }
+            launched = subprocess.run(
+                [str(output / "open-foresight-service")], env=launcher_environment,
+                check=True, capture_output=True, text=True, timeout=30,
+            )
+            selected = dict(line.split("=", 1) for line in launched.stdout.splitlines())
+            resources = output / "share/open-foresight"
+            configuration = json.loads((resources / "runtime.json").read_text())
+            for key, value in selected.items():
+                if key == "LD_LIBRARY_PATH":
+                    self.assertEqual(value, f"{output}/lib:{output}/app/lib")
+                elif key in {"FORESIGHT_RUNTIME_REVISION", "FORESIGHT_LITERT_BACKEND"}:
+                    self.assertEqual(value, configuration[key])
+                else:
+                    self.assertEqual(Path(value).resolve(), (resources / configuration[key]).resolve())
             self.assertTrue(
                 {"libgrpc_fixture.so", "libupb_fixture.so"}
                 <= set(manifest["bundled_libraries"])

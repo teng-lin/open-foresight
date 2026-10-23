@@ -1,6 +1,7 @@
+import 'package:open_foresight/features/chat/widgets.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/meeting_visuals.dart';
+import 'package:open_foresight/features/meetings/meeting_visuals.dart';
 
 /// Use the same visible tab or overflow menu as a desktop user.
 Future<void> selectMeetingPanel(WidgetTester tester, String panel) async {
@@ -59,6 +60,13 @@ Future<void> selectMeetingAnswerSource(
   await tester.pumpAndSettle();
 }
 
+/// History includes the prepared answer-source identity so a scope replacement
+/// retires its scroll position. Select the typed conversation, not an old key.
+Finder meetingChatHistory(int meeting) => find.byWidgetPredicate(
+  (widget) =>
+      widget is ChatHistory && widget.scope.startsWith('meeting:$meeting:'),
+);
+
 /// Reveal a citation in the answer history before opening its source.
 Future<void> openMeetingCitation(
   WidgetTester tester,
@@ -66,7 +74,7 @@ Future<void> openMeetingCitation(
   Object revision, {
   String citationLabel = 'S1',
 }) async {
-  final history = find.byKey(ValueKey('chat-history:meeting:$meeting'));
+  final history = meetingChatHistory(meeting);
   final citation = find.descendant(
     of: history,
     matching: find.widgetWithText(

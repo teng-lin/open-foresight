@@ -1,3 +1,4 @@
+import 'package:open_foresight/shell/workspace_tab.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -17,9 +18,8 @@ void main() {
         'text/plain',
         'fixture',
       );
-      final dynamic source = f.shell.sourceFeature;
-      final opening =
-          source.source(f.store.sourceSummaries.single) as Future<void>;
+      final source = f.shell.sourceFeature;
+      final opening = source.source(f.store.sourceSummaries.single);
       await tester.pumpAndSettle();
       expect(find.text('original'), findsOneWidget);
       await tester.tap(find.text('Edit source'));
@@ -55,7 +55,7 @@ void main() {
     'file and reviewed folder pickers import selections while cancellation is a no-op',
     (tester) async {
       final f = await ControllerFixture.mount(tester);
-      final dynamic source = f.shell.sourceFeature;
+      final source = f.shell.sourceFeature;
       const channel = MethodChannel('plugins.flutter.io/file_selector');
       final messenger = tester.binding.defaultBinaryMessenger;
       String? selected;
@@ -90,7 +90,7 @@ void main() {
       expect(f.connection.calls.last.$2, {'path': selected});
       selected = f.root.path;
       final callsBeforeFolder = f.connection.calls.length;
-      final folder = source.importFolder() as Future<void>;
+      final folder = source.importFolder();
       await pumpUntil(
         tester,
         () => find.text('Import selected (1)').evaluate().isNotEmpty,
@@ -117,7 +117,7 @@ void main() {
       expect(f.connection.calls.last.$2, {
         'url': 'https://example.test/document',
       });
-      final dialog = source.importUrl() as Future<void>;
+      final dialog = source.importUrl();
       await tester.pumpAndSettle();
       await tester.enterText(
         find.descendant(
@@ -142,7 +142,7 @@ void main() {
     tester,
   ) async {
     final f = await ControllerFixture.mount(tester);
-    f.shell.update(() => f.shell.tab = 2);
+    f.shell.update(() => f.shell.navigate(WorkspaceTab.notes));
     await tester.pumpAndSettle();
     await tester.tap(find.text('New note'));
     await tester.pumpAndSettle();
@@ -151,7 +151,7 @@ void main() {
     await tester.enterText(fields.at(1), 'First body');
     await tester.tap(find.text('Save note'));
     await tester.pumpAndSettle();
-    final id = f.shell.meetingFeature.noteId as int;
+    final id = f.shell.sourceFeature.noteId as int;
     expect(f.store.noteBody(id), 'First body');
     await tester.tap(find.text('New note'));
     await tester.pumpAndSettle();

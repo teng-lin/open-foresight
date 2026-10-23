@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -97,7 +98,10 @@ void main() {
       );
       ApplicationService? service;
       try {
-        service = await ApplicationService.start(profile);
+        service = await ApplicationService.start(
+          profile,
+          desktopPeerVerifier: trustInProcessDesktop,
+        );
         expect(wav.existsSync(), isFalse);
         // A bound, not a speed requirement: under a loaded concurrent run
         // the recovery index request can take longer than a few seconds.
@@ -164,7 +168,10 @@ void main() {
         final capability = Link('${profile.data}/.desktop-capability')
           ..createSync('${root.path}/elsewhere');
         await expectLater(
-          ApplicationService.start(profile),
+          ApplicationService.start(
+            profile,
+            desktopPeerVerifier: trustInProcessDesktop,
+          ),
           throwsA(
             isA<StateError>().having(
               (error) => error.message,
@@ -177,7 +184,10 @@ void main() {
         // POSIX locks belong to the process, so probe from another one.
         expect(await lockHeldElsewhere(profile), isFalse);
         capability.deleteSync();
-        final service = await ApplicationService.start(profile);
+        final service = await ApplicationService.start(
+          profile,
+          desktopPeerVerifier: trustInProcessDesktop,
+        );
         await service.close();
       } finally {
         runtimeConfiguration.environment
@@ -212,6 +222,7 @@ void main() {
         await expectLater(
           IsolatedApplicationService.start(
             profile,
+            desktopPeerVerifier: trustInProcessDesktop,
           ).timeout(const Duration(seconds: 30)),
           throwsA(
             predicate(

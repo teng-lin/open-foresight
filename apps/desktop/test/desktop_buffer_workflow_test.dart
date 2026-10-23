@@ -1,3 +1,6 @@
+import 'package:open_foresight/desktop_environment.dart';
+import '../test_support/platform_fixture.dart';
+import 'package:open_foresight/shell/workspace_tab.dart';
 import 'store_reader_fixture.dart';
 import 'dart:async';
 import 'dart:io';
@@ -6,9 +9,9 @@ import 'package:flutter/gestures.dart' show kDoubleTapTimeout;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/remote.dart';
-import 'package:foresight_core/src/google_auth.dart';
-import 'package:open_foresight/meeting_export.dart';
-import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
+import '../test_support/core_fixture.dart';
+import 'package:open_foresight/features/meetings/meeting_export.dart';
+import '../test_support/core_fixture.dart' as control;
 import 'controller_fixture.dart';
 import 'pump_until.dart';
 
@@ -60,8 +63,6 @@ class SettingsSources implements ConnectedSources {
   }
 
   @override
-  List<Map<String, dynamic>> attachments(int meeting) => [];
-  @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
@@ -69,7 +70,12 @@ void main() {
   testWidgets(
     'graph embedding failure preserves documents and paused indexing does not start another request',
     (tester) async {
-      final f = await ControllerFixture.mount(tester);
+      final f = await ControllerFixture.mount(
+        tester,
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
+      );
       final ids = [
         for (final name in ['Alpha', 'Beta'])
           f.store.importText(
@@ -94,8 +100,9 @@ void main() {
         ),
       );
       f.connection.graphFailure = StateError('Embedding worker disconnected');
+      f.connection.domain.helper.changed?.call();
       f.shell.update(() {
-        f.shell.tab = 0;
+        f.shell.navigate(WorkspaceTab.sources);
         f.shell.sourceFeature.graphView = true;
       });
       await tester.pump();
@@ -126,7 +133,12 @@ void main() {
   testWidgets(
     'graph embeddings for many sources arrive in bounded batches that survive a failure',
     (tester) async {
-      final f = await ControllerFixture.mount(tester);
+      final f = await ControllerFixture.mount(
+        tester,
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
+      );
       f.store.db.execute('BEGIN');
       final ids = [
         for (var i = 0; i < 1500; i++)
@@ -167,8 +179,9 @@ void main() {
           for (final source in sources) source['id'] as String: [1.0, 0, 0],
         };
       };
+      f.connection.domain.helper.changed?.call();
       f.shell.update(() {
-        f.shell.tab = 0;
+        f.shell.navigate(WorkspaceTab.sources);
         f.shell.sourceFeature.graphView = true;
       });
       await tester.pump();
@@ -197,7 +210,12 @@ void main() {
   testWidgets('graph embeddings from a replaced model run are not cached', (
     tester,
   ) async {
-    final f = await ControllerFixture.mount(tester);
+    final f = await ControllerFixture.mount(
+      tester,
+      environment: DesktopEnvironment(
+        capabilities: testHostPlatformCapabilities,
+      ),
+    );
     final ids = [
       for (final name in ['Alpha', 'Beta'])
         f.store.importText(
@@ -224,8 +242,9 @@ void main() {
     f.connection.domain.helper.snapshot = snapshot('fixture');
     final reply = Completer<Map<String, List<double>>>();
     f.connection.graphReply = (_) => reply.future;
+    f.connection.domain.helper.changed?.call();
     f.shell.update(() {
-      f.shell.tab = 0;
+      f.shell.navigate(WorkspaceTab.sources);
       f.shell.sourceFeature.graphView = true;
     });
     await tester.pump();
@@ -247,7 +266,12 @@ void main() {
   testWidgets(
     'custom export dates stay ordered when either boundary crosses the other and cancelled edits do not apply',
     (tester) async {
-      final f = await ControllerFixture.mount(tester);
+      final f = await ControllerFixture.mount(
+        tester,
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
+      );
       final opened = showDialog<void>(
         context: tester.element(find.byType(Scaffold).first),
         builder: (_) => MeetingExportDialog(
@@ -322,7 +346,12 @@ void main() {
   testWidgets(
     'answer font controls and dismissal affect presentation without deleting saved answers',
     (tester) async {
-      final f = await ControllerFixture.mount(tester);
+      final f = await ControllerFixture.mount(
+        tester,
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
+      );
       f.store.answer(
         'Saved question',
         'Saved answer body',
@@ -332,7 +361,7 @@ void main() {
         conversation: 'desktop',
       );
       final id = f.store.db.lastInsertRowId;
-      f.shell.update(() => f.shell.tab = 1);
+      f.shell.update(() => f.shell.navigate(WorkspaceTab.chat));
       await tester.pumpAndSettle();
       expect(
         find.text('Saved answer body', findRichText: true),
@@ -360,7 +389,12 @@ void main() {
   testWidgets(
     'manual transcript questions route answers to their owning meeting',
     (tester) async {
-      final f = await ControllerFixture.mount(tester);
+      final f = await ControllerFixture.mount(
+        tester,
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
+      );
       final id = f.store.meeting('Manual question fixture');
       final other = f.store.meeting('Other meeting');
       f.store.transcript(
@@ -402,7 +436,12 @@ void main() {
   testWidgets(
     'capture indicator reopens its meeting and shows only nonempty provisional segments',
     (tester) async {
-      final f = await ControllerFixture.mount(tester);
+      final f = await ControllerFixture.mount(
+        tester,
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
+      );
       final id = f.store.meeting('Live transcript fixture');
       f.connection.captureState = {
         'active': true,
@@ -419,7 +458,7 @@ void main() {
         },
       };
       f.shell.update(() {
-        f.shell.tab = 0;
+        f.shell.navigate(WorkspaceTab.sources);
         f.shell.meetingFeature.meetingPanel = 'Transcript';
         f.shell.meetingFeature.syncCapture();
       });
@@ -428,7 +467,7 @@ void main() {
       // The capture pill's double-tap recognizer defers a single tap.
       await tester.pump(kDoubleTapTimeout);
       await tester.pumpAndSettle();
-      expect(f.shell.tab, 3);
+      expect(f.shell.tab, WorkspaceTab.meetings);
       expect(f.shell.meetingFeature.meetingId, id);
       expect(f.shell.meetingFeature.meetingSidecarVisible, true);
       expect(find.text('Live microphone words'), findsOneWidget);
@@ -442,7 +481,12 @@ void main() {
   testWidgets(
     'desktop keyboard navigation, new note, cancelled import and help preserve workspace state',
     (tester) async {
-      final f = await ControllerFixture.mount(tester);
+      final f = await ControllerFixture.mount(
+        tester,
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
+      );
       Future<void> shortcut(LogicalKeyboardKey key) async {
         final modifier = Platform.isMacOS
             ? LogicalKeyboardKey.metaLeft
@@ -454,22 +498,22 @@ void main() {
       }
 
       for (final (key, tab) in [
-        (LogicalKeyboardKey.digit1, 3),
-        (LogicalKeyboardKey.digit2, 1),
-        (LogicalKeyboardKey.digit3, 0),
-        (LogicalKeyboardKey.digit4, 5),
-        (LogicalKeyboardKey.digit5, 6),
+        (LogicalKeyboardKey.digit1, WorkspaceTab.meetings),
+        (LogicalKeyboardKey.digit2, WorkspaceTab.chat),
+        (LogicalKeyboardKey.digit3, WorkspaceTab.sources),
+        (LogicalKeyboardKey.digit4, WorkspaceTab.stats),
+        (LogicalKeyboardKey.digit5, WorkspaceTab.settings),
       ]) {
         await shortcut(key);
         expect(f.shell.tab, tab);
       }
-      f.shell.meetingFeature.noteTitle.text = 'Old title';
-      f.shell.meetingFeature.noteBody.text = 'Old draft';
+      f.shell.sourceFeature.noteTitle.text = 'Old title';
+      f.shell.sourceFeature.noteBody.text = 'Old draft';
       await shortcut(LogicalKeyboardKey.keyN);
-      expect(f.shell.tab, 2);
-      expect(f.shell.meetingFeature.noteId, isNull);
-      expect(f.shell.meetingFeature.noteTitle.text, isEmpty);
-      expect(f.shell.meetingFeature.noteBody.text, isEmpty);
+      expect(f.shell.tab, WorkspaceTab.notes);
+      expect(f.shell.sourceFeature.noteId, isNull);
+      expect(f.shell.sourceFeature.noteTitle.text, isEmpty);
+      expect(f.shell.sourceFeature.noteBody.text, isEmpty);
       const picker = MethodChannel('plugins.flutter.io/file_selector');
       var openings = 0;
       tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(picker, (
@@ -502,7 +546,12 @@ void main() {
   testWidgets(
     'connected service settings refresh, change interval, disconnect and cancel sign-in without deleting imports',
     (tester) async {
-      final f = await ControllerFixture.mount(tester);
+      final f = await ControllerFixture.mount(
+        tester,
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
+      );
       final account = SettingsAccount(Directory('${f.root.path}/google'));
       addTearDown(account.close);
       final google = SettingsSources();
@@ -514,7 +563,7 @@ void main() {
         'text/plain',
         'fixture',
       );
-      f.shell.update(() => f.shell.tab = 6);
+      f.shell.update(() => f.shell.navigate(WorkspaceTab.settings));
       await tester.pumpAndSettle();
       final refresh = find.text('Refresh Google');
       await tester.ensureVisible(refresh);
@@ -563,7 +612,12 @@ void main() {
     testWidgets(
       'local discovery ${partial ? 'reports partial failure after attempting every selection' : 'imports every selected file'}',
       (tester) async {
-        final f = await ControllerFixture.mount(tester);
+        final f = await ControllerFixture.mount(
+          tester,
+          environment: DesktopEnvironment(
+            capabilities: testHostPlatformCapabilities,
+          ),
+        );
         final folder = Directory('${f.root.path}/documents')..createSync();
         final paths = [
           for (final name in ['alpha.txt', 'beta.md', 'gamma.txt'])
@@ -580,15 +634,11 @@ void main() {
           f.connection.fileFailures[paths[1]] = StateError(
             'Parser rejected file',
           );
-        final pending =
-            f.shell.run(
-                  () =>
-                      f.shell.sourceFeature.findLocalFiles(
-                            roots: <String>[selected.path],
-                          )
-                          as Future<void>,
-                )
-                as Future<void>;
+        final pending = f.shell.run(
+          () => f.shell.sourceFeature.findLocalFiles(
+            roots: <String>[selected.path],
+          ),
+        );
         await tester.pump();
         await pumpUntil(
           tester,
@@ -622,7 +672,12 @@ void main() {
     testWidgets(
       '${grid ? 'grid' : 'list'} source actions retry indexing and delete only the selected source',
       (tester) async {
-        final f = await ControllerFixture.mount(tester);
+        final f = await ControllerFixture.mount(
+          tester,
+          environment: DesktopEnvironment(
+            capabilities: testHostPlatformCapabilities,
+          ),
+        );
         final id = f.store.importText(
           'Action target',
           'Text',
@@ -636,8 +691,9 @@ void main() {
           'fixture',
         );
         f.store.state(id, 'failed', 'Index interrupted');
+        f.connection.domain.helper.changed?.call();
         f.shell.update(() {
-          f.shell.tab = 0;
+          f.shell.navigate(WorkspaceTab.sources);
           f.shell.sourceFeature.gridView = grid;
         });
         await tester.pumpAndSettle();
@@ -676,7 +732,12 @@ void main() {
   testWidgets(
     'summary history keeps earlier edits separate from the current version and permits regeneration',
     (tester) async {
-      final f = await ControllerFixture.mount(tester);
+      final f = await ControllerFixture.mount(
+        tester,
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
+      );
       final id = f.store.meeting('Versioned summary');
       f.store.artifact(id, 'summary', 'Earlier summary', 'fixture');
       final previous = f.store.db.lastInsertRowId;
@@ -730,7 +791,12 @@ void main() {
   testWidgets(
     'meeting question detection errors have an explicit retry for the owning meeting',
     (tester) async {
-      final f = await ControllerFixture.mount(tester);
+      final f = await ControllerFixture.mount(
+        tester,
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
+      );
       final id = f.store.meeting('Detection retry');
       f.connection.captureState = {
         'proactive': {

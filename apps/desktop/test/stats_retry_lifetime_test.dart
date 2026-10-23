@@ -1,12 +1,11 @@
+import 'package:open_foresight/features/settings/settings_controller.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/remote.dart';
-import 'package:foresight_core/src/application.dart';
-import 'package:foresight_core/src/domain.dart';
-import 'package:foresight_core/src/graph_labels.dart';
-import 'package:foresight_core/src/store.dart';
+import '../test_support/core_fixture.dart';
+
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/main.dart';
 
@@ -17,11 +16,12 @@ import 'meeting_setup_test.dart' show OfflineHelper;
 // fixture reader. This exposes replies that outlive the desktop client session.
 class _StatsReader implements StoreReader {
   final StoreReader delegate;
-  final requests = <Completer<ReadResult<OutputStats>>>[];
+  final requests = <StreamController<ReadResult<OutputStats>>>[];
+  final queries = <ReadQuery<Object?>>[];
   String? epoch;
   _StatsReader(this.delegate);
 
-  void succeed(int index, int words) => requests[index].complete(
+  void succeed(int index, int words) => requests[index].add(
     ReadResult(
       freshness: ReadFreshness.current,
       value: OutputStats(
@@ -37,79 +37,25 @@ class _StatsReader implements StoreReader {
   );
 
   @override
-  Future<ReadResult<T>> read<T>(ReadQuery<T> query) {
-    if (query.projection != 'output_stats') return delegate.read(query);
-    final reply = Completer<ReadResult<OutputStats>>();
-    requests.add(reply);
-    return reply.future.then((result) => result.asType<T>());
-  }
+  Future<ReadResult<T>> read<T>(ReadQuery<T> query) => delegate.read(query);
 
   @override
-  Stream<ReadResult<T>> watch<T>(ReadQuery<T> query) => delegate.watch(query);
+  Stream<ReadResult<T>> watch<T>(ReadQuery<T> query) {
+    if (query.projection != 'output_stats') return delegate.watch(query);
+    final reply = StreamController<ReadResult<OutputStats>>.broadcast(
+      sync: true,
+    );
+    queries.add(query);
+    requests.add(reply);
+    return reply.stream.map((result) => result.asType<T>());
+  }
+
   @override
   RpcError? get failure => delegate.failure;
   @override
   String get workspaceEpoch => epoch ?? delegate.workspaceEpoch;
   @override
   String get dataRevision => delegate.dataRevision;
-  @override
-  String preference(String key, [String fallback = '']) =>
-      delegate.preference(key, fallback);
-  @override
-  ModelRegistration? model(String kind) => delegate.model(kind);
-  @override
-  List<ModelRegistration> get models => delegate.models;
-  @override
-  List<SourceSummary> get sourceSummaries => delegate.sourceSummaries;
-  @override
-  SourceDocument? sourceById(String id, {bool includeDeleted = false}) =>
-      delegate.sourceById(id, includeDeleted: includeDeleted);
-  @override
-  List<NoteSummary> get noteSummaries => delegate.noteSummaries;
-  @override
-  String noteBody(int id) => delegate.noteBody(id);
-  @override
-  Map<String, String> get googleSourceMimes => delegate.googleSourceMimes;
-  @override
-  List<DocumentLabel> get documentLabels => delegate.documentLabels;
-  @override
-  List<DocumentCluster> get documentClusters => delegate.documentClusters;
-  @override
-  List<String> get documentClusterNames => delegate.documentClusterNames;
-  @override
-  String graphLabelSet() => delegate.graphLabelSet();
-  @override
-  List<MeetingCollectionEntry> get meetingCollection =>
-      delegate.meetingCollection;
-  @override
-  MeetingNoteData? meetingNote(int id) => delegate.meetingNote(id);
-  @override
-  MeetingDetails? meetingPreview(int id) => delegate.meetingPreview(id);
-  @override
-  MeetingDetails? meetingWorkspace(int id) => delegate.meetingWorkspace(id);
-  @override
-  int? meetingRevision(int id) => delegate.meetingRevision(id);
-  @override
-  List<MeetingQuestion> meetingQuestions(int id) =>
-      delegate.meetingQuestions(id);
-  @override
-  List<TranscriptSegment> meetingTranscript(int id, {bool finalOnly = false}) =>
-      delegate.meetingTranscript(id, finalOnly: finalOnly);
-  @override
-  List<MeetingArtifact> meetingArtifacts(int id, String kind) =>
-      delegate.meetingArtifacts(id, kind);
-  @override
-  String meetingEnhancedNotes(int id) => delegate.meetingEnhancedNotes(id);
-  @override
-  List<MeetingTask> meetingTasks(int id) => delegate.meetingTasks(id);
-  @override
-  List<SavedAnswer> conversationAnswers(int? meeting) =>
-      delegate.conversationAnswers(meeting);
-  @override
-  List<ExportNote> get exportNotes => delegate.exportNotes;
-  @override
-  List<CalendarAttachment> calendarAttachments(int meeting) =>
-      delegate.calendarAttachments(meeting);
 }
 
 class _StatsConnection extends ControllerConnection {
@@ -121,7 +67,7 @@ class _StatsConnection extends ControllerConnection {
 
 Future<
   ({
-    dynamic feature,
+    SettingsController feature,
     _StatsReader reader,
     _StatsConnection connection,
     Store store,
@@ -142,13 +88,12 @@ _mount(WidgetTester tester) async {
   await tester.pumpAndSettle();
   await tester.tap(find.text('Stats').first);
   await tester.pumpAndSettle();
-  final dynamic shell = tester.state(find.byType(Workspace));
+  final shell = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
   expect(reader.requests, hasLength(1));
   addTearDown(() async {
     await tester.pumpWidget(const SizedBox());
-    // Settle every gated reply after disposal so no test leaks async ownership.
-    for (var i = 0; i < reader.requests.length; i++) {
-      if (!reader.requests[i].isCompleted) reader.succeed(i, 0);
+    for (final reply in reader.requests) {
+      await reply.close();
     }
     await tester.pumpAndSettle();
     await tester.binding.setSurfaceSize(null);
@@ -165,35 +110,41 @@ _mount(WidgetTester tester) async {
 void main() {
   for (final timeout in [true, false]) {
     testWidgets(
-      'Stats retries same-input ${timeout ? 'timeout' : 'failure'} without a rebuild loop',
+      'Stats retains same-input ${timeout ? 'timeout' : 'failure'} values without a rebuild loop and recovers on its watch',
       (tester) async {
         final f = await _mount(tester);
         f.reader.succeed(0, 17);
         await tester.pumpAndSettle();
-        expect(f.feature.localOutputCount, 17);
-        expect(f.feature.localOutputWeekly, [0, 0, 0, 0, 17]);
-        expect(
-          [
-            f.feature.recordedMeetings,
-            f.feature.sourceCount,
-            f.feature.completedAnswers,
-          ],
-          [2, 3, 4],
-        );
+        void expectValues(int words) {
+          expect(f.feature.localOutputCount, words);
+          expect(f.feature.localOutputWeekly, [0, 0, 0, 0, words]);
+          expect(
+            [
+              f.feature.recordedMeetings,
+              f.feature.sourceCount,
+              f.feature.completedAnswers,
+            ],
+            [2, 3, 4],
+          );
+        }
 
-        // Begin a legitimate refresh, then keep both the DB and week unchanged
-        // throughout failure and recovery.
+        expectValues(17);
         f.store.setPreference('stats.retry.fixture', 'refresh');
-        f.feature.localWords();
-        expect(f.reader.requests, hasLength(2));
+        f.connection.application.changed();
+        await tester.pumpAndSettle();
         final revision = f.reader.dataRevision;
-        final key = f.feature.localOutputRevision;
+        final key = f.reader.queries.single.key;
+        expect(
+          f.reader.requests,
+          hasLength(1),
+          reason: 'data refresh preserves the stable watch',
+        );
         if (timeout) {
-          f.reader.requests[1].completeError(
+          f.reader.requests[0].addError(
             TimeoutException('transient Stats timeout'),
           );
         } else {
-          f.reader.requests[1].complete(
+          f.reader.requests[0].add(
             ReadResult<OutputStats>(
               freshness: ReadFreshness.failed,
               value: null,
@@ -209,31 +160,27 @@ void main() {
         await tester.pumpAndSettle();
         expect(
           f.reader.requests,
-          hasLength(2),
-          reason: 'failure must not schedule a rebuild',
+          hasLength(1),
+          reason: 'failure must not admit another query from a rebuild',
         );
-        expect(f.feature.localOutputCount, 17);
-        expect(f.feature.localOutputWeekly, [0, 0, 0, 0, 17]);
-        expect(
-          [
-            f.feature.recordedMeetings,
-            f.feature.sourceCount,
-            f.feature.completedAnswers,
-          ],
-          [2, 3, 4],
-        );
+        expectValues(17);
         expect(f.feature.localWords(), 17);
-        expect(f.reader.requests, hasLength(3));
-        expect(f.reader.dataRevision, revision);
-        expect(f.feature.localOutputRevision, key);
-        f.reader.succeed(2, 23);
         await tester.pumpAndSettle();
-        expect(f.feature.localOutputCount, 23);
-        expect(f.feature.localOutputWeekly, [0, 0, 0, 0, 23]);
+        expect(
+          f.reader.requests,
+          hasLength(1),
+          reason: 'a display getter never schedules reads',
+        );
+        expect(f.reader.dataRevision, revision);
+        expect(f.reader.queries.single.key, key);
+        // A successful later dispatch of the same watch recovers all metrics.
+        f.reader.succeed(0, 23);
+        await tester.pumpAndSettle();
+        expectValues(23);
         f.feature.localWords();
         expect(
           f.reader.requests,
-          hasLength(3),
+          hasLength(1),
           reason: 'successful values remain cached',
         );
       },
@@ -243,38 +190,36 @@ void main() {
   for (final boundary in ['client', 'epoch', 'disposal']) {
     for (final failure in [false, true]) {
       testWidgets(
-        'retired Stats ${failure ? 'error' : 'success'} after $boundary cannot publish or clear a newer key',
+        'retired Stats ${failure ? 'error' : 'success'} after $boundary cannot publish or replace a newer query',
         (tester) async {
           final f = await _mount(tester);
           final revision = f.reader.dataRevision;
-          final key = f.feature.localOutputRevision;
+          final key = f.reader.queries.single.key;
           switch (boundary) {
             case 'client':
               f.connection.replaceClientSessionForTesting();
             case 'epoch':
               f.reader.epoch = 'replacement-workspace';
               f.connection.adoptWorkspace();
+              f.connection.application.changed();
             case 'disposal':
               await tester.pumpWidget(const SizedBox());
           }
+          await tester.pumpAndSettle();
           if (boundary != 'disposal') {
-            // Same revision/week still needs a read owned by the new identity.
-            f.feature.localWords();
             expect(f.reader.requests, hasLength(2));
             f.reader.succeed(1, 31);
             await tester.pumpAndSettle();
             expect(f.feature.localOutputCount, 31);
           }
           if (failure) {
-            f.reader.requests[0].completeError(
-              StateError('retired Stats error'),
-            );
+            f.reader.requests[0].addError(StateError('retired Stats error'));
           } else {
             f.reader.succeed(0, 999);
           }
           await tester.pumpAndSettle();
           expect(f.feature.localOutputCount, boundary == 'disposal' ? 0 : 31);
-          expect(f.feature.localOutputRevision, key);
+          expect(f.reader.queries.last.key, key);
           if (boundary != 'disposal') {
             expect(f.reader.dataRevision, revision);
             f.feature.localWords();

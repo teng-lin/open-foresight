@@ -1,4 +1,4 @@
-import 'package:foresight_core/src/application.dart';
+import '../test_support/core_fixture.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -106,7 +106,7 @@ void main() {
           deviceLoader: () async => [],
         ),
       );
-      final dynamic state = tester.state(find.byType(Workspace));
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       state.update(() {
         state.meetingFeature.meetingId = meeting;
         state.meetingFeature.meetingPanel = 'Action items';

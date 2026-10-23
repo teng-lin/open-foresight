@@ -1,3 +1,4 @@
+import 'desktop_environment.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -67,7 +68,11 @@ class AppCommands {
     }
   }
 
-  static Future<AppCommands> bind(String path, [CommandAction? action]) async {
+  static Future<AppCommands> bind(
+    String path, {
+    CommandAction? action,
+    DesktopEnvironment environment = const DesktopEnvironment(),
+  }) async {
     final lock = File('$path.lock').openSync(mode: FileMode.append);
     try {
       // Nonblocking OS lock lives with the owner. A second process cannot
@@ -77,23 +82,28 @@ class AppCommands {
       lock.closeSync();
       rethrow;
     }
+    ServerSocket? server;
     try {
       final stale = File(path);
       if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound)
         stale.deleteSync();
-      final server = await ServerSocket.bind(
+      server = await ServerSocket.bind(
         InternetAddress(path, type: InternetAddressType.unix),
         0,
       );
-      final mode = await Process.run('/bin/chmod', ['600', path]);
+      final mode = await environment.run('/bin/chmod', ['600', path]);
       if (mode.exitCode != 0) {
-        await server.close();
         throw StateError('Cannot protect activation socket');
       }
       final result = AppCommands._(server, path, lock);
       if (action != null) result.setHandler(action);
       return result;
     } catch (_) {
+      try {
+        await server?.close();
+      } catch (_) {
+        // Keep the original setup failure actionable.
+      }
       lock.closeSync();
       rethrow;
     }

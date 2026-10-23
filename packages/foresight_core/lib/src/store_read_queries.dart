@@ -1,5 +1,6 @@
-import 'desktop_read_models.dart';
+import 'read_models.dart';
 import 'graph_persistence.dart';
+import 'graph_labels.dart';
 import 'read_coordinator.dart';
 
 /// Closed query names understood by the core-owned read worker, without SQL.
@@ -45,6 +46,55 @@ abstract final class StoreReadQueries {
     projection: 'source_search',
     arguments: {'query': query},
     decode: (value) => Set.unmodifiable((value as Set).cast<String>()),
+  );
+
+  static ReadQuery<List<NoteSummary>> notes() => ReadQuery(
+    projection: 'notes',
+    decode: (value) => List.unmodifiable((value as List).cast<NoteSummary>()),
+  );
+
+  static ReadQuery<String> noteBody(int id) => ReadQuery(
+    projection: 'note_body',
+    arguments: {'id': id},
+    decode: (value) => value as String,
+  );
+
+  static ReadQuery<Map<String, String>> sourceMimes() => ReadQuery(
+    projection: 'source_mimes',
+    decode: (value) => Map.unmodifiable((value as Map).cast<String, String>()),
+  );
+
+  static ReadQuery<List<DocumentLabel>> labels() => ReadQuery(
+    projection: 'labels',
+    decode: (value) => List.unmodifiable((value as List).cast<DocumentLabel>()),
+  );
+
+  static ReadQuery<List<DocumentCluster>> clusters() => ReadQuery(
+    projection: 'clusters',
+    decode: (value) =>
+        List.unmodifiable((value as List).cast<DocumentCluster>()),
+  );
+
+  static ReadQuery<List<String>> clusterNames() => ReadQuery(
+    projection: 'cluster_names',
+    decode: (value) => List.unmodifiable((value as List).cast<String>()),
+  );
+
+  static ReadQuery<String> graphLabelSet() => ReadQuery(
+    projection: 'graph_label_set',
+    decode: (value) => value as String,
+  );
+
+  static ReadQuery<int?> meetingRevision(int id) => ReadQuery(
+    projection: 'meeting_revision',
+    arguments: {'id': id},
+    decode: (value) => value as int?,
+  );
+
+  static ReadQuery<String> enhancedNotes(int id) => ReadQuery(
+    projection: 'enhanced_notes',
+    arguments: {'id': id},
+    decode: (value) => value as String,
   );
 
   static ReadQuery<OutputStats> outputStats({required DateTime now}) =>

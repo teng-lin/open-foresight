@@ -1,1154 +1,652 @@
 # Core service and desktop feature refactoring execution plan
 
-Revision 16, 2026-10-22. Reviewer verdicts and scope of convergence are recorded in the companion
-review record. This is the execution specification for planned PRs 6 and 7 in [audit plan
-3](../audit/2026-10-18-implementation-plan-3.md), not GitHub pull requests #6 and #7. The [review
-record](2026-10-20-core-desktop-refactor-reviews.md) records frozen revisions and finding
-dispositions. This revision reviews the owner-approved combined delivery before implementation
-continues; planning approval does not establish implementation or runtime validation.
+Revision 24, 2026-10-22. This revision records the owner's single-PR delivery decision. Revision 23 refreshed the plan after #170 merged the core work package and incorporated rounds 1 to 6 of its review.
 
-## Baseline and scope
+- **Revision 16**, the pre-merge specification, is preserved at
+  [`75898380`](https://github.com/teng-lin/open-foresight/blob/75898380ac68a0a98dc4a9fdcfc38afc99d133d5/docs/plans/2026-10-20-core-desktop-refactor-plan.md).
+  It includes the complete PR 6 (6A–6E) design.
+- **The [review record](2026-10-20-core-desktop-refactor-reviews.md)** covers revisions up to 15 and the revision 17 review. Whole-plan convergence was last reached at revision 13. Revisions 14 and 15 were scoped amendments, and revision 16 was not separately reviewed before #170 merged.
+- **The [progress record](2026-10-21-core-desktop-refactor-progress.md)** holds the evidence for #170.
 
-The implementation source baseline is fetched `origin/main` at
-`3fb259243a99137e3cba1d5e795c44100f42e688` (PR #168, after release 0.1.3). The immutable full
-source export used for this refresh is recorded in the review record. The earlier ADR-0007 branch
-`fea1fe93` remains historical review evidence, not the implementation source. ADR-0007 is now
-merged in #164, on top of lifecycle follow-ups #160/#162; its reconciliation prerequisite is
-complete. Main subsequently merged CI stabilization #163, Summary #165, meeting AI workflows #166
-and release/GPU-policy changes #167, then owned-DMG recovery/parallel contract restoration #168.
-Preserve that combined reviewed-main behavior. The local
-checkout may still be older; use the pinned main commit for code facts and current commands rather
-than silently treating local HEAD as the baseline. Before implementation, fetch main again and
-record its actual SHA, schema versions, test inventory and metrics; if it moved, assess the delta
-before extraction. Read ADR-0007 revision 7 and the current meeting Summary/AI architecture docs
-at this source commit.
+A plan review does not establish that implementation tests ran.
 
-The final fetch during revision-10 review caught #168 landing. Its twelve changed files affect
-DMG recovery, contract tests and CI selection/ordering, not core/desktop/native/helper code.
-Tree/blob identities including modes were independently compared for the complete application,
-native/services/protocol/CMake trees, AGENTS, pins and relevant runtime/host gate scripts; all are
-byte-identical between c28 and 3fb. The complete new source export and delta proof are recorded in
-the review record. Existing runtime measurements, compiled outputs and pass counts remain labeled
-`c28a1561`; unchanged source is not a new compilation or a final-head acceptance result. Advance
-the integration branch to this reviewed main before subsequent complete gates; the core checkpoint
-and final-head matrices retain their exact-source requirements.
+"PR 6" and "PR 7" name work packages from [audit plan 3](../audit/2026-10-18-implementation-plan-3.md), not GitHub PRs #6 and #7.
 
-Owner delivery direction (2026-10-21): execute the complete PR 6 and PR 7 scope on
-`refactor/core-desktop` as one PR. The old PR numbers below identify work packages and their
-internal dependency order; they do not require separate PRs or an intervening merge. Keep
-independently testable commits, integrate the core interfaces before migrating their desktop
-consumers, and preserve both work packages' complete acceptance criteria. Coordinate exact-source
-Mac verification on HanSolo in a dedicated worktree. The owner's latest direction (2026-10-22)
-is to create a draft PR soon, with remaining implementation and validation disclosed. This
-supersedes the earlier requirement to finish the final HanSolo matrix before PR creation;
-complete final-source Mac acceptance remains required before merge. Run native-team and Claude
-CLI implementation reviews, revise until those converge, and drive the PR's required checks and
-reviews to merge. The plan-review rounds recorded here precede implementation
-review and cannot substitute for it.
+## Current delivery decision
 
-Owner coverage direction (2026-10-21): improve measured Dart core and desktop line
-coverage to at least 95%, while keeping the enforced Linux minimum at 90%.
-Reach the core target at the core checkpoint and final combined head. The owner
-subsequently accepted the current desktop coverage for now (2026-10-22), so its
-95% improvement target no longer blocks delivery. Preserve its enforced 90%
-minimum and meaningful desktop characterization/extraction tests. Python retains its existing 95% gate. Use the actual CI
-coverage commands and unchanged inclusion/exclusion rules. Record covered/total
-lines, exact source, skips and uncovered behavior; add tests for meaningful
-success, failure, stale-publication and cleanup paths rather than mirrored
-implementation assertions. A 90% gate pass alone does not complete the requested
-core 95% improvement. Do not raise the minimum, exclude files or branches, or count
-unexecuted platform/model cases to reach the target.
+During execution on 2026-10-22, the owner requested collapsing the planned PRs
+and minimizing their number, followed by parallel implementation with sub-agents.
+This execution therefore ships **one final PR**, with separate reviewable commits
+for 7.0, 7.1, P0.1, 7A, the six 7B moves and the 7C cleanup stages. This supersedes
+the earlier separate-PR, intermediate-main-merge and approximately 100-file
+delivery requirements below. Stage names and dependency order remain useful;
+the implementation scope and acceptance criteria remain in force.
 
-No production behavior change is hidden in a mechanical extraction. Error classification,
-compatibility enforcement and data migrations are intentional changes with their own tests and
-release notes.
+Prerequisites integrate locally before their dependent stages. Run relevant
+checks during each stage, including the full desktop suite and compiled boundary
+gate required for feature moves. Run the complete applicable Linux and HanSolo
+matrices, canonical container schedule, sanitizer checks, integration acceptance
+and independent native-agent/Claude reviews on the final combined head before
+opening the final PR. Scoped worktrees may proceed in parallel where ownership
+and dependencies permit; merge and resolve their changes on the integration
+branch before validating the combined result.
 
-| Baseline observation at `3fb25924` (application trees unchanged from c28) | Consequence |
-| --- | --- |
-| `application.dart` 2,856 lines plus Summary/workflow/preparation parts 231/285/219 (3,591 combined); `service.dart` 3,313; `store.dart` 1,803; `remote_domain.dart` 1,053 | File separation is partial; shared-private Application parts are not independent services. Preserve the service lifecycle explicitly and measure aggregate scope. |
-| `Operation` still has negative-list policies; handlers decode maps; `RpcError` extends `StateError` and classifies `TypeError` as caller error | Typed dispatch and error ownership remain pending. |
-| Store schema 15: earlier migrations plus 14 (artifact manifests/Summary checkpoints) and 15 (action alias normalization/tasks/document-summary cache) | Freeze 1–15; allocate 16 or the next free version at implementation. Do not recreate delivered tables or normalization. |
-| Google constructor still repairs modification times; its old source URI backfill is already a Store migration | Move only remaining constructor repair work. |
-| Sources 2,386 lines, meetings 2,197 plus `meeting_ai_views.dart` 492 (2,689 combined), settings 1,348, integrations 669, chat 324, onboarding 282; main 1,059 | Feature modularization includes the new shared-private AI view part, onboarding, visuals and composition. |
-| Capture levels already use a separate event/notifier path; ordinary UI revisions are coalesced | Preserve level isolation; characterize ordinary invalidation before narrowing it. |
-| Frontend relay now coordinates closing refusals, socket ownership and worker failure | Keep the topology in these PRs. Its removal requires a separate evidence-backed decision. |
-| DMG fixture contracts are independent of the `macos` application job after #168 | Preserve separate real runtime owners; a DMG-only selection must not force a full Mac build, and a passing fixture is not application acceptance. |
+## Status
 
-Summary, Action Items, Enhanced Notes, Live Q&A, document Preparation and scoped Chat are already
-implemented. Reuse `summary_generator.dart`, `summary_output.dart`, `summary_prompt.dart`,
-`meeting_actions.dart`, `meeting_preparation.dart`, `answer_source_scope.dart` and
-`portable_query_setup.dart`; this plan reorganizes their ownership and boundaries, not their
-algorithms or product behavior. Current `docs/architecture/meeting-summary.md` and
-`docs/architecture/meeting-ai-workflows.md`, their validation records and frozen prompt fixtures
-are implementation references. Those records report historical runs, not fresh validation of a
-future refactor. `docs/architecture/schema-migrations.md` currently stops at 14 although code is
-15; reconcile that documentation when preparing the persistence work, not by rerunning migration 15.
+| Work package | State |
+|---|---|
+| Phase 0: baseline and inventories | Complete: inventories, scoped characterizations and final admission/build comparisons are recorded in the [execution record](2026-10-22-desktop-feature-execution.md) |
+| PR 6 (6A–6E): core service structure | **Merged** in #170 as `75898380` on 2026-10-22, from head `0f24e09c` (tree-identical to `75898380`) |
+| Core follow-ups found after the merge | Implemented and independently reviewed locally; applicable combined Linux/HanSolo acceptance passed within the explicit limits in the [execution record](2026-10-22-desktop-feature-execution.md). Final single-PR delivery and required hosted checks remain pending |
+| PR 7 (7A–7C): desktop feature modules | Implementation, independent source reviews and applicable local combined acceptance complete. All six feature owners use prepared reads; shell extraction, size cleanup, synchronous-reader removal, platform injection, typed fixtures and architecture guards are integrated. Mac selected-style AX remains unqualified. Final single-PR delivery and required hosted checks remain pending; see the [execution record](2026-10-22-desktop-feature-execution.md) |
+| PR 8: native split, backend removal, detector consolidation | Deferred by the owner; unchanged |
 
-PR 8 remains deferred, including backend removal, wholesale native splitting and question-detector
-consolidation. Native changes here are limited to helper schema integrity and any separately
-characterized join/liveness repair needed by PR 6. Windows support, resident model unloading,
-background-sync product policy and CI restructuring are outside scope. The Mac compatibility
-follow-up is a narrow dependency exception: build application-owned SQLite 3.54.1 from its
-checksum-pinned upstream amalgamation and select it through the protected runtime map for Dart
-service/read isolates and desktop. Keep sqlite3's Dart API package at 2.9.4 and retain the existing
-Dart/Flutter, helper SQLite, SDKs and toolchains. Preserve every original-source qualification,
-future-version and read-only WAL guard. Package and sign the library with source/build provenance
-and a checksum of its signed bytes; validate actual loaded identity, subprocesses and relocated UI.
-This replaces the rejected writable PERSIST_WAL cleanup experiment, which broke Apple's live
-read-only reopen semantics. It does not assert the cause of Apple's intermittent SHM ctime change.
+#170 merged the core work on its own. Revision 16 and #170's description both required the desktop work (7A–7C) to land in the same PR. The owner has now selected one final PR for the remaining implementation; see [Current delivery decision](#current-delivery-decision).
 
-## Execution status and checkpoint corrections
+## Baseline at 75898380
 
-The current execution record includes PR #170 and exact fb925644 Linux/HanSolo host
-matrices, with core coverage above 95% and both hosted native sanitizer jobs passing. That is not
-the core checkpoint: a subsequently reviewed resume-discovery lifetime correction and a required
-typed answer-scope projection must land and pass the updated full Linux matrix first. The latter
-keeps the service's canonical scope digest authoritative when preparing scoped desktop history;
-features must not copy the digest algorithm or import writable core implementation types.
-Desktop characterizations are active; 7A production extraction and 7B/7C remain outstanding.
-The progress record identifies actual hosted failures, source-bound evidence and the recovered
-local Docker access. The updated23360009 canonical Linux matrix passes its90% gates but core
-coverage is94.97%, so it is not the95% checkpoint; its full HanSolo matrix passes at95.39% core.
-The next freeze batches the paused-recording coverage regressions, actual hosted Google-verifier
-cancellation correction and valid MCP/graph/Stats review fixes. No historical failure or
-intermediate review verdict is final acceptance.
+The measurements below were taken at `75898380` on 2026-10-22. Before each PR in the series, fetch `main`, record its SHA, and re-measure the rows that PR touches. If `main` moved in a way that affects a row, assess that change before extracting.
 
-The renewed review originally used core candidate `4bd2c75d5890399f03d57ce8a46788da2dfcc623`;
-main resolved to `3fb259243a99137e3cba1d5e795c44100f42e688`.
-At that review the initial core implementation existed and the focused6E seams were pending.
-The following failure/correction requirements preserve that historical review input;
-current source-bound execution status is in the companion progress record.
-That complete container attempt passes
-30/30 native targets, then fails the namespace guard at the unchanged 30-second deadline and one
-graph-label fixture assertion: core 1,821 passed/14 skipped/one error; desktop 285 passed/17
-skipped/one failure. Service, fast integration and platform Python do not run after those failures.
-Both failed cases pass unchanged in isolation; these diagnostics neither resolve the complete gate
-nor establish a cause for the timeout. Historical host passes remain bound to their original source.
-The progress record retains exact attempts, counts, skipped cases and failed output.
+| Area | Measurement at `75898380` | Consequence for PR 7 |
+|---|---|---|
+| Core application | `application.dart` 540 lines. `Application.call` is 11 lines and dispatches through an exhaustive typed `OperationRegistry`. 17 owners in `application_services/`. `store.dart` 598 lines; `application_service.dart` 923. Business owners (`application*.dart`, `domain.dart`, `application_services/`) contain no SQL, enforced by `application_persistence_boundary_test.dart`; `Store` and `graph_persistence.dart` remain SQL owners | The core boundary PR 7 depends on exists. PR 7's core changes are limited to the follow-ups below and the core API removals that 7C-1 and 7C-4 list |
+| Operations | 83 operations (75 application, 8 service) and 32 MCP tools. Typed decoding precedes admission; the API version is negotiated in both directions. Typed requests are decode-only (private constructors, no client encoder) | Desktop commands still send untyped argument maps at about 72 call sites (`desktop_connection.dart:110-118`). Typed desktop commands are out of PR 7's scope (F-11) |
+| Schema | Store schema 17 (16: Google modification-time repair; 17: canonical ordered labels). Helper databases are versioned. `docs/architecture/schema-migrations.md` lists 1–17 | Migrations are frozen and guarded. PR 7 adds none |
+| Mac SQLite | Application-owned SQLite 3.54.1 is live in the macOS service and desktop processes (#170) | Delivered. Preserve it |
+| Desktop public API | Desktop `lib/` imports only `package:foresight_core/desktop.dart`; `main.dart` also imports `desktop_bootstrap.dart`. `desktop_boundary_test.dart` checks the import and export namespace | 7C closes the remaining edges; the boundary itself exists |
+| Desktop reader | `StoreReader` (`store_reader.dart`) exposes 25 synchronous projections, kept for "the compiling boundary migration", plus typed `watch` and `read`. Desktop production code uses the synchronous projections at about 87 sites, `read` at 3 and `watch` at none. About 40 `readRows`/`toRow` map conversions sit in 10 files, 9 of them in `desktop_reader_adapters.dart`. Nine projections the worker already serves have no typed `StoreReadQueries` factory: `notes`, `note_body`, `source_mimes`, `labels`, `clusters`, `cluster_names`, `graph_label_set`, `meeting_revision` and `enhanced_notes`. Two core APIs exported to the desktop also call synchronous projections: the `model_setup.dart` helpers (`model_setup.dart:286,381,406`), called during build in Settings and Meetings, and the `ConnectedSources.attachments` interface member (`desktop_connection.dart:64`; remote implementation `remote_google.dart:161-171`), called during build in Meetings (`meetings_controller.dart:514,1803`) | 7.0 adds the missing factories and reader-free helpers (F-12). 7B moves features to prepared asynchronous read models. 7C-1 only removes |
+| Desktop session seams | `DesktopConnection.clientSessionGeneration` and the Stats scheduling identity `OutputStatsPeriod` exist (6E). The desktop still calls the one-shot `StoreReadQueries.outputStats(now:)` (`background_store.dart:9-19`) | 7A and 7B consume them. Stats needs no further core change |
+| Desktop structure | 43 files, 14,459 lines. `main.dart` plus 9 `part` files form one 9,273-line library (7,697 at `1cfd203`); see the part sizes below. 33 other standalone libraries, listed in [Library ownership](#library-ownership). No `features/` directory exists yet | Unchanged target from revision 16 |
+| Desktop coupling | 168 cross-feature references and 236 `shell.` back-references. Every controller routes through one `shell.update` → `setState`. Shell services every part uses: the global operation gate (`run`, `busy`, `error`; `main.dart:618-635`; 42 `run` calls and 59 `busy` reads), `showInputDialog` (9), `reportAsyncError` (9), `rowsAreCurrent` (4) and the workspace-clear hooks. Tab indices 0–6 are integers at 38 sites in 7 files | 7A introduces the shell ports and explicit navigation (a `WorkspaceTab` enum) |
+| Feature dependencies | Outbound cross-feature references per part: settings → integrations 52, → meetings 5; integrations → meetings 8, → settings 3, → onboarding 2; chat → meetings 4, → sources 1; sources → meetings 21, → integrations 11; meetings → chat 16, → integrations 14, → settings 6; onboarding → integrations 18, → sources 4, → settings 3. Features also write each other's state directly (`integrations_controller.dart:340`; `meetings_controller.dart:1040,1581,1761,1892`) | Sets the 7B order: integrations first |
+| Largest desktop functions | `settings` 521 lines, `sources` 483, `meetingNotesEditor` 377, `screenshotWorkspace` 344, `scheduleGraphLayout` 298, `sourceGraph` 270, `models` 219, `stats` 218, `chat` 213. Outside the parts, `gemma_setup_view.dart:320` `build` is 203 | All exceed the 150-line build-method target |
+| Status and progress | Service status and events are untyped maps read by string paths: `capture[...]` for meeting summaries, workflows, note enhancement, the question detector, proactive state and echo cancellation (for example `meeting_ai_views.dart:87`, `meetings_controller.dart:159-161,279-283,1616-1620,1937`); `googleStatus[...]` (`integrations_controller.dart:49-67`); `generator.effectiveState` (`settings_controller.dart:326,377`). `RemoteDomain` treats every event other than `capture_levels` and the approval events as a full status snapshot, and invalidates every active reader query on each distinct one (`remote_domain.dart:49-52,176-221`) | Typed status decoders, coalesced broadcasts and data-only reader invalidation are prerequisites (F-3, F-4, F-10) |
+| Tests | Linux at `75898380` (2026-10-22 audit): core 1,998 passed / 16 skipped, 95.11% coverage; desktop 394 / 17, 92.47%. HanSolo at `0ba00435` (#170's evidence head): core 95.43%, desktop 92.36%. 48 desktop test, `integration_test` and `test_support` files reach private `Workspace` and feature state through `dynamic` (15 of them through `controller_fixture.dart`), and 13 test files set integer tabs. `reader_admissions_baseline_test.dart` measures admissions, notifications and builds for the Sources, Chat, Meetings and Stats tabs, but its numbers are not committed | Keep core at or above 95% measured. Desktop keeps its 90% minimum. Dynamic test access fails only at runtime (see [7B](#7b-move-one-feature-at-a-time)) |
 
-Before freezing the next core candidate, diagnose the namespace guard using the actual required
-container schedule and resource profile below. Preserve semantic transitive export/conditional
-resolution, both entry points and every required/forbidden/import assertion. Any context or query
-change needs complete namespace-set parity and the full required gate, not only an isolated pass.
-Correct graph-label fixtures by source ID and `(documentId, labelName)`: opaque SHA256 IDs derived
-from title and time do not sort by creation order. Retain per-document durable position, both
-metadata/color associations, reopen, source revision/changed, JSON projection and deletion/cascade
-assertions; test any global document order with explicit deterministic IDs in both lexical orders.
-Do not change production ordering or ID generation to satisfy a global `.first` assumption.
-Batch verified related corrections, freeze the actual source and rerun its complete applicable
-Linux matrix before recording `core_acceptance_sha` or starting 7A production extraction.
+Desktop `part` files of the `main.dart` library, in lines:
 
-The namespace/graph corrections and both6E seams have since landed. The c492
-canonical baseline passes, below95% coverage; the subsequent94deb coverage-test
-candidate fails one existing Linux connection-race assertion, so core acceptance
-remains pending. Preserve the requirements above and the actual failure evidence.
+| File | Lines |
+|---|---|
+| `sources_controller.dart` | 2,422 |
+| `meetings_controller.dart` | 2,213 |
+| `settings_controller.dart` | 1,370 |
+| `main.dart` | 1,054 |
+| `integrations_controller.dart` | 669 |
+| `meeting_ai_views.dart` | 549 |
+| `chat_controller.dart` | 387 |
+| `onboarding_controller.dart` | 283 |
+| `workspace_visuals.dart` | 230 |
+| `workspace_controller.dart` | 96 |
 
-HanSolo's original main compiler SDK has been provenance- and checksum-qualified without a rebuild.
-The owner personally completed the Xcode license prerequisite; selected full
-Xcode reports SDK27.0. Original dependency compatibility checks and a fresh94deb
-native build pass all33 root cases. These results retain their source identity.
-Final combined-source Mac acceptance still requires qualification of its full
-runtime/development dependency closure (including ICU headers, FlatBuffers and
-SentencePiece), locked pub/Pod resolution, actual
-application configuration/dependency reuse checks, and fresh current native/core/desktop/process/
-UI/installer gates. Prepare non-license prerequisites alongside Linux work before the final Mac
-gate. Seek existing qualified outputs first; a verified content-addressed miss permits necessary
-private compilation of pinned components with the reason/source/inputs recorded, as AGENTS allows.
-An incomplete runtime bundle alone is not proof that a compiler-SDK rebuild is needed. Hosted Mac
-checks do not substitute for the requested HanSolo matrix without an explicit owner change. CLT discovery,
-original producer reports and cached runtime bytes are not application test results. Preserve the
-original checkouts and verified dependency bytes; never accept the owner's license on their behalf.
+Summary, Action Items, Enhanced Notes, Live Q&A, document Preparation and scoped Chat are implemented. Reuse `summary_generator.dart`, `summary_output.dart`, `summary_prompt.dart`, `meeting_actions.dart`, `meeting_preparation.dart`, `answer_source_scope.dart` and `portable_query_setup.dart`. This plan reorganizes the desktop around them; it does not change their algorithms or product behavior. The current implementation references are:
+- `docs/architecture/meeting-summary.md`;
+- `docs/architecture/meeting-ai-workflows.md`;
+- their validation records and frozen prompt fixtures.
+
+PR 8 remains deferred. Windows support, resident model unloading, background-sync product policy and CI restructuring are out of scope.
+
+## What #170 delivered
+
+The complete 6A–6E specification is in revision 16. This section records what landed, so later PRs build on it rather than re-plan it.
+
+- **6A, operation contracts.**
+  - Every operation has a descriptor and a typed request with one decoder. Admission decodes first.
+  - `RpcError` implements `Exception`, and an unexpected `TypeError` maps to `internal`.
+  - API compatibility is checked on connect and reconnect.
+  - Runtime checks prove the application and service registries are disjoint and cover every operation.
+  - MCP schemas come from the same argument specification.
+- **6B, domain services.** `Application` composes 17 explicitly constructed owners:
+  - `SummaryCoordinator` and `MeetingWorkflowCoordinator`;
+  - `NoteEnhancementCoordinator` and `RecordingController`;
+  - `WorkspaceAdmin`, `ModelRegistry`, `SourceOperations` and `GoogleMaintenance`;
+  - and others.
+
+  `ConversationAnswer` is split into immutable phases. No `part of 'application.dart'` ownership remains.
+- **6C, service and reads.**
+  - The frontend relay topology is kept and documented.
+  - `service.dart` is a barrel over `service_client`, `service_frontend`, `application_service` and `service_startup`.
+  - `ApplicationService` is the single lifetime authority, deciding from the pure value `ServiceLifetimeSnapshot`.
+  - Persistent read workers follow the identity-versus-freshness protocol summarized in [Core interfaces PR 7 consumes](#core-interfaces-pr-7-consumes).
+  - The progress record measured RPC p95 below 2 ms during generation and capture at an intermediate candidate.
+- **6D, persistence.**
+  - Migrations 1–15 are frozen behind a digest manifest and a CI guard, and 16 and 17 are appended.
+  - Business owners contain no SQL (see the Baseline).
+  - The three helper databases are versioned as one set, with a non-mutating preflight.
+- **6E, desktop interfaces.**
+  - A curated `desktop.dart` API.
+  - `DesktopConnection` exposes `StoreReader` and `HelperStatus`. `RemoteHelper extends Helper` and the one-line re-export shims are gone.
+  - Two seams: `clientSessionGeneration`, and the Stats scheduling identity `OutputStatsPeriod`.
+  - Lazy trace strings and the grpc pin guard.
+
+Two function-size exceptions are retained with justification: `rankAnswerPassages` (164 lines) and the declarative `rpcTools` list (170).
+
+**Merge-time evidence.** #170 merged from head `0f24e09c`. Its description's local evidence was recorded at `0ba00435`, one commit earlier: a Git-free export of 1,375 files and modes. `0f24e09c` adds only four tests to `tests/test_macos_tools.py`; hosted checks are its only evidence, and they passed.
+
+| Gate at `0ba00435` | Linux | HanSolo Mac |
+|---|---|---|
+| Native root inventory | 30 passed | 33 passed |
+| Core | 1,995 / 18 skipped, 95.02% | 1,998 / 14, 95.43% |
+| Desktop | 394 / 17, 92.48% | 396 / 13, 92.36% |
+| Compiled service/MCP | 32 / 0 | 32 / 0 |
+| Real desktop/service UI | 59 assertions | 59 assertions |
+
+- Python Quality passed with 5,202 tests and 31 skips at 95.91% (5,206 at `75898380`, including the four added tests).
+- #170 merged with its five required hosted checks passing.
+- Its description listed three gates as not yet run: fresh local native sanitizers, the responsiveness measurement, and Linux portable-model, audio, package and installer acceptance.
+- Since then:
+  - The 2026-10-22 audit ran the root CTest under Clang ASan/UBSan (30/30) and a standalone `native/` ThreadSanitizer run (16/16) at `75898380`. The hosted root ASan/UBSan and TSan jobs passed on the `75898380` push.
+  - Main-push run [39830379125](https://github.com/teng-lin/open-foresight/actions/runs/39830379125) at `75898380` passed the Linux acceptance jobs with every phase selected (F-1a).
+  - The responsiveness measurement remains unrecorded for merged source (F-1b).
+
+## Core follow-ups
+
+The 2026-10-22 consolidated audits found most of these; the review of revisions 17 and 18 found F-10 and F-12. Their current resolution and acceptance evidence are recorded in the [execution record](2026-10-22-desktop-feature-execution.md). An item whose "When" names a step is a prerequisite of that step and lands in the PR the Delivery table assigns. Items marked "Separate" or "Any time" must not ride along in PR 7's feature moves.
+
+| # | Item | Source | When |
+|---|---|---|---|
+| F-1a | Record the hosted Linux acceptance for `75898380` in a closing #170 entry of the progress record: run 39830379125 passed `acceptance-cpu` (models suite), `acceptance-audio` (software GPU and virtual audio), `acceptance-deb`, and deb, rpm and arch packaging. Physical audio and physical GPU were not run. Rerun only if the owner rejects hosted evidence. `cpu` and `audio` can run locally: `bash tools/build_linux_container.sh --sdk-image <verified SDK> --seed <verified seed>` (default output `build/portable`, which `tools/linux_acceptance.sh` reads), then `VERSION=<version> SDK_IMAGE=<verified SDK> GITHUB_REPOSITORY=teng-lin/open-foresight bash tools/linux_acceptance.sh cpu`, and the same for `audio`. `deb`, and the deb, rpm and arch packaging jobs, run only on a GitHub-hosted runner: `tools/ci_package_sandbox.sh` refuses to run elsewhere, and must never be bypassed or installed on a developer host. To repeat them, dispatch `macos.yml` from `main` with the full SHA: `gh workflow run macos.yml --ref main -f source=75898380ac68a0a98dc4a9fdcfc38afc99d133d5 -f acceptance=full` | #170 description | 7.0 |
+| F-1b | Responsiveness of the service's `status` RPC. Commit the runner that produced #170's candidate numbers (today outside the repository at `/var/tmp/foresight-core-desktop/measure-current-rpc.py`, which takes source, build, commit and output arguments; not `measure-baseline-rpc.py`, which is fixed to the `c28a1561` build). Before committing, parameterize its host-local paths, use a private `/var/tmp` temporary root (AGENTS.md), make it pass `ruff`, `mypy` and `tools/check_subprocess_timeouts.py`, and unit-test its sampling and report logic without models so it does not lower Quality's coverage. Its source and build provenance checks, today against out-of-tree `source-manifest.json`, `native-build-evidence.json`, `logs/core/aot-build-evidence.json` and the baseline directory's model and runtime qualification files, become explicit inputs: the repository and commit, the Git-free export, the service, helper, native library, model-worker, LiteRT and Whisper runtime paths, and the model files. Immediately after the export, before compiling it or running any gate, the runner's export check verifies the pristine export against `git ls-tree -rz --full-tree <commit>` (blob hash, mode and exact file set, as the out-of-tree `/var/tmp/foresight-core-desktop/freeze_candidate.py` does today, with a subprocess timeout). At measurement time it re-verifies every Git-listed blob and mode, allows extra files only under an explicit allow-list of generated paths that the runner documents (at least `test-results/`, `coverage/`, `.dart_tool/`, `build/` directories including the build directory if it is inside the export, Flutter `ephemeral/` directories, `.flutter-plugins-dependencies`, `.coverage*`, and Python and linter caches; `tools/ci_rollout.py:32` is the existing list of generated-output names), never a modified or missing Git-listed file, and checks each model file against the export's `model_pins.dart` digest. It hashes the binaries and runtimes and records every digest with the commit in its report. The author compiles that export and runs the runner against the same build that the session's gate block then passed. It never trusts a pre-made evidence file, and it raises instead of using `assert`. Method: warm the real helper and generator; take 100 `status` round trips each while idle, during streaming generation and during capture; report p50, p95 and max, startup time, runner, toolchain, workload and host load. Target p95 below 50 ms on a documented idle host; report misses and causes. The 7.0 author runs it on the local Linux host at `75898380` and at 7.0's head, and records both in 7.0's description. Later PRs re-measure only when they change service-side status, broadcast, dispatch or read code; desktop-only PRs from 7A on rely on 7A's committed admission and build baselines. Timing never replaces the deterministic liveness tests | #170 description | 7.0 |
+| F-2 | Fix late subscribers in `ReadCoordinator`. A second `watch` or `read` on an active key receives nothing until another invalidation, and its 30-second deadline never starts (`read_coordinator.dart:166-186,408-416`). Give every subscriber initial delivery or work and a bounded wait, keeping one active query and one pending refresh per key. Any retained-result replay revalidates identity and freshness | CDX-F4 | 7.0, because PR 7 adds the first production watchers |
+| F-3 | Client-side typed decoders over the **unchanged** v1 status payload: capture and recording, meeting summaries, meeting workflows, note enhancement, question-detector, proactive and echo-cancellation state, Google status, and generator effective state. 7.0 adds them beside the existing maps. Each 7B PR switches its own feature's consumers in a separate commit before the move (see [7B](#7b-move-one-feature-at-a-time)). 7C-4 removes `capture` and `googleStatus` from `DesktopConnection` | ARCH-4 | 7.0 |
+| F-4 | Coalesce `ApplicationService._broadcast` on the trailing edge so the latest snapshot is always delivered: use `domain.createTimer` (at most about 100 ms), never drop a `workspace_epoch` change, keep `_exitIfIdle` synchronous in the `changes` listener, and cancel the pending broadcast in `close` and `_discard`. Drop a run's `preview` from status when the run settles (`summary_coordinator.dart:218` and the workflow equivalent), so status no longer keeps every finished body. Today one 201-chunk Summary produces 205 full-status broadcasts. Preferred: keep progress inside the existing status event. A separate progress event is allowed only if all of these hold: the service sends it only to clients advertising `client_api_version` 2 or higher, with a specified peer matrix as revision 16's §6A item 5 requires; `RemoteDomain._apply` handles it before the generic branch (released v1 clients treat unknown events as a full snapshot and would reset `capture`, `googleStatus`, `generation` and `helper`); it notifies presentation without invalidating the reader; and the desktop preview consumers and fixtures change in the same PR. **Event before reply.** Today the status event for a command precedes its reply (`changed()` in `callRequest`'s `finally`, `application.dart:394-397`, versus the reply at `application_service.dart:769-778`), and the desktop depends on it: Start, Stop, Pause/Resume and Enhance call `syncCapture()` right after their reply (`meetings_controller.dart:207-208,213-214,798-807,2163-2169`); stop-meeting is ignored while `recording` is null (`main.dart:384-388`); quick start admits a second meeting while it is null (`meetings_controller.dart:296`). So when a request whose operation `notifiesChanges` settles, with success or failure, cancel any pending coalesced broadcast and send the current status before the reply. For application-scope requests, flush in a `finally` immediately after `callRequest` and before the `request.committed` gate, so held-reply gate tests keep today's order. For service-scope streams, flush before the terminal `done` or error frame (`application_service.dart:595-616`), not before every frame. Bootstrap service operations (`createsLease: false`) and `service.stop_if_idle` send no status today and get no flush. Coalescing then covers only background progress, provisional transcripts and the heartbeat. Tests: a service test that the event precedes the reply for start, pause and stop, with the coalescing timer held; and a test that drives a streamed Summary through the real `ApplicationService._broadcast` and `RemoteDomain._apply` path, asserting that `capture['meeting_summaries']` carries the latest preview, that `changes` fires for each distinct delivered snapshot (`_apply` drops identical ones, `remote_domain.dart:196-197`), and that the settled snapshot drops the preview | ARCH-2, DART-N7 | 7.0 |
+| F-5 | Per-workflow invalidation keys. A document-only Preparation brief is cancelled by transcript rows and notes edits | ARCH-1 | Separate fix |
+| F-6 | One generation-run owner in place of the duplicated run, cancel and 20 ms SQL-polling machinery in the Summary and workflow coordinators | ARCH-3, DART-N8 | Separate, after F-5 |
+| F-7 | Descriptor fields. `response` is never read: route streams by it or delete it. `notifiesChanges` drives the after-commit `changed()` (`application.dart:396`) and `readOnly` drives the MCP `readOnlyHint` (`operations.dart:250`): keep both, and add tests that each declaration matches handler behavior. Pass the typed request to `authorize` | ARCH-5 | Separate |
+| F-8 | Layering fixes: <ul><li>move every `mcp_dart` use (`rpcTools`/`RpcTool`, `operation_tool_projection.dart`, and `OperationArgumentSchema.schema`, `operation_argument_schema.dart:1,162-165`) into an MCP-only library that nothing in `apps/desktop/lib` can reach, including through `desktop_bootstrap.dart`, which already pulls in `application_service.dart` through `remote_domain.dart` and `service.dart`; descriptors keep a plain JSON-schema map;</li><li>remove persistence imports of service modules (`sqlite_preflight.dart:6` → `service_socket.dart`; `source_store.dart:4` → `operations.dart`);</li><li>rename `desktop_read_models.dart`, which is core's shared projection layer;</li><li>mark `Application`'s recording setters `@visibleForTesting`, which needs `package:meta` as a direct `foresight_core` dependency with a one-line justification, or use a test-only seam</li></ul>`mcp_dart` stays a `foresight_core` package dependency, so it remains in the desktop's `pubspec.lock`. Removing it from the resolved dependencies would need a package split, which is an owner decision outside this plan | ARCH-7 | 7.0 if ready; otherwise its own core PR before 7C-4's boundary guard |
+| F-9 | `meeting-summary.md` still names the deleted `application_summary.dart` (ownership is now `SummaryCoordinator`). ADR 0007 is still "Proposed" | ARCH-6 | Any time |
+| F-10 | Invalidate the `StoreReader` only when status changes data identity: the status `revision` (`Store.dataRevision`, `application_service.dart:397`), `workspace_epoch` or `clientSessionGeneration`. Presentation-only status still notifies `changes`. Today the 1 Hz recording heartbeat (`elapsed_ms`) and each provisional-transcript update re-run every active watch (`application_service.dart:199-202`; `recording_controller.dart:66-71,139-143`). Prove with a test that every committed write a desktop projection reads changes the revision the next status event carries | Revision 17 review | 7.0, before 7B adds watchers |
+| F-11 | Typed desktop commands: client-constructible command values and a typed `DesktopConnection` command method. Encode field presence explicitly (`hasOwner`/`hasDue` come from `rawArguments.containsKey`, `operation_requests/meetings.dart:199-202`), and keep the wire map and request digest of every command the desktop sends byte-identical, proven by a fixture test, so `PendingRequestKey` retries stay valid | ARCH-4, revision 17 review | Separate, after 7C. Converting about 72 call sites is a logic change, so it does not ride along in the moves |
+| F-12 | Additive read APIs, so 7B never stops on a core interface gap and 7C-1 only removes: <ul><li>typed `StoreReadQueries` factories, with worker tests, for the nine projections that lack one (`notes`, `note_body`, `source_mimes`, `labels`, `clusters`, `cluster_names`, `graph_label_set`, `meeting_revision`, `enhanced_notes`);</li><li>reader-free versions of the `model_setup.dart` helpers that take a prepared `ModelRegistration?` (from `StoreReadQueries.model`) instead of a `StoreReader`.</li></ul>Features construct reads only through `StoreReadQueries`, never by constructing `ReadQuery` with a projection name; 7C-4's guard enforces this | Revision 18 review | 7.0, before 7B |
+
+**Security fixes.** Three consolidated tasks touch contracts this plan preserves:
+- P0.1 binds desktop approval to the verified desktop process. Its fix also changes desktop behavior: the host slot is kept while the window is hidden, capture is refused with no visible window, and the `commands.sock` quick meeting is gated (`agent_approval_surface.dart:47-56`, `commands.dart:115-140`).
+- P0.2 enforces each operation's declared policy at admission; `service.stop_if_idle` currently bypasses it.
+- P0.3 gates agent overwrites.
+
+Each is a deliberate behavior change with its own tests, and none rides along in PR 7. P0.1 changes 7A's composition-only approval port, the shell's approval characterizations (moved in 7B-6) and integrations' quick-meeting activation (7B-1), so land it before 7A (see [Delivery](#delivery)). A security PR that lands later updates the characterizations its intended behavior change replaces, in that PR; that is not a weakened assertion.
+
+The remaining defects are outside this plan: DART-N1, DART-N2, DART-N10 and CDX-F3 in core; CDX-F2 in native; DART-N9 (ungated `test_support` analysis) in desktop test hygiene.
+
+## Delivery
+
+The table retains the original stage names. The owner's [current delivery
+decision](#current-delivery-decision) combines them in one final PR; keep each
+stage independently reviewable in its commits.
+
+| PR | Content | Notes |
+|---|---|---|
+| 7.0 | F-1a, F-1b (baseline and re-measure), F-2, F-3, F-4, F-10, F-12; F-8 if ready | Core, plus the desktop consumers and fixtures F-3 and F-4 require. No feature moves. Full Linux matrix including native CTest, the compiled service/MCP gate, isolated-display desktop integration and the fast suite. Widget tests cannot see F-4 because the desktop fixture bypasses `_broadcast` and `_apply` (`desktop_connection_fixture.dart:68,100-101`); F-4's own service and real-path tests cover it |
+| 7.1 | Fix current desktop defects, each with a regression test: <ul><li>DART-N3: the preview's Generate button sends nothing (a #170 regression);</li><li>DART-N4: a slow save reply re-targets the note editor;</li><li>DART-N5: onboarding retry never marks the runtime ready;</li><li>DART-N6: UI callbacks drop request failures (see [Asynchronous actions](#asynchronous-actions));</li><li>DART-N11: the sign-in dialog pops whichever route is on top (`google_sign_in_dialog.dart:91`);</li><li>TEST-2: inject the platform environment so widget tests never run the real `hyprctl` or touch the real config (see [Hermetic tests](#hermetic-tests))</li></ul> | Keeps behavior fixes out of the mechanical moves |
+| 7A | Composition root, shared presentation, shell ports, `WorkspaceTab`, the interim rebuild bridge, the library ownership table, residual characterizations and committed admission baselines | No feature moves |
+| 7B-1 to 7B-6 | One feature per PR: integrations, settings, chat, sources (with the note editor), meetings (with the AI views and `meeting_visuals.dart`), then onboarding and shell | Meetings may need two PRs to stay under the file budget |
+| 7C-1 | Remove the synchronous `StoreReader` projections, the map conversions, `desktop_reader_adapters.dart`, the `StoreReader` versions of the `model_setup.dart` helpers and `ConnectedSources.attachments` (planned core API removals) | Core and desktop |
+| 7C-2 | Platform adapter replacing inline `Platform.is*` checks | |
+| 7C-3 | Test fixtures: replace `controller_fixture.dart`'s introspection and the remaining dynamic test access; enable `avoid_dynamic_calls` for desktop tests | |
+| 7C-4 | Architecture guard, `GoogleAccount.configured` (a planned core API change), removal of `capture`/`googleStatus` maps, remaining cleanup | |
+
+**Sequencing.**
+- 7.0 and 7.1 precede 7A. 7B-n follow 7A in order. 7C-1 follows 7B-6; 7C-2 to 7C-4 follow 7C-1 in any order, with 7C-4 last if it carries the guard.
+- P0.1 lands before 7A. If the owner schedules it later, the P0.1 PR updates the approval port and characterizations as its intended change.
+- F-8 lands before 7C-4.
+
+For every PR in the series:
+1. Rebase on current `main`.
+2. Run the full applicable Linux matrix (see [Verification](#verification-matrix-and-implementation-stop-conditions)), plus the HanSolo matrix where owner decision 1 requires it.
+3. Pass the required hosted checks.
+4. Run native-team implementation reviews and an external CLI review by a different agent than the implementer (Codex CLI while Claude Code implements) until they converge.
+5. Before each follow-up push, fetch the PR head, review threads (including bot reviews) and CI results. Read the failed step's output, verify each finding against current code, and batch the fixes (AGENTS.md).
+
+Record the evidence (source SHA, counts, skip reasons, coverage) in the PR description. The progress record stays the historical record for #170, apart from F-1a's closing entry.
+
+**Owner decisions needed:**
+1. **When to run the HanSolo Mac matrix.** Revision 16 required it at the final combined head. Recommended:
+   - run it on 7B-1 (integrations: shortcuts, accounts, platform behavior), on the Meetings PR (capture UI) and on 7C-2 (platform adapter);
+   - also run it whenever a hosted macOS check fails;
+   - rely on the hosted macOS checks for the other PRs.
+
+   The HanSolo matrix is the set #170 recorded, run from an exact Git-free export in a dedicated HanSolo worktree: the root native inventory; core and desktop suites with coverage; fresh AOT service and MCP, and the Release desktop; the compiled service/MCP gate and the real macOS UI test; `platform_python_tests.py --platform macos`; DMG fixtures; ad-hoc codesign and runtime closure, and the relocated MCP; live application-owned SQLite in both processes. Record each row as the merge-time table does. The hosted `macos` job covers most of this, but not coverage (off on PRs) or local Xcode and hardware.
+2. **Order of 7.0 and 7.1.** Recommended: land 7.1 first, because it fixes user-visible bugs, and develop 7.0 in parallel.
+3. **When P0.1 lands.** Recommended: before 7A, as above.
 
 ## Contracts that must survive every commit
 
-1. **Ownership and shutdown.** One writable application Store and one service owner per canonical
-   profile. Keep the public frontend and private worker socket, the record/lock release order,
-   closing refusals for undispatched work, `outcomeUnknown` for dispatched work without a proven
-   result, and the single resend only for `closing`/`notSent`. Never replay an ambiguous mutation.
-   Preserve helper identity/adoption verification and replacement-socket protection.
-2. **ADR-0007 lifetime.** Desktop presence pins the service. Desktop-only departure keeps its grace;
-   agent activity and helper-wait/dispatched/cancellation work follow revision 7's rules. The
-   desktop branch still waits for serialized domain mutations. Idle exit sees all executing
-   background work, including invalidated embedding drains; scheduled unfired timers and durable
-   paused work do not falsely pin it. Only the service decides to exit. Extraction must neither lose
-   nor double-count activity/busy state. Summary and meeting-workflow runs now contribute to
-   `backgroundBusy`; `GenerationReservationGate.generationReserved` holds the generator between
-   child calls. Foreground work joins preempted proactive/live-Notes cancellation before taking
-   ownership, preserving queued jobs. Keep one reservation authority and underlying-child
-   settlement.
-3. **Approval and capability admission.** Preserve the exact per-operation host, approval,
-   file-root, web-search and overwrite policies. Attach/bootstrap operations must remain reachable
-   by their existing capability flow; do not mark every `security.*` operation as requiring an
-   already attached host. No invalid request may start model work or acquire a write side effect. PR
-   6 intentionally moves complete side-effect-free decoding before authorization: decode
-   envelope/business arguments → reject stale workspace epoch → authorize/capability/approval →
-   helper readiness → dispatch. Structural decoding is distinct from dynamic resource/permission
-   checks. A structurally malformed stale request returns invalidArgument; a structurally valid
-   stale request is refused before approval. Invalid approval-requiring requests emit no approval
-   event. Preserve lease creation/origin and helper-wait accounting around this sequence; admission
-   failures never stamp agent activity in the new order. This intentionally changes malformed agent
-   requests: current code dispatches/stamps before handler decoding; decode-first rejection must
-   return `invalidArgument`, never enter `_dispatched`, and leave agent activity unchanged at both
-   dispatch and settlement. An already armed desktop-departure grace and its scheduled idle exit
-   also remain unchanged; malformed input must not cancel the departure. Add a
-   `service_lifetime_test.dart` regression and list this admission
-   consequence among the PR's intentional lifetime changes; ADR-0007's definition of stamping when
-   work starts remains unchanged. Durable idempotent replay stays inside authorized dispatch;
-   decoding never returns a cached result before authorization.
-4. **Commit and cancellation semantics.** Keep workspace epochs, idempotency keys, durable pending
-   helper work, revision checks, after-commit notification ordering, cancellation cleanup and
-   captured-transcript finalization. A cancelled future is not proof that underlying work settled.
-   Keep operation completion separate from wire response delivery. Preserve atomic Summary
-   artifact/checkpoint/derived-source acceptance and workflow artifact/task/cache/source acceptance,
-   with indexing asynchronous afterward. Preview/progress is not accepted data. Preserve manual task
-   details/completion/evidence/stale state, edited history, degraded results and retry identities.
-   Source-scope identity is a privacy boundary: selected-empty never widens to Workspace, and a
-   scope change invalidates in-flight retrieval/history/persistence and scoped web memory.
-5. **Desktop behavior.** Preserve recording ownership on host disconnect, selected-meeting targets,
-   recovery and reconnect behavior, transcript copying, autosave and enhancement edits, approvals,
-   Google authorization/setup, navigation and onboarding. Late completions from a retired feature,
-   connection, query or workspace epoch must not overwrite newer state. Keep the six meeting panels,
-   Summary phase/previews/cancel/history, structured task editing, degraded Notes warnings, local
-   Preparation selection and distinct manual/automatic answer scopes. Characterize missing switch,
-   dialog, scope-change, clear and reconnect races before claiming they are already safe; any actual
-   defect is a separately tested behavioral fix, not a weakened characterization assertion.
-6. **Integrity and verification.** [AGENTS.md](../../AGENTS.md) governs dependency provenance, cache
-   reuse and all gates. Reuse verified dependency SDKs; compile changed project code. Do not delete
-   caches, weaken tests, substitute mocks for process acceptance, or represent reused bytes as a new
-   build.
+1. **Ownership and shutdown.**
+   - One writable application Store and one service owner per canonical profile.
+   - Keep the public frontend and the private worker socket, the record and lock release order, and closing refusals for undispatched work.
+   - Return `outcomeUnknown` for dispatched work without a proven result, and resend once only for `closing`/`notSent`. Never replay an ambiguous mutation.
+   - Preserve helper identity and adoption verification, and replacement-socket protection.
+2. **ADR-0007 lifetime.**
+   - Desktop presence pins the service.
+   - Desktop-only departure keeps its grace period. Agent activity and helper-wait, dispatched and cancellation work follow revision 7's rules.
+   - Idle exit sees all executing background work, including Summary and meeting-workflow runs. Scheduled timers that have not fired and durable paused work do not pin it.
+   - Only the service decides to exit. Keep one generation-reservation authority and underlying-child settlement.
+3. **Approval and capability admission.**
+   - Preserve each operation's current host, approval, file-root, web-search and overwrite policy. Bootstrap operations stay reachable through their existing capability flow.
+   - Keep #170's admission order (`application_service.dart:440-528,586-587,745-772`): structural envelope decode → closing refusal → typed decode → bootstrap routes and `service.stop_if_idle` exit here (P0.2 changes this); a desktop `status` with an invalid token is denied here, and a valid one reserves desktop presence and continues → per-connection request cap → stale-epoch rejection → approval (`authorize` is approval-only) → for application-scope requests (`_execute`): closing re-check → helper readiness → closing re-check → the `hostedRecording` capability check, at dispatch time so the host must still be attached → cancellation check → dispatch → `Application.callRequest` (open, epoch and configuration gate). Service-scope streams go to their service handler after approval (`application_service.dart:640-692`). Do not move the capability check before the helper wait.
+   - A malformed request returns `invalidArgument`, emits no approval event, never enters dispatched work, never stamps agent activity, and leaves an armed desktop-departure grace intact.
+   - Durable idempotent replay stays inside authorized dispatch.
+   - Changes to these policies are security work (see Core follow-ups), not refactoring.
+4. **Commit and cancellation semantics.**
+   - Keep workspace epochs, idempotency keys, durable pending helper work, revision checks, after-commit notification order, cancellation cleanup and captured-transcript finalization. A cancelled future is not proof that the underlying work settled.
+   - Preserve atomic acceptance of Summary and workflow artifacts. Preview and progress output is not accepted data.
+   - Preserve manual task details, completion, evidence and stale state, edited history, degraded results and retry identities.
+   - Source scope is a privacy boundary: a selected-empty scope never widens to Workspace, and a scope change invalidates in-flight retrieval, history, persistence and scoped web memory.
+5. **Desktop behavior.**
+   - Preserve:
+     - recording ownership on host disconnect;
+     - selected-meeting targets, recovery and reconnect;
+     - transcript copying;
+     - autosave and enhancement edits;
+     - approvals and Google authorization and setup;
+     - navigation and onboarding.
+   - Late completions from a retired feature, connection, query or workspace epoch must not overwrite newer state. #170's retired-action guards must keep their meaning, without DART-N3's over-narrow `meetingId == id` check.
+   - The global operation gate (`busy`, `error`, the outcome-unknown refresh and the failure notification) stays shell-wide. Narrowing it per feature would let, for example, a meeting Generate start during a workspace clear; that is a product change outside this plan.
+   - Keep the six meeting-assistant panels; Summary phase, previews, cancel and history; structured task editing; degraded Notes warnings; local Preparation selection; and distinct manual and automatic answer scopes.
+   - Characterize missing races before claiming they are safe. A real defect gets a separately tested behavioral fix, never a weakened characterization assertion.
+6. **Integrity and verification.**
+   - [AGENTS.md](../../AGENTS.md) and [CI integrity](../platforms/ci-integrity.md) govern dependency provenance, cache reuse and gates.
+   - Reuse verified dependency SDKs, and compile the changed project code.
+   - Do not delete caches, weaken tests, substitute mocks for process acceptance, or present reused bytes as a new build.
 
-## Phase 0: establish an executable baseline
+## Core interfaces PR 7 consumes
 
-Owner: PR 6 author, with desktop author reviewing the interface inventory. Deliver before
-extraction:
-
-- Record the reconciled source SHA and run the verification matrix below once. Save counts, skip
-  reasons, failures, coverage and command output. Existing failures need triage against current
-  code; they are not acceptance waivers. Capture the root CTest inventory as well as any standalone
-  native/helper inventory.
-- Inventory every `Operation`, every service/client entry point (desktop, MCP, CLI, test support),
-  MCP tool exposure, argument/default/nullable/unknown-field behavior, authorization and activity
-  policy. Include `acceptsIdempotencyKey`, `carriesWorkspaceEpoch`, streaming, helper readiness and
-  change notification. Record current payloads as focused characterization fixtures without private
-  data.
-- Inventory desktop accesses to Store, helper/channel/client, runtime status, account state and
-  connection lifecycle. Classify reads, local writes and RPC writes. Identify the tests and tools
-  using the concrete classes before narrowing them.
-- Characterize behavior only where existing tests leave a gap: lifecycle/accounting across each
-  extraction seam, RPC error mapping, Google repair, label conflicts, helper legacy databases,
-  feature invalidation, asynchronous query cancellation and disposal. Each added characterization
-  passes before the move; no blanket snapshot churn.
-- Record file/function sizes and a reproducible RPC responsiveness baseline. Warm the actual
-  helper/generator; measure `status` round trips during streaming and capture (100 samples,
-  p50/p95/max), startup and idle, runner/toolchain and workload. A diagnostic records load; an
-  arbitrary hosted timing assertion must not replace deterministic liveness tests.
-
-Exit: the author can state which behavior each extraction must preserve, and every public desktop
-dependency has a replacement or an explicit migration step.
-
-## PR 6: core service structure
-
-### 6A. Define operation contracts and compatibility before replacing dispatch
-
-1. Introduce an explicit descriptor for each `Operation`: scope, read-only classification, approval
-   policy, desktop/capability requirements, helper readiness, model gating, change notification,
-   stream shape, epoch/dedup policy, and distinct activity-stamping and in-flight busy policies.
-   Preserve the current distinction: `status`, `security.*` and `service.*` wire methods are
-   stamp-exempt, but the lease busy check excludes only `status`; security/service calls currently
-   bypass leasing. Test both descriptor projections and routing/lease parity rather than collapsing
-   them into one flag. Use required constructor fields or exhaustive declarations; new operations cannot silently inherit permissive
-   defaults. Preserve current operation wire names and service-only routing.
-2. Define typed request values and one decoder per operation. Separate the wire envelope (request
-   ID, epoch, idempotency key, cancellation/stream metadata) and service-injected
-   conversation/request identity from caller business arguments. Preserve stale-workspace rejection
-   before approval effects. Preserve currently accepted defaults, nullability, numeric values and
-   additive fields; report validation failures as `invalidArgument` before authorization or invoking
-   a handler. Carry the original `requestArgumentsDigest` alongside typed values: compute it from
-   the original argument map with exactly the current key exclusions, recursive ordering, null-map
-   handling, accepted additive fields and JSON numeric spelling. Do not derive it from a
-   default-filled/reserialized DTO. Frozen pre-refactor `request_keys` rows must replay after
-   upgrade; test nested/null fields, omitted versus explicit defaults, additive keys, `1` versus
-   `1.0`, changed-argument refusal and epoch clear. A deliberate fingerprint change requires its own
-   persisted-data transition. Have one registry own dispatch declarations. MCP tools remain an
-   explicit subset with their existing names and adapters: generate their exposed schema from the
-   same argument specification after applying tool-name/argument transforms, rather than exposing
-   every internal operation.
-3. Replace negative sets and prefix checks incrementally with descriptor reads, including ADR-0007's
-   activity exemptions. Define registry membership by its single dispatch owner: ordinary
-   application calls belong to the application registry; service/security operations and streams
-   (`answer.stream`, `google.sign_in`, `google.add_account`) belong to the service registry and may
-   delegate their implementation to application services. Disjointness concerns routing ownership,
-   not a ban on delegation. Assert old/new policy parity per operation first; then remove the old
-   tables. Admission and execution remain separate so helper waits and cancellations keep the
-   current accounting. Test attach/detach/decide/import-root bootstrap independently.
-4. Separate decoding errors from execution errors. Migrate `RpcError` to `implements Exception` only
-   after auditing `StateError` catch sites in production and tests, including
-   startup/CLI/desktop/MCP and helper verification. Preserve wire codes, optional reason fields,
-   unknown-reason handling and byte-identical legacy closing messages. Decoder failures remain
-   `invalidArgument`; unexpected handler `TypeError`s become `internal`. Do not blindly reclassify
-   every `StateError` or serialize a stack trace to clients; retain diagnostic stacks in logs.
-5. Enforce API compatibility for unpackaged as well as packaged clients, without breaking previously
-   released version-1 peers. New clients always validate the service's advertised version during
-   initial connect **and reconnect**, before business calls. Missing/unsupported advertised versions
-   fail with a structured actionable error. An optional client-version field in the existing
-   startup/status exchange lets a new server reject an explicitly incompatible peer; absence means
-   legacy v1, supported while v1 payloads remain compatible. Keep install-root/runtime-revision
-   checks in addition to API checks. Do not require a new mandatory handshake or bump the version
-   for an internal refactor. Any incompatible wire change requires a separately specified version
-   transition and peer matrix before implementation.
-6. Extend operation-literal enforcement to `packages/foresight_core/bin/` and other actual
-   consumers, with narrow fixture/schema exceptions. Cover registry exhaustiveness, schema/decoder
-   equivalence for the MCP subset, malformed approval-requiring requests with no approval event,
-   stale-versus-malformed precedence, handler exceptions, incompatible connect/reconnect, old/new
-   peers, cancellation and internal operation non-exposure. The malformed-agent lifetime fixture
-   must assert `invalidArgument`, no dispatched work and no activity stamp, including on settlement;
-   also assert an armed desktop departure and its scheduled exit remain intact. Preserve valid-request
-   start/settle activity tests and a structurally valid keyed request whose changed arguments are
-   refused inside authorized dispatch (which still counts as dispatched activity).
-
-Current registry parity includes the five added operations `meetings.tasks`, `meetings.edit_task`,
-`meetings.prepare`, `meetings.cancel_generation` and `meetings.cancel_summary`. Keep these two
-cancel operations available without helper readiness. Preserve `meetings.cancel_enhance`'s existing helper requirement
-under per-operation parity; changing that admission policy requires a separately characterized and
-justified behavioral change. Preserve `meetings.generate`'s legacy `action_items` alias to
-`actions` and its Summary/actions/enhanced-notes dispatch plus the internal `questions` kind; MCP
-remains its narrower published
-schema/tool subset. Typed decoding preserves omitted versus explicitly null task owner/due fields,
-one-to-100 distinct local preparation sources, source-scope preference values and current raw-map
-digests. DTOs retain field-presence flags: owner/due omitted preserves stored values while explicit
-null clears them; task null keeps stored text via the current fallback, but the presence of any
-task/owner/due key still counts as a manual-details edit. Status-only edits keep details. Freeze
-`{id,status}`, `{id,owner:null}` and `{id,task:null}` request/row outcomes. Do not expose internal
-workflow variants (including `questions`) through MCP or silently widen an empty source scope.
-
-Commit sequence: characterization → descriptor declarations with parity checks → typed
-decode/adapters feature by feature → compatibility enforcement → error hierarchy migration → delete
-old policy/dispatch branches. Keep a compiling adapter during migration; remove it before PR
-completion.
-
-### 6B. Extract domain services without moving lifetime ownership
-
-`Application` becomes the composition and orchestration layer. A typed handler table dispatches
-feature handlers; the shared wrapper retains epoch admission, cancellation, model gates,
-notification and error mapping. Extract in this order, with constructor dependencies and typed
-results, no `Application` back-reference or service locator:
-
-| Service | Responsibility and acceptance |
-| --- | --- |
-| `WorkspaceAdmin` | Clear/purge/VACUUM and workspace epoch rotation. Preserve dedup reset and helper-delete durability, after-commit events and stale-write rejection. |
-| `ModelRegistry` | Generation, embedding, speech and query registration/configuration/acquisition. Keep readiness, adopted-helper identity and model busy guards. |
-| `SourceOperations` | Import/reimport/search/labels, revision revalidation and pending-source queue semantics. |
-| `GoogleMaintenance` | Account maintenance, sync scheduling and cleanup. Preserve its network-versus-model-work distinction for idle exit. |
-| `SummaryCoordinator` | Own Summary run/checkpoint identity, preview/progress, parent-to-child cancellation and atomic accepted artifact/checkpoint/derived-source commit. Reuse the existing generator/prompts/budget algorithms; retain full/incremental/MAP/REDUCE, latest-unedited checkpoint rules, clipping disclosure and prior accepted output on failure/cancel. |
-| `MeetingWorkflowCoordinator` | Own Actions and document Preparation orchestration and shared generation reservation/preemption. Preserve task evidence/manual/completion/stale merges, source/calendar/title/notes/model revalidation, degraded preparation retry with good document-cache reuse and atomic accepted artifact/cache/source writes. Reuse `meeting_actions.dart`, `meeting_preparation.dart` and persistence methods. Also own the preserved internal `questions` transcript-window/plain-artifact branch with its existing gating; do not give it Summary manifests/checkpoints/derived sources or implicitly route it through the Actions/Preparation workflow wrapper. |
-| `NoteEnhancementCoordinator` | Automatic/manual enhancement, edit mapping, autosave, cancellation and restoration. Keep it distinct from `Domain.noteEnhancementService`; preserve one owner of timers and in-flight work, latest-50 live chunks versus complete final transcript, raw-note revalidation, parent-child cancellation and degraded manifests. |
-| `RecordingController` | Capture start/pause/resume/stop, final transcription, meeting state and indexing triggers. Preserve desktop ownership and finishing state through cleanup. |
-
-Each service exposes a narrowly defined activity/completion view, aggregated into
-`Application.backgroundBusy`. Use balanced `try/finally` accounting that covers work after
-cancellation, invalidation or disposal. `Domain.mutating`, helper startup/adoption state and
-dispatched request tracking retain their existing meanings. Tests hold real work at the existing
-gates across every new ownership boundary and verify busy remains true until actual settlement.
-
-Introduce the narrow shared generation-reservation/yield contract before moving Summary, workflow
-or Notes owners, then extract those owners one at a time. Preserve `_summarizing`, `_workflowBusy`,
-active enhancement and proactive settlement semantics, request-parent to owned-child cancellation,
-`capture.meeting_summaries[id]` and `capture.meeting_workflows[id:kind]` status shapes, clear/close
-cancellation and no late acceptance. Replace `application_summary.dart`,
-`application_workflows.dart`
-and `application_preparation.dart` with independently testable services, not another shared-private
-part boundary. Count their 735 lines in the pre-refactor Application scope; moving code into a part
-alone is not completion. Keep the already independent algorithms unchanged unless a separate
-characterized defect requires a fix.
-
-Split `ConversationAnswer` into immutable retrieval, prompt preparation and generation results.
-Preserve streaming order, citations, partial output, revision revalidation and cancellation/close
-behavior, foreground generation reservation, source-scope filtering of retrieved IDs/previous
-questions/history, and `web-memory-v2` identity/budget rules. Keep manual Chat default Workspace,
-automatic Q&A default Meeting, selected-empty scope empty, Unicode production output policy and the
-portable `raw_query_jsonl_v1` detector's model digest/executable/probe/deadline/cancellation
-contract.
-Meeting scope retains the transcript plus four derived artifact source IDs; changing scope cannot
-persist an old answer.
-Remove the `ApplicationDomain`/`Expando` convenience ownership only after every caller has
-explicit dependencies, including test support and service startup.
-
-### 6C. Keep the relay, isolate persistence and address measured blocking work
-
-Document frontend, worker, native tasks, sockets, lock/record ownership, error channel, startup and
-ordered shutdown in `docs/architecture/application-service.md`, linking the existing lifecycle
-matrix. This documentation debt is partially addressed already; extend it rather than claim a new
-topology.
-
-Keep SQLite's writer and native ownership in the domain worker. Name the two executions explicitly:
-a **service read worker** serves service-originated projections, while a **desktop reader isolate**
-backs the direct read-only SQLite `StoreReader` facade; it is not an RPC proxy. Both follow the same
-coordinator protocol below. Move demonstrably heavy **read-only** queries to a separate read
-connection in a worker, using serializable query requests/results. A core-owned query coordinator,
-scoped to one profile and connection generation, owns one long-lived authoritative connection (the
-existing writer for service-originated reads, or a private long-lived read-only connection for
-desktop-originated reads). Its `Store.dataRevision` is an opaque **connection-local invalidation
-token**, never a transferable SQLite snapshot ID. At an autocommit boundary the coordinator records
-its own token plus owner/profile/connection identity, workspace epoch and query generation, then
-dispatches a serializable query. The worker begins one read transaction and reads the actual stored
-workspace epoch and all rows needed for the projection in that same snapshot; it echoes the caller
-token as a request tag only, never equates it with its own `dataRevision`. Before deciding whether
-and how to publish the reply, the coordinator rereads its token on the **same authoritative
-connection** to classify freshness, and checks the returned actual epoch, current workspace epoch,
-owner/connection generation and query identity. Distinguish identity from freshness: an epoch,
-owner/profile/connection generation or query-generation mismatch always discards, including a result
-superseded by a newer completed request. A token change alone on the same authoritative connection
-must not starve reads under sustained transcript/autosave writes: publish the first completed
-snapshot-consistent projection as a **preview**, tagged with its dispatch token as a request tag
-(not a claimed snapshot version), do not mark/cache it as current, and schedule one coalesced
-refresh. If the same-owner token is unchanged, mark that projection current. Retain at most one
-active query and one pending refresh per query key; ordinary commits never repeatedly cancel that
-active query. Thus continuous writes still deliver a preview after one completed read, and the next
-read after writes stop becomes current. Never accept by comparing coincident tokens from independent
-connections. Preview publication must retain the same epoch/owner/query and monotonic
-request-sequence checks as current publication; it cannot replace a later completed result. Commands
-based on displayed preview rows must retain current epoch/resource/revision admission checks rather
-than treating a preview tag as mutation authorization. Keep freshness/refresh status internal to the
-view model and existing loading/error presentation, not exposed SQLite counters. A 30-second caller
-deadline returns a typed retryable busy result while retaining the last valid view; a late worker
-reply is ignored, and no replacement worker/query starts until the original read actually settles.
-This bounds caller waiting without pretending timeout cancels synchronous SQLite work or
-accumulating detached queries. Tests inject the clock/deadline. Service `changed` tokens invalidate
-a desktop coordinator but are not compared numerically with its private connection token. Retain one
-read transaction for multi-query projections so rows cannot mix commits; reads never invoke
-migrations. Inside every worker read transaction, check `user_version` before application queries;
-an already open reader must detect a newer schema introduced by another owner. Return a typed
-incompatible-schema failure, publish no rows from that transaction, retire the coordinator and its
-cached projections, and close only after actual reads settle. Map any RPC representation through
-the existing actionable `unavailable` code rather than introducing an incompatible v1 wire code.
-Test a live reader across a future-schema upgrade and settlement/disposal of pending requests.
-Apply this guard to every connection issuing application reads, including the coordinator's
-authoritative identity/epoch checks before dispatch and acceptance and any retained synchronous
-`StoreReader` adapters. Schema and the dependent identity/projection are read in the same short
-snapshot before application-table SQL; opaque same-connection token samples remain at autocommit
-boundaries, not inside the snapshot. Never hold an identity transaction across a worker await.
-These paths trigger the same typed retirement/cache invalidation and actual-read settlement;
-do not convert a schema incompatibility into a generic internal error or a retry/reissue loop.
-Test a future migration changing an identity table before dispatch, between worker completion and
-acceptance, and before a synchronous adapter read, rather than only bumping the version while old
-queries still work. Assert no incompatible query or published/retained projection. No startup
-qualification copy runs on these refresh paths.
-Use normal read-only/WAL semantics, never `immutable=1` on a live query connection. A disposed
-coordinator/worker closes its own connection once its active read settles and pending caller
-requests settle; cancellation and caller deadlines remain responsive without losing track of the
-underlying read. Do not share SQLite handles across isolates or move writes into the reader.
-
-Audit capture/generation polling and `fs_conversation_destroy` call paths with ownership and timing
-evidence. A 20 ms asynchronous poll alone does not prove domain blocking. Keep polling unless
-measurements show it causes material responsiveness harm. Do not add `NativeCallable.listener`
-merely to remove a timer. Any native join repair must define handle ownership, asynchronous
-completion and no-use-after-free/callback-after-close semantics, keep the C ABI or version it
-deliberately, and update every runner/consumer fixture. If a safe repair expands into PR 8's native
-redesign, stop that extraction and write a separately scoped follow-up with the measured residual;
-do not claim P2-4 fully resolved. Acceptance for PR 6 still requires no responsiveness regression
-and deterministic cancellation/shutdown liveness.
-
-Tests: sustained streaming/capture with responsive status, no response starvation under a
-deliberately gated worker task, frontend structured refusal during worker close, unexpected worker
-exit, replacement-socket ownership, and read-worker revision/cancellation/disposal races. Gate
-writes/clear between dispatch and snapshot, a write between queries inside one projection, a write
-between snapshot and acceptance, repeated independent readers with equal local tokens, and service
-owner replacement; prove unchanged-identity results distinguish current versus preview freshness,
-changed-identity results are discarded/reissued without comparing foreign connection tokens, and
-sustained transcript commits still publish a preview after one completed read with at most one
-active/one pending refresh. After writes stop, require a current result reflecting the final commit;
-also exercise the caller deadline, late reply and no-overlapping-worker rule. The 50 ms p95 target
-over 100 warmed requests remains a measured target on a documented idle host; report misses and
-causes. Deterministic gates establish ordering; timing measurements establish performance, neither
-substitutes for the other.
-
-#### 6C.1 Extract the service implementation by responsibility
-
-This is required PR 6 work, after descriptor/admission characterization and before final metrics,
-rather than an unowned line-count condition. First pin `_RequestLease`
-creation/helper-wait/dispatch/future-and-stream settlement, `_exitIfIdle`, `_stopIfIdle`, frontend
-draining/refusal and lock/socket release in tests. Move `ServiceClient` transport, connect/status
-probe and retirement to `service_client.dart`; keep the desktop-facade reconnect policy in
-`RemoteDomain`. Move profile/socket/record ownership to `service_ownership.dart`, and frontend
-relay to `service_frontend.dart`, preserving existing public exports through `service.dart`. Split
-internal request routing/lease bookkeeping behind narrow service-owned interfaces if needed. Keep
-`ApplicationService` the sole authority that invokes close or stamps activity; a separately testable
-private lifetime evaluator may compute decisions from snapshots but cannot own a second timer,
-independent busy ledger or shutdown side effect. Move one responsibility per commit, with the
-lifecycle matrix after each move; compare lease state/event order before/after. Use explicit
-internal dependencies rather than a wide service back-reference, global locator or new
-shared-private part monolith. No topology, timer-policy, lock or retry change accompanies a move.
-Finish with the complete ownership/close/crash suite before claiming the touched-module size target.
-
-### 6D. Complete schema residuals, then split persistence
-
-1. Freeze shipped Store migrations 1–15 from the reconciled reviewed baseline before changing live
-   label/query code. The first persistence commit extracts them and migration-private copies of
-   every transitive business helper, including source-URI parsing, label reconciliation,
-   stored-name/color allocation and label read/write helpers, into a dedicated historical
-   implementation module. Historical migrations may call its frozen helpers and a minimal SQLite
-   transaction/execute/select interface, never live Store/query/label methods that later refactors
-   alter. Characterization fixtures pass before and after this isolation. Current business helpers
-   can then evolve independently. Protect complete executable definitions, including transitive Dart
-   data-transform helpers, with a committed digest manifest and checksummed frozen historical
-   fixtures. Unit tests consume these files without Git history. The initial combined PR cannot fetch a
-   manifest that main does not yet contain. Bootstrap explicitly from an independently resolved and
-   recorded reviewed-main commit: fetch its complete migration definitions plus transitive helper
-   source as a checksummed input, and derive the expected initial semantic-body digest set using the
-   reviewed extractor on **that source**, never candidate definitions. Missing manifest is permitted
-   only for this first-introduction mode with that verified source input; it is never a fallback to
-   trusting candidate hashes. A PR gate compares the candidate's frozen implementations with those
-   extracted reviewed-main bodies, so editing both implementation and local manifest cannot bypass
-   the comparison. After the initial merge, the gate consumes the independently supplied
-   reviewed-main manifest and requires its existing prefix and frozen fixture checksums unchanged.
-   Tests inject both bootstrap-source and subsequent-manifest inputs under unrelated PR, main and
-   unset refs, without local Git history. Hash canonical executable bodies/dependency closures
-   separately from file locations (explicitly map migration-private copied/renamed symbols to stable
-   historical identifiers; permit only that verified binding-preserving rename and
-   formatting/comment normalization): mechanical relocation supplies an explicit old-to-new
-   symbol/location map but keeps body digests byte-identical (apart from that documented
-   deterministic tokenization and verified symbol mapping). Any changed body is rejected; there is
-   no same-PR override or hash rebaseline for a semantic change. Verify canonicalization against
-   formatting-only moves, verified private-helper renames, attempted redirection back to live
-   helpers, changed constants/control flow and changed transitive helper behavior, and record
-   bootstrap SHA/digests, mapping and historical fixture parity in PR evidence. New versions append
-   entries; allocate the next free number at implementation time. The hashing unit is an entry keyed
-   by schema-version number containing that step's executable body and complete historical
-   dependency closure (including `DocumentLabel.fromRow`, color-allocation logic and palette
-   constants). The bootstrap extractor handles inline case bodies for 10–15 and the shared 1/2 body
-   by producing an entry for each version with the applicable shared body. Exclude the registry
-   container, version loop and current `schemaVersion` maximum from step digests so appending
-   version 16 does not rewrite versions 1–15. CI resolves the reviewed-main baseline SHA
-   independently of PR inputs. On first introduction, the extractor/canonicalizer is new code and
-   therefore needs explicit review with frozen positive/negative tests; record that bootstrap
-   limitation rather than claiming a previously trusted tool exists. After bootstrap, CI executes
-   the **reviewed-main** extractor/canonicalizer against candidate historical implementations, not a
-   PR-edited executable. Any PR changing that tooling calls it out in its description, passes its
-   negative tests, and must also pass the old main checker; later main runs adopt the newly reviewed
-   checker only after merge. A canonicalizer change cannot excuse altered old step bodies or
-   silently change their digest format. Preserve migrations 5/9 and their helper behavior even as
-   current label/query helpers evolve.
-   For first introduction, CI independently resolves fetched reviewed-main HEAD, requires the
-   manifest's recorded bootstrap source to be reachable from it, and extracts expected bodies from
-   that actual HEAD. The PR's recorded commit is evidence, never the source of authority. If HEAD's
-   migration set or frozen closures differ from the bootstrap input, fail with a rebase/refresh
-   diagnostic; refresh the candidate from current main, reallocate appended versions and rerun
-   bootstrap/review rather than silently selecting the older commit. Test unrelated main movement,
-   appended migrations, changed closures and a non-reachable bootstrap commit.
-   The extractor may promote already resolved packages to exact-pinned direct development
-   dependencies without changing resolved lock versions: the current foundation uses analyzer
-   12.1.0 and crypto 3.0.7. This is development guard tooling, not a runtime dependency upgrade.
-   Record the one-line dependency-input justification in the PR description and retain the existing
-   SDK/tool pins.
-   Preserve new migrations 14/15 exactly, including old summaries without fabricated checkpoints,
-   all legacy `action_items` artifacts normalized to `actions`, edited or not, manifest columns,
-   task evidence/manual
-   flags and the document-cache foreign keys. Cover schema 13→14→15→new upgrades, failure rollback,
-   fresh/current stores and future-version refusal. Keep workspace clear's three new content tables
-   (`meeting_summary_checkpoints`, `meeting_tasks`, `document_summary_cache`) and its scoped
-   preference/memory cleanup and latest-artifact-only derived source updates. A source delete is a
-   soft delete/revision bump; existing document-summary cache rows remain physically stored until
-   workspace clear. They become unreachable through revision/content-digest keys and deleted/source
-   revision revalidation before reuse. Characterize soft-delete cache retention, refused reuse and
-   clear-time physical removal. Purging on soft delete would be a separate privacy/product decision,
-   not refactor work. The current meeting-AI architecture doc claims source-delete cache clearing;
-   correct that prose to match code during persistence documentation upkeep, without introducing a
-   purge silently. `MeetingWorkflowStore` is an existing mixed read/write extension: move its SQL
-   into appropriate persistence/query modules while preserving savepoints/transaction boundaries;
-   exporting the whole extension is not a narrow reader interface.
-2. Move only `_restoreModificationTimes` from `GoogleConnections` construction into the next ordered
-   Store migration. The source URI backfill already lives in Store migration 5 and Google table
-   creation in 8. Preserve current live-source/local-edit filters, repeated `user edit; ` provenance
-   handling and null/malformed timestamp parsing; preserve repaired timestamps for legacy rows and
-   do not overwrite a newer user edit. Preserve the live import `_setSourceUri` path; it is not
-   constructor backfill. Test a pre-repair schema, already repaired data, empty/fresh stores and
-   interrupted/retried migration. Existing schema-15 databases must receive the new repair exactly
-   once.
-3. Make `document_labels` authoritative. Specify and test conflict rules before migrating: preserve
-   explicit/manual labels, source/color/rationale metadata and the existing reconciled visible label
-   set; retain meaningful JSON-only labels. Pin malformed/non-array JSON, duplicate names, ordering,
-   orphan/deleted sources and automatic/manual conflicts in fixtures. The chosen merge preserves
-   meaningful legacy JSON names in first-occurrence order, intentionally removes duplicate names,
-   then appends structured-only names in a deterministic documented order. Matching structured rows
-   keep their source/color/rationale metadata; JSON-only names become manual (`user_defined`)
-   labels using the frozen migration-private stored-name/color allocator, included in the new
-   migration's dependency closure rather than calling mutable live allocation code.
-   Keep deleted-source/tombstone rows rather
-   than silently purging them. Store order in an explicit durable `position`/ordinal column, never
-   implicit rowid; current writes use named columns and atomically maintain ordering. Test reorder,
-   VACUUM and reopen, not only initial insertion order. These guarantees apply to records available
-   when the appended canonicalization step runs. Frozen migration 9 treats valid JSON as the name
-   authority and can already discard structured-only manual rows on pre-9 upgrades; characterize
-   and preserve that historical behavior. The new migration does not promise to resurrect those
-   lost rows. Such recovery would require a separately specified adoption mechanism. Keep historical
-   five-column writes unchanged because they execute before the new ordering column exists.
-   All label projections, including `graphLabelSet` and graph persistence comparisons, explicitly
-   order by document/source identity and durable position; a rebuild/VACUUM must not spuriously
-   change graph state. Preserve a currently valid saved force layout when only order/representation
-   changes: capture old membership/signatures and rewrite `graph_force_state.label_set` to the new
-   canonical projection within the same migration transaction, only where the saved signature was
-   valid and per-document `(name,source)` membership remains equal. Keep positions/vectors and
-   document identities unchanged. Never make an already-stale saved layout valid by rewriting its
-   signature or by an accidental match with the new canonical string; remove obsolete force-state
-   entries as necessary while retaining saved positions. Real membership/source changes retain the existing invalidation/acknowledgement
-   policy. Upgrade fixtures cover complete saved-layout preservation, already-stale state, actual
-   membership change and rollback of the signature rewrite. Preserving structured-only records
-   still present at this new step is an
-   intentional merge policy, even where old JSON omitted them; report that visible union behavior
-   rather than describing it as recovery of already-lost historical rows.
-   Derive the existing
-   `sources.labels` JSON string read projection from structured records until all consumers migrate,
-   preserving RPC/desktop payloads. Backfill and verify row counts/content before dropping the
-   redundant `source_details.labels` column. Use a transactional table rebuild instead of assuming
-   SQLite 3.35+ `DROP COLUMN` support on every supported runtime; preserve IDs, foreign keys, indexes
-   and constraints, and assert referential integrity in upgrade fixtures. Record the actual SQLite
-   versions and loaded library paths as migration evidence: Linux host tests use the host SQLite
-   library, packaged Linux acceptance uses its bundled library, and HanSolo's Dart application
-   uses the protected application-owned SQLite 3.54.1 runtime described above; helper SQLite is
-   unchanged. Verify each exercised runtime instead of inferring the bundle version from the host. Update all serializers, queries, imports/exports,
-   graph/auto-label paths and fixtures together. Test fresh schema, every supported upgrade path,
-   repeated open, failure rollback, clear/delete and newer-version refusal. Old application readers
-   must refuse the newer schema before issuing incompatible queries; do not imply downgrade
-   compatibility.
-4. Version the helper's `agent_metadata.db`, `linux_state.db` and `rag_vector.db` as one documented
-   schema set with individually checked versions. Qualify all existing members and relevant
-   sidecars, including the absence of missing members, before any live writable open, new live-file
-   creation, sidecar mutation, PRAGMA setting, DDL or embedding rewrite. Private preflight scratch
-   files are permitted; they are never live profile files. Reject newer versions actionably without
-   changing original file sets, bytes or identities. Only after whole-set compatibility and a final
-   source-identity recheck may SQLite open/create the writable set. Use this grounded protocol:
-
-   - An existing rollback journal, including an empty journal, requires a source-stable private
-     DB+journal copy for the read-only SQLite probe in C++, Dart and Python. SQLite may change an
-     original journal's ctime through `fchown` even on a read-only open as UID 0. Preserve original
-     raw page-1 bounds, checksum/version walking, copy-time and final whole-set identity checks,
-     including ownership, mode and ctime; do not relax identity verification. Direct original
-     read-only/no-create inspection remains permitted only when the journal is absent and that
-     path is demonstrably non-mutating. The private probe never performs recovery or follows
-     absolute original superjournal paths. A genuine hot journal can make this fail with
-     `SQLITE_READONLY_ROLLBACK` both before and after the attached commit point; that error cannot
-     decide whether rollback should occur. Qualify such members conservatively with a bounded,
-     read-only modern-format journal walker: validate the current DB header and every applicable
-     checksummed original page-1 image, requiring all possible recovered versions to be supported.
-     A current header can hide a future version in rollback page 1. Validate segment geometry,
-     arithmetic, checksums and documented unsynced/terminal tails; stream bounded pages rather
-     than loading an entire index or journal into memory. Reject unsupported, corrupt, truncated,
-     unstable or ambiguous layouts with a recovery diagnostic and no live writes. Do not rewrite
-     journals, decide superjournal commit state or perform custom recovery. SQLite alone performs
-     original recovery after whole-set qualification. Never recover a naive private copy of
-     attached journals whose superjournal contains absolute original paths.
-   - Detect WAL before opening originals, including a WAL-mode main file with no current sidecars.
-     Read-only SQLite can create or change source SHM, while
-     `immutable=1` can miss a committed WAL-only future version. Inspect a source-stable private
-     DB+WAL snapshot, omit/rebuild SHM privately, and verify original DB/sidecar identities before
-     and after copying and again at the whole-set gate. Fail on ambiguous mixed WAL/rollback
-     layouts rather than guessing. Apply the same protection to application writer migration
-     preflight and profile-copy tooling. Application Store normally uses WAL, so acknowledge this
-     startup/migration qualification copy cost; do not copy on query refresh. Live query readers
-     retain normal WAL semantics and never use immutable or run migrations. Qualification scratch
-     is private (0700 directory/0600 files), outside the original profile file set, and removed on
-     success and failure. Distinguish a torn/unreadable/unstable copy from a proven future version.
-     A short immutable version probe is allowed only for a source-stable, sidecar-free qualified
-     image or private snapshot, never as authority for a live WAL or hot journal.
-   - Permanent real-SQLite tests cover journal-absent and empty-journal paths, UID 0 and ordinary
-     user qualification with independent nanosecond metadata/content snapshots, metadata-only
-     original-source changes, ordinary hot journals, abrupt attached transactions both
-     immediately before and after actual superjournal deletion, hidden future rollback page-1
-     versions, WAL-only future versions with absent/existing SHM, future versions in each of the
-     three members, source changes during qualification, rollback/retry and exact original
-     file-set/byte/identity preservation on refusal. Keep before/after-commit content assertions;
-     a probe that only patches journal bytes or mocks recovery is insufficient.
-
-   Preserve
-   DELETE journal mode and the existing multi-attached-database transaction boundary. Adopt
-   unversioned legacy databases via ordered steps, including the JSON-to-BLOB rewrite. Advance
-   versions only after successful transactional work. Test all-legacy, fresh, mixed/partially
-   upgraded sets, corrupt JSON, interrupted upgrade, newer version in each member and retry after
-   rollback. Do not reset or silently rebuild a user's index. Keep recurring vector-generation/chunk
-   pruning and crash recovery after startup separate from once-only schema migration. Inventory and
-   update `tools/migrate_profile.py`, `tests/test_profile_migration.py` and
-   `tests/helper/contract.cpp` as consumers: profile-copy tools must preflight supported helper
-   versions before settings rewrites and preserve versions, and helper contracts exercise all three
-   members.
-5. Split Store into connection/transaction/write ownership, immutable migration definitions, typed
-   `SourceQueries`/`MeetingQueries`, a document parser with Linux/macOS implementations, and label
-   planning in a domain service. Move SQL behind the persistence/query layer; read implementations
-   and migration code may contain SQL. UI and application handlers receive typed records and named
-   methods, not `db`/`rows`. Preserve extraction sandbox, failure diagnostics, source identity,
-   transaction scope, WAL/read visibility and `dataRevision` semantics. Avoid reconstructing whole
-   tables solely to hit file targets.
-   Extend `docs/architecture/schema-migrations.md` with shipped version 15, every newly allocated
-   application/helper version, the historical/current persistence module boundary and these
-   ordering/preflight decisions. Test privacy checkpoint/VACUUM with an idle long-lived reader;
-   an active read may defer maintenance, but must preserve the durable pending marker and complete
-   cleanup after settlement. Preserve capped-interval retries until success and rescheduling on
-   reopen; do not impose a retry-count cap or introduce a busy loop. Close stops owned timers while
-   retaining durable unfinished intent.
-
-### 6E. Publish narrow desktop interfaces and finish core hygiene
-
-Extend the existing curated `remote.dart` public barrel with only the required DTOs/enums and
-interfaces. `DesktopConnection` exposes read-only `StoreReader`, state-only `HelperStatus`,
-runtime/account/capture status, change notifications and RPC capabilities. Include a separate
-connection-owned lifecycle/change-subscription capability to replace current helper
-`changed`/`onReady`/`start`/`close` use; state-only `HelperStatus` cannot perform lifecycle actions.
-Cover `meeting_export.dart`, model setup views, `model_terms_dialog.dart` preference-write fallback,
-core model-setup helpers and `background_store.dart`, not only controllers. Model-terms acceptance
-writes go through explicit RPC commands; read workers are core-owned factories behind the reader
-API. Define only members from the Phase 0 consumer inventory; do not export a database handle, write
-method, native handle, gRPC channel or `RagServiceClient`. Keep profile/database identity available
-only to the read-worker implementation, not feature widgets.
-
-Use composition for remote helper status and reconnect retargeting; remove `RemoteHelper extends
-Helper`. Remote status/retargeting must not construct a `RagServiceClient` in the desktop process;
-move any remaining legitimate helper-backed read behind service RPCs. The service alone owns helper
-channels. Existing commands become RPCs or service-owned methods. Adapt desktop call sites
-sufficiently in PR 6 to compile against the new boundary; PR 7 reorganizes them, rather than relying
-on a removed concrete API. Test warm attach, helper replacement, reconnect, retired-state disposal
-and no direct desktop mutation path.
-
-Finish scoped cleanups after their owners are extracted: lazy trace strings, shared cancellation
-helper with preserved error text/reasons, one Store generation-digest query, one helper
-protocol-version constant, explicit Google initialization instead of side-effect getters, and
-consumption of the existing `tools/pins.json` for its declared SDK/tool pins; avoid dependency
-upgrades. For the grpc-internal subclass, document exact grpc/http2 pins and add a resolved-version
-guard reading both grpc and http2 from the resolved `packages/foresight_core/pubspec.lock`, checked
-against the documented exact pubspec pins. Prepare an upstream issue draft if no matching report is
-found; publishing it needs separate authorization to message others. Remove the workaround only
-after a verified upstream fix passes the EOF/write-race regressions.
-
-The read-only 7A consumer inventory identifies two additive core seams that must land before
-freezing the core checkpoint, without starting desktop feature extraction. Expose a narrow opaque
-read-only client-session generation/notification at the desktop connection boundary: every actual
-client/service replacement, even at the same path and epoch, advances it. Keep that feature/RPC
-session generation distinct from the authoritative SQLite reader's owner/connection/data token;
-retain the existing reader where valid without admitting retired feature work. Separately split
-Stats' immutable scheduling identity from its fresh dispatch-time argument snapshot, with an
-injected clock and unchanged defaults for other queries. Test replacement/late-result refusal,
-ordinary same-session preview/coalescing, exact Stats cutoffs and scheduler settlement before the
-freeze. These are focused consumer prerequisites within 6E, not authority to move feature owners.
-If a later migration discovers another core interface/ownership/read-scheduling change required
-for the desktop contract, stop moves, review that change and establish the updated core checkpoint
-with its full Linux matrix. Routine fixture adaptation does not retroactively relabel an earlier
-pass; it needs affected checks and the final combined matrix, without inventing a full checkpoint
-for every test-only edit.
-
-### PR 6 acceptance
-
-- Every operation, including the shipped meeting workflows, has a complete descriptor and typed
-  decoding; registry/tool/schema/admission tests
-  pass. Old/new peer compatibility and error classification are explicit and tested. Replace the
-  existing switch-source-parsing exhaustiveness test with runtime checks that service/application
-  registries are disjoint and their union equals all Operations; retain raw-name, epoch and
-  idempotency guards.
-- Application business services have explicit dependencies and no handwritten `part of
-  application.dart` ownership; SQL is confined to
-  persistence/query/migration implementations. Desktop consumers compile through narrow interfaces;
-  no write-capable helper client escapes them.
-- ADR-0007 busy/activity/exit and lifecycle ownership tests pass unchanged in meaning. Relay
-  topology remains. Schema upgrades preserve data, reject future schemas before mutation and recover
-  from failure.
-- Size targets: `Application` under 600 lines, `call` under 80, extracted functions under 150,
-  answer phases under 100, persistence files under 600, other touched handwritten core modules under
-  1,000. Complete the required service split in 6C.1, preserving the reviewed topology and one
-  service-level lifetime authority; any residual size miss after that split needs a documented
-  justification. Record justified misses with concrete retained responsibilities; do not add
-  arbitrary forwarding layers or weaken contracts to reach a count.
-  The current AST inventory retains two justified function-size exceptions:
-  `rankAnswerPassages` is 164 lines with its existing ranking algorithm unchanged from main;
-  `rpcTools` is a 170-line declarative list preserving the explicit published MCP subset,
-  descriptions and descriptor-derived schemas. Neither contains an extracted business-service
-  owner; splitting their declarations solely for line counts would obscure those contracts.
-- All applicable verification gates below pass. Report any measured P2-4 residual explicitly;
-  deferred native redesign is not completion evidence.
-- Before 7A production extraction, complete 6A–6E, refresh/rebase reviewed main and assess any
-  delta, then freeze the resulting core completion commit as `core_acceptance_sha` in the evidence
-  ledger. Run the full applicable Linux matrix below at that exact commit, including the adapted
-  existing desktop, and preserve this work package's acceptance and metric evidence. Core line
-  coverage reaches the requested 95% target with the enforced minimum still 90%; desktop keeps
-  its existing 90% minimum through final acceptance; the owner waived the desktop 95% target on 2026-10-22. This replaces
-  the old intermediate PR's final-head gate; interface compilation alone is insufficient. HanSolo's
-  complete Mac matrix is required at the final combined head, not this intermediate commit.
-  Explicitly inventory Linux gates that require hosted execution and cannot run on this host; record
-  them as unexecuted obligations deferred to the final PR head, where they must pass before merge.
-  Keep every locally runnable native/sanitizer/container/installer/process/UI gate at the checkpoint;
-  absence of a PR is not a reason to omit local execution or mark a hosted gate passed. Any
-  later rebase or main integration invalidates the core commit's evidence: identify the updated
-  core completion commit and rerun its full Linux matrix before treating the checkpoint as valid.
+- **Composition and ownership.** Composition owns the service connection, the read-only `StoreReader` and the `HelperStatus` proxy. The connection owns the persistent read worker and coordinator, and joins actual reads on close. Features own their subscriptions and presentation generations; they never duplicate the coordinator's scheduling.
+- **Identity versus freshness.**
+  - A mismatch in workspace epoch, owner, profile, reader connection (the endpoint, which a same-path replacement does not change) or query generation always discards a result, including one superseded by a newer completed request.
+  - A data-token change alone, on the same authoritative connection, publishes the completed projection as a **preview** and schedules one coalesced refresh. The result becomes current only when the token is unchanged.
+  - The coordinator keeps at most one active query and one pending refresh per query key.
+  - A 30-second caller deadline returns a typed retryable busy result and keeps the last valid view; a late reply is ignored.
+  - A schema incompatibility retires the coordinator with a typed failure (over RPC, `unavailable`).
+  - Commands based on preview rows keep their own epoch, resource and revision admission checks.
+- **Session identity.**
+  - `clientSessionGeneration` advances on every client or service replacement, even at the same path and epoch. It is distinct from the SQLite reader's connection and data token; never compare foreign tokens.
+  - Do not infer identity from socket paths, and do not cast back to a concrete transport client.
+- **Invalidation.** After F-10, the reader is invalidated only by data-identity changes, so status-only changes cause no `watch`, `read` or worker admissions. They still notify `changes`, which drives the `serviceUiRevision` rebuild, so a feature that has not moved still re-runs its synchronous build-time reads until its 7B PR. Until F-10 lands, every distinct status event re-runs every active watch.
+- **Stats.** `OutputStatsPeriod` is the stable calendar and zone scheduling identity; `OutputStatsWeek` is one captured Monday within it. Use `StoreReadQueries.outputStatsForPeriod(period: OutputStatsPeriod.capture(now))`, keyed by `period.key`. Each worker dispatch samples a fresh exact cutoff. If the period changed, the dispatch fails with an ordinary `ReadFreshness.failed` result (`RpcErrorCode.internal`; `store_read_queries.dart:57-76`, `read_coordinator.dart:297,319-330`). On any failed result, the Stats feature recaptures `OutputStatsPeriod` and compares its `key`: a changed key means "replace the query with the new period", never a user-visible error. Do not match the error message. If this seam proves insufficient, stop the move and treat the gap as a core follow-up.
+- **Multiple subscribers.** Until F-2 lands, a feature must not depend on a second subscriber to an active query key.
 
 ## PR 7: desktop feature modules
 
-### 7A. Establish composition, contracts and invalidation
+### 7A. Establish composition, ports and invalidation
 
-Start after the core completion commit above passes its Linux matrix. Record its SHA and actual
-public interfaces; the required main refresh/rebase occurs before freezing that commit, not
-between it and desktop extraction. Freeze before/after desktop behavior and rebuild/query counts.
-Retain `CaptureLevelEvents`,
-`captureVolumes` and the early-return capture notification path as existing functionality.
-Characterize the coalesced `serviceUiRevision` path and which screens consume it; do not describe
-every event as a full-workspace rebuild.
+**Start condition.** Under the current single-PR decision, start after 7.0, 7.1 and P0.1 production changes integrate locally with their focused checks and reviews. Record the fetched `main` SHA and the actual integrated public interfaces. Final combined platform acceptance remains required before publication.
 
-Include `workspace_controller.dart` in the handwritten part inventory; it defines
-`_FeatureController` and its back-reference to `_WorkspaceState`, which is defined in `main.dart`. Create an application composition root and
-independently importable libraries under
-`features/settings`, `integrations`, `chat`, `sources`, `meetings` and `onboarding`. Move
-`workspace_visuals.dart` into a shared presentation library, and leave `main.dart` responsible for
-process entry and composition, not feature-private state. The new `meeting_ai_views.dart` part and
-shared `meeting_visuals.dart`
-rendering belong in the meetings feature; moving the old controller without those leaves the shared
-private boundary intact. Remove the shared
-`_FeatureController`/`_WorkspaceState` back-reference; dependencies are explicit interfaces such as
-navigation, Google account status/commands, approval presentation, meeting selection and error
-reporting. Do not replace `shell` with a global service locator or a wide context exposing all
-features.
+**What to freeze and preserve.**
+- Commit the admission, notification and build numbers that `reader_admissions_baseline_test.dart` measures for Sources, Chat, Meetings and Stats, and add baselines for Settings, Integrations and Onboarding. "Freeze" means these committed numbers.
+- Retain `CaptureLevelEvents`, `captureVolumes` and the early-return capture notification path as existing functionality.
+- Characterize the coalesced `serviceUiRevision` path and which screens consume it. Today:
+  - each service event costs a schema check and a full `jsonEncode` signature on the UI isolate (`remote_domain.dart:195-196`);
+  - each distinct event rebuilds the active tab within 100 ms (`main.dart:312-339`), re-running synchronous Store reads in build.
+- Do not describe every event as a full-workspace rebuild.
 
-Specify ownership before extraction: composition owns the service connection, read-only reader and
-helper status proxy; the Workspace drains pending note saves before disconnect; each feature owns
-subscriptions, timers, text/scroll/focus controllers, view-model requests and notifiers it creates.
-The connection owns the persistent read worker/coordinator and joins actual reads on close;
-features own their subscriptions and presentation generations, without duplicating that scheduler.
-Dispose each owned resource exactly once and ignore late results using a
-feature/request/connection/epoch identity. Preserve window close/detach and settings persistence
-sequencing. Consume the core session-generation contract completed before the checkpoint. Same-path,
-same-epoch client/service replacement must remain observable and retire old feature actions/results;
-a retained valid SQLite reader is not evidence that the feature session survived. Feature
-client-session generation is distinct from the authoritative SQLite connection/token; never
-compare foreign data tokens. Do not infer identity from socket paths or cast back to a concrete
-transport client.
+**Libraries to create.**
+- An application composition root, a shared presentation library, and one interface-only shell-port library (for example `lib/shell/ports.dart`) holding the ports below. When a feature moves, the 7A cross-feature ports it provides (for example Google account status, recording facts) move into its outward port file or are re-exported by it, so each dependency has one interface.
+- Publish `_FeatureController`'s shared helpers (`pill`, `heading`, `searchBox`, `timeLabel`; `workspace_controller.dart:19-95`) and the cross-feature parts of `workspace_visuals.dart` as shared presentation. Feature-specific widgets in `workspace_visuals.dart` (`_CaptureWaveform` for meetings, `_DashedStadiumBorder` and `_SourceLinks` for sources, `_UsageChart` for settings) move with their feature in 7B.
+- Empty `features/integrations`, `settings`, `chat`, `sources`, `meetings` and `onboarding` directories are not needed; each 7B PR creates its own.
+- Leave `main.dart` responsible for process entry and composition, not feature-private state.
+- Record the final [library ownership](#library-ownership) table in the 7A PR, confirming the defaults below from actual symbol use.
 
-Invalidation starts conservatively. A change with known scope invalidates that feature's cached read
-models; an unknown/coarse service event invalidates all affected data consumers as today, until
-completeness is proven. Track dependencies explicitly for shared account/model/meeting/source
-changes. Do not require new fine-grained wire events merely to reduce rebuilds. Because current
-events contain a coarse `Stream<void>`/full snapshot and one `dataRevision`, choose immutable
-view-model projection comparison with broad invalidation as the initial mechanism: every event
-refreshes relevant cached projections asynchronously and only changed projections notify widgets.
-Typed per-feature wire scopes are a separate optional additive optimization after
-mutation/background-path completeness is proven. Dependency map: sources/imports → Sources, Stats
-and Ask citations; meeting notes/transcripts → Meetings, Stats and affected source graph/citations;
-model/helper identity → setup and graph; account changes → integrations and meeting calendar;
-artifact acceptance/edit/task completion/preparation/cache acceptance changes → meetings plus
-derived source,
-Stats, graph and scoped Chat consumers; source soft-delete/revision changes invalidate preparation
-eligibility and reuse, but do not imply physical cache-row removal; scope selection → the affected
-manual/automatic answer
-view and retrieval/history identity; unknown/reconnect/clear → all. A source change may legitimately
-invalidate a meetings dependency;
-test an unrelated screen rather than assert that meetings never rebuilds.
+**Shell ports.** 7A defines these interfaces and makes the shell implement them. Features keep `extends _FeatureController` until their own 7B PR.
+- **Feature host:** what `_FeatureController` supplies besides helpers and feature getters (`workspace_controller.dart:8-18`): the connection, `mounted`, a `BuildContext`, the rebuild callback (the interim bridge below) and a `TickerProvider` (the shell creates Sources' ticker and camera controller, `main.dart:358,361`); the `captureVolumes` and `serviceUiRevision` listenables; the `Workspace` constructor dependencies `deviceLoader`, `commands` and `sourceLinkOpener`; and 7.1's platform environment (runner, URI opener, notifier, environment variables and directories). `sourceLinkOpener` defaults to the environment's URI opener. `deviceLoader` stays a separately injected dependency (its default runs `pw-dump`; widget tests already inject it).
+- **Navigation:** a `WorkspaceTab` enum with exhaustive switches in place of integer tab indices (MNT-5). Cross-feature jumps go through a navigation method, never `shell.tab = N`. 7A converts the 38 lib sites and the integer tab reads and writes in 15 test files.
+- **Operation gate:** `run`, `busy`, `error`, the outcome-unknown refresh and the failure notification, unchanged in behavior (Contract 5).
+- **Dialogs:** `showInputDialog` and `rowsAreCurrent`.
+- **Error reporting:** `reportAsyncError`.
+- **Workspace lifecycle:** the clearing flag, `resetWorkspaceViews` and `serviceChanged`.
+- **Read-only activity facts:** chat `asking`, meeting `meetingEnhancing`, recording state and onboarding `active`.
+- **Owner commands** replacing each direct cross-feature write: `systemAudioSetupReviewed` (`integrations_controller.dart:340`), `modelKind` (`meetings_controller.dart:1040`), `answerFontSize` (`:1581`) and question text (`:1761,1892`).
+- **Google account status and commands, and meeting selection.**
+- **Approval presentation:** composition-only. The shell's `AgentApprovalSurface` wraps the workspace (`main.dart:667-671`); no feature part consumes it.
+- Do not replace `shell` with a global service locator or a wide context exposing all features.
 
-Before the first feature move, fill the characterized gaps with held producers/replies: Summary
-and actions/preparation across selection, clear/ID reuse, same-epoch connection replacement and
-disposal; task edits/completion and local source-picker/preference writes across those boundaries;
-same-conversation answer-scope changes with late text/history/citations; cancellation retaining
-accepted artifacts and manual task metadata; and a held note save proving Workspace drains before
-connection disconnect. Reuse the strong existing startup, pending-create/idempotency, clear/offline,
-accepted-history and capture-level fixtures. Characterizations pass before a mechanical move;
-if a stale generic preference write is reproduced, record a separate behavioral regression/fix.
-Freeze query admissions at the typed StoreReader/read/watch boundary and worker projections,
-then count feature notifications and widget builds separately. Legacy Store.rows overrides can
-be bypassed by current typed db.select queries: retain their semantic/large-source assertions,
-but supplement or replace those spies instead of treating zero calls as proof of zero SQL or
-isolate placement. Newly allocated value-equal DTO/list projections must not notify; relevant
-coarse events still refresh every dependent consumer, while capture ticks and graph frames cause
-no persistence admissions. Retain real worker/snapshot tests and actual process/UI integration
-as separate acceptance.
+**Interim rebuild bridge.** Until the last reader of a feature's state has moved, every state change in a moved feature must also trigger the shell rebuild, either through an injected `update` or by the shell listening to the feature's notifier. The shell build reads settings (`localWords`, `embeddingName`, `embeddingGpu`, `helperEmbeddingHealthy`), and `main.dart` makes 61 `meetingFeature` and 24 `sourceFeature` references; meetings reads `chatFeature.asking` and `answerFontSize` (`meetings_controller.dart:1363,1705,2039`). Narrow rebuilds only after all readers use selectors. Each 7B PR shows that none of its consumer screens shows stale state.
+
+**Resource ownership.**
+- The Workspace drains pending note saves before disconnect.
+- Each feature owns the subscriptions, timers, text, scroll and focus controllers, view-model requests and notifiers it creates.
+- Dispose each owned resource exactly once.
+- Ignore late results using a feature, request, connection and epoch identity.
+- Preserve the sequencing of window close, detach and settings persistence.
+
+**Session replacement.** Consume `clientSessionGeneration`. A same-path, same-epoch client or service replacement must remain observable, and it retires old feature actions and results. A retained valid SQLite reader is not evidence that the feature session survived.
+
+**Invalidation.**
+- **Initial mechanism.** Start conservatively:
+  - a change with known scope invalidates that feature's cached read models;
+  - an unknown or coarse service event invalidates every affected data consumer, as today, until completeness is proven.
+
+  Current events carry a coarse `Stream<void>` or full snapshot and one `dataRevision`. So begin with immutable view-model comparison under broad invalidation: every data-identity change refreshes the relevant cached projections asynchronously, and only projections that actually changed notify widgets. Typed per-feature wire scopes are an optional later optimization.
+- **Dependency map.**
+
+  | Change | Consumers to invalidate |
+  |---|---|
+  | Sources and imports | Sources, Stats and Ask citations |
+  | Meeting notes and transcripts | Meetings, Stats, and the affected source graph and citations |
+  | Model or helper identity | Setup and graph |
+  | Account changes | Integrations and the meeting calendar |
+  | Artifact acceptance or edit, task completion, preparation or cache acceptance | Meetings, plus derived-source, Stats, graph and scoped Chat consumers |
+  | Source soft delete or revision change | Preparation eligibility and reuse. This does not imply physical cache-row removal |
+  | Scope selection | The affected manual or automatic answer view, and retrieval and history identity |
+  | Unknown change, reconnect, clear | Everything |
+
+  A source change may legitimately invalidate a Meetings dependency. Test an unrelated screen rather than asserting that Meetings never rebuilds.
+
+**Characterization.** #170 and its follow-ups already cover most lifetime races. Reuse these; do not duplicate them:
+
+| Behavior | Existing coverage |
+|---|---|
+| Summary, actions and preparation across selection, clear (including ID reuse), session replacement and disposal | `meeting_producer_lifetime_test.dart`, `meeting_ui_producer_lifetime_test.dart` |
+| Task edits, completion, source picker and preference writes across clear and session | `meeting_dialog_lifetime_regression_test.dart`, `meeting_action_error_lifetime_test.dart`, `preference_reply_lifetime_test.dart` |
+| Same-conversation answer-scope changes with late text, history and citations | `answer_scope_lifetime_regression_test.dart` |
+| Cancellation that keeps accepted artifacts and manual tasks | `summary_stream_test.dart`, `meeting_producer_lifetime_test.dart` |
+| A held note save drained before disconnect | `note_save_scheduler_test.dart` |
+
+Fill only the residual gaps before the first move:
+- actions started from the meeting-list preview (every producer test sets `meetingId`, which is how DART-N3 escaped; 7.1 adds the first);
+- task and source-picker dialogs across a meeting-selection change (only clear and session are covered);
+- admission and build baselines for Settings, Integrations and Onboarding.
+
+Also reuse startup, pending-create and idempotency, clear and offline, accepted history and capture-level fixtures.
+
+**Measurement.**
+- Count query admissions at the typed `StoreReader` `read`/`watch` boundary and the worker projections, then count feature notifications and widget builds separately.
+- Legacy `Store.rows` overrides can be bypassed by typed `db.select` queries. Keep their semantic and large-source assertions, but do not treat zero calls as proof of zero SQL.
+- Newly allocated value-equal projections must not notify.
+- Capture-level events (`capture_levels`) and graph frames cause no persistence admissions. After F-10, other status-only changes, including the 1 Hz recording heartbeat, cause none for a feature once it reads prepared models (its 7B PR); until then, the committed baseline records them.
+
+### Library ownership
+
+Default owner of each standalone desktop library, from its main symbol's users at `75898380`. A library used by two or more features is shared. 7A confirms the table; a feature PR moves the libraries it owns.
+
+| Owner | Libraries |
+|---|---|
+| Shell and composition | `main.dart`, `account_button.dart`, `agent_approval_surface.dart`, `calendar_auth_links.dart`, `commands.dart`, `desktop_menu.dart` |
+| Shared presentation and utilities | `app_theme.dart`, `desktop_visuals.dart`, `generated_content.dart` (chat, meetings), `failure_text.dart`, `feature_request_identity.dart`, `model_setup.dart` (settings, meetings, shell), `service_edit_dialog.dart` (sources, meetings), the shared parts of `workspace_visuals.dart` |
+| Integrations (7B-1) | `desktop_settings.dart`, `global_shortcuts.dart`, `hypr_shortcuts.dart`, `google_picker.dart`, `google_sign_in_dialog.dart`, `system_audio_setup_dialog.dart` |
+| Settings (7B-2) | `gemma_setup_view.dart`, `speech_setup_view.dart`, `model_setup_surface.dart`, `model_terms_dialog.dart`; `localOutputStats` from `background_store.dart` |
+| Sources (7B-4) | `file_discovery_sheet.dart`, `graph_label_controls.dart`, `graph_rendering.dart`, `cluster_rendering.dart`; `searchSourceIds` from `background_store.dart` |
+| Meetings (7B-5) | `meeting_visuals.dart`, `meeting_export.dart`, `meeting_note_state.dart`, `note_save_scheduler.dart` (shared if the relocated note editor uses it) |
+| Onboarding (7B-6) | `onboarding_view.dart` |
+| Removed in 7C-1 | `desktop_reader_adapters.dart` |
+
+The size targets in [PR 7 acceptance](#pr-7-acceptance) apply to all of desktop `lib/`.
 
 ### 7B. Move one feature at a time
 
-Commit order: shared visuals/composition seams → settings → integrations → chat → sources → meetings
-→ onboarding/shell cleanup. Cross-feature dependencies may be introduced as small interfaces before
-either side moves. For each feature: characterize the existing behavior, introduce its
-interfaces/view model, move controller logic and widgets without logic changes, remove its old part,
-and verify its isolated and existing tests before proceeding. Keep public navigation and settings
-keys stable.
+**Order and method.**
+- Order: integrations, settings, chat, sources, meetings, then onboarding and shell cleanup. Each is its own PR (see [Delivery](#delivery)). Integrations is the hub: settings, onboarding, meetings and sources all depend on it, while it needs only small ports from unmoved features (a preference writer, recording and quick-start facts and commands, and the onboarding-active flag).
+- A moved library cannot see the private controllers still in `main.dart`. Every reference from a moved feature to an unmoved one goes through a 7A port or a small public interface added in that PR.
+- For each feature:
+  1. Characterize the existing behavior.
+  2. Introduce its interfaces and view model, and publish its outward port file. Unmoved parts and later features use only that file.
+  3. In a separate commit before the move, switch the feature's status consumers to F-3's typed decoders.
+  4. Move controller logic, widgets and its owned libraries without logic changes, and remove its `extends _FeatureController`.
+  5. Remove its old part.
+  6. Verify its isolated and existing tests.
+- 7B-6 deletes `workspace_controller.dart`.
+- Keep public navigation and settings keys stable.
 
-Read models use PR 6's `StoreReader` and typed async query results; perform queries outside widget
-building, cache by relevant query parameters plus workspace epoch/data revision and connection
-identity, including week boundary for usage statistics and `(model JSON, instanceId,
-activeGeneration)` for helper-dependent graph results, and invalidate on change. Existing
-off-isolate helpers may be reused behind the boundary. No Store/SQL query or expensive graph layout
-runs inside a `build` or widget-returning method or helper it invokes, including export dialogs,
-setup helpers, filtered-source lists and statistics. Keep cheap synchronous reads of already
-prepared immutable view state. Queries for an old search/selection or profile cannot publish, and an
-older completion cannot replace a newer result. Apply 6C’s identity-versus-freshness protocol to
-revision changes: same-identity previews may refresh the view without being marked current; stale
-identity results are always rejected. Preserve `resetWorkspaceViews` dropping drafts/IDs before
-`adoptWorkspace`, `rowsAreCurrent` dialog guards and `PendingRequestKey` reuse on retries with reset
-after workspace clear. Debounce/coalesce without dropping required invalidation or autosave.
-Before moving Sources, relocate standalone note-editor state and its New Note PendingRequestKey
-into Sources/Notes ownership in a separate mechanical commit; rebind composition's note-save
-drain, navigation and reset. Do not expose Meetings' mutable editor/controller as a cross-feature
-port. Preserve pending-create exact payload/idempotency-key and workspace-epoch assertions,
-including lost-reply retry, held save and reset-before-adopt behavior.
+**Dynamic test access.** 48 test files reach feature state through `dynamic`, so a rename or restructure compiles and fails only at runtime, including in the compiled service gate's `service_mcp_test.dart:105-109,222-355`. Each PR converts the dynamic accesses its change breaks, counts those files in its budget, and runs the full desktop suite and the compiled service gate. A typed `@visibleForTesting` facade on the Workspace may carry tests until 7C-3.
 
-Extract large builders into widgets with explicit state/actions. Use feature notifiers and small
-selectors; capture meters listen only to their existing level notifier. Scope loading/error state to
-the owning feature while preserving shell-level startup/fatal errors. Keep responsive layouts,
-accessibility/keyboard selection, transcript clipboard behavior and platform styling.
+**Read models.**
+- Read models use `StoreReader` typed asynchronous queries, built only through `StoreReadQueries` (F-12), instead of the synchronous projections and the `readRows`/`toRow` map conversions. Perform queries outside widget building. Meetings reads attachments through `StoreReadQueries.attachments`, not `ConnectedSources.attachments`.
+- Cache by the relevant query parameters plus workspace epoch, data revision and connection identity. That includes `OutputStatsPeriod.key` for usage statistics and `(model JSON, instanceId, activeGeneration)` for helper-dependent graph results.
+- No Store or SQL query and no expensive graph layout may run inside a `build` or widget-returning method, or any helper it invokes. That covers export dialogs, setup helpers, filtered-source lists and statistics.
+- Cheap synchronous reads of already-prepared immutable view state are fine.
+- A query for an old search, selection or profile cannot publish, and an older completion cannot replace a newer result.
+- Apply the identity-versus-freshness protocol above.
 
-Include captured answer scope in query/view/cache identity separately from ordinary data freshness;
-a scope change advances query generation and always rejects the old result, rather than publishing
-it as a preview. A stable scheduling key covers
-profile/connection/epoch/projection/filters/selection;
-ordinary data-revision changes affect freshness/cache tags but do not create a new scheduler or
-retire a valid active query. For Stats, consume the scheduling/dispatch seam completed before the
-core checkpoint: use a stable calendar-week/timezone scheduling identity while freezing a fresh exact
-`now` cutoff for each actual worker dispatch, preserving exclusion of future-created rows. Values
-and chart labels share the same captured period. Rearm a calendar-based next-Monday timer on
-period change and check calendar identity on resume. Also detect timezone/calendar changes while
-the app remains awake and focused, without a service event, through a reliable existing platform
-notification or a bounded clock/zone-identity recheck; resume alone is insufficient. Capture the
-effective zone and calendar identity, recompute boundaries on change, and reject any held
-prior-period reply rather than labeling it with the new period. Consume the typed scheduling/
-dispatch seam landed in 6E; 7B adds no core change for Stats. If that seam is insufficient, stop
-moves and apply 6E's review/re-checkpoint rule instead of extending core during the feature move.
-Retain one-active/one-pending and actual-settlement rules. Tests cover
-held refreshes, exact cutoffs, Monday/DST rollover and a midweek timezone change with neither
-resume nor a service event: one coalesced replacement uses the new boundaries/cutoff, and stable
-same-period updates do not create a second coordinator.
-Preserve `answerScope.meeting:<id>` versus `proactiveScope.<id>`, their
-selected-source keys and preparation selection. Local source pickers are not network authorization.
-Snapshot task/source dialogs and pending preference commands against their original meeting/epoch;
-current generic `preferences.set` is not epoch-scoped, so test for stale-dialog writes and fix an
-actual gap separately instead of asserting that current code already prevents it.
+**State preservation.**
+- Keep `resetWorkspaceViews` dropping drafts and IDs before `adoptWorkspace`.
+- Keep the `rowsAreCurrent` dialog guards.
+- Keep `PendingRequestKey` reuse on retries, with reset after workspace clear.
+- Debounce or coalesce without dropping required invalidation or autosave.
 
-Feature acceptance scenarios:
+#### Asynchronous actions
 
-| Feature | Scenarios that must retain assertions |
+DART-N6 is fixed in 7.1, not during the moves. 7.1 introduces one action wrapper that reports failures and binds the reply to the feature, selection and epoch it started from, and applies it at the known sites: `settings_controller.dart:837,990,1014,1315`; `integrations_controller.dart:666`; `meetings_controller.dart:1471-1473,1495-1496,1638-1639`. `discarded_futures` does not catch expression-bodied closures, so do not rely on the analyzer. 7.1 also fixes DART-N11 with a route-scoped pop. The 7B moves keep the wrapper and the route-scoped pop.
+
+**Sources.**
+- Before moving Sources, relocate the standalone note-editor state and its New Note `PendingRequestKey` into Sources/Notes ownership, in a separate mechanical commit.
+- Rebind composition's unsaved-edits check (`main.dart:572-573`), controller disposal (`:536-537`), clear reset (`:592-595,603`), New Note shortcut (`:722-727`) and navigation. The note-save drain before disconnect is Meetings' `NoteSaveScheduler` (`main.dart:506-507`).
+- Do not expose the Meetings editor or controller as a cross-feature port.
+- A save or create reply applies only while the editor still shows the note it was issued for (DART-N4, fixed in 7.1; the move must keep that guard).
+- Preserve the pending-create payload, idempotency-key and workspace-epoch assertions, including lost-reply retry, held save and reset-before-adopt.
+
+**Integrations.** `connectGranolaCalendar` overwrites `d.googleStatus` with the configure reply and then reads `granolaCalendar` from it (`integrations_controller.dart:52-59`). F-3's decoders are read-only, so 7B-1 replaces that write before 7C-4 removes the map: with F-4's event-before-reply, the `google` status that precedes the reply carries the new provider, so verify that and delete the write; otherwise keep the configured provider as feature-local state from the reply, without mutating connection state.
+
+#### Hermetic tests
+
+TEST-2 is fixed in 7.1. Today, under `HYPRLAND_INSTANCE_SIGNATURE`, desktop widget tests run the real `/usr/bin/hyprctl` and can rewrite the user's `hypr/bindings.lua`. 50 test files mount `Foresight(` or `Workspace(` directly, so fixing only shared fixtures is not enough.
+- `Foresight` and `Workspace` take a platform environment value: environment variables, config and data directories, a process runner, a URI opener and a notifier. `main()` creates the real one and `DesktopStartup` carries it; the parameter is required on `DesktopStartup`, so a production path cannot silently fall back to a fake. The `Foresight`/`Workspace` widget default is hermetic.
+- Route through it every direct host access in desktop `lib`:
+  - process launches: `activateWindow`'s `/usr/bin/hyprctl` call (`integrations_controller.dart:107-120`), the `HyprShortcuts` getter that drops `run` (`:6-12,95-96`) and its default `run = Process.run` (`hypr_shortcuts.dart:11`), `commands.dart:88` (`/bin/chmod`), `system_audio_setup_dialog.dart:25` (`/usr/bin/open`), and Gemma setup's `Process.start(widget.runner, ['--check'])` (`gemma_setup_view.dart:203`; `gemma_setup_test.dart` drives it with `/usr/bin/true`, which becomes a fake runner);
+  - environment reads: `integrations_controller.dart:7-9,108,163,199,612`, `sources_controller.dart:372` (`HOME` for file discovery), `main.dart:110,132,400`, and `DesktopSettings`' `HOME` and `XDG_DATA_HOME` (`desktop_settings.dart:31-33`);
+  - core helpers that launch host processes: `openPlatformUri` (`xdg-open`, `platform_services.dart:406-412`; called at `chat_controller.dart:67`, `model_terms_dialog.dart:42,49,96`, `integrations_controller.dart:370`, and the default opener at `generated_content.dart:12` and `main.dart:238`) and `platformNotification` (`notify-send`, `platform_services.dart:414-427`; called at `integrations_controller.dart:483`, which the shell gate reaches on every failure while notifications are on).
+- Guard: a source test rejects `Process.run`, `Process.start`, `Platform.environment`, `openPlatformUri` and `platformNotification` in desktop `lib` outside the environment adapter and `main()`. A behavioral test sets `HYPRLAND_INSTANCE_SIGNATURE` in the injected environment and asserts that the fake runner receives the `hyprctl` calls and that nothing outside the temporary directories changes; it skips on macOS until 7C-2 injects the platform, because every Hyprland path also checks the real `Platform.isMacOS` (`integrations_controller.dart:107,162,198,608`); register that skip in `tools/integration_skips.json`, which Quality's inventory check requires. A third test asserts that `main()`'s environment binds the real runner, opener and notifier. CI never has Hyprland, so the source guard carries the enforcement.
+- Production Hyprland behavior is tested through the adapter.
+
+**Widgets and loading state.**
+- Extract large builders into widgets with explicit state and actions.
+- Use feature notifiers and small selectors, within the interim rebuild bridge. Capture meters listen only to their existing level notifier.
+- Feature-local loading indicators may be added for work the feature owns, but the shell-wide operation gate keeps its meaning (Contract 5).
+- Keep responsive layouts, accessibility and keyboard selection, transcript clipboard behavior and platform styling.
+
+**Answer scope.**
+- Include the captured answer scope in query, view and cache identity, separately from ordinary data freshness.
+- A scope change advances the query generation and always rejects the old result; it is never published as a preview.
+- A stable scheduling key covers profile, connection, epoch, projection, filters and selection. Ordinary data-revision changes affect freshness and cache tags, but do not create a new scheduler or retire a valid active query.
+- Preserve `answerScope.meeting:<id>` versus `proactiveScope.<id>`, their selected-source keys, and preparation selection. Local source pickers are not network authorization.
+- Snapshot task and source dialogs, and pending preference commands, against their original meeting and epoch. Generic `preferences.set` is not epoch-scoped: test for stale-dialog writes, and fix any real gap separately.
+
+**Stats (with Settings, 7B-2).** Stats is Settings' tab, and today its period re-keys only when `localWords()` runs during a rebuild (`settings_controller.dart:425-429`). The next-Monday timer and the timezone recheck below are new behavior: list them as 7B-2's intentional behavior changes, with their tests.
+- Schedule by `OutputStatsPeriod` (see [Core interfaces](#core-interfaces-pr-7-consumes)), and let each worker dispatch freeze a fresh exact `now` cutoff, preserving the exclusion of future-created rows.
+- Values and chart labels share the same captured period.
+- Rearm a calendar-based next-Monday timer from `nextWeekMilliseconds` when the period changes, and check calendar identity on resume.
+- Detect timezone and calendar changes while the app stays awake and focused, with no service event, through a reliable platform notification or a bounded clock and zone recheck.
+- Reject any held reply from the prior period; a period-change dispatch failure replaces the query.
+- Keep the one-active, one-pending and actual-settlement rules.
+- Tests cover held refreshes, exact cutoffs, Monday and DST rollover, and a midweek timezone change with neither resume nor a service event.
+
+**Feature acceptance scenarios:**
+
+| Feature | Scenarios that must keep their assertions |
 | --- | --- |
-| Settings | Model reuse and repair, portable detector executable/SHA-256/backend setup, Unicode policy, idle preference, usage/statistics, version/license, platform controls and hook-free release behavior. |
-| Integrations | Google and Granola calendar setup/sign-in, multiple accounts/imports, cancellation, approval UI, connection status through reconnect. |
-| Chat | Streaming/cancellation/preemption, web approval, citations/history/memory filtered to captured scope, manual Workspace versus automatic Meeting defaults, selected-empty isolation and scope-change rejection. |
-| Sources | File/URL/Drive import, permissions, revision-safe search, selection, labels, graph layout, delete/clear and stale completion rejection. |
-| Meetings | All six panels; Summary streaming/progress/cancel/history/clipping; task evidence/manual completion/stale state; local Preparation/cache/degraded retry; Enhanced Notes edits/degraded warnings; detector readiness and Q&A queue age; record/finalization, transcript copy, calendar and recovery. |
-| Onboarding/shell | First-run and pending-create flows, model acquisition, navigation restoration, reconnect, retired workspace events, close/dispose and multiple desktop ownership. |
+| Integrations | Google and Granola calendar setup and sign-in; multiple accounts and imports; cancellation; quick-meeting activation from `commands.sock`; connection status through reconnect; Hyprland shortcut and focus behavior through the injected adapter |
+| Settings | Model reuse and repair; portable detector executable, SHA-256 and backend setup; Unicode policy; idle preference; usage statistics; version and license; platform controls; hook-free release behavior |
+| Chat | Streaming, cancellation and preemption; web approval; citations, history and memory filtered to the captured scope; manual Workspace versus automatic Meeting defaults; selected-empty isolation; scope-change rejection |
+| Sources | File, URL and Drive import; permissions; revision-safe search; selection; labels; graph layout; delete and clear; stale-completion rejection; note save and create bound to the issuing note |
+| Meetings | All six assistant panels (Chat, Live Q&A, Summary, Transcript, Actions, Preparation) from the meeting workspace; from the meeting-list preview, Notes, AI summary (including Generate, DART-N3) and Transcript; Summary streaming, progress, cancel, history and clipping; task evidence, manual completion and stale state; local Preparation, cache and degraded retry; Enhanced Notes edits and degraded warnings; detector readiness and Q&A queue age; recording and finalization, transcript copy, calendar and recovery |
+| Onboarding and shell | First-run and pending-create flows; model acquisition; retry after a failed first connection; navigation restoration; reconnect; retired workspace events; approval UI (`AgentApprovalSurface`); close and dispose; multiple desktop ownership |
 
-Before moving the new AI view part, add any missing characterization for switching meetings,
-clear/reconnect/dispose during Summary/workflow preview, stale task/source-picker completion,
-source-scope changes during an answer and cancellation that retains accepted artifacts/manual
-tasks. Reuse `summary_stream_test.dart`, `meeting_ai_views_test.dart`,
-`meeting_actions_workflow_test.dart` and `test_support/meeting_panel.dart` (visible-tab/overflow,
-scope selector and citation helpers); adapt fixture setup without losing its production selector
-behavior or replacing the real service integration with widget-only coverage.
+**Before moving the AI view part.**
+- Confirm characterization exists for:
+  - switching meetings;
+  - clear, reconnect or dispose during a Summary or workflow preview;
+  - stale task and source-picker completion;
+  - source-scope changes during an answer;
+  - cancellation that retains accepted artifacts and manual tasks.
+- Reuse `summary_stream_test.dart`, `meeting_ai_views_test.dart`, `meeting_actions_workflow_test.dart` and `test_support/meeting_panel.dart`.
+- Adapt fixture setup without losing production selector behavior, and without replacing the real service integration with widget-only coverage.
 
 ### 7C. Close the boundary and remove obsolete coupling
 
-Use the curated public core API everywhere, including remaining shims/tests that exercise the
-desktop boundary. Remove one-line `foresight_core/src` re-export shims after consumers migrate. A
-source architecture guard covers imports, exports and parts and rejects implementation imports and
-write-capable core types in desktop production code. Narrow test-support adapters may implement
-fakes; they do not exempt production. `StoreReader` remains typed/read-only without `dynamic`, casts
-to concrete classes or exposed callbacks returning writable objects.
+**7C-1: synchronous reads.**
+- Remove the 25 synchronous projections from `StoreReader` and its SQLite implementation once no consumer remains. By then the 7B moves have switched every consumer to F-12's factories and reader-free helpers, so 7C-1 only removes: the `StoreReader` versions of the `model_setup.dart` helpers (`model_setup.dart:286,381,406`), and `attachments` from the `ConnectedSources` interface (`desktop_connection.dart:64`) and its overrides in `RemoteGoogleConnections` (`remote_google.dart:161-171`), `GoogleConnections` and the desktop test fake `SettingsSources`. `GoogleConnections` keeps an internal method where `google_connections.dart:551` needs one. Update the core tests (including `remote_domain_test.dart` and `google_connections_test.dart`), `CountingStoreReader`, `store_reader_fixture.dart`, `stats_retry_lifetime_test.dart`'s `_StatsReader`, the typed reader reads in `integration_test/service_mcp_test.dart:173-175`, and every typed reader read in `integration_test/meeting_workflow_test.dart` (its `readerFor`/`sourceRows` helpers, about two dozen direct projection reads, and a `readerSpeechSetupProblem` call). The desktop gate's `flutter analyze` reports both files, and `test/agent_approval_surface_test.dart` imports `meeting_workflow_test.dart` into the ordinary suite; only the virtual-audio and compiled service gates execute them.
+- Delete `desktop_reader_adapters.dart`. Criterion: no `toRow`, `fromRow` or `readRows` in desktop `lib`, and no core API exported to the desktop that reads a synchronous projection.
 
-Move platform policy into an injected `PlatformCapabilities`/platform adapter chosen at startup.
-Presentation receives capability facts and actions; platform implementation code may use `Platform`.
-Keep macOS title bar, Linux capture/shortcuts and existing unsupported-action messages. This is not
-a Windows port.
+**7C-2: platform adapter.**
+- Move platform policy into a `PlatformCapabilities` or platform adapter, extending 7.1's injected environment and chosen at startup.
+- Presentation receives capability facts and actions. Only platform implementation code may use `Platform`; there are 41 inline `Platform.is*` checks in desktop `lib` today, across 10 files.
+- Keep the macOS title bar, Linux capture and shortcuts, and the existing unsupported-action messages. This is not a Windows port.
+- Remove the macOS skip from 7.1's behavioral Hyprland test and its `tools/integration_skips.json` entry, and run the test in 7C-2's HanSolo matrix.
 
-Delete `noteEnhancementChanges`, the redundant close wrapper and side-effect getter statements only
-after verifying their replacement/disposal paths. Apply the cleanup inventory to onboarding/shared
-files too. Remove migration adapters and all production `part`/`part of` links to `main.dart` at
-completion; generated Dart part directives are exempt.
+**7C-3: test fixtures.**
+- Replace `controller_fixture.dart`'s private shell introspection (15 users) and any remaining dynamic Workspace access with feature fakes or the typed test facade's replacement.
+- Enable `avoid_dynamic_calls` for desktop tests, or an equivalent guard.
+- In-process service fixtures may keep `package:foresight_core/src/...` imports through a single test-support library. Desktop production code and boundary tests use only the curated public API.
+
+**7C-4: guard and cleanup.**
+- **Architecture guard.** A source guard covers imports, exports and parts. It rejects implementation imports and write-capable core types in desktop production code, any construction of `ReadQuery` in desktop `lib`, including with type arguments and the `ReadQuery.new` tear-off (reads go through `StoreReadQueries`; removing `ReadQuery` from `desktop.dart`'s `show` list, so desktop `lib` can neither name nor construct it, also satisfies this; then change `desktop_boundary_test.dart`'s expected `desktop.dart` export list, which includes `ReadQuery` today), and `package:mcp_dart` in the transitive **import** closure of `apps/desktop/lib` (after F-8). Narrow test-support adapters may implement fakes, but they do not exempt production. `StoreReader` stays typed and read-only: no `dynamic`, no casts to concrete classes, and no exposed callbacks that return writable objects. For each `features/<x>`, the guard asserts that it imports only `foresight_core/desktop.dart`, shared presentation, the shell-port library and other features' port files.
+- **Google account.** Replace `GoogleAccount.client`'s credential-bearing `GoogleClient` type with `bool configured`; the desktop only null-checks it (`settings_controller.dart:1213,1252`, `integrations_controller.dart:360`) and the remote side fakes it as `GoogleClient('', '')` (`remote_google.dart:38-39`). Type `accounts` as account values.
+- **Status maps.** Remove `capture` and `googleStatus` from `DesktopConnection` once every consumer uses F-3's decoders.
+- **Cleanup.** Delete `noteEnhancementChanges`, the redundant close wrapper and the side-effect getter statements, only after verifying their replacement and disposal paths. Apply the same cleanup inventory to onboarding and shared files. At completion, remove the migration adapters and every production `part`/`part of` link to `main.dart`. Generated Dart part directives are exempt.
 
 ### PR 7 acceptance
 
-- Every feature builds independently with fake narrow interfaces; production has no feature
-  back-reference to shell state, global locator or implementation import. All handwritten main parts
-  have been replaced.
-- No persistence queries/graph work occur in widget building. Async results are
-  revision/epoch/connection safe; queries, subscriptions and controllers settle/dispose correctly
-  during reconnect and workspace clear.
-- Rebuild-count tests prove a level tick rebuilds only its meter, a local feature edit leaves
-  unrelated features alone, and coarse/unknown changes still refresh all relevant data. Preserve
-  existing capture-level tests rather than duplicate them.
-- Targets: feature files under 800 lines, widget-returning/build methods under 150, small
-  composition root with explicit ownership. Explain misses rather than introducing empty abstraction
-  layers.
-- Existing desktop and process integration assertions retain their meaning; replace private shell
-  introspection in `controller_fixture.dart` with feature fakes. Anchor
-  epoch/reset/pending-create/clear-offline/note-save/startup/approval/buffer workflows and core
-  `remote_domain_test.dart` before moving them. Full Linux and macOS record, enhance, Ask, import,
-  graph, settings, onboarding, approval, close and reconnect smoke passes using current binaries.
+Assessed at the last 7C PR, with each earlier PR meeting the parts it touches.
+
+- **Independence.**
+  - For each `features/<x>`, one widget test mounts the feature root with only fake ports, without `Foresight` or `Workspace`.
+  - The 7C-4 guard passes: no feature back-reference to shell state, no global locator, no implementation import. All handwritten main parts are gone.
+- **Read safety.**
+  - No persistence query or graph work happens during widget building.
+  - Asynchronous results are safe across revisions, epochs and connections.
+  - Queries, subscriptions and controllers settle and dispose correctly during reconnect and workspace clear.
+- **Rebuild counts.** Against the committed 7A baselines, tests prove that:
+  - a level tick rebuilds only its meter;
+  - a local feature edit leaves unrelated features alone;
+  - a coarse or unknown change still refreshes all relevant data.
+
+  Keep the existing capture-level tests rather than duplicating them.
+- **Hermetic tests.** 7.1's source guard, behavioral test and production-binding test pass: no widget test spawns `/usr/bin/hyprctl` or reads or writes the real XDG config, and `main()` binds the real runner, opener and notifier.
+- **Size targets.** Across desktop `lib/`: files under 800 lines; widget-returning and build methods under 150; `main.dart` holding only process entry and composition, under 300 lines. Explain any miss rather than adding empty abstraction layers.
+- **Behavior preserved.**
+  - Existing desktop and process integration assertions keep their meaning.
+  - The epoch, reset, pending-create, clear-offline, note-save, startup, approval and buffer workflows, and core `remote_domain_test.dart`, are anchored before they move.
+  - Full Linux and macOS smoke passes on current binaries: record, enhance, Ask, import, graph, settings, onboarding, approval, close and reconnect.
 
 ### Current-main regression anchors
 
-These delivered tests are required preservation evidence, not work still to implement:
-`summary_application_test.dart`, `summary_generator_test.dart` with frozen summary prompts,
-`meeting_actions_test.dart`, `meeting_workflows_test.dart`, `meeting_ai_reference_test.dart`,
-`notes_workflow_safety_test.dart`, `answer_source_scope_test.dart`,
-`portable_query_setup_test.dart`,
-`proactive_application_test.dart`, `web_answer_test.dart`, the current
-`service_cancellation_test.dart`
-variants, and migration tests for 14/15. Retain helper-tokenizer independence, conservative UTF-8
-admission, Unicode/map-reduce bounds, owned cancellation, preemption, edited-history and manual-task
-preservation, degraded retry/cache behavior, generic `questions` generation/cancellation in
-`application_operations_test.dart` and `service_cancellation_test.dart`, and source-scope privacy.
+These existing tests are preservation evidence, not work to implement:
+- `summary_application_test.dart` and `summary_generator_test.dart`, with the frozen summary prompts;
+- `meeting_actions_test.dart`, `meeting_workflows_test.dart` and `meeting_ai_reference_test.dart`;
+- `notes_workflow_safety_test.dart` and `answer_source_scope_test.dart`;
+- `portable_query_setup_test.dart`, `proactive_application_test.dart` and `web_answer_test.dart`;
+- the `service_cancellation_test.dart` variants;
+- the migration tests for 14 to 17;
+- the persistence characterization fixtures (`persistence-c28a1561`) and `operation_policy_baseline.json`.
 
-The compiled service gate must still execute
-`test_summary_commits_checkpoint_and_retains_edited_history`,
-`test_actions_and_preparation_through_compiled_service_and_mcp` and
-`test_stalled_notes_batch_is_cancelled_by_its_service_lease` in
-`tests/service/test_service_process.py`, together with the real desktop/service/MCP integration.
-Their structured-stdin/probe/finish worker protocol and production source-selector helpers are part
-of the contract. Controlled workers establish protocol and persistence, not real-model quality.
+Retain these behaviors:
+- helper-tokenizer independence and conservative UTF-8 admission;
+- Unicode and map/reduce bounds;
+- owned cancellation and preemption;
+- edited-history and manual-task preservation;
+- degraded retry and cache behavior;
+- generic `questions` generation and cancellation;
+- source-scope privacy.
+
+The compiled service gate must still execute these tests in `tests/service/test_service_process.py`, together with the real desktop/service/MCP integration:
+- `test_summary_commits_checkpoint_and_retains_edited_history`;
+- `test_actions_and_preparation_through_compiled_service_and_mcp`;
+- `test_stalled_notes_batch_is_cancelled_by_its_service_lease`.
+
+Their worker protocol (structured stdin, probe, finish) and the production source-selector helpers are part of the contract. Controlled workers establish protocol and persistence behavior, not real-model quality.
 
 ## Verification matrix and implementation stop conditions
 
-The command authority is the reconciled source's CI scripts, not old audit line numbers. At Phase 0
-save their exact invocations and tool versions; update the command manifest only when CI changes.
-Run focused relevant tests per commit, the full applicable Linux matrix at the frozen core
-completion commit, and the full applicable Linux and HanSolo Mac matrix at the final combined
-head. Record both source identities. Re-run affected checks after each later code change; a new
-rebase/main integration invalidates the earlier core checkpoint as specified above. A passing
-unrelated check is not verification.
+**Command authority.** The current CI scripts are the authority for commands, not old audit line numbers. Record their exact invocations and tool versions in each PR's evidence.
+
+**What to run.**
+- Run focused relevant tests for each commit.
+- Run the full applicable Linux matrix at each PR's final head, plus the HanSolo matrix where owner decision 1 requires it.
+- Rerun the affected checks after every later code change.
+- A rebase onto a moved `main` requires rerunning the matrix before merge.
+- A passing unrelated check is not verification.
 
 | Gate | Required execution and evidence |
 | --- | --- |
-| Static/contracts | Dart/Flutter analyze and format, operation registry/MCP schemas/literal guard, bindings and source-boundary guards; Python contracts and migration fixtures. Use the pinned CI Python environment; `python -m pytest --cov --cov-config=.coveragerc --cov-report=term --cov-report=xml --durations=20 --junitxml=coverage/python/junit.xml` is Quality's baseline command. Enforce its current 95% Python threshold; Linux core/desktop enforced minimums remain 90%, with the separate 95% improvement target above. |
-| Native | Root CMake/CTest inventory, all native/helper/inference tests, `tools/run_native_sanitizers.sh` and `tools/run_thread_sanitizers.sh` where applicable; GCC/libstdc++ and Clang/libc++ for stream/shutdown changes. Reuse verified SDKs/toolchains; report omitted or unsupported targets. |
-| Dart core | Entire `packages/foresight_core` suite, current native/helper paths configured. `FORESIGHT_CORE_COVERAGE_MIN=90 bash tools/coverage_core.sh` collects and enforces Linux core coverage. Reach at least 95% measured coverage at the core checkpoint and final head without raising the 90% minimum. No skipped native integration due to missing binary paths. |
-| Desktop | Entire Flutter desktop suite with current binaries, coverage using the current CI command/90% minimum, rebuild/feature isolation/query cancellation tests and full `integration_test` target. Keep the enforced 90% minimum; the owner waived the desktop 95% target for now. Retain skip inventory and counts. |
-| Compiled boundaries | Compile current service and MCP executables, then run `tests/service/test_service_process.py` and the current MCP process suite through the CI service stage; run actual desktop/service integration on an isolated display. Record binary paths and source identity. Capture fixtures write raw PCM to the owned FIFO and diagnostics to stdout. |
-| Lifetime/ownership | Source-compiler tests with test hooks explicitly enabled, ordinary tests with hooks disabled, release builds ignoring hooks even after cached development configuration; ADR-0007 idle/grace/busy and structured close/resend/ownership/adoption matrix. |
-| Schema/data | Frozen checksummed source/database fixtures without deep Git dependency; fresh/legacy/current/future/corrupt/partial and rollback/retry cases for application and helper databases; real hot-journal/attached-commit/WAL preflight and refusal-without-mutation fixtures from 6D; durable label ordering and Google repair identity/content assertions. |
-| Complete source export | Applicable archive/container/fixture checks from a full export without `.git`; explicit fixture CI metadata under unrelated PR, main and unset refs if these fixtures are touched. Preserve provenance/checksum assertions. |
-| Platform acceptance | Linux compiled desktop/service smoke and installer acceptance; macOS native/Flutter/process/installer smoke and cold-start/responsiveness observations. Preserve #168's independent real DMG fixture contracts, including owned-attachment cleanup; fixture success is not a Mac application pass. Docker/Apple paths unavailable locally remain required hosted checks, explicitly unexecuted locally. |
+| Static and contracts | Quality's `python` job in order: `ruff check .`, `mypy`, `python tools/check_subprocess_timeouts.py`, then `python -m pytest --cov --cov-config=.coveragerc --cov-report=term --cov-report=xml --durations=20 --junitxml=coverage/python/junit.xml` (95% through `.coveragerc`). Quality's `format` job: pinned `dart format --set-exit-if-changed` and clang-format. Dart and Flutter analyze; operation registry, MCP schema and literal guards; bindings and source-boundary guards; migration fixtures. Use the pinned CI Python environment, with `protoc` 35.1 first on `PATH` as Quality installs it (`tests/contracts/test_owned_descriptors.py` runs `protoc` directly) |
+| Native | Every PR: the root CTest inventory through the native test-only stage in the block below; AGENTS.md requires it for native, protocol or service changes, which include 7.0. When a PR changes paths in `native-sanitizers.yml`'s filter (native, services, proto, CMake): configure instrumented root trees with clang, the verified sanitizer SDK as `CMAKE_PREFIX_PATH`, and `-DFORESIGHT_SANITIZERS=ON` or `-DFORESIGHT_THREAD_SANITIZER=ON`, then run `tools/run_native_sanitizers.sh "$task_asan_build" test-results/sanitizers` and `tools/run_thread_sanitizers.sh "$task_tsan_build" test-results/thread` with the pinned Python first on `PATH` as `python`. Reuse verified SDKs and toolchains; report omitted or unsupported targets |
+| Dart core | The entire `packages/foresight_core` suite, with the current native library and helper configured. `FORESIGHT_CORE_COVERAGE_MIN=90 bash tools/coverage_core.sh` collects and enforces Linux core coverage. Keep measured core coverage at or above 95% without raising the 90% minimum. No native integration test may skip because a binary path is missing |
+| Desktop | The entire Flutter desktop suite with current binaries; coverage with the current CI command and its 90% minimum; rebuild, feature-isolation and query-cancellation tests. The `integration_test` target: `service_mcp_test.dart` through the compiled service gate, and `meeting_workflow_test.dart` through `integration_gates.py --suite virtual-audio` (locally, or as hosted `acceptance-audio` at the PR head). The Meetings PR and 7C-1 need models-suite and virtual-audio evidence at their heads. Keep the skip inventory: 8 macOS-only and 9 suite-gated tests on Linux. The owner waived the desktop 95% target |
+| Compiled boundaries | Compile the current service and MCP executables. Run `tests/service/test_service_process.py` and the current MCP process suite through the CI service stage, then the real desktop/service integration on an isolated display. Record binary paths and source identity. Capture fixtures write raw PCM to the owned FIFO and diagnostics to stdout |
+| Lifetime and ownership | Source-compiler tests with test hooks explicitly enabled; ordinary tests with hooks disabled; release builds ignoring hooks even after a cached development configuration; the ADR-0007 idle, grace and busy matrix; the structured close, resend, ownership and adoption matrix |
+| Responsiveness | F-1b's runner and method at 7.0's head, and at the head of any later PR that changes service-side status, broadcast, dispatch or read code. The runner times only the service's `status` RPC; desktop-only PRs from 7A on use 7A's committed admission and build baselines instead |
+| Complete source export | Run applicable archive, container and fixture checks from a full export without `.git`. If those fixtures are touched, inject fixture CI metadata explicitly and run under an unrelated PR ref, a `main` ref and no ref ([CI integrity](../platforms/ci-integrity.md#testing-ci-tooling-changes)) |
+| Platform acceptance | Linux compiled desktop and service smoke; portable-bundle acceptance through `linux_acceptance.sh cpu`/`audio` (local or hosted); installer and package acceptance (`acceptance-deb` and the deb, rpm and arch package jobs) as hosted checks only (F-1a). macOS: the HanSolo matrix (owner decision 1) where that decision requires it. Docker and Apple paths unavailable locally remain required hosted checks and are reported as not run locally |
 
-The canonical container schedule is the required CI owner's current invocation. At reviewed main,
-`tools/linux_container_test.sh` defaults `FORESIGHT_LINUX_TEST_SCHEDULE` to 1: native first, then
-core/desktop/platform Python branches concurrently, then compiled service. Schedule 0 instead uses
-`build.sh --test-only` followed by fast/platform Python; it still enables parallel Dart gates.
-The external local adapter selected 0 for the failed 4bd attempt. Record this difference and use
-the required default schedule 1 for the next acceptance attempt; alternate or isolated invocations
-remain diagnostic. Before that attempt record outer workloads, inner test/gate concurrency,
-compiler jobs, visible CPUs, CPU quota/cpuset, memory/swap limits and current host load/memory/swap.
-No CPU, memory or swap cause is established merely by observing a timeout or an isolated pass.
-Do not silently serialize the canonical gate, raise deadlines, exclude architecture coverage or
-alter hosted routing to obtain a pass. Preserve inventory, thresholds, original logs and every
-namespace assertion; a deliberate gate change requires its own review and complete validation.
-
-Concrete Linux gate invocations at the frozen baseline (set task-specific absolute paths first;
-inspect scripts again after reconciliation):
+**Concrete Linux gate invocations.** This block is the required local host test matrix. Before every push, also run the Static row's Quality `python` and `format` commands. Set task-specific absolute paths first, and inspect the scripts again before each PR:
 
 ```sh
 set -euo pipefail
 export FORESIGHT_PYTHON="$task_python" FORESIGHT_BUILD_DIR="$task_build"
 export LIBGL_ALWAYS_SOFTWARE=1
-# Choose short private disk-backed paths; generated Unix socket paths must fit platform limits.
+# A short `install -d -m 700` directory under /var/tmp (AGENTS.md), never below
+# a .cache directory until CDX-F5 is fixed; Unix socket paths must fit limits.
 export TMPDIR="$task_short_tmp" FORESIGHT_TEST_TEMP_ROOT="$task_short_tmp"
-# Keep widget/private-display tests independent of the host compositor session.
-unset HYPRLAND_INSTANCE_SIGNATURE
+# Keep tests off the host compositor, display and session bus, as the canonical
+# schedule does (TEST-2).
+unset HYPRLAND_INSTANCE_SIGNATURE WAYLAND_DISPLAY
+export GDK_BACKEND=x11
 export FORESIGHT_NATIVE_LIBRARY="$task_build/native/libforesight_native.so"
 export FORESIGHT_HELPER="$task_build/services/helper/ForesightHelper"
 bash tools/build.sh --platform linux --test-only --stage native
 "$task_python" tools/platform_python_tests.py --platform linux
-FORESIGHT_COVERAGE=1 FORESIGHT_CORE_COVERAGE_MIN=90 \
+FORESIGHT_COVERAGE=1 FORESIGHT_CORE_COVERAGE_MIN=90 xvfb-run -a dbus-run-session -- \
   bash tools/build_dart_gates.sh core linux "$task_build" "$task_python"
-bash tools/build_dart_gates.sh desktop linux "$task_build" "$task_python"
+xvfb-run -a dbus-run-session -- \
+  bash tools/build_dart_gates.sh desktop linux "$task_build" "$task_python"
 test -x "$task_flutter_executable" # absolute pinned Flutter SDK bin/flutter, not the app binary
 export FORESIGHT_FLUTTER_EXECUTABLE="$task_flutter_executable"
 export FORESIGHT_LINUX_UI_TEST=1 FORESIGHT_REQUIRE_NATIVE_UI_TEST=1
-unset WAYLAND_DISPLAY
-export GDK_BACKEND=x11
 xvfb-run -a dbus-run-session -- \
   bash tools/build_service_gate.sh linux "$task_build" "$task_python"
 xvfb-run -a dbus-run-session -- "$task_python" tools/integration_gates.py \
   --suite fast --native "$FORESIGHT_NATIVE_LIBRARY" \
   --output test-results/fast-integration
-tools/run_native_sanitizers.sh "$task_asan_build" test-results/sanitizers
-tools/run_thread_sanitizers.sh "$task_tsan_build" test-results/thread
 ```
 
-The native test-only stage requires current configured/compiled project outputs and verifies that no
-build would be needed; compile changed project code first using the existing verified dependency
-SDK, never pass old application bytes as new output. In the CI dependency-reuse/container path
-retain `FORESIGHT_REQUIRE_APP_DEPENDENCY_REUSE=1` and the existing verified handoff; this is a
-dependency-compilation guard, not permission to skip project compilation. Keep `FORESIGHT_PYTHON`
-set to the pinned Python executable so coverage does not fall back to an unrelated PATH interpreter.
-The desktop gate does not inherit the core gate's internal subprocess exports; set native/helper in
-the outer environment as above. Linux core and desktop gates enforce 90% coverage. Core compiles the
-current service/MCP and explicitly runs source-compiler enabled-hook tests; retain
-disabled-hook/release tests too. The compiled service gate drives the actual
-`integration_test/service_mcp_test.dart`; running a generic Flutter unit test command does not
-substitute for it. Set the UI prerequisite variables and examine skipped tests so the desktop
-process boundary actually runs. Configure sanitizer trees from root using
-`-DFORESIGHT_SANITIZERS=ON`/`-DFORESIGHT_THREAD_SANITIZER=ON` with verified compatible SDKs, and
-compare `ctest --show-only=json-v1` inventories including `native_probe_failure`.
+**Notes on these commands.**
+- **Native stage.** The native test-only stage needs current compiled project outputs and verifies that no build would be needed. Compile changed project code first against the verified dependency SDK; never pass old application bytes off as new output.
+- **Container path.** In the CI dependency-reuse and container path, keep `FORESIGHT_REQUIRE_APP_DEPENDENCY_REUSE=1`.
+- **Python.** Keep `FORESIGHT_PYTHON` set to the pinned interpreter.
+- **Desktop native tests.** They read `FORESIGHT_NATIVE` and are gated by suite flags, so they run in the fast, models and virtual-audio suites of `integration_gates.py`, not in `build_dart_gates.sh desktop`. Nothing in the desktop suite reads `FORESIGHT_NATIVE_LIBRARY`. The Dart and service gate scripts set their own library and helper paths (`build_dart_gates.sh:31-32`, `build_service_gate.sh:32-33`); the outer exports feed the fast suite's `--native` and focused Dart runs.
+- **Compiled service gate.** It drives the actual `integration_test/service_mcp_test.dart`; a generic Flutter unit-test command does not substitute for it.
+- **Script modes.** The Dart and service gate scripts are mode 100644. Invoke them through `bash`.
+- **Fast suite temp root.** `integration_gates.py` uses `/tmp` regardless of `TMPDIR` (`tools/integration_gates.py:537,668,674`). Check `/tmp` capacity before running it.
+- **Hyprland.** After 7.1's TEST-2 fix, keep unsetting `HYPRLAND_INSTANCE_SIGNATURE` as defense in depth.
+- **Linux UI isolation.** The Linux UI subprocess tree must inherit the private X display and authentication, the private D-Bus session and the explicit X11 backend. A qualified task-local Xvfb runner may replace an unavailable `xvfb-run` with the same isolation.
+- **Container schedule.** The canonical schedule (`FORESIGHT_LINUX_TEST_SCHEDULE=1`: native first, then core, desktop and platform Python concurrently, then the compiled service) runs inside the CI container through `tools/linux_container_test.sh`, in the required hosted `linux-test` job (`bash tools/build_linux_container.sh --test-only`). To run it locally, use `bash tools/build_linux_container.sh --output <dir>` with the verified SDK image and dependency seed. The serial host block above does not replace the canonical schedule; schedule 0 and isolated reruns are diagnostic only.
+- **Recording conditions.** Before a timed acceptance run, record workload, concurrency, CPU and memory limits, and host load. Do not serialize the canonical gate, raise deadlines, exclude coverage or change hosted routing to get a pass.
 
-The tracked Dart/service gate scripts have mode 100644 at this baseline; invoke them through
-`bash`, preserving modes rather than treating a failed direct invocation as a product failure.
-Record these invocations and the sanitized subprocess environment in Phase 0's command manifest.
-Inherited `HYPRLAND_INSTANCE_SIGNATURE` can make widget fake-async tests launch real `hyprctl`
-and can direct a private-display test at the host compositor. Unsetting it for these gates preserves
-production Hyprland behavior; exercise that behavior through the appropriate adapter/process
-fixtures. The Linux UI subprocess tree must inherit the private X display/authentication, private
-D-Bus session and explicit X11 backend. A qualified task-local Xvfb runner may replace unavailable
-`xvfb-run` with the same isolation; record its bytes/provenance and exact invocation. Preserve the
-original infrastructure failures and successful corrected reruns.
+**Preserved behavior these PRs must not disturb.**
+- **CI routing (#163).** Portable Python contracts go to Quality, real Apple checks to macOS, DMG contracts to their own gate, and RPM checks to packaging.
+- **DMG contract independence (#168).** The DMG contract job depends on `changes`, not on a successful `macos` job. The owned-attachment fixture detaches only the invocation's own image.
+- **GPU validation (0.1.3).** Physical GPU validation stays required by default, with an explicit per-invocation `skip_gpu_validation` waiver.
 
-Use `tools/run_ci_stage.py --help` and its selected stage implementation for stage arguments; do not
-guess obsolete commands. Current Linux runner `tools/linux_container_test.sh` sets coverage and
-threshold 90; macOS coverage has a different policy and is not proof of Linux coverage. If a changed
-workflow is necessary, first confirm ShellCheck on PATH, then run both ShellCheck and actionlint at
-hosted versions. Limit workflow edits to wiring the reviewed-main migration guard or necessary
-existing gates; CI restructuring is out of scope.
+These are preservation anchors, not refactor work. Workflow edits need actionlint with ShellCheck on PATH, at the hosted versions.
 
-The main refresh leaves `tools/build_dart_gates.sh`, `tools/build_service_gate.sh` and
-`tools/linux_container_test.sh` byte-identical to the old baseline. The commands above incorporate
-the baseline's executable-mode and local environment prerequisites. CI #163 changed **ownership and
-routing**, not these runtime gates: portable Python
-contracts belong to Quality, shared platform contracts route to macOS and Linux build, real Apple
-checks to macOS, external DMG contracts to their DMG gate and RPM checks to packaging. Inventory new
-checker/fixture files in
-`tools/platform_python_tests.py`/`tools/ci_changes.py`/`tools/ci_selection.py`
-as appropriate and extend `tests/test_ci_gate_owners.py` plus dependency/selection tests. A green
-aggregate or selection result is not execution evidence for a required runtime owner. Keep new
-migration-guard wiring main-read-only and preserve existing qualification/receipt and missing-proof
-broadening behavior; do not retire checks or activate routing as part of this refactor.
+**Stop conditions.** Stop extraction on any of these, and resolve and review it before continuing:
+- an unresolved ownership, data-loss or cancellation discrepancy;
+- new skips caused by binary paths;
+- unaccounted busy work;
+- an unintended admission-policy change;
+- a core interface gap;
+- an unexplained responsiveness regression against F-1b's baseline or 7A's committed admission and build baselines.
 
-Preserve #168's restored independence: `.github/workflows/macos.yml`'s DMG contract job depends on
-`changes`, not successful `macos`; both classifiers no longer add a Mac application build merely
-because DMG is selected. The fixture builds its own signed image and may run in parallel with
-application checks. Actual packaging still consumes verified application artifacts, and this
-application refactor still requires its complete Mac matrix. Keep the new real owned-attachment
-fixture: only the invocation's exact canonical created image, current owner and one unambiguous
-outer GUID device may be normally detached within the existing bounded recovery window, while
-unrelated images and original SHA256 bytes remain unchanged. Cleanup alone never proves checksum
-verification; genuine verification failures remain failures. These delivered fixes are preservation
-anchors, not new refactor work or permission to change installer policy.
+A core interface gap becomes a core follow-up PR with its own full matrix. It does not grow inside a feature move.
 
-Release 0.1.3 keeps physical GPU validation required by default with an explicit per-invocation
-`skip_gpu_validation` waiver. This documentation update neither exercises nor requests a waiver.
-Preserve that policy and automated installer/provenance/accepted-byte requirements; a GPU waiver
-never waives those checks. Publishing a release or changing its validation policy is outside scope.
-
-Before large parallel suites, check disk/quota capacity and choose a short private disk-backed
-TMPDIR whose derived runtime/socket paths fit platform limits; directory capacity alone is insufficient.
-Preserve failed stdout/stderr and subprocess logs; repair infrastructure and rerun affected tests.
-Do not clean successful dependencies. Before pushing, fetch the actual PR head/reviews/checks,
-inspect failed-step output, batch valid related fixes and check for new reviews while CI runs.
-
-Stop extraction on an unresolved ownership/data-loss/cancellation discrepancy, new
-binary-path-related skips, unaccounted busy work, unintended admission policy change, migration
-compatibility ambiguity or unexplained responsiveness regression. Resolve and review it before
-advancing. Owner choices are required only for new product behavior, wire incompatibility, native
-redesign or lifting PR 8's deferral; routine extraction decisions are within this plan.
+Owner choices are needed only for new product behavior, wire incompatibility, native redesign, package splits, or lifting PR 8's deferral. Routine extraction decisions fall within this plan.
 
 ## Completion and reporting
 
-The combined PR description lists intentional compatibility/error/data changes, migration versions
-and rollback limits, the label union/order policy and unrecoverable frozen-v9 losses, intentional
-lifetime changes (including malformed-agent activity stamping and retained desktop-departure grace),
-feature boundaries, ownership/invalidation contracts, metrics, measured
-blocking residuals and gates. Record `core_acceptance_sha` with its Linux matrix evidence and
-the final combined head with its Linux and HanSolo matrix evidence, including any platform checks
-that still require hosted verification. Justify SDK/toolchain input changes in
-one line if any become necessary. Failed upgrades must leave recoverable data; after a successful
-schema upgrade an older binary must refuse it, so rollback uses a verified pre-upgrade backup rather
-than pretending schema downgrade is supported.
+**Each PR description lists:**
+- intentional behavior changes, which should be limited to 7.0's core follow-ups (F-2, F-4, F-10), 7.1's fixes, 7B-2's Stats rollover timer and timezone recheck, and anything a characterization exposed;
+- the feature boundary it establishes;
+- its ownership and invalidation contracts;
+- before-and-after metrics: file and function sizes, rebuild and query counts against the committed baselines;
+- the gates run, with source SHA, counts, skip reasons and coverage;
+- any checks that still require hosted verification.
 
-The execution plan converges only when the native core, desktop and verification reviewers and
-Claude CLI review the same frozen revision with no unresolved actionable planning findings. Record
-every round and accepted/rejected/deferred finding with reasons. Re-review changes and their
-dependent sections; any material scope or interface change requires a complete pass. Reviewer
-approval does not establish that implementation tests ran.
+Justify SDK, toolchain or package-dependency input changes in one line, if any become necessary.
+
+**The last 7C PR reports:**
+- the completed PR 7 acceptance;
+- the final desktop metrics against the targets;
+- any justified misses.
+
+**Review convergence.** This plan converges when the native core, desktop and verification reviewers and an independent external CLI reviewer (Codex CLI from revision 17; Claude CLI through revision 15) review the same frozen revision with no unresolved blocker, major or minor findings.
+- Record every round, each reviewer's tool and version, and each accepted, rejected or deferred finding with its reason, in the review record.
+- Re-review changes and the sections that depend on them. A material scope or interface change requires a complete pass.
+- Reviewer approval does not establish that implementation tests ran.

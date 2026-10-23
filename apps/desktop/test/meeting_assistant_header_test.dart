@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/app_theme.dart';
-import 'package:open_foresight/meeting_visuals.dart';
+import 'package:open_foresight/features/meetings/meeting_visuals.dart';
 import '../test_support/meeting_panel.dart';
 
 void main() {

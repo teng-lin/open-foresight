@@ -1,15 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
-import 'package:foresight_core/desktop.dart' show openPlatformUri;
+import 'desktop_environment.dart';
 
 /// A formatted, selectable view of generated Markdown. Persisted content and
 /// copy/edit actions continue to use the original Markdown source.
+Future<void> _openLink(Uri uri) => const DesktopEnvironment().openUri(uri);
+
 class GeneratedContent extends StatelessWidget {
   const GeneratedContent(
     this.markdown, {
     super.key,
     this.fontSize = 15,
-    this.openLink = openPlatformUri,
+    this.openLink = _openLink,
   });
 
   final String markdown;

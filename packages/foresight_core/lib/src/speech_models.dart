@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'gemma_download.dart';
 import 'store.dart';
+import 'runtime_execution_policy.dart';
 
 // Official whisper.cpp artifact metadata, verified against the Hugging Face
 // repository API on 2026-10-15. All choices are multilingual (not .en models).
@@ -28,6 +29,7 @@ Future<void> configureSpeech(
   required bool Function() current,
   void Function(Process)? onProcess,
 }) async {
+  runner = requireInstalledRuntime(runner);
   final executable = File(runner);
   if (!executable.existsSync() || (executable.statSync().mode & 0x49) == 0) {
     throw StateError('The whisper.cpp runner is missing or not executable.');

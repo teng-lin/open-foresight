@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/desktop_identity.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
 
@@ -32,7 +33,10 @@ void main() {
         runtimeConfiguration.environment['FORESIGHT_HELPER'] = '';
         final root = createTestTempDirectorySync('rpc-cancellation-');
         final profile = ProfilePaths('${root.path}/data', '${root.path}/run');
-        final service = await ApplicationService.start(profile);
+        final service = await ApplicationService.start(
+          profile,
+          desktopPeerVerifier: trustInProcessDesktop,
+        );
         final client = await ServiceClient.connect(
           '${profile.runtime}/application.sock',
         );

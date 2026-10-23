@@ -1,13 +1,13 @@
-import 'package:foresight_core/src/application.dart';
+import 'package:open_foresight/desktop_environment.dart';
+import '../test_support/core_fixture.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/remote.dart';
 import 'package:foresight_test_support/test_paths.dart';
-import 'package:foresight_core/src/domain.dart';
-import 'package:foresight_core/src/audio_devices.dart';
+
 import 'package:open_foresight/main.dart';
-import 'package:foresight_core/src/store.dart';
+
 import 'desktop_connection_fixture.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
@@ -48,7 +48,38 @@ class ControllerConnection extends TestDesktopConnection {
   @override
   GoogleAccount get googleAuth => account ?? super.googleAuth;
   @override
-  Map<String, dynamic> get googleStatus => googleState ?? super.googleStatus;
+  Map<String, dynamic> get googleStatus {
+    if (googleState case final status?) return status;
+    final status = super.googleStatus;
+    // Substituted account ports must also appear in the service snapshot.
+    if (account case final current?) {
+      return {
+        ...status,
+        'connected': current.connected,
+        'configured': current.configured,
+        'signingIn': current.signingIn,
+        'email': current.email,
+        'displayName': current.displayName,
+        'photoUrl': current.photoUrl,
+        'account': current.account,
+        'accounts': [
+          for (final account in current.accounts)
+            {
+              'id': account.id,
+              'email': account.email,
+              'displayName': account.displayName,
+              'photoUrl': account.photoUrl,
+              'current': account.current,
+            },
+        ],
+        'loadError': current.loadError,
+        if (connectedSources case final sources?)
+          'lastRefresh': sources.lastCompletedRefreshMs,
+      };
+    }
+    return status;
+  }
+
   @override
   void close() {
     closes++;
@@ -142,11 +173,12 @@ class ControllerFixture {
   final Directory root;
   final Store store;
   final ControllerConnection connection;
-  final dynamic shell;
+  final WorkspaceTestAccess shell;
   ControllerFixture(this.root, this.store, this.connection, this.shell);
   static Future<ControllerFixture> mount(
     WidgetTester tester, {
     Future<List<AudioDevice>> Function()? devices,
+    DesktopEnvironment environment = const DesktopEnvironment(),
   }) async {
     final root = createTestTempDirectorySync('desktop-controls-');
     final store = Store('${root.path}/app.db');
@@ -160,14 +192,18 @@ class ControllerFixture {
     );
     await tester.binding.setSurfaceSize(const Size(1400, 1000));
     await tester.pumpWidget(
-      Foresight(connection, deviceLoader: devices ?? () async => []),
+      Foresight(
+        connection,
+        environment: environment,
+        deviceLoader: devices ?? () async => [],
+      ),
     );
     await tester.pumpAndSettle();
     final fixture = ControllerFixture(
       root,
       store,
       connection,
-      tester.state(find.byType(Workspace)),
+      tester.state(find.byType(Workspace)) as WorkspaceTestAccess,
     );
     addTearDown(() async {
       await tester.pumpWidget(const SizedBox());

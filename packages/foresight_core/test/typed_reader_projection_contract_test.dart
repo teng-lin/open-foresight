@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'support/current_read.dart';
 
 import 'package:foresight_core/desktop.dart';
 import 'package:foresight_core/src/graph_persistence.dart';
@@ -176,13 +177,19 @@ class _Workspace {
 
 void main() {
   test(
-    'sync reader keeps source, model, label and note snapshots independent of later commits',
+    'typed reader keeps source, model, label and note snapshots independent of later commits',
     () async {
       final workspace = _Workspace();
       final reader = workspace.reader();
-      final source = reader.sourceSummaries.single;
-      final model = reader.models.single;
-      final note = reader.noteSummaries.single;
+      final source = (await currentRead(
+        reader,
+        StoreReadQueries.sources(),
+      )).single;
+      final model = (await currentRead(
+        reader,
+        StoreReadQueries.models(),
+      )).single;
+      final note = (await currentRead(reader, StoreReadQueries.notes())).single;
       expect(source.id, workspace.source);
       expect(
         [
@@ -224,20 +231,44 @@ void main() {
           7,
         ],
       );
-      expect(reader.model('embedding')!.digest, model.digest);
-      expect(reader.model('not-registered'), isNull);
+      expect(
+        (await currentRead(
+          reader,
+          StoreReadQueries.model('embedding'),
+        ))!.digest,
+        model.digest,
+      );
+      expect(
+        (await currentRead(reader, StoreReadQueries.model('not-registered'))),
+        isNull,
+      );
       expect(
         [note.id, note.title, note.revision],
         [workspace.note, 'Private note', 1],
       );
-      expect(reader.noteBody(note.id), 'Keep the original notes');
-      expect(reader.googleSourceMimes, {source.id: 'application/google-doc'});
       expect(
-        () => reader.googleSourceMimes['new'] = 'mime',
-        throwsUnsupportedError,
+        (await currentRead(reader, StoreReadQueries.noteBody(note.id))),
+        'Keep the original notes',
       );
-      expect(reader.documentLabels.single.documentId, source.id);
-      final cluster = reader.documentClusters.single;
+      expect((await currentRead(reader, StoreReadQueries.sourceMimes())), {
+        source.id: 'application/google-doc',
+      });
+      final originalMimes = await currentRead(
+        reader,
+        StoreReadQueries.sourceMimes(),
+      );
+      expect(() => originalMimes['new'] = 'mime', throwsUnsupportedError);
+      expect(
+        (await currentRead(
+          reader,
+          StoreReadQueries.labels(),
+        )).single.documentId,
+        source.id,
+      );
+      final cluster = (await currentRead(
+        reader,
+        StoreReadQueries.clusters(),
+      )).single;
       expect(
         [
           cluster.id,
@@ -249,11 +280,22 @@ void main() {
         ],
         [4, 'Space', 'Related launch documents', 1.25, -2.5, 20.5],
       );
-      expect(reader.documentClusterNames, ['Space']);
-      expect(reader.graphLabelSet(), contains(source.id));
-      final document = reader.sourceById(source.id)!;
+      expect((await currentRead(reader, StoreReadQueries.clusterNames())), [
+        'Space',
+      ]);
+      expect(
+        (await currentRead(reader, StoreReadQueries.graphLabelSet())),
+        contains(source.id),
+      );
+      final document = (await currentRead(
+        reader,
+        StoreReadQueries.source(source.id),
+      ))!;
       expect(document.content, 'Launch the satellite on Tuesday.');
-      expect(reader.sourceById('absent'), isNull);
+      expect(
+        (await currentRead(reader, StoreReadQueries.source('absent'))),
+        isNull,
+      );
       final revision = reader.dataRevision;
       workspace.writer.importText(
         'Changed title',
@@ -267,23 +309,38 @@ void main() {
       expect(source.title, 'Launch plan');
       expect(document.content, 'Launch the satellite on Tuesday.');
       expect(note.title, 'Private note');
-      expect(reader.sourceById(source.id)!.revision, 2);
-      workspace.writer.tombstone(source.id);
-      expect(reader.sourceById(source.id), isNull);
       expect(
-        reader.sourceById(source.id, includeDeleted: true)!.deleted,
+        (await currentRead(
+          reader,
+          StoreReadQueries.source(source.id),
+        ))!.revision,
+        2,
+      );
+      workspace.writer.tombstone(source.id);
+      expect(
+        (await currentRead(reader, StoreReadQueries.source(source.id))),
+        isNull,
+      );
+      expect(
+        (await currentRead(
+          reader,
+          StoreReadQueries.source(source.id, includeDeleted: true),
+        ))!.deleted,
         isTrue,
       );
-      expect(reader.sourceSummaries, isEmpty);
+      expect((await currentRead(reader, StoreReadQueries.sources())), isEmpty);
     },
   );
 
   test(
     'meeting projections join the selected meeting and preserve calendar and evidence identities',
-    () {
+    () async {
       final workspace = _Workspace();
       final reader = workspace.reader();
-      final collection = reader.meetingCollection.single;
+      final collection = (await currentRead(
+        reader,
+        StoreReadQueries.meetings(),
+      )).single;
       expect(
         [
           collection.id,
@@ -299,13 +356,40 @@ void main() {
       );
       expect(collection.reminder && collection.hasTranscript, isTrue);
       expect(collection.calendarStatus, 'confirmed');
-      expect(reader.meetingPreview(7)!.durationMs, 9000);
-      expect(reader.meetingWorkspace(7)!.starts, 1000);
-      expect(reader.meetingRevision(7), 3);
-      expect(reader.meetingPreview(404), isNull);
-      expect(reader.meetingWorkspace(404), isNull);
-      expect(reader.meetingRevision(404), isNull);
-      final note = reader.meetingNote(7)!;
+      expect(
+        (await currentRead(
+          reader,
+          StoreReadQueries.meeting(7, preview: true),
+        ))!.durationMs,
+        9000,
+      );
+      expect(
+        (await currentRead(reader, StoreReadQueries.meeting(7)))!.starts,
+        1000,
+      );
+      expect(
+        (await currentRead(reader, StoreReadQueries.meetingRevision(7))),
+        3,
+      );
+      expect(
+        (await currentRead(
+          reader,
+          StoreReadQueries.meeting(404, preview: true),
+        )),
+        isNull,
+      );
+      expect(
+        (await currentRead(reader, StoreReadQueries.meeting(404))),
+        isNull,
+      );
+      expect(
+        (await currentRead(reader, StoreReadQueries.meetingRevision(404))),
+        isNull,
+      );
+      final note = (await currentRead(
+        reader,
+        StoreReadQueries.meetingNote(7),
+      ))!;
       expect(
         [
           note.meetingId,
@@ -326,11 +410,20 @@ void main() {
           850,
         ],
       );
-      expect(reader.meetingNote(404), isNull);
-      final transcript = reader.meetingTranscript(7);
+      expect(
+        (await currentRead(reader, StoreReadQueries.meetingNote(404))),
+        isNull,
+      );
+      final transcript = (await currentRead(
+        reader,
+        StoreReadQueries.transcript(7),
+      ));
       expect(transcript.map((segment) => segment.id), [11, 12]);
       expect(transcript.first.finalSegment, isFalse);
-      final finalSegment = reader.meetingTranscript(7, finalOnly: true).single;
+      final finalSegment = (await currentRead(
+        reader,
+        StoreReadQueries.transcript(7, finalOnly: true),
+      )).single;
       expect(
         [
           finalSegment.meetingId,
@@ -350,7 +443,10 @@ void main() {
         ],
       );
       expect(finalSegment.finalSegment, isTrue);
-      final question = reader.meetingQuestions(7).single;
+      final question = (await currentRead(
+        reader,
+        StoreReadQueries.questions(7),
+      )).single;
       expect(
         [
           question.id,
@@ -387,7 +483,10 @@ void main() {
           'Launch plan',
         ],
       );
-      final artifact = reader.meetingArtifacts(7, 'enhanced_notes').single;
+      final artifact = (await currentRead(
+        reader,
+        StoreReadQueries.artifacts(7, 'enhanced_notes'),
+      )).single;
       expect(
         [
           artifact.id,
@@ -418,8 +517,11 @@ void main() {
         'sources': ['launch'],
         'ready': true,
       });
-      expect(reader.meetingEnhancedNotes(7), 'Edited enhanced notes');
-      final tasks = reader.meetingTasks(7);
+      expect(
+        (await currentRead(reader, StoreReadQueries.enhancedNotes(7))),
+        'Edited enhanced notes',
+      );
+      final tasks = (await currentRead(reader, StoreReadQueries.tasks(7)));
       expect(tasks.map((task) => task.id), [51, 52]);
       final task = tasks.first;
       expect(
@@ -488,11 +590,20 @@ void main() {
         ],
       );
       expect(answer.citations.single.documentId, workspace.source);
-      expect(reader.conversationAnswers(null).map((answer) => answer.id), [21]);
-      expect(reader.conversationAnswers(7).map((answer) => answer.id), [
-        21,
-        22,
-      ]);
+      expect(
+        (await currentRead(
+          reader,
+          StoreReadQueries.answers(null, scope: '', privateScope: false),
+        )).map((answer) => answer.id),
+        [21],
+      );
+      expect(
+        (await currentRead(
+          reader,
+          StoreReadQueries.answers(7, scope: '', privateScope: false),
+        )).map((answer) => answer.id),
+        [21, 22],
+      );
       expect(
         (await reader.read(
           StoreReadQueries.answers(7, scope: '', privateScope: false),
@@ -520,7 +631,13 @@ void main() {
         ],
       );
       expect(() => attachments.clear(), throwsUnsupportedError);
-      expect(reader.calendarAttachments(7).single.fileId, attachment.fileId);
+      expect(
+        (await currentRead(
+          reader,
+          StoreReadQueries.attachments(7),
+        )).single.fileId,
+        attachment.fileId,
+      );
       expect(
         (await reader.read(StoreReadQueries.attachments(404))).value,
         isEmpty,
@@ -554,17 +671,84 @@ void main() {
         () => (meeting.metadata['attachments'] as List).clear(),
         throwsUnsupportedError,
       );
-      expect(reader.exportNotes.map((note) => note.title), [
-        'Launch review',
-        'Private note',
-      ]);
+      expect(
+        (await currentRead(
+          reader,
+          StoreReadQueries.exportNotes(),
+        )).map((note) => note.title),
+        ['Launch review', 'Private note'],
+      );
       expect(reader.workspaceEpoch, epoch);
       workspace.writer.db.execute(
         "UPDATE calendar_events SET metadata='{}' WHERE meeting_id=7",
       );
       expect(attachment.title, 'Launch plan');
       expect(meeting.metadata['summary'], 'Calendar launch');
-      expect(reader.calendarAttachments(7), isEmpty);
+      expect(
+        (await currentRead(reader, StoreReadQueries.attachments(7))),
+        isEmpty,
+      );
+    },
+  );
+
+  test(
+    'nine additional typed factories round-trip through the read worker',
+    () async {
+      final workspace = _Workspace();
+      final reader = workspace.reader();
+      final notes = (await reader.read(StoreReadQueries.notes())).value!;
+      expect(notes.single.id, workspace.note);
+      expect(notes.single.title, 'Private note');
+      expect(() => notes.clear(), throwsUnsupportedError);
+      expect(
+        (await reader.read(StoreReadQueries.noteBody(workspace.note))).value,
+        'Keep the original notes',
+      );
+      final missingNote = await reader.read(StoreReadQueries.noteBody(404));
+      expect(missingNote.freshness, ReadFreshness.failed);
+      expect(missingNote.value, isNull);
+      final mimes = (await reader.read(StoreReadQueries.sourceMimes())).value!;
+      expect(mimes, {workspace.source: 'application/google-doc'});
+      expect(() => mimes.clear(), throwsUnsupportedError);
+      final labels = (await reader.read(StoreReadQueries.labels())).value!;
+      expect(labels.single.documentId, workspace.source);
+      expect(labels.single.name, 'Space');
+      expect(labels.single.colorHex, '#123456');
+      expect(() => labels.clear(), throwsUnsupportedError);
+      final clusters = (await reader.read(StoreReadQueries.clusters())).value!;
+      expect(clusters.single.id, 4);
+      expect(clusters.single.label, 'Space');
+      expect(clusters.single.x, 1.25);
+      expect(() => clusters.clear(), throwsUnsupportedError);
+      final names = (await reader.read(StoreReadQueries.clusterNames())).value!;
+      expect(names, ['Space']);
+      expect(() => names.clear(), throwsUnsupportedError);
+      final labelSet = (await reader.read(
+        StoreReadQueries.graphLabelSet(),
+      )).value!;
+      expect(
+        labelSet,
+        (await currentRead(reader, StoreReadQueries.graphLabelSet())),
+      );
+      expect((await reader.read(StoreReadQueries.meetingRevision(7))).value, 3);
+      expect(
+        (await reader.read(StoreReadQueries.meetingRevision(404))).value,
+        isNull,
+      );
+      expect(
+        (await reader.read(StoreReadQueries.enhancedNotes(7))).value,
+        'Edited enhanced notes',
+      );
+      expect(
+        (await reader.read(StoreReadQueries.enhancedNotes(404))).value,
+        '',
+      );
+      workspace.writer.saveNote(workspace.note, 'Updated note', 'Updated body');
+      expect(
+        (await reader.read(StoreReadQueries.noteBody(workspace.note))).value,
+        'Updated body',
+      );
+      expect(notes.single.title, 'Private note');
     },
   );
 
@@ -695,7 +879,7 @@ void main() {
       );
       workspace.writer.state(second, 'indexed');
       final reader = workspace.reader();
-      final selected = reader.sourceSummaries;
+      final selected = (await currentRead(reader, StoreReadQueries.sources()));
       final identity = jsonEncode([
         graphLayoutAlgorithmVersion,
         'fixture-digest',
@@ -704,7 +888,10 @@ void main() {
         'scene',
         3,
       ]);
-      final labels = reader.graphLabelSet();
+      final labels = (await currentRead(
+        reader,
+        StoreReadQueries.graphLabelSet(),
+      ));
       expect(
         workspace.writer.saveGraphLayout(
           identity,

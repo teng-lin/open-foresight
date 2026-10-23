@@ -30,6 +30,7 @@ import 'service_socket.dart';
 import 'service_startup.dart';
 import 'store.dart';
 import 'web_search.dart';
+import 'unix_peer_identity.dart';
 
 const _outcomeUnknownMessage =
     'Application service stopped before this request finished; it may or may '
@@ -45,6 +46,9 @@ class ApplicationService {
   final RandomAccessFile lock;
   final RandomAccessFile? installationLock;
   final _clients = <Socket>{};
+  final bool _internalWorker;
+  final DesktopPeerVerifier _verifyDesktopPeer;
+  final _verifiedDesktopClients = <Socket>{};
   late final _messages = ServiceMessageWriter(
     (client, id) => _cancel(client, id),
   );
@@ -52,6 +56,8 @@ class ApplicationService {
   StreamSubscription<void>? _changes;
   StreamSubscription<void>? _captureLevels;
   Timer? _heartbeat;
+  Timer? _pendingBroadcast;
+  late String _broadcastEpoch;
   final _ledger = ServiceRequestLedger();
   final _desktopClients = <Socket>{};
   Timer? _lifetime;
@@ -88,6 +94,8 @@ class ApplicationService {
   void _retireSchemaReads() {
     _schemaReadsRetired = true;
     _heartbeat?.cancel();
+    _pendingBroadcast?.cancel();
+    _pendingBroadcast = null;
   }
 
   ServiceLifetimeSnapshot get _lifetimeSnapshot => ServiceLifetimeSnapshot(
@@ -163,6 +171,8 @@ class ApplicationService {
     this.lock,
     this.installationLock,
     this.application,
+    this._internalWorker,
+    this._verifyDesktopPeer,
   ) : listener = _binding.listener,
       _started = domain.clock.now() {
     final token = base64Url.encode(
@@ -182,7 +192,23 @@ class ApplicationService {
     access = AgentAccessGate(
       token,
       (host, event) => _messages.send(host as Socket, event),
+      rotateToken: (next) {
+        // Never expose a replacement token through a permissive staging file.
+        final suffix = base64Url.encode(
+          List<int>.generate(16, (_) => Random.secure().nextInt(256)),
+        );
+        final staging = File('${tokenFile.path}.$suffix.next');
+        staging.createSync(exclusive: true);
+        try {
+          protectPrivateFile(staging.path);
+          staging.writeAsStringSync(next);
+          staging.renameSync(tokenFile.path);
+        } finally {
+          if (staging.existsSync()) staging.deleteSync();
+        }
+      },
     );
+    _broadcastEpoch = domain.store.workspaceEpoch;
     _changes = application.changes.stream.listen((_) {
       _broadcast();
       _exitIfIdle();
@@ -206,6 +232,7 @@ class ApplicationService {
   void _discard() {
     _lifetime?.cancel();
     _heartbeat?.cancel();
+    _pendingBroadcast?.cancel();
     unawaited(_changes?.cancel());
     unawaited(_captureLevels?.cancel());
   }
@@ -222,6 +249,7 @@ class ApplicationService {
     Duration? helperStartupProbeTimeout,
     void Function()? onDraining,
     Future<void> Function()? beforeReleaseOwnership,
+    DesktopPeerVerifier? desktopPeerVerifier,
   }) async {
     // This must precede native loads, database opens, and worker creation.
     final installationLock = acquireInstallationLock();
@@ -236,6 +264,7 @@ class ApplicationService {
         clock: clock,
         createTimer: createTimer,
         helperStartupProbeTimeout: helperStartupProbeTimeout,
+        desktopPeerVerifier: desktopPeerVerifier,
       );
       service._desktopDetachGrace = desktopDetachGrace;
       service._onDraining = onDraining;
@@ -257,6 +286,7 @@ class ApplicationService {
     Clock? clock,
     Timer Function(Duration, void Function())? createTimer,
     Duration? helperStartupProbeTimeout,
+    DesktopPeerVerifier? desktopPeerVerifier,
   }) async {
     final lock = await acquireServiceProfileLock(
       profile,
@@ -336,6 +366,8 @@ class ApplicationService {
         lock,
         installationLock,
         application,
+        internalWorker,
+        desktopPeerVerifier ?? verifyInstalledDesktopPeer,
       );
       try {
         await publishServiceSocket(binding, service._accept);
@@ -389,6 +421,29 @@ class ApplicationService {
 
   void _broadcast() {
     if (_closing || _schemaReadsRetired) return;
+    try {
+      // Workspace replacement must retire old desktop views immediately.
+      if (domain.store.workspaceEpoch != _broadcastEpoch) {
+        _flushBroadcast();
+        return;
+      }
+    } on IncompatibleReadSchema {
+      _retireSchemaReads();
+      return;
+    }
+    // Bound background progress traffic while retaining its latest snapshot.
+    // Keeping the first deadline prevents a continuous producer from starving
+    // presentation updates indefinitely.
+    _pendingBroadcast ??= domain.createTimer(
+      const Duration(milliseconds: 100),
+      _flushBroadcast,
+    );
+  }
+
+  void _flushBroadcast() {
+    _pendingBroadcast?.cancel();
+    _pendingBroadcast = null;
+    if (_closing || _schemaReadsRetired) return;
     late final Map<String, Object?> message;
     try {
       message = {
@@ -403,6 +458,7 @@ class ApplicationService {
         'helper_state': domain.helper.state,
         'workspace_epoch': domain.store.workspaceEpoch,
       };
+      _broadcastEpoch = message['workspace_epoch']! as String;
     } on IncompatibleReadSchema {
       _retireSchemaReads();
       return;
@@ -413,6 +469,21 @@ class ApplicationService {
   }
 
   void _accept(Socket client) {
+    if (_internalWorker) {
+      try {
+        final peer = unixPeerIdentity(client);
+        if (peer.pid != pid || peer.uid != effectiveUserId) {
+          client.destroy();
+          return;
+        }
+      } catch (_) {
+        client.destroy();
+        return;
+      }
+    } else if (_verifyDesktopPeer(client)) {
+      _verifiedDesktopClients.add(client);
+    }
+    var needsFrontendIdentity = _internalWorker;
     traceServiceTransport(
       () => 'worker accept peer=${identityHashCode(client)}',
     );
@@ -438,6 +509,18 @@ class ApplicationService {
             int? responseId;
             try {
               final request = decodeServiceObject(line);
+              if (needsFrontendIdentity) {
+                needsFrontendIdentity = false;
+                if (request['_frontend_peer'] is! Map) {
+                  client.destroy();
+                  return;
+                }
+                final peer = request['_frontend_peer'] as Map;
+                if (peer['verified_desktop'] == true) {
+                  _verifiedDesktopClients.add(client);
+                }
+                return;
+              }
               traceServiceTransport(
                 () =>
                     'worker request peer=${identityHashCode(client)} '
@@ -465,7 +548,14 @@ class ApplicationService {
                   typed is! ServiceStopIfIdleRequest) {
                 try {
                   final result = _serviceHandlers
-                      .registry(ServiceRequestContext(client, id))
+                      .registry(
+                        ServiceRequestContext(
+                          client,
+                          id,
+                          null,
+                          _verifiedDesktopClients.contains(client),
+                        ),
+                      )
                       .invoke(typed);
                   if (result != true) {
                     throw StateError(
@@ -490,7 +580,8 @@ class ApplicationService {
                 // Reserve desktop lifetime atomically before its startup snapshot.
                 // This authenticates liveness only: visible approvals still need
                 // security.attach_desktop and its separate host assignment.
-                if (typed.token != access.desktopToken ||
+                if (!_verifiedDesktopClients.contains(client) ||
+                    typed.token != access.desktopToken ||
                     access.desktopToken.isEmpty) {
                   _messages.send(client, {
                     'id': id,
@@ -550,6 +641,7 @@ class ApplicationService {
       );
     }
     _clients.remove(client);
+    _verifiedDesktopClients.remove(client);
     for (final id in _leases[client]?.keys.toList() ?? <int>[]) {
       _cancel(client, id, reevaluate: false);
     }
@@ -596,6 +688,10 @@ class ApplicationService {
       (value) =>
           _messages.send(client, {'id': id, 'result': value, 'done': false}),
       onError: (Object e, StackTrace stack) {
+        if (typed.operation.descriptor.scope == OperationScope.service &&
+            typed.operation.notifiesChanges) {
+          _flushBroadcast();
+        }
         _messages.send(client, {
           'id': id,
           'error': requestFailure(e, stack).toJson(),
@@ -607,6 +703,10 @@ class ApplicationService {
         _exitIfIdle();
       },
       onDone: () {
+        if (typed.operation.descriptor.scope == OperationScope.service &&
+            typed.operation.notifiesChanges) {
+          _flushBroadcast();
+        }
         _messages.send(client, {'id': id, 'done': true});
         _subscriptions[client]?.remove(id);
         _leases[client]?.remove(id);
@@ -756,7 +856,7 @@ class ApplicationService {
     if (_closing) throw serviceClosingRefusal();
     if (request.operation.descriptor.capability ==
             CapabilityPolicy.hostedRecording &&
-        !access.hasHost) {
+        !access.hasVisibleHost) {
       throw RpcError(
         RpcErrorCode.denied,
         'Recording requires an open desktop indicator',
@@ -766,10 +866,17 @@ class ApplicationService {
       throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
     }
     _dispatch(lease);
-    final result = await application.callRequest(
-      request,
-      current: () => !lease.cancelled,
-    );
+    final Object? result;
+    try {
+      result = await application.callRequest(
+        request,
+        current: () => !lease.cancelled,
+      );
+    } finally {
+      // Desktop commands synchronously consume the state after their reply.
+      // Preserve event-before-reply even for a failed or held request.
+      if (request.operation.notifiesChanges) _flushBroadcast();
+    }
     // The operation has committed; a lifecycle test may hold its reply here.
     if (serviceGatesEnabled) await serviceGate('request.committed.$method');
     if (method == Operation.status.wire) {
@@ -824,6 +931,7 @@ class ApplicationService {
     _closing = true;
     _heartbeat?.cancel();
     _lifetime?.cancel();
+    _pendingBroadcast?.cancel();
     domain.helper.onReady = null;
     // An isolated frontend refuses new connections from here on.
     _onDraining?.call();

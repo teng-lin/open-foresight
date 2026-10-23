@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -362,7 +363,10 @@ void main() {
     final endpoint = '${profiles.owner.runtime}/application.sock';
     // A service without the isolate relay binds the public socket itself.
     await expectLater(
-      ApplicationService.start(profiles.other),
+      ApplicationService.start(
+        profiles.other,
+        desktopPeerVerifier: trustInProcessDesktop,
+      ),
       throwsA(
         refusedForAnotherProfile.having(
           (error) => error.message,
@@ -373,7 +377,10 @@ void main() {
     );
     // An isolated service's worker binds the worker socket first.
     await expectLater(
-      IsolatedApplicationService.start(profiles.other),
+      IsolatedApplicationService.start(
+        profiles.other,
+        desktopPeerVerifier: trustInProcessDesktop,
+      ),
       throwsA(
         isStateError.having(
           (error) => error.message,
@@ -417,7 +424,10 @@ void main() {
     expect(Process.runSync('/bin/chmod', ['000', path]).exitCode, 0);
     runtimeConfiguration.environment.remove('FORESIGHT_HELPER');
     await expectLater(
-      ApplicationService.start(profile),
+      ApplicationService.start(
+        profile,
+        desktopPeerVerifier: trustInProcessDesktop,
+      ),
       throwsA(
         isStateError.having(
           (error) => error.message,
@@ -444,7 +454,10 @@ void main() {
     runtimeConfiguration.environment['FORESIGHT_SERVICE_GATES'] =
         gates.directory.path;
     gates.hold('close.listener_closed');
-    final owner = await ApplicationService.start(profile);
+    final owner = await ApplicationService.start(
+      profile,
+      desktopPeerVerifier: trustInProcessDesktop,
+    );
     final path = '${profile.runtime}/application.sock';
     final closing = owner.close();
     await gates.reached('close.listener_closed');
@@ -474,11 +487,17 @@ void main() {
     // An owner without the isolate relay serves only the public socket, so
     // the other profile's worker binds its own worker socket and only its
     // frontend meets the live one.
-    final owner = await ApplicationService.start(profiles.owner);
+    final owner = await ApplicationService.start(
+      profiles.owner,
+      desktopPeerVerifier: trustInProcessDesktop,
+    );
     try {
       final endpoint = '${profiles.owner.runtime}/application.sock';
       await expectLater(
-        IsolatedApplicationService.start(profiles.other),
+        IsolatedApplicationService.start(
+          profiles.other,
+          desktopPeerVerifier: trustInProcessDesktop,
+        ),
         throwsA(
           refusedForAnotherProfile.having(
             (error) => error.message,
@@ -744,7 +763,10 @@ void main() {
     await owner.ready();
     writeCrashRecord(profile, shared);
     runtimeConfiguration.environment.remove('FORESIGHT_HELPER');
-    final service = await ApplicationService.start(profile);
+    final service = await ApplicationService.start(
+      profile,
+      desktopPeerVerifier: trustInProcessDesktop,
+    );
     try {
       expect(service.path, '${profile.runtime}/application.sock');
       expect(recordedRuntime(profile), profile.runtime);
@@ -1027,12 +1049,18 @@ void main() {
     final target = File('${directory.path}/target')..writeAsStringSync('kept');
     Link('${profile.runtime}/application.sock').createSync(target.path);
     runtimeConfiguration.environment.remove('FORESIGHT_HELPER');
-    var service = await ApplicationService.start(profile);
+    var service = await ApplicationService.start(
+      profile,
+      desktopPeerVerifier: trustInProcessDesktop,
+    );
     await service.close();
     expect(target.readAsStringSync(), 'kept');
     // A regular file, which a connect on macOS refuses with ENOTSOCK.
     File('${profile.runtime}/application.sock').writeAsStringSync('stale');
-    service = await ApplicationService.start(profile);
+    service = await ApplicationService.start(
+      profile,
+      desktopPeerVerifier: trustInProcessDesktop,
+    );
     await service.close();
     // A dangling link, which File.rename takes for a missing file (mac:
     // found by HanSolo), and a link to a directory.
@@ -1040,7 +1068,10 @@ void main() {
       ..createSync();
     for (final linked in ['${directory.path}/missing', directoryTarget.path]) {
       Link('${profile.runtime}/application.sock').createSync(linked);
-      service = await ApplicationService.start(profile);
+      service = await ApplicationService.start(
+        profile,
+        desktopPeerVerifier: trustInProcessDesktop,
+      );
       await service.close();
     }
     expect(directoryTarget.existsSync(), isTrue);
@@ -1065,7 +1096,10 @@ void main() {
     Link(path).createSync(live);
     runtimeConfiguration.environment.remove('FORESIGHT_HELPER');
     await expectLater(
-      ApplicationService.start(profile),
+      ApplicationService.start(
+        profile,
+        desktopPeerVerifier: trustInProcessDesktop,
+      ),
       throwsA(refusedForAnotherProfile),
     );
     expect(Link(path).targetSync(), live);

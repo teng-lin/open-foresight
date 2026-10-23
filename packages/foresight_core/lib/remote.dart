@@ -4,7 +4,7 @@ export 'src/desktop_connection.dart';
 export 'src/operations.dart' show Operation;
 export 'src/pending_request_key.dart';
 export 'src/rpc_error.dart' show RpcError, RpcErrorCode, RpcErrorReason;
-export 'src/desktop_read_models.dart';
+export 'src/read_models.dart';
 export 'src/helper_status.dart';
 export 'src/store_reader.dart';
 export 'src/store_read_queries.dart';

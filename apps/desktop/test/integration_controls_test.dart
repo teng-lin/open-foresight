@@ -1,3 +1,7 @@
+import 'package:open_foresight/desktop_environment.dart';
+import '../test_support/platform_fixture.dart';
+import 'package:open_foresight/features/integrations/audio_access.dart';
+import 'package:open_foresight/shell/workspace_tab.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -16,11 +20,16 @@ void main() {
   testWidgets(
     'calendar sync status distinguishes first sync, in-progress and calendar-day age',
     (tester) async {
-      final f = await ControllerFixture.mount(tester);
+      final f = await ControllerFixture.mount(
+        tester,
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
+      );
       final refresh = RefreshStatusSources();
       f.connection.connectedSources = refresh;
       f.connection.googleState = {'syncing': true};
-      final dynamic integration = f.shell.integrationFeature;
+      final integration = f.shell.integrationFeature;
       expect(integration.googleSyncStatus(), 'Syncing…');
       f.connection.googleState = {};
       expect(integration.googleSyncStatus(), 'Not synced yet');
@@ -44,8 +53,13 @@ void main() {
   testWidgets(
     'connection help explains missing sign-in configuration and returns to settings',
     (tester) async {
-      final f = await ControllerFixture.mount(tester);
-      f.shell.update(() => f.shell.tab = 6);
+      final f = await ControllerFixture.mount(
+        tester,
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
+      );
+      f.shell.update(() => f.shell.navigate(WorkspaceTab.settings));
       await tester.pumpAndSettle();
       final help = find.text('Connection help');
       await tester.ensureVisible(help);
@@ -67,8 +81,13 @@ void main() {
   testWidgets(
     'capability refresh and microphone requests report denial, malformed bundle and retry',
     (tester) async {
-      final f = await ControllerFixture.mount(tester);
-      final dynamic integration = f.shell.integrationFeature;
+      final f = await ControllerFixture.mount(
+        tester,
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
+      );
+      final integration = f.shell.integrationFeature;
       for (final (code, label) in [
         ('authorized', 'Allowed'),
         ('denied', 'Denied'),
@@ -111,7 +130,7 @@ void main() {
         'request disconnected',
       );
       await expectLater(
-        integration.requestMicrophoneAccess() as Future<void>,
+        integration.requestMicrophoneAccess(),
         throwsStateError,
       );
       expect(
@@ -127,12 +146,16 @@ void main() {
         (<String, dynamic>{}, 'Request access', false),
       ];
       for (final (capabilities, label, complete) in cases) {
-        integration.captureCapabilities = capabilities;
+        integration.captureCapabilities = AudioAccessPresentation.fromWire(
+          capabilities,
+        );
         expect(integration.systemAudioAccessLabel, startsWith(label));
         expect(integration.systemAudioSetupComplete, complete);
       }
       f.shell.meetingFeature.systemAudioSetupReviewed = true;
-      integration.captureCapabilities = <String, dynamic>{};
+      integration.captureCapabilities = AudioAccessPresentation.fromWire(
+        const {},
+      );
       expect(integration.systemAudioAccessLabel, startsWith('Setup complete'));
       expect(integration.systemAudioSetupComplete, true);
       await tester.pumpAndSettle();
@@ -141,21 +164,24 @@ void main() {
   testWidgets(
     'system audio setup persists review only after explicit completion',
     (tester) async {
-      final f = await ControllerFixture.mount(tester);
+      final f = await ControllerFixture.mount(
+        tester,
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
+      );
       f.connection.replies[Operation.audioRequestSystem] = {
         'system_audio_request': 'completed',
       };
-      final dynamic integration = f.shell.integrationFeature;
-      final setup = integration.setupSystemAudioAccess() as Future<bool>;
+      final integration = f.shell.integrationFeature;
+      final setup = integration.setupSystemAudioAccess();
       await tester.pumpAndSettle();
       await tester.tap(find.text('Done'));
       await tester.pumpAndSettle();
       expect(await setup, true);
       expect(f.store.preference('audio.systemSetupReviewed'), 'true');
       expect(integration.systemAudioSetupComplete, true);
-      final again =
-          integration.setupSystemAudioAccess(forRecording: true)
-              as Future<bool>;
+      final again = integration.setupSystemAudioAccess(forRecording: true);
       await tester.pumpAndSettle();
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
@@ -165,8 +191,13 @@ void main() {
   testWidgets(
     'notification preferences persist and unavailable service errors remain visible',
     (tester) async {
-      final f = await ControllerFixture.mount(tester);
-      final dynamic integration = f.shell.integrationFeature;
+      final f = await ControllerFixture.mount(
+        tester,
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
+      );
+      final integration = f.shell.integrationFeature;
       await integration.setNotifications(true);
       expect(f.store.preference('notifications'), 'true');
       expect(integration.notifications, true);
@@ -201,25 +232,30 @@ void main() {
   testWidgets(
     'menu navigation, shortcut editing and activation errors are controlled',
     (tester) async {
-      final f = await ControllerFixture.mount(tester);
-      final dynamic integration = f.shell.integrationFeature;
+      final f = await ControllerFixture.mount(
+        tester,
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
+      );
+      final integration = f.shell.integrationFeature;
       final messenger =
           TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
       const channel = MethodChannel('foresight/window');
       messenger.setMockMethodCallHandler(channel, (_) async => null);
       addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
       for (final (command, tab) in [
-        ('sources', 0),
-        ('ask', 1),
-        ('settings', 6),
-        ('meetings', 3),
+        ('sources', WorkspaceTab.sources),
+        ('ask', WorkspaceTab.chat),
+        ('settings', WorkspaceTab.settings),
+        ('meetings', WorkspaceTab.meetings),
       ]) {
         await integration.activateMenuCommand(command);
         expect(f.shell.tab, tab);
       }
       await integration.activateMenuCommand('unknown');
-      expect(f.shell.tab, 3);
-      var editing = integration.changeQuickShortcut() as Future<void>;
+      expect(f.shell.tab, WorkspaceTab.meetings);
+      var editing = integration.changeQuickShortcut();
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField).last, 'alt+shift+2');
       await tester.tap(find.text('Save shortcut'));
@@ -227,7 +263,7 @@ void main() {
       await editing;
       expect(f.store.preference('quickShortcut'), 'ALT + SHIFT + 2');
       expect(integration.quickActivator.alt, true);
-      editing = integration.changeQuickShortcut() as Future<void>;
+      editing = integration.changeQuickShortcut();
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField).last, 'CTRL+F');
       await tester.tap(find.text('Save shortcut'));
@@ -235,7 +271,7 @@ void main() {
       await editing;
       expect(f.shell.error, contains('at least two modifiers'));
       expect(f.store.preference('quickShortcut'), 'ALT + SHIFT + 2');
-      editing = integration.changeQuickShortcut() as Future<void>;
+      editing = integration.changeQuickShortcut();
       await tester.pumpAndSettle();
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
@@ -259,8 +295,11 @@ void main() {
           if (reject) throw StateError('device enumeration failed');
           return [];
         },
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
       );
-      final dynamic integration = f.shell.integrationFeature;
+      final integration = f.shell.integrationFeature;
       await integration.refreshAudioDevices();
       expect(
         integration.audioDeviceState,
@@ -270,7 +309,8 @@ void main() {
       await integration.refreshAudioDevices();
       expect(integration.audioDeviceState, isEmpty);
       f.store.setPreference('microphoneTarget', 'disconnected-microphone');
-      f.shell.update(() => f.shell.tab = 6);
+      f.connection.domain.helper.changed?.call();
+      f.shell.update(() => f.shell.navigate(WorkspaceTab.settings));
       await tester.pumpAndSettle();
       expect(find.text('Saved device unavailable'), findsOneWidget);
       expect(f.store.preference('microphoneTarget'), 'disconnected-microphone');

@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/desktop_identity.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
@@ -192,7 +193,10 @@ void main() {
         '${directory.path}/data',
         '${directory.path}/run',
       );
-      final service = await ApplicationService.start(profile);
+      final service = await ApplicationService.start(
+        profile,
+        desktopPeerVerifier: trustInProcessDesktop,
+      );
       RemoteDomain? first, second;
       try {
         first = await RemoteDomain.connect(profile);

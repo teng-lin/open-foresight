@@ -1,16 +1,17 @@
+import 'store_reader_fixture.dart';
+import 'package:foresight_core/desktop.dart' show MeetingArtifact;
 import 'pump_until.dart';
-import 'package:foresight_core/src/application.dart';
+import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
-import 'package:foresight_core/src/operations.dart';
+
 import 'desktop_connection_fixture.dart';
 import 'dart:async';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/main.dart';
-import 'package:foresight_core/src/domain.dart';
-import 'package:foresight_core/src/store.dart';
-import 'package:open_foresight/note_save_scheduler.dart';
+
+import 'package:open_foresight/features/meetings/note_save_scheduler.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 class GatedNoteDomain extends CommandFixtureDomain {
@@ -67,7 +68,7 @@ void main() {
         Foresight(connection, deviceLoader: () async => []),
       );
       await tester.pumpAndSettle();
-      final dynamic shell = tester.state(find.byType(Workspace));
+      final shell = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       shell.update(() => shell.meetingFeature.meetingId = id);
       await tester.pumpAndSettle();
       final gate = domain.saveGate = Completer<void>();
@@ -196,11 +197,13 @@ void main() {
           deviceLoader: () async => [],
         ),
       );
-      final dynamic state = tester.state(find.byType(Workspace));
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       state.update(() => state.meetingFeature.meetingId = id);
       await tester.pumpAndSettle();
-      state.meetingFeature.editArtifact(
-        store.rows('SELECT * FROM artifacts').single,
+      unawaited(
+        state.meetingFeature.editArtifact(
+          MeetingArtifact.fromRow(store.rows('SELECT * FROM artifacts').single),
+        ),
       );
       await tester.pumpAndSettle();
       final before = DateTime.now().millisecondsSinceEpoch;
@@ -222,8 +225,10 @@ void main() {
             .single,
         {'last_manual_edit': captured, 'last_enhanced': enhancedDate},
       );
-      state.meetingFeature.editArtifact(
-        store.rows('SELECT * FROM artifacts').single,
+      unawaited(
+        state.meetingFeature.editArtifact(
+          MeetingArtifact.fromRow(store.rows('SELECT * FROM artifacts').single),
+        ),
       );
       await tester.pumpAndSettle();
       await tester.tap(find.text('Save edit'));
@@ -259,7 +264,7 @@ void main() {
           deviceLoader: () async => [],
         ),
       );
-      final dynamic state = tester.state(find.byType(Workspace));
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       state.update(() => state.meetingFeature.meetingId = id);
       await tester.pumpAndSettle();
       domain.rejectNotes = true;
@@ -316,27 +321,30 @@ void main() {
         store,
         OfflineHelper('${directory.path}/sock', '${directory.path}/helper'),
       );
+      final app = Application(domain);
       await tester.pumpWidget(
-        Foresight(
-          TestDesktopConnection(Application(domain)),
-          deviceLoader: () async => [],
-        ),
+        Foresight(TestDesktopConnection(app), deviceLoader: () async => []),
       );
-      final dynamic state = tester.state(find.byType(Workspace));
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       state.update(() => state.meetingFeature.meetingId = id);
       await tester.pumpAndSettle();
       final editor = find.byKey(const ValueKey('meeting-notes-editor'));
       store.saveMeetingNotes(id, 'External first', lastManualEdit: 200);
-      state.update(() {});
-      await tester.pump();
+      invalidateFixtureReader(store);
+      await pumpUntil(
+        tester,
+        () =>
+            tester.widget<TextField>(editor).controller!.text ==
+            'External first',
+      );
       expect(
         tester.widget<TextField>(editor).controller!.text,
         'External first',
       );
       state.meetingFeature.meetingEnhancing = true;
       store.saveMeetingNotes(id, 'External second', lastManualEdit: 300);
-      state.update(() {});
-      await tester.pump();
+      invalidateFixtureReader(store);
+      await tester.pumpAndSettle();
       expect(
         tester.widget<TextField>(editor).controller!.text,
         'External first',
@@ -356,8 +364,8 @@ void main() {
         'External during pending write',
         lastManualEdit: 400,
       );
-      state.update(() {});
-      await tester.pump();
+      invalidateFixtureReader(store);
+      await tester.pumpAndSettle();
       expect(tester.widget<TextField>(editor).controller!.text, 'Local draft');
       domain.saveGate!.complete();
       await tester.pumpAndSettle();
@@ -366,7 +374,7 @@ void main() {
         {'body': 'Local draft', 'last_manual_edit': captured},
       );
       expect(
-        state.meetingFeature.loadedMeetingNoteSnapshot.body,
+        state.meetingFeature.loadedMeetingNoteSnapshot!.body,
         'Local draft',
       );
       expect(state.meetingFeature.meetingNoteSaves.isDirty(id), isFalse);
@@ -396,7 +404,7 @@ void main() {
           deviceLoader: () async => [],
         ),
       );
-      final dynamic state = tester.state(find.byType(Workspace));
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       state.update(() => state.meetingFeature.meetingId = id);
       await tester.pumpAndSettle();
       domain.saveGate = Completer<void>();
@@ -558,7 +566,7 @@ void main() {
         deviceLoader: () async => [],
       ),
     );
-    final dynamic state = tester.state(find.byType(Workspace));
+    final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
     state.update(() => state.meetingFeature.meetingId = first);
     await tester.pumpAndSettle();
     final editor = find.byKey(const ValueKey('meeting-notes-editor'));

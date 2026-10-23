@@ -1,7 +1,10 @@
+import 'package:open_foresight/features/sources/source_painters.dart';
 import 'package:foresight_test_support/macos_integration_runtime.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/remote.dart' show RemoteDomain;
 import 'dart:convert';
+import 'dart:async';
+import '../test_support/current_read.dart';
 import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
@@ -10,34 +13,47 @@ import 'package:integration_test/integration_test.dart';
 import 'package:foresight_test_support/capture_poll.dart';
 import 'package:foresight_test_support/capture_process.dart';
 import 'package:open_foresight/main.dart' as app;
+import 'package:open_foresight/features/onboarding/onboarding_view.dart';
 import 'package:foresight_core/desktop.dart';
 import '../test_support/integration_persistence.dart';
-import 'package:open_foresight/graph_rendering.dart';
-import 'package:open_foresight/cluster_rendering.dart';
+import 'package:open_foresight/features/sources/graph_rendering.dart';
+import 'package:open_foresight/features/sources/cluster_rendering.dart';
 
 import '../test_support/meeting_panel.dart';
 import '../test_support/file_manager_fixture.dart';
 import '../test_support/onboarding.dart';
 
-StoreReader readerFor(dynamic workspace) =>
-    (workspace.d as DesktopConnection).store;
-List<Map<String, Object?>> sourceRows(StoreReader reader) => [
-  for (final source in reader.sourceSummaries)
-    {...source.toRow(), ...reader.sourceById(source.id)!.toRow()},
-];
+StoreReader readerFor(app.WorkspaceTestAccess workspace) => (workspace.d).store;
+Future<List<Map<String, Object?>>> sourceRows(StoreReader reader) async {
+  final sources = await currentRead(reader, StoreReadQueries.sources());
+  final rows = <Map<String, Object?>>[];
+  for (final source in sources) {
+    final document = await currentRead(
+      reader,
+      StoreReadQueries.source(source.id),
+    );
+    if (document == null || document.revision != source.revision) {
+      throw const IntegrationReadPending('source selection changed');
+    }
+    rows.add({...source.toRow(), ...document.toRow()});
+  }
+  return rows;
+}
 
 Future<void> waitUntil(
   WidgetTester tester,
-  bool Function() ready, {
+  FutureOr<bool> Function() ready, {
   int seconds = 60,
   String reason = 'Workflow timed out',
 }) async {
   final elapsed = Stopwatch()..start();
   final deadline = DateTime.now().add(Duration(seconds: seconds));
-  while (!ready() && DateTime.now().isBefore(deadline)) {
+  var settled = await currentReadCondition(ready, deadline: deadline);
+  while (!settled && DateTime.now().isBefore(deadline)) {
     await tester.pump(const Duration(milliseconds: 100));
+    settled = await currentReadCondition(ready, deadline: deadline);
   }
-  if (!ready()) {
+  if (!settled) {
     final report = Platform.environment['FORESIGHT_MEETING_REPORT'];
     if (report != null) {
       File(
@@ -46,27 +62,30 @@ Future<void> waitUntil(
     }
     final workspaces = find.byType(app.Workspace);
     if (workspaces.evaluate().isNotEmpty) {
-      final dynamic workspace = tester.state(workspaces);
+      final workspace = tester.state(workspaces) as app.WorkspaceTestAccess;
       // Capture before the status RPC: pending work can finish while that
       // request runs, making a post-failure database artifact look successful.
       final observedAt = DateTime.now().toUtc().toIso8601String();
       final waitedMs = elapsed.elapsedMilliseconds;
-      final sources =
-          (readerFor(workspace).sourceSummaries.toList()
-                ..sort((a, b) => a.id.compareTo(b.id)))
-              .map(
-                (source) => <String, Object?>{
-                  'id': source.id,
-                  'state': source.state,
-                  'error': source.error,
-                  'revision': source.revision,
-                },
-              )
-              .toList();
+      final sourceResult = await readerFor(
+        workspace,
+      ).read(StoreReadQueries.sources());
+      final sources = (sourceResult.value?.toList() ?? <SourceSummary>[])
+        ..sort((a, b) => a.id.compareTo(b.id));
+      final observedSources = [
+        for (final source in sources)
+          {
+            'id': source.id,
+            'state': source.state,
+            'error': source.error,
+            'revision': source.revision,
+          },
+      ];
       final status = await workspace.d.command(Operation.status);
       fail(
         '$reason: busy=${workspace.busy}, error=${workspace.error}, '
-        'waited_ms=$waitedMs, observed_at=$observedAt, sources=$sources, '
+        'waited_ms=$waitedMs, observed_at=$observedAt, sources=$observedSources, '
+        'sources_freshness=${sourceResult.freshness.name}, source_error=${sourceResult.error}, '
         'status=$status',
       );
     }
@@ -81,13 +100,27 @@ Future<void> waitUntil(
   expect(failure, isNull);
 }
 
+/// Observe readiness under one existing workflow deadline. Retry only the
+/// fixture's noncurrent read signal; operation and query errors still fail.
+Future<T> observeCurrent<T>(
+  WidgetTester tester,
+  Future<T> Function() read,
+) async {
+  late T value;
+  await waitUntil(tester, () async {
+    value = await read();
+    return true;
+  }, reason: 'Current integration read did not settle');
+  return value;
+}
+
 /// Desktop startup connects the service before it mounts [app.Workspace].
 /// One frame is still the "Starting…" screen, so a state lookup there throws
 /// "Bad state: No element" and hides the real connection error.
-Future<dynamic> startedWorkspace(WidgetTester tester) async {
+Future<app.WorkspaceTestAccess> startedWorkspace(WidgetTester tester) async {
   await app.main();
   String? startupFailure;
-  await waitUntil(tester, () {
+  await waitUntil(tester, () async {
     if (find.text('Open Foresight could not start').evaluate().isNotEmpty) {
       final details = find.byType(SelectableText);
       startupFailure = details.evaluate().isEmpty
@@ -95,18 +128,25 @@ Future<dynamic> startedWorkspace(WidgetTester tester) async {
           : tester.widget<SelectableText>(details).data;
       return true;
     }
-    return find.byType(app.Workspace).evaluate().isNotEmpty;
+    // Workspace mounts before its asynchronous onboarding preferences load.
+    // Keep the same startup deadline while waiting for the actual first screen.
+    return find.byType(app.Workspace).evaluate().isNotEmpty &&
+        (find.byType(OnboardingView).evaluate().isNotEmpty ||
+            find.text('Meetings').evaluate().isNotEmpty);
   });
   if (startupFailure != null) {
     throw StateError('Desktop did not start: $startupFailure');
   }
   await finishOnboarding(tester);
-  return tester.state(find.byType(app.Workspace));
+  return tester.state(find.byType(app.Workspace)) as app.WorkspaceTestAccess;
 }
 
 /// Unmount first so disposal owns the pending note save and recording stop.
 /// Join its existing cleanup work instead of guessing when the next launch is safe.
-Future<void> closeWorkspace(WidgetTester tester, dynamic workspace) async {
+Future<void> closeWorkspace(
+  WidgetTester tester,
+  app.WorkspaceTestAccess workspace,
+) async {
   final saves = workspace.meetingFeature.meetingNoteSaves;
   final connection = workspace.d as RemoteDomain;
   final client = connection.client;
@@ -122,7 +162,8 @@ Future<void> closeWorkspace(WidgetTester tester, dynamic workspace) async {
   });
   await waitUntil(
     tester,
-    () => client.isClosed && (commands == null || commands.isClosed == true),
+    () async =>
+        client.isClosed && (commands == null || commands.isClosed == true),
     reason: 'Desktop disposal did not release the client and activation lock',
   );
 }
@@ -131,7 +172,7 @@ Future<void> closeWorkspace(WidgetTester tester, dynamic workspace) async {
 Future<void> allowRecording(WidgetTester tester) async {
   await waitUntil(
     tester,
-    () => find
+    () async => find
         .text('Allow microphone and system audio recording?')
         .evaluate()
         .isNotEmpty,
@@ -320,19 +361,19 @@ void main() {
       }
       final sink = env['FORESIGHT_PLAYBACK_TARGET']!;
       final fixture = env['FORESIGHT_AUDIO_FIXTURE']!;
-      final dynamic workspace = await startedWorkspace(tester);
+      final workspace = await startedWorkspace(tester);
       final receipts = IntegrationPersistenceReceipts(env['FORESIGHT_DATA']!);
       addTearDown(receipts.close);
       await waitUntil(
         tester,
-        () =>
+        () async =>
             workspace.d.generator?.effectiveState['state'] == 'ready' &&
             workspace.d.helper.snapshot?.pipeline == 'ready',
       );
-      final embeddingIdentity = workspace.d.helper.snapshot.model;
-      final embeddingBackend = embeddingIdentity.backend as String;
+      final embeddingIdentity = workspace.d.helper.snapshot!.model;
+      final embeddingBackend = embeddingIdentity.backend;
       final generationBackend =
-          workspace.d.generator.effectiveState['backend'] as String;
+          workspace.d.generator!.effectiveState['backend'] as String;
       if (env['FORESIGHT_EXPECT_EMBEDDING_BACKEND'] != null)
         expect(embeddingBackend, env['FORESIGHT_EXPECT_EMBEDDING_BACKEND']);
       if (env['FORESIGHT_EXPECT_GENERATION_BACKEND'] != null)
@@ -349,7 +390,7 @@ void main() {
       final screenshotDirectory = env['FORESIGHT_REFERENCE_SCREENSHOTS']!;
       await tester.tap(find.text('Ask').first);
       await tester.pumpAndSettle();
-      await waitUntil(tester, () => true);
+      await waitUntil(tester, () async => true);
       await captureWindow(tester, '$screenshotDirectory/06-ask.png');
       await tester.tap(find.text('Meetings').first);
       await tester.pumpAndSettle();
@@ -358,14 +399,27 @@ void main() {
       final meeting = workspace.meetingFeature.meetingId as int;
       final title =
           [
-                if (readerFor(workspace).meetingWorkspace(meeting)
+                if ((await observeCurrent(
+                      tester,
+                      () => currentRead(
+                        readerFor(workspace),
+                        StoreReadQueries.meeting(meeting),
+                      ),
+                    ))
                     case final value?)
                   value.toRow(),
               ].single['title']
               as String;
       await waitUntil(
         tester,
-        () => readerSpeechSetupProblem(readerFor(workspace)) == null,
+        () async =>
+            preparedSpeechSetupProblem(
+              await currentRead(
+                readerFor(workspace),
+                StoreReadQueries.model('speech'),
+              ),
+            ) ==
+            null,
         reason: 'Speech model and runner were not ready for recording',
       );
       await tester.tap(find.text('Start transcribing'));
@@ -376,15 +430,22 @@ void main() {
       );
       await waitUntil(
         tester,
-        () =>
+        () async =>
             workspace.meetingFeature.recording?.sampleCounts.length == 2 &&
-            workspace.meetingFeature.recording.sampleCounts.every(
+            workspace.meetingFeature.recording!.sampleCounts.every(
               (int n) => n > 0,
             ),
       );
       expect(
         [
-          if (readerFor(workspace).meetingWorkspace(meeting) case final value?)
+          if ((await observeCurrent(
+                tester,
+                () => currentRead(
+                  readerFor(workspace),
+                  StoreReadQueries.meeting(meeting),
+                ),
+              ))
+              case final value?)
             value.toRow(),
         ].single['state'],
         'recording',
@@ -402,18 +463,20 @@ void main() {
       player.stderr.drain<void>();
       await waitUntil(
         tester,
-        () => workspace.meetingFeature.recording.peakVolumes[1] > 0,
+        () async => workspace.meetingFeature.recording!.peakVolumes[1] > 0,
       );
       expect(await player.exitCode, 0);
       await waitUntil(
         tester,
-        () =>
+        () async =>
             workspace.meetingFeature.recording != null &&
             (workspace.meetingFeature.provisionalTranscript.values.any(
-                  (text) => (text as String).toLowerCase().contains('country'),
+                  (text) => (text).toLowerCase().contains('country'),
                 ) ||
-                readerFor(workspace)
-                    .meetingTranscript(meeting, finalOnly: true)
+                (await currentRead(
+                      readerFor(workspace),
+                      StoreReadQueries.transcript(meeting, finalOnly: true),
+                    ))
                     .map((row) => row.toRow())
                     .toList()
                     .any(
@@ -425,17 +488,23 @@ void main() {
       final liveBeforeStop = Map<String, String>.from(
         workspace.meetingFeature.provisionalTranscript,
       );
-      final finalizedBeforeStop = readerFor(workspace)
-          .meetingTranscript(meeting, finalOnly: true)
-          .map(
-            (row) => <String, Object?>{
-              'text': row.text,
-              'source': row.source,
-              'start_ms': row.startMs,
-              'end_ms': row.endMs,
-            },
-          )
-          .toList();
+      final finalizedBeforeStop =
+          (await observeCurrent(
+                tester,
+                () => currentRead(
+                  readerFor(workspace),
+                  StoreReadQueries.transcript(meeting, finalOnly: true),
+                ),
+              ))
+              .map(
+                (row) => <String, Object?>{
+                  'text': row.text,
+                  'source': row.source,
+                  'start_ms': row.startMs,
+                  'end_ms': row.endMs,
+                },
+              )
+              .toList();
       expect(workspace.meetingFeature.recording, isNotNull);
       await tester.pumpAndSettle();
       await captureWindow(
@@ -443,10 +512,10 @@ void main() {
         '$screenshotDirectory/09-live-transcription.png',
       );
       final counts = List<int>.from(
-        workspace.meetingFeature.recording.sampleCounts,
+        workspace.meetingFeature.recording!.sampleCounts,
       );
       final peaks = List<double>.from(
-        workspace.meetingFeature.recording.peakVolumes,
+        workspace.meetingFeature.recording!.peakVolumes,
       );
       expect(counts[0], greaterThan(0));
       expect(counts[1], greaterThan(48000));
@@ -460,7 +529,7 @@ void main() {
       await tester.tap(find.byTooltip('Stop transcribing'));
       await waitUntil(
         tester,
-        () =>
+        () async =>
             workspace.meetingFeature.recording == null &&
             workspace.busy == false,
       );
@@ -468,7 +537,14 @@ void main() {
       expect(workspace.d.sourcesPaused, true);
       expect(
         [
-          if (readerFor(workspace).meetingWorkspace(meeting) case final value?)
+          if ((await observeCurrent(
+                tester,
+                () => currentRead(
+                  readerFor(workspace),
+                  StoreReadQueries.meeting(meeting),
+                ),
+              ))
+              case final value?)
             value.toRow(),
         ].single['state'],
         'completed',
@@ -478,9 +554,12 @@ void main() {
       await tester.tap(find.byTooltip('Resume source imports and indexing'));
       await waitUntil(
         tester,
-        () =>
+        () async =>
             [
-              if (readerFor(workspace).sourceById('meeting-$meeting')
+              if ((await currentRead(
+                    readerFor(workspace),
+                    StoreReadQueries.source('meeting-$meeting'),
+                  ))
                   case final value?)
                 value.toRow(),
             ].single['state'] ==
@@ -488,25 +567,32 @@ void main() {
       );
       await tester.tap(find.text('Meetings').first);
       await tester.pumpAndSettle();
-      final transcripts =
-          readerFor(workspace)
-                  .meetingTranscript(meeting, finalOnly: true)
-                  .map((row) => row.toRow())
-                  .toList()
-              as List;
+      final transcripts = (await observeCurrent(
+        tester,
+        () => currentRead(
+          readerFor(workspace),
+          StoreReadQueries.transcript(meeting, finalOnly: true),
+        ),
+      )).map((row) => row.toRow()).toList();
       expect(transcripts, isNotEmpty);
       final text = transcripts.map((t) => t['text']).join('\n').toLowerCase();
       expect(text, contains('country'));
       expect(text, contains('ask not'));
       final source = [
-        if (readerFor(workspace).sourceById('meeting-$meeting')
+        if ((await observeCurrent(
+              tester,
+              () => currentRead(
+                readerFor(workspace),
+                StoreReadQueries.source('meeting-$meeting'),
+              ),
+            ))
             case final value?)
           value.toRow(),
       ].single;
       expect(source['state'], 'indexed');
       await selectMeetingPanel(tester, 'Summary');
       await tester.tap(find.byTooltip('Generate Summary'));
-      await waitUntil(tester, () => workspace.busy == false);
+      await waitUntil(tester, () async => workspace.busy == false);
       expect(workspace.error, isEmpty);
       final summary = receipts
           .artifacts(meeting: meeting)
@@ -528,7 +614,7 @@ void main() {
       await tester.pumpAndSettle();
       await selectMeetingPanel(tester, 'Summary');
       await tester.tap(find.byTooltip('Generate Summary'));
-      await waitUntil(tester, () => workspace.busy == false);
+      await waitUntil(tester, () async => workspace.busy == false);
       expect(workspace.error, isEmpty);
       expect(
         receipts
@@ -562,14 +648,14 @@ void main() {
       }
       await waitUntil(
         tester,
-        () => find.text('Enhance notes').evaluate().isNotEmpty,
+        () async => find.text('Enhance notes').evaluate().isNotEmpty,
         reason: 'Enhanced notes did not refresh after editing the draft',
       );
       await tester.ensureVisible(find.text('Enhance notes'));
       await tester.tap(find.text('Enhance notes'));
       await waitUntil(
         tester,
-        () =>
+        () async =>
             workspace.meetingFeature.meetingEnhancing == false &&
             receipts
                 .artifacts(kind: 'enhanced_notes')
@@ -588,19 +674,21 @@ void main() {
       expect(enhanced.toLowerCase(), contains('country'));
       // Release the actual widget/domain and launch a fresh one against the saved profile.
       await closeWorkspace(tester, workspace);
-      final dynamic reopened = await startedWorkspace(tester);
+      final reopened = await startedWorkspace(tester);
       await waitUntil(
         tester,
-        () =>
+        () async =>
             reopened.d.generator?.effectiveState['state'] == 'ready' &&
             reopened.d.helper.snapshot?.pipeline == 'ready',
       );
       expect(
-        readerFor(reopened)
-            .meetingTranscript(meeting, finalOnly: true)
-            .map((row) => row.toRow())
-            .toList()
-            .length,
+        (await observeCurrent(
+          tester,
+          () => currentRead(
+            readerFor(reopened),
+            StoreReadQueries.transcript(meeting, finalOnly: true),
+          ),
+        )).map((row) => row.toRow()).toList().length,
         transcripts.length,
       );
       expect(
@@ -619,7 +707,14 @@ void main() {
       await tester.pumpAndSettle();
       expect(
         [
-          if (readerFor(reopened).meetingNote(meeting) case final value?)
+          if ((await observeCurrent(
+                tester,
+                () => currentRead(
+                  readerFor(reopened),
+                  StoreReadQueries.meetingNote(meeting),
+                ),
+              ))
+              case final value?)
             value.toRow(),
         ].single['body'],
         'Ask what you can do for your country.',
@@ -632,7 +727,7 @@ void main() {
         findsOneWidget,
       );
       await tester.pumpAndSettle();
-      await waitUntil(tester, () => true);
+      await waitUntil(tester, () async => true);
       await captureWindow(tester, env['FORESIGHT_MEETING_SCREENSHOT']!);
       await selectMeetingPanel(tester, 'Chat');
       // This acceptance checks the recorded transcript's exact revision. Other
@@ -641,14 +736,23 @@ void main() {
       await selectMeetingAnswerSource(tester, source['title'] as String);
       await waitUntil(
         tester,
-        () =>
+        () async =>
             reopened.busy == false &&
-            readerFor(reopened).preference('answerScope.meeting:$meeting') ==
+            (await currentRead(
+                  readerFor(reopened),
+                  StoreReadQueries.preference('answerScope.meeting:$meeting'),
+                )) ==
                 'selected',
       );
       expect(
         jsonDecode(
-          readerFor(reopened).preference('answerSources.meeting:$meeting'),
+          (await observeCurrent(
+            tester,
+            () => currentRead(
+              readerFor(reopened),
+              StoreReadQueries.preference('answerSources.meeting:$meeting'),
+            ),
+          )),
         ),
         ['meeting-$meeting'],
       );
@@ -660,7 +764,7 @@ void main() {
       await tester.tap(find.byTooltip('Ask'));
       await waitUntil(
         tester,
-        () =>
+        () async =>
             reopened.busy == false &&
             receipts.answers.map((row) => row.toRow()).toList().isNotEmpty,
       );
@@ -670,13 +774,14 @@ void main() {
       expect((answer['body'] as String).toLowerCase(), contains('country'));
       expect((answer['body'] as String).toLowerCase(), isNot(contains('king')));
       await tester.pumpAndSettle();
-      await waitUntil(tester, () => true);
+      await waitUntil(tester, () async => true);
       await captureWindow(tester, env['FORESIGHT_COPILOT_SCREENSHOT']!);
-      final cited = jsonDecode(answer['citations'] as String) as List;
+      final cited = (jsonDecode(answer['citations'] as String) as List)
+          .cast<Map>();
       final transcriptCitation = cited.firstWhere(
         (citation) => citation['document_id'] == 'meeting-$meeting',
       );
-      final citedRevision = transcriptCitation['revision'];
+      final citedRevision = transcriptCitation['revision'] as int;
       await openMeetingCitation(
         tester,
         meeting,
@@ -693,7 +798,14 @@ void main() {
       // The service must finish transcription and survive reconnection.
       final savedSpeech =
           [
-                if (readerFor(reopened).model('speech') case final value?)
+                if ((await observeCurrent(
+                      tester,
+                      () => currentRead(
+                        readerFor(reopened),
+                        StoreReadQueries.model('speech'),
+                      ),
+                    ))
+                    case final value?)
                   value.toRow(),
               ].single['runtime']
               as String;
@@ -702,7 +814,14 @@ void main() {
       )..writeAsStringSync('#!/bin/sh\nsleep 2\nexec "$savedSpeech" "\$@"\n');
       await Process.run('chmod', ['700', slowSpeech.path]);
       final speechAsset = [
-        if (readerFor(reopened).model('speech') case final value?)
+        if ((await observeCurrent(
+              tester,
+              () => currentRead(
+                readerFor(reopened),
+                StoreReadQueries.model('speech'),
+              ),
+            ))
+            case final value?)
           value.toRow(),
       ].single['path'];
       await reopened.d.command(Operation.modelsRegister, {
@@ -720,9 +839,9 @@ void main() {
       );
       await waitUntil(
         tester,
-        () =>
+        () async =>
             reopened.meetingFeature.recording?.sampleCounts.length == 2 &&
-            reopened.meetingFeature.recording.sampleCounts.every(
+            reopened.meetingFeature.recording!.sampleCounts.every(
               (int n) => n > 0,
             ),
       );
@@ -741,22 +860,29 @@ void main() {
       await tester.tap(find.byTooltip('Stop transcribing'));
       await waitUntil(
         tester,
-        () => reopened.meetingFeature.recording?.finishing == true,
+        () async => reopened.meetingFeature.recording?.finishing == true,
       );
       await closeWorkspace(tester, reopened);
       expect(tester.takeException(), isNull);
-      dynamic afterCancellation = await startedWorkspace(tester);
+      var afterCancellation = await startedWorkspace(tester);
       await waitUntil(
         tester,
-        () => afterCancellation.d.generator?.effectiveState['state'] == 'ready',
+        () async =>
+            afterCancellation.d.generator?.effectiveState['state'] == 'ready',
       );
       await waitUntil(
         tester,
-        () => afterCancellation.meetingFeature.recording == null,
+        () async => afterCancellation.meetingFeature.recording == null,
       );
       expect(
         [
-          if (readerFor(afterCancellation).meetingWorkspace(meeting)
+          if ((await observeCurrent(
+                tester,
+                () => currentRead(
+                  readerFor(afterCancellation),
+                  StoreReadQueries.meeting(meeting),
+                ),
+              ))
               case final value?)
             value.toRow(),
         ].single['state'],
@@ -768,9 +894,13 @@ void main() {
         'runtime': savedSpeech,
       });
       final realInactivity = env['FORESIGHT_REAL_INACTIVITY'] == '1';
-      final inactivitySetting = readerFor(
-        afterCancellation,
-      ).preference('inactivity', '15');
+      final inactivitySetting = (await observeCurrent(
+        tester,
+        () => currentRead(
+          readerFor(afterCancellation),
+          StoreReadQueries.preference('inactivity', '15'),
+        ),
+      ));
       final inactivityObservations = <Map<String, Object?>>[];
       await afterCancellation.d.command(Operation.preferencesSet, {
         'key': 'inactivity',
@@ -785,35 +915,34 @@ void main() {
       );
       await waitUntil(
         tester,
-        () =>
+        () async =>
             afterCancellation.meetingFeature.recording?.sampleCounts.length ==
             2,
       );
       final silentMeeting = afterCancellation.meetingFeature.meetingId as int;
       final activityAtStart =
-          afterCancellation.meetingFeature.recording.lastAudioActivity
-              as DateTime;
+          afterCancellation.meetingFeature.recording!.lastAudioActivity;
       var nextCheckpoint = 60;
-      await waitUntil(tester, () {
+      await waitUntil(tester, () async {
         final elapsed = DateTime.now().difference(activityAtStart).inSeconds;
         if (realInactivity &&
             elapsed >= nextCheckpoint &&
             elapsed < 300 &&
             afterCancellation.meetingFeature.recording != null) {
           expect(
-            afterCancellation.meetingFeature.recording.lastAudioActivity,
+            afterCancellation.meetingFeature.recording!.lastAudioActivity,
             activityAtStart,
           );
-          expect(afterCancellation.meetingFeature.recording.finishing, false);
+          expect(afterCancellation.meetingFeature.recording!.finishing, false);
           inactivityObservations.add({
             'elapsed_seconds': elapsed,
             'recording_active': true,
             'activity_timestamp_unchanged': true,
             'sample_counts': List<int>.from(
-              afterCancellation.meetingFeature.recording.sampleCounts as List,
+              afterCancellation.meetingFeature.recording!.sampleCounts as List,
             ),
             'peak_volumes': List<double>.from(
-              afterCancellation.meetingFeature.recording.peakVolumes as List,
+              afterCancellation.meetingFeature.recording!.peakVolumes as List,
             ),
           });
           debugPrint(
@@ -836,7 +965,13 @@ void main() {
       expect(afterCancellation.error, isEmpty);
       expect(
         [
-          if (readerFor(afterCancellation).meetingWorkspace(silentMeeting)
+          if ((await observeCurrent(
+                tester,
+                () => currentRead(
+                  readerFor(afterCancellation),
+                  StoreReadQueries.meeting(silentMeeting),
+                ),
+              ))
               case final value?)
             value.toRow(),
         ].single['state'],
@@ -866,16 +1001,20 @@ void main() {
       await tester.tap(find.byTooltip('Pause source imports and indexing'));
       await tester.pumpAndSettle();
       expect(afterCancellation.d.sourcesPaused, true);
-      final beforePauseImports = sourceRows(
-        readerFor(afterCancellation),
-      ).length;
+      final beforePauseImports = (await observeCurrent(
+        tester,
+        () => sourceRows(readerFor(afterCancellation)),
+      )).length;
       final pausedImport = afterCancellation.run(() async {
         await afterCancellation.sourceFeature.importFolderPath(fixtures.path);
       });
       await tester.pump();
       expect(afterCancellation.busy, true);
       expect(
-        sourceRows(readerFor(afterCancellation)).length,
+        (await observeCurrent(
+          tester,
+          () => sourceRows(readerFor(afterCancellation)),
+        )).length,
         beforePauseImports,
       );
       await captureWindow(
@@ -887,9 +1026,10 @@ void main() {
       await tester.pumpAndSettle();
       expect(afterCancellation.d.sourcesPaused, false);
       expect(afterCancellation.error, isEmpty);
-      final firstImported = sourceRows(
-        readerFor(afterCancellation),
-      ).where((s) => s['title'] == 'Apollo planning.md').single;
+      final firstImported = (await observeCurrent(
+        tester,
+        () => sourceRows(readerFor(afterCancellation)),
+      )).where((s) => s['title'] == 'Apollo planning.md').single;
       expect(firstImported['state'], 'indexed');
       File(
         '${fixtures.path}/Apollo planning.md',
@@ -897,9 +1037,10 @@ void main() {
       await afterCancellation.run(
         afterCancellation.sourceFeature.refreshSources,
       );
-      final revised = sourceRows(
-        readerFor(afterCancellation),
-      ).where((s) => s['id'] == firstImported['id']).single;
+      final revised = (await observeCurrent(
+        tester,
+        () => sourceRows(readerFor(afterCancellation)),
+      )).where((s) => s['id'] == firstImported['id']).single;
       expect(revised['revision'], 2);
       expect(revised['content'], contains('Monday'));
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -928,9 +1069,10 @@ void main() {
             'allow_private_network': true,
           });
         });
-        final imported = sourceRows(
-          readerFor(afterCancellation),
-        ).where((s) => s['provenance'] == 'url:$address').single;
+        final imported = (await observeCurrent(
+          tester,
+          () => sourceRows(readerFor(afterCancellation)),
+        )).where((s) => s['provenance'] == 'url:$address').single;
         expect(imported['revision'], 2);
         expect(imported['content'], contains('Wednesday'));
         expect(imported['content'], isNot(contains('hidden script')));
@@ -960,7 +1102,7 @@ void main() {
       await tester.pump();
       await waitUntil(
         tester,
-        () => find.text('Discovered review.md').evaluate().isNotEmpty,
+        () async => find.text('Discovered review.md').evaluate().isNotEmpty,
       );
       expect(find.text('2 files found · 5 already imported'), findsOneWidget);
       await tester.tap(find.text('Discovered review.md'));
@@ -976,29 +1118,35 @@ void main() {
       await finding;
       await tester.pumpAndSettle();
       expect(afterCancellation.error, isEmpty);
-      final discovered = sourceRows(
-        readerFor(afterCancellation),
-      ).where((source) => source['title'] == 'Discovered review.md').single;
+      final discovered = (await observeCurrent(
+        tester,
+        () => sourceRows(readerFor(afterCancellation)),
+      )).where((source) => source['title'] == 'Discovered review.md').single;
       expect(discovered['state'], 'indexed');
       expect(discovered['content'], contains('Thursday'));
       expect(
-        sourceRows(
-          readerFor(afterCancellation),
-        ).where((source) => source['title'] == 'Unselected budget.txt'),
+        (await observeCurrent(
+          tester,
+          () => sourceRows(readerFor(afterCancellation)),
+        )).where((source) => source['title'] == 'Unselected budget.txt'),
         isEmpty,
       );
-      final exportedNotes = readerFor(
-        afterCancellation,
-      ).meetingEnhancedNotes(meeting);
+      final exportedNotes = (await observeCurrent(
+        tester,
+        () => currentRead(
+          readerFor(afterCancellation),
+          StoreReadQueries.enhancedNotes(meeting),
+        ),
+      ));
       expect(exportedNotes, isNotEmpty);
       expect(
-        afterCancellation.meetingFeature.exportMeetingMarkdown(),
+        await afterCancellation.meetingFeature.exportMeetingMarkdown(),
         contains(exportedNotes.trim()),
       );
       for (final name in ['Stats', 'Sources']) {
         await tester.tap(find.text(name).first);
         await tester.pumpAndSettle();
-        await waitUntil(tester, () => true);
+        await waitUntil(tester, () async => true);
         await captureWindow(
           tester,
           '$screenshotDirectory/${name == 'Stats' ? '01-stats' : '02-sources-list'}.png',
@@ -1014,11 +1162,11 @@ void main() {
       // A pending source is automatically indexed when the desktop reconnects.
       // Seed a failed source in this disposable fixture profile so the graph
       // restoration check retains a text node without an embedding.
-      seedMissingGraphVector(
-        env['FORESIGHT_DATA']!,
-        unindexedGraphSource as String,
-      );
-      final labelledSources = sourceRows(readerFor(afterCancellation));
+      seedMissingGraphVector(env['FORESIGHT_DATA']!, unindexedGraphSource);
+      final labelledSources = (await observeCurrent(
+        tester,
+        () => sourceRows(readerFor(afterCancellation)),
+      ));
       await afterCancellation.d.command(Operation.labelsSet, {
         'id': labelledSources[0]['id'],
         'labels': ['Planning'],
@@ -1035,7 +1183,7 @@ void main() {
       await tester.pumpAndSettle();
       await waitUntil(
         tester,
-        () =>
+        () async =>
             !afterCancellation.sourceFeature.graphOrganizing &&
             afterCancellation.sourceFeature.graphPoints.length >= 2,
       );
@@ -1053,9 +1201,9 @@ void main() {
         false,
       );
       final semanticGraphPointCount =
-          afterCancellation.sourceFeature.graphPoints.length as int;
+          afterCancellation.sourceFeature.graphPoints.length;
       final semanticGraphEdgeCount =
-          afterCancellation.sourceFeature.graphEdges.length as int;
+          afterCancellation.sourceFeature.graphEdges.length;
       expect(semanticGraphEdgeCount, greaterThan(0));
       final expectedGraphEdges = <String, double>{};
       for (final edge in afterCancellation.sourceFeature.graphEdges) {
@@ -1063,7 +1211,7 @@ void main() {
         expect(edge.similarity, greaterThanOrEqualTo(.2));
         expect(edge.similarity.isFinite, true);
         expectedGraphEdges[jsonEncode([edge.source, edge.target])] =
-            edge.similarity as double;
+            edge.similarity;
       }
       expect(expectedGraphEdges.length, semanticGraphEdgeCount);
       final viewer = tester.widget<InteractiveViewer>(
@@ -1075,12 +1223,16 @@ void main() {
         tester.getSize(find.byKey(const ValueKey('source-graph-links'))),
         const Size(3000, 3000),
       );
-      final dynamic unselectedLinks = tester
-          .widget<CustomPaint>(find.byKey(const ValueKey('source-graph-links')))
-          .painter;
+      final unselectedLinks =
+          tester
+                  .widget<CustomPaint>(
+                    find.byKey(const ValueKey('source-graph-links')),
+                  )
+                  .painter
+              as SourceLinks;
       expect(unselectedLinks.edges, isEmpty);
       final persistedLayoutIdentity =
-          jsonDecode(
+          (jsonDecode(
                 receipts.graphModelIdentities
                         .map(
                           (identity) => <String, Object?>{
@@ -1091,7 +1243,7 @@ void main() {
                         .single['model_identity']
                     as String,
               )
-              as List;
+              as List);
       expect(persistedLayoutIdentity.first, graphLayoutAlgorithmVersion);
       await captureWindow(tester, '$screenshotDirectory/03-sources-graph.png');
       final graphNodes = find.byWidgetPredicate(
@@ -1152,11 +1304,14 @@ void main() {
         await tester.pump();
         await waitUntil(
           tester,
-          () => !afterCancellation.sourceFeature.graphRelatedLoading,
+          () async => !afterCancellation.sourceFeature.graphRelatedLoading,
         );
         final id = afterCancellation.sourceFeature.graphSelectedDocument;
         if (id == null) continue;
-        final rows = sourceRows(readerFor(afterCancellation)) as List;
+        final rows = (await observeCurrent(
+          tester,
+          () => sourceRows(readerFor(afterCancellation)),
+        ));
         selectedUri =
             rows.singleWhere((row) => row['id'] == id)['source_uri'] as String;
         if (Uri.tryParse(selectedUri)?.scheme == 'file' &&
@@ -1199,7 +1354,7 @@ void main() {
           await tester.pump();
           await waitUntil(
             tester,
-            () => dispatch.existsSync(),
+            () async => dispatch.existsSync(),
             reason:
                 'Original source was not revealed through FileManager1.ShowItems',
           );
@@ -1221,9 +1376,13 @@ void main() {
           await fileManager.close();
         }
       }
-      final dynamic selectedLinks = tester
-          .widget<CustomPaint>(find.byKey(const ValueKey('source-graph-links')))
-          .painter;
+      final selectedLinks =
+          tester
+                  .widget<CustomPaint>(
+                    find.byKey(const ValueKey('source-graph-links')),
+                  )
+                  .painter
+              as SourceLinks;
       expect(selectedLinks.edges, isNotEmpty);
       for (final edge in selectedLinks.edges) {
         expect(
@@ -1238,8 +1397,7 @@ void main() {
         expectGraphSelection: true,
       );
       final beforeInlineOrganization = {
-        for (final entry
-            in (afterCancellation.sourceFeature.graphPoints as Map).entries)
+        for (final entry in afterCancellation.sourceFeature.graphPoints.entries)
           entry.key: [entry.value.x, entry.value.y, entry.value.z],
       };
       await tester.tap(find.byKey(const ValueKey('inspector-add-label')));
@@ -1257,7 +1415,7 @@ void main() {
       await tester.testTextInput.receiveAction(TextInputAction.done);
       await waitUntil(
         tester,
-        () =>
+        () async =>
             !afterCancellation.busy &&
             receipts
                 .labels(document: selectedDocument, name: 'Inspector fixture')
@@ -1267,7 +1425,7 @@ void main() {
       expect(afterCancellation.error, isEmpty);
       expect(afterCancellation.sourceFeature.graphLabelInput.text, isEmpty);
       expect(
-        (afterCancellation.sourceFeature.graphPoints as Map).entries.any(
+        afterCancellation.sourceFeature.graphPoints.entries.any(
           (entry) =>
               (entry.value.x - beforeInlineOrganization[entry.key]![0]).abs() >
                   1e-6 ||
@@ -1306,7 +1464,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(afterCancellation.sourceFeature.graphSelectedDocument, isNull);
       expect(find.byKey(const ValueKey('graph-inspector')), findsNothing);
-      await waitUntil(tester, () => !afterCancellation.busy);
+      await waitUntil(tester, () async => !afterCancellation.busy);
       final organizationButton = find.widgetWithText(ActionChip, 'Add label');
       expect(
         tester.widget<ActionChip>(organizationButton).onPressed,
@@ -1321,11 +1479,12 @@ void main() {
       await tester.tap(find.text('Create & Auto-Assign'));
       await waitUntil(
         tester,
-        () => !afterCancellation.busy && receipts.clusters('Apollo').isNotEmpty,
+        () async =>
+            !afterCancellation.busy && receipts.clusters('Apollo').isNotEmpty,
       );
       await tester.pumpAndSettle();
       expect(afterCancellation.error, isEmpty);
-      final organizationRows = receipts.labels(name: 'Apollo') as List;
+      final organizationRows = receipts.labels(name: 'Apollo');
       expect(organizationRows, isNotEmpty);
       expect(
         organizationRows.any((row) => row['label_source'] == 'user_defined'),
@@ -1345,7 +1504,7 @@ void main() {
       );
       await tester.tap(find.text('Add source'));
       await tester.pumpAndSettle();
-      await waitUntil(tester, () => true);
+      await waitUntil(tester, () async => true);
       await captureWindow(
         tester,
         '$screenshotDirectory/04-add-source-menu.png',
@@ -1354,7 +1513,7 @@ void main() {
       await tester.pumpAndSettle();
       final expectedClusters = receipts.clusters();
       final expectedLabels = receipts.labels();
-      final savedGraphRows = receipts.graphEmbeddingReceipts as List;
+      final savedGraphRows = receipts.graphEmbeddingReceipts;
       expect(savedGraphRows.length, semanticGraphPointCount);
       expect(
         savedGraphRows.every(
@@ -1367,14 +1526,31 @@ void main() {
       // Distinguish restoration from a coincidentally identical fresh PCA result.
       // This changes coordinates only inside the disposable acceptance profile.
       final snapshotReader = readerFor(afterCancellation);
-      final snapshotSources = sourceRows(snapshotReader);
-      final snapshotResult = await snapshotReader.read(
-        StoreReadQueries.graphLayout(
-          sources: snapshotReader.sourceSummaries,
-          labelSet: snapshotReader.graphLabelSet(),
-          helperIdentity: 'integration-registered-receipt',
-        ),
-      );
+      final graphObservation = await observeCurrent(tester, () async {
+        final sources = await sourceRows(snapshotReader);
+        final summaries = await currentRead(
+          snapshotReader,
+          StoreReadQueries.sources(),
+        );
+        final labels = await currentRead(
+          snapshotReader,
+          StoreReadQueries.graphLabelSet(),
+        );
+        final result = await snapshotReader.read(
+          StoreReadQueries.graphLayout(
+            sources: summaries,
+            labelSet: labels,
+            helperIdentity: 'integration-registered-receipt',
+          ),
+        );
+        if (result.error != null) throw result.error!;
+        if (!result.current) {
+          throw const IntegrationReadPending('graph layout');
+        }
+        return (sources: sources, labels: labels, result: result);
+      });
+      final snapshotSources = graphObservation.sources;
+      final snapshotResult = graphObservation.result;
       expect(snapshotResult.error, isNull);
       final snapshot = snapshotResult.value!;
       final adjusted = snapshot.points.map(
@@ -1386,7 +1562,7 @@ void main() {
           'sources': graphSceneSources(snapshotSources, snapshot.vectors),
           'vectors': snapshot.vectors,
           'points': adjusted.map((k, v) => MapEntry(k, [v.x, v.y, v.z])),
-          'labelSet': snapshotReader.graphLabelSet(),
+          'labelSet': graphObservation.labels,
           'clusters': receipts.clusters(),
         }),
         true,
@@ -1399,7 +1575,7 @@ void main() {
       afterCancellation = await startedWorkspace(tester);
       await waitUntil(
         tester,
-        () =>
+        () async =>
             afterCancellation.d.helper.snapshot?.pipeline == 'ready' &&
             afterCancellation.d.generator?.effectiveState['state'] == 'ready',
       );
@@ -1411,7 +1587,7 @@ void main() {
       await tester.pumpAndSettle();
       await waitUntil(
         tester,
-        () =>
+        () async =>
             !afterCancellation.sourceFeature.graphOrganizing &&
             afterCancellation.sourceFeature.graphPoints.length ==
                 expectedGraph.length,
@@ -1420,7 +1596,7 @@ void main() {
       expect(receipts.labels(), expectedLabels);
       expect(receipts.clusters(), expectedClusters);
       for (final entry in expectedGraph.entries) {
-        final point = afterCancellation.sourceFeature.graphPoints[entry.key];
+        final point = afterCancellation.sourceFeature.graphPoints[entry.key]!;
         expect([point.x, point.y, point.z], entry.value);
       }
       expect(
@@ -1504,15 +1680,15 @@ void main() {
         await tester.tap(find.byTooltip('All meetings'));
         await tester.pumpAndSettle();
       }
-      await waitUntil(tester, () => true);
+      await waitUntil(tester, () async => true);
       await captureWindow(tester, '$screenshotDirectory/05-meetings.png');
       await tester.tap(find.text('Settings'));
       await tester.pumpAndSettle();
-      await waitUntil(tester, () => true);
+      await waitUntil(tester, () async => true);
       await captureWindow(tester, '$screenshotDirectory/07-settings.png');
       await tester.ensureVisible(find.text('Version'));
       await tester.pumpAndSettle();
-      await waitUntil(tester, () => true);
+      await waitUntil(tester, () async => true);
       await captureWindow(tester, '$screenshotDirectory/08-settings-lower.png');
       // The destructive action is exercised only in this disposable test profile.
       await tester.ensureVisible(find.text('Clear workspace data'));
@@ -1521,21 +1697,51 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
-      expect(sourceRows(readerFor(afterCancellation)), isNotEmpty);
+      expect(
+        (await observeCurrent(
+          tester,
+          () => sourceRows(readerFor(afterCancellation)),
+        )),
+        isNotEmpty,
+      );
       await tester.tap(find.text('Clear workspace data'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Delete workspace'));
-      await waitUntil(tester, () => afterCancellation.busy == false);
+      await waitUntil(tester, () async => afterCancellation.busy == false);
       expect(afterCancellation.error, isEmpty);
-      expect(sourceRows(readerFor(afterCancellation)), isEmpty);
+      expect(
+        (await observeCurrent(
+          tester,
+          () => sourceRows(readerFor(afterCancellation)),
+        )),
+        isEmpty,
+      );
       expect(receipts.graphDocuments, isEmpty);
       expect(receipts.graphLayouts, isEmpty);
       expect(receipts.labels(), isEmpty);
       expect(receipts.graphForceState, isEmpty);
       expect(receipts.clusters(), isEmpty);
-      expect(readerFor(afterCancellation).meetingCollection, isEmpty);
+      expect(
+        (await observeCurrent(
+          tester,
+          () => currentRead(
+            readerFor(afterCancellation),
+            StoreReadQueries.meetings(),
+          ),
+        )),
+        isEmpty,
+      );
       expect(receipts.answers.map((row) => row.toRow()).toList(), isEmpty);
-      expect(readerFor(afterCancellation).models.length, 3);
+      expect(
+        (await observeCurrent(
+          tester,
+          () => currentRead(
+            readerFor(afterCancellation),
+            StoreReadQueries.models(),
+          ),
+        )).length,
+        3,
+      );
       final report = env['FORESIGHT_MEETING_REPORT'];
       if (report != null) {
         File(report).writeAsStringSync(

@@ -63,6 +63,34 @@ void main() {
     });
   }
 
+  test(
+    'installed capture supplies the canonical runtime to its native ABI',
+    () async {
+      final environment = Map.of(runtimeConfiguration.environment);
+      addTearDown(
+        () => runtimeConfiguration.environment
+          ..clear()
+          ..addAll(environment),
+      );
+      runtimeConfiguration.environment['FORESIGHT_INSTALL_ROOT'] =
+          directory.path;
+      final runner = File(
+        '/usr/bin/true',
+      ).copySync('${directory.path}/speech-runner');
+      final alias = Link('${directory.path}/speech-alias')
+        ..createSync(runner.path);
+      final recording = Recording(library, (_) {}, (_, _, _, _) {});
+      addTearDown(recording.dispose);
+      recording.start(alias.path, model, playback: false);
+      final selected = fixture
+          .lookupFunction<Pointer<Utf8> Function(), Pointer<Utf8> Function()>(
+            'fixture_speech_runtime',
+          )()
+          .toDartString();
+      expect(selected, runner.resolveSymbolicLinksSync());
+    },
+  );
+
   test('disposing during finalization returns an owned cancellation', () async {
     fail(-1);
     holdSpeech(true);

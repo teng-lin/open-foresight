@@ -20,6 +20,7 @@ import smoke_bundle as smoke
 import installed_documents as documents
 import installed_runtime as runtime
 import smoke_macos_bundle as peers
+import installed_desktop_approval as gui
 import verify_macos_release_runtime as release
 
 
@@ -102,6 +103,9 @@ def test_linux_smoke_checks_relocation_isolated_owners_and_cleanup(
         data, run = Path(env["FORESIGHT_DATA"]), Path(env["FORESIGHT_RUNTIME"])
         data.mkdir(mode=0o700)
         run.mkdir(mode=0o755 if failure == "permissions" else 0o700)
+        if failure == "permissions":
+            run.chmod(0o755)
+            assert run.stat().st_mode & 0o777 == 0o755
         if failure != "database":
             (data / "application.db").touch()
         assert "relocated bundle" in command[0]
@@ -176,17 +180,28 @@ def test_installed_document_probe_cleans_peers_and_stops_only_its_own_service(
             state["closed"].append("mcp")
 
     class Application:
-        def __init__(self, endpoint):
+        def __init__(self, endpoint, host):
             pass
-
-        def attach_test_desktop(self, profile):
-            return failure != "attach"
 
         def close(self):
             state["closed"].append("application")
 
     monkeypatch.setattr(peers, "McpPeer", Mcp)
-    monkeypatch.setattr(peers, "ApplicationPeer", Application)
+    monkeypatch.setattr(gui, "ApprovedApplicationPeer", Application)
+
+    class Desktop:
+        def __init__(self, *args):
+            pass
+
+        def start(self):
+            if failure == "attach":
+                raise RuntimeError("Actual GUI unavailable")
+            return self
+
+        def close(self):
+            state["closed"].append("actual_gui")
+
+    monkeypatch.setattr(gui, "InstalledDesktop", Desktop)
     monkeypatch.setattr(
         documents,
         "process_path",
@@ -370,6 +385,9 @@ def test_installer_smoke_validates_manifest_startup_and_service_stop(
             Path(kwargs["env"]["FORESIGHT_RUNTIME"]),
         )
         data.mkdir(mode=0o755 if failure == "permissions" else 0o700)
+        if failure == "permissions":
+            data.chmod(0o755)
+            assert data.stat().st_mode & 0o777 == 0o755
         runtime.mkdir(mode=0o700)
         (runtime / "helper.sock").touch()
         with sqlite3.connect(data / "application.db") as db:

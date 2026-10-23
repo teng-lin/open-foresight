@@ -1,11 +1,34 @@
 import 'desktop_connection.dart';
-import 'desktop_read_models.dart';
+import 'read_models.dart';
+import 'desktop_status.dart';
 
 /// Immutable capture presentation state; owns no recorder or native handle.
 final class RecordingSnapshot implements RecordingStatus {
   final Map<String, Object?> snapshot;
   RecordingSnapshot(Map<String, dynamic> snapshot)
     : snapshot = immutableReadMap(snapshot);
+
+  /// Consume the already decoded desktop value without exposing wire maps.
+  RecordingSnapshot.fromPresentation(CapturePresentation value)
+    : this({
+        'finishing': value.finishing,
+        'paused': value.paused,
+        'samples': value.samples,
+        'peaks': value.peaks,
+        'volumes': value.volumes,
+        if (value.lastAudioMilliseconds != null)
+          'last_audio': value.lastAudioMilliseconds,
+        'echo_cancellation': {
+          'requested': value.echoCancellation.requested,
+          'active': value.echoCancellation.active,
+          'pending': value.echoCancellation.pending,
+          'restart_required': value.echoCancellation.restartRequired,
+          'fallback_status': value.echoCancellation.fallbackStatus,
+          'fallback_reason': value.echoCancellation.fallbackReason,
+          if (value.echoCancellation.supported != null)
+            'supported': value.echoCancellation.supported,
+        },
+      });
   @override
   bool get finishing => snapshot['finishing'] == true;
   @override

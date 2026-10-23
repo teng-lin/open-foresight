@@ -1,4 +1,7 @@
-import 'package:foresight_core/src/application.dart';
+import 'package:open_foresight/desktop_environment.dart';
+import '../test_support/platform_fixture.dart';
+import 'package:open_foresight/shell/workspace_tab.dart';
+import '../test_support/core_fixture.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -6,7 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/desktop_menu.dart';
 import 'package:open_foresight/main.dart';
-import 'package:foresight_core/src/store.dart';
+
 import 'desktop_connection_fixture.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 import 'quick_start_test.dart' show QuickStartDomain;
@@ -39,7 +42,10 @@ void main() {
     'menu commands work without enabling global shortcuts and stop on close',
     () async {
       final received = <String>[];
-      final menu = DesktopMenu((name) async => received.add(name), macOS: true);
+      final menu = DesktopMenu(
+        (name) async => received.add(name),
+        capabilities: const PlatformCapabilities.macOS(),
+      );
       for (final name in DesktopMenu.commands) {
         await command(name);
       }
@@ -76,15 +82,18 @@ void main() {
         Foresight(
           TestDesktopConnection(Application(domain)),
           deviceLoader: () async => [],
+          environment: DesktopEnvironment(
+            capabilities: testHostPlatformCapabilities,
+          ),
         ),
       );
       await tester.pumpAndSettle();
-      final dynamic state = tester.state(find.byType(Workspace));
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       for (final route in {
-        'settings': 6,
-        'ask': 1,
-        'sources': 0,
-        'meetings': 3,
+        'settings': WorkspaceTab.settings,
+        'ask': WorkspaceTab.chat,
+        'sources': WorkspaceTab.sources,
+        'meetings': WorkspaceTab.meetings,
       }.entries) {
         final navigating = command(route.key);
         await tester.pumpAndSettle();

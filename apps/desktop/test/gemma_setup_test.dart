@@ -1,12 +1,12 @@
+import 'fixtures/setup_process.dart';
 import 'store_reader_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'fixtures/verified_model_files.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/src/gemma_download.dart';
-import 'package:open_foresight/gemma_setup_view.dart';
-import 'package:foresight_core/src/store.dart';
+import '../test_support/core_fixture.dart';
+import 'package:open_foresight/features/settings/gemma_setup_view.dart';
 
 void main() {
   testWidgets('missing runner reuses a registered model outside the cache', (
@@ -31,6 +31,7 @@ void main() {
         MaterialApp(
           home: Scaffold(
             body: GemmaSetupDialog(
+              environment: setupEnvironment(),
               findLocalModel: verifiedFixtureModelFile,
               store: fixtureReader(store),
               savePreference: (key, value) async =>
@@ -81,6 +82,7 @@ void main() {
           MaterialApp(
             home: Scaffold(
               body: GemmaSetupDialog(
+                environment: setupEnvironment(),
                 findLocalModel: verifiedFixtureModelFile,
                 store: fixtureReader(store),
                 savePreference: (key, value) async =>
@@ -128,6 +130,7 @@ void main() {
         MaterialApp(
           home: Scaffold(
             body: GemmaSetupDialog(
+              environment: setupEnvironment(),
               findLocalModel: verifiedFixtureModelFile,
               store: fixtureReader(store),
               savePreference: (key, value) async =>
@@ -204,6 +207,7 @@ void main() {
                   onPressed: () => showDialog<void>(
                     context: context,
                     builder: (_) => GemmaSetupDialog(
+                      environment: setupEnvironment(),
                       findLocalModel: verifiedFixtureModelFile,
                       store: fixtureReader(store),
                       savePreference: (key, value) async =>
@@ -267,6 +271,7 @@ void main() {
         MaterialApp(
           home: Scaffold(
             body: GemmaSetupDialog(
+              environment: setupEnvironment(),
               findLocalModel: verifiedFixtureModelFile,
               store: fixtureReader(store),
               savePreference: (key, value) async =>

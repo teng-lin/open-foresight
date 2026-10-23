@@ -2,8 +2,9 @@ import '../operations.dart';
 import 'request_context.dart';
 
 class SecurityAttachDesktopRequest extends OperationRequest {
-  SecurityAttachDesktopRequest._(super.context, this.token);
+  SecurityAttachDesktopRequest._(super.context, this.token, this.visible);
   final String token;
+  final bool visible;
   @override
   Operation get operation => Operation.securityAttachDesktop;
   factory SecurityAttachDesktopRequest.decode(OperationRequestContext context) {
@@ -13,6 +14,7 @@ class SecurityAttachDesktopRequest extends OperationRequest {
     return SecurityAttachDesktopRequest._(
       context,
       values.value<String>("token"),
+      values.value<bool>('visible'),
     );
   }
 }
@@ -23,6 +25,23 @@ class SecurityDetachDesktopRequest extends OperationRequest {
   Operation get operation => Operation.securityDetachDesktop;
   factory SecurityDetachDesktopRequest.decode(OperationRequestContext context) {
     return SecurityDetachDesktopRequest._(context);
+  }
+}
+
+class SecurityDesktopVisibilityRequest extends OperationRequest {
+  SecurityDesktopVisibilityRequest._(super.context, this.visible);
+  final bool visible;
+  @override
+  Operation get operation => Operation.securityDesktopVisibility;
+  factory SecurityDesktopVisibilityRequest.decode(
+    OperationRequestContext context,
+  ) {
+    final values = Operation.securityDesktopVisibility.descriptor.arguments
+        .decode(context.rawArguments);
+    return SecurityDesktopVisibilityRequest._(
+      context,
+      values.value<bool>('visible'),
+    );
   }
 }
 

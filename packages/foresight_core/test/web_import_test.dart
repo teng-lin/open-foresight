@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/desktop_identity.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
@@ -722,13 +723,17 @@ void main() {
     () async {
       final root = createTestTempDirectorySync('web-import-service-');
       final profile = ProfilePaths('${root.path}/data', '${root.path}/run');
-      final service = await ApplicationService.start(profile);
+      final service = await ApplicationService.start(
+        profile,
+        desktopPeerVerifier: trustInProcessDesktop,
+      );
       final client = await ServiceClient.connect(
         '${profile.runtime}/application.sock',
       );
       final desktopCapability = File('${profile.data}/.desktop-capability');
       if (desktopCapability.existsSync()) {
         await client.call('security.attach_desktop', {
+          'visible': true,
           'token': desktopCapability.readAsStringSync(),
         });
       }

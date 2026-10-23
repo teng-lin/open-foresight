@@ -1,11 +1,12 @@
-import 'package:foresight_core/src/application.dart';
+import 'package:open_foresight/shell/workspace_tab.dart';
+import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/src/domain.dart';
+
 import 'package:open_foresight/main.dart';
-import 'package:foresight_core/src/store.dart';
+
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 void main() {
@@ -40,7 +41,8 @@ void main() {
             deviceLoader: () async => [],
           ),
         );
-        final dynamic state = tester.state(find.byType(Workspace));
+        final state =
+            tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
         for (final id in [alpha, beta]) {
           state.update(() {
             state.meetingFeature.meetingId = id;
@@ -69,7 +71,7 @@ void main() {
         }
         state.update(() {
           state.meetingFeature.meetingId = null;
-          state.tab = 1;
+          state.navigate(WorkspaceTab.chat);
         });
         await tester.pumpAndSettle();
         await tester.enterText(

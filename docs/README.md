@@ -18,6 +18,7 @@ remain in git history. Current AI workflow research is linked below.
 - [Application service and MCP](architecture/application-service.md)
 - [Linux packaging and CI](platforms/linux-packaging.md)
 - [CI dependencies, release promotion, and preview installers](platforms/ci-performance.md)
+- [CI integrity rules](platforms/ci-integrity.md)
 - [macOS build, bundle, and release gates](platforms/macos-support.md)
 
 ## Models and inference

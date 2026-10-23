@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'package:clock/clock.dart';
 import 'dart:convert';
@@ -292,6 +293,7 @@ void main() {
       runtimeConfiguration.environment.remove('FORESIGHT_HELPER');
       final owner = await ApplicationService.start(
         profile,
+        desktopPeerVerifier: trustInProcessDesktop,
         clock: Clock(() => now),
       );
       final oneShot = await ServiceClient.connect(serviceEndpoint(profile));
@@ -340,6 +342,7 @@ void main() {
       writer = await ServiceClient.connect(serviceEndpoint(profile));
       desktop = await ServiceClient.connect(serviceEndpoint(profile));
       await desktop.call('security.attach_desktop', {
+        'visible': true,
         'token': File('${profile.data}/.desktop-capability').readAsStringSync(),
       });
       final save = failureOf(
@@ -806,6 +809,7 @@ void main() {
     runtimeConfiguration.environment.remove('FORESIGHT_HELPER');
     final service = await ApplicationService.start(
       profile,
+      desktopPeerVerifier: trustInProcessDesktop,
       desktopDetachGrace: Duration.zero,
     );
     runtimeConfiguration.environment['FORESIGHT_HELPER'] = '';
@@ -815,6 +819,7 @@ void main() {
     try {
       previous = await ServiceClient.connect(serviceEndpoint(profile));
       await previous.call('security.attach_desktop', {
+        'visible': true,
         'token': File('${profile.data}/.desktop-capability').readAsStringSync(),
       });
       // The second status is the desktop's reserving snapshot.
@@ -1172,6 +1177,7 @@ void main() {
       Future<ServiceClient> attachDesktop() async {
         final host = await ServiceClient.connect(serviceEndpoint(profile));
         await host.call('security.attach_desktop', {
+          'visible': true,
           'token': File(
             '${profile.data}/.desktop-capability',
           ).readAsStringSync(),

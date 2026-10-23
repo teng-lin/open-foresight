@@ -1,5 +1,8 @@
 import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
+import 'support/current_read.dart';
+import 'package:foresight_core/desktop.dart'
+    show StoreReadQueries, ReadFreshness;
 import 'dart:convert';
 import 'dart:io';
 
@@ -21,6 +24,285 @@ void main() {
     await f.start();
   });
   tearDown(() => f.close());
+
+  test(
+    'reenabling approvals waits for an obsolete failed attach then retries',
+    () async {
+      final entered = Completer<void>();
+      late Socket heldSocket;
+      late Map<String, dynamic> heldRequest;
+      var attaches = 0;
+      f.handler = (socket, request) {
+        if (request['method'] == Operation.securityAttachDesktop.wire &&
+            ++attaches == 1) {
+          heldSocket = socket;
+          heldRequest = request;
+          entered.complete();
+        } else {
+          f.reply(socket, request, true);
+        }
+      };
+      final old = f.remote.enableDesktopApprovals((_) {});
+      await entered.future;
+      await f.remote.disableDesktopApprovals();
+      final next = f.remote.enableDesktopApprovals((_) {});
+      final completed = expectLater(next, completes);
+      heldSocket.writeln(
+        jsonEncode({
+          'id': heldRequest['id'],
+          'error': RpcError(RpcErrorCode.denied, 'Obsolete attach').toJson(),
+        }),
+      );
+      await old;
+      await completed;
+      expect(attaches, 2);
+    },
+  );
+
+  test(
+    'concurrent current-generation attach failures remain observable',
+    () async {
+      final entered = Completer<void>();
+      late Socket heldSocket;
+      late Map<String, dynamic> heldRequest;
+      var attaches = 0;
+      f.handler = (socket, request) {
+        attaches++;
+        heldSocket = socket;
+        heldRequest = request;
+        if (!entered.isCompleted) entered.complete();
+      };
+      final first = f.remote.enableDesktopApprovals((_) {});
+      final firstError = expectLater(first, throwsRpcCode(RpcErrorCode.denied));
+      await entered.future;
+      final second = f.remote.enableDesktopApprovals((_) {});
+      final secondError = expectLater(
+        second,
+        throwsRpcCode(RpcErrorCode.denied),
+      );
+      heldSocket.writeln(
+        jsonEncode({
+          'id': heldRequest['id'],
+          'error': RpcError(RpcErrorCode.denied, 'Current attach').toJson(),
+        }),
+      );
+      await Future.wait([firstError, secondError]);
+      expect(attaches, 1);
+    },
+  );
+
+  test(
+    'new visibility ignores an obsolete failed update after reenable',
+    () async {
+      f.handler = (socket, request) => f.reply(socket, request, true);
+      await f.remote.enableDesktopApprovals((_) {});
+      final entered = Completer<void>();
+      late Socket heldSocket;
+      late Map<String, dynamic> heldRequest;
+      var updates = 0;
+      f.handler = (socket, request) {
+        if (request['method'] == Operation.securityDesktopVisibility.wire &&
+            ++updates == 1) {
+          heldSocket = socket;
+          heldRequest = request;
+          entered.complete();
+        } else {
+          f.reply(socket, request, true);
+        }
+      };
+      final old = f.remote.setDesktopVisible(true);
+      await entered.future;
+      await f.remote.disableDesktopApprovals();
+      await f.remote.enableDesktopApprovals((_) {});
+      final hidden = f.remote.setDesktopVisible(false);
+      final completed = expectLater(hidden, completes);
+      heldSocket.writeln(
+        jsonEncode({
+          'id': heldRequest['id'],
+          'error': RpcError(
+            RpcErrorCode.denied,
+            'Obsolete visibility',
+          ).toJson(),
+        }),
+      );
+      await old;
+      await completed;
+      expect(updates, 2);
+    },
+  );
+
+  test(
+    'hiding during attachment reconciles the latest visibility once',
+    () async {
+      await f.remote.setDesktopVisible(true);
+      final attached = Completer<void>();
+      late Socket heldSocket;
+      late Map<String, dynamic> heldRequest;
+      var attaches = 0;
+      var visible = false;
+      final token = File('${f.profile.data}/.desktop-capability');
+      f.handler = (socket, request) {
+        final args = request['args'] as Map;
+        if (request['method'] == Operation.securityAttachDesktop.wire) {
+          attaches++;
+          if (attaches > 1 || args['token'] != token.readAsStringSync()) {
+            socket.writeln(
+              jsonEncode({
+                'id': request['id'],
+                'error': RpcError(RpcErrorCode.denied, 'Stale token').toJson(),
+              }),
+            );
+            return;
+          }
+          visible = args['visible'] == true;
+          heldSocket = socket;
+          heldRequest = request;
+          attached.complete();
+        } else {
+          visible = args['visible'] == true;
+          f.reply(socket, request, true);
+        }
+      };
+      final initial = f.remote.enableDesktopApprovals((_) {});
+      await attached.future;
+      final hidden = f.remote.setDesktopVisible(false);
+      final completed = expectLater(Future.wait([initial, hidden]), completes);
+      token.writeAsStringSync('rotated-token');
+      f.reply(heldSocket, heldRequest, true);
+      await completed;
+      expect(attaches, 1);
+      expect(visible, false);
+    },
+  );
+
+  test(
+    'overlapping lifecycle updates reconcile the latest desired visibility',
+    () async {
+      f.handler = (socket, request) => f.reply(socket, request, true);
+      await f.remote.enableDesktopApprovals((_) {});
+      final entered = Completer<void>();
+      late Socket heldSocket;
+      late Map<String, dynamic> heldRequest;
+      final updates = <bool>[];
+      f.handler = (socket, request) {
+        expect(request['method'], Operation.securityDesktopVisibility.wire);
+        updates.add((request['args'] as Map)['visible'] as bool);
+        if (!entered.isCompleted) {
+          heldSocket = socket;
+          heldRequest = request;
+          entered.complete();
+        } else {
+          f.reply(socket, request, true);
+        }
+      };
+      final shown = f.remote.setDesktopVisible(true);
+      await entered.future;
+      final hidden = f.remote.setDesktopVisible(false);
+      final reshown = f.remote.setDesktopVisible(true);
+      final lastHidden = f.remote.setDesktopVisible(false);
+      f.reply(heldSocket, heldRequest, true);
+      await Future.wait([shown, hidden, reshown, lastHidden]);
+      expect(updates, [true, false]);
+    },
+  );
+
+  test(
+    'disable during attachment prevents late visibility and host resurrection',
+    () async {
+      await f.remote.setDesktopVisible(true);
+      final entered = Completer<void>();
+      late Socket heldSocket;
+      late Map<String, dynamic> heldRequest;
+      f.handler = (socket, request) {
+        if (!entered.isCompleted) {
+          heldSocket = socket;
+          heldRequest = request;
+          entered.complete();
+        } else {
+          f.reply(socket, request, true);
+        }
+      };
+      final attach = f.remote.enableDesktopApprovals((_) {});
+      await entered.future;
+      final hidden = f.remote.setDesktopVisible(false);
+      await f.remote.disableDesktopApprovals();
+      f.reply(heldSocket, heldRequest, true);
+      await Future.wait([attach, hidden]);
+      expect(
+        f.requests.where(
+          (r) => r['method'] == Operation.securityDesktopVisibility.wire,
+        ),
+        isEmpty,
+      );
+      await f.remote.enableDesktopApprovals((_) {});
+      expect(
+        f.requests.where(
+          (r) => r['method'] == Operation.securityAttachDesktop.wire,
+        ),
+        hasLength(2),
+      );
+    },
+  );
+
+  test(
+    'closing during attachment prevents late visibility and reattachment',
+    () async {
+      await f.remote.setDesktopVisible(true);
+      final entered = Completer<void>();
+      f.handler = (_, request) {
+        expect(request['method'], Operation.securityAttachDesktop.wire);
+        entered.complete();
+      };
+      final attach = f.remote.enableDesktopApprovals((_) {});
+      await entered.future;
+      final hidden = f.remote.setDesktopVisible(false);
+      f.remote.close();
+      await f.remote.closed;
+      await Future.wait([attach, hidden]);
+      expect(
+        f.requests.where(
+          (r) => r['method'] == Operation.securityAttachDesktop.wire,
+        ),
+        hasLength(1),
+      );
+      expect(
+        f.requests.where(
+          (r) => r['method'] == Operation.securityDesktopVisibility.wire,
+        ),
+        isEmpty,
+      );
+    },
+  );
+
+  test(
+    'a displaced hidden window waits for visibility before reclaiming its host',
+    () async {
+      await f.remote.setDesktopVisible(true);
+      var attaches = 0;
+      f.handler = (socket, request) {
+        if (request['method'] == Operation.securityAttachDesktop.wire) {
+          attaches++;
+          f.reply(socket, request, true);
+        } else {
+          socket.writeln(
+            jsonEncode({
+              'id': request['id'],
+              'error': RpcError(
+                RpcErrorCode.denied,
+                'Replaced desktop',
+              ).toJson(),
+            }),
+          );
+        }
+      };
+      await f.remote.enableDesktopApprovals((_) {});
+      await f.remote.setDesktopVisible(false);
+      await f.remote.setDesktopVisible(false);
+      expect(attaches, 1);
+      await f.remote.setDesktopVisible(true);
+      expect(attaches, 2);
+    },
+  );
 
   test(
     'a future schema retires the reader and reports an actionable connection state',
@@ -138,7 +420,7 @@ void main() {
       expect(auth.displayName, 'Fixture Person');
       expect(auth.photoUrl, 'https://lh3.googleusercontent.com/fixture');
       expect(auth.account, 'account');
-      expect(auth.client, isNotNull);
+      expect(auth.configured, isTrue);
       expect(auth.signingIn, isTrue);
       expect(auth.loadError, 'refresh needed');
       expect(
@@ -148,7 +430,7 @@ void main() {
       f.event({'capture': {}, 'generation': {}, 'google': {}});
       await eventually(() => f.remote.generator == null);
       expect(f.remote.webSearchAvailable, isFalse);
-      expect(auth.client, isNull);
+      expect(auth.configured, isFalse);
       expect(auth.email, isEmpty);
       expect(auth.displayName, isEmpty);
       expect(auth.photoUrl, isEmpty);
@@ -183,12 +465,24 @@ void main() {
         }
         f.reply(socket, request, null);
       };
-      expect(f.remote.store.sourceById(id)!.content, 'committed body');
+      expect(
+        (await currentRead(
+          f.remote.store,
+          StoreReadQueries.source(id),
+        ))!.content,
+        'committed body',
+      );
       await f.remote.index(id);
-      expect(f.remote.store.sourceById(id)!.state, 'indexed');
+      expect(
+        (await currentRead(f.remote.store, StoreReadQueries.source(id)))!.state,
+        'indexed',
+      );
       expect(
         await f.remote.graphEmbeddings([
-          f.remote.store.sourceById(id)!.toRow(),
+          (await currentRead(
+            f.remote.store,
+            StoreReadQueries.source(id),
+          ))!.toRow(),
         ]),
         {
           id: [1.0, 2.5],
@@ -196,7 +490,10 @@ void main() {
       );
       await f.remote.resume();
       await f.remote.delete(id);
-      expect(f.remote.store.sourceSummaries, isEmpty);
+      expect(
+        (await currentRead(f.remote.store, StoreReadQueries.sources())),
+        isEmpty,
+      );
       expect(
         f.requests.where((r) => r['method'] == 'application.resume'),
         hasLength(1),
@@ -421,11 +718,18 @@ void main() {
       final opened = <Uri>[];
       await auth.addAccount((uri) async => opened.add(uri));
       expect(opened.single.path, '/add');
-      expect(auth.accounts.map((account) => account['id']), [
+      expect(auth.accounts.map((account) => account.id), ['second', 'first']);
+      final previousAccounts = auth.accounts;
+      expect(previousAccounts.first.email, 'second@example.test');
+      expect(previousAccounts.first.current, isTrue);
+      expect(previousAccounts.last.displayName, isEmpty);
+      expect(() => previousAccounts.clear(), throwsUnsupportedError);
+      await auth.switchAccount('first');
+      expect(auth.accounts, isEmpty);
+      expect(previousAccounts.map((account) => account.id), [
         'second',
         'first',
       ]);
-      await auth.switchAccount('first');
       expect(auth.account, 'first');
       await auth.signOutAccount('second');
       expect(auth.connected, isTrue);
@@ -474,7 +778,10 @@ void main() {
         'id': 19,
         'workspace_epoch': f.owner.workspaceEpoch,
       });
-      expect(connection.attachments(19), isEmpty);
+      expect(
+        (await currentRead(f.remote.store, StoreReadQueries.attachments(19))),
+        isEmpty,
+      );
       f.owner.db.execute(
         "INSERT INTO meetings(id,title,state) VALUES(19,'Fixture','ready')",
       );
@@ -489,7 +796,13 @@ void main() {
           }),
         ],
       );
-      expect(connection.attachments(19).single['fileId'], 'doc');
+      expect(
+        (await currentRead(
+          f.remote.store,
+          StoreReadQueries.attachments(19),
+        )).single.fileId,
+        'doc',
+      );
       await connection.reminders(DateTime.now(), (_) async {
         fail('Service owns reminders');
       });
@@ -946,7 +1259,12 @@ void main() {
     );
     expect(created, isNotNull);
     await created!.closed;
-    expect(() => created!.store.preference('unused'), throwsA(anything));
+    final retired = await created!.store.read(
+      StoreReadQueries.preference('unused'),
+    );
+    expect(retired.freshness, ReadFreshness.cancelled);
+    expect(retired.error!.code, RpcErrorCode.cancelled);
+    expect(retired.value, isNull);
     expect(created!.client.isClosed, isTrue);
     expect(f.sockets.length, greaterThan(connections));
   });

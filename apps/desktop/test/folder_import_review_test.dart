@@ -1,4 +1,4 @@
-import 'package:foresight_core/src/application.dart';
+import '../test_support/core_fixture.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -6,8 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/main.dart';
-import 'package:foresight_core/src/domain.dart';
-import 'package:foresight_core/src/store.dart';
+
 import 'desktop_connection_fixture.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 import 'pump_until.dart';
@@ -37,8 +36,8 @@ void main() {
           deviceLoader: () async => [],
         ),
       );
-      final dynamic state = tester.state(find.byType(Workspace));
-      final work = state.sourceFeature.importFolder() as Future<void>;
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
+      final work = state.sourceFeature.importFolder();
       await tester.pump();
       expect(requested, isTrue);
       await tester.pumpWidget(const SizedBox.shrink());
@@ -81,12 +80,11 @@ void main() {
             deviceLoader: () async => [],
           ),
         );
-        final dynamic state = tester.state(find.byType(Workspace));
-        final work =
-            state.run(() async {
-                  await state.sourceFeature.reviewFolderImport(files.path);
-                })
-                as Future<void>;
+        final state =
+            tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
+        final work = state.run(() async {
+          await state.sourceFeature.reviewFolderImport(files.path);
+        });
         await pumpUntil(
           tester,
           () => find.text('Import selected (2)').evaluate().isNotEmpty,

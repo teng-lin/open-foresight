@@ -2,6 +2,9 @@ import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/application.dart';
 import 'dart:async';
+import 'support/current_read.dart';
+import 'package:foresight_core/desktop.dart' show StoreReadQueries;
+import 'package:foresight_core/src/sqlite_store_reader.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:test/test.dart';
@@ -779,7 +782,19 @@ void main() {
         expect(domain.indexed, hasLength(indexedBeforeCalendarRefresh));
         final meeting =
             store.rows('SELECT * FROM meetings').single['id'] as int;
-        expect(connection.attachments(meeting).single['fileId'], 'doc');
+        final reader = SqliteStoreReader.open(
+          store.path,
+          profile: 'fixture',
+          connection: 'calendar',
+        );
+        addTearDown(reader.close);
+        expect(
+          (await currentRead(
+            reader,
+            StoreReadQueries.attachments(meeting),
+          )).single.fileId,
+          'doc',
+        );
         await connection.importAttachments(meeting);
         expect(
           store.sources

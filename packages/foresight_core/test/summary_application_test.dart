@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:foresight_core/desktop.dart'
+    show CapturePresentation, MeetingRunPresentation;
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:foresight_core/src/rpc_error.dart';
@@ -129,9 +131,64 @@ void main() {
         (app.captureState['meeting_summaries'] as Map)['$meeting']['active'],
         isFalse,
       );
+      expect(
+        (app.captureState['meeting_summaries'] as Map)['$meeting'],
+        isNot(contains('preview')),
+      );
       // A canceled prior user edit must never be used as an incremental checkpoint.
       store.editArtifact(artifact['id'] as int, 'User correction');
       expect(store.summaryCheckpoint(meeting), isNull);
+    },
+  );
+
+  test(
+    'typed summary JSON retains active map/reduce progress and previews',
+    () async {
+      store.transcript(
+        meeting,
+        'Alice owns the release and ships Friday. ' * 400,
+        true,
+        200,
+        1000,
+        'microphone',
+      );
+      final states = <MeetingRunPresentation>[];
+      final changes = app.changes.stream.listen((_) {
+        final capture = CapturePresentation.fromWire(
+          jsonDecode(jsonEncode(app.captureState)),
+        );
+        final summary = capture.summary(meeting);
+        if (summary != null) states.add(summary);
+      });
+      addTearDown(changes.cancel);
+      await app.generateSummary(meeting, requestId: 'typed-map-reduce');
+      final maps = states
+          .where((state) => state.active && state.phase == 'mapping')
+          .toList();
+      expect(maps, isNotEmpty);
+      final total = maps.first.total;
+      expect(total, greaterThan(1));
+      expect(maps.any((state) => state.completed > 0), isTrue);
+      final reduction = states.firstWhere(
+        (state) =>
+            state.active &&
+            state.phase == 'reducing' &&
+            state.preview.isNotEmpty,
+      );
+      expect(reduction.completed, total);
+      expect(reduction.total, total);
+      expect(reduction.preview, '# Overview\nLaunch Friday.');
+      final settled = CapturePresentation.fromWire(
+        jsonDecode(jsonEncode(app.captureState)),
+      ).summary(meeting)!;
+      expect(settled.phase, 'completed');
+      expect(settled.active, isFalse);
+      expect(settled.preview, isEmpty);
+      final artifact = store.meetingArtifacts(meeting, 'summary').single;
+      expect(
+        (jsonDecode(artifact['manifest'] as String) as Map)['mode'],
+        'map_reduce',
+      );
     },
   );
 
@@ -174,6 +231,14 @@ void main() {
     await expectLater(app.generateSummary(meeting), throwsStateError);
     expect(store.meetingArtifacts(meeting, 'summary'), hasLength(1));
     expect(store.summaryCheckpoint(meeting), checkpoint);
+    final failed = CapturePresentation.fromWire(
+      jsonDecode(jsonEncode(app.captureState)),
+    ).summary(meeting)!;
+    expect(failed.phase, 'failed');
+    expect(failed.error, contains('worker failed'));
+    expect(failed.active, isFalse);
+    expect(failed.cancelled, isFalse);
+    expect(failed.preview, isEmpty);
   });
 
   test(
@@ -192,6 +257,14 @@ void main() {
       expect(runtime.cancelled, contains('parent-summary-1'));
       expect(store.meetingArtifacts(meeting, 'summary'), isEmpty);
       expect(store.summaryCheckpoint(meeting), isNull);
+      final cancelled = CapturePresentation.fromWire(
+        jsonDecode(jsonEncode(app.captureState)),
+      ).summary(meeting)!;
+      expect(cancelled.phase, 'failed');
+      expect(cancelled.cancelled, isTrue);
+      expect(cancelled.active, isFalse);
+      expect(cancelled.error, contains('cancelled'));
+      expect(cancelled.preview, isEmpty);
     },
   );
 

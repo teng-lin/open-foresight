@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/src/native.dart';
-import 'package:foresight_core/src/rpc_error.dart';
+import '../test_support/core_fixture.dart';
 
 void main() {
   test(

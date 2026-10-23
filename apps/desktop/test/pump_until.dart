@@ -19,3 +19,26 @@ Future<void> pumpUntil(
   );
   await tester.pump();
 }
+
+/// Drain work started by widget callbacks in their FakeAsync zone while real
+/// worker I/O settles. Awaiting that work inside runAsync would freeze its
+/// originating widget microtasks.
+Future<void> pumpUntilCompleted(
+  WidgetTester tester,
+  Future<void> pending,
+) async {
+  var settled = false;
+  Object? failure;
+  StackTrace? trace;
+  final joined = pending.then<void>(
+    (_) => settled = true,
+    onError: (Object error, StackTrace stack) {
+      failure = error;
+      trace = stack;
+      settled = true;
+    },
+  );
+  await pumpUntil(tester, () => settled);
+  await joined;
+  if (failure != null) Error.throwWithStackTrace(failure!, trace!);
+}

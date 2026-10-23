@@ -35,7 +35,7 @@ void main() {
           action,
         );
       }
-      final published = schema.schema.toJson();
+      final published = schema.schemaJson;
       expect(published['required'], ['action', 'count']);
       expect(published['additionalProperties'], isTrue);
       expect((published['properties'] as Map)['action'], {
@@ -73,7 +73,7 @@ void main() {
       distinct: true,
     );
     const schema = OperationArgumentSchema([field]);
-    expect((schema.schema.toJson()['properties'] as Map)['sources'], {
+    expect((schema.schemaJson['properties'] as Map)['sources'], {
       'type': 'array',
       'items': {'type': 'string'},
       'minItems': 1,
@@ -113,7 +113,7 @@ void main() {
         ArgumentField('labels', ArgumentKind.strings, defaultValue: <String>[]),
         ArgumentField('enabled', ArgumentKind.trueSwitch),
       ]);
-      final published = schema.schema.toJson();
+      final published = schema.schemaJson;
       expect(published['required'], ['sources', 'vectors', 'points']);
       final properties = published['properties'] as Map;
       expect(properties['sources'], {

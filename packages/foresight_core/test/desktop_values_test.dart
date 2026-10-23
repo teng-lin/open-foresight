@@ -40,4 +40,33 @@ void main() {
     expect(snapshot.lastAudioActivity.millisecondsSinceEpoch, 42);
     expect(() => snapshot.sampleCounts[0] = 99, throwsUnsupportedError);
   });
+  test(
+    'recording snapshot accepts typed capture without retaining mutable lists',
+    () {
+      final samples = [4, 0];
+      final capture = CapturePresentation.fromWire({
+        'finishing': true,
+        'paused': true,
+        'samples': samples,
+        'peaks': [0.5, 0],
+        'volumes': [0.2, 0],
+        'last_audio': 42,
+        'echo_cancellation': {
+          'requested': true,
+          'active': true,
+          'fallback_reason': 'fixture',
+        },
+      });
+      final snapshot = RecordingSnapshot.fromPresentation(capture);
+      samples[0] = 90;
+      expect(snapshot.finishing, isTrue);
+      expect(snapshot.paused, isTrue);
+      expect(snapshot.sampleCounts, [4, 0]);
+      expect(snapshot.peakVolumes, [0.5, 0.0]);
+      expect(snapshot.currentVolumes, [0.2, 0.0]);
+      expect(snapshot.lastAudioActivity.millisecondsSinceEpoch, 42);
+      expect(snapshot.echoCancellationState['fallback_reason'], 'fixture');
+      expect(() => snapshot.sampleCounts[0] = 90, throwsUnsupportedError);
+    },
+  );
 }

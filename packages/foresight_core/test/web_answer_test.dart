@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/desktop_identity.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/application.dart';
 import 'dart:async';
@@ -379,6 +380,7 @@ void main() {
       );
       final service = await ApplicationService.start(
         profile,
+        desktopPeerVerifier: trustInProcessDesktop,
         webSearch: fixtureSearch(),
       );
       final serviceRuntime = ToolRuntime();
@@ -390,6 +392,7 @@ void main() {
       RemoteDomain? client;
       try {
         client = await RemoteDomain.connect(profile);
+        await client.setDesktopVisible(true);
         await client.enableDesktopApprovals((event) {
           if (event['event'] == 'approval') {
             unawaited(

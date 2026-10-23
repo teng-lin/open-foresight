@@ -1,7 +1,7 @@
 import 'dart:io';
 
 import 'package:foresight_core/desktop.dart';
-import 'package:foresight_core/src/store.dart' show Store;
+import 'core_fixture.dart';
 
 /// Persistence receipts belong to this disposable test profile, not the UI's
 /// reader capability. The inspector owns only its separate read-only handle.

@@ -1101,3 +1101,21 @@ corrected source needs its own clean build/source proof before service/UI and
 packaged runtime acceptance. No dependency version or SDK input changed for this
 CocoaPods synchronization. The latest prior Mac unit/coverage results remain
 bound to their original export, not silently relabeled as this later source.
+
+
+## Closing #170 hosted Linux acceptance (F-1a, 2026-10-22)
+
+GitHub run [39830379125](https://github.com/teng-lin/open-foresight/actions/runs/39830379125)
+is completed with conclusion `success` at the exact merged source
+`75898380ac68a0a98dc4a9fdcfc38afc99d133d5`. Its `acceptance-cpu`,
+`acceptance-audio`, `acceptance-deb`, `packaging / linux-deb`,
+`packaging / linux-rpm`, `packaging / linux-arch`, and `acceptance-checks`
+jobs all report success. This closes the hosted models, software GPU,
+virtual audio, installer and packaging obligations listed in F-1a. Physical
+microphone/audio devices and physical GPU validation were not run by those jobs.
+The run's current job conclusions and source SHA were queried through `gh run
+view` on 2026-10-22; this is hosted evidence, not a new local execution.
+
+The desktop feature execution now has its own
+[record](2026-10-22-desktop-feature-execution.md). This historical progress file
+continues to describe #170 only.

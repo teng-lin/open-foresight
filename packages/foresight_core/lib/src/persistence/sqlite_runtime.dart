@@ -29,9 +29,35 @@ DynamicLibrary _openMacSqlite() {
   return DynamicLibrary.open(path);
 }
 
+DynamicLibrary _openLinuxBundleSqlite(String root) {
+  final file = File('$root/lib/libsqlite3.so');
+  final String path;
+  try {
+    path = file.resolveSymbolicLinksSync();
+  } on FileSystemException {
+    throw StateError(
+      'The packaged SQLite runtime is missing. Reinstall Open Foresight.',
+    );
+  }
+  if (!path.startsWith('$root/')) {
+    throw StateError(
+      'The packaged SQLite runtime leaves this installation. Reinstall Open Foresight.',
+    );
+  }
+  return DynamicLibrary.open(path);
+}
+
 upstream.Sqlite3 _loadSqlite() {
   if (Platform.isMacOS) {
     loader.open.overrideFor(loader.OperatingSystem.macOS, _openMacSqlite);
+  } else if (Platform.isLinux) {
+    final root = runtimeConfiguration.linuxBundleRoot;
+    if (root != null) {
+      loader.open.overrideFor(
+        loader.OperatingSystem.linux,
+        () => _openLinuxBundleSqlite(root),
+      );
+    }
   }
   final api = upstream.sqlite3;
   if (Platform.isMacOS && api.version.sourceId != applicationSqliteSourceId) {

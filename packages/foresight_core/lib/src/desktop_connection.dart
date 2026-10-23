@@ -2,7 +2,12 @@ import 'operations.dart';
 import 'dart:io';
 import 'helper_status.dart';
 import 'store_reader.dart';
-import 'google_auth.dart';
+import 'desktop_status.dart';
+
+extension GenerationPresentationValue on GenerationStatus {
+  GenerationPresentation get presentation =>
+      GenerationPresentation.fromWire(effectiveState, generating: generating);
+}
 
 /// Capabilities exposed to a desktop. Worker mutation and credentials stay in
 /// the application service; proxies only implement these client operations.
@@ -29,14 +34,14 @@ abstract interface class GoogleAccount {
   String get email;
   String get displayName;
   String get photoUrl;
-  List<Map<String, Object?>> get accounts;
+  List<GoogleAccountPresentation> get accounts;
   Future<void> addAccount(Future<void> Function(Uri) openBrowser);
   Future<void> switchAccount(String id);
   Future<void> signOutAccount(String id);
   String get account;
   String get loadError;
   bool get signingIn;
-  GoogleClient? get client;
+  bool get configured;
   Future<void> configure(File file);
   Future<void> signIn(Future<void> Function(Uri) openBrowser);
   void cancelSignIn();
@@ -61,7 +66,6 @@ abstract interface class ConnectedSources {
   Future<void> syncCalendar({String calendarId = 'primary', DateTime? now});
   Future<void> refresh();
   Future<void> importAttachments(int meeting);
-  List<Map<String, dynamic>> attachments(int meeting);
 }
 
 /// Optional high-frequency telemetry, independent of workspace changes.
@@ -91,8 +95,8 @@ abstract interface class DesktopConnection {
   GenerationStatus get runtime;
   GoogleAccount get googleAuth;
   ConnectedSources get google;
-  Map<String, dynamic> get capture;
-  Map<String, dynamic> get googleStatus;
+  CapturePresentation get capturePresentation;
+  GooglePresentation get googlePresentation;
   bool get webSearchAvailable;
   bool get sourcesPaused;
 
@@ -143,6 +147,7 @@ abstract interface class DesktopConnection {
     void Function(Map<String, dynamic>) events,
   );
   Future<void> disableDesktopApprovals();
+  Future<void> setDesktopVisible(bool visible);
   void close();
 }
 

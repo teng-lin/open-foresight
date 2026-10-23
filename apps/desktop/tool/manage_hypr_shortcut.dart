@@ -1,5 +1,5 @@
 import 'dart:io';
-import 'package:open_foresight/hypr_shortcuts.dart';
+import 'package:open_foresight/features/integrations/hypr_shortcuts.dart';
 
 Future<void> main(List<String> arguments) async {
   if (arguments.length != 2) throw ArgumentError('install|remove launcher');

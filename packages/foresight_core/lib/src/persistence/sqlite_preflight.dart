@@ -3,7 +3,7 @@ import 'dart:typed_data';
 
 import 'sqlite_runtime.dart';
 
-import '../service_socket.dart' show fileMetadataSync;
+import '../platform_file_metadata.dart' show fileMetadataSync;
 import '../platform_services.dart' show protectPrivateFile;
 
 /// Qualifies existing bytes before any live writable connection is opened.

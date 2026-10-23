@@ -2,7 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/app_theme.dart';
-import 'package:open_foresight/onboarding_view.dart';
+import 'package:open_foresight/features/onboarding/onboarding_view.dart';
 
 void main() {
   Future<void> show(

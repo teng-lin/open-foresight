@@ -1,11 +1,12 @@
+import 'pump_until.dart';
+import 'package:open_foresight/shell/workspace_tab.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/remote.dart';
-import 'package:foresight_core/src/gemma_download.dart';
-import 'package:open_foresight/gemma_setup_view.dart';
-import 'package:foresight_core/src/speech_models.dart';
-import 'package:open_foresight/speech_setup_view.dart';
+import '../test_support/core_fixture.dart';
+import 'package:open_foresight/features/settings/gemma_setup_view.dart';
+
+import 'package:open_foresight/features/settings/speech_setup_view.dart';
 import 'controller_fixture.dart';
 
 void main() {
@@ -13,7 +14,7 @@ void main() {
     'model setup routes service commands and ignores cancelled embedding adoption',
     (tester) async {
       final f = await ControllerFixture.mount(tester);
-      final dynamic settings = f.shell.settingsFeature;
+      final settings = f.shell.settingsFeature;
       final setup = settings.gemmaSetup(firstRun: true) as GemmaSetupDialog;
       final asset = File('${f.root.path}/embedding.litertlm');
       await setup.installEmbedding!(asset, () => false);
@@ -48,7 +49,7 @@ void main() {
       expect(f.shell.error, isEmpty);
       expect(settings.modelState, '${gemmaModels.last.name} ready');
       setup.localSetup();
-      expect(f.shell.tab, 4);
+      expect(f.shell.tab, WorkspaceTab.models);
       final speech = settings.speechSetup() as SpeechSetupDialog;
       await speech.installSpeech!(
         File('/models/speech.bin'),
@@ -71,7 +72,7 @@ void main() {
     'known and custom model names are shown without reading model bytes',
     (tester) async {
       final f = await ControllerFixture.mount(tester);
-      final dynamic settings = f.shell.settingsFeature;
+      final settings = f.shell.settingsFeature;
       expect(settings.speechModelName(), 'Select a transcription model');
       expect(settings.generationName(), 'Choose a local model');
       for (final (kind, path, digest, expected) in [
@@ -100,6 +101,15 @@ void main() {
           'INSERT OR REPLACE INTO models(kind,path,digest,runtime,backend) VALUES(?,?,?,?,?)',
           [kind, path, digest, '', 'fixture'],
         );
+        f.connection.application.changed();
+        await pumpUntil(
+          tester,
+          () =>
+              (kind == 'speech'
+                  ? settings.speechModelName()
+                  : settings.generationName()) ==
+              expected,
+        );
         expect(
           kind == 'speech'
               ? settings.speechModelName()
@@ -114,8 +124,8 @@ void main() {
     'local model form registers each model kind and retains failed input for retry',
     (tester) async {
       final f = await ControllerFixture.mount(tester);
-      final dynamic settings = f.shell.settingsFeature;
-      f.shell.update(() => f.shell.tab = 4);
+      final settings = f.shell.settingsFeature;
+      f.shell.update(() => f.shell.navigate(WorkspaceTab.models));
       await tester.pumpAndSettle();
       Future<void> select(String kind) async {
         await tester.tap(find.byType(DropdownButton<String>));
@@ -208,12 +218,10 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Local helper'), findsNothing);
       expect(f.connection.resumes, 1);
-      final pending =
-          f.shell.settingsFeature.chooseGemma(
-                firstRun: true,
-                embeddingOnly: true,
-              )
-              as Future<void>;
+      final pending = f.shell.settingsFeature.chooseGemma(
+        firstRun: true,
+        embeddingOnly: true,
+      );
       await tester.pumpAndSettle();
       expect(find.byType(GemmaSetupDialog), findsOneWidget);
       await tester.tap(find.text('Cancel'));

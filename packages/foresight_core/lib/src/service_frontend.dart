@@ -11,6 +11,7 @@ import 'service_gates.dart';
 import 'service_ownership.dart';
 import 'service_protocol.dart';
 import 'service_socket.dart';
+import 'unix_peer_identity.dart';
 
 /// Public socket transport lives on the main service isolate. The complete
 /// Domain (SQLite connections, native handles, model ownership, approvals and
@@ -33,6 +34,7 @@ class IsolatedApplicationService {
   final _peers = <Socket>{};
   final _refused = <Socket>{};
   final _bridges = <Future<void>>{};
+  final DesktopPeerVerifier _verifyDesktopPeer;
   SendPort? _control;
   ServiceSocketBinding? _binding;
   Future<void>? _listening;
@@ -58,9 +60,13 @@ class IsolatedApplicationService {
     this._messages,
     this._errors,
     this._exits,
+    this._verifyDesktopPeer,
   );
 
-  static Future<IsolatedApplicationService> start(ProfilePaths profile) async {
+  static Future<IsolatedApplicationService> start(
+    ProfilePaths profile, {
+    DesktopPeerVerifier? desktopPeerVerifier,
+  }) async {
     // The worker only gets the runtime path; check its parent here.
     privateRuntime(profile);
     final host = IsolatedApplicationService._(
@@ -68,6 +74,7 @@ class IsolatedApplicationService {
       ReceivePort(),
       ReceivePort(),
       ReceivePort(),
+      desktopPeerVerifier ?? verifyInstalledDesktopPeer,
     );
     host._messages.listen(host._message);
     host._errors.listen((dynamic error) {
@@ -192,6 +199,7 @@ class IsolatedApplicationService {
   }
 
   Future<void> _bridge(Socket client) async {
+    final verifiedDesktop = _verifyDesktopPeer(client);
     final peer = identityHashCode(client);
     traceServiceTransport(() => 'frontend accept peer=$peer');
     _peers.add(client);
@@ -213,6 +221,14 @@ class IsolatedApplicationService {
         _refuse(client);
         return;
       }
+      // The worker authenticates this socket's OS peer as its own process.
+      // Application bytes cannot claim or replace this first identity frame.
+      backend.writeln(
+        jsonEncode({
+          '_frontend_peer': {'verified_desktop': verifiedDesktop},
+        }),
+      );
+      await backend.flush();
       // pipe applies stream backpressure and flushes before closing. Keeping
       // both directions alive is necessary for approval and cancel frames.
       Future<void> copy(Socket source, Socket target, String direction) async {

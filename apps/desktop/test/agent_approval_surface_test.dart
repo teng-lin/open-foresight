@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/remote.dart';
@@ -30,6 +32,8 @@ class ApprovalDomain implements RemoteDomain {
   final capture = <String, dynamic>{};
   void Function(Map<String, dynamic>)? events;
   bool attached = false;
+  bool visible = true;
+  final visibility = <bool>[];
   bool failAttach = false;
   @override
   Future<void> enableDesktopApprovals(
@@ -46,6 +50,12 @@ class ApprovalDomain implements RemoteDomain {
   }
 
   @override
+  Future<void> setDesktopVisible(bool value) async {
+    visible = value;
+    visibility.add(value);
+  }
+
+  @override
   Future<Object?> command(
     Operation operation, [
     Map<String, dynamic> args = const {},
@@ -54,7 +64,227 @@ class ApprovalDomain implements RemoteDomain {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
+class HeldVisibilityDomain extends ApprovalDomain {
+  Future<void> Function()? visibleUpdate;
+  @override
+  Future<void> setDesktopVisible(bool value) async {
+    await super.setDesktopVisible(value);
+    if (value) await visibleUpdate?.call();
+  }
+}
+
 void main() {
+  for (final (method, caption, args) in [
+    (
+      'labels.set',
+      'Change source labels',
+      <String, dynamic>{
+        'id': 'source-alpha',
+        'labels': ['Bundle Smoke'],
+      },
+    ),
+    (
+      'graph.save',
+      'Save source graph data',
+      <String, dynamic>{
+        'identity': 'bundle-storage-smoke',
+        'sources': [
+          {'id': 'source-alpha', 'revision': 2},
+        ],
+        'vectors': <String, dynamic>{},
+        'points': {
+          'source-alpha': [-0.5, 0.25, 0.0],
+        },
+      },
+    ),
+  ]) {
+    testWidgets('$method approval names its action before consent', (
+      tester,
+    ) async {
+      final domain = ApprovalDomain();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: AgentApprovalSurface(domain: domain, child: const Scaffold()),
+        ),
+      );
+      await tester.pumpAndSettle();
+      domain.events!({
+        'event': 'approval',
+        'approval_id': 'named-operation',
+        'method': method,
+        'args': args,
+        'requester': 'External client (identity unverified)',
+        'risk_flags': <String>[],
+      });
+      await tester.pumpAndSettle();
+      expect(find.text(caption), findsOneWidget);
+      expect(
+        find.text('Change application data or access a connected service'),
+        findsNothing,
+      );
+      expect(
+        find.text('External client (identity unverified)'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining(
+          method == 'labels.set'
+              ? 'id: source-alpha\nlabels: [Bundle Smoke]'
+              : 'sources: [{id: source-alpha, revision: 2}]',
+        ),
+        findsOneWidget,
+      );
+      expect(domain.client.decisions, isEmpty);
+      await tester.tap(find.text('Allow once'));
+      await tester.pumpAndSettle();
+      expect(domain.client.decisions, [
+        {'approval_id': 'named-operation', 'allow': true},
+      ]);
+      await tester.pumpWidget(const SizedBox.shrink());
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('a visible retry clears a failed initial approval attachment', (
+    tester,
+  ) async {
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    addTearDown(
+      () => tester.binding.handleAppLifecycleStateChanged(
+        AppLifecycleState.resumed,
+      ),
+    );
+    final fixture = RemoteFixture();
+    await tester.runAsync(fixture.start);
+    addTearDown(() => tester.runAsync(fixture.close));
+    var attachments = 0;
+    fixture.handler = (socket, request) {
+      if (request['method'] == Operation.securityAttachDesktop.wire &&
+          ++attachments == 1) {
+        socket.writeln(
+          jsonEncode({
+            'id': request['id'],
+            'error': {'code': 'denied', 'message': 'First attach unavailable'},
+            'done': true,
+          }),
+        );
+      } else {
+        fixture.reply(socket, request, true);
+      }
+    };
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AgentApprovalSurface(
+          domain: fixture.remote,
+          child: const Scaffold(),
+        ),
+      ),
+    );
+    final banner = find.textContaining('Agent approvals unavailable:');
+    await pumpUntil(tester, () => banner.evaluate().isNotEmpty);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await pumpUntil(tester, () => attachments == 2);
+    await pumpUntil(tester, () => banner.evaluate().isEmpty);
+    final requests = fixture.requests.where(
+      (request) => request['method'] == Operation.securityAttachDesktop.wire,
+    );
+    expect(requests.map((request) => (request['args'] as Map)['visible']), [
+      true,
+      true,
+    ]);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('an older visible success cannot clear the latest failure', (
+    tester,
+  ) async {
+    final domain = HeldVisibilityDomain();
+    final first = Completer<void>();
+    addTearDown(() {
+      if (!first.isCompleted) first.complete();
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AgentApprovalSurface(domain: domain, child: const Scaffold()),
+      ),
+    );
+    await tester.pumpAndSettle();
+    var attempts = 0;
+    domain.visibleUpdate = () async {
+      if (attempts++ == 0) {
+        await first.future;
+      } else {
+        throw StateError('Latest visible retry failed');
+      }
+    };
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await tester.pump();
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Latest visible retry failed'), findsOneWidget);
+    first.complete();
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Latest visible retry failed'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('a visible retry completion cannot update a disposed surface', (
+    tester,
+  ) async {
+    final domain = HeldVisibilityDomain();
+    final visible = Completer<void>();
+    addTearDown(() {
+      if (!visible.isCompleted) visible.complete();
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AgentApprovalSurface(domain: domain, child: const Scaffold()),
+      ),
+    );
+    await tester.pumpAndSettle();
+    domain.visibleUpdate = () => visible.future;
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await tester.pump();
+    await tester.pumpWidget(const SizedBox());
+    visible.complete();
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('visibility treats inactive consistently after a hidden window', (
+    tester,
+  ) async {
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    addTearDown(
+      () => tester.binding.handleAppLifecycleStateChanged(
+        AppLifecycleState.resumed,
+      ),
+    );
+    final domain = ApprovalDomain();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AgentApprovalSurface(domain: domain, child: const Scaffold()),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(domain.visibility, [true]);
+    for (final state in [
+      AppLifecycleState.hidden,
+      AppLifecycleState.inactive,
+      AppLifecycleState.resumed,
+      AppLifecycleState.paused,
+      AppLifecycleState.detached,
+    ]) {
+      tester.binding.handleAppLifecycleStateChanged(state);
+      await tester.pumpAndSettle();
+    }
+    expect(domain.visibility, [true, false, true, true, false, false]);
+    expect(domain.attached, true);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('an approval dialog closes when its service connection drops', (
     tester,
   ) async {
@@ -228,10 +458,12 @@ void main() {
       expect(find.text('Stop recording'), findsNothing);
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
       await tester.pumpAndSettle();
-      expect(domain.attached, false);
+      expect(domain.attached, true);
+      expect(domain.visible, false);
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pumpAndSettle();
       expect(domain.attached, true);
+      expect(domain.visible, true);
       await tester.pumpWidget(const SizedBox());
       expect(domain.attached, false);
     },

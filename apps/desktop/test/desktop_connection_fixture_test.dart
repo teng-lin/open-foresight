@@ -2,14 +2,14 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/src/application.dart';
-import 'package:foresight_core/src/domain.dart';
-import 'package:foresight_core/src/helper.dart';
-import 'package:foresight_core/src/rpc_error.dart';
-import 'package:foresight_core/src/store.dart';
+import '../test_support/core_fixture.dart';
+
 import 'package:foresight_test_support/test_paths.dart';
 
 import 'desktop_connection_fixture.dart';
+import 'store_reader_fixture.dart';
+import '../test_support/reader_admissions.dart';
+import 'package:foresight_core/desktop.dart' show StoreReadQueries, StoreReader;
 
 class ReadinessHelper extends Helper {
   ReadinessHelper(super.socket, super.storage, this.ready);
@@ -28,7 +28,125 @@ class ResumeDomain extends Domain {
   Future<void> resume() async => resumes++;
 }
 
+class _CustomReaderConnection extends TestDesktopConnection {
+  _CustomReaderConnection(super.application, this.reader);
+  final StoreReader reader;
+  @override
+  StoreReader get store => reader;
+}
+
+class _ReaderWorker implements ReadWorker {
+  _ReaderWorker(Store store) : session = SqliteReadSession.borrow(store);
+  final SqliteReadSession session;
+  int reads = 0;
+  @override
+  Future<ReadWorkerReply> read(ReadWorkerRequest request) async {
+    reads++;
+    return session.query(request.projection, request.arguments);
+  }
+
+  @override
+  Future<void> close() async => session.close();
+}
+
 void main() {
+  test(
+    'fixture refreshes watched rows only when durable identity changes',
+    () async {
+      final root = createTestTempDirectorySync('fixture-watch-');
+      final store = Store('${root.path}/application.db');
+      final admissions = ReaderAdmissions();
+      fixtureReader(store, admissions: admissions);
+      final helper = ReadinessHelper(
+        '${root.path}/socket',
+        '${root.path}/helper',
+        true,
+      );
+      final connection = TestDesktopConnection(
+        Application(Domain(store, helper)),
+      );
+      final values = StreamIterator(
+        connection.store.watch(StoreReadQueries.preference('fixture')),
+      );
+      try {
+        expect(await values.moveNext(), isTrue);
+        expect(values.current.value, '');
+        // The result is emitted before the coordinator settles its worker.
+        await Future<void>.delayed(Duration.zero);
+        expect(admissions.workers['preference'], 1);
+        helper.changed?.call();
+        expect(
+          admissions.workers['preference'],
+          1,
+          reason: 'Status-only events retain prepared queries',
+        );
+        store.setPreference('fixture', 'saved');
+        helper.changed?.call();
+        expect(
+          admissions.workers['preference'],
+          2,
+          reason: 'Durable change starts the refresh',
+        );
+        expect(await values.moveNext(), isTrue);
+        expect(values.current.value, 'saved');
+        expect(admissions.workers['preference'], 2);
+        helper.changed?.call();
+        expect(admissions.workers['preference'], 2);
+      } finally {
+        await values.cancel();
+        connection.close();
+        await connection.closed;
+        root.deleteSync(recursive: true);
+      }
+    },
+  );
+
+  test(
+    'durable events invalidate the overridden reader, not the writer reader',
+    () async {
+      final root = createTestTempDirectorySync('fixture-custom-');
+      final store = Store('${root.path}/application.db');
+      final worker = _ReaderWorker(store);
+      final reader = SqliteStoreReader.borrow(store, worker: worker);
+      final helper = ReadinessHelper(
+        '${root.path}/socket',
+        '${root.path}/helper',
+        true,
+      );
+      final connection = _CustomReaderConnection(
+        Application(Domain(store, helper)),
+        reader,
+      );
+      final values = StreamIterator(
+        reader.watch(StoreReadQueries.preference('fixture')),
+      );
+      try {
+        expect(await values.moveNext(), isTrue);
+        expect(values.current.value, '');
+        await Future<void>.delayed(Duration.zero);
+        expect(worker.reads, 1);
+        helper.changed?.call();
+        await Future<void>.delayed(Duration.zero);
+        expect(worker.reads, 1, reason: 'Status-only events do not refresh');
+        store.setPreference('fixture', 'custom');
+        helper.changed?.call();
+        expect(worker.reads, 2, reason: 'The overridden reader refreshes');
+        expect(await values.moveNext(), isTrue);
+        expect(values.current.value, 'custom');
+        await Future<void>.delayed(Duration.zero);
+        expect(worker.reads, 2);
+        helper.changed?.call();
+        await Future<void>.delayed(Duration.zero);
+        expect(worker.reads, 2);
+      } finally {
+        await values.cancel();
+        await reader.close();
+        connection.close();
+        await connection.closed;
+      }
+    },
+  );
+
   for (final ready in [false, true]) {
     test('fixture initializes only after helper readiness ($ready)', () async {
       final Directory directory = createTestTempDirectorySync('fixture-ready-');

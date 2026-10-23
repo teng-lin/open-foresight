@@ -1,4 +1,7 @@
-import 'package:foresight_core/src/application.dart';
+import '../test_support/platform_fixture.dart';
+import 'package:open_foresight/features/integrations/audio_access.dart';
+import 'package:open_foresight/desktop_environment.dart';
+import '../test_support/core_fixture.dart';
 import 'package:foresight_core/remote.dart' show StoreReader;
 import 'store_reader_fixture.dart';
 import 'package:foresight_test_support/poll.dart';
@@ -6,18 +9,18 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/src/operations.dart';
+
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/commands.dart';
 import 'package:open_foresight/desktop_menu.dart';
-import 'package:foresight_core/src/gemma_download.dart';
-import 'package:open_foresight/gemma_setup_view.dart';
-import 'package:foresight_core/src/speech_models.dart';
-import 'package:open_foresight/speech_setup_view.dart';
-import 'package:open_foresight/model_terms_dialog.dart';
+
+import 'package:open_foresight/features/settings/gemma_setup_view.dart';
+
+import 'package:open_foresight/features/settings/speech_setup_view.dart';
+import 'package:open_foresight/features/settings/model_terms_dialog.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/onboarding_view.dart';
-import 'package:foresight_core/src/store.dart';
+import 'package:open_foresight/features/onboarding/onboarding_view.dart';
+
 import 'desktop_connection_fixture.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 import 'quick_start_test.dart' show QuickStartDomain;
@@ -33,6 +36,7 @@ class SetupDomain extends QuickStartDomain {
   ]) async {
     if (operation == Operation.sourcesDelete) {
       store.tombstone(args['id'] as String);
+      helper.changed?.call();
       return null;
     }
     if (operation == Operation.audioCapabilities) {
@@ -93,10 +97,13 @@ void main() {
         Foresight(
           ReadOnlyProfileConnection(Application(domain), reader),
           deviceLoader: () async => [],
+          environment: DesktopEnvironment(
+            capabilities: testHostPlatformCapabilities,
+          ),
         ),
       );
       await tester.pumpAndSettle();
-      final dynamic shell = tester.state(find.byType(Workspace));
+      final shell = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       final gemma =
           shell.settingsFeature.gemmaSetup(firstRun: true) as GemmaSetupDialog;
       final speech = shell.settingsFeature.speechSetup() as SpeechSetupDialog;
@@ -146,7 +153,10 @@ void main() {
       OfflineHelper('${root.path}/sock', '${root.path}/helper'),
     );
     final commands = await tester.runAsync(
-      () => AppCommands.bind('${root.path}/cmd'),
+      () => AppCommands.bind(
+        '${root.path}/cmd',
+        environment: DesktopEnvironment.production(),
+      ),
     );
     await tester.binding.setSurfaceSize(const Size(1280, 1100));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -156,6 +166,9 @@ void main() {
         commands: commands!,
         quickOnLaunch: quick,
         deviceLoader: () async => [],
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
       ),
     );
     await tester.pumpAndSettle();
@@ -201,12 +214,13 @@ void main() {
         find.text('Setup complete · Access is checked when recording starts.'),
         findsOneWidget,
       );
-      final dynamic shell = tester.state(find.byType(Workspace));
+      final shell = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       shell.update(
-        () => shell.integrationFeature.captureCapabilities = {
-          'system_audio': 'denied',
-          'system_audio_request': 'failed',
-        },
+        () => shell.integrationFeature.captureCapabilities =
+            AudioAccessPresentation.fromWire({
+              'system_audio': 'denied',
+              'system_audio_request': 'failed',
+            }),
       );
       await tester.pumpAndSettle();
       expect(
@@ -299,7 +313,7 @@ void main() {
   testWidgets(
     'manual import page shows real source states, removes documents and completes setup',
     (tester) async {
-      final (store, _, commands) = await mount(tester, step: 5);
+      final (store, domain, commands) = await mount(tester, step: 5);
       final source = store.importText(
         'Project brief',
         'Project notes',
@@ -307,8 +321,7 @@ void main() {
         'fixture',
       );
       store.state(source, 'indexed');
-      final dynamic state = tester.state(find.byType(Workspace));
-      state.serviceChanged();
+      domain.helper.changed?.call();
       await tester.pumpAndSettle();
       expect(find.text('Project brief'), findsOneWidget);
       expect(find.text('1 sources added · 1 indexed'), findsOneWidget);
@@ -337,7 +350,7 @@ void main() {
   testWidgets(
     'large onboarding libraries render lazily and keep the final source reachable',
     (tester) async {
-      final (store, _, commands) = await mount(tester, step: 5);
+      final (store, domain, commands) = await mount(tester, step: 5);
       for (var i = 0; i < 250; i++) {
         store.importText(
           'Document ${i.toString().padLeft(3, '0')}',
@@ -346,8 +359,7 @@ void main() {
           'fixture',
         );
       }
-      final dynamic state = tester.state(find.byType(Workspace));
-      state.serviceChanged();
+      domain.helper.changed?.call();
       await tester.pumpAndSettle();
       expect(find.text('Documents added (250)'), findsOneWidget);
       expect(
@@ -378,7 +390,7 @@ void main() {
   testWidgets(
     'saved imports waiting for models show recovery guidance instead of raw gRPC errors',
     (tester) async {
-      final (store, _, _) = await mount(tester, step: 5);
+      final (store, domain, _) = await mount(tester, step: 5);
       store.importText('Saved document', 'Content', 'text/plain', 'fixture');
       final legacy = store.importText(
         'Calendar event',
@@ -391,8 +403,7 @@ void main() {
         'failed',
         'gRPC Error (code: 9, codeName: FAILED_PRECONDITION, message: Pipeline not initialized, details: [])',
       );
-      final dynamic state = tester.state(find.byType(Workspace));
-      state.serviceChanged();
+      domain.helper.changed?.call();
       await tester.pumpAndSettle();
       expect(find.text('Waiting for model setup'), findsNWidgets(2));
       expect(find.text('Set up indexing model'), findsOneWidget);
@@ -400,7 +411,7 @@ void main() {
       expect(find.text('2 sources added · 0 indexed'), findsOneWidget);
       expect(store.sources, hasLength(2));
       store.state(legacy, 'failed', 'gRPC Error: another genuine failure');
-      state.serviceChanged();
+      domain.helper.changed?.call();
       await tester.pumpAndSettle();
       expect(
         find.text(

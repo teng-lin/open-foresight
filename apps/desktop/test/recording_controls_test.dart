@@ -1,17 +1,17 @@
+import 'package:open_foresight/features/meetings/capture_waveform.dart';
 import '../test_support/reader_admissions.dart';
 import 'store_reader_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
 import 'package:foresight_core/remote.dart' show CaptureLevelEvents;
 import 'desktop_connection_fixture.dart';
-import 'package:foresight_core/src/application.dart';
+import '../test_support/core_fixture.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/src/domain.dart';
+
 import 'package:open_foresight/main.dart';
-import 'package:foresight_core/src/recording.dart';
-import 'package:foresight_core/src/store.dart';
+
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 class _Recording implements Recording {
@@ -113,7 +113,7 @@ void main() {
           find.byKey(const ValueKey('capture-waveform')),
         );
         expect(meter.painter, isNot(same(oldMeter.painter)));
-        expect((meter.painter as dynamic).volumes, [0.9, 0.0]);
+        expect((meter.painter as CaptureWaveform).volumes, [0.9, 0.0]);
         expect(
           tester.widget(find.byKey(const ValueKey('recording-pill'))),
           same(header),

@@ -50,9 +50,18 @@ final class GoogleMaintenance implements WorkspaceAccountCleanup {
     'email': auth.email,
     'displayName': auth.displayName,
     'photoUrl': auth.photoUrl,
-    'accounts': auth.accounts,
+    'accounts': [
+      for (final account in auth.accounts)
+        {
+          'id': account.id,
+          'email': account.email,
+          'displayName': account.displayName,
+          'photoUrl': account.photoUrl,
+          'current': account.current,
+        },
+    ],
     'account': auth.account,
-    'configured': auth.client != null,
+    'configured': auth.configured,
     'provider': auth.viaGranola ? 'granola' : 'google',
     'driveAvailable': !auth.viaGranola,
     'signingIn': auth.signingIn,

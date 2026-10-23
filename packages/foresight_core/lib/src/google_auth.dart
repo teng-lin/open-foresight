@@ -1,5 +1,6 @@
 import 'rpc_error.dart';
 import 'desktop_connection.dart';
+import 'desktop_status.dart';
 import 'secret_store.dart';
 export 'secret_store.dart';
 import 'platform_services.dart';
@@ -82,8 +83,9 @@ class GoogleAuth implements GoogleAccount {
   late final String _secretKey = sha256
       .convert(utf8.encode(directory.absolute.path))
       .toString();
-  @override
   GoogleClient? client;
+  @override
+  bool get configured => client != null;
   @override
   String loadError = '';
   Map<String, dynamic>? _tokens;
@@ -200,18 +202,19 @@ class GoogleAuth implements GoogleAccount {
       : _secretKey;
 
   @override
-  List<Map<String, Object?>> get accounts => [
+  List<GoogleAccountPresentation> get accounts => List.unmodifiable([
     if (_tokens != null) _summary(_tokens!, true),
     for (final saved in _savedAccounts.values) _summary(saved, false),
-  ];
+  ]);
 
-  Map<String, Object?> _summary(Map<String, dynamic> data, bool current) => {
-    'id': data['account_sub'],
-    'email': data['email'] as String? ?? '',
-    'displayName': data['name'] as String? ?? '',
-    'photoUrl': data['picture'] as String? ?? '',
-    'current': current,
-  };
+  GoogleAccountPresentation _summary(Map<String, dynamic> data, bool current) =>
+      GoogleAccountPresentation(
+        id: data['account_sub'] as String,
+        email: data['email'] as String? ?? '',
+        displayName: data['name'] as String? ?? '',
+        photoUrl: data['picture'] as String? ?? '',
+        current: current,
+      );
 
   @override
   bool get connected =>

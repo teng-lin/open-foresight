@@ -1,6 +1,6 @@
 import '../test_support/reader_admissions.dart';
 import 'store_reader_fixture.dart';
-import 'package:foresight_core/src/application.dart';
+import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:async';
@@ -9,11 +9,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/src/domain.dart';
+
 import 'package:open_foresight/main.dart';
-import 'package:foresight_core/src/store.dart';
-import 'package:open_foresight/graph_rendering.dart';
-import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
+
+import 'package:open_foresight/features/sources/graph_rendering.dart';
+import '../test_support/core_fixture.dart' as control;
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 class SourceReadCountingStore extends Store {
@@ -68,7 +68,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Graph view'));
     await tester.pump();
-    final dynamic state = tester.state(find.byType(Workspace));
+    final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
     for (
       final elapsed = Stopwatch()..start();
       elapsed.elapsed < const Duration(seconds: 5) &&
@@ -124,9 +124,9 @@ void main() {
     await tester.tap(find.text('Graph view'));
     await tester.pump();
     await tester.pump();
-    final dynamic state = tester.state(find.byType(Workspace));
+    final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
     final before = store.sourceReads;
-    final frameBefore = state.sourceFeature.graphMotionFrames.value as int;
+    final frameBefore = state.sourceFeature.graphMotionFrames.value;
     final typedBeforeFrames = admissions.snapshot();
     for (var i = 0; i < 10; i++) {
       await tester.pump(const Duration(milliseconds: 16));
@@ -144,7 +144,7 @@ void main() {
     );
     final helpBefore = tester.widget(find.byTooltip('Help'));
     final bodiesBefore = store.bodyReads;
-    final revisionBefore = state.serviceUiRevision.value as int;
+    final revisionBefore = state.serviceUiRevision.value;
     for (var i = 0; i < 20; i++) {
       helper.changed?.call();
     }
@@ -201,9 +201,9 @@ void main() {
       await tester.tap(find.text('Graph view'));
       await tester.pump();
       await tester.pump();
-      final dynamic state = tester.state(find.byType(Workspace));
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       expect(state.sourceFeature.graphMotionTicker.isActive, true);
-      final initial = state.sourceFeature.graphYaw as double;
+      final initial = state.sourceFeature.graphYaw;
       await tester.pump(const Duration(seconds: 1));
       expect(state.sourceFeature.graphYaw, greaterThan(initial));
       await tester.tap(find.byTooltip('Pause graph animation'));
@@ -229,7 +229,7 @@ void main() {
       expect(state.sourceFeature.graphCameraController.isAnimating, true);
       await tester.pump(const Duration(milliseconds: 51));
       expect(state.sourceFeature.graphCameraController.isAnimating, false);
-      final paused = state.sourceFeature.graphYaw as double;
+      final paused = state.sourceFeature.graphYaw;
       final sourcePaused = domain.sourcesPaused;
       await tester.pump(const Duration(seconds: 5));
       expect(state.sourceFeature.graphYaw, paused);
@@ -253,8 +253,8 @@ void main() {
       await tester.pump();
       await drag.moveBy(const Offset(40, 20));
       await tester.pump();
-      final manualYaw = state.sourceFeature.graphYaw as double;
-      final manualPitch = state.sourceFeature.graphPitch as double;
+      final manualYaw = state.sourceFeature.graphYaw;
+      final manualPitch = state.sourceFeature.graphPitch;
       await tester.pump(const Duration(seconds: 3));
       expect(state.sourceFeature.graphYaw, manualYaw);
       expect(state.sourceFeature.graphMotionTicker.isActive, false);
@@ -266,7 +266,7 @@ void main() {
       expect(state.sourceFeature.graphPitch, manualPitch);
       await tester.tap(find.text('Meetings').first);
       await tester.pumpAndSettle();
-      final hidden = state.sourceFeature.graphYaw as double;
+      final hidden = state.sourceFeature.graphYaw;
       await tester.pump(const Duration(seconds: 20));
       expect(state.sourceFeature.graphYaw, hidden);
       expect(state.sourceFeature.graphMotionTicker.isActive, false);
@@ -291,7 +291,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(state.sourceFeature.graphMotionTicker.isActive, false);
-      final reduced = state.sourceFeature.graphYaw as double;
+      final reduced = state.sourceFeature.graphYaw;
       await tester.pump(const Duration(seconds: 5));
       expect(state.sourceFeature.graphYaw, reduced);
       expect(
@@ -358,7 +358,7 @@ void main() {
       await tester.tap(find.byTooltip('Pause graph animation'));
       await tester.pumpAndSettle();
       expect(domain.requests.length, 1);
-      final dynamic state = tester.state(find.byType(Workspace));
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       final c = store.importText(
         'Comet',
         'Astronomy',
@@ -366,6 +366,7 @@ void main() {
         'fixture:c',
       );
       store.state(c, 'indexed');
+      helper.changed?.call();
       state.update(() {});
       await tester.pumpAndSettle();
       expect(domain.requests.length, 2);
@@ -425,14 +426,13 @@ void main() {
         state.sourceFeature.graphPitch = 0.0;
         // Force layout separates identical embeddings; explicitly overlap the
         // fixture to retain the independent equal-depth hit-selection check.
-        state.sourceFeature.graphPoints[b] = state.sourceFeature.graphPoints[a];
+        state.sourceFeature.graphPoints[b] =
+            state.sourceFeature.graphPoints[a]!;
       });
       await tester.pumpAndSettle();
       final originalPosition = tester.getTopLeft(apollo);
-      final initialX =
-          state.sourceFeature.graphTransform.value.storage[12] as double;
-      final initialY =
-          state.sourceFeature.graphTransform.value.storage[13] as double;
+      final initialX = state.sourceFeature.graphTransform.value.storage[12];
+      final initialY = state.sourceFeature.graphTransform.value.storage[13];
       final canvas = find.byKey(const ValueKey('source-graph-canvas'));
       final emptyPoint = tester.getTopLeft(canvas) + const Offset(120, 80);
       final rotating = await tester.startGesture(

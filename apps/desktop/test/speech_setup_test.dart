@@ -4,9 +4,8 @@ import 'fixtures/verified_model_files.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/src/speech_models.dart';
-import 'package:open_foresight/speech_setup_view.dart';
-import 'package:foresight_core/src/store.dart';
+import '../test_support/core_fixture.dart';
+import 'package:open_foresight/features/settings/speech_setup_view.dart';
 
 void main() {
   testWidgets(

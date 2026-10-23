@@ -1,5 +1,5 @@
 import '../store.dart';
-import '../desktop_read_models.dart';
+import '../read_models.dart';
 import '../answer_retrieval.dart';
 import '../reference_chat_history.dart';
 import 'dart:convert';

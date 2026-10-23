@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/desktop_identity.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_test_support/poll.dart';
 import 'dart:async';
@@ -61,6 +62,7 @@ void main() {
   Future<void> startService(Duration grace, {Clock? clock}) async {
     service = await ApplicationService.start(
       ProfilePaths('${temp.path}/profile', '${temp.path}/run'),
+      desktopPeerVerifier: trustInProcessDesktop,
       desktopDetachGrace: grace,
       clock: clock,
     );
@@ -108,10 +110,43 @@ void main() {
     timeout: const Duration(seconds: 30),
   );
   Future<void> attach() async => desktop.call('security.attach_desktop', {
+    'visible': true,
     'token': File(
       '${temp.path}/profile/.desktop-capability',
     ).readAsStringSync(),
   });
+
+  test(
+    'hiding retains the verified host and finishes capture before it can restart',
+    () async {
+      await attach();
+      final recording = CountingRecording();
+      service.application.recording = recording;
+      service.application.recordingMeeting = service.domain.store.meeting(
+        'Hidden capture',
+      );
+      await desktop.call('security.desktop_visibility', {'visible': false});
+      await eventually(
+        () => recording.stops == 1 && service.application.recording == null,
+      );
+      expect(service.access.hasHost, true);
+      expect(service.access.hasVisibleHost, false);
+      for (final operation in ['meetings.start', 'meetings.resume']) {
+        await expectLater(
+          desktop.call(operation, {'id': 999}),
+          throwsA(
+            isA<RpcError>().having(
+              (error) => error.code,
+              'code',
+              RpcErrorCode.denied,
+            ),
+          ),
+        );
+      }
+      await desktop.call('security.desktop_visibility', {'visible': true});
+      expect(service.access.hasVisibleHost, true);
+    },
+  );
   // Store one note so that the notes.list reply to request [id], with its
   // newline, is exactly [bytes] long.
   void sizeNotesReply(int bytes, {int id = 1}) {
@@ -558,6 +593,7 @@ void main() {
     service.access.attach(
       host,
       File('${temp.path}/profile/.desktop-capability').readAsStringSync(),
+      verifiedDesktop: true,
     );
     await expectLater(
       agent.call('sources.delete', {'id': 'source'}),
@@ -712,7 +748,10 @@ void main() {
         );
       }
       await expectLater(
-        agent.call('security.attach_desktop', {'token': 'forged'}),
+        agent.call('security.attach_desktop', {
+          'visible': true,
+          'token': 'forged',
+        }),
         throwsA(
           isA<RpcError>().having(
             (error) => error.code,

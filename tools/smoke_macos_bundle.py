@@ -11,6 +11,7 @@ from typing import Any, IO, cast
 import argparse
 from contextlib import closing, ExitStack
 import json
+import os
 from pathlib import Path
 import queue
 import socket
@@ -20,6 +21,7 @@ import sys
 import tempfile
 import threading
 import time
+from installed_desktop_approval import ApprovedApplicationPeer, InstalledDesktop
 from install_macos import (
     metadata,
     minimal_environment,
@@ -177,16 +179,10 @@ class ApplicationPeer:
         self.sequence = 0
 
     def attach_test_desktop(self, profile):
-        """Authenticate a synthetic test UI for non-capture service writes.
-
-        Callers own disposable profiles and have already closed the GUI probe.
-        No production gate is disabled and no capture request is auto-approved.
-        """
-        token = Path(profile) / ".desktop-capability"
-        if token.exists():
-            self.call("security.attach_desktop", {"token": token.read_text()})
-            return True
-        return False  # Keep the harness usable for historical installer audits.
+        raise RuntimeError(
+            "Python peers cannot own installed desktop approval; use the actual "
+            "bundled GUI with InstalledDesktop and ApprovedApplicationPeer"
+        )
 
     def call(self, method, args=None):
         self.sequence += 1
@@ -215,6 +211,12 @@ class ApplicationPeer:
                 return result
 
     def close(self):
+        # Wake an in-flight bounded RPC before closing its file reader. Closing
+        # a reader held by another thread can otherwise block on its read lock.
+        try:
+            self.socket.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
         self.reader.close()
         self.socket.close()
 
@@ -317,12 +319,17 @@ def graph_rows(database):
         ).fetchall()
 
 
-def source_graph_probe(endpoint, mcp, database, *, application_peer=None):
+def source_graph_probe(
+    endpoint, mcp, database, *, application_peer=None, approval_host=None
+):
+    if application_peer is None and approval_host is None:
+        raise ValueError("Source graph writes require the actual installed desktop GUI")
     peer = (
-        application_peer if application_peer is not None else ApplicationPeer(endpoint)
+        application_peer
+        if application_peer is not None
+        else ApprovedApplicationPeer(endpoint, approval_host)
     )
     try:
-        peer.attach_test_desktop(Path(database).parent)
         first = peer.call(
             "sources.import",
             {"title": "Bundle alpha", "text": "Alpha revision one.", "index": False},
@@ -535,14 +542,17 @@ def smoke(bundle, output, desktop=False, expected_revision=None):
         }
     }
     with (
-        tempfile.TemporaryDirectory(prefix="of-smoke-", dir="/tmp") as temporary,
+        tempfile.TemporaryDirectory(
+            prefix="of-smoke-",
+            dir=os.environ.get("FORESIGHT_TEST_TEMP_ROOT", "/var/tmp"),  # noqa: S108 - mkdtemp owns a private unique directory
+        ) as temporary,
         ExitStack() as connections,
     ):
         root = Path(temporary)
         app = root / "Relocated App With Spaces" / "Open Foresight.app"
         app.parent.mkdir()
         copy_application(bundle, app)
-        info = metadata(app)
+        metadata(app)
         verify_runtime_revision(app, expected_revision, report, output)
         upgrade_source = root / "Upgrade Source.app"
         copy_application(app, upgrade_source)
@@ -562,37 +572,16 @@ def smoke(bundle, output, desktop=False, expected_revision=None):
             app, root / "external-fixtures", env
         )
         executable, service = app / "Contents/MacOS/foresight-mcp", app / SERVICE
-        peers, desktop_process = [], None
+        peers = []
+        desktop_host = None
         owner = None
         try:
             desktop_owner = None
             if desktop:
-                desktop_log = (root / "desktop.log").open("wb")
-                try:
-                    desktop_process = subprocess.Popen(
-                        [str(app / "Contents/MacOS" / info["CFBundleExecutable"])],
-                        cwd="/",
-                        env=env,
-                        stdout=desktop_log,
-                        stderr=desktop_log,
-                    )
-                    deadline = time.monotonic() + 30
-                    while True:
-                        if desktop_process.poll() is not None:
-                            raise RuntimeError("Desktop exited during first launch")
-                        try:
-                            desktop_owner = service_command(service, env, "--status")[
-                                "pid"
-                            ]
-                            break
-                        except subprocess.CalledProcessError:
-                            if not (time.monotonic() < deadline):
-                                raise RuntimeError(
-                                    "Desktop did not launch its service"
-                                ) from None
-                            time.sleep(0.1)
-                finally:
-                    desktop_log.close()
+                desktop_host = InstalledDesktop(
+                    app, root, env, output.parent / (output.stem + "-gui-desktop-first")
+                ).start()
+                desktop_owner = service_command(service, env, "--status")["pid"]
             # Both are real separately running AOT MCP processes with an env -i
             # equivalent environment; no SDK, shell init, DYLD or checkout paths.
             first = McpPeer(executable, env)
@@ -636,22 +625,16 @@ def smoke(bundle, output, desktop=False, expected_revision=None):
                 )
             ):
                 raise RuntimeError(notes)
-            if desktop and desktop_process is not None:
-                if desktop_process.poll() is not None:
-                    raise RuntimeError("Desktop exited before explicit closure")
-                report["desktop_exit_code"] = stop_desktop(desktop_process)
-                desktop_process = None
-                if not (service_command(service, env, "--status")["pid"] == owner):
-                    raise RuntimeError("Verification failed")
-                report["gates"]["desktop"] = (
-                    "passed_desktop_first_mcp_attach_and_desktop_process_exit"
-                )
-            # The MCP save_note/list_notes calls are recent agent activity, so
-            # the owner survives the test desktop closing above. This
-            # authenticated desktop peer owns the graph writes and keeps the
-            # service pinned through live-upgrade deferral and idle shutdown.
+            if desktop_host is None:
+                # Preserve MCP-first ownership: only now open the actual GUI to
+                # approve this external client's non-capture graph fixture writes.
+                desktop_host = InstalledDesktop(
+                    app, root, env, output.parent / (output.stem + "-gui-mcp-first")
+                ).start()
             graph_peer = connections.enter_context(
-                closing(ApplicationPeer(runtime / "application.sock"))
+                closing(
+                    ApprovedApplicationPeer(runtime / "application.sock", desktop_host)
+                )
             )
             source_graph = source_graph_probe(
                 runtime / "application.sock",
@@ -659,6 +642,15 @@ def smoke(bundle, output, desktop=False, expected_revision=None):
                 data / "application.db",
                 application_peer=graph_peer,
             )
+            desktop_host.close()
+            report["production_gui_approval"] = desktop_host.evidence
+            if service_command(service, env, "--status")["pid"] != owner:
+                raise RuntimeError("GUI closure changed the established service owner")
+            if desktop:
+                report["desktop_exit_code"] = desktop_host.evidence.get("exit")
+                report["gates"]["desktop"] = (
+                    "passed_desktop_first_mcp_attach_and_desktop_process_exit"
+                )
             for peer in peers:
                 peer.close()
             peers.clear()
@@ -792,8 +784,8 @@ def smoke(bundle, output, desktop=False, expected_revision=None):
                     peer.close()
                 except Exception:  # noqa: S110 - Best effort cleanup after process exit.
                     pass
-            if desktop_process is not None and desktop_process.poll() is None:
-                report["desktop_exit_code"] = stop_desktop(desktop_process)
+            if desktop_host is not None:
+                desktop_host.close()
             if owner is None:
                 try:
                     owner = service_command(service, env, "--status")["pid"]
