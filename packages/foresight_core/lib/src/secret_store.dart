@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:meta/meta.dart';
+
 /// Profile-scoped credential storage. False means no usable platform store;
 /// callers may then use a private file. Secrets never appear in process argv.
 abstract interface class SecretStore {
@@ -33,6 +35,12 @@ class PlatformSecretStore implements SecretStore {
           : Platform.isLinux && File('/usr/bin/secret-tool').existsSync()
           ? '/usr/bin/secret-tool'
           : null;
+
+  @visibleForTesting
+  PlatformSecretStore.forTesting({
+    required this.executable,
+    required this.macOS,
+  });
 
   Future<ProcessResult> _run(List<String> args, {String? input}) async {
     if (executable == null) {
@@ -105,8 +113,12 @@ class PlatformSecretStore implements SecretStore {
           ? ['delete-generic-password', '-a', key, '-s', service]
           : ['clear', 'service', service, 'profile', key],
     );
-    // Keychain 44 and secret-tool 1 mean the entry is already absent.
-    if (result.exitCode != 0 && result.exitCode != (macOS ? 44 : 1)) {
+    // libsecret also returns 1 for backend failures, with a diagnostic. Only
+    // the silent no-match result is absence; failures must remain retryable.
+    final absent = macOS
+        ? result.exitCode == 44
+        : result.exitCode == 1 && result.stderr.toString().trim().isEmpty;
+    if (result.exitCode != 0 && !absent) {
       throw StateError('Could not remove platform authorization');
     }
   }
