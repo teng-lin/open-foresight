@@ -1,5 +1,4 @@
 import 'package:foresight_test_support/test_paths.dart';
-import 'package:foresight_core/desktop.dart' show Operation;
 import 'desktop_connection_fixture.dart';
 import 'pump_until.dart';
 import 'dart:io';
