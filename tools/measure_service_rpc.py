@@ -335,29 +335,50 @@ def host_state() -> dict[str, Any]:
             "cpu_stat": read("/proc/stat")}
 
 
-def group_members(group: int) -> list[int]:
-    """Inspect Linux membership while the supervisor pins the session/group ID."""
+def session_members(session: int) -> list[int]:
+    """Include owned worker process groups while the live supervisor pins SID."""
     members = []
     for entry in Path("/proc").iterdir():
-        if not entry.name.isdecimal() or int(entry.name) == group:
+        if not entry.name.isdecimal() or int(entry.name) == session:
             continue
         try:
             # comm is parenthesized and may itself contain spaces or ')'.
             fields = (entry / "stat").read_text().rpartition(")")[2].split()
         except (FileNotFoundError, ProcessLookupError):
             continue
-        if int(fields[2]) == group and int(fields[3]) == group:
+        if int(fields[3]) == session:
             members.append(int(entry.name))
     return members
+
+
+def signal_session_members(session: int, kind: int) -> None:
+    """Signal verified members through stable pidfds, never recycled PID/PGIDs.
+
+    The caller retains a live/unreaped supervisor to pin the session identity.
+    Open the pidfd before checking SID: if a numeric PID is recycled during the
+    check, sending through the fd can only reach the original (now dead) task.
+    """
+    for member in session_members(session):
+        try:
+            descriptor = os.pidfd_open(member)
+        except ProcessLookupError:
+            continue
+        try:
+            if os.getsid(member) == session:
+                signal.pidfd_send_signal(descriptor, kind)
+        except ProcessLookupError:
+            pass
+        finally:
+            os.close(descriptor)
 
 
 def service_supervisor(service: Path, state: Path) -> None:
     """Keep a live session leader until the service and orphan descendants settle.
 
     The supervisor is a Linux child subreaper. Even when the service exits first,
-    its group cannot be reused while this process remains alive (or unreaped).
-    TERM asks the group to stop; the owner can KILL the same pinned group after
-    its deadline. Unexpected supervisor errors kill that group before exiting.
+    its SID cannot be reused while this process remains alive (or unreaped).
+    TERM asks every session member to stop, including workers that create new
+    process groups. The owner escalates through verified pidfds after a deadline.
     """
     if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
         raise OSError(ctypes.get_errno(), "Cannot establish owned child subreaper")
@@ -373,6 +394,8 @@ def service_supervisor(service: Path, state: Path) -> None:
         details = {"pid": child.pid, "exit_code": None}
         written: dict[str, Any] | None = None
         while True:
+            if stopping:
+                signal_session_members(os.getpid(), signal.SIGTERM)
             code = child.poll()
             details["exit_code"] = code
             if written != details:
@@ -388,13 +411,24 @@ def service_supervisor(service: Path, state: Path) -> None:
                         pass
                 except ChildProcessError:
                     pass
-                if stopping and not group_members(os.getpid()):
+                if stopping and not session_members(os.getpid()):
                     return
             time.sleep(.02)
     except BaseException:
         traceback.print_exc()
-        os.killpg(os.getpid(), signal.SIGKILL)
-        raise
+        # Keep session ownership while stopping descendants from every PGID.
+        # The external owner's bounded cleanup can terminate a stuck supervisor.
+        while True:
+            signal_session_members(os.getpid(), signal.SIGKILL)
+            try:
+                while os.waitpid(-1, os.WNOHANG)[0]:
+                    pass
+            except ChildProcessError:
+                pass
+            if not session_members(os.getpid()):
+                os.killpg(os.getpid(), signal.SIGKILL)
+                raise
+            time.sleep(.02)
 
 
 class Measurement:
@@ -520,9 +554,8 @@ class Measurement:
         process = self.process
         if process is not None:
             if process.poll() is None:
-                # The supervisor pins this invocation's session/group until its
-                # service and descendants settle. A timed-out wait has not reaped
-                # that leader, so escalation cannot target a reused group ID.
+                # TERM reaches the supervisor, which also signals workers in
+                # other process groups through verified session-member pidfds.
                 try:
                     os.killpg(process.pid, signal.SIGTERM)
                 except ProcessLookupError:
@@ -530,11 +563,27 @@ class Measurement:
                 try:
                     process.wait(timeout=self.cleanup_timeout)
                 except subprocess.TimeoutExpired:
-                    try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                    process.wait(timeout=self.cleanup_timeout)
+                    # A timed-out wait has not reaped the session leader. Kill
+                    # exact verified session members, repeatedly covering children
+                    # forked while an earlier pass was stopping their parents.
+                    deadline = time.monotonic() + self.cleanup_timeout
+                    while True:
+                        signal_session_members(process.pid, signal.SIGKILL)
+                        remaining = deadline - time.monotonic()
+                        try:
+                            process.wait(timeout=max(0, min(.05, remaining)))
+                            break
+                        except subprocess.TimeoutExpired:
+                            if remaining > 0:
+                                continue
+                            # The supervisor may itself be stuck. It still pins
+                            # SID/PGID until this final bounded owner termination.
+                            try:
+                                os.killpg(process.pid, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                            process.wait(timeout=self.cleanup_timeout)
+                            break
             self.report["owned_supervisor_exit_code"] = process.returncode
             self.service_state()
         if self.thread is not None:

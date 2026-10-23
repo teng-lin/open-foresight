@@ -494,7 +494,7 @@ def test_failed_qualification_retains_all_raw_samples(workload, monkeypatch):
     assert len(workload.report["samples"]["warmed_streaming"]["raw_ms"]) == 100
 
 
-def test_close_kills_only_owned_group_on_deadline_and_joins_thread(workload, monkeypatch):
+def test_close_kills_verified_session_members_on_deadline_and_joins_thread(workload, monkeypatch):
     process = FakeProcess()
     calls = []
     waits = []
@@ -506,10 +506,11 @@ def test_close_kills_only_owned_group_on_deadline_and_joins_thread(workload, mon
     process.wait = wait
     workload.process = process
     workload.thread = FakeThread()
-    monkeypatch.setattr(rpc.os, "killpg", lambda pid, sig: calls.append((pid, sig)))
+    monkeypatch.setattr(rpc.os, "killpg", lambda pid, sig: calls.append(("group", pid, sig)))
+    monkeypatch.setattr(rpc, "signal_session_members", lambda sid, sig: calls.append(("session", sid, sig)))
     workload.close()
-    assert calls == [(process.pid, rpc.signal.SIGTERM), (process.pid, rpc.signal.SIGKILL)]
-    assert waits == [30, 30]
+    assert calls == [("group", process.pid, rpc.signal.SIGTERM), ("session", process.pid, rpc.signal.SIGKILL)]
+    assert waits == [30, .05]
     assert workload.report["owned_supervisor_exit_code"] == -9
 
 
@@ -676,8 +677,8 @@ def test_partial_sampling_retains_successes_and_failed_attempt_in_report(inputs,
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Owned process-session supervision uses Linux child subreaping and /proc")
-@pytest.mark.parametrize("ignore_term", [False, True])
-def test_real_supervisor_cleans_descendant_after_service_exits(private, ignore_term):
+@pytest.mark.parametrize("ignore_term,stop_supervisor", [(False, False), (True, False), (True, True)])
+def test_real_supervisor_cleans_descendant_after_service_exits(private, ignore_term, stop_supervisor):
     descendant = private / "descendant.pid"
     child_script = "import time; time.sleep(20)"
     if ignore_term:
@@ -687,7 +688,7 @@ def test_real_supervisor_cleans_descendant_after_service_exits(private, ignore_t
     child_script = child_script.replace("time.sleep(20)", f"open({str(ready)!r},'w').close(); time.sleep(20)")
     service = private / "service"
     service.write_text(f"#!{sys.executable}\nimport subprocess,time\n"
-                       f"child=subprocess.Popen([{sys.executable!r},'-c',{child_script!r}])\n"
+                       f"child=subprocess.Popen([{sys.executable!r},'-c',{child_script!r}],process_group=0)\n"
                        f"open({str(descendant)!r},'w').write(str(child.pid))\n"
                        f"while not __import__('os').path.exists({str(ready)!r}): time.sleep(.01)\n")
     service.chmod(0o700)
@@ -697,19 +698,25 @@ def test_real_supervisor_cleans_descendant_after_service_exits(private, ignore_t
                                start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     measurement = rpc.Measurement(SimpleNamespace(), private, {})
     measurement.process = process
-    measurement.cleanup_timeout = .5
+    measurement.cleanup_timeout = .3
+    child_handle = None
     try:
         rpc.wait_until(lambda: state.exists() and json.loads(state.read_text())["exit_code"] is not None, timeout=5)
         service_state = json.loads(state.read_text())
         assert service_state["exit_code"] == 0
         assert service_state["pid"] != process.pid
         child = int(descendant.read_text())
-        assert child in rpc.group_members(process.pid)
+        assert child in rpc.session_members(process.pid)
+        assert os.getpgid(child) == child
+        assert os.getsid(child) == process.pid
         assert process.poll() is None, "Supervisor must retain group ownership after service exits"
+        child_handle = os.pidfd_open(child)
+        if stop_supervisor:
+            os.kill(process.pid, rpc.signal.SIGSTOP)
         measurement.close()
         assert measurement.report["owned_service_exit_code"] == 0
         assert measurement.report["owned_service_pid"] == service_state["pid"]
-        assert measurement.report["owned_supervisor_exit_code"] == (-9 if ignore_term else 0)
+        assert measurement.report["owned_supervisor_exit_code"] == (-9 if stop_supervisor else 0)
         # The supervisor reaps on graceful exit; after SIGKILL, init may still
         # own a dead zombie briefly. Neither case leaves an executing child.
         def stopped():
@@ -717,7 +724,14 @@ def test_real_supervisor_cleans_descendant_after_service_exits(private, ignore_t
             return not path.exists() or path.read_text().rpartition(")")[2].split()[0] == "Z"
         rpc.wait_until(stopped, timeout=5)
     finally:
+        if child_handle is not None:
+            try:
+                rpc.signal.pidfd_send_signal(child_handle, rpc.signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            os.close(child_handle)
         if process.poll() is None:
+            rpc.signal_session_members(process.pid, rpc.signal.SIGKILL)
             os.killpg(process.pid, rpc.signal.SIGKILL)
         out, err = process.communicate(timeout=5)
         assert process.returncode in {0, -9}, (out, err)
@@ -732,7 +746,7 @@ def test_supervisor_membership_ignores_disappearing_process_and_parses_comm(monk
             raise FileNotFoundError("exited")
         if entry.name == "12":
             raise ProcessLookupError("exited")
-        return SimpleNamespace(read_text=lambda: "13 (name with ) spaces) S 1 10 10 0")
+        return SimpleNamespace(read_text=lambda: "13 (name with ) spaces) S 1 99 10 0")
     # SimpleNamespace cannot overload '/', so adapt the numeric fixture entries.
     class Entry:
         def __init__(self, name):
@@ -740,7 +754,7 @@ def test_supervisor_membership_ignores_disappearing_process_and_parses_comm(monk
         def __truediv__(self, name):
             return stat(self, name)
     monkeypatch.setattr(Path, "iterdir", lambda _path: [Entry(row.name) for row in entries])
-    assert rpc.group_members(10) == [13]
+    assert rpc.session_members(10) == [13]
 
 
 def test_supervisor_refuses_missing_subreaper_before_launch(monkeypatch):
@@ -763,3 +777,35 @@ def test_unexpected_supervisor_error_kills_its_still_owned_group(monkeypatch, ca
     assert signals == [(os.getpid(), rpc.signal.SIGKILL)]
     assert rpc.signal.SIGTERM in handlers
     assert "exec failed" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("race", ["owned", "wrong session", "open exited", "lookup exited", "send exited"])
+def test_session_signals_verify_sid_after_pidfd_open_and_ignore_pid_reuse(monkeypatch, race):
+    calls = []
+    monkeypatch.setattr(rpc, "session_members", lambda session: [17])
+    def opened(pid):
+        calls.append(("open", pid))
+        if race == "open exited":
+            raise ProcessLookupError()
+        return 71
+    def session(pid):
+        calls.append(("sid", pid))
+        if race == "lookup exited":
+            raise ProcessLookupError()
+        return 99 if race == "wrong session" else 10
+    def sent(descriptor, kind):
+        calls.append(("signal", descriptor, kind))
+        if race == "send exited":
+            raise ProcessLookupError()
+    monkeypatch.setattr(rpc.os, "pidfd_open", opened, raising=False)
+    monkeypatch.setattr(rpc.os, "getsid", session)
+    monkeypatch.setattr(rpc.signal, "pidfd_send_signal", sent, raising=False)
+    monkeypatch.setattr(rpc.os, "close", lambda descriptor: calls.append(("close", descriptor)))
+    rpc.signal_session_members(10, rpc.signal.SIGKILL)
+    expected = [("open", 17)]
+    if race != "open exited":
+        expected.append(("sid", 17))
+        if race in {"owned", "send exited"}:
+            expected.append(("signal", 71, rpc.signal.SIGKILL))
+        expected.append(("close", 71))
+    assert calls == expected
