@@ -11,12 +11,14 @@ class ServiceEditDialog extends StatefulWidget {
     required this.onSave,
     this.onChanged,
     this.height = 300,
+    this.maxLines,
   });
   final String title, saveLabel;
   final TextEditingController controller;
   final Future<void> Function() onSave;
   final ValueChanged<String>? onChanged;
   final double height;
+  final int? maxLines;
 
   @override
   State<ServiceEditDialog> createState() => _ServiceEditDialogState();
@@ -54,8 +56,8 @@ class _ServiceEditDialogState extends State<ServiceEditDialog> {
             child: TextField(
               controller: widget.controller,
               onChanged: widget.onChanged,
-              maxLines: null,
-              expands: true,
+              maxLines: widget.maxLines,
+              expands: widget.maxLines == null,
               enabled: !saving,
             ),
           ),

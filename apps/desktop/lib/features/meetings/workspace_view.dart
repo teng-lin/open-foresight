@@ -1,6 +1,32 @@
 part of 'meetings_controller.dart';
 
 extension _WorkspaceView on MeetingsController {
+  Future<void> _renameMeeting(MeetingDetails meeting) async {
+    if (!_dialogs.rowsAreCurrent()) return;
+    final epoch = d.workspaceEpoch;
+    final controller = TextEditingController(text: meeting.title);
+    try {
+      await _dialogs.showInputDialog<bool>(
+        builder: (context) => ServiceEditDialog(
+          title: 'Rename meeting',
+          controller: controller,
+          saveLabel: 'Save',
+          height: 90,
+          maxLines: 1,
+          onSave: () async {
+            await d.command(Operation.meetingsRename, {
+              'id': meeting.id,
+              'title': controller.text.trim(),
+              if (epoch != null) 'workspace_epoch': epoch,
+            });
+          },
+        ),
+      );
+    } finally {
+      controller.dispose();
+    }
+  }
+
   Widget _immersiveMeetingWorkspace() => CallbackShortcuts(
     bindings: {
       const SingleActivator(LogicalKeyboardKey.escape): () =>
@@ -196,7 +222,27 @@ extension _WorkspaceView on MeetingsController {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(meeting.title, style: MeetingVisuals.title),
+            Row(
+              children: [
+                Flexible(
+                  child: Text(meeting.title, style: MeetingVisuals.title),
+                ),
+                IconButton(
+                  tooltip: 'Rename meeting',
+                  iconSize: 18,
+                  padding: const EdgeInsets.all(4),
+                  constraints: const BoxConstraints.tightFor(
+                    width: 32,
+                    height: 26,
+                  ),
+                  style: IconButton.styleFrom(
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  icon: const Icon(Icons.edit_outlined),
+                  onPressed: () => _renameMeeting(meeting),
+                ),
+              ],
+            ),
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,

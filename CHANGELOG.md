@@ -6,6 +6,11 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Added
+
+- Rename meetings from the workspace header. Manual names persist across restarts
+  and calendar refreshes.
+
 ### Fixed
 
 - Enforce owner capabilities before service dispatch and refuse installer shutdown while a desktop is attached.

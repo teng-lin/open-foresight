@@ -87,6 +87,14 @@ class ApplicationMigrations {
         _canonicalizeLabels();
       case 18:
         _createContentHistory();
+      case 19:
+        if (!rows(
+          'PRAGMA table_info(meetings)',
+        ).any((row) => row['name'] == 'title_manually_edited')) {
+          db.execute(
+            'ALTER TABLE meetings ADD COLUMN title_manually_edited INTEGER NOT NULL DEFAULT 0',
+          );
+        }
       default:
         throw StateError('Missing application database migration $version');
     }

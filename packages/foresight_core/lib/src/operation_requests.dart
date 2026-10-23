@@ -74,6 +74,7 @@ OperationRequest decodeOperationRequest(
     Operation.preferencesSet => PreferencesSetRequest.decode(context),
     Operation.meetingsList => MeetingsListRequest.decode(context),
     Operation.meetingsCreate => MeetingsCreateRequest.decode(context),
+    Operation.meetingsRename => MeetingsRenameRequest.decode(context),
     Operation.meetingsGet => MeetingsGetRequest.decode(context),
     Operation.meetingsRetryQuestion => MeetingsRetryQuestionRequest.decode(
       context,

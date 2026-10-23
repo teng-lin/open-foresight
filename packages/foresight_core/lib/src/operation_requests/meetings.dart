@@ -23,6 +23,24 @@ class MeetingsCreateRequest extends OperationRequest {
   }
 }
 
+class MeetingsRenameRequest extends OperationRequest {
+  MeetingsRenameRequest._(super.context, this.id, this.title);
+  final int id;
+  final String title;
+  @override
+  Operation get operation => Operation.meetingsRename;
+  factory MeetingsRenameRequest.decode(OperationRequestContext context) {
+    final values = Operation.meetingsRename.descriptor.arguments.decode(
+      context.rawArguments,
+    );
+    return MeetingsRenameRequest._(
+      context,
+      values.value<int>('id'),
+      values.value<String>('title'),
+    );
+  }
+}
+
 class MeetingsGetRequest extends OperationRequest {
   MeetingsGetRequest._(super.context, this.id);
   final int id;

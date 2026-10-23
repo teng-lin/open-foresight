@@ -201,6 +201,32 @@ void main() {
       )).any((note) => note.title == 'MCP note');
       await waitFor(tester, mcpNoteVisible);
       observed.expect('mcp_changes_visible', await mcpNoteVisible(), true);
+      workspace.update(() => workspace.meetingFeature.meetingId = id);
+      await waitFor(
+        tester,
+        () => find.byTooltip('Rename meeting').evaluate().isNotEmpty,
+      );
+      await tester.tap(find.byTooltip('Rename meeting'));
+      await tester.pumpAndSettle();
+      final name = find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.byType(TextField),
+      );
+      await tester.enterText(name, 'Renamed shared planning');
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      await waitFor(
+        tester,
+        () => find.text('Renamed shared planning').evaluate().isNotEmpty,
+      );
+      final renamed =
+          await workspace.d.command(Operation.meetingsGet, {'id': id}) as Map;
+      observed.expect(
+        'meeting_rename_persisted',
+        (renamed['meeting'] as Map)['title'],
+        'Renamed shared planning',
+      );
+
       // Exercise denial through the visible desktop and the real MCP/service
       // boundary before allowing a fresh request. A previous denial must not
       // create capture handles, transcripts, or an implicit future grant.

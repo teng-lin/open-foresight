@@ -60,7 +60,7 @@ class _Workspace {
       "INSERT INTO document_clusters(cluster_id,label,summary,center_proj_x,center_proj_y,radius) VALUES(4,'Space','Related launch documents',1.25,-2.5,20.5)",
     );
     writer.db.execute(
-      "INSERT INTO meetings VALUES(7,'Launch review',3,'done')",
+      "INSERT INTO meetings(id,title,revision,state) VALUES(7,'Launch review',3,'done')",
     );
     writer.db.execute('INSERT INTO meeting_details VALUES(7,100,1)');
     writer.db.execute(

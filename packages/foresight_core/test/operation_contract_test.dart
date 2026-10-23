@@ -61,7 +61,16 @@ void main() {
       baseline[method]['approval'] = true;
       baseline[method]['approval_web_search'] = true;
     }
-    expect(Operation.values, hasLength(84));
+    baseline['meetings.rename'] = {
+      'requires_helper': false,
+      'approval': true,
+      'approval_web_search': true,
+      'notifies_changes': true,
+      'workspace_epoch': true,
+      'idempotency_key': false,
+      'tools': <Object?>[],
+    };
+    expect(Operation.values, hasLength(85));
     for (final operation in Operation.values) {
       final old = baseline[operation.wire] as Map;
       final descriptor = operation.descriptor;

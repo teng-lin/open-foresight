@@ -66,7 +66,10 @@ void main() {
     );
     db.dispose();
     store = Store(path);
-    expect(store.rows('PRAGMA user_version').single.values.single, 18);
+    expect(
+      store.rows('PRAGMA user_version').single.values.single,
+      Store.schemaVersion,
+    );
     expect(store.notes().single['body'], 'old body');
     expect(store.contentHistory.revisions('notes', 42), isEmpty);
     store.saveNote(42, 'new title', 'new body');

@@ -49,6 +49,16 @@ void main() {
           tool['destructive'] = true;
         }
       }
+      // New desktop metadata edit; the historical fixture remains frozen.
+      expected['meetings.rename'] = {
+        'requires_helper': false,
+        'approval': true,
+        'approval_web_search': true,
+        'notifies_changes': true,
+        'workspace_epoch': true,
+        'idempotency_key': false,
+        'tools': <Object?>[],
+      };
       final actual = <String, Object?>{};
       for (final operation in Operation.values) {
         actual[operation.wire] = {
