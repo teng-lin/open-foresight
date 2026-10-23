@@ -80,7 +80,7 @@ class DesktopStartup extends StatefulWidget {
   final Future<DesktopConnection> Function(ProfilePaths) connect;
   final VoidCallback quit;
   final void Function(String) configureRuntime;
-  final Future<List<AudioDevice>> Function() deviceLoader;
+  final Future<List<AudioDevice>> Function()? deviceLoader;
   const DesktopStartup({
     super.key,
     required this.environment,
@@ -89,7 +89,7 @@ class DesktopStartup extends StatefulWidget {
     this.connect = connectDesktopDomain,
     this.quit = quitDesktop,
     this.configureRuntime = configureProfileRuntime,
-    this.deviceLoader = audioDevices,
+    this.deviceLoader,
   });
   @override
   State<DesktopStartup> createState() => _DesktopStartupState();
@@ -251,7 +251,7 @@ class Foresight extends StatelessWidget {
   final DesktopConnection domain;
   final AppCommands? commands;
   final bool quickOnLaunch;
-  final Future<List<AudioDevice>> Function() deviceLoader;
+  final Future<List<AudioDevice>> Function()? deviceLoader;
   final Future<void> Function(Uri)? sourceLinkOpener;
   final DesktopEnvironment environment;
   const Foresight(
@@ -259,7 +259,7 @@ class Foresight extends StatelessWidget {
     super.key,
     this.commands,
     this.quickOnLaunch = false,
-    this.deviceLoader = audioDevices,
+    this.deviceLoader,
     this.sourceLinkOpener,
     this.environment = const DesktopEnvironment(),
   });
@@ -283,7 +283,7 @@ class Workspace extends StatefulWidget {
   final DesktopConnection domain;
   final AppCommands? commands;
   final bool quickOnLaunch;
-  final Future<List<AudioDevice>> Function() deviceLoader;
+  final Future<List<AudioDevice>> Function()? deviceLoader;
   final Future<void> Function(Uri)? sourceLinkOpener;
   final DesktopEnvironment environment;
   const Workspace(
@@ -291,7 +291,7 @@ class Workspace extends StatefulWidget {
     super.key,
     this.commands,
     this.quickOnLaunch = false,
-    this.deviceLoader = audioDevices,
+    this.deviceLoader,
     this.sourceLinkOpener,
     this.environment = const DesktopEnvironment(),
   });

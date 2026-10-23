@@ -17,12 +17,19 @@ class _HeldConnection extends ControllerConnection {
   _HeldConnection(super.application);
   final entered = Completer<void>(), release = Completer<void>();
   bool holdSave = false, failInitialize = false, holdPreference = false;
+  bool replaceOnResume = false;
   @override
   Future<void> initialize() async {
     if (failInitialize) {
       failInitialize = false;
       throw StateError('First initialization failed');
     }
+  }
+
+  @override
+  Future<void> resume() async {
+    if (replaceOnResume) replaceClientSessionForTesting();
+    await super.resume();
   }
 
   @override
@@ -153,6 +160,23 @@ void main() {
     await tester.pumpAndSettle();
     expect(shell.onboardingFeature.ready, isTrue);
     expect(connection.resumes, 1);
+    expect(shell.error, isEmpty);
+  });
+
+  testWidgets('onboarding retry becomes ready after reconnecting its client', (
+    tester,
+  ) async {
+    final (connection, dynamic shell, _) = await mount(
+      tester,
+      failInitialize: true,
+    );
+    connection.replaceOnResume = true;
+    final original = connection.clientSessionGeneration;
+    final dynamic view = shell.onboardingFeature.build();
+    await view.retryRuntime();
+    await tester.pumpAndSettle();
+    expect(connection.clientSessionGeneration, isNot(same(original)));
+    expect(shell.onboardingFeature.ready, isTrue);
     expect(shell.error, isEmpty);
   });
 

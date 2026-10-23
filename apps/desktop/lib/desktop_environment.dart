@@ -21,13 +21,29 @@ class DesktopEnvironment {
     this.notify = _noNotification,
   });
 
-  factory DesktopEnvironment.production() {
-    final variables = Map<String, String>.unmodifiable(Platform.environment);
-    final home = variables['HOME']!;
+  factory DesktopEnvironment.production({
+    Map<String, String>? variables,
+    bool? macOS,
+    ProcessResult Function(String, List<String>)? runSync,
+  }) {
+    final values = Map<String, String>.unmodifiable(
+      variables ?? Platform.environment,
+    );
+    // Profile resolution remains inside startup's recoverable error surface.
+    // Match its account-directory fallback for Finder launches without HOME.
+    final home =
+        values['HOME'] ??
+        ((macOS ?? Platform.isMacOS)
+            ? _macHome(runSync ?? Process.runSync)
+            : null);
     return DesktopEnvironment(
-      variables: variables,
-      configDirectory: variables['XDG_CONFIG_HOME'] ?? '$home/.config',
-      dataDirectory: variables['XDG_DATA_HOME'] ?? '$home/.local/share',
+      variables: values,
+      configDirectory:
+          values['XDG_CONFIG_HOME'] ??
+          (home == null ? '/dev/null/foresight-config' : '$home/.config'),
+      dataDirectory:
+          values['XDG_DATA_HOME'] ??
+          (home == null ? '/dev/null/foresight-data' : '$home/.local/share'),
       launcher:
           '${File(Platform.resolvedExecutable).parent.parent.path}/open-foresight',
       run: Process.run,
@@ -35,6 +51,25 @@ class DesktopEnvironment {
       openUri: openPlatformUri,
       notify: platformNotification,
     );
+  }
+
+  static String? _macHome(ProcessResult Function(String, List<String>) run) {
+    try {
+      final user = run('/usr/bin/id', ['-un']);
+      if (user.exitCode != 0) return null;
+      final result = run('/usr/bin/dscl', [
+        '.',
+        '-read',
+        '/Users/${user.stdout.toString().trim()}',
+        'NFSHomeDirectory',
+      ]);
+      if (result.exitCode != 0) return null;
+      final value = result.stdout.toString().trim();
+      const prefix = 'NFSHomeDirectory: ';
+      return value.startsWith(prefix) ? value.substring(prefix.length) : null;
+    } on ProcessException {
+      return null;
+    }
   }
 
   final Map<String, String> variables;

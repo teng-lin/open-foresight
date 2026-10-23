@@ -347,7 +347,9 @@ class _IntegrationsController extends _FeatureController {
 
   Future<void> refreshAudioDevices() async {
     try {
-      final devices = await widget.deviceLoader();
+      final devices =
+          await (widget.deviceLoader?.call() ??
+              audioDevices(runProcess: widget.environment.run));
       if (mounted)
         setState(() {
           availableAudioDevices = devices;

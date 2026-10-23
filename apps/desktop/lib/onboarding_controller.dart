@@ -246,10 +246,12 @@ class _OnboardingController extends _FeatureController {
     runtimeError: shell.error,
     retryRuntime: () async {
       setState(() => shell.error = '');
-      final identity = FeatureRequestIdentity.capture(d);
-      await d.initialize();
-      await d.resume();
-      if (identity.isCurrent(d, alive: mounted)) setState(() => ready = true);
+      final connection = d;
+      await connection.initialize();
+      await connection.resume();
+      // A successful resume can replace its underlying client session. Runtime
+      // readiness belongs to this connection, rather than to a data snapshot.
+      if (mounted && identical(d, connection)) setState(() => ready = true);
     },
     saveStep: (step) async {
       await d.command(Operation.preferencesSet, {
