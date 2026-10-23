@@ -302,3 +302,35 @@ canonical container, sanitizers, real-model acceptance, HanSolo, and independent
 native-agent/Claude reviews remain required. The requested HanSolo Accessibility
 grant for `/usr/bin/osascript` has not been confirmed; no final Mac GUI approval
 result is claimed.
+
+## Cleanup and review checkpoint, 2026-10-23
+
+Meetings now uses prepared typed readers, including collections, previews,
+attachments, citations and editor bodies. All 25 synchronous `StoreReader`
+projections and the desktop row adapters have been removed. Typed fixture access,
+injected platform capabilities, feature-scoped rebuild selection, and AST guards
+for ownership, imports, public reader shape and size limits are integrated.
+The guards follow conditional dependencies and normalized package/relative URIs.
+
+Independent review found and corrected two desktop regressions. Global operation
+transitions now invalidate cached controls, with a held-operation regression.
+Existing-note saves now require an accepted body for the current editor, note,
+session and workspace; failure offers retry without losing deliberate drafts.
+The note correction (`f0110863`) passed 52 focused tests with no skips and a
+separate review. Runtime review also reproduced a whitespace-only executable
+name bypass with a real private executable. `8a16233c` applies installation-root
+containment to every nonempty selection; all seven runtime-policy tests passed,
+including the real process regression and the preserved empty-default behavior.
+
+The complete core coverage run at `3b44ce07801033846f1844a7507aea4997d9f993`
+passed 2,063 tests, skipped 16, and measured 95.11% (16,215/17,049).
+Its preceding run overlapped the full desktop job and failed two unchanged
+startup-deadline fixtures; both failed cases passed alone, then the complete
+quiet rerun passed without changing their deadlines or assertions. Native
+admission cases now use bounded owned processes: copying a shared library does
+not isolate its GNU unique process globals. Logs remain under
+`/var/tmp/of-async/core-full-coverage-r{3,4-quiet}.log`.
+
+These remain checkpoint results. The final combined source, fresh builds,
+platform matrices, installed-package acceptance and final external CLI review
+are still pending. Delivery remains one final PR, with no intermediate PRs.
