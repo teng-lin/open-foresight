@@ -22,6 +22,9 @@ directories (including resolved symlinks), plus repeated --runtime-file inputs,
 are hashed; the directory scan is non-recursive. Default system-loader files
 outside those directories must be named with --runtime-file for this inventory.
 Child environment inheritance is allowlisted and loader injection is refused.
+--desktop-host opts into a hashed native stdio/socket relay for a synthetic visible
+UI peer. This proves native host attachment, not graphical desktop acceptance.
+Without this option the pre-P0 token-peer benchmark behavior is unchanged.
 """
 
 from __future__ import annotations
@@ -35,6 +38,8 @@ import math
 import os
 from pathlib import Path
 import platform
+import re
+import selectors
 import signal
 import shutil
 import socket
@@ -46,7 +51,7 @@ import tempfile
 import threading
 import time
 import traceback
-from typing import Any, Callable
+from typing import Any, BinaryIO, Callable, cast
 
 _pins = importlib.import_module("tools.model_pins" if __package__ else "model_pins")
 GENERATED_DIRECTORIES = frozenset({
@@ -164,11 +169,26 @@ def verify_export(
             "allowed_generated_files": sorted(extras), "additional_generated_directories": list(additional)}
 
 
+def desktop_host_identity(path: Path) -> dict[str, Any]:
+    path = path.resolve(strict=True)
+    with path.open("rb") as stream:
+        header = stream.read(65536)
+    if not path.stat().st_mode & 0o111 or header[:4] != b"\x7fELF":
+        raise ValueError("--desktop-host requires an executable native ELF relay")
+    if re.fullmatch(r"dart|dartaotruntime|python[0-9.]*|pypy[0-9.]*|bash|sh|zsh|node|deno|ruby|perl|lua|php|java", path.name) or any(
+        marker in header for marker in (b"Dart_Initialize", b"Py_BytesMain", b"Py_Main")
+    ):
+        raise ValueError("--desktop-host cannot trust an SDK or script interpreter")
+    return file_identity(path)
+
+
 def verify_inputs(args: argparse.Namespace) -> dict[str, Any]:
     paths = {name: getattr(args, name) for name in (
         "service", "helper", "native_library", "model_worker", "litert_library", "whisper_runtime",
     )}
     result = {name: file_identity(path) for name, path in paths.items()}
+    if args.desktop_host is not None:
+        result["desktop_host"] = desktop_host_identity(args.desktop_host)
     libraries = {path.absolute() for path in args.runtime_file}
     for directory in args.library_path:
         libraries.update(path.absolute() for path in directory.iterdir() if path.is_file())
@@ -209,14 +229,13 @@ class Peer:
         self.sequence += 1
         request = self.sequence
         deadline = time.monotonic() + self.timeout
-        self.socket.sendall((json.dumps({"id": request, "method": method, "args": arguments or {}}) + "\n").encode())
+        self._send((json.dumps({"id": request, "method": method, "args": arguments or {}}) + "\n").encode(), deadline, method)
         result = None
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError(f"RPC deadline exceeded: {method}")
-            self.socket.settimeout(remaining)
-            line = self.stream.readline()
+            line = self._line(deadline, method, remaining)
             if not line:
                 raise RuntimeError("Service disconnected")
             row = json.loads(line)
@@ -231,6 +250,13 @@ class Peer:
             if row.get("done"):
                 return result
 
+    def _send(self, payload: bytes, deadline: float, method: str) -> None:
+        self.socket.sendall(payload)
+
+    def _line(self, deadline: float, method: str, remaining: float) -> bytes:
+        self.socket.settimeout(remaining)
+        return self.stream.readline()
+
     def interrupt(self) -> None:
         try:
             self.socket.shutdown(socket.SHUT_RDWR)
@@ -240,6 +266,108 @@ class Peer:
     def close(self) -> None:
         self.stream.close()
         self.socket.close()
+
+
+class DesktopHostPeer(Peer):
+    """Explicit native host relay with a single absolute read/write RPC deadline."""
+
+    def __init__(self, executable: Path, path: Path, log: Path,
+                 evidence: dict[str, Any], child_environment: dict[str, str], *,
+                 timeout: float = 300, close_timeout: float = 1):
+        identity = desktop_host_identity(executable)
+        self.evidence, self.log = evidence, log
+        evidence.update(executable=identity, kind="synthetic native UI peer; not graphical acceptance")
+        self.timeout, self.close_timeout, self.sequence = timeout, close_timeout, 0
+        self.interrupted = threading.Event()
+        self.buffer = bytearray()
+        self.closed = False
+        with log.open("wb") as output:
+            self.process = subprocess.Popen(
+                [identity["resolved_path"], str(path)], stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=output, env=child_environment,
+                start_new_session=True, bufsize=0,
+            )
+        evidence["pid"] = self.process.pid
+        self.writer = cast(BinaryIO, self.process.stdin)
+        self.reader = cast(BinaryIO, self.process.stdout)
+        try:
+            image = file_identity(Path(f"/proc/{self.process.pid}/exe"))
+            evidence["executed_image"] = image
+            if image["sha256"] != identity["sha256"]:
+                raise ValueError("Native desktop relay executed a different image")
+            os.set_blocking(self.writer.fileno(), False)
+            os.set_blocking(self.reader.fileno(), False)
+        except BaseException:
+            self.close()
+            raise
+
+    def _check(self, deadline: float, method: str) -> float:
+        if self.interrupted.is_set():
+            raise RuntimeError("Desktop relay interrupted")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f"RPC deadline exceeded: {method}")
+        return remaining
+
+    def _ready(self, descriptor: int, event: int, deadline: float, method: str) -> None:
+        with selectors.DefaultSelector() as selector:
+            selector.register(descriptor, event)
+            while True:
+                remaining = self._check(deadline, method)
+                # Cancellation has its own bounded wakeup even with no I/O.
+                if selector.select(min(.05, remaining)):
+                    return
+
+    def _send(self, payload: bytes, deadline: float, method: str) -> None:
+        offset = 0
+        while offset < len(payload):
+            self._ready(self.writer.fileno(), selectors.EVENT_WRITE, deadline, method)
+            try:
+                offset += os.write(self.writer.fileno(), payload[offset:])
+            except BlockingIOError:
+                continue
+
+    def _line(self, deadline: float, method: str, remaining: float) -> bytes:
+        while True:
+            self._check(deadline, method)
+            end = self.buffer.find(b"\n")
+            if end >= 0:
+                result = bytes(self.buffer[:end + 1])
+                del self.buffer[:end + 1]
+                return result
+            self._ready(self.reader.fileno(), selectors.EVENT_READ, deadline, method)
+            try:
+                chunk = os.read(self.reader.fileno(), 65536)
+            except BlockingIOError:
+                continue
+            if not chunk:
+                return b""
+            self.buffer.extend(chunk)
+
+    def interrupt(self) -> None:
+        self.interrupted.set()
+
+    def close(self) -> None:
+        if self.closed:
+            return
+        self.closed = True
+        self.interrupt()
+        try:
+            self.writer.close()
+            try:
+                self.process.wait(timeout=self.close_timeout)
+            except subprocess.TimeoutExpired:
+                self.process.terminate()
+                try:
+                    self.process.wait(timeout=self.close_timeout)
+                except subprocess.TimeoutExpired:
+                    self.evidence["forced_kill"] = True
+                    self.process.kill()
+                    self.process.wait(timeout=self.close_timeout)
+        finally:
+            self.reader.close()
+            self.evidence["exit_code"] = self.process.returncode
+            self.evidence["log"] = file_identity(self.log)
 
 
 def native_active(status: dict[str, Any]) -> bool:
@@ -358,6 +486,8 @@ def environment(args: argparse.Namespace, run: Path) -> dict[str, str]:
         "LD_LIBRARY_PATH": os.pathsep.join(map(str, args.library_path)),
         "OMP_NUM_THREADS": "2", "OPENBLAS_NUM_THREADS": "2",
     })
+    if args.desktop_host is not None:
+        env["FORESIGHT_DEVELOPMENT_DESKTOP_EXECUTABLES"] = json.dumps([str(args.desktop_host.resolve(strict=True))])
     return env
 
 
@@ -549,9 +679,21 @@ class Measurement:
         wait_until(ready)
         self.service_state()
         control = self.peers[0]
+        if self.args.desktop_host is not None:
+            evidence: dict[str, Any] = {}
+            self.report["desktop_host"] = evidence
+            host = DesktopHostPeer(self.args.desktop_host, self.run / "run/application.sock",
+                                   self.run / "desktop-host.log", evidence, child_environment)
+            self.peers.append(host)
+            control.close()
+            self.peers.remove(control)
+            control = host
         control.call("status")
         self.report["startup_seconds"] = time.monotonic() - started
-        control.call("security.attach_desktop", {"token": (self.run / "data/.desktop-capability").read_text()})
+        attachment: dict[str, Any] = {"token": (self.run / "data/.desktop-capability").read_text()}
+        if self.args.desktop_host is not None:
+            attachment["visible"] = True
+        control.call("security.attach_desktop", attachment)
         for key, value in [("liveEnhance", "false"), ("proactiveAnswers", "false"), ("serviceIdleMinutes", "30")]:
             control.call("preferences.set", {"key": key, "value": value})
         observer = self.connect()
@@ -707,6 +849,10 @@ def measure(args: argparse.Namespace) -> dict[str, Any]:
         finally:
             try:
                 log = run / "service.log"
+                if (run / "desktop-host.log").exists():
+                    retained_host = args.output / "desktop-host.log"
+                    shutil.copyfile(run / "desktop-host.log", retained_host)
+                    report["desktop_host_log"] = file_identity(retained_host)
                 if log.exists():
                     report["service_log_source"] = file_identity(log)
                     retained = args.output / "service.log"
@@ -739,6 +885,8 @@ def main(argv: list[str] | None = None) -> int:
     timed.add_argument("--generated-directory", action="append", default=[])
     timed.add_argument("--toolchain", action="append", required=True, metavar="NAME=VERSION")
     timed.add_argument("--library-path", type=Path, action="append", default=[])
+    timed.add_argument("--desktop-host", type=Path,
+                       help="explicit native relay executable for a synthetic visible desktop host")
     timed.add_argument("--runtime-file", type=Path, action="append", default=[],
                        help="additional concrete loaded library/runtime to hash, including system-loader dependencies")
     for name in ("service", "helper", "native-library", "model-worker", "litert-library", "whisper-runtime",
@@ -758,6 +906,8 @@ def main(argv: list[str] | None = None) -> int:
         setattr(args, name, getattr(args, name).resolve(strict=True))
     args.library_path = [path.resolve(strict=True) for path in args.library_path]
     args.runtime_file = [path.resolve(strict=True) for path in args.runtime_file]
+    if args.desktop_host is not None:
+        args.desktop_host = args.desktop_host.resolve(strict=True)
     result = measure(args)
     print(json.dumps({"status": result["status"], "report": str(args.output / "rpc-responsiveness.json")}))
     return 0 if result["status"] == "passed" else 1

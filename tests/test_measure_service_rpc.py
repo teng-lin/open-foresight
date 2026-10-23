@@ -60,7 +60,7 @@ def inputs(export, tmp_path):
     repository, commit, source = export
     args = argparse.Namespace(repository=repository, commit=commit, source=source,
                               output=tmp_path / "report", toolchain=["fixture=1"],
-                              generated_directory=[], library_path=[], runtime_file=[])
+                              generated_directory=[], library_path=[], runtime_file=[], desktop_host=None)
     for name in ("service", "helper", "native_library", "model_worker", "litert_library", "whisper_runtime"):
         path = tmp_path / name
         path.write_bytes(name.encode())
@@ -609,7 +609,7 @@ def cli_args(args):
             "--output", str(args.output)]
 
 
-def test_cli_pristine_check_and_measurement_return_codes(inputs, private, monkeypatch, capsys):
+def test_cli_pristine_check_and_measurement_return_codes(inputs, private, monkeypatch, capsys, native_relay):
     assert rpc.main(["verify-export", *cli_args(inputs)]) == 0
     assert json.loads(inputs.output.read_text())["commit"] == inputs.commit
     inputs.output.unlink()
@@ -620,6 +620,11 @@ def test_cli_pristine_check_and_measurement_return_codes(inputs, private, monkey
         arguments += ["--" + name.replace("_", "-"), str(getattr(inputs, name))]
     monkeypatch.setattr(rpc, "measure", lambda args: {"status": "passed"})
     assert rpc.main(arguments) == 0
+    def host_measure(args):
+        assert args.desktop_host == native_relay.resolve()
+        return {"status": "passed"}
+    monkeypatch.setattr(rpc, "measure", host_measure)
+    assert rpc.main([*arguments, "--desktop-host", str(native_relay)]) == 0
     monkeypatch.setattr(rpc, "measure", lambda args: {"status": "performance_target_missed"})
     assert rpc.main(arguments) == 1
     assert "performance_target_missed" in capsys.readouterr().out
@@ -993,3 +998,300 @@ def test_cleanup_snapshot_records_only_live_members_of_pinned_session(monkeypatc
         return f"{pid} (fixture) {state} 1 88 {session} 0"
     monkeypatch.setattr(Path, "read_text", stat)
     assert rpc.live_session_members(10) == [{"pid": 16, "state": "D", "process_group": 88}]
+
+
+# A real native byte relay exercises the OS peer identity and pipe transport.
+NATIVE_RELAY_SOURCE = r'''
+#include <cerrno>
+#include <cstring>
+#include <poll.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+int main(int argc, char** argv) {
+  if (argc != 2 || strlen(argv[1]) >= sizeof(sockaddr_un::sun_path)) return 2;
+  int peer = socket(AF_UNIX, SOCK_STREAM, 0);
+  if (peer < 0) return 3;
+  sockaddr_un address{};
+  address.sun_family = AF_UNIX;
+  strcpy(address.sun_path, argv[1]);
+  if (connect(peer, reinterpret_cast<sockaddr*>(&address), sizeof(address))) return 4;
+  pollfd streams[2]{{STDIN_FILENO, POLLIN, 0}, {peer, POLLIN, 0}};
+  char bytes[16384];
+  while (true) {
+    if (poll(streams, 2, -1) < 0) { if (errno == EINTR) continue; return 5; }
+    for (int i = 0; i < 2; ++i) {
+      if (!(streams[i].revents & (POLLIN | POLLHUP | POLLERR))) continue;
+      auto count = read(streams[i].fd, bytes, sizeof(bytes));
+      if (count <= 0) { close(peer); return 0; }
+      ssize_t offset = 0;
+      int output = i == 0 ? peer : STDOUT_FILENO;
+      while (offset < count) {
+        auto sent = write(output, bytes + offset, count - offset);
+        if (sent < 0 && errno == EINTR) continue;
+        if (sent <= 0) return 6;
+        offset += sent;
+      }
+    }
+  }
+}
+'''
+
+
+@pytest.fixture(scope="module")
+def native_relay(tmp_path_factory):
+    directory = tmp_path_factory.mktemp("native-relay")
+    source = directory / "relay.cpp"
+    source.write_text(NATIVE_RELAY_SOURCE)
+    executable = directory / "desktop-relay"
+    built = subprocess.run(["c++", "-std=c++17", "-O0", str(source), "-o", str(executable)],
+                           capture_output=True, text=True, timeout=30)
+    assert built.returncode == 0, built.stdout + built.stderr
+    return executable
+
+
+@pytest.fixture
+def relay_server(private):
+    servers = []
+
+    def start(handler):
+        path = private / f"relay-{len(servers)}.sock"
+        listener = socket.socket(socket.AF_UNIX)
+        listener.bind(str(path))
+        listener.listen()
+        stop, entered = threading.Event(), threading.Event()
+        state = SimpleNamespace(connection=None, errors=[], stop=stop, entered=entered, path=path)
+
+        def serve():
+            try:
+                connection, _ = listener.accept()
+                state.connection = connection
+                entered.set()
+                handler(connection, stop)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # Deadline/cancellation intentionally closes the owned peer.
+            except BaseException as error:
+                if not stop.is_set():
+                    state.errors.append(error)
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        servers.append((listener, state, thread))
+        return state
+
+    yield start
+    for listener, state, thread in servers:
+        state.stop.set()
+        if state.connection is not None:
+            state.connection.close()
+        listener.close()
+        thread.join(3)
+        assert not thread.is_alive(), "owned fake service did not settle"
+        assert not state.errors, state.errors
+
+
+def relay_request(connection):
+    with connection.makefile("rb") as reader:
+        return json.loads(reader.readline())
+
+
+def test_native_relay_is_actual_socket_peer_and_records_executable_exit_and_log(native_relay, relay_server, private, monkeypatch):
+    import struct
+    seen = {}
+
+    def respond(connection, stop):
+        seen["pid"] = struct.unpack("3i", connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))[0]
+        request = relay_request(connection)
+        connection.sendall((json.dumps({"event": "status"}) + "\n" +
+                            json.dumps({"id": request["id"], "result": "first"}) + "\n" +
+                            json.dumps({"id": request["id"], "result": "second", "done": True}) + "\n").encode())
+        connection.recv(1)
+
+    service = relay_server(respond)
+    evidence = {}
+    peer = rpc.DesktopHostPeer(native_relay, service.path, private / "relay.log", evidence, {}, timeout=1)
+    # Nonblocking readiness may race; both retry paths must preserve the deadline.
+    original_read, original_write = os.read, os.write
+    attempts = {"read": 0, "write": 0}
+
+    def once(kind, original, *args):
+        attempts[kind] += 1
+        if attempts[kind] == 1:
+            raise BlockingIOError()
+        return original(*args)
+
+    monkeypatch.setattr(rpc.os, "read", lambda *args: once("read", original_read, *args))
+    monkeypatch.setattr(rpc.os, "write", lambda *args: once("write", original_write, *args))
+    chunks = []
+    try:
+        assert peer.call("answer.stream", on_result=chunks.append) == "second"
+        assert chunks == ["first", "second"]
+        assert seen["pid"] == peer.process.pid == evidence["pid"]
+        assert evidence["executed_image"]["sha256"] == rpc.file_identity(native_relay)["sha256"]
+    finally:
+        peer.close()
+        peer.close()
+    assert evidence["exit_code"] == 0
+    assert evidence["log"]["sha256"] == hashlib.sha256(b"").hexdigest()
+    assert "not graphical acceptance" in evidence["kind"]
+
+
+@pytest.mark.parametrize("mode", ["partial", "events", "hung", "blocked-write"])
+def test_native_relay_absolute_deadline_survives_partial_lines_events_and_blocked_pipes(native_relay, relay_server, private, mode):
+    def respond(connection, stop):
+        if mode == "blocked-write":
+            stop.wait(3)
+            return
+        relay_request(connection)
+        while not stop.wait(.005):
+            if mode == "partial":
+                connection.sendall(b" ")
+            elif mode == "events":
+                connection.sendall(b'{"event":"status"}\n')
+
+    service = relay_server(respond)
+    peer = rpc.DesktopHostPeer(native_relay, service.path, private / "relay.log", {}, {}, timeout=.15, close_timeout=.2)
+    started = rpc.time.monotonic()
+    try:
+        with pytest.raises(TimeoutError, match="RPC deadline exceeded: status"):
+            peer.call("status", {"large": "x" * 4_000_000} if mode == "blocked-write" else {})
+        assert rpc.time.monotonic() - started < 3
+    finally:
+        service.stop.set()
+        peer.close()
+    assert peer.process.returncode is not None
+
+
+def test_native_relay_cancel_interrupts_pending_read_and_reaps_process(native_relay, relay_server, private):
+    service = relay_server(lambda connection, stop: stop.wait(3))
+    peer = rpc.DesktopHostPeer(native_relay, service.path, private / "relay.log", {}, {}, close_timeout=.2)
+    errors = []
+
+    def call():
+        try:
+            peer.call("status")
+        except BaseException as error:
+            errors.append(error)
+
+    thread = threading.Thread(target=call)
+    thread.start()
+    assert service.entered.wait(2)
+    peer.interrupt()
+    thread.join(2)
+    assert not thread.is_alive()
+    assert len(errors) == 1 and "interrupted" in str(errors[0])
+    peer.close()
+    assert peer.process.returncode == 0
+
+
+def test_native_relay_stopped_process_has_bounded_escalated_cleanup(native_relay, relay_server, private):
+    import signal
+    service = relay_server(lambda connection, stop: stop.wait(3))
+    evidence = {}
+    peer = rpc.DesktopHostPeer(native_relay, service.path, private / "relay.log", evidence, {}, close_timeout=.1)
+    try:
+        assert service.entered.wait(2)
+        os.kill(peer.process.pid, signal.SIGSTOP)
+    finally:
+        peer.close()
+    assert evidence["forced_kill"] is True
+    assert evidence["exit_code"] == -signal.SIGKILL
+
+
+@pytest.mark.parametrize("failure", ["setup", "image"])
+def test_native_relay_constructor_failure_closes_owned_process(native_relay, relay_server, private, monkeypatch, failure):
+    service = relay_server(lambda connection, stop: connection.recv(1))
+    evidence = {}
+    if failure == "setup":
+        monkeypatch.setattr(rpc.os, "set_blocking", lambda *args: (_ for _ in ()).throw(OSError("setup failed")))
+        expected, message = OSError, "setup failed"
+    else:
+        original = rpc.file_identity
+        def identity(path):
+            value = original(path)
+            if str(path).startswith("/proc/"):
+                value["sha256"] = "different"
+            return value
+        monkeypatch.setattr(rpc, "file_identity", identity)
+        expected, message = ValueError, "different image"
+    with pytest.raises(expected, match=message):
+        rpc.DesktopHostPeer(native_relay, service.path, private / "relay.log", evidence, {})
+    assert evidence["exit_code"] == 0
+    assert evidence["log"]["sha256"]
+
+
+@pytest.mark.parametrize("name, data, mode, error", [
+    ("relay", b"#!/bin/sh\n", 0o755, "native ELF"),
+    ("relay", b"\x7fELF", 0o644, "native ELF"),
+    ("python3.13", b"\x7fELF", 0o755, "interpreter"),
+    ("renamed", b"\x7fELF\0Py_Main", 0o755, "interpreter"),
+    ("renamed", b"\x7fELF\0Dart_Initialize", 0o755, "interpreter"),
+])
+def test_native_host_refuses_scripts_sdk_and_nonexecutables(private, name, data, mode, error):
+    path = private / name
+    path.write_bytes(data)
+    path.chmod(mode)
+    with pytest.raises(ValueError, match=error):
+        rpc.desktop_host_identity(path)
+
+
+def test_native_host_input_hash_and_environment_are_explicit(inputs, private, native_relay, monkeypatch):
+    monkeypatch.setenv("FORESIGHT_DEVELOPMENT_DESKTOP_EXECUTABLES", '["untrusted"]')
+    assert "FORESIGHT_DEVELOPMENT_DESKTOP_EXECUTABLES" not in rpc.environment(inputs, private)
+    link = private / "relay-link"
+    link.symlink_to(native_relay)
+    inputs.desktop_host = link
+    assert rpc.verify_inputs(inputs)["desktop_host"]["sha256"] == rpc.file_identity(native_relay)["sha256"]
+    assert json.loads(rpc.environment(inputs, private)["FORESIGHT_DEVELOPMENT_DESKTOP_EXECUTABLES"]) == [str(native_relay.resolve())]
+
+
+def test_workload_native_host_attaches_visible_and_replaces_plain_control(workload, native_relay, monkeypatch):
+    workload.args.desktop_host = native_relay
+    hosts = []
+    def create(executable, path, log, evidence, environment):
+        assert executable == native_relay
+        assert json.loads(environment["FORESIGHT_DEVELOPMENT_DESKTOP_EXECUTABLES"]) == [str(native_relay.resolve())]
+        host = WorkPeer(path, workload.peers[0].state)
+        hosts.append(host)
+        evidence.update(pid=123, kind="synthetic native UI peer")
+        return host
+    monkeypatch.setattr(rpc, "DesktopHostPeer", create)
+    workload.workload()
+    assert ("security.attach_desktop", {"token": "private fixture capability", "visible": True}) in hosts[0].calls
+    assert workload.report["desktop_host"]["pid"] == 123
+    workload.close()
+
+
+def test_native_host_evidence_log_is_retained_on_failure(inputs, private, native_relay, monkeypatch):
+    inputs.desktop_host, inputs.temp_root = native_relay, private
+    def fail(measurement):
+        (measurement.run / "desktop-host.log").write_bytes(b"relay failure\n")
+        raise RuntimeError("failed relay")
+    monkeypatch.setattr(rpc.Measurement, "workload", fail)
+    with pytest.raises(RuntimeError, match="failed relay"):
+        rpc.measure(inputs)
+    report = json.loads((inputs.output / "rpc-responsiveness.json").read_text())
+    assert report["status"] == "incomplete"
+    assert report["desktop_host_log"]["sha256"] == hashlib.sha256(b"relay failure\n").hexdigest()
+
+
+def test_native_relay_eof_is_reported_as_disconnection(native_relay, relay_server, private):
+    def respond(connection, stop):
+        relay_request(connection)
+        connection.sendall(b'{"id":1')
+        connection.shutdown(socket.SHUT_RDWR)
+    service = relay_server(respond)
+    peer = rpc.DesktopHostPeer(native_relay, service.path, private / "relay.log", {}, {})
+    try:
+        with pytest.raises(RuntimeError, match="Service disconnected"):
+            peer.call("status")
+    finally:
+        peer.close()
+
+
+def test_native_host_flag_cannot_bypass_exact_source_precheck(inputs, private, native_relay, monkeypatch):
+    inputs.desktop_host, inputs.temp_root = native_relay, private
+    (inputs.source / "plain").write_text("tampered")
+    monkeypatch.setattr(rpc, "DesktopHostPeer", lambda *args, **kwargs: pytest.fail("unverified export launched host"))
+    with pytest.raises(ValueError, match="blob mismatch"):
+        rpc.measure(inputs)
