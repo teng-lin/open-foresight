@@ -67,51 +67,7 @@ extension _WorkspaceView on MeetingsController {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Row(
-              children: [
-                IconButton.filledTonal(
-                  tooltip: 'All meetings',
-                  onPressed: () async {
-                    try {
-                      await flushMeetingNotesDraft();
-                    } catch (_) {
-                      return;
-                    }
-                    if (mounted)
-                      update(() {
-                        meetingId = null;
-                        meetingImmersive = false;
-                      });
-                  },
-                  style: IconButton.styleFrom(backgroundColor: Colors.white),
-                  icon: const Icon(Icons.arrow_back),
-                ),
-                const SizedBox(width: 8),
-                const CircleAvatar(
-                  backgroundColor: Color(0xffdce1ea),
-                  child: Icon(Icons.calendar_today, color: Color(0xff555b62)),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(meeting.title, style: MeetingVisuals.title),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8,
-                        children: [
-                          MeetingMetadataBadge(dateText),
-                          MeetingMetadataBadge(
-                            '${meetingClock(start)} - ${meetingClock(end)}',
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+            _meetingWorkspaceHeader(meeting, dateText, start, end),
             if (preparedSpeechSetupProblem(_reads.speech) != null)
               ListTile(
                 dense: true,
@@ -205,4 +161,55 @@ extension _WorkspaceView on MeetingsController {
       },
     );
   }
+
+  Widget _meetingWorkspaceHeader(
+    MeetingDetails meeting,
+    String dateText,
+    int start,
+    int end,
+  ) => Row(
+    children: [
+      IconButton.filledTonal(
+        tooltip: 'All meetings',
+        onPressed: () async {
+          try {
+            await flushMeetingNotesDraft();
+          } catch (_) {
+            return;
+          }
+          if (mounted)
+            update(() {
+              meetingId = null;
+              meetingImmersive = false;
+            });
+        },
+        style: IconButton.styleFrom(backgroundColor: Colors.white),
+        icon: const Icon(Icons.arrow_back),
+      ),
+      const SizedBox(width: 8),
+      const CircleAvatar(
+        backgroundColor: Color(0xffdce1ea),
+        child: Icon(Icons.calendar_today, color: Color(0xff555b62)),
+      ),
+      const SizedBox(width: 14),
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(meeting.title, style: MeetingVisuals.title),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              children: [
+                MeetingMetadataBadge(dateText),
+                MeetingMetadataBadge(
+                  '${meetingClock(start)} - ${meetingClock(end)}',
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    ],
+  );
 }

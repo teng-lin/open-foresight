@@ -16,68 +16,14 @@ extension _SummaryView on MeetingsController {
     final clipped = manifest != null && manifest['reduction_clipped'] == true;
     return Column(
       children: [
-        Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  title,
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-              ),
-              IconButton(
-                tooltip: 'Generate $title',
-                onPressed:
-                    active ||
-                        _operations.busy ||
-                        _chat.asking ||
-                        meetingEnhancing
-                    ? null
-                    : () => _runMeetingAction(
-                        id,
-                        identity,
-                        (current) => generateMeeting(
-                          kind,
-                          id: id,
-                          workspaceEpoch: identity.workspaceEpoch,
-                          current: current,
-                        ),
-                        preview: fromPreview,
-                      ),
-                icon: const Icon(Icons.auto_awesome),
-              ),
-              if (active)
-                IconButton(
-                  tooltip: 'Cancel summary',
-                  onPressed: () => unawaited(
-                    d
-                        .command(Operation.meetingsCancelSummary, {'id': id})
-                        .catchError(_operations.reportAsyncError),
-                  ),
-                  icon: const Icon(Icons.stop_circle_outlined),
-                ),
-              if (artifact != null)
-                IconButton(
-                  tooltip: 'Copy $title',
-                  onPressed: () =>
-                      Clipboard.setData(ClipboardData(text: artifact.body)),
-                  icon: const Icon(Icons.copy_outlined),
-                ),
-              if (artifact != null)
-                IconButton(
-                  tooltip: 'Edit $title',
-                  onPressed: active
-                      ? null
-                      : () => unawaited(
-                          editArtifact(
-                            artifact,
-                          ).catchError(_operations.reportAsyncError),
-                        ),
-                  icon: const Icon(Icons.edit_outlined),
-                ),
-            ],
-          ),
+        _meetingSummaryHeading(
+          id,
+          identity,
+          fromPreview: fromPreview,
+          kind: kind,
+          title: title,
+          active: active,
+          artifact: artifact,
         ),
         if (active) ...[
           LinearProgressIndicator(
@@ -166,4 +112,70 @@ extension _SummaryView on MeetingsController {
       ],
     );
   }
+
+  Widget _meetingSummaryHeading(
+    int id,
+    FeatureRequestIdentity identity, {
+    required bool fromPreview,
+    required String kind,
+    required String title,
+    required bool active,
+    MeetingArtifact? artifact,
+  }) => Padding(
+    padding: const EdgeInsets.all(16),
+    child: Row(
+      children: [
+        Expanded(
+          child: Text(title, style: Theme.of(context).textTheme.titleLarge),
+        ),
+        IconButton(
+          tooltip: 'Generate $title',
+          onPressed:
+              active || _operations.busy || _chat.asking || meetingEnhancing
+              ? null
+              : () => _runMeetingAction(
+                  id,
+                  identity,
+                  (current) => generateMeeting(
+                    kind,
+                    id: id,
+                    workspaceEpoch: identity.workspaceEpoch,
+                    current: current,
+                  ),
+                  preview: fromPreview,
+                ),
+          icon: const Icon(Icons.auto_awesome),
+        ),
+        if (active)
+          IconButton(
+            tooltip: 'Cancel summary',
+            onPressed: () => unawaited(
+              d
+                  .command(Operation.meetingsCancelSummary, {'id': id})
+                  .catchError(_operations.reportAsyncError),
+            ),
+            icon: const Icon(Icons.stop_circle_outlined),
+          ),
+        if (artifact != null)
+          IconButton(
+            tooltip: 'Copy $title',
+            onPressed: () =>
+                Clipboard.setData(ClipboardData(text: artifact.body)),
+            icon: const Icon(Icons.copy_outlined),
+          ),
+        if (artifact != null)
+          IconButton(
+            tooltip: 'Edit $title',
+            onPressed: active
+                ? null
+                : () => unawaited(
+                    editArtifact(
+                      artifact,
+                    ).catchError(_operations.reportAsyncError),
+                  ),
+            icon: const Icon(Icons.edit_outlined),
+          ),
+      ],
+    ),
+  );
 }

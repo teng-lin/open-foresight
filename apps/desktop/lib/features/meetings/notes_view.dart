@@ -9,12 +9,65 @@ extension _NotesView on MeetingsController {
   }) {
     if (loadedMeetingNotes != id)
       return const Center(child: Text('Loading meeting notes…'));
-    final enhanced = _reads.artifacts(id, 'enhanced_notes').firstOrNull;
-    final progress = meetingEnhancements['$id'];
-    final enhancedText = progress?.bodyProvided == true
-        ? progress!.body
-        : _reads.enhanced(id);
     final live = _reads.preference('liveEnhance', 'true') == 'true';
+    final editor = _meetingNotesInput();
+    final enhancedPane = _meetingEnhancedPane(id, preview: preview);
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: MeetingVisuals.panelRadius,
+      ),
+      child: Column(
+        children: [
+          _meetingNotesToolbar(
+            id,
+            preview: preview,
+            live: live,
+            assistantToggle: assistantToggle,
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: !meetingEnhancedVisible
+                ? editor
+                : preview
+                ? Column(
+                    children: [
+                      Expanded(flex: 3, child: editor),
+                      Expanded(flex: 2, child: enhancedPane),
+                    ],
+                  )
+                : wide
+                ? Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(flex: 11, child: editor),
+                      const SizedBox(width: 24),
+                      Expanded(flex: 9, child: enhancedPane),
+                    ],
+                  )
+                : DefaultTabController(
+                    length: 2,
+                    child: Column(
+                      children: [
+                        const TabBar(
+                          tabs: [
+                            Tab(text: 'Notes'),
+                            Tab(text: 'Enhanced'),
+                          ],
+                        ),
+                        Expanded(
+                          child: TabBarView(children: [editor, enhancedPane]),
+                        ),
+                      ],
+                    ),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _meetingNotesInput() {
     final editorField = TextField(
       key: const ValueKey('meeting-notes-editor'),
       controller: meetingNotesController,
@@ -32,7 +85,7 @@ extension _NotesView on MeetingsController {
         contentPadding: EdgeInsets.all(24),
       ),
     );
-    final editor = Stack(
+    return Stack(
       fit: StackFit.expand,
       children: [
         Semantics(label: 'Meeting notes', child: editorField),
@@ -54,7 +107,15 @@ extension _NotesView on MeetingsController {
         ),
       ],
     );
-    final enhancedPane = Container(
+  }
+
+  Widget _meetingEnhancedPane(int id, {required bool preview}) {
+    final enhanced = _reads.artifacts(id, 'enhanced_notes').firstOrNull;
+    final progress = meetingEnhancements['$id'];
+    final enhancedText = progress?.bodyProvided == true
+        ? progress!.body
+        : _reads.enhanced(id);
+    return Container(
       margin: EdgeInsets.fromLTRB(preview ? 24 : 0, 24, 24, 24),
       decoration: BoxDecoration(
         color: MeetingVisuals.enhancedSurface,
@@ -138,43 +199,11 @@ extension _NotesView on MeetingsController {
                     child: Text(progress!.status),
                   ),
                 Expanded(
-                  child: enhancedText.isEmpty && progress == null
-                      ? Center(
-                          child: SingleChildScrollView(
-                            padding: const EdgeInsets.all(24),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                if (!preview) ...[
-                                  const Icon(
-                                    Icons.auto_awesome,
-                                    color: Color(0xffb8bec8),
-                                    size: 32,
-                                  ),
-                                  const SizedBox(height: 16),
-                                ],
-                                Text(
-                                  meetingEnhanceStatus.isEmpty
-                                      ? 'Live enhanced notes will appear here as shorthand notes are written.'
-                                      : meetingEnhanceStatus,
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(
-                                    color: Color(0xff959ba5),
-                                    fontSize: 14,
-                                    height: 1.5,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        )
-                      : SingleChildScrollView(
-                          padding: const EdgeInsets.all(20),
-                          child: GeneratedContent(
-                            enhancedText,
-                            openLink: _host.environment.openUri,
-                          ),
-                        ),
+                  child: _meetingEnhancedBody(
+                    enhancedText,
+                    preview: preview,
+                    hasProgress: progress != null,
+                  ),
                 ),
                 if (meetingNotesController.text.isNotEmpty)
                   TextButton.icon(
@@ -191,197 +220,203 @@ extension _NotesView on MeetingsController {
         ),
       ),
     );
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: MeetingVisuals.panelRadius,
-      ),
-      child: Column(
-        children: [
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-            child: Wrap(
-              alignment: WrapAlignment.spaceBetween,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              spacing: 8,
-              runSpacing: 4,
+  }
+
+  Widget _meetingEnhancedBody(
+    String enhancedText, {
+    required bool preview,
+    required bool hasProgress,
+  }) => enhancedText.isEmpty && !hasProgress
+      ? Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                if (preview)
-                  PopupMenuButton<String>(
-                    tooltip: 'Format notes',
-                    icon: const Icon(Icons.text_format),
-                    onSelected: (format) {
-                      switch (format) {
-                        case 'Bold':
-                          formatMeetingNotes('**', '**');
-                        case 'Italic':
-                          formatMeetingNotes('*', '*');
-                        case 'Bullet list':
-                          formatMeetingNotes('\n- ');
-                        case 'Numbered list':
-                          formatMeetingNotes('\n1. ');
-                        case 'Heading':
-                          formatMeetingNotes('\n# ');
-                      }
-                    },
-                    itemBuilder: (_) => [
-                      for (final format in [
-                        'Bold',
-                        'Italic',
-                        'Bullet list',
-                        'Numbered list',
-                        'Heading',
-                      ])
-                        PopupMenuItem(value: format, child: Text(format)),
-                    ],
-                  )
-                else
-                  IconButtonTheme(
-                    data: IconButtonThemeData(
-                      style: IconButton.styleFrom(
-                        fixedSize: const Size(40, 40),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        IconButton(
-                          tooltip: 'Bold',
-                          onPressed: () => formatMeetingNotes('**', '**'),
-                          icon: const Icon(Icons.format_bold),
-                        ),
-                        IconButton(
-                          tooltip: 'Italic',
-                          onPressed: () => formatMeetingNotes('*', '*'),
-                          icon: const Icon(Icons.format_italic),
-                        ),
-                        IconButton(
-                          tooltip: 'Bullet list',
-                          onPressed: () => formatMeetingNotes('\n- '),
-                          icon: const Icon(Icons.format_list_bulleted),
-                        ),
-                        IconButton(
-                          tooltip: 'Numbered list',
-                          onPressed: () => formatMeetingNotes('\n1. '),
-                          icon: const Icon(Icons.format_list_numbered),
-                        ),
-                        IconButton(
-                          tooltip: 'Heading',
-                          onPressed: () => formatMeetingNotes('\n# '),
-                          icon: const Icon(Icons.title),
-                        ),
-                      ],
-                    ),
+                if (!preview) ...[
+                  const Icon(
+                    Icons.auto_awesome,
+                    color: Color(0xffb8bec8),
+                    size: 32,
                   ),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    DropdownButton<String>(
-                      value: _reads.preference('noteStyle', 'Standard'),
-                      underline: const SizedBox.shrink(),
-                      items: ['Standard', 'Concise']
-                          .map(
-                            (s) => DropdownMenuItem(value: s, child: Text(s)),
-                          )
-                          .toList(),
-                      onChanged: (style) => runAction(
-                        () => _settings.preference('noteStyle', style!),
-                      ),
-                    ),
-                    const SizedBox(width: 18),
-                    if (preview)
-                      FilledButton.tonalIcon(
-                        onPressed:
-                            meetingEnhancing ||
-                                _operations.busy ||
-                                _chat.asking ||
-                                meetingNotesController.text.trim().isEmpty
-                            ? null
-                            : () => enhanceMeetingNotes(id),
-                        icon: const Icon(Icons.auto_awesome, size: 18),
-                        label: Text(
-                          meetingEnhancing ? 'Enhancing…' : 'Enhance',
-                        ),
-                      )
-                    else
-                      FilledButton.tonalIcon(
-                        key: const ValueKey('meeting-live-enhance'),
-                        onPressed: () => update(() {
-                          unawaited(
-                            runAction(
-                              () => _settings.preference(
-                                'liveEnhance',
-                                (!live).toString(),
-                              ),
-                            ),
-                          );
-                          meetingEnhancedVisible = !live;
-                          if (!live) unawaited(runAction(saveMeetingNotes));
-                        }),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xffdce9ff),
-                          foregroundColor: const Color(0xff254ab5),
-                        ),
-                        icon: const Icon(Icons.auto_awesome, size: 18),
-                        label: Text('Live Enhance ${live ? 'ON' : 'OFF'}'),
-                      ),
-                    if (assistantToggle != null) ...[
-                      const SizedBox(width: 8),
-                      assistantToggle,
-                    ],
-                    if (!meetingEnhancedVisible)
-                      IconButton(
-                        tooltip: 'Show enhanced notes',
-                        onPressed: () =>
-                            update(() => meetingEnhancedVisible = true),
-                        icon: const Icon(Icons.vertical_split),
-                      ),
-                  ],
+                  const SizedBox(height: 16),
+                ],
+                Text(
+                  meetingEnhanceStatus.isEmpty
+                      ? 'Live enhanced notes will appear here as shorthand notes are written.'
+                      : meetingEnhanceStatus,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Color(0xff959ba5),
+                    fontSize: 14,
+                    height: 1.5,
+                  ),
                 ),
               ],
             ),
           ),
-          const Divider(height: 1),
-          Expanded(
-            child: !meetingEnhancedVisible
-                ? editor
-                : preview
-                ? Column(
-                    children: [
-                      Expanded(flex: 3, child: editor),
-                      Expanded(flex: 2, child: enhancedPane),
-                    ],
-                  )
-                : wide
-                ? Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Expanded(flex: 11, child: editor),
-                      const SizedBox(width: 24),
-                      Expanded(flex: 9, child: enhancedPane),
-                    ],
-                  )
-                : DefaultTabController(
-                    length: 2,
-                    child: Column(
-                      children: [
-                        const TabBar(
-                          tabs: [
-                            Tab(text: 'Notes'),
-                            Tab(text: 'Enhanced'),
-                          ],
-                        ),
-                        Expanded(
-                          child: TabBarView(children: [editor, enhancedPane]),
-                        ),
-                      ],
-                    ),
-                  ),
+        )
+      : SingleChildScrollView(
+          padding: const EdgeInsets.all(20),
+          child: GeneratedContent(
+            enhancedText,
+            openLink: _host.environment.openUri,
           ),
-        ],
+        );
+
+  Widget _meetingNotesToolbar(
+    int id, {
+    required bool preview,
+    required bool live,
+    Widget? assistantToggle,
+  }) => Container(
+    width: double.infinity,
+    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+    child: Wrap(
+      alignment: WrapAlignment.spaceBetween,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 8,
+      runSpacing: 4,
+      children: [
+        _meetingNotesFormatting(preview),
+        _meetingNotesActions(
+          id,
+          preview: preview,
+          live: live,
+          assistantToggle: assistantToggle,
+        ),
+      ],
+    ),
+  );
+
+  Widget _meetingNotesFormatting(bool preview) => preview
+      ? PopupMenuButton<String>(
+          tooltip: 'Format notes',
+          icon: const Icon(Icons.text_format),
+          onSelected: (format) {
+            switch (format) {
+              case 'Bold':
+                formatMeetingNotes('**', '**');
+              case 'Italic':
+                formatMeetingNotes('*', '*');
+              case 'Bullet list':
+                formatMeetingNotes('\n- ');
+              case 'Numbered list':
+                formatMeetingNotes('\n1. ');
+              case 'Heading':
+                formatMeetingNotes('\n# ');
+            }
+          },
+          itemBuilder: (_) => [
+            for (final format in [
+              'Bold',
+              'Italic',
+              'Bullet list',
+              'Numbered list',
+              'Heading',
+            ])
+              PopupMenuItem(value: format, child: Text(format)),
+          ],
+        )
+      : IconButtonTheme(
+          data: IconButtonThemeData(
+            style: IconButton.styleFrom(
+              fixedSize: const Size(40, 40),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                tooltip: 'Bold',
+                onPressed: () => formatMeetingNotes('**', '**'),
+                icon: const Icon(Icons.format_bold),
+              ),
+              IconButton(
+                tooltip: 'Italic',
+                onPressed: () => formatMeetingNotes('*', '*'),
+                icon: const Icon(Icons.format_italic),
+              ),
+              IconButton(
+                tooltip: 'Bullet list',
+                onPressed: () => formatMeetingNotes('\n- '),
+                icon: const Icon(Icons.format_list_bulleted),
+              ),
+              IconButton(
+                tooltip: 'Numbered list',
+                onPressed: () => formatMeetingNotes('\n1. '),
+                icon: const Icon(Icons.format_list_numbered),
+              ),
+              IconButton(
+                tooltip: 'Heading',
+                onPressed: () => formatMeetingNotes('\n# '),
+                icon: const Icon(Icons.title),
+              ),
+            ],
+          ),
+        );
+
+  Widget _meetingNotesActions(
+    int id, {
+    required bool preview,
+    required bool live,
+    Widget? assistantToggle,
+  }) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      DropdownButton<String>(
+        value: _reads.preference('noteStyle', 'Standard'),
+        underline: const SizedBox.shrink(),
+        items: [
+          'Standard',
+          'Concise',
+        ].map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
+        onChanged: (style) =>
+            runAction(() => _settings.preference('noteStyle', style!)),
       ),
-    );
-  }
+      const SizedBox(width: 18),
+      if (preview)
+        FilledButton.tonalIcon(
+          onPressed:
+              meetingEnhancing ||
+                  _operations.busy ||
+                  _chat.asking ||
+                  meetingNotesController.text.trim().isEmpty
+              ? null
+              : () => enhanceMeetingNotes(id),
+          icon: const Icon(Icons.auto_awesome, size: 18),
+          label: Text(meetingEnhancing ? 'Enhancing…' : 'Enhance'),
+        )
+      else
+        FilledButton.tonalIcon(
+          key: const ValueKey('meeting-live-enhance'),
+          onPressed: () => update(() {
+            unawaited(
+              runAction(
+                () => _settings.preference('liveEnhance', (!live).toString()),
+              ),
+            );
+            meetingEnhancedVisible = !live;
+            if (!live) unawaited(runAction(saveMeetingNotes));
+          }),
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xffdce9ff),
+            foregroundColor: const Color(0xff254ab5),
+          ),
+          icon: const Icon(Icons.auto_awesome, size: 18),
+          label: Text('Live Enhance ${live ? 'ON' : 'OFF'}'),
+        ),
+      if (assistantToggle != null) ...[
+        const SizedBox(width: 8),
+        assistantToggle,
+      ],
+      if (!meetingEnhancedVisible)
+        IconButton(
+          tooltip: 'Show enhanced notes',
+          onPressed: () => update(() => meetingEnhancedVisible = true),
+          icon: const Icon(Icons.vertical_split),
+        ),
+    ],
+  );
 }

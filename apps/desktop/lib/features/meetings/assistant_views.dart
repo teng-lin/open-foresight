@@ -112,76 +112,7 @@ extension _AssistantViews on MeetingsController {
                   padding: const EdgeInsets.all(16),
                   children: [
                     for (final item in detected)
-                      Card(
-                        child: Padding(
-                          padding: const EdgeInsets.all(12),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                item.question,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                              Text(switch (item.state) {
-                                'queued' => 'Automatic · Waiting',
-                                'answering' => 'Automatic · Answering…',
-                                'completed' => 'Automatic · Answered',
-                                'insufficient_context' =>
-                                  'Automatic · No supporting sources found',
-                                'failed' => 'Automatic · Could not answer',
-                                'cancelled' => 'Automatic · Cancelled',
-                                'superseded' =>
-                                  'Automatic · Replaced by an updated question',
-                                _ => 'Automatic · Saved question',
-                              }),
-                              if ((item.error).isNotEmpty) Text(item.error),
-                              if (item.body != null)
-                                GeneratedContent(
-                                  item.body!,
-                                  openLink: _host.environment.openUri,
-                                  fontSize: _chat.answerFontSize,
-                                ),
-                              if (item.body != null)
-                                IconButton(
-                                  tooltip: 'Copy automatic answer',
-                                  onPressed: () => Clipboard.setData(
-                                    ClipboardData(text: item.body!),
-                                  ),
-                                  icon: const Icon(Icons.copy_outlined),
-                                ),
-                              if (item.citations.isNotEmpty)
-                                Wrap(
-                                  children: [
-                                    for (final source in item.citations)
-                                      TextButton(
-                                        onPressed: () =>
-                                            _chatCommands.cite(source),
-                                        child: Text(
-                                          '[${source.label}] source revision ${source.revision}',
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                              if ([
-                                'failed',
-                                'insufficient_context',
-                                'cancelled',
-                              ].contains(item.state))
-                                TextButton(
-                                  onPressed: () => _operations.run(() async {
-                                    await d.command(
-                                      Operation.meetingsRetryQuestion,
-                                      {'id': item.id},
-                                    );
-                                  }),
-                                  child: const Text('Try again'),
-                                ),
-                            ],
-                          ),
-                        ),
-                      ),
+                      _meetingAutomaticQuestion(item),
                     for (final row in manual)
                       ListTile(
                         title: SelectableText(row.text),
@@ -356,4 +287,68 @@ extension _AssistantViews on MeetingsController {
       ],
     );
   }
+
+  Widget _meetingAutomaticQuestion(MeetingQuestion item) => Card(
+    child: Padding(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            item.question,
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+          Text(switch (item.state) {
+            'queued' => 'Automatic · Waiting',
+            'answering' => 'Automatic · Answering…',
+            'completed' => 'Automatic · Answered',
+            'insufficient_context' => 'Automatic · No supporting sources found',
+            'failed' => 'Automatic · Could not answer',
+            'cancelled' => 'Automatic · Cancelled',
+            'superseded' => 'Automatic · Replaced by an updated question',
+            _ => 'Automatic · Saved question',
+          }),
+          if ((item.error).isNotEmpty) Text(item.error),
+          if (item.body != null)
+            GeneratedContent(
+              item.body!,
+              openLink: _host.environment.openUri,
+              fontSize: _chat.answerFontSize,
+            ),
+          if (item.body != null)
+            IconButton(
+              tooltip: 'Copy automatic answer',
+              onPressed: () =>
+                  Clipboard.setData(ClipboardData(text: item.body!)),
+              icon: const Icon(Icons.copy_outlined),
+            ),
+          if (item.citations.isNotEmpty)
+            Wrap(
+              children: [
+                for (final source in item.citations)
+                  TextButton(
+                    onPressed: () => _chatCommands.cite(source),
+                    child: Text(
+                      '[${source.label}] source revision ${source.revision}',
+                    ),
+                  ),
+              ],
+            ),
+          if ([
+            'failed',
+            'insufficient_context',
+            'cancelled',
+          ].contains(item.state))
+            TextButton(
+              onPressed: () => _operations.run(() async {
+                await d.command(Operation.meetingsRetryQuestion, {
+                  'id': item.id,
+                });
+              }),
+              child: const Text('Try again'),
+            ),
+        ],
+      ),
+    ),
+  );
 }
