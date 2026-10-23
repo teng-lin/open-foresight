@@ -1,5 +1,6 @@
 import 'desktop_environment.dart';
 import 'shell/workspace_tab.dart';
+import 'presentation/workspace_presentation.dart';
 import 'system_audio_setup_dialog.dart';
 import 'onboarding_view.dart';
 import 'model_terms_dialog.dart';

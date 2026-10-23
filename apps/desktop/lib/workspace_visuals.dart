@@ -1,7 +1,7 @@
 part of 'main.dart';
 
-const _blue = Color(0xffbfe8ff);
-const _ink = Color(0xff07577b);
+const _blue = workspaceBlue;
+const _ink = workspaceInk;
 
 /// The reference Sources action uses a dashed pill outline.
 class _DashedStadiumBorder extends StadiumBorder {
