@@ -1072,7 +1072,7 @@ void main() {
       ));
       expect(exportedNotes, isNotEmpty);
       expect(
-        afterCancellation.meetingFeature.exportMeetingMarkdown(),
+        await afterCancellation.meetingFeature.exportMeetingMarkdown(),
         contains(exportedNotes.trim()),
       );
       for (final name in ['Stats', 'Sources']) {
