@@ -390,6 +390,12 @@ class FakeProcess:
     pid = 12345
     returncode = None
 
+    def terminate(self):
+        pass
+
+    def kill(self):
+        self.returncode = -9
+
     def poll(self):
         return self.returncode
 
@@ -530,10 +536,11 @@ def test_close_kills_verified_session_members_on_deadline_and_joins_thread(workl
     process.wait = wait
     workload.process = process
     workload.thread = FakeThread()
-    monkeypatch.setattr(rpc.os, "killpg", lambda pid, sig: calls.append(("group", pid, sig)))
+    process.terminate = lambda: calls.append(("supervisor", process.pid, rpc.signal.SIGTERM))
     monkeypatch.setattr(rpc, "signal_session_members", lambda sid, sig: calls.append(("session", sid, sig)))
     workload.close()
-    assert calls == [("group", process.pid, rpc.signal.SIGTERM), ("session", process.pid, rpc.signal.SIGKILL)]
+    assert calls == [("supervisor", process.pid, rpc.signal.SIGTERM), ("session", process.pid, rpc.signal.SIGKILL)]
+    assert workload.report["owned_session_escalated_to_kill"] is True
     assert waits == [30, .05]
     assert workload.report["owned_supervisor_exit_code"] == -9
 
@@ -549,9 +556,9 @@ def test_close_tolerates_process_exit_between_poll_and_signals(workload, monkeyp
         process.returncode = 0
     process.wait = wait
     workload.process = process
-    def gone(pid, sig):
+    def gone():
         raise ProcessLookupError("already exited")
-    monkeypatch.setattr(rpc.os, "killpg", gone)
+    process.terminate = gone
     workload.close()
     assert workload.report["owned_supervisor_exit_code"] == 0
 
@@ -559,7 +566,7 @@ def test_close_leaves_already_exited_process_alone(workload, monkeypatch):
     process = FakeProcess()
     process.returncode = 3
     workload.process = process
-    monkeypatch.setattr(rpc.os, "killpg", lambda *args: pytest.fail("must not signal exited PID"))
+    process.terminate = lambda: pytest.fail("must not signal exited PID")
     workload.close()
     assert workload.report["owned_supervisor_exit_code"] == 3
     assert workload.report["status"] == "incomplete"
@@ -1357,3 +1364,80 @@ def test_summary_workload_warms_then_regenerates_real_summary_contract(workload)
     assert sample["stream_chunks_during_samples"][0]["received_ns"] == sample["first_status_ns"]
     assert sample["stream_chunks_during_samples"][-1]["received_ns"] == sample["last_status_ns"]
     workload.close()
+
+
+def test_supervisor_sends_graceful_term_once_and_waits_for_real_service_cleanup(private):
+    ready = private / "graceful.ready"
+    finished = private / "graceful.finished"
+    service = private / "graceful-service"
+    service.write_text(f'''#!{sys.executable}
+import signal,time
+stopping = False
+def stop(kind, frame):
+    global stopping
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    stopping = True
+signal.signal(signal.SIGTERM, stop)
+open({str(ready)!r}, 'w').close()
+while not stopping: time.sleep(.01)
+time.sleep(.2)
+open({str(finished)!r}, 'w').close()
+''')
+    service.chmod(0o700)
+    state = private / "service-state.json"
+    process = subprocess.Popen([sys.executable, str(Path(rpc.__file__).resolve()), "_supervise", str(service), str(state)],
+                               start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    measurement = rpc.Measurement(SimpleNamespace(), private, {})
+    measurement.process, measurement.cleanup_timeout = process, 2
+    try:
+        rpc.wait_until(lambda: ready.exists() and state.exists(), timeout=5)
+        measurement.close()
+        assert finished.exists(), "A repeated TERM interrupted graceful cleanup"
+        assert measurement.report["owned_service_exit_code"] == 0
+        assert measurement.report["owned_supervisor_exit_code"] == 0
+        assert not measurement.report.get("owned_session_escalated_to_kill")
+    finally:
+        if process.poll() is None:
+            rpc.signal_session_members(process.pid, rpc.signal.SIGKILL)
+            process.kill()
+        out, err = process.communicate(timeout=5)
+        assert process.returncode == 0, (out, err)
+
+
+def test_term_once_tracks_process_start_and_new_descendants_without_signalling_reused_session(monkeypatch):
+    calls = []
+    starts = {17: "100"}
+    monkeypatch.setattr(rpc, "session_members", lambda session: list(starts))
+    monkeypatch.setattr(rpc.os, "pidfd_open", lambda pid: pid, raising=False)
+    monkeypatch.setattr(rpc.os, "getsid", lambda pid: 10)
+    monkeypatch.setattr(rpc.os, "close", lambda fd: None)
+    monkeypatch.setattr(rpc.signal, "pidfd_send_signal", lambda fd, kind: calls.append(fd), raising=False)
+    def stat(path):
+        pid = int(path.parts[2])
+        return f'{pid} (test) S 1 17 10 ' + '0 ' * 15 + starts[pid]
+    monkeypatch.setattr(Path, "read_text", stat)
+    once = set()
+    rpc.signal_session_members(10, rpc.signal.SIGTERM, once=once)
+    rpc.signal_session_members(10, rpc.signal.SIGTERM, once=once)
+    starts[18] = "101"
+    rpc.signal_session_members(10, rpc.signal.SIGTERM, once=once)
+    starts[17] = "102"
+    rpc.signal_session_members(10, rpc.signal.SIGTERM, once=once)
+    assert calls == [17, 18, 17]
+    assert once == {(17, "100"), (18, "101"), (17, "102")}
+
+
+def test_term_once_does_not_certify_failed_signal_or_signal_process_that_left_session(monkeypatch):
+    monkeypatch.setattr(rpc, "session_members", lambda session: [17])
+    monkeypatch.setattr(rpc.os, "pidfd_open", lambda pid: pid, raising=False)
+    monkeypatch.setattr(rpc.os, "getsid", lambda pid: 10)
+    monkeypatch.setattr(rpc.os, "close", lambda fd: None)
+    monkeypatch.setattr(Path, "read_text", lambda path: '17 (test) S 1 17 10 ' + '0 ' * 15 + '100')
+    monkeypatch.setattr(rpc.signal, "pidfd_send_signal", lambda fd, kind: (_ for _ in ()).throw(ProcessLookupError()), raising=False)
+    once = set()
+    rpc.signal_session_members(10, rpc.signal.SIGTERM, once=once)
+    assert not once
+    monkeypatch.setattr(Path, "read_text", lambda path: '17 (test) S 1 17 99 ' + '0 ' * 15 + '100')
+    monkeypatch.setattr(rpc.signal, "pidfd_send_signal", lambda *args: pytest.fail("moved outside session"), raising=False)
+    rpc.signal_session_members(10, rpc.signal.SIGTERM, once=once)
+    assert not once

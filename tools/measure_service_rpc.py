@@ -548,7 +548,8 @@ def live_session_members(session: int) -> list[dict[str, Any]]:
     return survivors
 
 
-def signal_session_members(session: int, kind: int) -> None:
+def signal_session_members(session: int, kind: int, *,
+                           once: set[tuple[int, str]] | None = None) -> None:
     """Signal verified members through stable pidfds, never recycled PID/PGIDs.
 
     The caller retains a live/unreaped supervisor to pin the session identity.
@@ -562,8 +563,17 @@ def signal_session_members(session: int, kind: int) -> None:
             continue
         try:
             if os.getsid(member) == session:
+                identity = None
+                if once is not None:
+                    fields = Path(f"/proc/{member}/stat").read_text().rpartition(")")[2].split()
+                    identity = (member, fields[19])  # starttime distinguishes PID reuse.
+                    if int(fields[3]) != session or identity in once:
+                        continue
                 signal.pidfd_send_signal(descriptor, kind)
-        except ProcessLookupError:
+                # Only record a successful signal to the still-pinned pidfd.
+                if once is not None and identity is not None:
+                    once.add(identity)
+        except (ProcessLookupError, FileNotFoundError):
             pass
         finally:
             os.close(descriptor)
@@ -580,6 +590,7 @@ def service_supervisor(service: Path, state: Path) -> None:
     if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
         raise OSError(ctypes.get_errno(), "Cannot establish owned child subreaper")
     stopping = False
+    terminated: set[tuple[int, str]] = set()
 
     def stop(_signal: int, _frame: Any) -> None:
         nonlocal stopping
@@ -592,7 +603,7 @@ def service_supervisor(service: Path, state: Path) -> None:
         written: dict[str, Any] | None = None
         while True:
             if stopping:
-                signal_session_members(os.getpid(), signal.SIGTERM)
+                signal_session_members(os.getpid(), signal.SIGTERM, once=terminated)
             code = child.poll()
             details["exit_code"] = code
             if written != details:
@@ -795,15 +806,16 @@ class Measurement:
         process = self.process
         if process is not None:
             if process.poll() is None:
-                # TERM reaches the supervisor, which also signals workers in
+                # TERM targets only the supervisor, which signals workers in
                 # other process groups through verified session-member pidfds.
                 try:
-                    os.killpg(process.pid, signal.SIGTERM)
+                    process.terminate()
                 except ProcessLookupError:
                     pass  # The owned process can exit between poll and signal.
                 try:
                     process.wait(timeout=self.cleanup_timeout)
                 except subprocess.TimeoutExpired:
+                    self.report["owned_session_escalated_to_kill"] = True
                     # A timed-out wait has not reaped the session leader. Kill
                     # exact verified session members, repeatedly covering children
                     # forked while an earlier pass was stopping their parents.
@@ -821,8 +833,9 @@ class Measurement:
                             # SID/PGID until this final bounded owner termination.
                             self.report["owned_session_survivors_before_supervisor_kill"] = live_session_members(process.pid)
                             self.report["status"] = "incomplete"
+                            self.report["owned_supervisor_forced_kill"] = True
                             try:
-                                os.killpg(process.pid, signal.SIGKILL)
+                                process.kill()
                             except ProcessLookupError:
                                 pass
                             process.wait(timeout=self.cleanup_timeout)
