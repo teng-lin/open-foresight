@@ -315,6 +315,7 @@ class _WorkspaceState extends State<Workspace>
       });
     }
     connectionChanges = d.changes.listen((_) => serviceChanged());
+    integrationFeature.initialize();
     Future<void> initializeConnection() async {
       await d.initialize();
       try {

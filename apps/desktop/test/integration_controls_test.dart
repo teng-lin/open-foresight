@@ -276,6 +276,7 @@ void main() {
       await integration.refreshAudioDevices();
       expect(integration.audioDeviceState, isEmpty);
       f.store.setPreference('microphoneTarget', 'disconnected-microphone');
+      f.connection.domain.helper.changed?.call();
       f.shell.update(() => f.shell.navigate(WorkspaceTab.settings));
       await tester.pumpAndSettle();
       expect(find.text('Saved device unavailable'), findsOneWidget);

@@ -8,7 +8,6 @@ import 'package:foresight_core/desktop.dart';
 
 import '../../commands.dart';
 import '../../desktop_environment.dart';
-import '../../desktop_visuals.dart';
 import '../../feature_request_identity.dart';
 import '../../shell/ports.dart'
     show
@@ -28,6 +27,8 @@ import 'google_picker.dart';
 import 'google_sign_in_dialog.dart';
 import 'hypr_shortcuts.dart';
 import 'ports.dart';
+import 'preferences.dart';
+import 'widgets.dart';
 import 'system_audio_setup_dialog.dart';
 
 class IntegrationsController implements IntegrationsPort {
@@ -62,7 +63,20 @@ class IntegrationsController implements IntegrationsPort {
   DesktopEnvironment get environment => _host.environment;
   BuildContext get context => _host.context;
   bool get mounted => !_disposed && _host.mounted;
-  bool _disposed = false;
+  bool _disposed = false, _initialized = false;
+  late final preferenceModel = IntegrationPreferenceModel(d);
+
+  void initialize() {
+    if (_initialized || _disposed) return;
+    _initialized = true;
+    preferenceModel.addListener(_preferencesChanged);
+    preferenceModel.start();
+  }
+
+  void _preferencesChanged() {
+    if (mounted) setState(() {});
+  }
+
   void setState(VoidCallback action) => _host.update(action);
 
   /// The shared gate keeps nesting and notifications; this owner retires stale
@@ -90,6 +104,8 @@ class IntegrationsController implements IntegrationsPort {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    preferenceModel.removeListener(_preferencesChanged);
+    preferenceModel.dispose();
     unawaited(googleAuth.close());
     unawaited(commands?.close() ?? Future<void>.value());
     unawaited(globalShortcuts?.close() ?? Future<void>.value());
@@ -277,22 +293,7 @@ class IntegrationsController implements IntegrationsPort {
     try {
       final allow = await showDialog<bool>(
         context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: const Text('Start microphone and system audio recording?'),
-          content: const Text(
-            'Another process requested a quick meeting. Recording starts only after you confirm here.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('Start recording'),
-            ),
-          ],
-        ),
+        builder: (_) => const QuickMeetingConfirmation(),
       );
       if (allow == true &&
           mounted &&
@@ -329,11 +330,10 @@ class IntegrationsController implements IntegrationsPort {
 
   @override
   Future<void> enableGlobalShortcuts() async {
+    final shortcut = await preferenceModel.readCurrent('quickShortcut');
     if (!Platform.isMacOS &&
         environment.variables['HYPRLAND_INSTANCE_SIGNATURE'] != null) {
-      await hyprShortcuts.install(
-        d.store.preference('quickShortcut', 'CTRL + SHIFT + F'),
-      );
+      await hyprShortcuts.install(shortcut);
       globalShortcutState = 'Global shortcut installed';
     } else {
       await desktopSettings.ensureApplicationEntry();
@@ -351,9 +351,7 @@ class IntegrationsController implements IntegrationsPort {
         },
       );
       await globalShortcuts!.enable(
-        preferredTrigger: d.store
-            .preference('quickShortcut', 'CTRL + SHIFT + F')
-            .replaceAll(' ', ''),
+        preferredTrigger: shortcut.replaceAll(' ', ''),
       );
       globalShortcutState = globalShortcuts!.state;
     }
@@ -455,22 +453,7 @@ class IntegrationsController implements IntegrationsPort {
     }
     final allow = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Allow recording access'),
-        content: const Text(
-          'Allow microphone access to transcribe your voice. macOS may also ask for Screen & System Audio Recording access when recording starts. If access was denied, enable Open Foresight in System Settings > Privacy & Security.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Allow microphone'),
-          ),
-        ],
-      ),
+      builder: (_) => const MicrophoneAccessDialog(),
     );
     if (allow != true || !mounted) return false;
     await requestMicrophoneAccess();
@@ -747,42 +730,16 @@ class IntegrationsController implements IntegrationsPort {
     }
   }
 
-  SingleActivator get quickActivator {
-    final parts = d.store
-        .preference('quickShortcut', 'CTRL + SHIFT + F')
-        .split(' + ');
-    return SingleActivator(
-      LogicalKeyboardKey(parts.last.toLowerCase().codeUnitAt(0)),
-      control: parts.contains('CTRL'),
-      shift: parts.contains('SHIFT'),
-      alt: parts.contains('ALT'),
-      meta: parts.any({'SUPER', 'CMD', 'COMMAND', 'META'}.contains),
-    );
-  }
+  SingleActivator get quickActivator =>
+      quickMeetingActivator(preferenceModel.value.value('quickShortcut'));
 
   @override
   Future<void> changeQuickShortcut() async {
     final input = TextEditingController(
-      text: d.store.preference('quickShortcut', 'CTRL + SHIFT + F'),
+      text: await preferenceModel.readCurrent('quickShortcut'),
     );
     final saved = await _dialogs.showInputDialog<bool>(
-      builder: (context) => AlertDialog(
-        title: const Text('Meeting shortcut'),
-        content: TextField(
-          controller: input,
-          decoration: const InputDecoration(hintText: 'CTRL + SHIFT + F'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Save shortcut'),
-          ),
-        ],
-      ),
+      builder: (_) => MeetingShortcutDialog(input: input),
     );
     final value = input.text;
     input.dispose();
@@ -797,7 +754,7 @@ class IntegrationsController implements IntegrationsPort {
                   .replaceAll('CONTROL', 'CTRL')
             : value,
       );
-      if (d.store.preference('globalShortcut') == 'true') {
+      if (await preferenceModel.readCurrent('globalShortcut') == 'true') {
         if (Platform.isMacOS) {
           await globalShortcuts!.enable(
             preferredTrigger: normalized.replaceAll(' ', ''),
@@ -815,47 +772,21 @@ class IntegrationsController implements IntegrationsPort {
   }
 
   @override
-  String googleSyncStatus() {
-    if (googleSyncing) return 'Syncing…';
-    final timestamp = google.lastCompletedRefreshMs;
-    if (timestamp == 0) return 'Not synced yet';
-    final last = DateTime.fromMillisecondsSinceEpoch(timestamp);
-    final now = DateTime.now();
-    final days = DateTime.utc(
-      now.year,
-      now.month,
-      now.day,
-    ).difference(DateTime.utc(last.year, last.month, last.day)).inDays;
-    if (days == 0) return 'Last synced today';
-    if (days == 1) return 'Last synced yesterday';
-    return 'Last synced $days days ago';
-  }
+  String googleSyncStatus() => googleSyncLabel(
+    syncing: googleSyncing,
+    timestamp: lastCompletedRefreshMilliseconds,
+  );
 
   @override
   Widget deviceChoice(bool playback) {
     final key = playback ? 'playbackTarget' : 'microphoneTarget';
-    final current = d.store.preference(key, 'auto');
+    final current = preferenceModel.value.value(key);
     final devices = availableAudioDevices
         .where((device) => device.playback == playback)
         .toList();
-    return DesktopSettingSelect<String>(
-      width: 300,
-      value: current,
-      items: [
-        const DropdownMenuItem(value: 'auto', child: Text('System default')),
-        if (current != 'auto' &&
-            !devices.any((device) => device.name == current))
-          DropdownMenuItem(
-            value: current,
-            child: const Text('Saved device unavailable'),
-          ),
-        ...devices.map(
-          (device) => DropdownMenuItem(
-            value: device.name,
-            child: Text(device.label, overflow: TextOverflow.ellipsis),
-          ),
-        ),
-      ],
+    return IntegrationDeviceChoice(
+      current: current,
+      devices: devices,
       onChanged: _meetings.recording != null
           ? null
           : (value) => runAction(() => _preferences.preference(key, value!)),
