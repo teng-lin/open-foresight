@@ -130,3 +130,69 @@ is deferred to 7C-2's platform boundary: no injectable public core helper exists
 today, and introducing that API solely to remove this small adapter duplication
 would expand the prerequisite scope. All four changed files format clean;
 core and desktop analysis pass. Another frozen review remains required.
+
+## Runner round 4
+
+Native review converged at `99dcaed9`, with 137 independent controlled tests
+passing. Claude's review of the same frozen source confirmed the prior fixes and
+found three minor and three low issues. Root accepted five: exclude a preview
+first observed on sample zero; reject non-graceful service/relay shutdown; bind
+mapped declared input paths and the executed service image to their pre-run
+identity; restrict mutable shared-data handling to private workload roots and
+label its post-run hash separately; and let the service settle its children
+before signalling remaining orphans.
+
+`0e4d0d2a` (integrated as `48813ed9`) implements all five with real process and
+file regressions. Implementer tests: 153/0, 98.44% runner coverage; independent
+native review and the same 153 tests passed without remaining actionable source
+findings. Refusing deleted/memfd mappings is retained intentionally: the pinned
+CPU workload passed without them, and unqualified memory-backed runtime code
+must not be silently treated as a hashed disk artifact. Supporting additional
+runtime mapping forms requires its own provenance treatment.
+
+The canonical `99dcaed9` failure and deterministic consumer-acknowledgment fixture
+fix are recorded in the execution record. The original failed case passed alone;
+the fixed full file passed 12/0 with coverage and two correctness mutations
+failed. Another frozen external review and canonical matrix remain pending.
+
+## Defensive P0.1 review dispositions (in progress)
+
+The completed external defensive review targets `2132ba92`; it is static evidence.
+
+- The suspected missing macOS libproc library is rejected against actual target
+  evidence: the fresh Mac process/bridge suite exercised that lookup and passed
+  all 50 cases.
+- Consistent inactive/hidden lifecycle reporting is accepted. `8c4f3cc2`
+  (integrated as `d3b14a28`) treats resumed/inactive as visible and
+  hidden/paused/detached as unavailable, with a seven-test lifecycle group. A
+  persistent tray/menu indicator would be new product behavior. Physical OS
+  visibility scenarios remain distinct from widget lifecycle tests.
+- Direct Linux packaged entrypoints must enforce installed configuration without
+  relying on launcher environment. Accepted and under follow-up verification;
+  missing resource-directory and model-manifest compatibility cases, loader
+  parity and actual relocated runtime closure are not yet accepted.
+- Whole-process integrity against same-user OS injection or modification of a
+  user-owned installation is outside this executable-identity boundary. The
+  trust assumption is documented. Stronger kernel-generation/signature or
+  signing-policy requirements are separate platform security design work; no
+  such resistance is claimed here.
+- A new host-displacement UI event is deferred: current service authorization
+  always uses its actual host and denies displaced clients. Last verified attach
+  wins, and a hidden replacement finalizes capture. A new v1 event would need
+  its own compatibility treatment; no stale client-side host belief confers
+  authorization.
+- The hypothetical future await before recording starts is rejected against
+  current dispatch: Start/Resume have no configuration gate, synchronous handler
+  invocation reaches recording assignment/resume in the same turn, and helper
+  readiness is already followed by the visible-host recheck. A future async
+  boundary must preserve that invariant.
+- Canonical runtime execution and LiteRT probe/load parity are accepted and
+  being implemented. Executable-format caching and broader format recognition
+  are not required: supported-platform native process tests exercise actual
+  accepted executables; the exact canonical allowlist is the trust boundary,
+  while interpreter marker checks are supplementary.
+- Remove-by-key and stale-generation failure handling are fixed in `763c9575`
+  (integrated as `75c85bdf`), independently reproduced green with four focused
+  regressions. Concrete Linux development startup instructions were added.
+
+No whole-security convergence or final platform matrix is claimed by this triage.

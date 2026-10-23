@@ -117,3 +117,44 @@ The retained Linux SDK dependency seed was reverified against its producer and
 actual bytes without recompiling dependencies. Container preparation uses the
 official driver and verifies a dry run with no dependency compile/archive/link
 work; preparation alone is not the canonical test schedule.
+
+## 7.0 final-run checkpoints
+
+The core-only export `99dcaed99013cd8c5bc4c9bfb97f204696927bf2` was verified
+pristine before building (`/var/tmp/of-pr7/core-7-final/pristine.json`). Its fresh
+host native build passed 30/30 CTests. Quality passed ruff, mypy (164 files), the
+timeout guard and 5,344 Python tests / 31 expected skips at 96.03% combined
+coverage. The complete Python log is `core-7-final/python-tests.log`.
+
+The official container driver reused the verified immutable SDK and dependency
+seed, freshly built the application, packaged 146 files and checked 111 ELF
+objects against the ABI baseline. Its canonical schedule 1 passed native 30/30,
+desktop 394 / 17 expected skips at 92.48% (6,284/6,795), the fast suite 2/0, and
+platform Python 603 / 3 skips / 1 Arch deselection. Core failed one Summary
+fixture wait: 2,026 passed / 18 skipped / 1 failed. The compiled service gate was
+therefore not run. This is a failed matrix, not acceptance. The two additional
+core skips versus the host are existing root-user filesystem-permission cases,
+not missing binaries. Full retained output is `core-container-final.log` and
+`container-core-final/evidence/` under `/var/tmp/of-pr7`.
+
+The failed case alone passed unchanged, with coverage, after restoring the exact
+qualified handoff into a fresh container. Its fixture queued 201 previews and
+polled for the last one on a wall-clock deadline. `c745d98e` (integrated as
+`27624db3`) instead acknowledges each event after the real coordinator consumer
+requests its next event, then asserts the exact final state. All 201 events,
+timer/snapshot/remote/reply assertions and test timeouts remain. The whole file
+passed 12/0 with coverage; mutations that corrupt the final preview or fire the
+broadcast prematurely both failed. Logs: `/var/tmp/of-status-sync` and
+`/var/tmp/of-pr7/core-status-failed-only*`. The full canonical rerun is pending.
+
+The real-model baseline checkpoint passed at `75898380` with the runner before
+the last review batch: 100 samples per condition; warmed-idle p50/p95/max
+0.790/0.907/1.344 ms, incremental Summary 0.799/1.192/1.526 ms, capture
+0.901/1.427/2.715 ms. Native generation overlapped all 100 Summary samples;
+capture progressed throughout all 100 samples. Service and supervisor exited 0,
+with verified empty-session cleanup; 182 mapped objects were inventoried.
+Startup to the first status reply was 0.102 seconds. No other heavy tests ran;
+initial host load was 0.45/0.49/1.57. Raw samples, host details, binary/model/
+runtime hashes and workload evidence are in `/var/tmp/of-pr7/rpc-baseline-r2`.
+Final matching baseline/head measurements with the stricter final runner remain
+pending; this checkpoint is not relabeled as having used later runner bytes.
