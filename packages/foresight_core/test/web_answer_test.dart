@@ -392,6 +392,7 @@ void main() {
       RemoteDomain? client;
       try {
         client = await RemoteDomain.connect(profile);
+        await client.setDesktopVisible(true);
         await client.enableDesktopApprovals((event) {
           if (event['event'] == 'approval') {
             unawaited(

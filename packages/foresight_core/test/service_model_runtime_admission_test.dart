@@ -14,6 +14,18 @@ void main() {
     'installed service model runtime admission',
     () {
       late Directory directory;
+      late String isolatedLibrary;
+      setUpAll(() {
+        // Test files run in Dart isolates in one process. The production native
+        // library seals its environment process-wide; use a distinct loaded
+        // image so another fixture's profile cannot freeze this file's cache.
+        final nativeRoot = createTestTempDirectorySync('admission-native-');
+        isolatedLibrary = File(library!)
+            .copySync(
+              '${nativeRoot.path}/${Platform.isMacOS ? 'native.dylib' : 'native.so'}',
+            )
+            .path;
+      });
       setUp(() {
         directory = createTestTempDirectorySync('model-admission-');
         File('${directory.path}/asset').writeAsStringSync('fixture');
@@ -54,7 +66,7 @@ print(json.dumps({'native_stop_token_sequences':True}))
             runtimeConfiguration.environment.addAll({
               'FORESIGHT_INSTALL_ROOT': directory.path,
               'FORESIGHT_LITERT_RUNNER': alias.path,
-              'FORESIGHT_NATIVE': library!,
+              'FORESIGHT_NATIVE': isolatedLibrary,
               'FORESIGHT_HELPER': '',
             });
             final profile = ProfilePaths(
