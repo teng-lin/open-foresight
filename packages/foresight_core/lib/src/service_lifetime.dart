@@ -9,6 +9,7 @@ class ServiceRequestLease {
   bool streamed = false;
   bool helperWait = false;
   bool cancelled = false;
+  void Function()? validateReplacement;
   // Set only while the request waits for desktop approval or helper
   // readiness, and cleared just before dispatch. A close refuses a waiting
   // request like a new one; any other is outcomeUnknown.

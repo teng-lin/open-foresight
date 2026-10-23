@@ -5,6 +5,20 @@ import 'package:sqlite3/sqlite3.dart';
 /// Production never downgrades a profile. Historical migration bodies retain
 /// their original five-column writes; this fixture keeps that schema boundary.
 void legacyLabelFixture(Database db) {
+  // A version-1/8/16 fixture cannot keep schema-18 tables or triggers. Retain
+  // the original content while reconstructing that actual historical shape.
+  for (final table in [
+    'notes',
+    'meeting_notes',
+    'artifacts',
+    'meeting_tasks',
+    'sources',
+  ]) {
+    db.execute('DROP TRIGGER IF EXISTS ${table}_retain_revision');
+    db.execute('DROP TRIGGER IF EXISTS ${table}_erase_revisions');
+  }
+  db.execute('DROP TRIGGER IF EXISTS sources_erase_deleted_revisions');
+  db.execute('DROP TABLE IF EXISTS content_revisions');
   final columns = db
       .select('PRAGMA table_info(document_labels)')
       .map((r) => r['name'])

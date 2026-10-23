@@ -1566,14 +1566,9 @@ def test_idle_upgrade_shutdown_defers_capture_and_requires_verified_ack(running)
 
     peer = running["peer"]
     owner = running["process"]
-    wrong = subprocess.run(
-        [str(SERVICE), f"--stop-if-idle={owner.pid + 1}"],
-        env=running["env"],
-        capture_output=True,
-        text=True,
-        timeout=15,
-    )
-    assert wrong.returncode != 0 and "ownership changed" in wrong.stderr
+    for args in ({}, {"token": "wrong"}):
+        with pytest.raises(RuntimeError, match="declared owner capability"):
+            peer.call("service.stop_if_idle", args)
     assert peer.call("status")["pid"] == owner.pid and owner.poll() is None
     peer.call(
         "models.register",
@@ -1594,7 +1589,9 @@ def test_idle_upgrade_shutdown_defers_capture_and_requires_verified_ack(running)
         text=True,
         timeout=15,
     )
-    assert refused.returncode != 0 and "final transcript" in refused.stderr
+    # Desktop admission precedes idle/capture inspection. Even the installer
+    # with the current owner token cannot stop a service pinned by its UI.
+    assert refused.returncode != 0 and "Close the desktop" in refused.stderr
     assert owner.poll() is None and peer.call("status")["capture"]["active"]
     deadline = time.monotonic() + 15
     while sum(peer.call("status")["capture"]["samples"]) < 24000:
@@ -1602,6 +1599,20 @@ def test_idle_upgrade_shutdown_defers_capture_and_requires_verified_ack(running)
         poll_delay(deadline)
     peer.call("meetings.stop")
     wait_for_background_idle(peer)
+    running["desktop"].close()
+    deadline = time.monotonic() + 5
+    while peer.call("status")["lifetime"]["pinned_by_desktop"]:
+        assert time.monotonic() < deadline, "closed desktop still pins service"
+        poll_delay(deadline)
+    wrong = subprocess.run(
+        [str(SERVICE), f"--stop-if-idle={owner.pid + 1}"],
+        env=running["env"],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert wrong.returncode != 0 and "ownership changed" in wrong.stderr
+    assert peer.call("status")["pid"] == owner.pid and owner.poll() is None
     stopped = stop_if_idle_after_background_work(owner.pid, running["env"])
     assert stopped.returncode == 0, stopped.stderr
     assert json.loads(stopped.stdout) == {"stopped": True, "shutdown_verified": True}

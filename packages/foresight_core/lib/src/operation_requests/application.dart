@@ -218,10 +218,12 @@ class ServiceStopIfIdleRequest extends OperationRequest {
     this.expectedPid,
     this.installationRoot,
     this.runtimeRevision,
+    this.token,
   );
   final int? expectedPid;
   final String? installationRoot;
   final String? runtimeRevision;
+  final String? token;
   @override
   Operation get operation => Operation.serviceStopIfIdle;
   factory ServiceStopIfIdleRequest.decode(OperationRequestContext context) {
@@ -233,6 +235,7 @@ class ServiceStopIfIdleRequest extends OperationRequest {
       values.value<int?>("expected_pid"),
       values.value<String?>("installation_root"),
       values.value<String?>("runtime_revision"),
+      values.value<String?>("token"),
     );
   }
 }

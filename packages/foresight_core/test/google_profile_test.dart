@@ -10,6 +10,9 @@ import 'package:test/test.dart';
 
 class MemoryProfileSecrets implements SecretStore {
   final values = <String, String>{};
+  final failedDeletes = <String>{};
+  final deleted = <String>[];
+  void Function(String key)? onDelete;
   @override
   Future<bool> write(String key, String value) async {
     values[key] = value;
@@ -20,7 +23,10 @@ class MemoryProfileSecrets implements SecretStore {
   Future<String?> read(String key) async => values[key];
   @override
   Future<void> delete(String key) async {
+    deleted.add(key);
+    if (failedDeletes.contains(key)) throw StateError('fixture keyring locked');
     values.remove(key);
+    onDelete?.call(key);
   }
 }
 
@@ -363,6 +369,39 @@ void main() {
   );
 
   test(
+    'failed key deletion does not orphan other accounts and retries after restart',
+    () async {
+      await auth.close();
+      final vault = MemoryProfileSecrets();
+      secrets = vault;
+      auth = createAuth();
+      await auth.signIn(fixture.consent);
+      identity['sub'] = 'second-account';
+      await auth.addAccount(fixture.consent);
+      final failed = vault.values.keys.last;
+      vault.failedDeletes.add(failed);
+      final forgetting = auth.forget();
+      expect(auth.accounts, isEmpty);
+      expect(File('${root.path}/tokens.json').existsSync(), isFalse);
+      await expectLater(forgetting, throwsStateError);
+      expect(vault.values.keys, [failed]);
+      expect(vault.deleted, containsAll(vault.values.keys));
+      final journal = File('${root.path}/credential-cleanup.json');
+      expect(jsonDecode(journal.readAsStringSync())['keys'], {failed: true});
+      expect(journal.readAsStringSync(), isNot(contains('fixture-refresh')));
+      expect(journal.statSync().mode & 0x3f, 0);
+      await auth.close();
+      vault.failedDeletes.clear();
+      auth = createAuth();
+      expect(auth.accounts, isEmpty);
+      await auth.disconnect();
+      expect(vault.values, isEmpty);
+      expect(journal.existsSync(), isFalse);
+      await auth.disconnect();
+    },
+  );
+
+  test(
     'legacy platform authorization remains usable while adding and switching accounts',
     () async {
       await auth.close();
@@ -395,6 +434,166 @@ void main() {
       expect(vault.values, hasLength(1));
       await auth.forget();
       expect(vault.values, isEmpty);
+    },
+  );
+
+  test(
+    'old cleanup work cannot erase a newly authorized account credential',
+    () async {
+      await auth.close();
+      final vault = MemoryProfileSecrets();
+      secrets = vault;
+      auth = createAuth();
+      await auth.signIn(fixture.consent);
+      final key = vault.values.keys.single;
+      vault.failedDeletes.add(key);
+      await expectLater(auth.forget(), throwsStateError);
+      vault.failedDeletes.clear();
+      await auth.signIn(fixture.consent);
+      await auth.retryCredentialCleanup();
+      expect(auth.connected, isTrue);
+      expect(vault.values.keys, [key]);
+      await auth.close();
+      auth = createAuth();
+      await auth.retryCredentialCleanup();
+      expect(auth.connected, isTrue);
+      expect(vault.values.keys, [key]);
+      await auth.disconnect();
+      expect(vault.values, isEmpty);
+      expect(
+        File('${root.path}/credential-cleanup.json').existsSync(),
+        isFalse,
+      );
+    },
+  );
+
+  test(
+    'a failed journal update remains retryable without restarting',
+    () async {
+      await auth.close();
+      final vault = MemoryProfileSecrets();
+      secrets = vault;
+      auth = createAuth();
+      await auth.signIn(fixture.consent);
+      final journal = File('${root.path}/credential-cleanup.json');
+      final held = File('${journal.path}.held');
+      var obstructed = false;
+      vault.onDelete = (_) {
+        if (obstructed) return;
+        obstructed = true;
+        journal.renameSync(held.path);
+        Directory(journal.path).createSync();
+      };
+      try {
+        await expectLater(auth.forget(), throwsStateError);
+        expect(vault.values, isEmpty);
+      } finally {
+        vault.onDelete = null;
+        if (obstructed) {
+          Directory(journal.path).deleteSync();
+          held.renameSync(journal.path);
+        }
+      }
+      await auth.retryCredentialCleanup();
+      expect(journal.existsSync(), isFalse);
+      expect(auth.accounts, isEmpty);
+    },
+  );
+
+  test(
+    'initial journal storage failure still clears accounts and can retry',
+    () async {
+      await auth.close();
+      final vault = MemoryProfileSecrets();
+      secrets = vault;
+      auth = createAuth();
+      await auth.signIn(fixture.consent);
+      identity['sub'] = 'second-account';
+      await auth.addAccount(fixture.consent);
+      final keys = vault.values.keys.toList();
+      final journal = Directory('${root.path}/credential-cleanup.json')
+        ..createSync();
+      final forgetting = Future<void>.sync(auth.forget);
+      expect(auth.accounts, isEmpty);
+      expect(auth.connected, isFalse);
+      expect(File('${root.path}/tokens.json').existsSync(), isFalse);
+      await expectLater(forgetting, throwsA(isA<FileSystemException>()));
+      expect(vault.deleted, containsAll(keys));
+      expect(vault.values, isEmpty);
+      journal.deleteSync();
+      await auth.retryCredentialCleanup();
+      expect(vault.values, isEmpty);
+      expect(File(journal.path).existsSync(), isFalse);
+    },
+  );
+
+  for (final corrupt in ['foreign key', 'version', 'public permissions']) {
+    test(
+      'cleanup refuses a journal with $corrupt before touching the keyring',
+      () async {
+        await auth.close();
+        final vault = MemoryProfileSecrets();
+        secrets = vault;
+        auth = createAuth();
+        await auth.signIn(fixture.consent);
+        vault.failedDeletes.add(vault.values.keys.single);
+        await expectLater(auth.forget(), throwsStateError);
+        await auth.close();
+        final journal = File('${root.path}/credential-cleanup.json');
+        final data =
+            jsonDecode(journal.readAsStringSync()) as Map<String, dynamic>;
+        if (corrupt == 'foreign key') {
+          (data['keys'] as Map)['another-profile'] = true;
+        } else if (corrupt == 'version') {
+          data['version'] = 2;
+        }
+        journal.writeAsStringSync(jsonEncode(data));
+        if (corrupt == 'public permissions') {
+          expect(
+            Process.runSync('/bin/chmod', ['644', journal.path]).exitCode,
+            0,
+          );
+        }
+        final deletions = vault.deleted.length;
+        vault.failedDeletes.clear();
+        auth = createAuth();
+        await expectLater(auth.retryCredentialCleanup(), throwsStateError);
+        expect(vault.deleted, hasLength(deletions));
+        expect(vault.values, hasLength(1));
+      },
+    );
+  }
+
+  test(
+    'failed sign-out erasure is retried without deleting the remaining account',
+    () async {
+      await auth.close();
+      final vault = MemoryProfileSecrets();
+      secrets = vault;
+      auth = createAuth();
+      await auth.signIn(fixture.consent);
+      final first = auth.account;
+      identity['sub'] = 'second-account';
+      await auth.addAccount(fixture.consent);
+      final failed = vault.values.keys.last;
+      vault.failedDeletes.add(failed);
+      await expectLater(
+        auth.signOutAccount('second-account'),
+        throwsStateError,
+      );
+      expect(auth.account, first);
+      expect(auth.accounts, hasLength(1));
+      expect(vault.values, hasLength(2));
+      vault.failedDeletes.clear();
+      await auth.retryCredentialCleanup();
+      expect(vault.values, hasLength(1));
+      expect(vault.values.containsKey(failed), isFalse);
+      expect(auth.account, first);
+      await auth.close();
+      auth = createAuth();
+      await auth.retryCredentialCleanup();
+      expect(auth.account, first);
+      expect(vault.values, hasLength(1));
     },
   );
 

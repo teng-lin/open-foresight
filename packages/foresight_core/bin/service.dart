@@ -116,6 +116,9 @@ Future<void> main(List<String> args) async {
           final result =
               await client
                       .call(Operation.serviceStopIfIdle.wire, {
+                        'token': File(
+                          '${profile.data}/.desktop-capability',
+                        ).readAsStringSync(),
                         if (expectedPid != null) 'expected_pid': expectedPid,
                         if (configuredInstallationRoot != null)
                           'installation_root': configuredInstallationRoot,

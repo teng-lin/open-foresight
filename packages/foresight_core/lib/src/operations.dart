@@ -176,8 +176,13 @@ enum Operation {
   const Operation(this.wire, this.descriptor);
   final OperationDescriptor descriptor;
   final String wire;
-  bool requiresApproval({bool webSearch = false}) =>
-      descriptor.requiresApproval(webSearch: webSearch);
+  bool requiresApproval({
+    bool webSearch = false,
+    bool existingContent = true,
+  }) => descriptor.requiresApproval(
+    webSearch: webSearch,
+    existingContent: existingContent,
+  );
   bool get acceptsIdempotencyKey => descriptor.acceptsIdempotencyKey;
   bool get carriesWorkspaceEpoch => descriptor.carriesWorkspaceEpoch;
 

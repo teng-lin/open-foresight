@@ -8,6 +8,12 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Fixed
 
+- Enforce owner capabilities before service dispatch and refuse installer shutdown while a desktop is attached.
+- Require visible desktop approval before agents replace saved notes, meeting tasks or artifacts, and retain previous content atomically for recovery. Deletion and workspace clear erase retained revisions.
+- Keep native worker pipes separate from closed standard input, output or error descriptors.
+- Bound web-summary RPCs by the caller's deadline and cancel stalled transports.
+- Continue credential cleanup after an individual keyring failure and retry remaining profile-scoped keys after restart without retaining account tokens in the cleanup journal.
+
 - Preserve Chat history scroll position while its source scope refreshes.
 
 - Refresh Stats at the local Monday boundary and after an awake timezone change, keeping chart labels aligned with the displayed calendar period.

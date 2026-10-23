@@ -1,5 +1,7 @@
 import 'package:grpc/grpc.dart';
 
+import 'web_search.dart' show referenceSearchTimeout;
+
 import 'generated/web_content.pbgrpc.dart';
 import 'reference_text.dart';
 
@@ -23,23 +25,27 @@ class WebsiteSummaryResult {
 /// the app's selected local chat model does not perform this summarization.
 /// Distribution credentials are supplied internally, without user project UI.
 class WebContentService {
-  WebContentService({required String apiKey, ClientChannel? channel})
-    : _ownsChannel = channel == null,
-      _channel =
-          channel ??
-          ClientChannel(
-            referenceWebContentHost,
-            port: 443,
-            options: const ChannelOptions(
-              credentials: ChannelCredentials.secure(),
-            ),
-          ) {
+  WebContentService({
+    required String apiKey,
+    ClientChannel? channel,
+    this.timeout = referenceSearchTimeout,
+  }) : _ownsChannel = channel == null,
+       _channel =
+           channel ??
+           ClientChannel(
+             referenceWebContentHost,
+             port: 443,
+             options: const ChannelOptions(
+               credentials: ChannelCredentials.secure(),
+             ),
+           ) {
     _client = ForesightServiceClient(
       _channel,
       options: CallOptions(metadata: {'X-Goog-Api-Key': apiKey}),
     );
   }
 
+  final Duration timeout;
   final bool _ownsChannel;
   final ClientChannel _channel;
   late final ForesightServiceClient _client;
@@ -50,6 +56,7 @@ class WebContentService {
     String url, {
     int maxWords = 100,
     int summaryTimeoutMillis = -1,
+    Duration? timeout,
   }) async {
     if (_closed) throw StateError('Web content service is closed.');
     if (url.isEmpty) return null;
@@ -63,6 +70,7 @@ class WebContentService {
         summaryTimeoutMillis: summaryTimeoutMillis,
         maxInputTokens: 131072,
       ),
+      options: CallOptions(timeout: timeout ?? this.timeout),
     );
     _requests.add(request);
     final FetchExternalWebsiteResponse response;
@@ -70,6 +78,9 @@ class WebContentService {
       response = await request;
     } finally {
       _requests.remove(request);
+      // Release this RPC when its deadline settles, independently of channel
+      // ownership and of other concurrent requests.
+      await request.cancel();
     }
     response.content = sanitizeReferenceUtf8(response.content);
     response.mimeType = 'text/html';
@@ -86,6 +97,7 @@ class WebContentService {
     bool enableCandidateRanking = false,
     int candidateRankingCount = 3,
     int summaryTimeoutMillis = -1,
+    Duration? timeout,
   }) async {
     if (_closed) throw StateError('Web content service is closed.');
     final count = enableCandidateRanking && candidateRankingCount > 1
@@ -96,7 +108,7 @@ class WebContentService {
     // propagates; it is applied around this entire operation by SearchCallbacks.
     final candidates = await Future.wait([
       for (var i = 0; i < count; i++)
-        _fetchCandidate(url, maxWords, summaryTimeoutMillis),
+        _fetchCandidate(url, maxWords, summaryTimeoutMillis, timeout),
     ]);
     var bestScore = -1.0;
     var best = const WebsiteSummaryResult();
@@ -118,13 +130,15 @@ class WebContentService {
   Future<FetchExternalWebsiteResponse?> _fetchCandidate(
     String url,
     int maxWords,
-    int timeout,
+    int summaryTimeoutMillis,
+    Duration? timeout,
   ) async {
     try {
       return await fetchWebContent(
         url,
         maxWords: maxWords,
-        summaryTimeoutMillis: timeout,
+        summaryTimeoutMillis: summaryTimeoutMillis,
+        timeout: timeout,
       );
     } catch (_) {
       return null;
@@ -132,8 +146,12 @@ class WebContentService {
   }
 
   /// Adapter for SearchCallbacks' summary provider.
-  Future<String> summarizeSearchPage(String url, int maxWords) async =>
-      (await summarizeWebContent(url, maxWords)).summary;
+  Future<String> summarizeSearchPage(
+    String url,
+    int maxWords, {
+    Duration? timeout,
+  }) async =>
+      (await summarizeWebContent(url, maxWords, timeout: timeout)).summary;
 
   Future<void> close() async {
     if (_closed) return;

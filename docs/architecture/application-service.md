@@ -24,6 +24,25 @@ The desktop accepts `DesktopConnection`; production connects `RemoteDomain` to t
 
 ## Ownership inside the service
 
+Every request checks its declared owner capability before dispatch, including
+bootstrap operations and installer idle shutdown. The bundled service CLI sends
+the current private profile capability for `--stop-if-idle`; shutdown refuses
+while any desktop connection pins the service. Desktop attachment additionally
+requires the verified executable, and approval-host actions require their live
+host connection.
+
+External clients need visible desktop consent before replacing saved notes,
+meeting notes, tasks or artifacts. Consent is bound to the pre-dispatch content
+snapshot. Schema 18 retains prior content atomically in `content_revisions`;
+`Store.contentHistory` reads those snapshots for recovery through the existing
+writers. Individual deletion and workspace clear erase the corresponding history.
+
+Credential cleanup persists only profile-scoped key identifiers and revocation
+flags in a private journal. One failed keyring deletion does not stop the other
+accounts. Startup, periodic maintenance and disconnect retry remaining deletions
+without restoring the cleared account registry. Remote revocation remains best
+effort when the network is unavailable.
+
 The relay process remains a forwarding owner; its worker owns the single profile
 writer, application, helper and native runtimes. `ApplicationService` retains
 request cancellation, dispatched activity, the idle timer and the one ordered

@@ -31,6 +31,7 @@ import 'service_startup.dart';
 import 'store.dart';
 import 'web_search.dart';
 import 'unix_peer_identity.dart';
+import 'operation_admission.dart';
 
 const _outcomeUnknownMessage =
     'Application service stopped before this request finished; it may or may '
@@ -542,6 +543,7 @@ class ApplicationService {
                 return;
               }
               final typed = envelope.decodeOperation(conversation);
+              _enforceCapability(client, typed);
               // Bootstrap routes retain their historical no-lease/no-epoch
               // admission; ordinary and stream calls check epoch below.
               if (!typed.operation.descriptor.createsLease &&
@@ -661,6 +663,15 @@ class ApplicationService {
     _exitIfIdle();
   }
 
+  void _enforceCapability(Socket client, OperationRequest request) =>
+      enforceOperationCapability(
+        access,
+        client,
+        request,
+        verifiedDesktop: _verifiedDesktopClients.contains(client),
+        desktopPinned: _desktopClients.isNotEmpty,
+      );
+
   /// Epoch/approval and lease creation stay one synchronous admission turn;
   /// stream/future completion settles the same dispatched producer ledger.
   void _admitRequest(Socket client, int id, OperationRequest typed) {
@@ -676,11 +687,29 @@ class ApplicationService {
         // A request from a cleared workspace fails before it can
         // ask the desktop for approval.
         application.checkRequestWorkspaceEpoch(typed);
+        if (typed.operation.descriptor.approval == ApprovalPolicy.overwrite &&
+            !access.isHost(client)) {
+          final before = replacementSnapshot(
+            domain.store.contentHistory,
+            typed,
+          );
+          lease.validateReplacement = () {
+            if (replacementSnapshot(domain.store.contentHistory, typed) !=
+                before) {
+              throw RpcError(
+                RpcErrorCode.cancelled,
+                'Content changed while awaiting approval; retry to review the current revision',
+              );
+            }
+          };
+        }
         return access.authorize(
           client,
           lease.method,
           typed.rawArguments,
           current: () => !lease.cancelled,
+          existingContent:
+              replacementSnapshot(domain.store.contentHistory, typed) != null,
         );
       }),
     ).asyncExpand((_) => _results(client, typed, lease));
@@ -802,6 +831,7 @@ class ApplicationService {
     ServiceStopIfIdleRequest request,
   ) async {
     try {
+      _enforceCapability(client, request);
       final guard = ServiceIdleShutdownGuard(
         helper: domain.helper,
         recording: () => application.recording != null,
@@ -816,6 +846,7 @@ class ApplicationService {
         if (_closing) throw serviceClosingRefusal();
         guard.checkBusy();
       }
+      _enforceCapability(client, request);
       await close(acknowledgementClient: client);
       if (!domain.helper.shutdownVerified) {
         throw StateError(
@@ -864,6 +895,12 @@ class ApplicationService {
     }
     if (lease.cancelled) {
       throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+    }
+    try {
+      lease.validateReplacement?.call();
+    } on IncompatibleReadSchema catch (error) {
+      _retireSchemaReads();
+      throw error.rpcError;
     }
     _dispatch(lease);
     final Object? result;

@@ -31,7 +31,8 @@ void main() {
         queries.add(q);
         return null;
       },
-      summarize: (_, _) async => throw StateError('unexpected summary'),
+      summarize: (_, _, {Duration? timeout}) async =>
+          throw StateError('unexpected summary'),
     );
     for (final args in [
       <String, dynamic>{},
@@ -68,7 +69,7 @@ void main() {
           const WebSearchItem(link: 'three'),
           const WebSearchItem(link: 'ignored'),
         ],
-        summarize: (url, budget) {
+        summarize: (url, budget, {Duration? timeout}) {
           expect(budget, 100);
           return (completions[url] = Completer<String>()).future;
         },
@@ -104,7 +105,8 @@ void main() {
           const WebSearchItem(),
           const WebSearchItem(link: 'fourth'),
         ],
-        summarize: (_, _) async => throw StateError('unexpected summary'),
+        summarize: (_, _, {Duration? timeout}) async =>
+            throw StateError('unexpected summary'),
       );
       final result = await callbacks.handleGoogleSearch({'query': 'q'});
       expect(result.sources, [('', '')]);
@@ -122,7 +124,7 @@ void main() {
           const WebSearchItem(title: 'A', link: 'same'),
           const WebSearchItem(title: 'B', link: 'same'),
         ],
-        summarize: (_, _) {
+        summarize: (_, _, {Duration? timeout}) {
           final c = Completer<String>();
           completions.add(c);
           return c.future;
@@ -145,8 +147,8 @@ void main() {
 
   test('summary error and deadline propagate', () async {
     for (final summarize in <SummarizeSearchPage>[
-      (_, _) async => throw StateError('failure'),
-      (_, _) => Completer<String>().future,
+      (_, _, {Duration? timeout}) async => throw StateError('failure'),
+      (_, _, {Duration? timeout}) => Completer<String>().future,
     ]) {
       final callbacks = SearchCallbacks(
         search: (_) async => [const WebSearchItem(link: 'one')],

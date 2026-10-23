@@ -463,7 +463,9 @@ void main() {
       await owner.ready();
       await eventually(() => owner.output.contains('Helper startup:'));
       stopper = await ServiceClient.connect(serviceEndpoint(profile));
-      final idle = stopper.call('service.stop_if_idle');
+      final idle = stopper.call('service.stop_if_idle', {
+        'token': File('${profile.data}/.desktop-capability').readAsStringSync(),
+      });
       await owner.reached('close.helper_closed');
       final frame = await rawRequest(serviceEndpoint(profile), 7, 'status');
       expect(frame['done'], isTrue);
@@ -505,7 +507,9 @@ void main() {
       await owner.ready();
       await helper.started();
       stopper = await ServiceClient.connect(serviceEndpoint(profile));
-      final idle = stopper.call('service.stop_if_idle');
+      final idle = stopper.call('service.stop_if_idle', {
+        'token': File('${profile.data}/.desktop-capability').readAsStringSync(),
+      });
       await owner.reached('close.helper_closed');
       final refused = proxy
           .seen(ProxyDirection.toClient, where: isClosingFrame)

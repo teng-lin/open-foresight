@@ -527,6 +527,8 @@ void main() {
       // Cover every persistence table, including all desktop projection inputs.
       // Keeping this inventory exact makes a new table require revision evidence.
       final inserts = <String, String>{
+        'content_revisions':
+            "INSERT INTO content_revisions(entity,entity_id,snapshot,created) VALUES('notes','1','{}',1)",
         'sources':
             "INSERT INTO sources(id,title,content,mime,revision,state,provenance) VALUES('s','Source','Body','text/plain',1,'imported','fixture')",
         'source_details':

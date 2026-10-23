@@ -74,6 +74,35 @@ void main() {
     isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
   );
 
+  for (final existing in [false, true]) {
+    test(
+      'Questions reject concurrent artifact changes (existing=$existing)',
+      () async {
+        if (existing) {
+          store.artifact(id, 'questions', 'Original questions', 'fixture');
+        }
+        final work = app.generateMeeting(id, 'questions');
+        final rejected = expectLater(work, cancelled());
+        await runtime.entered.future;
+        if (existing) {
+          final artifact = store.meetingArtifacts(id, 'questions').single;
+          store.editArtifact(artifact['id'] as int, 'Desktop questions');
+        } else {
+          store.artifact(id, 'questions', 'Desktop questions', 'fixture');
+        }
+        runtime.release.complete();
+        await rejected;
+        final artifacts = store.meetingArtifacts(id, 'questions');
+        expect(artifacts, hasLength(1));
+        expect(
+          artifacts.single['edited'] ?? artifacts.single['generated'],
+          'Desktop questions',
+        );
+        expect(app.generationReserved, isFalse);
+      },
+    );
+  }
+
   test(
     'Questions shutdown retains reservation through actual cancellation and rejects late completion',
     () async {

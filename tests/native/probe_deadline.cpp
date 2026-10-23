@@ -38,11 +38,77 @@ bool dead(pid_t pid) {
   return end != std::string::npos && line[end + 2] == 'Z';
 #endif
 }
+int closed_stdio(const char *executable) {
+  // Each case runs in a fresh process; closing stdio must not affect CTest or
+  // the diagnostics for another case. Include all three closed together.
+  for (int mask : {0, 1, 2, 4, 7}) {
+    const pid_t child = fork();
+    check(child >= 0);
+    if (child == 0) {
+      for (int fd = 0; fd < 3; ++fd)
+        if (mask & (1 << fd))
+          close(fd);
+      execl(executable, executable, "--closed-stdio-child", nullptr);
+      _exit(127);
+    }
+    int status = 0;
+    check(waitpid(child, &status, 0) == child);
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+      std::cerr << "Closed-stdio mask " << mask << " failed: " << status
+                << '\n';
+      return 1;
+    }
+  }
+  return 0;
+}
 int main(int argc, char **argv) {
+  const auto executable = fs::absolute(argv[0]).string();
+  if (argc > 1 && std::string(argv[1]) == "--closed-stdio")
+    return closed_stdio(executable.c_str());
+  if (argc > 1 && std::string(argv[1]) == "--closed-stdio-child") {
+    // Use a compiled worker: interpreters can reopen or repair closed stdio
+    // before the native API sees it. Restore diagnostics only after the calls.
+    void *engine = fs_engine_create_backend(executable.c_str(), "/dev/null", 1);
+    if (!engine)
+      return 2;
+    const int probe = fs_engine_probe(engine); // non-duplex
+    void *conversation = fs_conversation_create(engine);
+    bool generated = false;
+    if (probe == 0 && conversation &&
+        fs_generate_tools(conversation, "closed-stdio", "prompt", "[]", 32) ==
+            0) {
+      for (int attempts = 0; attempts < 50; ++attempts) {
+        char *raw = fs_event_poll(conversation, 100);
+        if (!raw)
+          continue;
+        const auto event = nlohmann::json::parse(raw);
+        fs_string_free(raw);
+        if (event.at("type") == "done") {
+          generated = event.at("status") == "completed";
+          break;
+        }
+      }
+    }
+    if (conversation)
+      fs_conversation_destroy(conversation, 1);
+    fs_engine_destroy(engine);
+    return probe == 0 && generated ? 0 : 3;
+  }
   const fs::path root = std::getenv("FORESIGHT_PROBE_FIXTURE_ROOT")
                             ? std::getenv("FORESIGHT_PROBE_FIXTURE_ROOT")
                             : "";
   if (argc > 1 && std::string(argv[1]) == "--model") {
+    if (std::string(argv[2]) == "/dev/null") {
+      bool probe = false;
+      for (int i = 3; i < argc; ++i)
+        probe = probe || std::string(argv[i]) == "--probe";
+      if (!probe) {
+        std::string prompt;
+        std::getline(std::cin, prompt);
+        std::cout << "answer {}" << std::endl;
+      }
+      return 0;
+    }
     if (fs::exists(root / "succeed"))
       return 0;
     const pid_t child = fork();

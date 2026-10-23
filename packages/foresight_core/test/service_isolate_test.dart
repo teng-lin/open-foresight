@@ -357,7 +357,11 @@ void main() {
           (results.first as List).single['body'],
           'Saved on the domain isolate',
         );
-        final stopped = await client.call('service.stop_if_idle');
+        final stopped = await client.call('service.stop_if_idle', {
+          'token': File(
+            '${profile.data}/.desktop-capability',
+          ).readAsStringSync(),
+        });
         expect(stopped, {'stopped': true, 'shutdown_verified': true});
         await host.closed.timeout(const Duration(seconds: 10));
         expect(File('${profile.runtime}/application.sock').existsSync(), false);

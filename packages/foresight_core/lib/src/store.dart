@@ -14,6 +14,7 @@ import 'persistence/model_store.dart';
 import 'persistence/meeting_queries.dart';
 import 'persistence/label_store.dart';
 import 'persistence/schema_migrations.dart';
+import 'persistence/content_history.dart';
 import 'persistence/sqlite_preflight.dart';
 import 'rpc_error.dart';
 import 'dart:async';
@@ -27,7 +28,9 @@ import 'persistence/sqlite_runtime.dart';
 class Store {
   final Database db;
   final String path;
-  static const schemaVersion = 17;
+  static const schemaVersion = 18;
+  ContentHistory get contentHistory =>
+      ContentHistory(db, supportedVersion: schemaVersion);
 
   /// Names one workspace between clears. SQLite reuses INTEGER PRIMARY KEY
   /// values after a clear, so a caller holding an ID sends this back with it.

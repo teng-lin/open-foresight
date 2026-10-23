@@ -117,7 +117,7 @@ const meetingsLinkAnswerDescriptor = OperationDescriptor(
 const meetingsNotesDescriptor = OperationDescriptor(
   scope: OperationScope.application,
   readOnly: false,
-  approval: ApprovalPolicy.never,
+  approval: ApprovalPolicy.overwrite,
   capability: CapabilityPolicy.ordinary,
   requiresHelper: false,
   modelGate: ModelGatePolicy.none,
@@ -180,7 +180,7 @@ const meetingsIndexDescriptor = OperationDescriptor(
 const meetingsGenerateDescriptor = OperationDescriptor(
   scope: OperationScope.application,
   readOnly: false,
-  approval: ApprovalPolicy.never,
+  approval: ApprovalPolicy.overwrite,
   capability: CapabilityPolicy.ordinary,
   requiresHelper: true,
   modelGate: ModelGatePolicy.none,
@@ -219,7 +219,7 @@ const meetingsTasksDescriptor = OperationDescriptor(
 const meetingsEditTaskDescriptor = OperationDescriptor(
   scope: OperationScope.application,
   readOnly: false,
-  approval: ApprovalPolicy.never,
+  approval: ApprovalPolicy.overwrite,
   capability: CapabilityPolicy.ordinary,
   requiresHelper: false,
   modelGate: ModelGatePolicy.none,
@@ -247,7 +247,7 @@ const meetingsEditTaskDescriptor = OperationDescriptor(
 const meetingsPrepareDescriptor = OperationDescriptor(
   scope: OperationScope.application,
   readOnly: false,
-  approval: ApprovalPolicy.never,
+  approval: ApprovalPolicy.overwrite,
   capability: CapabilityPolicy.ordinary,
   requiresHelper: false,
   modelGate: ModelGatePolicy.none,
@@ -293,7 +293,7 @@ const meetingsCancelGenerationDescriptor = OperationDescriptor(
 const meetingsEnhanceDescriptor = OperationDescriptor(
   scope: OperationScope.application,
   readOnly: false,
-  approval: ApprovalPolicy.never,
+  approval: ApprovalPolicy.overwrite,
   capability: CapabilityPolicy.ordinary,
   requiresHelper: true,
   modelGate: ModelGatePolicy.none,

@@ -86,6 +86,18 @@ final class GoogleMaintenance implements WorkspaceAccountCleanup {
 
   Future<void> restoreProfile() async {
     try {
+      await auth.retryCredentialCleanup();
+      if (auth.loadError.startsWith('Google credential cleanup failed')) {
+        auth.loadError = '';
+        _notify();
+      }
+    } catch (_) {
+      auth.loadError =
+          'Google credential cleanup failed; will retry automatically';
+      stderr.writeln(auth.loadError);
+      _notify();
+    }
+    try {
       final previousName = auth.displayName, previousPhoto = auth.photoUrl;
       await auth.refreshProfile();
       if (previousName != auth.displayName || previousPhoto != auth.photoUrl) {
@@ -97,10 +109,11 @@ final class GoogleMaintenance implements WorkspaceAccountCleanup {
   }
 
   Future<void> maintain() async {
-    if (_closed || _busy || !auth.connected) return;
+    if (_closed || _busy) return;
     _busy = true;
     try {
       await restoreProfile();
+      if (!auth.connected) return;
       await connections.reminders(domain.clock.now(), (message) async {
         await platformNotification('Open Foresight', message);
       });
@@ -170,7 +183,8 @@ final class GoogleMaintenance implements WorkspaceAccountCleanup {
     unawaited(
       Future<void>.sync(auth.forget).catchError((Object error) {
         stderr.writeln('Google credential cleanup: $error');
-        auth.loadError = 'Google credential cleanup failed; disconnect again';
+        auth.loadError =
+            'Google credential cleanup failed; will retry automatically';
         _notify();
       }),
     );

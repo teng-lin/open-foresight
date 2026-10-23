@@ -244,16 +244,20 @@ void main() {
     }
   }
 
-  Future<void> backgroundRefusal() async {
+  Future<void> backgroundRefusal({bool desktopPinned = false}) async {
     await expectLater(
-      agent.call('service.stop_if_idle'),
+      agent.call('service.stop_if_idle', {
+        'token': File('${profile.data}/.desktop-capability').readAsStringSync(),
+      }),
       throwsA(
         isA<RpcError>()
             .having((e) => e.code, 'code', RpcErrorCode.busy)
             .having(
               (e) => e.message,
               'message',
-              contains('Background model work'),
+              contains(
+                desktopPinned ? 'Close the desktop' : 'Background model work',
+              ),
             ),
       ),
     );
@@ -331,7 +335,11 @@ void main() {
       expect((await lifetime())['busy'], true);
       expect((await lifetime())['exit_after'], null);
       await expectLater(
-        agent.call('service.stop_if_idle'),
+        agent.call('service.stop_if_idle', {
+          'token': File(
+            '${profile.data}/.desktop-capability',
+          ).readAsStringSync(),
+        }),
         throwsA(
           isA<RpcError>().having(
             (e) => e.message,
@@ -890,7 +898,7 @@ void main() {
         rag.release.complete();
         await rag.configuring.future;
         expect(service.domain.resumeInProgress, true);
-        await backgroundRefusal();
+        await backgroundRefusal(desktopPinned: true);
         expect((await lifetime())['busy'], true);
         await d.close();
         await departed();
@@ -1354,7 +1362,11 @@ void main() {
         expect(service.dispatchedCount, 1);
         expect((await lifetime())['exit_after'], null);
         await expectLater(
-          agent.call('service.stop_if_idle'),
+          agent.call('service.stop_if_idle', {
+            'token': File(
+              '${profile.data}/.desktop-capability',
+            ).readAsStringSync(),
+          }),
           throwsA(
             isA<RpcError>().having(
               (e) => e.message,

@@ -2,6 +2,7 @@ import 'rpc_error.dart';
 import 'desktop_connection.dart';
 import 'desktop_status.dart';
 import 'secret_store.dart';
+import 'google_credential_cleanup.dart';
 export 'secret_store.dart';
 import 'platform_services.dart';
 import 'dart:async';
@@ -100,6 +101,27 @@ class GoogleAuth implements GoogleAccount {
   int _authorizationGeneration = 0;
   Future<void> _credentialBarrier = Future<void>.value();
   Future<void>? _forgetting;
+  late final _cleanup = GoogleCredentialCleanup(
+    directory,
+    secretStore,
+    _secretKey,
+  );
+
+  Set<String> get _activeCredentialKeys => {
+    for (final data in [
+      if (_tokens != null) _tokens!,
+      if (_persistedActive != null) _persistedActive!,
+      ..._savedAccounts.values,
+    ])
+      _credentialKey(data),
+  };
+
+  Future<void> retryCredentialCleanup() => _changeCredential(
+    () => _cleanup.retry(
+      revoke: _revokeBestEffort,
+      activeKeys: _activeCredentialKeys,
+    ),
+  );
 
   Future<T> _changeCredential<T>(Future<T> Function() action) {
     final result = _credentialBarrier.then((_) => action());
@@ -831,6 +853,23 @@ class GoogleAuth implements GoogleAccount {
     final existing = _forgetting;
     if (existing != null) return existing;
     final saved = [if (_tokens != null) _tokens!, ..._savedAccounts.values];
+    // Commit key-only retry work before discarding the account registry.
+    final cleanupKeys = {
+      for (final data in saved)
+        _credentialKey(data): data['provider'] != 'granola',
+      _secretKey: saved.any(
+        (data) =>
+            _credentialKey(data) == _secretKey && data['provider'] != 'granola',
+      ),
+    };
+    Object? journalError;
+    try {
+      _cleanup.add(cleanupKeys);
+    } catch (error) {
+      // A storage failure must not leave cleared accounts usable in memory.
+      // Keep the known keys for another durable attempt on the credential queue.
+      journalError = error;
+    }
     final file = File('${directory.path}/tokens.json');
     if (file.existsSync()) file.deleteSync();
     _tokens = null;
@@ -839,19 +878,36 @@ class GoogleAuth implements GoogleAccount {
     _resetActiveWork();
     return _forgetting = _changeCredential(() async {
       for (final data in saved) {
-        String? refresh;
-        try {
-          refresh = await _refreshCredential(data);
-        } catch (_) {}
-        await secretStore.delete(_credentialKey(data));
-        await _revokeBestEffort(refresh);
+        if (data['provider'] != 'granola' && data['refresh_token'] is String) {
+          final token = data['refresh_token'] as String;
+          await _revokeBestEffort(token);
+        }
       }
-      await secretStore.delete(_secretKey);
+      if (journalError != null) {
+        try {
+          _cleanup.add(cleanupKeys);
+          journalError = null;
+        } catch (error) {
+          journalError = error;
+        }
+      }
+      // Even persistent journal I/O failure must not prevent local deletion.
+      // retry retains unsuccessful journal commits in memory for maintenance.
+      try {
+        await _cleanup.retry(
+          revoke: _revokeBestEffort,
+          activeKeys: _activeCredentialKeys,
+        );
+      } catch (_) {
+        if (journalError != null) throw journalError!;
+        rethrow;
+      }
+      if (journalError != null) throw journalError!;
     }).whenComplete(() => _forgetting = null);
   }
 
   Future<void> _revokeBestEffort(String? token) async {
-    if (token == null || _viaGranola) return;
+    if (token == null) return;
     try {
       await request(
         endpoints.revoke,
@@ -866,6 +922,7 @@ class GoogleAuth implements GoogleAccount {
   @override
   Future<void> disconnect() async {
     if (account.isNotEmpty) await signOutAccount(account);
+    await retryCredentialCleanup();
   }
 
   @override
@@ -900,6 +957,13 @@ class GoogleAuth implements GoogleAccount {
           next = inactive.isEmpty ? null : inactive.values.first;
           if (next != null) inactive.remove(next['account_sub']);
         }
+        // Queue erasure before committing the registry change. A failed
+        // registry write leaves the still-active key protected from retry.
+        // Remote revocation above has already settled for this account.
+        _cleanup.add({
+          _credentialKey(data): false,
+          if (data['refresh_token_legacy'] == true) _secretKey: false,
+        });
         await _saveRegistry(next, inactive, generation);
         _tokens = next == null ? null : Map<String, dynamic>.from(next);
         _persistedActive = next;
@@ -907,10 +971,10 @@ class GoogleAuth implements GoogleAccount {
           ..clear()
           ..addAll(inactive);
         _resetActiveWork();
-        await secretStore.delete(_credentialKey(data));
-        if (data['refresh_token_legacy'] == true) {
-          await secretStore.delete(_secretKey);
-        }
+        await _cleanup.retry(
+          revoke: _revokeBestEffort,
+          activeKeys: _activeCredentialKeys,
+        );
       });
     } finally {
       _disconnecting = false;
