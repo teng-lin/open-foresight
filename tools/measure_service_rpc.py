@@ -24,7 +24,10 @@ outside those directories must be named with --runtime-file for this inventory.
 Child environment inheritance is allowlisted and loader injection is refused.
 --desktop-host opts into a hashed native stdio/socket relay for a synthetic visible
 UI peer. This proves native host attachment, not graphical desktop acceptance.
-Without this option the pre-P0 token-peer benchmark behavior is unchanged.
+Without this option the pre-P0 token-peer attachment protocol is unchanged.
+The warmed streaming condition regenerates a meeting summary: real native
+deltas update status previews before completion. Grounded answers intentionally
+buffer until citation verification and cannot qualify incremental-token overlap.
 """
 
 from __future__ import annotations
@@ -72,12 +75,6 @@ EVIDENCE_TEXT = (
     "Tuesday. The implementation has three stages: schema safety, typed service "
     "admission, and desktop lifecycle verification. The project requires signed "
     "Linux and Mac acceptance before release."
-)
-WARM_QUESTION = "Who owns Apollo and when does she ship the design?"
-STREAM_QUESTION = (
-    "Explain the Apollo migration plan in detail, covering every stage and owner, "
-    "review schedule, and acceptance criteria. Use complete paragraphs grounded "
-    "in the source."
 )
 CAPTURE_SCRIPT = """import math, os, struct, sys, time
 rate = int(sys.argv[sys.argv.index('--rate') + 1]) if '--rate' in sys.argv else 48000
@@ -217,7 +214,7 @@ class Peer:
         try:
             self.socket.settimeout(timeout)
             self.socket.connect(str(path))
-            self.stream = self.socket.makefile("rb")
+            self.buffer = bytearray()
         except BaseException:
             self.socket.close()
             raise
@@ -251,11 +248,28 @@ class Peer:
                 return result
 
     def _send(self, payload: bytes, deadline: float, method: str) -> None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f"RPC deadline exceeded: {method}")
+        self.socket.settimeout(remaining)
         self.socket.sendall(payload)
 
     def _line(self, deadline: float, method: str, remaining: float) -> bytes:
-        self.socket.settimeout(remaining)
-        return self.stream.readline()
+        while True:
+            if remaining <= 0:
+                raise TimeoutError(f"RPC deadline exceeded: {method}")
+            end = self.buffer.find(b"\n")
+            if end >= 0:
+                result = bytes(self.buffer[:end + 1])
+                del self.buffer[:end + 1]
+                return result
+            self.socket.settimeout(remaining)
+            chunk = self.socket.recv(65536)
+            if not chunk:
+                return b""
+            self.buffer.extend(chunk)
+            # A partial frame cannot renew the original operation budget.
+            remaining = deadline - time.monotonic()
 
     def interrupt(self) -> None:
         try:
@@ -264,7 +278,6 @@ class Peer:
             pass
 
     def close(self) -> None:
-        self.stream.close()
         self.socket.close()
 
 
@@ -385,7 +398,8 @@ def capture_active(status: dict[str, Any]) -> bool:
 
 
 def sample(peer: Peer, *, delay: float = .01,
-           evidence: dict[str, Any] | None = None) -> dict[str, Any]:
+           evidence: dict[str, Any] | None = None,
+           on_status: Callable[[dict[str, Any], int], None] | None = None) -> dict[str, Any]:
     result = evidence if evidence is not None else {}
     rows: list[float] = []
     states: list[dict[str, Any]] = []
@@ -406,6 +420,8 @@ def sample(peer: Peer, *, delay: float = .01,
         result["n"] = len(rows)
         generation, capture = status.get("generation") or {}, status.get("capture") or {}
         received = time.monotonic_ns()
+        if on_status is not None:
+            on_status(status, received)
         result.setdefault("first_status_ns", received)
         result["last_status_ns"] = received
         states.append({
@@ -436,7 +452,7 @@ def validate_sample(label: str, result: dict[str, Any]) -> None:
     if label == "warmed_streaming" and result["native_active_count"] != 100:
         raise RuntimeError("Not all 100 status samples overlapped native generation")
     if label == "warmed_streaming" and not result["stream_chunks_during_samples"]:
-        raise RuntimeError("No changed non-empty streamed answer chunk arrived between first and last status samples")
+        raise RuntimeError("No changed non-empty native summary preview arrived between first and last status samples")
     if label == "warmed_capture":
         if result["generation_active_count"]:
             raise RuntimeError("Capture condition contained active generation")
@@ -621,6 +637,7 @@ class Measurement:
         self.stream_failures: list[str] = []
         self.stream_chunks: list[dict[str, Any]] = []
         self.last_chunk: str | None = None
+        self.summary_id: int | None = None
         self.cleanup_timeout = 30.0
 
     def connect(self) -> Peer:
@@ -631,7 +648,7 @@ class Measurement:
     def record(self, label: str, peer: Peer) -> None:
         result: dict[str, Any] = {}
         self.report["samples"][label] = result
-        result.update(sample(peer, evidence=result))
+        result.update(sample(peer, evidence=result, on_status=self.summary_preview))
         if label == "warmed_streaming":
             result["stream_chunks_during_samples"] = [
                 chunk for chunk in self.stream_chunks
@@ -640,12 +657,18 @@ class Measurement:
         # Retain raw failing qualifications before raising.
         validate_sample(label, result)
 
-    def streamed(self, value: Any) -> None:
+    def summary_preview(self, status: dict[str, Any], received_ns: int) -> None:
+        summaries = (status.get("capture") or {}).get("meeting_summaries") or {}
+        summary = summaries.get(str(self.summary_id)) or {}
+        if summary.get("active") and native_active(status):
+            self.streamed(summary.get("preview"), received_ns=received_ns)
+
+    def streamed(self, value: Any, *, received_ns: int | None = None) -> None:
         if not isinstance(value, str) or not value or value == self.last_chunk:
             return
         self.last_chunk = value
         self.stream_chunks.append({
-            "received_ns": time.monotonic_ns(), "characters": len(value),
+            "received_ns": time.monotonic_ns() if received_ns is None else received_ns, "characters": len(value),
             "sha256": hashlib.sha256(value.encode()).hexdigest(),
         })
 
@@ -700,13 +723,15 @@ class Measurement:
         self.record("idle_before_models", observer)
         control.call("models.embedding", {"path": str(self.args.embedding_model), "gpu": False})
         control.call("models.generation", {"path": str(self.args.generation_model), "runtime": str(self.args.model_worker)})
-        control.call("sources.import", {"title": "RPC measurement evidence", "text": EVIDENCE_TEXT})
-        control.call("answer", {"question": WARM_QUESTION})
+        self.summary_id = control.call("meetings.create", {"title": "RPC measurement summary"})["id"]
+        self.report["streaming_meeting_id"] = self.summary_id
+        control.call("meetings.transcript", {"id": self.summary_id, "text": EVIDENCE_TEXT})
+        control.call("meetings.generate", {"id": self.summary_id, "kind": "summary"})
         self.record("warmed_idle", observer)
 
         def stream() -> None:
             try:
-                control.call("answer.stream", {"question": STREAM_QUESTION}, on_result=self.streamed)
+                control.call("meetings.generate", {"id": self.summary_id, "kind": "summary"})
             except BaseException as error:
                 self.stream_failures.append(repr(error))
 
@@ -716,7 +741,9 @@ class Measurement:
         def generating() -> bool:
             if self.stream_failures:
                 raise RuntimeError(f"Generation failed: {self.stream_failures}")
-            if native_active(observer.call("status")) and self.stream_chunks:
+            status = observer.call("status")
+            self.summary_preview(status, time.monotonic_ns())
+            if native_active(status) and self.stream_chunks:
                 return True
             if self.thread is not None and not self.thread.is_alive():
                 raise RuntimeError(f"Generation settled before native overlap: {self.stream_failures}")
@@ -827,8 +854,11 @@ def measure(args: argparse.Namespace) -> dict[str, Any]:
         "host_before": host_state(),
         "workload": {"status_samples_per_condition": 100, "sample_delay_seconds": .01,
                      "threads": {"OMP_NUM_THREADS": "2", "OPENBLAS_NUM_THREADS": "2"},
-                     "source_text": EVIDENCE_TEXT, "warm_question": WARM_QUESTION,
-                     "stream_question": STREAM_QUESTION, "capture_warm_seconds": 8,
+                     "source_text": EVIDENCE_TEXT,
+                     "generation": "meetings.generate(kind=summary), synchronous warm then repeated generation",
+                     "stream_evidence": "changed nonempty capture.meeting_summaries[id].preview while summary active and native generation loading",
+                     "prior_workload": "grounded answer.stream buffers verified output; unsuitable for incremental overlap",
+                     "capture_warm_seconds": 8,
                      "capture": "deterministic synthetic PCM, 48 kHz; no physical audio or transcription throughput claim"},
     }
     measurement = Measurement(args, run, report)

@@ -282,8 +282,8 @@ class FakeSocket:
     def connect(self, path):
         self.path = path
 
-    def makefile(self, mode):
-        return self.lines
+    def recv(self, size):
+        return self.lines.readline()
 
     def sendall(self, value):
         self.sent.append(json.loads(value))
@@ -323,7 +323,7 @@ def test_peer_event_flood_cannot_extend_deadline(monkeypatch):
     sock = FakeSocket([b'{"event":"status"}\n'])
     monkeypatch.setattr(rpc.socket, "socket", lambda *args: sock)
     peer = rpc.Peer(Path("/fixture.sock"), timeout=1)
-    times = iter([0, .1, 1.1])
+    times = iter([0, 0, .1, .1, 1.1])
     monkeypatch.setattr(rpc.time, "monotonic", lambda: next(times))
     with pytest.raises(TimeoutError, match="RPC deadline"):
         peer.call("status")
@@ -360,12 +360,17 @@ class WorkPeer:
             self.samples += 1
             if self.state.get("on_result") and self.state.get("generating"):
                 self.state["on_result"](f"Changed answer chunk {self.samples}")
-            return status(generating=self.state.get("generating", False),
-                          state="loading" if self.state.get("generating") else "ready",
-                          capture=self.state.get("capturing", False), samples=self.samples)
-        if method == "answer.stream":
-            self.state.update(generating=True, on_result=on_result)
-            on_result("Initial answer chunk")
+            result = status(generating=self.state.get("generating", False),
+                            state="loading" if self.state.get("generating") else "ready",
+                            capture=self.state.get("capturing", False), samples=self.samples)
+            result["capture"]["meeting_summaries"] = {
+                "7": {"active": self.state.get("generating", False), "preview": f"Summary chunk {self.samples}"}
+            }
+            return result
+        if method == "meetings.generate":
+            self.state["summary_runs"] = self.state.get("summary_runs", 0) + 1
+            # The warm summary settles before sampling; the second is async.
+            self.state["generating"] = self.state["summary_runs"] > 1
         if method == "meetings.start":
             self.state["capturing"] = True
         if method == "meetings.stop":
@@ -441,7 +446,7 @@ def test_full_workload_records_warm_stream_and_pcm_conditions_and_cleans_up(work
 
 def test_workload_keeps_performance_target_miss_honest(workload, monkeypatch):
     original = rpc.sample
-    monkeypatch.setattr(rpc, "sample", lambda peer, **_kwargs: {**original(peer, delay=0), "target_met": False})
+    monkeypatch.setattr(rpc, "sample", lambda peer, **kwargs: {**original(peer, delay=0, **kwargs), "target_met": False})
     workload.workload()
     assert workload.report["status"] == "performance_target_missed"
     workload.close()
@@ -476,7 +481,7 @@ def test_generation_without_native_overlap_and_generation_failure_are_refused(wo
 def test_stream_exception_is_retained_and_refused_after_settlement(workload, monkeypatch):
     original = WorkPeer.call
     def call(self, method, args=None, **kwargs):
-        if method == "answer.stream":
+        if method == "meetings.generate" and self.state.get("summary_runs"):
             raise RuntimeError("native fixture failure")
         return original(self, method, args, **kwargs)
     monkeypatch.setattr(WorkPeer, "call", call)
@@ -915,7 +920,7 @@ def test_streaming_qualification_requires_a_chunk_inside_status_sample_window(wo
     workload.stream_chunks = [{"received_ns": 99}, {"received_ns": 201}]
     if inside:
         workload.stream_chunks.append({"received_ns": 150})
-    def sample(peer, *, evidence):
+    def sample(peer, *, evidence, on_status):
         evidence.update(native_active_count=100, first_status_ns=100, last_status_ns=200)
         return evidence
     monkeypatch.setattr(rpc, "sample", sample)
@@ -1295,3 +1300,60 @@ def test_native_host_flag_cannot_bypass_exact_source_precheck(inputs, private, n
     monkeypatch.setattr(rpc, "DesktopHostPeer", lambda *args, **kwargs: pytest.fail("unverified export launched host"))
     with pytest.raises(ValueError, match="blob mismatch"):
         rpc.measure(inputs)
+
+
+@pytest.mark.parametrize("mode", ["partial", "events", "hung", "blocked-write"])
+def test_direct_peer_absolute_deadline_bounds_partial_lines_and_events(relay_server, mode):
+    def respond(connection, stop):
+        if mode == "blocked-write":
+            stop.wait(3)
+            return
+        relay_request(connection)
+        while not stop.wait(.005):
+            if mode == "partial":
+                connection.sendall(b" ")
+            elif mode == "events":
+                connection.sendall(b'{"event":"status"}\n')
+    service = relay_server(respond)
+    peer = rpc.Peer(service.path, timeout=.15)
+    started = rpc.time.monotonic()
+    try:
+        with pytest.raises(TimeoutError):
+            peer.call("status", {"large": "x" * 4_000_000} if mode == "blocked-write" else {})
+        assert rpc.time.monotonic() - started < 3
+    finally:
+        service.stop.set()
+        peer.close()
+
+
+@pytest.mark.parametrize("active,native,meeting,preview,accepted", [
+    (True, True, "7", "Actual model preview", True),
+    (False, True, "7", "Completed preview", False),
+    (True, False, "7", "Preview before native inference", False),
+    (True, True, "8", "Another meeting", False),
+    (True, True, "7", "", False),
+])
+def test_summary_evidence_requires_same_active_meeting_and_actual_native_work(workload, active, native, meeting, preview, accepted):
+    workload.summary_id = 7
+    wire = status(generating=native, state="loading" if native else "ready")
+    wire["capture"]["meeting_summaries"] = {meeting: {"active": active, "preview": preview}}
+    workload.summary_preview(wire, 123)
+    workload.summary_preview(wire, 124)
+    assert len(workload.stream_chunks) == int(accepted)
+    if accepted:
+        assert workload.stream_chunks == [{"received_ns": 123, "characters": len(preview),
+                                           "sha256": hashlib.sha256(preview.encode()).hexdigest()}]
+
+
+def test_summary_workload_warms_then_regenerates_real_summary_contract(workload):
+    workload.workload()
+    calls = workload.peers[0].calls
+    assert [method for method, _ in calls].count("meetings.generate") == 2
+    assert ("meetings.transcript", {"id": 7, "text": rpc.EVIDENCE_TEXT}) in calls
+    assert all(method not in {"answer", "answer.stream"} for method, _ in calls)
+    sample = workload.report["samples"]["warmed_streaming"]
+    assert sample["native_active_count"] == 100
+    assert len(sample["stream_chunks_during_samples"]) == 100
+    assert sample["stream_chunks_during_samples"][0]["received_ns"] == sample["first_status_ns"]
+    assert sample["stream_chunks_during_samples"][-1]["received_ns"] == sample["last_status_ns"]
+    workload.close()
