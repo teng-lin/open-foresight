@@ -176,7 +176,7 @@ void main() {
       for (final name in ['Documents', 'Downloads', 'Desktop'])
         (Directory('${root.path}/$name')..createSync()).path,
     ];
-    final environment = DesktopEnvironment.production(
+    final resolvedEnvironment = DesktopEnvironment.production(
       variables: const {},
       macOS: true,
       runSync: (executable, _) => ProcessResult(
@@ -187,6 +187,9 @@ void main() {
             : 'NFSHomeDirectory: ${root.path}\n',
         '',
       ),
+    );
+    final environment = DesktopEnvironment(
+      homeDirectory: resolvedEnvironment.homeDirectory,
     );
     final connection = ControllerConnection(
       Application(
