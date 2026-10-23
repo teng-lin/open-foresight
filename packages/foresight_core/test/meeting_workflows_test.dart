@@ -161,6 +161,14 @@ void main() {
       runtime.failCall = 2;
       await expectLater(app.generateActions(meeting), throwsStateError);
       expect(store.meetingTasks(meeting), before);
+      final failed = CapturePresentation.fromWire(
+        jsonDecode(jsonEncode(app.captureState)),
+      ).workflow(meeting, 'actions')!;
+      expect(failed.phase, 'failed');
+      expect(failed.error, contains('Meeting generation failed'));
+      expect(failed.active, isFalse);
+      expect(failed.cancelled, isFalse);
+      expect(failed.preview, isEmpty);
       runtime.failCall = null;
       store.db.execute(
         "CREATE TRIGGER fail_tasks BEFORE INSERT ON meeting_tasks BEGIN SELECT RAISE(ABORT,'fixture'); END",
@@ -188,6 +196,14 @@ void main() {
       await failed;
       expect(runtime.cancelled, contains('parent-actions-1'));
       expect(store.meetingTasks(meeting), isEmpty);
+      final cancelled = CapturePresentation.fromWire(
+        jsonDecode(jsonEncode(app.captureState)),
+      ).workflow(meeting, 'actions')!;
+      expect(cancelled.phase, 'failed');
+      expect(cancelled.cancelled, isTrue);
+      expect(cancelled.active, isFalse);
+      expect(cancelled.error, contains('cancelled'));
+      expect(cancelled.preview, isEmpty);
     },
   );
   test(

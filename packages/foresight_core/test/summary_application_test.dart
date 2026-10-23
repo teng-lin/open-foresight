@@ -231,6 +231,14 @@ void main() {
     await expectLater(app.generateSummary(meeting), throwsStateError);
     expect(store.meetingArtifacts(meeting, 'summary'), hasLength(1));
     expect(store.summaryCheckpoint(meeting), checkpoint);
+    final failed = CapturePresentation.fromWire(
+      jsonDecode(jsonEncode(app.captureState)),
+    ).summary(meeting)!;
+    expect(failed.phase, 'failed');
+    expect(failed.error, contains('worker failed'));
+    expect(failed.active, isFalse);
+    expect(failed.cancelled, isFalse);
+    expect(failed.preview, isEmpty);
   });
 
   test(
@@ -249,6 +257,14 @@ void main() {
       expect(runtime.cancelled, contains('parent-summary-1'));
       expect(store.meetingArtifacts(meeting, 'summary'), isEmpty);
       expect(store.summaryCheckpoint(meeting), isNull);
+      final cancelled = CapturePresentation.fromWire(
+        jsonDecode(jsonEncode(app.captureState)),
+      ).summary(meeting)!;
+      expect(cancelled.phase, 'failed');
+      expect(cancelled.cancelled, isTrue);
+      expect(cancelled.active, isFalse);
+      expect(cancelled.error, contains('cancelled'));
+      expect(cancelled.preview, isEmpty);
     },
   );
 
