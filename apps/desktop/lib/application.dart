@@ -1,7 +1,7 @@
 import 'desktop_environment.dart';
 import 'features/chat/chat_controller.dart';
 import 'features/meetings/meetings_controller.dart';
-import 'model_setup.dart';
+import 'feature_request_identity.dart';
 import 'shell/feature_bridges.dart';
 import 'features/integrations/integrations_controller.dart';
 import 'shell/workspace_tab.dart';
@@ -280,16 +280,7 @@ class _WorkspaceState extends State<Workspace>
           ),
         ),
       );
-    if (d.store.preference('globalShortcut') == 'true') {
-      unawaited(
-        integrationFeature.enableGlobalShortcuts().catchError((Object e) {
-          if (mounted)
-            setState(
-              () => integrationFeature.globalShortcutState = e.toString(),
-            );
-        }),
-      );
-    }
+    unawaited(_initializePreferences());
     integrationFeature
         .google; // Create the independently versioned connection tables.
     integrationFeature.googleState = integrationFeature.googleAuth.loadError;
@@ -299,8 +290,6 @@ class _WorkspaceState extends State<Workspace>
       unawaited(integrationFeature.refreshLoginSetting());
     }
 
-    integrationFeature.notifications =
-        d.store.preference('notifications') == 'true';
     unawaited(integrationFeature.refreshNotifications());
     meetingFeature.syncCapture();
     final connection = d;
@@ -319,18 +308,7 @@ class _WorkspaceState extends State<Workspace>
         await d.resume();
       } finally {
         if (mounted) setState(() => onboardingFeature.ready = true);
-        if (mounted &&
-            !onboardingFeature.active &&
-            widget.commands != null &&
-            !settingsFeature.modelSetupShown &&
-            (needsModel(d.store, 'embedding') ||
-                needsModel(d.store, 'generation'))) {
-          settingsFeature.modelSetupShown = true;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) unawaited(settingsFeature.chooseGemma(firstRun: true));
-          });
-          if (mounted) setState(() {});
-        }
+        await _offerInitialModelSetup();
       }
     }
 
@@ -342,6 +320,72 @@ class _WorkspaceState extends State<Workspace>
           );
       }),
     );
+  }
+
+  Future<void> _initializePreferences() async {
+    final identity = FeatureRequestIdentity.capture(d);
+    try {
+      final shortcut = await d.store.read(
+        StoreReadQueries.preference('globalShortcut', 'false'),
+      );
+      if (!identity.isCurrent(d, alive: mounted)) return;
+      if (shortcut.error != null) throw shortcut.error!;
+      if (shortcut.current && shortcut.value == 'true') {
+        await integrationFeature.enableGlobalShortcuts();
+      }
+    } catch (error) {
+      if (identity.isCurrent(d, alive: mounted)) {
+        update(() => integrationFeature.globalShortcutState = error.toString());
+      }
+    }
+    try {
+      final notifications = await d.store.read(
+        StoreReadQueries.preference('notifications', 'false'),
+      );
+      if (!identity.isCurrent(d, alive: mounted)) return;
+      if (notifications.error != null) throw notifications.error!;
+      if (notifications.current) {
+        update(
+          () =>
+              integrationFeature.notifications = notifications.value == 'true',
+        );
+      }
+    } catch (error) {
+      if (identity.isCurrent(d, alive: mounted)) {
+        update(() => integrationFeature.notificationState = error.toString());
+      }
+    }
+  }
+
+  Future<void> _offerInitialModelSetup() async {
+    if (!mounted || widget.commands == null || settingsFeature.modelSetupShown)
+      return;
+    final identity = FeatureRequestIdentity.capture(d);
+    final complete = await d.store.read(
+      StoreReadQueries.preference('onboarding.complete'),
+    );
+    final embedding = await d.store.read(StoreReadQueries.model('embedding'));
+    final generation = await d.store.read(StoreReadQueries.model('generation'));
+    if (!identity.isCurrent(d, alive: mounted) ||
+        !complete.current ||
+        complete.error != null ||
+        complete.value != 'true' ||
+        !embedding.current ||
+        embedding.error != null ||
+        !generation.current ||
+        generation.error != null ||
+        settingsFeature.modelSetupShown)
+      return;
+    if (!preparedNeedsModel(embedding.value, 'embedding') &&
+        !preparedNeedsModel(generation.value, 'generation'))
+      return;
+    settingsFeature.modelSetupShown = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (identity.isCurrent(d, alive: mounted)) {
+        unawaited(settingsFeature.chooseGemma(firstRun: true));
+      }
+    });
+    update(() {});
   }
 
   @override
