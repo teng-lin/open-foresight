@@ -8,7 +8,7 @@ import 'shell/workspace_tab.dart';
 import 'shell/ports.dart';
 import 'features/settings/settings_controller.dart';
 import 'features/sources/sources_controller.dart';
-import 'presentation/workspace_presentation.dart';
+import 'shell/workspace_view.dart';
 
 import 'features/onboarding/onboarding_controller.dart';
 
@@ -16,7 +16,6 @@ import 'failure_text.dart';
 
 import 'dart:async';
 import 'dart:io';
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:foresight_core/desktop.dart';
@@ -26,9 +25,6 @@ import 'calendar_auth_links.dart';
 import 'desktop_menu.dart';
 import 'account_button.dart';
 import 'agent_approval_surface.dart';
-
-const _blue = workspaceBlue;
-const _ink = workspaceInk;
 
 class Foresight extends StatelessWidget {
   final DesktopConnection domain;
@@ -600,286 +596,70 @@ class _WorkspaceState extends State<Workspace>
           children: [
             ValueListenableBuilder<int>(
               valueListenable: serviceUiRevision,
-              builder: (_, __, ___) => Padding(
-                padding: EdgeInsets.fromLTRB(
-                  24,
-                  28,
-                  meetingFeature.recording != null ? 16 : 24,
-                  8,
-                ),
-                child: LayoutBuilder(
-                  builder: (_, constraints) => SizedBox(
-                    width: constraints.maxWidth,
-                    child: Wrap(
-                      alignment: WrapAlignment.spaceBetween,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      spacing: 16,
-                      runSpacing: 12,
-                      children: [
-                        ConstrainedBox(
-                          constraints: BoxConstraints(
-                            maxWidth: math.max(200, constraints.maxWidth - 260),
-                          ),
-                          child: Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            crossAxisAlignment: WrapCrossAlignment.center,
-                            children: [
-                              Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Image.asset(
-                                    'assets/images/open-foresight-logo.png',
-                                    width: 24,
-                                    height: 24,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Flexible(
-                                    child: Text.rich(
-                                      TextSpan(
-                                        children: const [
-                                          TextSpan(
-                                            text: 'Open ',
-                                            style: TextStyle(
-                                              fontWeight: FontWeight.w700,
-                                            ),
-                                          ),
-                                          TextSpan(text: 'Foresight'),
-                                        ],
-                                      ),
-                                      style: const TextStyle(fontSize: 18),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              if (MediaQuery.sizeOf(context).width > 1100) ...[
-                                Chip(
-                                  label: Text(
-                                    'Powered by ${settingsFeature.embeddingName()}',
-                                  ),
-                                ),
-                                Chip(
-                                  label: Text(
-                                    '${settingsFeature.localWords()} Local output words',
-                                  ),
-                                ),
-                              ],
-                              SizedBox(
-                                width: 32,
-                                height: 28,
-                                child: IconButton(
-                                  tooltip: 'Local helper status',
-                                  onPressed: settingsFeature.showHelperMonitor,
-                                  padding: EdgeInsets.zero,
-                                  style: IconButton.styleFrom(
-                                    backgroundColor: Colors.white.withValues(
-                                      alpha: .7,
-                                    ),
-                                    foregroundColor: _ink,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                  ),
-                                  icon: Icon(
-                                    settingsFeature.helperEmbeddingHealthy
-                                        ? Icons.task_alt
-                                        : Icons.info_outline,
-                                    size: 18,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        if (meetingFeature.recording != null)
-                          meetingFeature.recordingHeader()
-                        else
-                          FilledButton.icon(
-                            onPressed:
-                                busy ||
-                                    meetingFeature.quickStarting ||
-                                    meetingFeature.meetingEnhancing
-                                ? null
-                                : tab == WorkspaceTab.meetings &&
-                                      meetingFeature.meetingId != null
-                                ? () => meetingFeature.recordExistingMeeting(
-                                    meetingFeature.meetingId!,
-                                  )
-                                : meetingFeature.quickStart,
-                            icon: Icon(
-                              meetingFeature.recording != null
-                                  ? Icons.stop
-                                  : Icons.graphic_eq,
-                            ),
-                            label: Text(
-                              meetingFeature.recording != null
-                                  ? 'Stop transcribing'
-                                  : 'Start transcribing',
-                            ),
-                            style: FilledButton.styleFrom(
-                              backgroundColor: _ink,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 18,
-                                vertical: 16,
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
+              builder: (_, __, ___) => WorkspaceHeader(
+                embeddingName: settingsFeature.embeddingName(),
+                localWords: settingsFeature.localWords(),
+                helperHealthy: settingsFeature.helperEmbeddingHealthy,
+                showHelperMonitor: settingsFeature.showHelperMonitor,
+                recordingHeader: meetingFeature.recording == null
+                    ? null
+                    : meetingFeature.recordingHeader(),
+                onRecord:
+                    busy ||
+                        meetingFeature.quickStarting ||
+                        meetingFeature.meetingEnhancing
+                    ? null
+                    : tab == WorkspaceTab.meetings &&
+                          meetingFeature.meetingId != null
+                    ? () => meetingFeature.recordExistingMeeting(
+                        meetingFeature.meetingId!,
+                      )
+                    : meetingFeature.quickStart,
               ),
             ),
             Expanded(
               child: Row(
                 children: [
-                  SizedBox(
-                    width:
-                        72 *
-                        MediaQuery.textScalerOf(context).scale(1).clamp(1, 2),
-                    child: Column(
-                      children: [
-                        Expanded(
-                          child: ListView(
-                            children: [
-                              navItem(
-                                WorkspaceTab.meetings,
-                                'Meetings',
-                                tab == WorkspaceTab.meetings
-                                    ? Icons.description
-                                    : Icons.description_outlined,
-                              ),
-                              navItem(
-                                WorkspaceTab.chat,
-                                'Ask',
-                                tab == WorkspaceTab.chat
-                                    ? Icons.chat_bubble
-                                    : Icons.chat_bubble_outline,
-                              ),
-                              navItem(
-                                WorkspaceTab.sources,
-                                'Sources',
-                                tab == WorkspaceTab.sources
-                                    ? Icons.snippet_folder
-                                    : Icons.snippet_folder_outlined,
-                              ),
-                              navItem(
-                                WorkspaceTab.stats,
-                                'Stats',
-                                tab == WorkspaceTab.stats
-                                    ? Icons.emoji_events
-                                    : Icons.emoji_events_outlined,
-                              ),
-                            ],
-                          ),
-                        ),
-                        navItem(
-                          WorkspaceTab.settings,
-                          'Settings',
-                          tab == WorkspaceTab.settings ||
-                                  tab == WorkspaceTab.models
-                              ? Icons.settings
-                              : Icons.settings_outlined,
-                        ),
-                        IconButton(
-                          tooltip: 'Help',
-                          onPressed: () => showDialog<void>(
-                            context: context,
-                            builder: (_) => const AlertDialog(
-                              title: Text('Foresight'),
-                              content: Text(
-                                'Add local knowledge sources, then ask a question with citations. Start transcribing captures microphone and system playback; live transcription updates during recording.\n\nCtrl+1–5: navigate\nCtrl+O: add file\nCtrl+N: new note\nCtrl+Shift+F: start a meeting',
-                              ),
-                            ),
-                          ),
-                          icon: const Icon(Icons.help_outline),
-                        ),
-                        AccountButton(
-                          connected: integrationFeature.googleAuth.connected,
-                          busy: busy,
-                          displayName:
-                              integrationFeature.googleAuth.displayName,
-                          email: integrationFeature.googleAuth.email,
-                          photoUrl: integrationFeature.googleAuth.photoUrl,
-                          account: integrationFeature.googleAuth.account,
-                          accounts: integrationFeature.googleAuth.accounts,
-                          onSignIn: () => run(integrationFeature.connectGoogle),
-                          onAddAccount: () =>
-                              run(integrationFeature.addGoogleAccount),
-                          onSwitchAccount: (id) => run(
-                            () => integrationFeature.switchGoogleAccount(id),
-                          ),
-                          onSignOutAccount: (id) => run(
-                            () => integrationFeature.signOutGoogleAccount(id),
-                          ),
-                        ),
-                      ],
+                  WorkspaceSidebar(
+                    tab: tab,
+                    navigate: navigate,
+                    account: AccountButton(
+                      connected: integrationFeature.googleAuth.connected,
+                      busy: busy,
+                      displayName: integrationFeature.googleAuth.displayName,
+                      email: integrationFeature.googleAuth.email,
+                      photoUrl: integrationFeature.googleAuth.photoUrl,
+                      account: integrationFeature.googleAuth.account,
+                      accounts: integrationFeature.googleAuth.accounts,
+                      onSignIn: () => run(integrationFeature.connectGoogle),
+                      onAddAccount: () =>
+                          run(integrationFeature.addGoogleAccount),
+                      onSwitchAccount: (id) =>
+                          run(() => integrationFeature.switchGoogleAccount(id)),
+                      onSignOutAccount: (id) => run(
+                        () => integrationFeature.signOutGoogleAccount(id),
+                      ),
                     ),
                   ),
                   Expanded(
-                    child: Padding(
-                      padding: EdgeInsets.fromLTRB(
-                        tab == WorkspaceTab.chat ||
-                                (tab == WorkspaceTab.meetings &&
-                                    meetingFeature.meetingId != null)
-                            ? 16
-                            : MediaQuery.sizeOf(context).width > 1000
-                            ? 56
-                            : 16,
-                        tab == WorkspaceTab.meetings &&
-                                meetingFeature.meetingId != null
-                            ? 12
-                            : tab == WorkspaceTab.chat
-                            ? 22
-                            : 34,
-                        MediaQuery.sizeOf(context).width > 1000
-                            ? (tab == WorkspaceTab.chat ||
-                                      (tab == WorkspaceTab.meetings &&
-                                          meetingFeature.meetingId != null)
-                                  ? 40
-                                  : tab == WorkspaceTab.settings
-                                  ? 88
-                                  : 68)
-                            : 16,
-                        28,
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          if (busy) const LinearProgressIndicator(),
-                          if (error.isNotEmpty)
-                            Material(
-                              color: Theme.of(
-                                context,
-                              ).colorScheme.errorContainer,
-                              borderRadius: BorderRadius.circular(12),
-                              child: Padding(
-                                padding: const EdgeInsets.all(12),
-                                child: SelectableText(error),
-                              ),
-                            ),
-                          Expanded(
-                            child: ValueListenableBuilder<int>(
-                              valueListenable: serviceUiRevision,
-                              builder: (_, __, ___) => switch (tab) {
-                                WorkspaceTab.sources => SourcesView(
-                                  sourceFeature,
-                                ),
-                                WorkspaceTab.chat => chatFeature.chat(),
-                                WorkspaceTab.notes => sourceFeature.notes(),
-                                WorkspaceTab.meetings => MeetingsView(
-                                  meetingFeature,
-                                ),
-                                WorkspaceTab.models => settingsFeature.models(),
-                                WorkspaceTab.stats => settingsFeature.stats(),
-                                WorkspaceTab.settings => SettingsView(
-                                  settingsFeature,
-                                ),
-                              },
-                            ),
+                    child: WorkspaceContent(
+                      tab: tab,
+                      meetingSelected: meetingFeature.meetingId != null,
+                      busy: busy,
+                      error: error,
+                      child: ValueListenableBuilder<int>(
+                        valueListenable: serviceUiRevision,
+                        builder: (_, __, ___) => switch (tab) {
+                          WorkspaceTab.sources => SourcesView(sourceFeature),
+                          WorkspaceTab.chat => chatFeature.chat(),
+                          WorkspaceTab.notes => sourceFeature.notes(),
+                          WorkspaceTab.meetings => MeetingsView(meetingFeature),
+                          WorkspaceTab.models => settingsFeature.models(),
+                          WorkspaceTab.stats => settingsFeature.stats(),
+                          WorkspaceTab.settings => SettingsView(
+                            settingsFeature,
                           ),
-                        ],
+                        },
                       ),
                     ),
                   ),
@@ -887,48 +667,6 @@ class _WorkspaceState extends State<Workspace>
               ),
             ),
           ],
-        ),
-      ),
-    ),
-  );
-
-  Widget navItem(
-    WorkspaceTab destination,
-    String title,
-    IconData icon,
-  ) => Padding(
-    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-    child: Material(
-      color:
-          tab == destination ||
-              destination == WorkspaceTab.settings && tab == WorkspaceTab.models
-          ? _blue
-          : Colors.transparent,
-      borderRadius: BorderRadius.circular(16),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(16),
-        onTap: () => navigate(destination),
-        child: SizedBox(
-          width: 56 * MediaQuery.textScalerOf(context).scale(1).clamp(1, 2),
-          height: 54 * MediaQuery.textScalerOf(context).scale(1).clamp(1, 2),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                icon,
-                size: 20,
-                color: tab == destination ? _ink : const Color(0xff45494b),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
-          ),
         ),
       ),
     ),
