@@ -12,14 +12,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:open_foresight/main.dart' as app;
 import '../test_support/onboarding.dart';
+import 'package:open_foresight/features/onboarding/onboarding_view.dart';
 
 final observed = ObservedExpectations();
 
 Future<void> waitFor(
   WidgetTester tester,
-  FutureOr<bool> Function() ready,
-) async {
-  final deadline = DateTime.now().add(const Duration(seconds: 30));
+  FutureOr<bool> Function() ready, {
+  DateTime? deadline,
+}) async {
+  deadline ??= DateTime.now().add(const Duration(seconds: 30));
   var settled = await currentReadCondition(ready, deadline: deadline);
   while (!settled && DateTime.now().isBefore(deadline)) {
     await tester.pump(const Duration(milliseconds: 100));
@@ -31,11 +33,13 @@ Future<void> waitFor(
 
 Future<void> startDesktop(WidgetTester tester) async {
   await app.main();
+  final startupDeadline = DateTime.now().add(const Duration(seconds: 30));
   await waitFor(
     tester,
     () =>
         find.byType(app.Workspace).evaluate().isNotEmpty ||
         find.text('Open Foresight could not start').evaluate().isNotEmpty,
+    deadline: startupDeadline,
   );
   if (find.byType(app.Workspace).evaluate().isEmpty) {
     final details = find.byType(SelectableText);
@@ -43,6 +47,15 @@ Future<void> startDesktop(WidgetTester tester) async {
       'Desktop startup failed: ${details.evaluate().isEmpty ? 'unknown' : tester.widget<SelectableText>(details).data}',
     );
   }
+  // Workspace can mount while its asynchronous onboarding preferences load.
+  // Wait for the actual first screen before deciding whether to advance it.
+  await waitFor(
+    tester,
+    () =>
+        find.byType(OnboardingView).evaluate().isNotEmpty ||
+        find.text('Meetings').evaluate().isNotEmpty,
+    deadline: startupDeadline,
+  );
 }
 
 class Mcp {
