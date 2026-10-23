@@ -59,6 +59,7 @@ class ChatHistory extends StatelessWidget {
     super.key,
     required this.history,
     required this.loading,
+    required this.initialLoading,
     required this.scope,
     required this.scopeAsking,
     required this.searchWeb,
@@ -69,7 +70,7 @@ class ChatHistory extends StatelessWidget {
     required this.cite,
   });
   final List<ChatAnswer> history;
-  final bool loading, scopeAsking, searchWeb;
+  final bool loading, initialLoading, scopeAsking, searchWeb;
   final String scope, answer;
   final double answerFontSize;
   final Future<void> Function(Uri) openLink;
@@ -77,80 +78,94 @@ class ChatHistory extends StatelessWidget {
   final ValueChanged<Citation> cite;
   @override
   Widget build(BuildContext context) => Expanded(
-    child: loading
-        ? const Center(child: CircularProgressIndicator())
-        : history.isEmpty && !scopeAsking
-        ? const Center(
-            child: Text(
-              'Get answer from your personalized\nknowledge sources.',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 20, color: Color(0xff87a8b7)),
-            ),
-          )
-        : ListView(
-            key: ValueKey('chat-history:$scope'),
-            children: [
-              for (final a in history)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              a.question,
-                              style: const TextStyle(
-                                fontSize: 21,
-                                fontWeight: FontWeight.w500,
-                              ),
+    child: Stack(
+      fit: StackFit.expand,
+      children: [
+        // Keep scroll/render state without exposing uncertain scoped output
+        // through pixels, hit testing, keyboard focus or accessibility.
+        Visibility(
+          visible: !loading,
+          maintainState: true,
+          maintainAnimation: true,
+          maintainSize: true,
+          child: ExcludeFocus(excluding: loading, child: _content()),
+        ),
+        if (initialLoading) const Center(child: CircularProgressIndicator()),
+      ],
+    ),
+  );
+
+  Widget _content() => history.isEmpty && !scopeAsking
+      ? const Center(
+          child: Text(
+            'Get answer from your personalized\nknowledge sources.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 20, color: Color(0xff87a8b7)),
+          ),
+        )
+      : ListView(
+          key: ValueKey('chat-history:$scope'),
+          children: [
+            for (final a in history)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            a.question,
+                            style: const TextStyle(
+                              fontSize: 21,
+                              fontWeight: FontWeight.w500,
                             ),
                           ),
-                          IconButton(
-                            tooltip: 'Close answer',
-                            onPressed: () => onClose(a.id),
-                            icon: const Icon(Icons.close),
-                          ),
-                        ],
-                      ),
-                      GeneratedContent(
-                        a.body,
-                        openLink: openLink,
-                        fontSize: answerFontSize,
-                      ),
-                      if (a.status != 'completed') Text('Status: ${a.status}'),
-                      Wrap(
-                        children: a.citations
-                            .map(
-                              (c) => TextButton(
-                                onPressed: () => cite(c),
-                                child: Text(
-                                  c.kind == 'web'
-                                      ? '[${c.label}] ${c.title == '' ? c.url : c.title}'
-                                      : '[${c.label}] source revision ${c.revision}',
-                                ),
+                        ),
+                        IconButton(
+                          tooltip: 'Close answer',
+                          onPressed: () => onClose(a.id),
+                          icon: const Icon(Icons.close),
+                        ),
+                      ],
+                    ),
+                    GeneratedContent(
+                      a.body,
+                      openLink: openLink,
+                      fontSize: answerFontSize,
+                    ),
+                    if (a.status != 'completed') Text('Status: ${a.status}'),
+                    Wrap(
+                      children: a.citations
+                          .map(
+                            (c) => TextButton(
+                              onPressed: () => cite(c),
+                              child: Text(
+                                c.kind == 'web'
+                                    ? '[${c.label}] ${c.title == '' ? c.url : c.title}'
+                                    : '[${c.label}] source revision ${c.revision}',
                               ),
-                            )
-                            .toList(),
-                      ),
-                      const Divider(),
-                    ],
-                  ),
+                            ),
+                          )
+                          .toList(),
+                    ),
+                    const Divider(),
+                  ],
                 ),
-              if (scopeAsking)
-                GeneratedContent(
-                  answer.isEmpty
-                      ? searchWeb
-                            ? 'Preparing your answer…'
-                            : 'Searching your knowledge…'
-                      : answer,
-                  fontSize: answerFontSize,
-                  openLink: openLink,
-                ),
-            ],
-          ),
-  );
+              ),
+            if (scopeAsking)
+              GeneratedContent(
+                answer.isEmpty
+                    ? searchWeb
+                          ? 'Preparing your answer…'
+                          : 'Searching your knowledge…'
+                    : answer,
+                fontSize: answerFontSize,
+                openLink: openLink,
+              ),
+          ],
+        );
 }
 
 class ChatControls extends StatelessWidget {

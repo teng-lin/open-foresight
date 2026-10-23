@@ -8,6 +8,8 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Fixed
 
+- Preserve Chat history scroll position while its source scope refreshes.
+
 - Refresh Stats at the local Monday boundary and after an awake timezone change, keeping chart labels aligned with the displayed calendar period.
 
 - Bind desktop approval to the verified local desktop executable, rotate its attach capability, and preserve its host slot while hidden. Hidden windows refuse new capture and finish active capture; requests through the quick-meeting socket require visible confirmation.

@@ -289,7 +289,8 @@ class ChatController extends ChangeNotifier implements ChatPort {
           ChatHistory(
             history: history,
             loading: state.loading,
-            scope: scope,
+            initialLoading: state.loading && state.scope == null,
+            scope: '$scope:${state.scope?.identity ?? 'pending'}',
             scopeAsking: scopeAsking,
             searchWeb: searchWeb,
             answer: answer,

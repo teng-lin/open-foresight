@@ -253,7 +253,9 @@ final class ChatConversationModel extends ChangeNotifier {
     if (_disposed) return;
     final next = ChatConversationState(
       scope: _scope,
-      answers: _uncertain ? const [] : _answers,
+      // Prepared rows remain tied to their last verified scope for restoration.
+      // The view hides this preview while freshness cannot authorize display.
+      answers: _answers,
       loading: _uncertain,
       error: _error.isEmpty ? _historyError : _error,
     );

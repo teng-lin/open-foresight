@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/desktop.dart';
 import 'package:open_foresight/desktop_environment.dart';
+import 'package:open_foresight/generated_content.dart';
 import 'package:open_foresight/features/chat/chat_controller.dart';
 import 'package:open_foresight/features/chat/read_model.dart';
 import 'package:open_foresight/shell/ports.dart';
@@ -97,7 +98,10 @@ class _Connection implements DesktopConnection {
     yield* response.stream;
   }
 
+  bool _disposed = false;
   Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
     await response.close();
     await events.close();
     await store.close();
@@ -252,6 +256,140 @@ void main() {
     );
   });
 
+  testWidgets(
+    'held scope refresh preserves history scroll while hiding stale content',
+    (tester) async {
+      final semantics = tester.ensureSemantics();
+      try {
+        await tester.pumpWidget(
+          MaterialApp(home: Scaffold(body: controller.chat())),
+        );
+        await tester.pump();
+        await tester.pump();
+        connection.store.histories.single.add(
+          connection.store._result([
+            for (var i = 0; i < 40; i++)
+              SavedAnswer.fromRow({
+                'id': i,
+                'question': 'Saved question $i',
+                'body': 'Private saved answer $i',
+                'status': 'completed',
+                'citations': '[]',
+              }),
+          ]),
+        );
+        await tester.pump();
+        final list = find.byType(ListView);
+        final scrollable = find.descendant(
+          of: list,
+          matching: find.byType(Scrollable),
+        );
+        final scrollState = tester.state<ScrollableState>(scrollable);
+        scrollState.position.jumpTo(600);
+        await tester.pump();
+        expect(scrollState.position.pixels, greaterThan(0));
+
+        controller.setQuestion(null, 'Held question');
+        final work = controller.askQuestion();
+        await tester.pump();
+        connection.response.add('Private streaming answer');
+        await tester.pump();
+        expect(controller.answer, 'Private streaming answer');
+        final streaming = find.byWidgetPredicate(
+          (widget) =>
+              widget is GeneratedContent &&
+              widget.markdown == 'Private streaming answer',
+        );
+        await tester.scrollUntilVisible(streaming, 500, scrollable: scrollable);
+        final offset = scrollState.position.pixels;
+        expect(streaming.hitTestable(), findsOneWidget);
+        final focus = find.descendant(
+          of: list,
+          matching: find.byWidgetPredicate(
+            (widget) => widget is Focus && widget.focusNode != null,
+          ),
+        );
+        final focusNode = tester.widget<Focus>(focus.last).focusNode!;
+        focusNode.requestFocus();
+        await tester.pump();
+        expect(focusNode.hasFocus, isTrue);
+        connection.store.dataRevision = '2';
+        connection.events.add(null);
+        connection.response.add('Unverified next token');
+        await tester.pump();
+        expect(
+          find.byType(ListView),
+          findsOneWidget,
+          reason: 'A freshness wait retains the scroll/render subtree',
+        );
+        expect(tester.state<ScrollableState>(scrollable), same(scrollState));
+        expect(scrollState.position.pixels, offset);
+        expect(find.byType(CircularProgressIndicator), findsNothing);
+        expect(focusNode.hasFocus, isFalse);
+        expect(
+          find
+              .textContaining('Private saved answer', findRichText: true)
+              .hitTestable(),
+          findsNothing,
+        );
+        expect(streaming.hitTestable(), findsNothing);
+        final hiddenSemantics = tester
+            .binding
+            .renderViews
+            .single
+            .owner!
+            .semanticsOwner!
+            .rootSemanticsNode!
+            .toStringDeep();
+        expect(hiddenSemantics, isNot(contains('Private saved answer')));
+        expect(hiddenSemantics, isNot(contains('Private streaming answer')));
+        expect(controller.answer, 'Private streaming answer');
+
+        // An unrelated commit restores exactly the existing scroll state.
+        connection.store.settleScope();
+        await tester.pump();
+        expect(tester.state<ScrollableState>(scrollable), same(scrollState));
+        expect(scrollState.position.pixels, offset);
+        expect(controller.answer, 'Unverified next token');
+        expect(
+          find
+              .textContaining('Private saved answer', findRichText: true)
+              .hitTestable(),
+          findsWidgets,
+        );
+
+        // A real scope change cannot reveal either the old rows or stream.
+        connection.store.dataRevision = '3';
+        connection.store.scope = AnswerScopeSnapshot(mode: 'selected', ids: {});
+        connection.events.add(null);
+        await tester.pump();
+        expect(
+          find
+              .textContaining('Private saved answer', findRichText: true)
+              .hitTestable(),
+          findsNothing,
+        );
+        connection.store.settleScope();
+        await tester.pump();
+        await tester.pump();
+        expect(
+          find.textContaining('Private saved answer', findRichText: true),
+          findsNothing,
+        );
+        expect(find.text('Unverified next token'), findsNothing);
+        expect(controller.answer, isEmpty);
+        expect(scrollState.mounted, isFalse);
+        await connection.response.close();
+        await work;
+        await tester.pumpWidget(const SizedBox.shrink());
+      } finally {
+        semantics.dispose();
+        controller.dispose();
+        await tester.runAsync(connection.dispose);
+      }
+    },
+  );
+
   for (final changed in [false, true]) {
     test(
       'held scope verification ${changed ? 'rejects a changed scope' : 'keeps an unrelated commit alive'}',
@@ -293,6 +431,43 @@ void main() {
       },
     );
   }
+
+  test(
+    'session replacement clears retained history before any late result',
+    () async {
+      final model = ChatConversationModel(connection, null);
+      addTearDown(model.dispose);
+      model.start();
+      await _settle();
+      final oldHistoryIndex = connection.store.histories.length - 1;
+      final answer = SavedAnswer.fromRow({
+        'id': 1,
+        'question': 'Old owner question',
+        'body': 'Old owner private answer',
+        'status': 'completed',
+        'citations': '[]',
+      });
+      connection.store.histories[oldHistoryIndex].add(
+        connection.store._result([answer]),
+      );
+      expect(model.value.answers.single.body, 'Old owner private answer');
+      connection.store.dataRevision = '2';
+      connection.events.add(null);
+      expect(model.value.loading, isTrue);
+      expect(model.value.answers, hasLength(1));
+      connection.clientSessionGeneration = Object();
+      connection.events.add(null);
+      expect(model.value.answers, isEmpty);
+      expect(model.value.scope, isNull);
+      expect(model.value.loading, isTrue);
+      connection.store.histories[oldHistoryIndex].add(
+        connection.store._result([answer]),
+      );
+      await _settle();
+      expect(model.value.answers, isEmpty);
+      expect(model.value.loading, isFalse);
+    },
+  );
 
   test(
     'session replacement cancels temporary action validation subscriptions',
