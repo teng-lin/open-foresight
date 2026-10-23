@@ -22,6 +22,7 @@ extension _NoteWidgets on SourcesController {
       noteId = id;
       noteLoading = true;
       _acceptedNoteBody = null;
+      _noteBodyNeedsReview = false;
       _noteLoadError = '';
       if (resetEditor) {
         noteTitle.text = title;
@@ -47,7 +48,10 @@ extension _NoteWidgets on SourcesController {
       }
       setState(() {
         final savedBody = body.value ?? '';
-        if (!preserveBody && _noteDraftRevision == draftRevision) {
+        _noteBodyNeedsReview =
+            (preserveBody || _noteDraftRevision != draftRevision) &&
+            noteBody.text != savedBody;
+        if (!_noteBodyNeedsReview) {
           noteBody.text = savedBody;
           _noteBodyLoadRevision = _noteDraftRevision;
         }
@@ -93,6 +97,7 @@ extension _NoteWidgets on SourcesController {
                   noteId = null;
                   noteLoading = false;
                   _acceptedNoteBody = null;
+                  _noteBodyNeedsReview = false;
                   _noteLoadError = '';
                   noteBaseline = ('', '');
                   newNoteKey.reset();
@@ -127,11 +132,13 @@ extension _NoteWidgets on SourcesController {
             _noteLoadStatus(),
             TextField(
               controller: noteTitle,
+              readOnly: noteLoading || !noteBodyReady,
               decoration: const InputDecoration(labelText: 'Title'),
             ),
             Expanded(
               child: TextField(
                 controller: noteBody,
+                readOnly: noteLoading || !noteBodyReady,
                 maxLines: null,
                 expands: true,
                 decoration: const InputDecoration(
@@ -175,6 +182,7 @@ extension _NoteWidgets on SourcesController {
                             noteBaseline = (note['title']!, note['body']!);
                             _acceptedNoteBody = (id, noteEditorGeneration);
                             _noteLoadOwner = identity;
+                            _noteBodyNeedsReview = false;
                             _noteLoadError = '';
                             if (noteBody.text == note['body'])
                               _noteBodyLoadRevision = _noteDraftRevision;
@@ -228,6 +236,22 @@ extension _NoteWidgets on SourcesController {
     final id = noteId;
     if (id == null || noteLoading || noteBodyReady)
       return const SizedBox.shrink();
+    if (_noteBodyAcceptedCurrent && _noteBodyNeedsReview) {
+      final accepted = _acceptedNoteBody!;
+      return ListTile(
+        title: const Text(
+          'Review the saved note before replacing it with this draft.',
+        ),
+        trailing: TextButton(
+          onPressed: () => unawaited(
+            _reviewLoadedNote(
+              accepted,
+            ).catchError(_operations.reportAsyncError),
+          ),
+          child: const Text('Review saved note'),
+        ),
+      );
+    }
     final current = _noteLoadOwner?.isCurrent(d, alive: mounted) ?? false;
     return ListTile(
       title: Text(
@@ -249,5 +273,62 @@ extension _NoteWidgets on SourcesController {
         child: const Text('Retry loading note'),
       ),
     );
+  }
+
+  Future<void> _reviewLoadedNote((int, int) accepted) async {
+    if (!mounted ||
+        !_noteBodyAcceptedCurrent ||
+        !_noteBodyNeedsReview ||
+        accepted != _acceptedNoteBody)
+      return;
+    final owner = FeatureRequestIdentity.capture(d);
+    final saved = noteBaseline;
+    final useSaved = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Saved note'),
+        content: SizedBox(
+          width: 600,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(saved.$1),
+                const SizedBox(height: 12),
+                SelectableText(saved.$2),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Use saved note'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Keep my draft'),
+          ),
+        ],
+      ),
+    );
+    if (useSaved == null ||
+        !owner.isCurrent(d, alive: mounted) ||
+        accepted != _acceptedNoteBody ||
+        !_noteBodyNeedsReview)
+      return;
+    setState(() {
+      if (useSaved) {
+        noteTitle.text = saved.$1;
+        noteBody.text = saved.$2;
+        _noteBodyLoadRevision = _noteDraftRevision;
+      }
+      _noteBodyNeedsReview = false;
+    });
   }
 }

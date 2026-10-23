@@ -393,6 +393,13 @@ void main() {
       connection.store.complete(1, 'Persisted body');
       if (reselected != null) await reselected;
       await tester.pumpAndSettle();
+      expect(controller.noteBodyReady, isFalse);
+      expect(connection.writes, isEmpty);
+      await tester.tap(find.text('Review saved note'));
+      await tester.pumpAndSettle();
+      expect(find.text('Persisted body'), findsOneWidget);
+      await tester.tap(find.text('Keep my draft'));
+      await tester.pumpAndSettle();
       expect(controller.noteBodyReady, isTrue);
       expect(controller.noteBody.text, 'Draft after failure');
       expect(controller.noteTitle.text, 'Draft title');
@@ -573,4 +580,119 @@ void main() {
       expect(connection.writes, isEmpty);
     },
   );
+  testWidgets(
+    'slow successful note load shows its saved body before any replacement',
+    (tester) async {
+      final opening = controller.openNote(note(8));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: StatefulBuilder(
+            builder: (context, rebuild) {
+              host.context = context;
+              host.rebuild = rebuild;
+              return Scaffold(body: controller.notes());
+            },
+          ),
+        ),
+      );
+      await tester.pump();
+      final title = find.widgetWithText(TextField, 'Title');
+      final body = find.widgetWithText(TextField, 'Your editable note');
+      final titleWasReadOnly = tester.widget<TextField>(title).readOnly;
+      final bodyWasReadOnly = tester.widget<TextField>(body).readOnly;
+      await tester.tap(body);
+      if (tester.testTextInput.hasAnyClients) {
+        tester.testTextInput.enterText('x');
+        await tester.pump();
+      }
+      connection.store.complete(0, 'Previously saved body');
+      await opening;
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save note'));
+      await tester.pumpAndSettle();
+      expect(connection.writes.single['body'], 'Previously saved body');
+      expect(titleWasReadOnly, isTrue);
+      expect(bodyWasReadOnly, isTrue);
+      expect(tester.widget<TextField>(body).readOnly, isFalse);
+    },
+  );
+  test(
+    'selection-only controller notifications do not hide a loaded body',
+    () async {
+      final opening = controller.openNote(note(8));
+      controller.noteBody.selection = const TextSelection.collapsed(offset: 0);
+      connection.store.complete(0, 'Saved body after selection');
+      await opening;
+      expect(controller.noteBody.text, 'Saved body after selection');
+      expect(controller.noteBodyReady, isTrue);
+    },
+  );
+
+  for (final boundary in ['use saved', 'session', 'selection', 'disposal']) {
+    testWidgets('diverged draft review respects $boundary', (tester) async {
+      final opening = controller.openNote(note(8));
+      controller.noteBody.text = 'Retained draft';
+      connection.store.complete(0, 'Saved body to review');
+      await opening;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: StatefulBuilder(
+            builder: (context, rebuild) {
+              host.context = context;
+              host.rebuild = rebuild;
+              return Scaffold(body: controller.notes());
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(controller.noteBodyReady, isFalse);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.widgetWithText(FilledButton, 'Save note'),
+            )
+            .onPressed,
+        isNull,
+      );
+      final review = tester
+          .widget<TextButton>(
+            find.widgetWithText(TextButton, 'Review saved note'),
+          )
+          .onPressed!;
+      review();
+      await tester.pumpAndSettle();
+      expect(find.text('Saved body to review'), findsOneWidget);
+      if (boundary == 'session') {
+        connection.clientSessionGeneration = Object();
+      } else if (boundary == 'selection') {
+        final selecting = controller.openNote(note(9));
+        connection.store.complete(1, 'Another note body');
+        await selecting;
+      } else if (boundary == 'disposal') {
+        host.mounted = false;
+      }
+      await tester.tap(
+        find.text(boundary == 'use saved' ? 'Use saved note' : 'Keep my draft'),
+      );
+      await tester.pumpAndSettle();
+      expect(connection.writes, isEmpty);
+      if (boundary == 'use saved') {
+        expect(controller.noteBody.text, 'Saved body to review');
+        expect(controller.noteBodyReady, isTrue);
+      } else if (boundary == 'selection') {
+        expect(controller.noteBody.text, 'Another note body');
+        expect(controller.noteId, 9);
+        expect(controller.noteBodyReady, isTrue);
+        review();
+        await tester.pumpAndSettle();
+        expect(find.byType(AlertDialog), findsNothing);
+      } else {
+        expect(controller.noteBody.text, 'Retained draft');
+        expect(controller.noteBodyReady, isFalse);
+      }
+      controller.dispose();
+      await tester.pumpWidget(const SizedBox());
+    });
+  }
 }

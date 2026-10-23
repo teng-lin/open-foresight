@@ -126,7 +126,12 @@ class SourcesController implements SourceCommands {
   void initializeGraph() {
     _reads.start();
     _host.serviceUiRevision.addListener(_coarseServiceChanged);
-    noteBody.addListener(() => _noteDraftRevision++);
+    var lastNoteText = noteBody.text;
+    noteBody.addListener(() {
+      if (lastNoteText == noteBody.text) return;
+      lastNoteText = noteBody.text;
+      _noteDraftRevision++;
+    });
     graphMotionTicker = _host.vsync.createTicker(tickGraphMotion);
     graphCameraController = AnimationController(vsync: _host.vsync);
     graphCameraController.addListener(() {
@@ -344,11 +349,12 @@ class SourcesController implements SourceCommands {
   int _noteDraftRevision = 0, _noteBodyLoadRevision = 0;
   (int, int)? _acceptedNoteBody;
   String _noteLoadError = '';
-  bool noteLoading = false;
+  bool noteLoading = false, _noteBodyNeedsReview = false;
+  bool get _noteBodyAcceptedCurrent =>
+      _acceptedNoteBody == (noteId, noteEditorGeneration) &&
+      (_noteLoadOwner?.isCurrent(d, alive: mounted) ?? false);
   bool get noteBodyReady =>
-      noteId == null ||
-      (_acceptedNoteBody == (noteId, noteEditorGeneration) &&
-          (_noteLoadOwner?.isCurrent(d, alive: mounted) ?? false));
+      noteId == null || (_noteBodyAcceptedCurrent && !_noteBodyNeedsReview);
   Future<void> openNote(NoteSummary note) => _featureOpenNote(note);
 
   void showSource(String id) => _featureShowSource(id);
