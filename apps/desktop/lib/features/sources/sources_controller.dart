@@ -8,14 +8,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:foresight_core/desktop.dart';
-import '../../desktop_reader_adapters.dart';
+import 'read_model.dart';
+import 'typed_graph.dart';
 import '../../desktop_visuals.dart';
 import '../../feature_request_identity.dart';
 import '../../service_edit_dialog.dart';
 import '../../presentation/workspace_presentation.dart';
 import '../../shell/ports.dart';
 import '../../shell/workspace_tab.dart';
-import 'background_store.dart';
 import 'file_discovery_sheet.dart';
 import 'graph_label_controls.dart';
 import 'graph_rendering.dart';
@@ -47,11 +47,40 @@ class SourcesController implements SourceCommands {
   final WorkspaceDialogs _dialogs;
   final IntegrationsPort integrationFeature;
   bool _disposed = false;
+  late final SourcesReadModel _reads = SourcesReadModel(
+    connection: () => d,
+    changed: () {
+      if (!mounted) return;
+      update(() {});
+    },
+  );
+  List<SourceSummary> _graphRows = const [];
+
+  void _prepareGraphScene() {
+    if (!graphView) return;
+    final all = _reads.sources;
+    scheduleGraphLayout(all);
+    _graphRows = typedGraphSceneSources(all, graphSceneVectors);
+    final ids = _graphRows.map((s) => s.id).toList()..sort();
+    final fallback = uniformGraphLayout(ids);
+    graphWorldPoints = {
+      for (final id in ids)
+        id: graphWorldPoint(
+          graphPoints[id] ?? fallback[id]!,
+          uniform: !graphPoints.containsKey(id),
+        ),
+    };
+  }
+
   DesktopConnection get d => _host.connection;
   bool get mounted => !_disposed && _host.mounted;
   BuildContext get context => _host.context;
   void update(VoidCallback action) {
-    if (mounted) _host.update(action);
+    if (mounted)
+      _host.update(() {
+        action();
+        _prepareGraphScene();
+      });
   }
 
   void setState(VoidCallback action) => update(action);
@@ -75,6 +104,9 @@ class SourcesController implements SourceCommands {
   String timeLabel(Object? stamp) => workspaceTimeLabel(stamp);
 
   void initializeGraph() {
+    _reads.start();
+    _host.serviceUiRevision.addListener(_coarseServiceChanged);
+    noteBody.addListener(() => _noteDraftRevision++);
     graphMotionTicker = _host.vsync.createTicker(tickGraphMotion);
     graphCameraController = AnimationController(vsync: _host.vsync);
     graphCameraController.addListener(() {
@@ -90,6 +122,8 @@ class SourcesController implements SourceCommands {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    unawaited(_reads.dispose());
+    _host.serviceUiRevision.removeListener(_coarseServiceChanged);
     graphMotionTicker.dispose();
     graphCameraController.dispose();
     graphMotionFrames.dispose();
@@ -111,13 +145,33 @@ class SourcesController implements SourceCommands {
   /// The note editor's text as last loaded or saved.
   (String, String) noteBaseline = ('', '');
 
-  bool graphView = false;
+  bool _graphView = false;
+  bool get graphView => _graphView;
+  set graphView(bool value) {
+    _graphView = value;
+    if (value) _queueGraphScene();
+  }
+
+  bool _sceneQueued = false;
+  void _queueGraphScene() {
+    if (_sceneQueued || _disposed) return;
+    _sceneQueued = true;
+    scheduleMicrotask(() {
+      _sceneQueued = false;
+      if (mounted) _prepareGraphScene();
+    });
+  }
 
   bool gridView = false;
 
   bool ascending = true;
 
-  String sourceQuery = '';
+  String _sourceQuery = '';
+  String get sourceQuery => _sourceQuery;
+  set sourceQuery(String value) {
+    _sourceQuery = value;
+    _reads.search(value);
+  }
 
   String labelFilter = '';
 
@@ -201,12 +255,16 @@ class SourcesController implements SourceCommands {
 
   bool graphModalOpen = false;
 
+  void _coarseServiceChanged() {
+    if (graphView) _queueGraphScene();
+  }
+
   void syncGraphMotion() {
     final enabled =
         mounted &&
         _navigation.selectedTab == WorkspaceTab.sources &&
         graphView &&
-        readRows(d.store.sourceSummaries).isNotEmpty &&
+        _reads.sources.isNotEmpty &&
         !graphAnimationPaused &&
         graphMousePointer == null &&
         !graphModalOpen &&
@@ -360,17 +418,70 @@ class SourcesController implements SourceCommands {
     text.dispose();
   }
 
+  int _noteDraftRevision = 0;
+  bool noteLoading = false;
+  Future<void> openNote(NoteSummary note) async {
+    final owner = FeatureRequestIdentity.capture(d);
+    final generation = ++noteEditorGeneration;
+    setState(() {
+      newNoteKey.reset();
+      noteId = note.id;
+      noteLoading = true;
+      noteTitle.text = note.title;
+      noteBody.clear();
+      noteBaseline = (note.title, '');
+    });
+    final draftRevision = _noteDraftRevision;
+    bool current() =>
+        owner.isCurrent(d, alive: mounted) &&
+        generation == noteEditorGeneration &&
+        noteId == note.id;
+    try {
+      final body = await d.store.read(StoreReadQueries.noteBody(note.id));
+      if (!current()) return;
+      if (body.error != null) throw body.error!;
+      if (!body.current) {
+        throw RpcError(
+          RpcErrorCode.unavailable,
+          'Note is refreshing; try again.',
+        );
+      }
+      setState(() {
+        final savedBody = body.value ?? '';
+        if (_noteDraftRevision == draftRevision) noteBody.text = savedBody;
+        noteBaseline = (note.title, savedBody);
+      });
+    } catch (_) {
+      if (current()) rethrow;
+    } finally {
+      if (current()) setState(() => noteLoading = false);
+    }
+  }
+
+  void showSource(String id) {
+    final owner = FeatureRequestIdentity.capture(d);
+    unawaited(
+      sourceById(id).catchError((Object error) {
+        if (owner.isCurrent(d, alive: mounted))
+          _operations.reportAsyncError(error);
+        return false;
+      }),
+    );
+  }
+
   Widget notes() => Row(
     children: [
       SizedBox(
         width: 260,
         child: Column(
           children: [
+            if (_reads.problem != null) Text(_reads.problem!),
             FilledButton(
               onPressed: () {
                 setState(() {
                   noteEditorGeneration++;
                   noteId = null;
+                  noteLoading = false;
                   noteBaseline = ('', '');
                   newNoteKey.reset();
                   noteTitle.clear();
@@ -381,20 +492,14 @@ class SourcesController implements SourceCommands {
             ),
             Expanded(
               child: ListView(
-                children: readRows(d.store.noteSummaries)
+                children: _reads.notes
                     .map(
                       (n) => ListTile(
-                        title: Text(n['title'] as String),
-                        subtitle: Text('Revision ${n['revision']}'),
-                        onTap: () => setState(() {
-                          // Opening a note abandons an unconfirmed new one.
-                          newNoteKey.reset();
-                          noteEditorGeneration++;
-                          noteId = n['id'] as int;
-                          noteTitle.text = n['title'] as String;
-                          noteBody.text = d.store.noteBody(n['id'] as int);
-                          noteBaseline = (noteTitle.text, noteBody.text);
-                        }),
+                        title: Text(n.title),
+                        subtitle: Text('Revision ${n.revision}'),
+                        onTap: () => unawaited(
+                          openNote(n).catchError(_operations.reportAsyncError),
+                        ),
                       ),
                     )
                     .toList(),
@@ -423,60 +528,68 @@ class SourcesController implements SourceCommands {
               ),
             ),
             FilledButton(
-              onPressed: () => _operations.run(() async {
-                // Every send names the workspace this save began in, and a
-                // reply that arrives after a reset is not shown: it names an
-                // ID the views have dropped.
-                final epoch = d.workspaceEpoch;
-                final identity = FeatureRequestIdentity.capture(d);
-                var originalId = noteId;
-                final editorGeneration = noteEditorGeneration;
-                bool current() =>
-                    identity.isCurrent(d, alive: mounted) &&
-                    noteId == originalId &&
-                    noteEditorGeneration == editorGeneration;
-                Map<String, dynamic> scoped(Map<String, dynamic> args) => {
-                  ...args,
-                  if (epoch != null) 'workspace_epoch': epoch,
-                };
-                final note = {'title': noteTitle.text, 'body': noteBody.text};
-                void saved(int id) => setState(() {
-                  noteId = id;
-                  noteBaseline = (note['title']!, note['body']!);
-                });
-                final id = noteId;
-                if (id != null) {
-                  await d.command(
-                    Operation.notesSave,
-                    scoped({...note, 'id': id}),
-                  );
-                  if (current()) saved(id);
-                  return;
-                }
-                final created =
-                    await newNoteKey.run(
-                          note,
-                          (keyed) =>
-                              d.command(Operation.notesSave, scoped(keyed)),
-                          // Edited after an unconfirmed save: the first save
-                          // is now known, so the edit updates that note.
-                          amend: (first, edited) async {
-                            final id = (first as Map)['id'] as int;
-                            if (current()) {
-                              setState(() {
-                                originalId = id;
-                                noteId = id;
-                              });
-                            }
-                            return d.command(
-                              Operation.notesSave,
-                              scoped({...edited, 'id': id}),
-                            );
-                          },
-                        )
-                        as Map;
-                if (current()) saved(created['id'] as int);
-              }),
+              onPressed: noteLoading
+                  ? null
+                  : () => _operations.run(() async {
+                      // Every send names the workspace this save began in, and a
+                      // reply that arrives after a reset is not shown: it names an
+                      // ID the views have dropped.
+                      final epoch = d.workspaceEpoch;
+                      final identity = FeatureRequestIdentity.capture(d);
+                      var originalId = noteId;
+                      final editorGeneration = noteEditorGeneration;
+                      bool current() =>
+                          identity.isCurrent(d, alive: mounted) &&
+                          noteId == originalId &&
+                          noteEditorGeneration == editorGeneration;
+                      Map<String, dynamic> scoped(Map<String, dynamic> args) =>
+                          {
+                            ...args,
+                            if (epoch != null) 'workspace_epoch': epoch,
+                          };
+                      final note = {
+                        'title': noteTitle.text,
+                        'body': noteBody.text,
+                      };
+                      void saved(int id) => setState(() {
+                        noteId = id;
+                        noteBaseline = (note['title']!, note['body']!);
+                      });
+                      final id = noteId;
+                      if (id != null) {
+                        await d.command(
+                          Operation.notesSave,
+                          scoped({...note, 'id': id}),
+                        );
+                        if (current()) saved(id);
+                        return;
+                      }
+                      final created =
+                          await newNoteKey.run(
+                                note,
+                                (keyed) => d.command(
+                                  Operation.notesSave,
+                                  scoped(keyed),
+                                ),
+                                // Edited after an unconfirmed save: the first save
+                                // is now known, so the edit updates that note.
+                                amend: (first, edited) async {
+                                  final id = (first as Map)['id'] as int;
+                                  if (current()) {
+                                    setState(() {
+                                      originalId = id;
+                                      noteId = id;
+                                    });
+                                  }
+                                  return d.command(
+                                    Operation.notesSave,
+                                    scoped({...edited, 'id': id}),
+                                  );
+                                },
+                              )
+                              as Map;
+                      if (current()) saved(created['id'] as int);
+                    }),
               child: const Text('Save note'),
             ),
           ],
@@ -492,8 +605,8 @@ class SourcesController implements SourceCommands {
 
   Future<void> findFilesOnComputer({List<String>? roots}) async {
     final excluded = <String>{};
-    for (final row in readRows(d.store.sourceSummaries)) {
-      final uri = Uri.tryParse(row['source_uri'] as String? ?? '');
+    for (final row in _reads.sources) {
+      final uri = Uri.tryParse(row.sourceUri ?? '');
       if (uri == null || uri.scheme != 'file' || !allowedSourceUri(uri))
         continue;
       try {
@@ -631,8 +744,7 @@ class SourcesController implements SourceCommands {
     });
   }
 
-  List<String> sourceLabels(Map<String, Object?> s) =>
-      (jsonDecode(s['labels'] as String? ?? '[]') as List).cast<String>();
+  List<String> sourceLabels(SourceSummary s) => s.labels;
 
   Future<void> putDocumentLabel(DocumentLabel label) async {
     await d.command(Operation.labelsPut, {
@@ -646,7 +758,7 @@ class SourcesController implements SourceCommands {
 
   Future<bool> saveGraphLayout(
     String identity,
-    List<Map<String, Object?>> sources,
+    List<SourceSummary> sources,
     Map<String, List<double>> vectors,
     Map<String, GraphPoint> points, {
     String? labelSet,
@@ -654,7 +766,7 @@ class SourcesController implements SourceCommands {
   }) async {
     return await d.command(Operation.graphSave, {
           'identity': identity,
-          'sources': sources,
+          'sources': graphSourceArguments(sources),
           'vectors': vectors,
           'points': points.map((k, v) => MapEntry(k, [v.x, v.y, v.z])),
           'labelSet': labelSet,
@@ -680,7 +792,7 @@ class SourcesController implements SourceCommands {
         id,
         name,
         'user_defined',
-        allocateGraphLabelColor(name, d.store.documentLabels),
+        allocateGraphLabelColor(name, _reads.labels),
       ),
     );
     graphLabelInput.clear();
@@ -688,9 +800,7 @@ class SourcesController implements SourceCommands {
   }
 
   Future<void> removeSelectedGraphLabel(String id, String name) async {
-    final source = readRows(
-      d.store.sourceSummaries,
-    ).where((row) => row['id'] == id).single;
+    final source = _reads.sources.where((row) => row.id == id).single;
     await d.command(Operation.labelsSet, {
       'id': id,
       'labels': sourceLabels(source).where((label) => label != name).toList(),
@@ -783,7 +893,7 @@ class SourcesController implements SourceCommands {
     }
   }
 
-  Future<void> editLabels(Map<String, Object?>? s) async {
+  Future<void> editLabels(SourceSummary? s) async {
     // The sources belong to the workspace of the rows on screen.
     if (!_dialogs.rowsAreCurrent()) return;
     final epoch = d.workspaceEpoch;
@@ -792,9 +902,7 @@ class SourcesController implements SourceCommands {
     );
     final ok = await _dialogs.showInputDialog<bool>(
       builder: (context) => AlertDialog(
-        title: Text(
-          s == null ? 'Add label to sources' : 'Labels · ${s['title']}',
-        ),
+        title: Text(s == null ? 'Add label to sources' : 'Labels · ${s.title}'),
         content: TextField(
           controller: input,
           decoration: const InputDecoration(hintText: 'Comma-separated labels'),
@@ -821,7 +929,7 @@ class SourcesController implements SourceCommands {
     if (ok != true || !mounted) return;
     for (final row in s == null ? filteredSources() : [s]) {
       await d.command(Operation.labelsSet, {
-        'id': row['id'],
+        'id': row.id,
         'labels': s == null
             ? {...sourceLabels(row), ...values}.toList()
             : values,
@@ -831,12 +939,10 @@ class SourcesController implements SourceCommands {
     if (mounted) update(() {});
   }
 
-  Map<String, String> driveSourceMimes() => d.store.googleSourceMimes;
+  Map<String, String> driveSourceMimes() => _reads.originalMimes;
 
-  SourceType typeOf(
-    Map<String, Object?> source,
-    Map<String, String> originals,
-  ) => sourceType(source, originalMime: originals[source['id']]);
+  SourceType typeOf(SourceSummary source, Map<String, String> originals) =>
+      typedSourceType(source, originalMime: originals[source.id]);
 
   String typeName(SourceType type) => switch (type) {
     SourceType.pdf => 'PDF',
@@ -862,44 +968,25 @@ class SourcesController implements SourceCommands {
     SourceType.other => Icons.insert_drive_file_outlined,
   };
 
-  List<Map<String, Object?>> filteredSources([
-    List<Map<String, Object?>>? collection,
+  List<SourceSummary> filteredSources([
+    List<SourceSummary>? collection,
     Map<String, String>? originalMimes,
   ]) {
     final originals = originalMimes ?? driveSourceMimes();
-    Set<String>? searchMatches;
-    if (sourceQuery.isNotEmpty) {
-      final key = jsonEncode([sourceQuery, d.store.dataRevision]);
-      if (key != sourceSearchCacheKey) {
-        sourceSearchCacheKey = key;
-        sourceSearchMatches = {
-          for (final source in collection ?? readRows(d.store.sourceSummaries))
-            if ((source['title'] as String).toLowerCase().contains(
-              sourceQuery.toLowerCase(),
-            ))
-              source['id'] as String,
-        };
-        final reader = d.store;
-        final query = sourceQuery.toLowerCase();
-        unawaited(
-          searchSourceIds(reader, query).then(
-            (matches) {
-              if (mounted && sourceSearchCacheKey == key)
-                update(() => sourceSearchMatches = matches);
-            },
-            onError: (Object error) {
-              if (mounted && sourceSearchCacheKey == key)
-                _operations.reportAsyncError(error);
-            },
-          ),
-        );
-      }
-      searchMatches = sourceSearchMatches;
-    }
-    final rows = (collection ?? readRows(d.store.sourceSummaries))
+    final searchMatches = sourceQuery.isEmpty
+        ? null
+        : _reads.searchMatches ??
+              {
+                for (final source in collection ?? _reads.sources)
+                  if (source.title.toLowerCase().contains(
+                    sourceQuery.toLowerCase(),
+                  ))
+                    source.id,
+              };
+    final rows = (collection ?? _reads.sources)
         .where(
           (s) =>
-              (searchMatches == null || searchMatches.contains(s['id'])) &&
+              (searchMatches == null || searchMatches.contains(s.id)) &&
               (labelFilter.isEmpty || sourceLabels(s).contains(labelFilter)) &&
               (typeFilter == null || typeOf(s, originals) == typeFilter),
         )
@@ -907,9 +994,7 @@ class SourcesController implements SourceCommands {
     rows.sort(
       (a, b) =>
           (ascending ? 1 : -1) *
-          (a['title'] as String).toLowerCase().compareTo(
-            (b['title'] as String).toLowerCase(),
-          ),
+          (a.title).toLowerCase().compareTo((b.title).toLowerCase()),
     );
     return rows;
   }
@@ -922,17 +1007,17 @@ class SourcesController implements SourceCommands {
     _ => const Color(0xff4083df),
   };
 
-  IconData sourceIcon(Map<String, Object?> source, {String? originalMime}) =>
-      typeIcon(sourceType(source, originalMime: originalMime));
+  IconData sourceIcon(SourceSummary source, {String? originalMime}) =>
+      typeIcon(typedSourceType(source, originalMime: originalMime));
 
   Widget sources() {
-    final all = readRows(d.store.sourceSummaries);
+    final all = _reads.sources;
     final originals = driveSourceMimes();
     final rows = filteredSources(all, originals);
-    final labelRecords = d.store.documentLabels;
-    final clusters = readRows(
-      d.store.documentClusters,
-    ).map(GraphCluster.fromRow).toList();
+    final labelRecords = _reads.labels;
+    final clusters = _reads.clusters
+        .map((c) => GraphCluster(c.label, GraphPoint(c.x, c.y, 0), c.radius))
+        .toList();
     final fallbackLabelColor = Theme.of(context).colorScheme.primary;
     final documentLabelRecords = <String, List<DocumentLabel>>{};
     final documentLabelColors = <String, List<Color>>{};
@@ -947,20 +1032,7 @@ class SourcesController implements SourceCommands {
     // Vsync frames below reuse this snapshot and only project the points.
     graphSceneClusters = clusters;
     graphSceneLabels = documentLabelRecords;
-    if (graphView) scheduleGraphLayout(all);
-    final graphRows = graphView
-        ? graphSceneSources(all, graphSceneVectors)
-        : <Map<String, Object?>>[];
-    final graphIds = graphRows.map((source) => source['id'] as String).toList()
-      ..sort();
-    final graphFallback = uniformGraphLayout(graphIds);
-    graphWorldPoints = {
-      for (final id in graphIds)
-        id: graphWorldPoint(
-          graphPoints[id] ?? graphFallback[id]!,
-          uniform: !graphPoints.containsKey(id),
-        ),
-    };
+    final graphRows = _graphRows;
     final counts = <SourceType, int>{};
     for (final source in all) {
       final type = typeOf(source, originals);
@@ -968,7 +1040,7 @@ class SourcesController implements SourceCommands {
     }
     final labels = {
       ...all.expand(sourceLabels),
-      ...d.store.documentClusterNames,
+      ..._reads.clusterNames,
       if (labelFilter.isNotEmpty) labelFilter,
     }.toList()..sort();
     return Column(
@@ -982,6 +1054,7 @@ class SourcesController implements SourceCommands {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (_reads.problem != null) Text(_reads.problem!),
                 heading(
                   'Knowledge Sources',
                   actions: [
@@ -1210,7 +1283,7 @@ class SourcesController implements SourceCommands {
                   builder: (_, constraints) {
                     final filters = <Widget>[
                       Text(
-                        '${all.length} sources identified, ${all.where((s) => s['state'] == 'indexed').length} indexed',
+                        '${all.length} sources identified, ${all.where((s) => s.state == 'indexed').length} indexed',
                         style: const TextStyle(
                           fontSize: 14,
                           color: Color(0xff83898e),
@@ -1389,7 +1462,7 @@ class SourcesController implements SourceCommands {
                       itemBuilder: (_, i) => Card(
                         child: sourceTile(
                           rows[i],
-                          originalMime: originals[rows[i]['id']],
+                          originalMime: originals[rows[i].id],
                         ),
                       ),
                     )
@@ -1404,10 +1477,10 @@ class SourcesController implements SourceCommands {
                         if (index == 1) return const Divider(height: 1);
                         final source = rows[index - 2];
                         return KeyedSubtree(
-                          key: ValueKey(source['id']),
+                          key: ValueKey(source.id),
                           child: sourceTile(
                             source,
-                            originalMime: originals[source['id']],
+                            originalMime: originals[source.id],
                           ),
                         );
                       },
@@ -1422,7 +1495,7 @@ class SourcesController implements SourceCommands {
   String sourceTimeLabel(Object? stamp) =>
       stamp == null || stamp == 0 ? '--' : timeLabel(stamp);
 
-  Widget sourceCells(Map<String, Object?>? source, {String? originalMime}) {
+  Widget sourceCells(SourceSummary? source, {String? originalMime}) {
     final header = source == null;
     final wide = MediaQuery.sizeOf(context).width > 950;
     final textStyle = TextStyle(
@@ -1448,7 +1521,7 @@ class SourcesController implements SourceCommands {
                     sourceIcon(source, originalMime: originalMime),
                     size: 20,
                     color: sourceColor(
-                      sourceType(source, originalMime: originalMime),
+                      typedSourceType(source, originalMime: originalMime),
                     ),
                   ),
                 ),
@@ -1462,19 +1535,19 @@ class SourcesController implements SourceCommands {
                 )
               : Padding(
                   padding: const EdgeInsets.only(right: 16),
-                  child: cell(source['title'] as String),
+                  child: cell(source.title),
                 ),
         ),
         if (wide) ...[
           Expanded(
             child: cell(
-              header ? 'Imported' : sourceTimeLabel(source['imported']),
+              header ? 'Imported' : sourceTimeLabel(source.imported),
               color: const Color(0xff999999),
             ),
           ),
           Expanded(
             child: cell(
-              header ? 'Last changed' : sourceTimeLabel(source['changed']),
+              header ? 'Last changed' : sourceTimeLabel(source.changed),
               color: const Color(0xff999999),
             ),
           ),
@@ -1508,9 +1581,7 @@ class SourcesController implements SourceCommands {
                         tooltip: 'Index / retry',
                         onPressed: _operations.busy
                             ? null
-                            : () => _operations.run(
-                                () => d.index(source['id'] as String),
-                              ),
+                            : () => _operations.run(() => d.index(source.id)),
                         visualDensity: VisualDensity.compact,
                         icon: const Icon(Icons.refresh, size: 20),
                       ),
@@ -1521,9 +1592,7 @@ class SourcesController implements SourceCommands {
                         tooltip: 'Delete source',
                         onPressed: _operations.busy
                             ? null
-                            : () => _operations.run(
-                                () => d.delete(source['id'] as String),
-                              ),
+                            : () => _operations.run(() => d.delete(source.id)),
                         visualDensity: VisualDensity.compact,
                         icon: const Icon(Icons.delete_outline, size: 20),
                       ),
@@ -1535,13 +1604,13 @@ class SourcesController implements SourceCommands {
     );
   }
 
-  Widget sourceTile(Map<String, Object?> source, {String? originalMime}) {
+  Widget sourceTile(SourceSummary source, {String? originalMime}) {
     if (gridView) return sourceCardTile(source, originalMime: originalMime);
-    final showState = source['state'] != 'indexed' || source['error'] != '';
+    final showState = source.state != 'indexed' || source.error != '';
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        onTap: () => this.source(source),
+        onTap: () => showSource(source.id),
         child: Padding(
           padding: DesktopVisuals.sourceRowPadding,
           child: Column(
@@ -1552,7 +1621,7 @@ class SourcesController implements SourceCommands {
                 Padding(
                   padding: const EdgeInsets.only(left: 40),
                   child: Text(
-                    '${source['state']}${source['error'] == '' ? '' : ' · ${source['error']}'}',
+                    '${source.state}${source.error == '' ? '' : ' · ${source.error}'}',
                   ),
                 ),
             ],
@@ -1562,30 +1631,23 @@ class SourcesController implements SourceCommands {
     );
   }
 
-  Widget sourceCardTile(
-    Map<String, Object?> s, {
-    String? originalMime,
-  }) => ListTile(
+  Widget sourceCardTile(SourceSummary s, {String? originalMime}) => ListTile(
     leading: Icon(
       sourceIcon(s, originalMime: originalMime),
-      color: sourceColor(sourceType(s, originalMime: originalMime)),
+      color: sourceColor(typedSourceType(s, originalMime: originalMime)),
     ),
     title: Row(
       children: [
         Expanded(
           flex: 3,
-          child: Text(
-            s['title'] as String,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-          ),
+          child: Text(s.title, maxLines: 2, overflow: TextOverflow.ellipsis),
         ),
       ],
     ),
     subtitle: Text(
-      '${s['state']}${sourceLabels(s).isEmpty ? '' : ' · ${sourceLabels(s).join(', ')}'}${s['error'] == '' ? '' : ' · ${s['error']}'}',
+      '${s.state}${sourceLabels(s).isEmpty ? '' : ' · ${sourceLabels(s).join(', ')}'}${s.error == '' ? '' : ' · ${s.error}'}',
     ),
-    onTap: () => source(s),
+    onTap: () => showSource(s.id),
     trailing: Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -1598,14 +1660,14 @@ class SourcesController implements SourceCommands {
           tooltip: 'Index / retry',
           onPressed: _operations.busy
               ? null
-              : () => _operations.run(() => d.index(s['id'] as String)),
+              : () => _operations.run(() => d.index(s.id)),
           icon: const Icon(Icons.refresh, size: 20),
         ),
         IconButton(
           tooltip: 'Delete source',
           onPressed: _operations.busy
               ? null
-              : () => _operations.run(() => d.delete(s['id'] as String)),
+              : () => _operations.run(() => d.delete(s.id)),
           icon: const Icon(Icons.delete_outline, size: 20),
         ),
       ],
@@ -1642,25 +1704,23 @@ class SourcesController implements SourceCommands {
     });
   }
 
-  void scheduleGraphLayout(List<Map<String, Object?>> all) {
+  void scheduleGraphLayout(List<SourceSummary> all) {
     final selected = graphSelectedDocument;
-    if (selected != null && !all.any((row) => row['id'] == selected)) {
+    if (selected != null && !all.any((row) => row.id == selected)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted &&
             graphSelectedDocument == selected &&
-            !readRows(
-              d.store.sourceSummaries,
-            ).any((row) => row['id'] == selected)) {
+            !_reads.sources.any((row) => row.id == selected)) {
           selectGraphDocument(null);
         }
       });
     }
-    final labelSet = d.store.graphLabelSet();
-    final labelRecords = d.store.documentLabels;
+    final labelSet = _reads.labelSet;
+    final labelRecords = _reads.labels;
     final forceLabels = <String, List<String>>{};
     final forceNames = <String>{};
     for (final source in all) {
-      final id = source['id'] as String;
+      final id = source.id;
       forceLabels[id] = labelRecords
           .where((label) => label.documentId == id)
           .map((label) => label.name)
@@ -1678,15 +1738,13 @@ class SourcesController implements SourceCommands {
     );
     final snapshot = d.helper.snapshot;
     if (snapshot?.pipeline != 'ready') {
-      var sources = all
-          .where((s) => (s['title'] as String? ?? '').trim().isNotEmpty)
-          .toList();
-      final registered = d.store.registeredEmbedding();
+      var sources = all.where((s) => s.title.trim().isNotEmpty).toList();
+      final registered = _reads.embedding;
       final key = jsonEncode([
         'cached',
         snapshot?.pipeline,
-        registered.firstOrNull?['digest'],
-        graphDocumentSet(sources),
+        registered?.digest,
+        typedGraphDocumentSet(sources),
         labelSet,
         graphOrganizationRevision,
       ]);
@@ -1700,16 +1758,14 @@ class SourcesController implements SourceCommands {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (!current()) return;
         try {
-          var saved = await d.store.loadRegisteredGraphLayout(
+          var saved = await readGraphLayout(
+            d.store,
             sources,
             labelSet: labelSet,
           );
           if (!current()) return;
-          sources = graphSceneSources(sources, saved.vectors);
-          saved = await d.store.loadRegisteredGraphLayout(
-            sources,
-            labelSet: labelSet,
-          );
+          sources = typedGraphSceneSources(sources, saved.vectors);
+          saved = await readGraphLayout(d.store, sources, labelSet: labelSet);
           if (!current()) return;
           update(() {
             graphPoints = saved.points;
@@ -1727,7 +1783,7 @@ class SourcesController implements SourceCommands {
                   forceLabels,
                   forceNames.toList(),
                   saved.points,
-                  documents: sources.map((s) => s['id'] as String).toList(),
+                  documents: sources.map((s) => s.id).toList(),
                 );
           if (!current()) return;
           final edges =
@@ -1772,9 +1828,7 @@ class SourcesController implements SourceCommands {
       graphOrganizing = false;
       return;
     }
-    var sources = all
-        .where((s) => (s['title'] as String? ?? '').trim().isNotEmpty)
-        .toList();
+    var sources = all.where((s) => s.title.trim().isNotEmpty).toList();
     final identity = snapshot!.model.writeToJson();
     final instance = snapshot.instanceId;
     final generation = snapshot.activeGeneration.toString();
@@ -1790,7 +1844,7 @@ class SourcesController implements SourceCommands {
       identity,
       instance,
       generation,
-      sources.map((s) => [s['id'], s['revision']]).toList(),
+      sources.map((s) => [s.id, s.revision]).toList(),
       labelSet,
       graphOrganizationRevision,
     ]);
@@ -1814,20 +1868,21 @@ class SourcesController implements SourceCommands {
       }
 
       try {
-        final saved = await d.store.loadGraphLayout(
-          persistentIdentity,
+        final saved = await readGraphLayout(
+          d.store,
           sources,
-          snapshot.model.dimensions,
+          identity: persistentIdentity,
+          dimensions: snapshot.model.dimensions,
           labelSet: labelSet,
         );
         if (!current() || helperChanged()) return;
         for (final source in sources) {
-          final vector = saved.vectors[source['id']];
+          final vector = saved.vectors[source.id];
           if (vector != null) {
             graphVectorCache[jsonEncode([
                   identity,
-                  source['id'],
-                  source['revision'],
+                  source.id,
+                  source.revision,
                 ])] =
                 vector;
           }
@@ -1855,9 +1910,9 @@ class SourcesController implements SourceCommands {
         final missing = sources
             .where(
               (s) =>
-                  s['state'] == 'indexed' &&
+                  s.state == 'indexed' &&
                   !graphVectorCache.containsKey(
-                    jsonEncode([identity, s['id'], s['revision']]),
+                    jsonEncode([identity, s.id, s.revision]),
                   ),
             )
             .toList();
@@ -1871,16 +1926,16 @@ class SourcesController implements SourceCommands {
             start,
             math.min(start + _graphEmbeddingBatch, missing.length),
           );
-          final fresh = await d.graphEmbeddings(batch);
+          final fresh = await d.graphEmbeddings(graphSourceArguments(batch));
           // Never cache vectors from a model run that has since changed.
           if (!current() || helperChanged()) return;
           for (final source in batch) {
-            final vector = fresh[source['id']];
+            final vector = fresh[source.id];
             if (vector != null)
               graphVectorCache[jsonEncode([
                     identity,
-                    source['id'],
-                    source['revision'],
+                    source.id,
+                    source.revision,
                   ])] =
                   vector;
           }
@@ -1888,23 +1943,19 @@ class SourcesController implements SourceCommands {
         final vectors = <String, List<double>>{};
         final retained = <String>{};
         for (final source in sources) {
-          final cacheKey = jsonEncode([
-            identity,
-            source['id'],
-            source['revision'],
-          ]);
+          final cacheKey = jsonEncode([identity, source.id, source.revision]);
           retained.add(cacheKey);
           final vector = graphVectorCache[cacheKey];
-          if (vector != null) vectors[source['id'] as String] = vector;
+          if (vector != null) vectors[source.id] = vector;
         }
         graphVectorCache.removeWhere((key, _) => !retained.contains(key));
-        sources = graphSceneSources(sources, vectors);
+        sources = typedGraphSceneSources(sources, vectors);
         final scene = await organizeForceGraphSceneInBackground(
           vectors,
           forceLabels,
           forceNames.toList(),
           saved.points,
-          documents: sources.map((s) => s['id'] as String).toList(),
+          documents: sources.map((s) => s.id).toList(),
         );
         final layout = scene.points;
         if (!current() || helperChanged()) return;
@@ -2170,14 +2221,14 @@ class SourcesController implements SourceCommands {
   }
 
   Widget graphInspector(
-    Map<String, Object?> selected,
-    List<Map<String, Object?>> rows,
+    SourceSummary selected,
+    List<SourceSummary> rows,
     List<GraphEdge> edges,
     List<DocumentLabel> labels,
   ) {
-    final id = selected['id'] as String;
-    final sourceUri = selected['source_uri'] as String? ?? '';
-    final byId = {for (final row in rows) row['id']: row};
+    final id = selected.id;
+    final sourceUri = selected.sourceUri ?? '';
+    final byId = {for (final row in rows) row.id: row};
     final related =
         edges
             .map(
@@ -2204,7 +2255,7 @@ class SourcesController implements SourceCommands {
               children: [
                 Expanded(
                   child: Text(
-                    selected['title'] as String,
+                    selected.title,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
@@ -2281,18 +2332,18 @@ class SourcesController implements SourceCommands {
             else
               for (final item in related)
                 ListTile(
-                  key: ValueKey('graph-related-${item.row!['id']}'),
+                  key: ValueKey('graph-related-${item.row!.id}'),
                   dense: true,
                   contentPadding: EdgeInsets.zero,
                   title: Text(
-                    item.row!['title'] as String,
+                    item.row!.title,
                     style: const TextStyle(fontSize: 12),
                   ),
                   trailing: Text(
                     '${(item.similarity * 100).round()}% Match',
                     style: const TextStyle(fontSize: 12),
                   ),
-                  onTap: () => selectGraphDocument(item.row!['id'] as String),
+                  onTap: () => selectGraphDocument(item.row!.id),
                 ),
           ],
         ),
@@ -2303,9 +2354,9 @@ class SourcesController implements SourceCommands {
   Color fallbackGraphLabelColor() => Theme.of(context).colorScheme.primary;
 
   Widget sourceGraph(
-    List<Map<String, Object?>> rows,
+    List<SourceSummary> rows,
     Map<String, GraphPoint> worldPoints,
-    List<Map<String, Object?>> matches,
+    List<SourceSummary> matches,
     Map<String, List<Color>> documentLabelColors,
     Map<String, Color> labelColorsByName,
     Map<String, List<DocumentLabel>> documentLabelRecords,
@@ -2318,7 +2369,7 @@ class SourcesController implements SourceCommands {
         scheduleGraphFit();
       }
       final rotated = rows.map((row) {
-        final id = row['id'] as String;
+        final id = row.id;
         return rotateGraphPoint(
           worldPoints[id] ?? const GraphPoint(0, 0, 0),
           yaw: graphYaw,
@@ -2337,9 +2388,9 @@ class SourcesController implements SourceCommands {
         ..sort((a, b) => rotated[b].z.compareTo(rotated[a].z));
       final zoom = graphTransform.value.getMaxScaleOnAxis();
       final selected = rows
-          .where((row) => row['id'] == graphSelectedDocument)
+          .where((row) => row.id == graphSelectedDocument)
           .firstOrNull;
-      final selectedId = selected?['id'] as String?;
+      final selectedId = selected?.id;
       final selectionEdges = selectedId == null
           ? <GraphEdge>[]
           : graphSelectionEdges;
@@ -2347,33 +2398,33 @@ class SourcesController implements SourceCommands {
         if (selectedId != null) selectedId,
         for (final edge in selectionEdges) ...[edge.source, edge.target],
       };
-      final matchingIds = matches.map((row) => row['id']).toSet();
+      final matchingIds = matches.map((row) => row.id).toSet();
       final dimmed = <String>{
         for (final row in rows)
           if (labelFilter.isNotEmpty
               ? !sourceLabels(row).contains(labelFilter)
               : selectedId != null
-              ? !connected.contains(row['id'])
-              : !matchingIds.contains(row['id']))
-            row['id'] as String,
+              ? !connected.contains(row.id)
+              : !matchingIds.contains(row.id))
+            row.id,
       };
       final painters = [
         for (var i = 0; i < rows.length; i++)
           GraphNodePainter(
             depth: rotated[i].z,
             zoom: zoom,
-            labelColors: documentLabelColors[rows[i]['id']] ?? const [],
+            labelColors: documentLabelColors[rows[i].id] ?? const [],
             matchColor: labelFilter.isEmpty
                 ? Colors.white
                 : labelColorsByName[labelFilter] ?? fallbackGraphLabelColor(),
-            title: rows[i]['title'] as String? ?? rows[i]['id'] as String,
+            title: rows[i].title,
             fontFamily: Theme.of(context).textTheme.bodyMedium?.fontFamily,
             textDirection: Directionality.of(context),
-            selected: selectedId == rows[i]['id'],
-            dimmed: dimmed.contains(rows[i]['id']),
+            selected: selectedId == rows[i].id,
+            dimmed: dimmed.contains(rows[i].id),
             activeMatch:
                 (sourceQuery.isNotEmpty || labelFilter.isNotEmpty) &&
-                !dimmed.contains(rows[i]['id']),
+                !dimmed.contains(rows[i].id),
           ),
       ];
       return Stack(
@@ -2416,7 +2467,7 @@ class SourcesController implements SourceCommands {
                   if ((scenePoint - center).distance <=
                           graphHitRadius(rotated[i].z, zoom) &&
                       rotated[i].z < depth) {
-                    document = rows[i]['id'] as String;
+                    document = rows[i].id;
                     depth = rotated[i].z;
                   }
                 }
@@ -2465,19 +2516,18 @@ class SourcesController implements SourceCommands {
                           left: positions[i].dx - painters[i].extent,
                           top: positions[i].dy - painters[i].extent,
                           child: Tooltip(
-                            message: rows[i]['title'] as String,
+                            message: rows[i].title,
                             child: Semantics(
                               button: true,
-                              label: rows[i]['title'] as String,
-                              onTap: () =>
-                                  selectGraphDocument(rows[i]['id'] as String),
+                              label: rows[i].title,
+                              onTap: () => selectGraphDocument(rows[i].id),
                               child: SizedBox(
-                                key: ValueKey('graph-node-${rows[i]['id']}'),
+                                key: ValueKey('graph-node-${rows[i].id}'),
                                 width: painters[i].extent * 2,
                                 height: painters[i].extent * 2,
                                 child: CustomPaint(
                                   key: ValueKey(
-                                    'graph-node-paint-${rows[i]['id']}',
+                                    'graph-node-paint-${rows[i].id}',
                                   ),
                                   painter: painters[i],
                                 ),
@@ -2505,7 +2555,7 @@ class SourcesController implements SourceCommands {
                     selected,
                     rows,
                     selectionEdges,
-                    documentLabelRecords[selected['id']] ?? const [],
+                    documentLabelRecords[selected.id] ?? const [],
                   ),
                 ),
               ),

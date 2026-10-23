@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/foresight_core.dart';
+import 'package:foresight_core/desktop.dart' show SourceSummary;
 import 'package:foresight_core/remote.dart'
     show StoreReader, RpcError, RpcErrorCode;
 import 'package:foresight_core/src/application.dart';
@@ -279,7 +280,9 @@ void main() {
         // An independent explicit invalidation admits a same-input replacement
         // before the old request's deferred cleanup runs.
         f.feature.graphLayoutKey = '';
-        f.feature.scheduleGraphLayout(f.store.sourceSummaries);
+        f.feature.scheduleGraphLayout(
+          f.store.sourceSummaries.map(SourceSummary.fromRow).toList(),
+        );
         await tester.pump();
         expect(f.feature.graphLayoutKey, key);
         await pumpUntil(tester, () => f.worker.followingEntered!.isCompleted);

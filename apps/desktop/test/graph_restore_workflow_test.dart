@@ -207,6 +207,7 @@ void main() {
         'fixture:c',
       );
       store.state(c, 'indexed');
+      second.helper.changed?.call();
       state.update(() {});
       await tester.pumpAndSettle();
       expect(second.requestedIds.single, [c]);

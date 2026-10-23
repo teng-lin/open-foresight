@@ -95,6 +95,7 @@ void main() {
         ),
       );
       f.connection.graphFailure = StateError('Embedding worker disconnected');
+      f.connection.domain.helper.changed?.call();
       f.shell.update(() {
         f.shell.navigate(WorkspaceTab.sources);
         f.shell.sourceFeature.graphView = true;
@@ -168,6 +169,7 @@ void main() {
           for (final source in sources) source['id'] as String: [1.0, 0, 0],
         };
       };
+      f.connection.domain.helper.changed?.call();
       f.shell.update(() {
         f.shell.navigate(WorkspaceTab.sources);
         f.shell.sourceFeature.graphView = true;
@@ -225,6 +227,7 @@ void main() {
     f.connection.domain.helper.snapshot = snapshot('fixture');
     final reply = Completer<Map<String, List<double>>>();
     f.connection.graphReply = (_) => reply.future;
+    f.connection.domain.helper.changed?.call();
     f.shell.update(() {
       f.shell.navigate(WorkspaceTab.sources);
       f.shell.sourceFeature.graphView = true;
@@ -637,6 +640,7 @@ void main() {
           'fixture',
         );
         f.store.state(id, 'failed', 'Index interrupted');
+        f.connection.domain.helper.changed?.call();
         f.shell.update(() {
           f.shell.navigate(WorkspaceTab.sources);
           f.shell.sourceFeature.gridView = grid;

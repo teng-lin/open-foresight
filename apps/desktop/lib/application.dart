@@ -453,6 +453,7 @@ class _WorkspaceState extends State<Workspace>
     sourceFeature.labelFilter = '';
     sourceFeature.noteEditorGeneration++;
     sourceFeature.noteId = null;
+    sourceFeature.noteLoading = false;
     sourceFeature.noteTitle.clear();
     sourceFeature.noteBody.clear();
     sourceFeature.noteBaseline = ('', '');
@@ -583,6 +584,7 @@ class _WorkspaceState extends State<Workspace>
         navigate(WorkspaceTab.notes);
         sourceFeature.noteEditorGeneration++;
         sourceFeature.noteId = null;
+        sourceFeature.noteLoading = false;
         sourceFeature.noteBaseline = ('', '');
         sourceFeature.newNoteKey.reset();
         sourceFeature.noteTitle.clear();

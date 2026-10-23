@@ -37,7 +37,7 @@ class DashedStadiumBorder extends StadiumBorder {
 }
 
 class SourceLinks extends CustomPainter {
-  final List<Map<String, Object?>> rows;
+  final List<SourceSummary> rows;
   final List<Offset> positions;
   final List<GraphEdge> edges;
   final List<double> depths;
@@ -46,10 +46,10 @@ class SourceLinks extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final paint = Paint();
     final visible = {
-      for (var i = 0; i < rows.length; i++) rows[i]['id']: positions[i],
+      for (var i = 0; i < rows.length; i++) rows[i].id: positions[i],
     };
     final depthById = {
-      for (var i = 0; i < rows.length; i++) rows[i]['id']: depths[i],
+      for (var i = 0; i < rows.length; i++) rows[i].id: depths[i],
     };
     for (final edge in edges) {
       final source = visible[edge.source], target = visible[edge.target];

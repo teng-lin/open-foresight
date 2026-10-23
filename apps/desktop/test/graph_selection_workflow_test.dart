@@ -165,6 +165,7 @@ void main() {
           'UPDATE source_details SET source_uri=? WHERE source_id=?',
           [unsafe, center],
         );
+        helper.changed?.call();
         state.update(() {});
         await tester.pumpAndSettle();
         await tester.tap(find.byKey(const ValueKey('graph-inspector-link')));
