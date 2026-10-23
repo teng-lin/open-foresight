@@ -1,3 +1,4 @@
+import 'desktop_status.dart';
 import 'cancellation.dart';
 export 'recording_status.dart' show RemoteRecording;
 import 'rpc_error.dart';
@@ -228,8 +229,13 @@ class RemoteDomain
   Future<void>? _reconnection;
   // Completes with the outcome of the current or next reconnect attempt.
   Completer<void>? _attempt;
-  @override
   Map<String, dynamic> capture = {};
+  @override
+  CapturePresentation get capturePresentation =>
+      CapturePresentation.fromWire(capture);
+  @override
+  GooglePresentation get googlePresentation =>
+      GooglePresentation.fromWire(googleStatus);
   @override
   Map<String, dynamic> googleStatus = {};
   bool _paused = false;

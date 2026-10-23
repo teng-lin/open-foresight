@@ -1,3 +1,5 @@
+import 'package:foresight_core/desktop.dart'
+    show CapturePresentation, GooglePresentation;
 import 'dart:io';
 import 'store_reader_fixture.dart';
 import 'package:foresight_core/remote.dart'
@@ -101,9 +103,13 @@ class TestDesktopConnection implements DesktopConnection {
   @override
   ConnectedSources get google => application.google;
   @override
+  CapturePresentation get capturePresentation =>
+      CapturePresentation.fromWire(capture);
+  @override
+  GooglePresentation get googlePresentation =>
+      GooglePresentation.fromWire(googleStatus);
   Map<String, dynamic> get capture =>
       Map<String, dynamic>.from(application.captureState);
-  @override
   Map<String, dynamic> get googleStatus =>
       Map<String, dynamic>.from(application.googleState);
   @override

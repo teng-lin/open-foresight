@@ -6,7 +6,6 @@ import 'dart:io';
 import 'package:clock/clock.dart';
 import 'package:foresight_core/desktop.dart'
     show
-        DesktopPresentation,
         GenerationPresentationValue,
         CapturePresentation,
         GooglePresentation,

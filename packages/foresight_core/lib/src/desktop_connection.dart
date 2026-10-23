@@ -5,15 +5,6 @@ import 'store_reader.dart';
 import 'google_auth.dart';
 import 'desktop_status.dart';
 
-/// Additive typed access during the feature migration. Extensions keep existing
-/// connection implementations and test doubles source compatible.
-extension DesktopPresentation on DesktopConnection {
-  CapturePresentation get capturePresentation =>
-      CapturePresentation.fromWire(capture);
-  GooglePresentation get googlePresentation =>
-      GooglePresentation.fromWire(googleStatus);
-}
-
 extension GenerationPresentationValue on GenerationStatus {
   GenerationPresentation get presentation =>
       GenerationPresentation.fromWire(effectiveState, generating: generating);
@@ -106,8 +97,8 @@ abstract interface class DesktopConnection {
   GenerationStatus get runtime;
   GoogleAccount get googleAuth;
   ConnectedSources get google;
-  Map<String, dynamic> get capture;
-  Map<String, dynamic> get googleStatus;
+  CapturePresentation get capturePresentation;
+  GooglePresentation get googlePresentation;
   bool get webSearchAvailable;
   bool get sourcesPaused;
 

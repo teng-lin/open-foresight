@@ -283,9 +283,7 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
     meetingEnhancing =
         meetingEnhancementStarting ||
         meetingEnhancements.values.any((value) => value.active);
-    // The immutable recording facade is the remaining legacy constructor seam;
-    // UI decisions below use the typed presentation.
-    recording = state.active ? RecordingSnapshot(d.capture) : null;
+    recording = state.active ? RecordingSnapshot.fromPresentation(state) : null;
     recordingMeeting = state.meetingId;
     recordingState = state.state;
     final began = state.beganMilliseconds;
