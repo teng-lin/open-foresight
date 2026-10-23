@@ -208,3 +208,97 @@ initial host load was 0.45/0.49/1.57. Raw samples, host details, binary/model/
 runtime hashes and workload evidence are in `/var/tmp/of-pr7/rpc-baseline-r2`.
 Final matching baseline/head measurements with the stricter final runner remain
 pending; this checkpoint is not relabeled as having used later runner bytes.
+
+
+## Desktop extraction checkpoint, 2026-10-23
+
+The owner selected one final PR. All implementation remains on the integration
+branch with separate commits; no intermediate GitHub PRs have been opened.
+Earlier “not started” and “pending” statements above describe their dated
+checkpoints rather than the present implementation.
+
+All six feature owners now live in independent libraries under `features/`,
+constructed with explicit shell and outward feature ports. The application no
+longer has feature parts or the old top-level ownership shims. Integrations,
+Settings/Stats, Chat, Sources and Onboarding have prepared typed readers. Meetings
+has its mechanical owner and typed status consumers; its prepared-reader wiring
+is still in progress. Feature-local size splits and the 7C removal/guard work
+remain. `f563effe` split the shell header, sidebar and content into presentation
+widgets; `application.dart` was 674 lines at that commit and `main.dart` 203.
+
+Representative integration commits:
+
+| Area | Integration commit | Checkpoint evidence |
+|---|---|---|
+| Integrations | `d2ea6ef0`, `a0ac012c` | Mechanical move and stable typed preference watches; 99 focused passes / 6 platform skips, plus 6 isolated-port tests |
+| Settings and Stats | `0260cd30`, `e1e0f879`, `e4749d3f`, `b676f4ea`, `ec2b6b0a`, `463e81cd`, `2f012c93` | Prepared preferences/models, calendar-period scheduling and value equality; current-only model readiness; focused regressions and view-size checks |
+| Sources | `dbf482e5`, `a362e275`, `6df2aac6`, `344e6bf3` | Note ownership, standalone owner, guarded current source-by-ID action, eight stable typed watches and search; latest author checkpoint 51 focused passes and 3 isolated feature passes, no skips |
+| Chat | `47c99c7c` | Prepared scope/history, guarded generation and citations; 42 focused and 6 isolated-port passes, no skips |
+| Meetings | `35dd59f5`, `194efb06`, `8735aeb3`, `95134de1` | Explicit status field-presence semantics, typed consumers, independent owner and actual DI cleanup; 65 focused passes / 4 platform skips |
+| Onboarding and shell | `3ed85d60`, `20a659f0`, `f563effe`, `d5c6647b` | Four stable setup watches, owner replacement and held action guards, fake-port mounting, shell presentation and typed startup reads; Onboarding 36 passes / 6 platform skips; subsequent startup checks 41 passes / 6 platform skips |
+
+The complete desktop suite at `f563effe` finished with 479 passes, 17 skips and
+one failure: `setup_surfaces_test.dart` still passed raw maps to the newly typed
+Onboarding status method. `439e81b` converts those fixture inputs and publishes
+the actual model change before checking prepared status. That failed case then
+passed (1/0). The retained whole-run LCOV measured 93.03% (7,323/7,872), but the
+failed whole run is not a final green matrix. Logs are under
+`/var/tmp/of-pr7/all-prepared-before-cleanup/` and
+`/var/tmp/of-pr7/setup-prepared-fixture.log`.
+
+Other retained fixture corrections preserve assertions: pending read-only
+connection shutdown is pumped across the widget and IO zones (`7f42d59`), actual
+reader invalidation follows the reader used by the connection (`303fa498`,
+`b590e5d0`), and manually inserted Chat history publishes its durable-change
+event (`bba70115`). Status-only events still do not invalidate worker reads.
+
+### Fresh native and compiled boundary checkpoint
+
+The Git-free `1418eca4d866fc9d0f56e473710ccde28b2d3a4a` export under
+`/var/tmp/of-pr7/feature-ui-1418/` freshly built all native application targets,
+passed root CTest 30/30, and built fresh AOT service/MCP plus Release desktop.
+Its desktop suite passed 450 tests / 17 skips at 92.70% (6,599/7,119).
+
+The compiled 34-case boundary run initially had 31 passes and three failures.
+Two packaging fixtures assumed the old default model runtime mapping; explicitly
+selecting their intended `llama_cpp` outside-runtime path restored those exact
+checks (2/0). The third tried to reserve desktop presence from a Dart interpreter,
+which P0.1 deliberately denies. `dabc8b40` executes the same remote facade probe
+inside an actual native Flutter desktop integration image, retaining its
+read-only, change, reconnect, no-replay and OAuth assertions. That failed case
+passed against the fresh native/helper/service binaries (1/0). The complete
+combined boundary run remains required on the final head.
+
+### Actual installed Linux approval checkpoint
+
+The same fresh 1418 application was packaged from the verified immutable SDK
+inputs and qualified through its normal installed launcher. Directly launching
+the native image bypasses the product's private library path and is not the
+installed-app acceptance path. The diagnostic crash, loader evidence and failed
+attempts are retained under `/var/tmp/of-gui-approval/`.
+
+The Linux harness observes the exact owned native process through its private
+AT-SPI bus and invokes the app's public accessibility actions. It refuses capture
+consent and ambiguous controls. The harness now waits for a clicked approval
+dialog to disappear within the original request deadline, including failed RPCs,
+and samples coherent `/proc` identity across wrapper exec transitions.
+
+With harness `8ee7fda1`, the actual document gate passed: onboarding, import-root
+consent, PDF and RTF parser output, durable source records and GUI approval. RTF
+used the signed pinned-snapshot `unrtf` package at its normal runtime paths only
+inside a disposable mount namespace; the production nested parser sandbox was
+unchanged and host `/usr` was untouched. Report:
+`/var/tmp/of-gui-approval/actual-1418-parser-qualified/documents.json`.
+
+Persistence also passed: GUI-approved source and MCP-created note survived
+service shutdown, replacement of the private installation with identical package
+bytes/modes, and restart. This exercised application persistence, not OS package
+manager lifecycle. Report:
+`/var/tmp/of-gui-approval/actual-1418-persistence/report.json`.
+Separate actual refusal qualification is still being completed.
+
+These are checkpoint results, not final combined-source acceptance. Final Linux,
+canonical container, sanitizers, real-model acceptance, HanSolo, and independent
+native-agent/Claude reviews remain required. The requested HanSolo Accessibility
+grant for `/usr/bin/osascript` has not been confirmed; no final Mac GUI approval
+result is claimed.
