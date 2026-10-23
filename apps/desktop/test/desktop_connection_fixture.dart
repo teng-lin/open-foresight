@@ -66,7 +66,7 @@ class TestDesktopConnection implements DesktopConnection {
     _workspaceEpoch = _serviceEpoch;
     registerFixtureReader(store);
     domain.helper.changed = () {
-      invalidateFixtureReader(store);
+      invalidatePreparedFixtureReader(store);
       _events.add(null);
     };
     _changes = application.changes.stream.listen(

@@ -23,7 +23,10 @@ void registerFixtureReader(StoreReader reader) {
   }
 }
 
-void invalidateFixtureReader(StoreReader reader) {
+void invalidateFixtureReader(Store store) =>
+    invalidatePreparedFixtureReader(fixtureReader(store));
+
+void invalidatePreparedFixtureReader(StoreReader reader) {
   final session = _session(reader);
   if (session == null) return;
   final identity = (session.workspaceEpoch, session.dataRevision);
