@@ -36,20 +36,6 @@ class _HeldPreferenceConnection extends TestDesktopConnection {
     sent.add((operation, Map.of(args)));
     return _reply(operation, args, await super.command(operation, args));
   }
-
-  @override
-  Future<Object?> commandCurrent(
-    Operation operation,
-    Map<String, dynamic> args,
-    bool Function() current,
-  ) async {
-    sent.add((operation, Map.of(args)));
-    return _reply(
-      operation,
-      args,
-      await super.commandCurrent(operation, args, current),
-    );
-  }
 }
 
 void main() {

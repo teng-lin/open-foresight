@@ -1,3 +1,4 @@
+import 'pump_until.dart';
 import 'package:open_foresight/shell/workspace_tab.dart';
 import '../test_support/core_fixture.dart';
 import 'store_reader_fixture.dart';
@@ -126,7 +127,16 @@ void main() {
       );
       helper.changed?.call();
       workspace.update(() {});
-      await tester.pumpAndSettle();
+      await pumpUntil(
+        tester,
+        () => find
+            .descendant(
+              of: meetingChatHistory(meeting),
+              matching: find.byType(Scrollable),
+            )
+            .evaluate()
+            .isNotEmpty,
+      );
       expect(find.text('[S1] source revision 1').hitTestable(), findsNothing);
       await openMeetingCitation(tester, meeting, 1);
       expect(

@@ -1,3 +1,5 @@
+import 'package:open_foresight/desktop_environment.dart';
+import '../test_support/platform_fixture.dart';
 import 'package:open_foresight/features/sources/sources_controller.dart';
 import 'package:open_foresight/shell/workspace_tab.dart';
 import 'dart:async';
@@ -164,7 +166,13 @@ class _GraphFixture {
     );
     await tester.binding.setSurfaceSize(const Size(1440, 1000));
     await tester.pumpWidget(
-      Foresight(connection, deviceLoader: () async => []),
+      Foresight(
+        connection,
+        deviceLoader: () async => [],
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
+      ),
     );
     await tester.pumpAndSettle();
     final shell = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
