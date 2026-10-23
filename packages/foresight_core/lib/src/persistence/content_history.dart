@@ -2,11 +2,24 @@ import 'dart:convert';
 
 import 'package:sqlite3/sqlite3.dart';
 
+import 'read_schema_guard.dart';
+
 /// Read access to recoverable pre-replacement snapshots. Writes are captured by
 /// schema-owned triggers, so every writer shares the same atomic history.
 final class ContentHistory {
-  ContentHistory(this.db);
+  ContentHistory(this.db, {required this.supportedVersion});
   final Database db;
+  final int supportedVersion;
+
+  List<Map<String, Object?>> _rows(String sql, List<Object?> args) =>
+      readSnapshot(
+        db,
+        () => [
+          for (final row in db.select(sql, args))
+            Map<String, Object?>.from(row),
+        ],
+        supportedVersion: supportedVersion,
+      );
 
   static const entities = {
     'notes',
@@ -19,7 +32,7 @@ final class ContentHistory {
   List<Map<String, Object?>> revisions(String entity, Object id) {
     if (!entities.contains(entity)) throw ArgumentError.value(entity, 'entity');
     return [
-      for (final row in db.select(
+      for (final row in _rows(
         'SELECT id,snapshot,created FROM content_revisions WHERE entity=? AND entity_id=? ORDER BY id DESC',
         [entity, '$id'],
       ))
@@ -35,15 +48,13 @@ final class ContentHistory {
     if (!entities.contains(entity)) throw ArgumentError.value(entity, 'entity');
     final column = entity == 'meeting_notes' ? 'meeting_id' : 'id';
     return [
-      for (final row in db.select('SELECT * FROM $entity WHERE $column=?', [
-        id,
-      ]))
+      for (final row in _rows('SELECT * FROM $entity WHERE $column=?', [id]))
         Map<String, Object?>.from(row),
     ];
   }
 
   List<Map<String, Object?>> meetingArtifacts(int id, String kind) => [
-    for (final row in db.select(
+    for (final row in _rows(
       'SELECT * FROM artifacts WHERE meeting_id=? AND kind=? ORDER BY id',
       [id, kind],
     ))

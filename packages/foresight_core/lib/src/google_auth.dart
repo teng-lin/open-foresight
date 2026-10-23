@@ -933,6 +933,13 @@ class GoogleAuth implements GoogleAccount {
           next = inactive.isEmpty ? null : inactive.values.first;
           if (next != null) inactive.remove(next['account_sub']);
         }
+        // Queue erasure before committing the registry change. A failed
+        // registry write leaves the still-active key protected from retry.
+        // Remote revocation above has already settled for this account.
+        _cleanup.add({
+          _credentialKey(data): false,
+          if (data['refresh_token_legacy'] == true) _secretKey: false,
+        });
         await _saveRegistry(next, inactive, generation);
         _tokens = next == null ? null : Map<String, dynamic>.from(next);
         _persistedActive = next;
@@ -940,10 +947,10 @@ class GoogleAuth implements GoogleAccount {
           ..clear()
           ..addAll(inactive);
         _resetActiveWork();
-        await secretStore.delete(_credentialKey(data));
-        if (data['refresh_token_legacy'] == true) {
-          await secretStore.delete(_secretKey);
-        }
+        await _cleanup.retry(
+          revoke: _revokeBestEffort,
+          activeKeys: _activeCredentialKeys,
+        );
       });
     } finally {
       _disconnecting = false;

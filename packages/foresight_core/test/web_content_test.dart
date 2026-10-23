@@ -158,7 +158,16 @@ void main() {
       expect(fixture.requests, isEmpty);
     });
 
+    Future<void> warmTransport() async {
+      fixture.respond = (_) async => FetchExternalWebsiteResponse();
+      await service.fetchWebContent('warm-channel');
+      fixture.calls.clear();
+      fixture.requests.clear();
+      fixture.credentials.clear();
+    }
+
     test('stalled RPCs expire and the server observes cancellation', () async {
+      await warmTransport();
       final replies = <Completer<FetchExternalWebsiteResponse>>[];
       fixture.respond = (_) {
         final reply = Completer<FetchExternalWebsiteResponse>();
@@ -170,7 +179,7 @@ void main() {
           await expectLater(
             service.fetchWebContent(
               'stalled-$i',
-              timeout: const Duration(milliseconds: 150),
+              timeout: const Duration(seconds: 1),
             ),
             throwsA(
               isA<GrpcError>().having(
@@ -198,12 +207,13 @@ void main() {
     });
 
     test('callback budget reaches and cancels its underlying RPC', () async {
+      await warmTransport();
       final reply = Completer<FetchExternalWebsiteResponse>();
       fixture.respond = (_) => reply.future;
       final callbacks = SearchCallbacks(
         search: (_) async => [const WebSearchItem(link: 'stalled')],
         summarize: service.summarizeSearchPage,
-        timeout: const Duration(milliseconds: 150),
+        timeout: const Duration(seconds: 1),
       );
       try {
         // A raced deadline may yield the existing empty-summary fallback or

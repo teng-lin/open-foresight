@@ -90,8 +90,14 @@ final class GoogleCredentialCleanup {
       }
       try {
         await secrets.delete(key);
-        _keys.remove(key);
-        _save();
+        final pending = _keys.remove(key)!;
+        try {
+          _save();
+        } catch (_) {
+          // A failed journal commit must remain retryable in this process too.
+          _keys[key] = pending;
+          rethrow;
+        }
       } catch (_) {
         failed = true;
       }

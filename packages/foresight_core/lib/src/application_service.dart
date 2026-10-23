@@ -895,7 +895,12 @@ class ApplicationService {
     if (lease.cancelled) {
       throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
     }
-    lease.validateReplacement?.call();
+    try {
+      lease.validateReplacement?.call();
+    } on IncompatibleReadSchema catch (error) {
+      _retireSchemaReads();
+      throw error.rpcError;
+    }
     _dispatch(lease);
     final Object? result;
     try {

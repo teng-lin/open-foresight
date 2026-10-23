@@ -145,6 +145,37 @@ void main() {
     },
   );
 
+  test(
+    'a future schema while approval is pending refuses the replacement',
+    () async {
+      final store = service.domain.store;
+      final id = store.saveNote(null, 'original', 'trusted');
+      await attach();
+      final work = agent.call('notes.save', {
+        'id': id,
+        'title': 'agent',
+        'body': 'replacement',
+      });
+      final refused = expectLater(
+        work,
+        throwsA(code(RpcErrorCode.unavailable)),
+      );
+      await eventually(() => approvals.isNotEmpty);
+      store.db.execute('PRAGMA user_version=${Store.schemaVersion + 1}');
+      await host.call('security.decide', {
+        'approval_id': approvals.single['approval_id'],
+        'allow': true,
+      });
+      await refused;
+      expect(
+        store.db.select('SELECT body FROM notes WHERE id=?', [
+          id,
+        ]).single['body'],
+        'trusted',
+      );
+    },
+  );
+
   for (final method in [
     'meetings.notes',
     'artifacts.edit',

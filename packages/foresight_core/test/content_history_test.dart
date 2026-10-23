@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:foresight_core/src/store.dart';
 import 'package:foresight_core/src/persistence/schema_migrations.dart';
 import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
+import 'package:foresight_core/src/persistence/read_schema_guard.dart';
 import 'package:foresight_core/src/meeting_workflow_store.dart';
 import 'package:foresight_core/src/persistence/application_queries.dart';
 import 'package:foresight_test_support/test_paths.dart';
@@ -28,6 +29,18 @@ void main() {
     store.saveNote(id, saved['title'] as String, saved['body'] as String);
     expect(store.notes().single['body'], 'trusted');
     expect(store.contentHistory.revisions('notes', id), hasLength(2));
+  });
+
+  test('history and approval snapshots refuse a future schema', () {
+    final id = store.saveNote(null, 'first', 'trusted');
+    store.db.execute('PRAGMA user_version=${Store.schemaVersion + 1}');
+    for (final read in [
+      () => store.contentHistory.revisions('notes', id),
+      () => store.contentHistory.row('notes', id),
+      () => store.contentHistory.meetingArtifacts(1, 'summary'),
+    ]) {
+      expect(read, throwsA(isA<IncompatibleReadSchema>()));
+    }
   });
 
   test('schema 17 upgrades without changing existing content', () {

@@ -500,7 +500,22 @@ void main() {
         );
       expect(Process.runSync('/bin/chmod', ['600', tokens.path]).exitCode, 0);
       final secrets = RejectingDeleteSecretStore();
-      final auth = GoogleAuth(authDirectory, secretStore: secrets);
+      final revokeServer = await HttpServer.bind(
+        InternetAddress.loopbackIPv4,
+        0,
+      );
+      addTearDown(() => revokeServer.close(force: true));
+      revokeServer.listen((request) async {
+        await request.drain<void>();
+        await request.response.close();
+      });
+      final auth = GoogleAuth(
+        authDirectory,
+        secretStore: secrets,
+        endpoints: GoogleEndpoints(
+          revoke: Uri.parse('http://127.0.0.1:${revokeServer.port}/revoke'),
+        ),
+      );
       expect(auth.connected, isTrue);
       app = Application(domain, auth: auth);
       store.importText(
@@ -514,7 +529,11 @@ void main() {
         () async {
           await app.call('workspace.clear', {});
           await secrets.deleted.future;
-          await Future<void>.delayed(Duration.zero);
+          await eventually(
+            () => (app.googleState['loadError'] as String? ?? '').contains(
+              'Google credential cleanup failed',
+            ),
+          );
         },
         (error, stack) {
           uncaught.add(error);
@@ -525,7 +544,7 @@ void main() {
       expect(tokens.existsSync(), isFalse);
       expect(
         app.googleState['loadError'],
-        contains('Google credential cleanup failed; disconnect again'),
+        contains('Google credential cleanup failed; will retry automatically'),
       );
       expect(await app.call('notes.list', {}), isEmpty);
       expect(uncaught, isEmpty);

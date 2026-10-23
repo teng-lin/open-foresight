@@ -16,17 +16,46 @@ void enforceOperationCapability(
 }) {
   switch (request.operation.descriptor.capability) {
     case CapabilityPolicy.ordinary:
+      return;
     case CapabilityPolicy.hostedRecording:
-      return; // Hosted recording is checked again after helper readiness.
+      if (!access.hasVisibleHost) {
+        throw RpcError(
+          RpcErrorCode.denied,
+          'Recording requires an open desktop indicator',
+          reason: RpcErrorReason.needsDesktop,
+        );
+      }
+      return; // Also rechecked after asynchronous helper readiness.
     case CapabilityPolicy.desktopToken:
+      if (!verifiedDesktop) {
+        throw RpcError(
+          RpcErrorCode.denied,
+          'Only the verified desktop process can attach',
+        );
+      }
       if (request is SecurityAttachDesktopRequest &&
           verifiedDesktop &&
           request.token.isNotEmpty &&
           request.token == access.desktopToken) {
         return;
       }
+      throw RpcError(RpcErrorCode.denied, 'Invalid desktop capability');
     case CapabilityPolicy.approvalHost:
-      if (access.isHost(client)) return;
+      if (access.isHost(client) &&
+          (access.hasVisibleHost ||
+              request is SecurityDetachDesktopRequest ||
+              request is SecurityDesktopVisibilityRequest)) {
+        return;
+      }
+      throw RpcError(RpcErrorCode.denied, switch (request) {
+        SecurityDecideRequest() =>
+          'Only the visible desktop can approve requests',
+        SecurityAllowImportRootRequest() =>
+          'Only the desktop can select import folders',
+        SecurityDesktopVisibilityRequest() =>
+          'Only the desktop host can report window visibility',
+        _ => 'Not the desktop approval connection',
+      });
     case CapabilityPolicy.profileOwner:
       if (request is ServiceStopIfIdleRequest &&
           request.token != null &&

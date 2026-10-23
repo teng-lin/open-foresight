@@ -50,8 +50,8 @@ void main() {
     store.artifact(meeting, 'summary', 'Accepted brief', 'old-model');
     store.editArtifact(1, 'Reviewed brief');
     store.db.execute('DROP TABLE meeting_summary_checkpoints');
-    store.db.execute('ALTER TABLE artifacts DROP COLUMN manifest');
     legacyLabelFixture(store.db);
+    store.db.execute('ALTER TABLE artifacts DROP COLUMN manifest');
     store.db.execute('PRAGMA user_version=13');
     store.close();
     store = Store(path);
@@ -125,8 +125,8 @@ void main() {
     var store = Store(path);
     final meeting = store.meeting('An older meeting');
     store.artifact(meeting, 'summary', 'legacy output', 'fixture');
-    store.db.execute('ALTER TABLE artifacts DROP COLUMN created');
     legacyLabelFixture(store.db);
+    store.db.execute('ALTER TABLE artifacts DROP COLUMN created');
     store.db.execute('PRAGMA user_version=11');
     store.close();
     store = Store(path);

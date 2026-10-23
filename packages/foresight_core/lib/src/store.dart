@@ -29,7 +29,8 @@ class Store {
   final Database db;
   final String path;
   static const schemaVersion = 18;
-  ContentHistory get contentHistory => ContentHistory(db);
+  ContentHistory get contentHistory =>
+      ContentHistory(db, supportedVersion: schemaVersion);
 
   /// Names one workspace between clears. SQLite reuses INTEGER PRIMARY KEY
   /// values after a clear, so a caller holding an ID sends this back with it.

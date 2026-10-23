@@ -19,6 +19,7 @@ import 'package:test/test.dart';
 
 class RejectingMaintenanceSecrets implements SecretStore {
   final deleted = Completer<void>();
+  bool rejectDeletes = true;
   @override
   Future<bool> write(String key, String value) async => true;
   @override
@@ -26,7 +27,9 @@ class RejectingMaintenanceSecrets implements SecretStore {
   @override
   Future<void> delete(String key) async {
     if (!deleted.isCompleted) deleted.complete();
-    throw const FileSystemException('Fixture credential deletion failed');
+    if (rejectDeletes) {
+      throw const FileSystemException('Fixture credential deletion failed');
+    }
   }
 }
 
@@ -200,6 +203,16 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       expect(maintenance.state['loadError'], contains('cleanup failed'));
       expect(changes, greaterThan(0));
+      secrets.rejectDeletes = false;
+      await maintenance.maintain();
+      expect(maintenance.state['connected'], isFalse);
+      expect(maintenance.state['loadError'], isEmpty);
+      expect(
+        File(
+          '${directory.path}/cleanup-google/credential-cleanup.json',
+        ).existsSync(),
+        isFalse,
+      );
       await maintenance.close();
       await maintenance.close();
     },

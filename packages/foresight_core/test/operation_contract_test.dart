@@ -40,7 +40,7 @@ Map<String, dynamic> minimal(Operation operation) {
 }
 
 void main() {
-  test('every declared policy matches frozen pre-refactor behavior', () {
+  test('policies retain the baseline with replacement consent', () {
     final baseline =
         jsonDecode(
               File(
@@ -48,6 +48,19 @@ void main() {
               ).readAsStringSync(),
             )
             as Map;
+    // Preserve the historical fixture and assert the deliberate P0.3 change.
+    for (final method in [
+      'notes.save',
+      'artifacts.edit',
+      'meetings.notes',
+      'meetings.edit_task',
+      'meetings.prepare',
+      'meetings.enhance',
+      'meetings.generate',
+    ]) {
+      baseline[method]['approval'] = true;
+      baseline[method]['approval_web_search'] = true;
+    }
     expect(Operation.values, hasLength(84));
     for (final operation in Operation.values) {
       final old = baseline[operation.wire] as Map;
