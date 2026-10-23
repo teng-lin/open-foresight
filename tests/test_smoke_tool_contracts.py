@@ -107,7 +107,7 @@ def test_application_peer_streaming_replies_are_correlated(reply, expected):
     peer.sequence, peer.reader, peer.socket = (
         0,
         io.StringIO(reply),
-        SimpleNamespace(sendall=Mock(), close=Mock()),
+        SimpleNamespace(sendall=Mock(), shutdown=Mock(), close=Mock()),
     )
     if isinstance(expected, type):
         with pytest.raises(expected):

@@ -215,6 +215,12 @@ class ApplicationPeer:
                 return result
 
     def close(self):
+        # Wake an in-flight bounded RPC before closing its file reader. Closing
+        # a reader held by another thread can otherwise block on its read lock.
+        try:
+            self.socket.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
         self.reader.close()
         self.socket.close()
 
