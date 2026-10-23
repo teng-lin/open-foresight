@@ -43,8 +43,8 @@ Future<void> _measure(
     expect(notifications, 1, reason: '$label coalesces coarse service events');
     expect(widgetBuilds, greaterThan(0));
     final after = admissions.snapshot();
-    // These screens still make synchronous projections on a status rebuild.
-    // Status-only events do not admit asynchronous worker queries after F-10.
+    // Status-only events retain prepared queries; count worker admissions
+    // separately from metadata reads and widget publications.
     for (final boundary in ['read', 'watch', 'worker']) {
       expect(after[boundary], before[boundary], reason: '$label $boundary');
     }
@@ -106,6 +106,8 @@ void main() {
         // Models is setup, not an independent Integrations screen.
         ('Integrations', WorkspaceTab.settings),
       ]) {
+        final beforeSourceProjections =
+            admissions.synchronous['sourceSummaries'] ?? 0;
         shell.navigate(tab);
         await tester.pumpAndSettle();
         if (label == 'Integrations') {
@@ -113,10 +115,17 @@ void main() {
           expect(find.text('Refresh audio devices'), findsOneWidget);
         }
         await _measure(tester, label, shell, helper, admissions);
+        if (label == 'Sources') {
+          expect(
+            admissions.synchronous['sourceSummaries'] ?? 0,
+            beforeSourceProjections,
+            reason: 'Sources rebuilds use prepared snapshots',
+          );
+          expect(admissions.watches['sources'], 1);
+        }
       }
-      expect(admissions.synchronous['sourceSummaries'], greaterThan(0));
-      // This baseline deliberately records existing synchronous projections. It
-      // must not equate a Store.rows spy with absent SQLite work.
+      // Retain the frozen pre-migration JSON; this test records current
+      // typed admissions without equating raw-row spies with SQLite work.
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pumpAndSettle();
       var closed = false;

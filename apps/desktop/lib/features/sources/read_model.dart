@@ -19,6 +19,9 @@ class SourcesReadModel {
   List<String> clusterNames = const [];
   String labelSet = '';
   ModelRegistration? embedding;
+  bool embeddingCurrent = false;
+  ModelRegistration? get currentEmbedding =>
+      embeddingCurrent ? embedding : null;
   Set<String>? searchMatches;
   String? problem;
   String _searchQuery = '';
@@ -62,17 +65,19 @@ class SourcesReadModel {
     _values.clear();
     _problems.clear();
     searchMatches = null;
+    _owner = null;
+    sources = const [];
+    notes = const [];
+    labels = const [];
+    clusters = const [];
+    clusterNames = const [];
+    originalMimes = const {};
+    embedding = null;
+    embeddingCurrent = false;
+    labelSet = '';
+    problem = null;
     try {
       _owner = FeatureRequestIdentity.capture(connection());
-      sources = const [];
-      notes = const [];
-      labels = const [];
-      clusters = const [];
-      clusterNames = const [];
-      originalMimes = const {};
-      embedding = null;
-      labelSet = '';
-      problem = null;
       final reader = connection().store;
       _watch(
         'sources',
@@ -162,6 +167,11 @@ class SourcesReadModel {
                 value.modelType,
               ],
         (value) => embedding = value,
+        onCurrent: (current) {
+          if (embeddingCurrent == current) return;
+          embeddingCurrent = current;
+          _notify();
+        },
       );
       _bindSearch();
       _notify();
@@ -203,12 +213,14 @@ class SourcesReadModel {
     Stream<ReadResult<T>> stream,
     int generation,
     Object? Function(T) signature,
-    void Function(T) accept,
-  ) {
+    void Function(T) accept, {
+    void Function(bool)? onCurrent,
+  }) {
     _reads.add(
       stream.listen(
         (result) {
           if (!_current(generation)) return;
+          onCurrent?.call(result.current && result.error == null);
           if (result.error != null) {
             _problem(key, result.error);
             return;
@@ -228,7 +240,10 @@ class SourcesReadModel {
           }
         },
         onError: (Object error) {
-          if (_current(generation)) _problem(key, error);
+          if (_current(generation)) {
+            onCurrent?.call(false);
+            _problem(key, error);
+          }
         },
       ),
     );

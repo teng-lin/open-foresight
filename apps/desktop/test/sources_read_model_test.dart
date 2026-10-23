@@ -9,8 +9,15 @@ class _Reader implements StoreReader {
   final streams = <StreamController<ReadResult<Object?>>>[];
   int active = 0;
   bool failWatch = false;
+  bool failIdentity = false;
+  String _epoch = 'epoch';
   @override
-  String workspaceEpoch = 'epoch';
+  String get workspaceEpoch {
+    if (failIdentity) throw StateError('identity unavailable');
+    return _epoch;
+  }
+
+  set workspaceEpoch(String value) => _epoch = value;
   @override
   String dataRevision = '1';
   @override
@@ -141,6 +148,35 @@ void main() {
   );
 
   test(
+    'preview registration displays but never certifies embedding readiness',
+    () async {
+      model.start();
+      final registration = ModelRegistration.fromRow({
+        'kind': 'embedding',
+        'path': '/fixture/model',
+        'digest': 'known',
+      });
+      reader.reply(7, registration, freshness: ReadFreshness.preview);
+      await settle();
+      expect(model.embedding, same(registration));
+      expect(model.currentEmbedding, isNull);
+      final count = publications;
+      reader.reply(7, registration);
+      await settle();
+      expect(model.currentEmbedding, same(registration));
+      expect(publications, count + 1);
+      reader.reply(7, registration, freshness: ReadFreshness.preview);
+      await settle();
+      expect(model.embedding, same(registration));
+      expect(model.currentEmbedding, isNull);
+      expect(publications, count + 2);
+      reader.reply(7, registration);
+      reader.streams[7].addError(StateError('embedding unavailable'));
+      expect(model.currentEmbedding, isNull);
+    },
+  );
+
+  test(
     'value-equal MIME maps preserve identity independent of key order',
     () async {
       model.start();
@@ -206,6 +242,30 @@ void main() {
       reader.reply(27, {'late'});
       await settle();
       expect(publications, count);
+    },
+  );
+
+  test(
+    'failed replacement binding clears retired snapshots before capture',
+    () async {
+      model.start();
+      reader.reply(0, [
+        SourceSummary.fromRow({'id': 'retired', 'title': 'Retired source'}),
+      ]);
+      expect(model.sources, hasLength(1));
+      reader.failIdentity = true;
+      connection.clientSessionGeneration = Object();
+      connection.events.add(null);
+      await settle();
+      expect(model.sources, isEmpty);
+      expect(model.embedding, isNull);
+      expect(model.currentEmbedding, isNull);
+      expect(model.problem, contains('identity unavailable'));
+      reader.failIdentity = false;
+      connection.events.add(null);
+      await settle();
+      expect(model.problem, isNull);
+      expect(reader.active, 8);
     },
   );
 

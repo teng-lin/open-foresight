@@ -48,13 +48,13 @@ class _Reader implements StoreReader {
 
   @override
   Future<ReadResult<T>> read<T>(ReadQuery<T> query) {
-    expect(query.projection, 'note_body');
+    expect(query.projection, anyOf('note_body', 'source'));
     final completer = Completer<ReadResult<Object?>>();
     pending.add(completer);
     return completer.future.then((result) => result.asType<T>());
   }
 
-  void complete(int index, String body, {RpcError? error}) =>
+  void complete(int index, Object? body, {RpcError? error}) =>
       pending[index].complete(
         ReadResult<Object?>(
           freshness: ReadFreshness.current,
@@ -209,6 +209,52 @@ void main() {
       controller.dispose();
       await tester.pumpWidget(const SizedBox());
       await tester.binding.setSurfaceSize(null);
+    },
+  );
+
+  testWidgets(
+    'local source open errors report only to their live owner without holding the operation gate',
+    (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) {
+              host.context = context;
+              return const SizedBox();
+            },
+          ),
+        ),
+      );
+      controller.showSource('current');
+      expect(host.busy, isFalse);
+      connection.store.complete(
+        0,
+        null,
+        error: RpcError(RpcErrorCode.unavailable, 'current source failure'),
+      );
+      await tester.pump();
+      expect(host.error, contains('current source failure'));
+      host.error = '';
+      controller.showSource('retired');
+      connection.clientSessionGeneration = Object();
+      connection.events.add(null);
+      connection.store.complete(
+        1,
+        null,
+        error: RpcError(RpcErrorCode.unavailable, 'retired source failure'),
+      );
+      await tester.pump();
+      expect(host.error, isEmpty);
+      controller.showSource('disposed');
+      controller.dispose();
+      connection.store.complete(
+        2,
+        null,
+        error: RpcError(RpcErrorCode.unavailable, 'disposed source failure'),
+      );
+      await tester.pump();
+      expect(host.error, isEmpty);
+      expect(tester.takeException(), isNull);
     },
   );
 
