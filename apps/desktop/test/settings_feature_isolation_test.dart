@@ -189,6 +189,9 @@ void main() {
       await action;
       expect(host.error, isEmpty);
       expect(tester.takeException(), isNull);
+      controller.dispose();
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
     },
   );
 }

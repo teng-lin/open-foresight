@@ -1,3 +1,4 @@
+import 'pump_until.dart';
 import 'package:open_foresight/shell/workspace_tab.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -100,6 +101,15 @@ void main() {
         f.store.db.execute(
           'INSERT OR REPLACE INTO models(kind,path,digest,runtime,backend) VALUES(?,?,?,?,?)',
           [kind, path, digest, '', 'fixture'],
+        );
+        f.connection.application.changed();
+        await pumpUntil(
+          tester,
+          () =>
+              (kind == 'speech'
+                  ? settings.speechModelName()
+                  : settings.generationName()) ==
+              expected,
         );
         expect(
           kind == 'speech'

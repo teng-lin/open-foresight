@@ -8,6 +8,8 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Fixed
 
+- Refresh Stats at the local Monday boundary and after an awake timezone change, keeping chart labels aligned with the displayed calendar period.
+
 - Bind desktop approval to the verified local desktop executable, rotate its attach capability, and preserve its host slot while hidden. Hidden windows refuse new capture and finish active capture; requests through the quick-meeting socket require visible confirmation.
 - Packaged installations refuse model executables outside their installation directory, including saved runtimes restored after restart and direct Linux service/MCP launches. Select a bundled runtime in model settings to recover an older external registration.
 - Keep using the bundled LiteRT worker when generation setup or registration names a retired runner.

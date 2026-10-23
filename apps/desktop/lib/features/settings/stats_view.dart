@@ -5,7 +5,6 @@ extension _StatsView on SettingsController {
     final meetings = recordedMeetings;
     final sources = sourceCount;
     final answers = completedAnswers;
-    localWords();
     final weekly = localOutputWeekly;
     return SingleChildScrollView(
       child: Column(
@@ -74,6 +73,7 @@ extension _StatsView on SettingsController {
                               ),
                               painter: SettingsUsageChart(
                                 weekly,
+                                weeks: _stats.displayPeriod?.weeks ?? const [],
                                 textStyle: Theme.of(
                                   context,
                                 ).textTheme.bodySmall!,

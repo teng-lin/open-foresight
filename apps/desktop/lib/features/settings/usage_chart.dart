@@ -6,11 +6,13 @@ import 'package:foresight_core/desktop.dart';
 
 class SettingsUsageChart extends CustomPainter {
   final List<int> values;
+  final List<OutputStatsWeek> weeks;
   final TextStyle textStyle;
   final TextScaler textScaler;
   final TextDirection textDirection;
   SettingsUsageChart(
     this.values, {
+    required this.weeks,
     required this.textStyle,
     required this.textScaler,
     required this.textDirection,
@@ -117,7 +119,8 @@ class SettingsUsageChart extends CustomPainter {
       ];
 
   String _weekLabel(int index) {
-    final week = outputWeekStart(DateTime.now(), weeksAgo: 4 - index);
+    if (index >= weeks.length) return 'Week ${index + 1}';
+    final week = weeks[index];
     return 'Week of ${week.month}/${week.day}';
   }
 

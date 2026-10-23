@@ -3,7 +3,6 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:foresight_core/desktop.dart';
-import '../../background_store.dart';
 import '../../desktop_visuals.dart';
 import '../../feature_request_identity.dart';
 import '../../presentation/workspace_presentation.dart';
@@ -14,12 +13,15 @@ import 'speech_setup_view.dart';
 import 'model_terms_dialog.dart';
 import 'usage_chart.dart';
 import 'read_model.dart';
+import 'stats_read_model.dart';
 
 part 'models_view.dart';
 part 'stats_view.dart';
 part 'settings_view.dart';
 
-class SettingsController implements SettingsCommands {
+class SettingsController
+    with WidgetsBindingObserver
+    implements SettingsCommands {
   SettingsController({
     required FeatureHost host,
     required WorkspaceNavigation navigation,
@@ -52,7 +54,25 @@ class SettingsController implements SettingsCommands {
       });
     },
   );
-  void start() => _reads.start();
+  late final SettingsStatsModel _stats = SettingsStatsModel(
+    connection: () => d,
+    changed: () {
+      if (mounted) _lifecycle.serviceChanged();
+    },
+  );
+  bool _started = false;
+  void start() {
+    if (_started || _disposed) return;
+    _started = true;
+    WidgetsBinding.instance.addObserver(this);
+    _reads.start();
+    _stats.start();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) _stats.recheck();
+  }
 
   final FeatureHost _host;
   final WorkspaceNavigation _navigation;
@@ -110,7 +130,9 @@ class SettingsController implements SettingsCommands {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    WidgetsBinding.instance.removeObserver(this);
     unawaited(_reads.dispose());
+    unawaited(_stats.dispose());
     modelPath.dispose();
     runtimePath.dispose();
     tokenizer.dispose();
@@ -330,56 +352,13 @@ class SettingsController implements SettingsCommands {
         : path.split('/').where((s) => s.isNotEmpty).last;
   }
 
-  String? localOutputRevision;
-  FeatureRequestIdentity? _localOutputIdentity;
-  Object? _localOutputRequest;
-  int localOutputCount = 0;
-  int recordedMeetings = 0, sourceCount = 0, completedAnswers = 0;
-  List<int> localOutputWeekly = List<int>.filled(5, 0);
-
-  int localWords() {
-    final revision =
-        '${d.store.dataRevision}:${outputWeekStart(DateTime.now()).millisecondsSinceEpoch}';
-    if (localOutputRevision != revision ||
-        !(_localOutputIdentity?.isCurrent(d, alive: mounted) ?? false)) {
-      final identity = FeatureRequestIdentity.capture(d);
-      final request = Object();
-      localOutputRevision = revision;
-      _localOutputIdentity = identity;
-      _localOutputRequest = request;
-      bool current() =>
-          identical(_localOutputRequest, request) &&
-          localOutputRevision == revision &&
-          identity.isCurrent(d, alive: mounted);
-      unawaited(
-        localOutputStats(d.store).then(
-          (stats) {
-            if (!current()) return;
-            var changed = localOutputCount != stats.words;
-            for (var i = 0; i < 5; i++) {
-              changed |= localOutputWeekly[i] != stats.weekly[i];
-            }
-            changed |=
-                recordedMeetings != stats.recordedMeetings ||
-                sourceCount != stats.sources ||
-                completedAnswers != stats.completedAnswers;
-            recordedMeetings = stats.recordedMeetings;
-            sourceCount = stats.sources;
-            completedAnswers = stats.completedAnswers;
-            localOutputCount = stats.words;
-            localOutputWeekly = stats.weekly;
-            if (changed) _lifecycle.serviceChanged();
-          },
-          onError: (Object _) {
-            // Retry on the next normal read, retaining the last successful values.
-            // Scheduling a rebuild here would loop while the service is failing.
-            if (current()) localOutputRevision = null;
-          },
-        ),
-      );
-    }
-    return localOutputCount;
-  }
+  int get localOutputCount => _stats.value?.words ?? 0;
+  int get recordedMeetings => _stats.value?.recordedMeetings ?? 0;
+  int get sourceCount => _stats.value?.sources ?? 0;
+  int get completedAnswers => _stats.value?.completedAnswers ?? 0;
+  List<int> get localOutputWeekly =>
+      _stats.value?.weekly ?? const [0, 0, 0, 0, 0];
+  int localWords() => localOutputCount;
 
   Widget stats() => _buildStats();
 

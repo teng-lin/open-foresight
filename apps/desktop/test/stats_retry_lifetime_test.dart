@@ -17,11 +17,12 @@ import 'meeting_setup_test.dart' show OfflineHelper;
 // fixture reader. This exposes replies that outlive the desktop client session.
 class _StatsReader implements StoreReader {
   final StoreReader delegate;
-  final requests = <Completer<ReadResult<OutputStats>>>[];
+  final requests = <StreamController<ReadResult<OutputStats>>>[];
+  final queries = <ReadQuery<Object?>>[];
   String? epoch;
   _StatsReader(this.delegate);
 
-  void succeed(int index, int words) => requests[index].complete(
+  void succeed(int index, int words) => requests[index].add(
     ReadResult(
       freshness: ReadFreshness.current,
       value: OutputStats(
@@ -37,15 +38,19 @@ class _StatsReader implements StoreReader {
   );
 
   @override
-  Future<ReadResult<T>> read<T>(ReadQuery<T> query) {
-    if (query.projection != 'output_stats') return delegate.read(query);
-    final reply = Completer<ReadResult<OutputStats>>();
-    requests.add(reply);
-    return reply.future.then((result) => result.asType<T>());
-  }
+  Future<ReadResult<T>> read<T>(ReadQuery<T> query) => delegate.read(query);
 
   @override
-  Stream<ReadResult<T>> watch<T>(ReadQuery<T> query) => delegate.watch(query);
+  Stream<ReadResult<T>> watch<T>(ReadQuery<T> query) {
+    if (query.projection != 'output_stats') return delegate.watch(query);
+    final reply = StreamController<ReadResult<OutputStats>>.broadcast(
+      sync: true,
+    );
+    queries.add(query);
+    requests.add(reply);
+    return reply.stream.map((result) => result.asType<T>());
+  }
+
   @override
   RpcError? get failure => delegate.failure;
   @override
@@ -146,9 +151,8 @@ _mount(WidgetTester tester) async {
   expect(reader.requests, hasLength(1));
   addTearDown(() async {
     await tester.pumpWidget(const SizedBox());
-    // Settle every gated reply after disposal so no test leaks async ownership.
-    for (var i = 0; i < reader.requests.length; i++) {
-      if (!reader.requests[i].isCompleted) reader.succeed(i, 0);
+    for (final reply in reader.requests) {
+      await reply.close();
     }
     await tester.pumpAndSettle();
     await tester.binding.setSurfaceSize(null);
@@ -165,35 +169,41 @@ _mount(WidgetTester tester) async {
 void main() {
   for (final timeout in [true, false]) {
     testWidgets(
-      'Stats retries same-input ${timeout ? 'timeout' : 'failure'} without a rebuild loop',
+      'Stats retains same-input ${timeout ? 'timeout' : 'failure'} values without a rebuild loop and recovers on its watch',
       (tester) async {
         final f = await _mount(tester);
         f.reader.succeed(0, 17);
         await tester.pumpAndSettle();
-        expect(f.feature.localOutputCount, 17);
-        expect(f.feature.localOutputWeekly, [0, 0, 0, 0, 17]);
-        expect(
-          [
-            f.feature.recordedMeetings,
-            f.feature.sourceCount,
-            f.feature.completedAnswers,
-          ],
-          [2, 3, 4],
-        );
+        void expectValues(int words) {
+          expect(f.feature.localOutputCount, words);
+          expect(f.feature.localOutputWeekly, [0, 0, 0, 0, words]);
+          expect(
+            [
+              f.feature.recordedMeetings,
+              f.feature.sourceCount,
+              f.feature.completedAnswers,
+            ],
+            [2, 3, 4],
+          );
+        }
 
-        // Begin a legitimate refresh, then keep both the DB and week unchanged
-        // throughout failure and recovery.
+        expectValues(17);
         f.store.setPreference('stats.retry.fixture', 'refresh');
-        f.feature.localWords();
-        expect(f.reader.requests, hasLength(2));
+        f.connection.application.changed();
+        await tester.pumpAndSettle();
         final revision = f.reader.dataRevision;
-        final key = f.feature.localOutputRevision;
+        final key = f.reader.queries.single.key;
+        expect(
+          f.reader.requests,
+          hasLength(1),
+          reason: 'data refresh preserves the stable watch',
+        );
         if (timeout) {
-          f.reader.requests[1].completeError(
+          f.reader.requests[0].addError(
             TimeoutException('transient Stats timeout'),
           );
         } else {
-          f.reader.requests[1].complete(
+          f.reader.requests[0].add(
             ReadResult<OutputStats>(
               freshness: ReadFreshness.failed,
               value: null,
@@ -209,31 +219,27 @@ void main() {
         await tester.pumpAndSettle();
         expect(
           f.reader.requests,
-          hasLength(2),
-          reason: 'failure must not schedule a rebuild',
+          hasLength(1),
+          reason: 'failure must not admit another query from a rebuild',
         );
-        expect(f.feature.localOutputCount, 17);
-        expect(f.feature.localOutputWeekly, [0, 0, 0, 0, 17]);
-        expect(
-          [
-            f.feature.recordedMeetings,
-            f.feature.sourceCount,
-            f.feature.completedAnswers,
-          ],
-          [2, 3, 4],
-        );
+        expectValues(17);
         expect(f.feature.localWords(), 17);
-        expect(f.reader.requests, hasLength(3));
-        expect(f.reader.dataRevision, revision);
-        expect(f.feature.localOutputRevision, key);
-        f.reader.succeed(2, 23);
         await tester.pumpAndSettle();
-        expect(f.feature.localOutputCount, 23);
-        expect(f.feature.localOutputWeekly, [0, 0, 0, 0, 23]);
+        expect(
+          f.reader.requests,
+          hasLength(1),
+          reason: 'a display getter never schedules reads',
+        );
+        expect(f.reader.dataRevision, revision);
+        expect(f.reader.queries.single.key, key);
+        // A successful later dispatch of the same watch recovers all metrics.
+        f.reader.succeed(0, 23);
+        await tester.pumpAndSettle();
+        expectValues(23);
         f.feature.localWords();
         expect(
           f.reader.requests,
-          hasLength(3),
+          hasLength(1),
           reason: 'successful values remain cached',
         );
       },
@@ -243,38 +249,36 @@ void main() {
   for (final boundary in ['client', 'epoch', 'disposal']) {
     for (final failure in [false, true]) {
       testWidgets(
-        'retired Stats ${failure ? 'error' : 'success'} after $boundary cannot publish or clear a newer key',
+        'retired Stats ${failure ? 'error' : 'success'} after $boundary cannot publish or replace a newer query',
         (tester) async {
           final f = await _mount(tester);
           final revision = f.reader.dataRevision;
-          final key = f.feature.localOutputRevision;
+          final key = f.reader.queries.single.key;
           switch (boundary) {
             case 'client':
               f.connection.replaceClientSessionForTesting();
             case 'epoch':
               f.reader.epoch = 'replacement-workspace';
               f.connection.adoptWorkspace();
+              f.connection.application.changed();
             case 'disposal':
               await tester.pumpWidget(const SizedBox());
           }
+          await tester.pumpAndSettle();
           if (boundary != 'disposal') {
-            // Same revision/week still needs a read owned by the new identity.
-            f.feature.localWords();
             expect(f.reader.requests, hasLength(2));
             f.reader.succeed(1, 31);
             await tester.pumpAndSettle();
             expect(f.feature.localOutputCount, 31);
           }
           if (failure) {
-            f.reader.requests[0].completeError(
-              StateError('retired Stats error'),
-            );
+            f.reader.requests[0].addError(StateError('retired Stats error'));
           } else {
             f.reader.succeed(0, 999);
           }
           await tester.pumpAndSettle();
           expect(f.feature.localOutputCount, boundary == 'disposal' ? 0 : 31);
-          expect(f.feature.localOutputRevision, key);
+          expect(f.reader.queries.last.key, key);
           if (boundary != 'disposal') {
             expect(f.reader.dataRevision, revision);
             f.feature.localWords();
