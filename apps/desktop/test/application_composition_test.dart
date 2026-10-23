@@ -66,5 +66,10 @@ void main() {
     expect(onboarding.active, fixture.shell.onboardingFeature.active);
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    // A pending clear releases this flag in finally, after the window closes.
+    lifecycle.setClearingWorkspace(false);
+    expect(lifecycle.clearingWorkspace, isFalse);
+    expect(tester.takeException(), isNull);
   });
 }

@@ -3,8 +3,8 @@ import 'package:foresight_test_support/test_paths.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/src/gemma_download.dart';
-import 'package:open_foresight/gemma_setup_view.dart';
-import 'package:open_foresight/model_terms_dialog.dart';
+import 'package:open_foresight/features/settings/gemma_setup_view.dart';
+import 'package:open_foresight/features/settings/model_terms_dialog.dart';
 import 'package:foresight_core/src/speech_models.dart';
 import 'package:foresight_core/src/store.dart';
 

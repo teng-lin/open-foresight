@@ -11,7 +11,7 @@ import 'package:foresight_core/src/helper.dart';
 import 'package:open_foresight/main.dart';
 import 'package:open_foresight/model_setup.dart';
 import 'package:foresight_core/src/store.dart';
-import 'package:open_foresight/speech_setup_view.dart';
+import 'package:open_foresight/features/settings/speech_setup_view.dart';
 import '../test_support/meeting_panel.dart';
 
 class OfflineHelper extends Helper {

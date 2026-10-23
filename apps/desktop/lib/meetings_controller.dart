@@ -1038,10 +1038,7 @@ class _MeetingsController extends _FeatureController {
                 leading: const Icon(Icons.info_outline),
                 title: Text(speechSetupProblem(d.store)!),
                 trailing: TextButton(
-                  onPressed: () => shell.update(() {
-                    shell.navigate(WorkspaceTab.models);
-                    settingsFeature.modelKind = 'speech';
-                  }),
+                  onPressed: () => settingsFeature.showModelSetup('speech'),
                   child: const Text('Set up speech'),
                 ),
               ),

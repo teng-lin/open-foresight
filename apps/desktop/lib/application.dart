@@ -2,9 +2,9 @@ import 'desktop_environment.dart';
 import 'features/integrations/integrations_controller.dart';
 import 'shell/workspace_tab.dart';
 import 'shell/ports.dart';
+import 'features/settings/settings_controller.dart';
 import 'presentation/workspace_presentation.dart';
 import 'onboarding_view.dart';
-import 'model_terms_dialog.dart';
 
 import 'background_store.dart';
 import 'desktop_reader_adapters.dart';
@@ -21,8 +21,6 @@ import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/semantics.dart' show SemanticsProperties;
-import 'package:intl/intl.dart' show NumberFormat;
 import 'package:foresight_core/desktop.dart';
 import 'graph_label_controls.dart';
 import 'cluster_rendering.dart';
@@ -34,8 +32,6 @@ import 'commands.dart';
 import 'calendar_auth_links.dart';
 import 'desktop_menu.dart';
 import 'account_button.dart';
-import 'gemma_setup_view.dart';
-import 'speech_setup_view.dart';
 import 'file_discovery_sheet.dart';
 import 'graph_rendering.dart';
 import 'meeting_export.dart';
@@ -51,7 +47,6 @@ part 'sources_controller.dart';
 part 'chat_controller.dart';
 part 'meetings_controller.dart';
 part 'meeting_ai_views.dart';
-part 'settings_controller.dart';
 part 'shell/legacy_feature_adapters.dart';
 
 class Foresight extends StatelessWidget {
@@ -119,7 +114,15 @@ class _WorkspaceState extends State<Workspace>
   late final sourceFeature = _SourcesController(this);
   late final chatFeature = _ChatController(this);
   late final meetingFeature = _MeetingsController(this);
-  late final settingsFeature = _SettingsController(this);
+  late final settingsFeature = SettingsController(
+    host: this,
+    navigation: this,
+    operations: this,
+    lifecycle: this,
+    integrations: integrationFeature,
+    integrationCommands: integrationFeature,
+    meetings: meetingPorts,
+  );
   late final integrationFeature = IntegrationsController(
     host: this,
     navigation: this,
@@ -131,8 +134,8 @@ class _WorkspaceState extends State<Workspace>
     onboarding: onboardingActivity,
   );
 
-  late final PreferenceCommands preferenceCommands = _LegacyPreferenceCommands(
-    settingsFeature,
+  late final PreferenceCommands preferenceCommands = _PreferenceCommands(
+    (key, value) => settingsFeature.preference(key, value),
   );
   late final meetingPorts = _LegacyMeetingPorts(meetingFeature);
   late final OnboardingActivity onboardingActivity = _LegacyOnboardingActivity(
@@ -174,8 +177,7 @@ class _WorkspaceState extends State<Workspace>
   bool clearingWorkspace = false;
 
   @override
-  void setClearingWorkspace(bool value) =>
-      update(() => clearingWorkspace = value);
+  void setClearingWorkspace(bool value) => clearingWorkspace = value;
 
   @override
   void serviceChanged() {
@@ -399,6 +401,7 @@ class _WorkspaceState extends State<Workspace>
           },
         ),
       );
+    settingsFeature.dispose();
     integrationFeature.dispose();
     sourceFeature.graphMotionTicker.dispose();
     sourceFeature.graphCameraController.dispose();
@@ -411,9 +414,6 @@ class _WorkspaceState extends State<Workspace>
       sourceFeature.graphLabelInput,
       meetingFeature.noteTitle,
       meetingFeature.noteBody,
-      settingsFeature.modelPath,
-      settingsFeature.runtimePath,
-      settingsFeature.tokenizer,
       meetingFeature.meetingNotesController,
       meetingFeature.meetingSearchController,
     ]) {
@@ -890,7 +890,7 @@ class _WorkspaceState extends State<Workspace>
                                 ),
                                 WorkspaceTab.models => settingsFeature.models(),
                                 WorkspaceTab.stats => settingsFeature.stats(),
-                                WorkspaceTab.settings => _SettingsView(
+                                WorkspaceTab.settings => SettingsView(
                                   settingsFeature,
                                 ),
                               },

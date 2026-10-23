@@ -12,7 +12,7 @@ abstract class _FeatureController {
   _SourcesController get sourceFeature => shell.sourceFeature;
   _ChatController get chatFeature => shell.chatFeature;
   _MeetingsController get meetingFeature => shell.meetingFeature;
-  _SettingsController get settingsFeature => shell.settingsFeature;
+  SettingsCommands get settingsFeature => shell.settingsFeature;
   IntegrationsPort get integrationFeature => shell.integrationFeature;
 
   /// UI futures share the shell's gate while retaining their original owner.

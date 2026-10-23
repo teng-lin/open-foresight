@@ -2,13 +2,13 @@ part of '../application.dart';
 
 /// Narrow bridges for features that still belong to the application library.
 /// Each bridge leaves state and resources with the existing feature owner.
-final class _LegacyPreferenceCommands implements PreferenceCommands {
-  const _LegacyPreferenceCommands(this.owner);
-  final _SettingsController owner;
+/// Defers the cyclic preference dependency until a command is issued.
+final class _PreferenceCommands implements PreferenceCommands {
+  const _PreferenceCommands(this.write);
+  final Future<void> Function(String, String) write;
 
   @override
-  Future<void> preference(String key, String value) =>
-      owner.preference(key, value);
+  Future<void> preference(String key, String value) => write(key, value);
 }
 
 final class _LegacyMeetingPorts implements MeetingActivity, MeetingCommands {

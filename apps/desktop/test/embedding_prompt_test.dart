@@ -4,7 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/src/gemma_download.dart';
-import 'package:open_foresight/gemma_setup_view.dart';
+import 'package:open_foresight/features/settings/gemma_setup_view.dart';
 import 'package:foresight_core/src/store.dart';
 
 void main() {
