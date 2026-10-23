@@ -354,3 +354,31 @@ unmatchable requests fail closed. Identical visible facts cannot establish the
 identity of distinct external clients. Fresh actual GUI acceptance is required
 for the new accessibility observation; earlier button-only snapshots do not
 establish that matching ran.
+
+### First combined validation candidate
+
+`dab551266553cc9ccd49564120ccd5eeaeb6bae9` was exported with exact blob/mode
+and file-set verification. Its fresh Linux native build passed 30/30 CTest;
+HanSolo passed 33/33 and core 2,066 passed / 14 skipped at 95.42%
+(16,276/17,058). Linux freshly compiled AOT service/MCP and Release Flutter.
+
+The remaining whole jobs failed and are retained as failures: Linux desktop
+541 passed / 4 failed / 17 skipped; HanSolo desktop 517 / 30 / 13; Python
+5,506 / 4 / 31 at 95.79% coverage; compiled service/MCP 32 / 2 / 0.
+The desktop failures were stale scope selectors, redundant fixture interception
+and missing injected Mac facts. Their bounded corrections (`4a55eba1`) passed
+all 30 exact failed Mac cases, then 33 affected-file cases on each platform.
+Python's stale typed-helper assertion and three fixtures that never created the
+intended bad permissions under restrictive umask were corrected in `af62fed7`
+and `8b52ea92`, preserving the rejection and ordering assertions. Compiled probe
+migration remains in progress. Full jobs must pass on the next candidate.
+
+Claude's second round cleared the product corrections within its source scope,
+but found text-frame ambiguity and case-insensitive AppleScript comparisons in
+the harness. `55d70da4` establishes frame boundaries before decoding payloads,
+checks the complete expected fact set and uses case-sensitive Mac comparisons.
+The original matcher accepted a mismatched framed argument; the correction
+rejects it, including through the complete call path. Its 114 focused tests,
+analysis and actual Mac script compilation passed, followed by an independent
+source review. Actual GUI behavior and final CLI convergence remain pending.
+The native-agent Chat follow-up review also found no remaining actionable issue.
