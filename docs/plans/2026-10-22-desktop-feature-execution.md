@@ -83,7 +83,8 @@ seven-screen stimulus, 20 status notifications admit no new projection/read/
 watch/worker operations and produce one coalesced UI notification per screen.
 These fixture counts measure work admission and rebuilds, not latency. Separate
 actual-builder guards establish the scoped SQL-during-render correction. See
-the plan and `reader-admissions-comparison-83a26aa9.md` for exact comparisons and
+[the plan](2026-10-20-core-desktop-refactor-plan.md) and
+`reader-admissions-comparison-83a26aa9.md` for exact comparisons and
 limits.
 
 ## Historical execution checkpoints
@@ -1133,6 +1134,8 @@ unchanged; disposable private ownership was restored and no owned process or
 container survived. This is functional smoke coverage, with no physical
 microphone/GPU, pixel-baseline or comprehensive accessibility claim.
 
+## Mac broad real-model workflow attempts (r49–r86)
+
 On the current Mac build, tooltip-only `IconButton` controls lack individual AX
 labels, the Ask and note fields are anonymous, and some rendered text appears in
 group labels. The graph zoom percentage is merged into the root `AXImage` label.
@@ -1189,7 +1192,7 @@ Root-reviewed evidence includes:
 `mac-final-83a26aa9-r1/broad-r56-evidence/root-evidence-review.json`,
 `mac-final-83a26aa9-r1/broad-r58-evidence/root-evidence-review.json`,
 `mac-final-83a26aa9-r1/broad-r60-evidence/root-evidence-review.json`,
-`mac-final-83a26aa9-r1/broad-r68-evidence/root-evidence-review.json` and
+`mac-final-83a26aa9-r1/broad-r68-evidence/root-evidence-review.json`,
 `mac-final-83a26aa9-r1/broad-r72-evidence/root-evidence-review.json` and
 `mac-final-83a26aa9-r1/broad-r74-evidence/root-evidence-review.json`.
 
@@ -1204,7 +1207,6 @@ and owned cleanup. The original selected-style oracle failed after restart;
 final supported persistence and exact four-source graph/vector scope remain
 pending. Evidence:
 `mac-final-83a26aa9-r1/broad-r76-evidence/root-evidence-review.json`.
-
 
 R76's original 60-second restart oracle failed to establish Concise selection
 through native accessibility attributes. R78's read-only typed diagnostic found
@@ -1267,7 +1269,7 @@ Evidence: `mac-final-83a26aa9-r1/broad-r86-evidence/root-evidence-review.json`.
 The 95-row requirement handoff has completed its source, assertion and actual
 execution review. For 59 implementation and contract rows, 168 selected positive
 claims bind to 1,796 passing case references (1,287 unique cases). Independent
-review rehashed 94 source files and nine event reports, then root separately
+review rehashed 94 test files and nine event reports, then root separately
 verified the bindings. All eight API-negotiation cases also passed on each host.
 The supported Mac feature/restart scope is now qualified separately by the
 terminal r86 review, with selected-style AX still unqualified. Final delivery and

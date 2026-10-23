@@ -432,6 +432,9 @@ graph currentness. Output SHA256: `3700e1230347cc2093ca34dd654db2ea94cc508a0ec55
 
 ## Final local evidence handoff (delivery pending)
 
+Earlier rounds are chronological records; this handoff supersedes their pending
+status within the scopes below.
+
 Application/native/runtime source remains `83a26aa9`; dependent reviewed code is
 `0ec8ea49`, with its unchanged Python portion qualified at `6ff877a6`. The initial
 two-document aggregate was integrated at `45a7334f`. Native/root review and Claude
