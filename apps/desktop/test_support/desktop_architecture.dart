@@ -16,6 +16,32 @@ const sharedDesktopLibraries = {
   'service_edit_dialog.dart',
 };
 
+List<String> desktopDependencyUris(UriBasedDirective directive) => [
+  directive.uri.stringValue ?? '',
+  if (directive is NamespaceDirective)
+    for (final configuration in directive.configurations)
+      configuration.uri.stringValue ?? '',
+];
+
+bool fixtureImportsCoreImplementation(String relative, String source) {
+  final unit = parseString(content: source, path: relative).unit;
+  for (final directive in unit.directives.whereType<UriBasedDirective>()) {
+    for (final value in desktopDependencyUris(directive)) {
+      final uri = Uri.parse(value);
+      if (uri.scheme == 'package' &&
+          uri.pathSegments.first == 'foresight_core' &&
+          _normalPath(uri.pathSegments.skip(1).join('/')).startsWith('src/'))
+        return true;
+      final resolved = uri.scheme.isEmpty
+          ? Uri(path: relative).resolve(value)
+          : uri;
+      if (_normalPath(resolved.path).contains('foresight_core/lib/src/'))
+        return true;
+    }
+  }
+  return false;
+}
+
 String _normalPath(String path) => Uri(path: path).normalizePath().path;
 
 List<String> desktopArchitectureViolations(String relative, String source) {
@@ -37,13 +63,7 @@ List<String> desktopArchitectureViolations(String relative, String source) {
     }
   }
   for (final directive in unit.directives.whereType<UriBasedDirective>()) {
-    final uris = [
-      directive.uri.stringValue ?? '',
-      if (directive is NamespaceDirective)
-        for (final configuration in directive.configurations)
-          configuration.uri.stringValue ?? '',
-    ];
-    for (final uri in uris) {
+    for (final uri in desktopDependencyUris(directive)) {
       final parsed = Uri.parse(uri);
       final package =
           parsed.scheme == 'package' && parsed.pathSegments.isNotEmpty

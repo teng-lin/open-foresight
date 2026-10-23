@@ -32,13 +32,7 @@ void main() {
         path: file.path,
       ).unit;
       for (final directive in unit.directives.whereType<UriBasedDirective>()) {
-        final uris = [
-          directive.uri.stringValue ?? '',
-          if (directive is NamespaceDirective)
-            for (final conditional in directive.configurations)
-              conditional.uri.stringValue ?? '',
-        ];
-        for (final uri in uris) {
+        for (final uri in desktopDependencyUris(directive)) {
           if (uri.startsWith('package:mcp_dart/')) {
             violations.add('${file.path}: $uri');
           } else if (uri.startsWith('package:')) {
