@@ -26,7 +26,7 @@ extension _MeetingAiViews on MeetingsController {
   Widget meetingAnswerScope(int id, {required bool automatic}) {
     final identity = FeatureRequestIdentity.capture(d);
     final key = automatic ? 'proactiveScope.$id' : 'answerScope.meeting:$id';
-    final scope = d.store.preference(key, automatic ? 'meeting' : 'workspace');
+    final scope = _reads.preference(key, automatic ? 'meeting' : 'workspace');
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Row(
@@ -133,8 +133,8 @@ extension _MeetingAiViews on MeetingsController {
 
   Widget meetingActionsPanel(int id) {
     final identity = FeatureRequestIdentity.capture(d);
-    final tasks = readRows(d.store.meetingTasks(id));
-    final versions = readRows(d.store.meetingArtifacts(id, 'actions'));
+    final tasks = _reads.tasks(id);
+    final versions = _reads.artifacts(id, 'actions');
     final active = _workflow(id, 'actions')?.active == true;
     return Column(
       children: [
@@ -162,12 +162,7 @@ extension _MeetingAiViews on MeetingsController {
                 IconButton(
                   tooltip: 'Copy Action items',
                   onPressed: () => Clipboard.setData(
-                    ClipboardData(
-                      text:
-                          (versions.first['edited'] ??
-                                  versions.first['generated'])
-                              as String,
-                    ),
+                    ClipboardData(text: versions.first.body),
                   ),
                   icon: const Icon(Icons.copy_outlined),
                 ),
@@ -186,9 +181,7 @@ extension _MeetingAiViews on MeetingsController {
                     : SingleChildScrollView(
                         padding: const EdgeInsets.all(16),
                         child: GeneratedContent(
-                          (versions.first['edited'] ??
-                                  versions.first['generated'])
-                              as String,
+                          versions.first.body,
                           openLink: _host.environment.openUri,
                         ),
                       )
@@ -205,7 +198,7 @@ extension _MeetingAiViews on MeetingsController {
                               Row(
                                 children: [
                                   Checkbox(
-                                    value: task['status'] == 'completed',
+                                    value: task.status == 'completed',
                                     onChanged: active || _operations.busy
                                         ? null
                                         : (value) =>
@@ -215,7 +208,7 @@ extension _MeetingAiViews on MeetingsController {
                                                 await d.commandCurrent(
                                                   Operation.meetingsEditTask,
                                                   {
-                                                    'id': task['id'],
+                                                    'id': task.id,
                                                     'status': value == true
                                                         ? 'completed'
                                                         : 'open',
@@ -226,11 +219,7 @@ extension _MeetingAiViews on MeetingsController {
                                                 );
                                               }),
                                   ),
-                                  Expanded(
-                                    child: SelectableText(
-                                      task['task'] as String,
-                                    ),
-                                  ),
+                                  Expanded(child: SelectableText(task.task)),
                                   IconButton(
                                     tooltip: 'Edit task',
                                     onPressed: active || _operations.busy
@@ -248,25 +237,21 @@ extension _MeetingAiViews on MeetingsController {
                                 ],
                               ),
                               Text(
-                                '${task['owner'] ?? 'Unassigned'}${task['due'] == null ? '' : ' · Due: ${task['due']}'} · ${task['status']}',
+                                '${task.owner ?? 'Unassigned'}${task.due == null ? '' : ' · Due: ${task.due}'} · ${task.status}',
                               ),
-                              if (task['stale'] == 1)
+                              if (task.stale)
                                 const Text(
                                   'Not found in the latest extraction — retained for review',
                                 ),
-                              if (task['manual'] == 1)
+                              if (task.manual)
                                 const Text('Your edits are preserved'),
                               ExpansionTile(
                                 title: const Text('Supporting evidence'),
                                 children: [
-                                  for (final quote
-                                      in jsonDecode(task['evidence'] as String)
-                                          as List)
+                                  for (final quote in task.evidence)
                                     ListTile(
-                                      title: SelectableText(
-                                        quote['quote'] as String,
-                                      ),
-                                      subtitle: Text(quote['id'] as String),
+                                      title: SelectableText(quote.quote),
+                                      subtitle: Text(quote.id),
                                     ),
                                 ],
                               ),
@@ -281,8 +266,7 @@ extension _MeetingAiViews on MeetingsController {
                           for (final version in versions.skip(1))
                             ListTile(
                               title: GeneratedContent(
-                                (version['edited'] ?? version['generated'])
-                                    as String,
+                                version.body,
                                 openLink: _host.environment.openUri,
                               ),
                             ),
@@ -296,17 +280,17 @@ extension _MeetingAiViews on MeetingsController {
   }
 
   Future<void> editMeetingTask(
-    Map<String, Object?> task,
+    MeetingTask task,
     FeatureRequestIdentity identity,
   ) async {
     final selectedMeeting = meetingId;
-    if (task['meeting_id'] != selectedMeeting) return;
+    if (task.meetingId != selectedMeeting) return;
     bool current() =>
         meetingId == selectedMeeting && identity.isCurrent(d, alive: mounted);
     if (!current()) return;
-    final text = TextEditingController(text: task['task'] as String),
-        owner = TextEditingController(text: task['owner'] as String? ?? ''),
-        due = TextEditingController(text: task['due'] as String? ?? '');
+    final text = TextEditingController(text: task.task),
+        owner = TextEditingController(text: task.owner ?? ''),
+        due = TextEditingController(text: task.due ?? '');
     try {
       final save = await _dialogs.showInputDialog<bool>(
         builder: (dialog) => AlertDialog(
@@ -349,7 +333,7 @@ extension _MeetingAiViews on MeetingsController {
       );
       if (save == true && current())
         await d.commandCurrent(Operation.meetingsEditTask, {
-          'id': task['id'],
+          'id': task.id,
           'task': text.text,
           'owner': owner.text.trim().isEmpty ? null : owner.text.trim(),
           'due': due.text.trim().isEmpty ? null : due.text.trim(),
@@ -365,15 +349,28 @@ extension _MeetingAiViews on MeetingsController {
   }
 
   Future<List<String>?> selectMeetingSources(int id, String preference) async {
-    final all = readRows(d.store.sourceSummaries)
-        .where(
-          (source) =>
-              !(source['id'] as String).startsWith('meeting-preparation-'),
-        )
+    final identity = FeatureRequestIdentity.capture(d);
+    final selectedMeeting = meetingId, preview = meetingPreviewId;
+    bool current() =>
+        identity.isCurrent(d, alive: mounted) &&
+        meetingId == selectedMeeting &&
+        meetingPreviewId == preview;
+    final sources = await readCurrentMeeting(
+      d.store,
+      StoreReadQueries.sources(),
+    );
+    if (!current()) return null;
+    final saved = await readCurrentMeeting(
+      d.store,
+      StoreReadQueries.preference('$preference.$id', '[]'),
+    );
+    if (!current()) return null;
+    final all = sources
+        .where((source) => !source.id.startsWith('meeting-preparation-'))
         .toList();
-    final saved = d.store.preference('$preference.$id', '[]');
     final selected = (jsonDecode(saved) as List).cast<String>().toSet()
-      ..retainAll(all.map((source) => source['id'] as String));
+      ..retainAll(all.map((source) => source.id));
+    if (!context.mounted) return null;
     return showDialog<List<String>>(
       context: context,
       builder: (dialog) => StatefulBuilder(
@@ -390,13 +387,13 @@ extension _MeetingAiViews on MeetingsController {
                     children: [
                       for (final source in all)
                         CheckboxListTile(
-                          value: selected.contains(source['id']),
-                          title: Text(source['title'] as String),
+                          value: selected.contains(source.id),
+                          title: Text(source.title),
                           onChanged: (value) => update(() {
                             if (value == true) {
-                              selected.add(source['id'] as String);
+                              selected.add(source.id);
                             } else {
-                              selected.remove(source['id']);
+                              selected.remove(source.id);
                             }
                           }),
                         ),
@@ -442,13 +439,11 @@ extension _MeetingAiViews on MeetingsController {
 
   Widget meetingPreparationPanel(int id) {
     final identity = FeatureRequestIdentity.capture(d);
-    final versions = readRows(d.store.meetingArtifacts(id, 'preparation'));
+    final versions = _reads.artifacts(id, 'preparation');
     final active = _workflow(id, 'preparation')?.active == true;
     final preview = _workflow(id, 'preparation')?.preview ?? '';
     final artifact = versions.firstOrNull;
-    final manifest = artifact?['manifest'] == null
-        ? const {}
-        : jsonDecode(artifact!['manifest'] as String) as Map;
+    final manifest = artifact?.manifest ?? const {};
     return Column(
       children: [
         Padding(
@@ -475,13 +470,8 @@ extension _MeetingAiViews on MeetingsController {
               if (artifact != null)
                 IconButton(
                   tooltip: 'Copy preparation',
-                  onPressed: () => Clipboard.setData(
-                    ClipboardData(
-                      text:
-                          (artifact['edited'] ?? artifact['generated'])
-                              as String,
-                    ),
-                  ),
+                  onPressed: () =>
+                      Clipboard.setData(ClipboardData(text: artifact.body)),
                   icon: const Icon(Icons.copy_outlined),
                 ),
             ],
@@ -512,10 +502,7 @@ extension _MeetingAiViews on MeetingsController {
                           'Some documents could not be summarized. See unavailable documents below.',
                         ),
                       GeneratedContent(
-                        active && preview.isNotEmpty
-                            ? preview
-                            : (artifact!['edited'] ?? artifact['generated'])
-                                  as String,
+                        active && preview.isNotEmpty ? preview : artifact!.body,
                         openLink: _host.environment.openUri,
                       ),
                       if (artifact != null)
@@ -535,7 +522,7 @@ extension _MeetingAiViews on MeetingsController {
                           children: [
                             for (final old in versions.skip(1))
                               GeneratedContent(
-                                (old['edited'] ?? old['generated']) as String,
+                                old.body,
                                 openLink: _host.environment.openUri,
                               ),
                           ],

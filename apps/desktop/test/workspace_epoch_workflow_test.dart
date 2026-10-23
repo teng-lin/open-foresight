@@ -62,7 +62,9 @@ void main() {
       final before = f.store.meeting('Before');
       f.store.artifact(before, 'summary', 'old summary', 'fixture');
       final row = f.store.rows('SELECT * FROM artifacts').single;
-      final editing = f.shell.meetingFeature.editArtifact(row);
+      final editing = f.shell.meetingFeature.editArtifact(
+        MeetingArtifact.fromRow(row),
+      );
       await tester.pumpAndSettle();
       await tester.runAsync(
         () => f.connection.application.call(Operation.workspaceClear.wire, {}),
@@ -152,7 +154,7 @@ void main() {
       // A clear has committed; its event has not reached the views yet.
       f.store.renewWorkspaceEpoch();
       expect(f.connection.workspaceReplaced, isTrue);
-      await (f.shell.meetingFeature.editArtifact(row));
+      await (f.shell.meetingFeature.editArtifact(MeetingArtifact.fromRow(row)));
       await tester.pumpAndSettle();
       expect(find.byType(AlertDialog), findsNothing);
       expect(f.shell.error, contains('cleared elsewhere'));

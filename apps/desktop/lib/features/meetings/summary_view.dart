@@ -7,15 +7,13 @@ extension _SummaryView on MeetingsController {
     final fromPreview = meetingId == null;
     final kind = actions ? 'actions' : 'summary';
     final title = actions ? 'Action items' : 'Summary';
-    final versions = readRows(d.store.meetingArtifacts(id, kind));
+    final versions = _reads.artifacts(id, kind);
     final artifact = versions.firstOrNull;
     final summary = actions ? null : d.capturePresentation.summary(id);
     final active = summary?.active == true;
     final preview = summary?.preview ?? '';
-    final manifest = artifact?['manifest'] as String?;
-    final clipped =
-        manifest != null &&
-        (jsonDecode(manifest) as Map)['reduction_clipped'] == true;
+    final manifest = artifact?.manifest;
+    final clipped = manifest != null && manifest['reduction_clipped'] == true;
     return Column(
       children: [
         Padding(
@@ -62,13 +60,8 @@ extension _SummaryView on MeetingsController {
               if (artifact != null)
                 IconButton(
                   tooltip: 'Copy $title',
-                  onPressed: () => Clipboard.setData(
-                    ClipboardData(
-                      text:
-                          (artifact['edited'] ?? artifact['generated'])
-                              as String,
-                    ),
-                  ),
+                  onPressed: () =>
+                      Clipboard.setData(ClipboardData(text: artifact.body)),
                   icon: const Icon(Icons.copy_outlined),
                 ),
               if (artifact != null)
@@ -133,15 +126,14 @@ extension _SummaryView on MeetingsController {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if ((artifact['input_revision'] as int? ?? 0) <
-                          (d.store.meetingRevision(id) ?? 0))
+                      if (artifact.inputRevision < (_reads.revision(id) ?? 0))
                         const Text('Out of date — regenerate'),
                       if (clipped)
                         const Text(
                           'This summary used shortened excerpts. Review the transcript for full context.',
                         ),
                       GeneratedContent(
-                        (artifact['edited'] ?? artifact['generated']) as String,
+                        artifact.body,
                         openLink: _host.environment.openUri,
                         fontSize: _chat.answerFontSize,
                       ),
@@ -152,8 +144,7 @@ extension _SummaryView on MeetingsController {
                             for (final previous in versions.skip(1))
                               ListTile(
                                 title: GeneratedContent(
-                                  (previous['edited'] ?? previous['generated'])
-                                      as String,
+                                  previous.body,
                                   openLink: _host.environment.openUri,
                                 ),
                                 trailing: IconButton(

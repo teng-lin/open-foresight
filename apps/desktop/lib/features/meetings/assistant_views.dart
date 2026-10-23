@@ -39,14 +39,15 @@ extension _AssistantViews on MeetingsController {
   );
 
   Widget meetingQuestionsPanel(int id) {
-    final automatic = d.store.preference('proactiveAnswers', 'true') == 'true';
-    final detected = readRows(d.store.meetingQuestions(id));
-    final manual = d.store
-        .finalTranscript(id)
+    final automatic = _reads.preference('proactiveAnswers', 'true') == 'true';
+    final detected = _reads.questions(id);
+    final manual = _reads
+        .transcript(id)
+        .where((row) => row.finalSegment)
         .where(
           (row) =>
-              (row['text'] as String).contains(RegExp('[?？]')) &&
-              !detected.any((question) => question['question'] == row['text']),
+              row.text.contains(RegExp('[?？]')) &&
+              !detected.any((question) => question.question == row.text),
         )
         .toList();
     final capture = d.capturePresentation;
@@ -118,12 +119,12 @@ extension _AssistantViews on MeetingsController {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                item['question'] as String,
+                                item.question,
                                 style: const TextStyle(
                                   fontWeight: FontWeight.w700,
                                 ),
                               ),
-                              Text(switch (item['state']) {
+                              Text(switch (item.state) {
                                 'queued' => 'Automatic · Waiting',
                                 'answering' => 'Automatic · Answering…',
                                 'completed' => 'Automatic · Answered',
@@ -135,37 +136,30 @@ extension _AssistantViews on MeetingsController {
                                   'Automatic · Replaced by an updated question',
                                 _ => 'Automatic · Saved question',
                               }),
-                              if ((item['error'] as String).isNotEmpty)
-                                Text(item['error'] as String),
-                              if (item['body'] != null)
+                              if ((item.error).isNotEmpty) Text(item.error),
+                              if (item.body != null)
                                 GeneratedContent(
-                                  item['body'] as String,
+                                  item.body!,
                                   openLink: _host.environment.openUri,
                                   fontSize: _chat.answerFontSize,
                                 ),
-                              if (item['body'] != null)
+                              if (item.body != null)
                                 IconButton(
                                   tooltip: 'Copy automatic answer',
                                   onPressed: () => Clipboard.setData(
-                                    ClipboardData(text: item['body'] as String),
+                                    ClipboardData(text: item.body!),
                                   ),
                                   icon: const Icon(Icons.copy_outlined),
                                 ),
-                              if (item['citations'] != null)
+                              if (item.citations.isNotEmpty)
                                 Wrap(
                                   children: [
-                                    for (final source
-                                        in jsonDecode(
-                                              item['citations'] as String,
-                                            )
-                                            as List)
+                                    for (final source in item.citations)
                                       TextButton(
-                                        onPressed: () => _chatCommands.citation(
-                                          (source as Map)
-                                              .cast<String, Object?>(),
-                                        ),
+                                        onPressed: () =>
+                                            _chatCommands.cite(source),
                                         child: Text(
-                                          '[${source['citation']}] source revision ${source['revision']}',
+                                          '[${source.label}] source revision ${source.revision}',
                                         ),
                                       ),
                                   ],
@@ -174,12 +168,12 @@ extension _AssistantViews on MeetingsController {
                                 'failed',
                                 'insufficient_context',
                                 'cancelled',
-                              ].contains(item['state']))
+                              ].contains(item.state))
                                 TextButton(
                                   onPressed: () => _operations.run(() async {
                                     await d.command(
                                       Operation.meetingsRetryQuestion,
-                                      {'id': item['id']},
+                                      {'id': item.id},
                                     );
                                   }),
                                   child: const Text('Try again'),
@@ -190,7 +184,7 @@ extension _AssistantViews on MeetingsController {
                       ),
                     for (final row in manual)
                       ListTile(
-                        title: SelectableText(row['text'] as String),
+                        title: SelectableText(row.text),
                         trailing: IconButton(
                           tooltip: 'Answer this question',
                           onPressed:
@@ -199,10 +193,7 @@ extension _AssistantViews on MeetingsController {
                                   meetingEnhancing
                               ? null
                               : () {
-                                  _chatCommands.setQuestion(
-                                    id,
-                                    row['text'] as String,
-                                  );
+                                  _chatCommands.setQuestion(id, row.text);
                                   update(() => meetingPanel = 'Chat');
                                   unawaited(
                                     _chatCommands.askQuestion(meetingScope: id),
@@ -219,9 +210,9 @@ extension _AssistantViews on MeetingsController {
   }
 
   Widget meetingTranscriptPanel(int id, {bool questions = false}) {
-    final rows = readRows(d.store.meetingTranscript(id));
+    final rows = _reads.transcript(id);
     final displayed = questions
-        ? rows.where((t) => (t['text'] as String).contains('?')).toList()
+        ? rows.where((t) => (t.text).contains('?')).toList()
         : rows;
     return Column(
       children: [
@@ -244,7 +235,7 @@ extension _AssistantViews on MeetingsController {
                             _operations.run(() => importMeetingTranscript(id)),
                   icon: const Icon(Icons.file_upload_outlined),
                 ),
-                if (readRows(d.store.calendarAttachments(id)).isNotEmpty)
+                if (_reads.attachments(id).isNotEmpty)
                   IconButton(
                     tooltip: 'Import meeting attachments',
                     onPressed:
@@ -264,7 +255,7 @@ extension _AssistantViews on MeetingsController {
                       ? null
                       : () => Clipboard.setData(
                           ClipboardData(
-                            text: rows.map((row) => row['text']).join('\n\n'),
+                            text: rows.map((row) => row.text).join('\n\n'),
                           ),
                         ),
                   icon: const Icon(Icons.copy_all),
@@ -305,10 +296,10 @@ extension _AssistantViews on MeetingsController {
                             ) ...[
                               TextSpan(
                                 text:
-                                    '${MeetingSpeaker.fromSource(rows[index]['source'] as String).label}\n',
+                                    '${MeetingSpeaker.fromSource(rows[index].source).label}\n',
                                 style: Theme.of(context).textTheme.bodySmall,
                               ),
-                              TextSpan(text: rows[index]['text'] as String),
+                              TextSpan(text: rows[index].text),
                               if (index < rows.length - 1)
                                 const TextSpan(text: '\n\n'),
                             ],
@@ -320,11 +311,9 @@ extension _AssistantViews on MeetingsController {
                       for (final t in displayed)
                         ListTile(
                           contentPadding: EdgeInsets.zero,
-                          title: SelectableText(t['text'] as String),
+                          title: SelectableText(t.text),
                           subtitle: Text(
-                            MeetingSpeaker.fromSource(
-                              t['source'] as String,
-                            ).label,
+                            MeetingSpeaker.fromSource(t.source).label,
                           ),
                           trailing: questions
                               ? IconButton(
@@ -335,10 +324,7 @@ extension _AssistantViews on MeetingsController {
                                           meetingEnhancing
                                       ? null
                                       : () {
-                                          _chatCommands.setQuestion(
-                                            id,
-                                            t['text'] as String,
-                                          );
+                                          _chatCommands.setQuestion(id, t.text);
                                           update(() => meetingPanel = 'Chat');
                                           unawaited(
                                             _chatCommands.askQuestion(

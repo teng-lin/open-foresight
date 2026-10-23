@@ -43,12 +43,18 @@ extension _WorkspaceView on MeetingsController {
 
   Widget meetingWorkspace() {
     final id = meetingId!;
-    loadMeetingNotes(id);
-    final meeting = d.store.meetingWorkspaceRows(id).single;
-    final start = (meeting['starts'] ?? meeting['created'] ?? 0) as int;
+    final meeting = _reads.meeting(id);
+    if (meeting == null)
+      return Center(
+        child: Text(
+          _reads.meetingLoaded(id)
+              ? 'Meeting no longer exists.'
+              : 'Loading meeting…',
+        ),
+      );
+    final start = (meeting.starts ?? meeting.created ?? 0);
     final end =
-        (meeting['ends'] ?? start + const Duration(minutes: 30).inMilliseconds)
-            as int;
+        (meeting.ends ?? start + const Duration(minutes: 30).inMilliseconds);
     final date = DateTime.fromMillisecondsSinceEpoch(start).toLocal();
     final dateText =
         '${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][date.weekday - 1]}, ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][date.month - 1]} ${date.day}, ${date.year}';
@@ -90,10 +96,7 @@ extension _WorkspaceView on MeetingsController {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        meeting['title'] as String,
-                        style: MeetingVisuals.title,
-                      ),
+                      Text(meeting.title, style: MeetingVisuals.title),
                       const SizedBox(height: 8),
                       Wrap(
                         spacing: 8,
@@ -109,11 +112,11 @@ extension _WorkspaceView on MeetingsController {
                 ),
               ],
             ),
-            if (speechSetupProblem(d.store) != null)
+            if (preparedSpeechSetupProblem(_reads.speech) != null)
               ListTile(
                 dense: true,
                 leading: const Icon(Icons.info_outline),
-                title: Text(speechSetupProblem(d.store)!),
+                title: Text(preparedSpeechSetupProblem(_reads.speech)!),
                 trailing: TextButton(
                   onPressed: () => _settings.showModelSetup('speech'),
                   child: const Text('Set up speech'),

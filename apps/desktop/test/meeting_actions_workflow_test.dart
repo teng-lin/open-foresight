@@ -251,10 +251,9 @@ void main() {
       final f = await ControllerFixture.mount(tester);
       final id = f.store.meeting('Artifact fixture');
       f.store.artifact(id, 'summary', 'Generated summary', 'fixture');
-      final artifact = f.store.rows(
-        'SELECT * FROM artifacts WHERE meeting_id=?',
-        [id],
-      ).single;
+      final artifact = (await f.connection.store.read(
+        StoreReadQueries.artifacts(id, 'summary'),
+      )).value!.single;
       final meeting = f.shell.meetingFeature;
       var edit = meeting.editArtifact(artifact);
       await tester.pumpAndSettle();
@@ -270,18 +269,18 @@ void main() {
       await edit;
       expect(
         f.store.rows('SELECT edited FROM artifacts WHERE id=?', [
-          artifact['id'],
+          artifact.id,
         ]).single['edited'],
         'User summary',
       );
-      edit = meeting.editArtifact({...artifact, 'edited': 'User summary'});
+      edit = meeting.editArtifact(artifact, initialText: 'User summary');
       await tester.pumpAndSettle();
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
       await edit;
       expect(
         f.store.rows('SELECT edited FROM artifacts WHERE id=?', [
-          artifact['id'],
+          artifact.id,
         ]).single['edited'],
         'User summary',
       );

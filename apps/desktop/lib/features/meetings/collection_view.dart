@@ -6,15 +6,13 @@ extension _CollectionView on MeetingsController {
     return '${date.hour % 12 == 0 ? 12 : date.hour % 12}:${date.minute.toString().padLeft(2, '0')} ${date.hour < 12 ? 'AM' : 'PM'}';
   }
 
-  int meetingStart(Map<String, Object?> meeting) =>
-      (meeting['calendar_starts'] ?? meeting['created'] ?? 0) as int;
+  int meetingStart(MeetingDetails meeting) =>
+      (meeting.starts ?? meeting.created ?? 0);
 
-  int meetingEnd(Map<String, Object?> meeting) =>
-      (meeting['calendar_ends'] ??
-              meetingStart(meeting) +
-                  ((meeting['duration_ms'] as int?) ??
-                      const Duration(minutes: 30).inMilliseconds))
-          as int;
+  int meetingEnd(MeetingDetails meeting) =>
+      (meeting.ends ??
+      meetingStart(meeting) +
+          (meeting.durationMs ?? const Duration(minutes: 30).inMilliseconds));
 
   String meetingDay(int timestamp) {
     if (timestamp == 0) return 'Saved meetings';
@@ -79,11 +77,9 @@ extension _CollectionView on MeetingsController {
   );
 
   Widget meetingList({bool showHeading = true}) {
-    final rows = readRows(d.store.meetingCollection)
+    final rows = _reads.meetings
         .where(
-          (m) => (m['title'] as String).toLowerCase().contains(
-            meetingQuery.toLowerCase(),
-          ),
+          (m) => m.title.toLowerCase().contains(meetingQuery.toLowerCase()),
         )
         .toList();
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -186,12 +182,12 @@ extension _CollectionView on MeetingsController {
     );
   }
 
-  Widget meetingListTile(Map<String, Object?> meeting) {
-    final id = meeting['id'] as int;
+  Widget meetingListTile(MeetingCollectionEntry meeting) {
+    final id = meeting.id;
     final start = meetingStart(meeting);
     final end = meetingEnd(meeting);
-    final attachmentCount = readRows(d.store.calendarAttachments(id)).length;
-    final state = meeting['state'] as String;
+    final attachmentCount = _reads.attachments(id).length;
+    final state = meeting.state;
     final active = state == 'recording' || state == 'transcribing';
     void open() => update(() {
       forgetPendingMeetingCreates();
@@ -210,7 +206,7 @@ extension _CollectionView on MeetingsController {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                meeting['title'] as String,
+                meeting.title,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: MeetingVisuals.listTitle,
@@ -220,7 +216,7 @@ extension _CollectionView on MeetingsController {
                   '${meetingClock(start)} – ${meetingClock(end)}',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
-              if (meeting['has_transcript'] == 1)
+              if (meeting.hasTranscript)
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
                   child: Container(
@@ -253,12 +249,12 @@ extension _CollectionView on MeetingsController {
                     ),
                   ),
                 ),
-              if (meeting['calendar_status'] != null &&
-                  meeting['calendar_status'] != 'confirmed')
+              if (meeting.calendarStatus != null &&
+                  meeting.calendarStatus != 'confirmed')
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
                   child: Text(
-                    'Calendar ${meeting['calendar_status']}',
+                    'Calendar ${meeting.calendarStatus}',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ),
@@ -351,8 +347,15 @@ extension _CollectionView on MeetingsController {
   }
 
   Widget meetingPreview(int id) {
-    loadMeetingNotes(id);
-    final meeting = d.store.meetingPreviewRows(id).single;
+    final meeting = _reads.meeting(id, preview: true);
+    if (meeting == null)
+      return Center(
+        child: Text(
+          _reads.meetingLoaded(id, preview: true)
+              ? 'Meeting no longer exists.'
+              : 'Loading meeting…',
+        ),
+      );
     final start = meetingStart(meeting);
     final end = meetingEnd(meeting);
     return Container(
@@ -373,10 +376,7 @@ extension _CollectionView on MeetingsController {
                 Row(
                   children: [
                     Expanded(
-                      child: Text(
-                        meeting['title'] as String,
-                        style: MeetingVisuals.title,
-                      ),
+                      child: Text(meeting.title, style: MeetingVisuals.title),
                     ),
                     IconButton(
                       tooltip: 'Expand meeting',

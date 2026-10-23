@@ -125,6 +125,8 @@ void main() {
         chat: chat,
         chatCommands: chat,
       );
+      controller.setSystemAudioSetupReviewed(true);
+      controller.start();
       await tester.binding.setSurfaceSize(const Size(1400, 1000));
       await tester.pumpWidget(
         MaterialApp(
@@ -144,6 +146,12 @@ void main() {
       });
       await tester.pumpAndSettle();
       expect(find.text('Standalone meeting'), findsOneWidget);
+      expect(
+        controller.systemAudioSetupReviewed,
+        true,
+        reason:
+            'A late initial preference cannot replace the current reviewed choice',
+      );
       expect(find.text('Meetings'), findsOneWidget);
       final failure = Completer<void>();
       final action = controller.runAction(() => failure.future);
@@ -152,7 +160,7 @@ void main() {
       await action;
       expect(host.error, isEmpty);
       controller.meetingId = id;
-      controller.loadMeetingNotes(id);
+      await pumpUntil(tester, () => controller.loadedMeetingNotes == id);
       controller.meetingNotesController.text = 'Draft owned by Meetings';
       controller.scheduleMeetingNotesSave();
       expect(controller.hasPendingNoteSave, true);

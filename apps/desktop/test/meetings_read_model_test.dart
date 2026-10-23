@@ -48,6 +48,16 @@ class _Reader implements StoreReader {
     }
   }
 
+  ReadFreshness readFreshness = ReadFreshness.current;
+  RpcError? readError;
+  @override
+  Future<ReadResult<T>> read<T>(ReadQuery<T> query) async => ReadResult(
+    freshness: readFreshness,
+    value: 'fixture' as T,
+    error: readError,
+    requestTag: 'action',
+    sequence: 0,
+  );
   @override
   dynamic noSuchMethod(Invocation invocation) =>
       throw StateError('Unexpected synchronous read ${invocation.memberName}');
@@ -80,6 +90,37 @@ MeetingCollectionEntry _meeting(int id) => MeetingCollectionEntry.fromRow({
 });
 
 void main() {
+  test(
+    'current startup preferences initialize without notifying equal defaults',
+    () async {
+      final reader = _Reader();
+      final connection = _Connection(reader);
+      final current = <String, String>{};
+      var publications = 0;
+      final model = MeetingReadModel(
+        connection: () => connection,
+        changed: () => publications++,
+        currentPreference: (key, value) => current[key] = value,
+      );
+      model.start();
+      await _turn();
+      final before = publications;
+      for (final entry in MeetingReadModel.defaults.entries) {
+        final index = reader.queries.indexWhere(
+          (q) =>
+              q.projection == 'preference' && q.arguments['key'] == entry.key,
+        );
+        reader.reply(index, entry.value);
+      }
+      await _turn();
+      expect(current, MeetingReadModel.defaults);
+      expect(publications, before);
+      await model.dispose();
+      await reader.close();
+      await connection.events.close();
+    },
+  );
+
   test(
     'global and selected watches remain stable across status/data events and retire selection work',
     () async {
@@ -268,6 +309,32 @@ void main() {
       await model.dispose();
       await reader.close();
       await connection.events.close();
+    },
+  );
+  test(
+    'action reads require current projections and retain concrete read failures',
+    () async {
+      final reader = _Reader();
+      expect(
+        await readCurrentMeeting(
+          reader,
+          StoreReadQueries.preference('fixture'),
+        ),
+        'fixture',
+      );
+      reader.readFreshness = ReadFreshness.preview;
+      await expectLater(
+        readCurrentMeeting(reader, StoreReadQueries.preference('fixture')),
+        throwsA(isA<RpcError>()),
+      );
+      reader.readError = RpcError(
+        RpcErrorCode.unavailable,
+        'fixture unavailable',
+      );
+      await expectLater(
+        readCurrentMeeting(reader, StoreReadQueries.preference('fixture')),
+        throwsA(same(reader.readError)),
+      );
     },
   );
 }

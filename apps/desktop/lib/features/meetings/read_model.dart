@@ -7,13 +7,19 @@ import '../../feature_request_identity.dart';
 /// Feature-owned queries. Revisions invalidate the existing reader entries;
 /// only owner/selection changes add or retire subscriptions.
 class MeetingReadModel {
-  MeetingReadModel({required this.connection, required this.changed});
+  MeetingReadModel({
+    required this.connection,
+    required this.changed,
+    this.currentPreference,
+  });
   final DesktopConnection Function() connection;
   final void Function() changed;
+  final void Function(String key, String value)? currentPreference;
   static const defaults = {
     'proactiveAnswers': 'true',
     'liveEnhance': 'true',
     'noteStyle': 'Standard',
+    'audio.systemSetupReviewed': 'false',
   };
   final _slots = <String, _Slot>{};
   StreamSubscription<void>? _changes;
@@ -38,6 +44,7 @@ class MeetingReadModel {
   MeetingNoteData? note(int id) =>
       _value<MeetingNoteData?>(StoreReadQueries.meetingNote(id));
   bool noteLoaded(int id) => _current(StoreReadQueries.meetingNote(id));
+  bool enhancedLoaded(int id) => _current(StoreReadQueries.enhancedNotes(id));
   String enhanced(int id) => _value(StoreReadQueries.enhancedNotes(id)) ?? '';
   List<TranscriptSegment> transcript(int id) =>
       _value(StoreReadQueries.transcript(id)) ?? const [];
@@ -162,6 +169,19 @@ class MeetingReadModel {
 
   void _watch(ReadQuery<Object?> query) {
     final generation = _generation, slot = _Slot();
+    if (query.projection == 'preference') {
+      slot.value = query.arguments['fallback'];
+      slot.fields = slot.value;
+    } else if (const [
+      'meetings',
+      'transcript',
+      'questions',
+      'tasks',
+      'artifacts',
+      'attachments',
+    ].contains(query.projection)) {
+      slot.fields = const [];
+    }
     _slots[query.key] = slot;
     bool current() => _owns(generation) && identical(_slots[query.key], slot);
     try {
@@ -170,7 +190,16 @@ class MeetingReadModel {
           .listen(
             (result) {
               if (!current()) return;
-              final readinessChanged = slot.current != result.current;
+              final readinessChanged =
+                  slot.current != result.current &&
+                  (const [
+                        'meeting',
+                        'meeting_preview',
+                        'meeting_note',
+                        'enhanced_notes',
+                      ].contains(query.projection) ||
+                      (query.projection == 'model' &&
+                          (slot.value != null || result.value != null)));
               slot.current = result.current;
               final accepted =
                   result.current || result.freshness == ReadFreshness.preview;
@@ -179,6 +208,14 @@ class MeetingReadModel {
               if (valueChanged) {
                 slot.value = result.value;
                 slot.fields = nextFields;
+              }
+              if (result.current &&
+                  query.projection == 'preference' &&
+                  result.value is String) {
+                currentPreference?.call(
+                  query.arguments['key'] as String,
+                  result.value as String,
+                );
               }
               final error = result.error?.toString();
               final errorChanged = error != null && error != problem;

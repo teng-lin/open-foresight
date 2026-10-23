@@ -6,7 +6,6 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:foresight_core/desktop.dart';
-import '../../desktop_reader_adapters.dart';
 import '../../failure_text.dart';
 import '../../feature_request_identity.dart';
 import '../../generated_content.dart';
@@ -20,6 +19,7 @@ import 'meeting_export.dart';
 import 'meeting_note_state.dart';
 import 'meeting_visuals.dart';
 import 'note_save_scheduler.dart';
+import 'read_model.dart';
 part 'collection_view.dart';
 part 'workspace_view.dart';
 part 'notes_view.dart';
@@ -59,6 +59,29 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
   final SettingsCommands _settings;
   final ChatActivity _chat;
   final ChatCommands _chatCommands;
+  bool _started = false;
+  int _noteReadGeneration = 0;
+  late final MeetingReadModel _reads = MeetingReadModel(
+    connection: () => d,
+    currentPreference: (key, value) {
+      if (key == 'audio.systemSetupReviewed' && !_systemAudioSetupInitialized) {
+        _systemAudioSetupInitialized = true;
+        _systemAudioSetupReviewed = value == 'true';
+      }
+    },
+    changed: () {
+      if (!mounted) return;
+      final id = meetingId ?? meetingPreviewId;
+      if (id != null) loadMeetingNotes(id);
+      update(() {});
+    },
+  );
+  void start() {
+    if (_started || _disposed) return;
+    _started = true;
+    _reads.start(selected: meetingId, preview: meetingPreviewId);
+  }
+
   bool _disposed = false;
   Future<void>? _closing;
   DesktopConnection get d => _host.connection;
@@ -99,6 +122,8 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
     if (_disposed) return _closing ?? Future<void>.value();
     _disposed = true;
     unawaited(noteEnhancementChanges?.cancel());
+    unawaited(_reads.dispose());
+    _noteReadGeneration++;
     recording?.dispose();
     meetingNotesController.dispose();
     meetingSearchController.dispose();
@@ -143,14 +168,33 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
 
   DateTime recordingElapsedAt = DateTime.now();
 
+  bool _systemAudioSetupInitialized = false, _systemAudioSetupReviewed = false;
   @override
-  bool systemAudioSetupReviewed = false;
+  bool get systemAudioSetupReviewed => _systemAudioSetupReviewed;
+  set systemAudioSetupReviewed(bool value) {
+    _systemAudioSetupInitialized = true;
+    _systemAudioSetupReviewed = value;
+  }
 
-  int? meetingId;
+  int? _meetingId;
+  int? get meetingId => _meetingId;
+  set meetingId(int? value) {
+    if (_meetingId == value) return;
+    _meetingId = value;
+    _noteReadGeneration++;
+    _reads.select(_meetingId, _meetingPreviewId);
+  }
 
   int? recordingMeeting;
 
-  int? meetingPreviewId;
+  int? _meetingPreviewId;
+  int? get meetingPreviewId => _meetingPreviewId;
+  set meetingPreviewId(int? value) {
+    if (_meetingPreviewId == value) return;
+    _meetingPreviewId = value;
+    _noteReadGeneration++;
+    _reads.select(_meetingId, _meetingPreviewId);
+  }
 
   String meetingPreviewTab = 'Notes';
 
@@ -184,7 +228,7 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
     onSaved: (id) {
       if (mounted) {
         if (loadedMeetingNotes == id && !meetingNoteSaves.isDirty(id)) {
-          loadMeetingNotes(id, acceptedSave: true);
+          unawaited(_refreshSavedNote(id));
         }
         update(() {});
       }
@@ -221,8 +265,15 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
 
   bool meetingEnhancedVisible = true;
 
+  bool _meetingEnhancing = false;
   @override
-  bool meetingEnhancing = false;
+  bool get meetingEnhancing => _meetingEnhancing;
+  set meetingEnhancing(bool value) {
+    if (_meetingEnhancing == value) return;
+    _meetingEnhancing = value;
+    final id = meetingId ?? meetingPreviewId;
+    if (!value && _started && !_disposed && id != null) loadMeetingNotes(id);
+  }
 
   bool meetingAssistantFallback = false;
 
@@ -278,6 +329,7 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
   }
 
   void syncCapture() {
+    _reads.reconcile();
     final state = d.capturePresentation;
     meetingEnhancements = state.noteEnhancements;
     meetingEnhancing =
@@ -354,13 +406,11 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
     }
   }
 
-  Future<void> editArtifact(Map<String, Object?> a) async {
+  Future<void> editArtifact(MeetingArtifact a, {String? initialText}) async {
     // The artifact ID belongs to the workspace of the rows on screen.
     if (!_dialogs.rowsAreCurrent()) return;
     final epoch = d.workspaceEpoch;
-    final controller = TextEditingController(
-      text: (a['edited'] ?? a['generated']) as String,
-    );
+    final controller = TextEditingController(text: initialText ?? a.body);
     final original = controller.text;
     int? lastManualEdit;
     final saved = await _dialogs.showInputDialog<bool>(
@@ -369,9 +419,9 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
         controller: controller,
         saveLabel: 'Save edit',
         onChanged: (text) {
-          if (a['kind'] == 'enhanced_notes' &&
+          if (a.kind == 'enhanced_notes' &&
               (text != original ||
-                  (loadedMeetingNotes == a['meeting_id'] &&
+                  (loadedMeetingNotes == a.meetingId &&
                       meetingNotesController.text !=
                           loadedMeetingNoteSnapshot?.body))) {
             lastManualEdit = DateTime.now().millisecondsSinceEpoch;
@@ -379,7 +429,7 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
         },
         onSave: () async {
           await d.command(Operation.artifactsEdit, {
-            'id': a['id'],
+            'id': a.id,
             'text': controller.text,
             if (lastManualEdit != null) 'last_manual_edit': lastManualEdit,
             if (epoch != null) 'workspace_epoch': epoch,
@@ -572,15 +622,39 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
     }
   }
 
+  Future<void> _refreshSavedNote(int id) async {
+    final identity = FeatureRequestIdentity.capture(d),
+        generation = _noteReadGeneration;
+    final body = meetingNotesController.text,
+        manualEdit = meetingNoteManualEdit;
+    bool current() =>
+        identity.isCurrent(d, alive: mounted) &&
+        generation == _noteReadGeneration &&
+        loadedMeetingNotes == id &&
+        !meetingNoteSaves.isDirty(id) &&
+        meetingNotesController.text == body &&
+        meetingNoteManualEdit == manualEdit;
+    try {
+      await Future.wait([
+        readCurrentMeeting(d.store, StoreReadQueries.meetingNote(id)),
+        readCurrentMeeting(d.store, StoreReadQueries.enhancedNotes(id)),
+      ]);
+      if (current()) loadMeetingNotes(id, acceptedSave: true);
+    } catch (_) {
+      // The write is accepted. Retain its draft until a later current watch
+      // reply arrives rather than turning a read failure into a save failure.
+    }
+  }
+
   void loadMeetingNotes(int id, {bool acceptedSave = false}) {
-    final row = d.store.meetingNoteRows(id).firstOrNull;
-    final enhanced = d.store.meetingEnhancedNotes(id);
+    if (!_reads.noteLoaded(id) || !_reads.enhancedLoaded(id)) return;
+    final row = _reads.note(id);
     final stored = MeetingNoteSnapshot(
-      body: row?['body'] as String? ?? '',
-      enhanced: enhanced,
-      timestamp: row?['timestamp'] as int?,
-      lastEnhanced: row?['last_enhanced'] as int?,
-      lastManualEdit: row?['last_manual_edit'] as int?,
+      body: row?.body ?? '',
+      enhanced: _reads.enhanced(id),
+      timestamp: row?.timestamp,
+      lastEnhanced: row?.lastEnhancedAt,
+      lastManualEdit: row?.lastManualEdit,
     );
     final changedId = loadedMeetingNotes != id;
     if (changedId ||

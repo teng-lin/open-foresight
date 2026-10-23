@@ -291,8 +291,7 @@ class _WorkspaceState extends State<Workspace>
     sourceFeature.initializeGraph();
     settingsFeature.start();
     onboardingFeature.start();
-    meetingFeature.systemAudioSetupReviewed =
-        d.store.preference('audio.systemSetupReviewed') == 'true';
+    meetingFeature.start();
     integrationFeature.commands = widget.commands;
     integrationFeature.commands?.onError =
         integrationFeature.reportShortcutFailure;

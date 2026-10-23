@@ -7,12 +7,14 @@ extension _NotesView on MeetingsController {
     bool preview = false,
     Widget? assistantToggle,
   }) {
-    final enhanced = d.store.enhancedNoteArtifacts(id).firstOrNull;
+    if (loadedMeetingNotes != id)
+      return const Center(child: Text('Loading meeting notes…'));
+    final enhanced = _reads.artifacts(id, 'enhanced_notes').firstOrNull;
     final progress = meetingEnhancements['$id'];
     final enhancedText = progress?.bodyProvided == true
         ? progress!.body
-        : d.store.meetingEnhancedNotes(id);
-    final live = d.store.preference('liveEnhance', 'true') == 'true';
+        : _reads.enhanced(id);
+    final live = _reads.preference('liveEnhance', 'true') == 'true';
     final editorField = TextField(
       key: const ValueKey('meeting-notes-editor'),
       controller: meetingNotesController,
@@ -85,10 +87,10 @@ extension _NotesView on MeetingsController {
                         IconButton(
                           tooltip: 'Edit enhanced notes',
                           onPressed: () => unawaited(
-                            editArtifact({
-                              ...enhanced,
-                              'edited': enhancedText,
-                            }).catchError(_operations.reportAsyncError),
+                            editArtifact(
+                              enhanced,
+                              initialText: enhancedText,
+                            ).catchError(_operations.reportAsyncError),
                           ),
                           icon: const Icon(Icons.edit_outlined, size: 18),
                         ),
@@ -101,10 +103,7 @@ extension _NotesView on MeetingsController {
                     ],
                   ),
                 ),
-                if (enhanced?['manifest'] != null &&
-                    (jsonDecode(enhanced!['manifest'] as String)
-                            as Map)['degraded'] ==
-                        true)
+                if (enhanced?.manifest['degraded'] == true)
                   const Padding(
                     padding: EdgeInsets.all(12),
                     child: Text(
@@ -280,7 +279,7 @@ extension _NotesView on MeetingsController {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     DropdownButton<String>(
-                      value: d.store.preference('noteStyle', 'Standard'),
+                      value: _reads.preference('noteStyle', 'Standard'),
                       underline: const SizedBox.shrink(),
                       items: ['Standard', 'Concise']
                           .map(

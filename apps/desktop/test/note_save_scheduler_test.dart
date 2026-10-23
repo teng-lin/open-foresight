@@ -1,3 +1,5 @@
+import 'store_reader_fixture.dart';
+import 'package:foresight_core/desktop.dart' show MeetingArtifact;
 import 'pump_until.dart';
 import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
@@ -200,7 +202,7 @@ void main() {
       await tester.pumpAndSettle();
       unawaited(
         state.meetingFeature.editArtifact(
-          store.rows('SELECT * FROM artifacts').single,
+          MeetingArtifact.fromRow(store.rows('SELECT * FROM artifacts').single),
         ),
       );
       await tester.pumpAndSettle();
@@ -225,7 +227,7 @@ void main() {
       );
       unawaited(
         state.meetingFeature.editArtifact(
-          store.rows('SELECT * FROM artifacts').single,
+          MeetingArtifact.fromRow(store.rows('SELECT * FROM artifacts').single),
         ),
       );
       await tester.pumpAndSettle();
@@ -319,27 +321,30 @@ void main() {
         store,
         OfflineHelper('${directory.path}/sock', '${directory.path}/helper'),
       );
+      final app = Application(domain);
       await tester.pumpWidget(
-        Foresight(
-          TestDesktopConnection(Application(domain)),
-          deviceLoader: () async => [],
-        ),
+        Foresight(TestDesktopConnection(app), deviceLoader: () async => []),
       );
       final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       state.update(() => state.meetingFeature.meetingId = id);
       await tester.pumpAndSettle();
       final editor = find.byKey(const ValueKey('meeting-notes-editor'));
       store.saveMeetingNotes(id, 'External first', lastManualEdit: 200);
-      state.update(() {});
-      await tester.pump();
+      invalidateFixtureReader(store);
+      await pumpUntil(
+        tester,
+        () =>
+            tester.widget<TextField>(editor).controller!.text ==
+            'External first',
+      );
       expect(
         tester.widget<TextField>(editor).controller!.text,
         'External first',
       );
       state.meetingFeature.meetingEnhancing = true;
       store.saveMeetingNotes(id, 'External second', lastManualEdit: 300);
-      state.update(() {});
-      await tester.pump();
+      invalidateFixtureReader(store);
+      await tester.pumpAndSettle();
       expect(
         tester.widget<TextField>(editor).controller!.text,
         'External first',
@@ -359,8 +364,8 @@ void main() {
         'External during pending write',
         lastManualEdit: 400,
       );
-      state.update(() {});
-      await tester.pump();
+      invalidateFixtureReader(store);
+      await tester.pumpAndSettle();
       expect(tester.widget<TextField>(editor).controller!.text, 'Local draft');
       domain.saveGate!.complete();
       await tester.pumpAndSettle();
