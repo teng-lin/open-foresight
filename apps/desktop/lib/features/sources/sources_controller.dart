@@ -266,21 +266,40 @@ class SourcesController implements SourceCommands {
   }
 
   @override
-  Future<void> source(Map<String, Object?> s) async {
-    if (!s.containsKey('content')) {
-      final current = d.store.sourceById(s['id'] as String);
-      if (current == null) return;
-      s = {...s, ...current.toRow()};
+  Future<void> source(Map<String, Object?> row) async {
+    await sourceById(
+      row['id'] as String,
+      expectedRevision: row['revision'] as int?,
+    );
+  }
+
+  @override
+  Future<bool> sourceById(String id, {int? expectedRevision}) async {
+    final owner = FeatureRequestIdentity.capture(d);
+    final dialogContext = context;
+    final result = await d.store.read(StoreReadQueries.source(id));
+    if (!owner.isCurrent(d, alive: mounted)) return false;
+    if (result.error != null) throw result.error!;
+    if (!result.current) {
+      throw RpcError(
+        RpcErrorCode.unavailable,
+        'Source is refreshing; try again.',
+      );
     }
+    final source = result.value;
+    if (source == null ||
+        source.deleted ||
+        (expectedRevision != null && source.revision != expectedRevision)) {
+      return false;
+    }
+    if (!dialogContext.mounted) return false;
     await showDialog<void>(
-      context: context,
+      context: dialogContext,
       builder: (context) => AlertDialog(
-        title: Text('${s['title']} · revision ${s['revision']}'),
+        title: Text('${source.title} · revision ${source.revision}'),
         content: SizedBox(
           width: 650,
-          child: SingleChildScrollView(
-            child: SelectableText(s['content'] as String),
-          ),
+          child: SingleChildScrollView(child: SelectableText(source.content)),
         ),
         actions: [
           TextButton(
@@ -289,7 +308,14 @@ class SourcesController implements SourceCommands {
                 : () {
                     Navigator.pop(context);
                     unawaited(
-                      editSource(s).catchError(_operations.reportAsyncError),
+                      editSource({
+                        'id': source.id,
+                        'title': source.title,
+                        'content': source.content,
+                        'mime': source.mime,
+                        'provenance': source.provenance,
+                        'revision': source.revision,
+                      }).catchError(_operations.reportAsyncError),
                     );
                   },
             child: const Text('Edit source'),
@@ -301,6 +327,7 @@ class SourcesController implements SourceCommands {
         ],
       ),
     );
+    return true;
   }
 
   Future<void> editSource(Map<String, Object?> s) async {

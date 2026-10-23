@@ -8,6 +8,7 @@ import '../desktop_environment.dart';
 import 'workspace_tab.dart';
 
 export '../features/integrations/ports.dart';
+export '../features/sources/ports.dart';
 
 /// Host capabilities shared by features, without access to other controllers.
 /// [update] preserves the shell rebuild bridge while feature readers migrate.
@@ -85,12 +86,4 @@ abstract interface class ChatCommands {
   Future<void> askQuestion({int? meetingScope});
   void citation(Map<String, Object?> citation);
   Widget chat({int? meetingScope, bool compact = false});
-}
-
-abstract interface class SourceCommands {
-  Future<void> source(Map<String, Object?> source);
-  Future<void> findLocalFiles({List<String>? roots});
-  Future<void> import();
-  Future<void> importFolder();
-  Future<void> importUrl();
 }
