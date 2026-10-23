@@ -229,20 +229,26 @@ class AtSpi:
         finally:
             self.release(states)
 
-    def press(self, node):
+    def _action(self, node, allowed):
         action = self.atspi.atspi_accessible_get_action_iface(node)
         try:
             if action:
                 count = self.checked("atspi_action_get_n_actions", action)
                 for index in range(min(count, 16)):
                     name = self.text("atspi_action_get_action_name", action, index)
-                    if name.lower() in {"click", "press", "activate", "tap"}:
+                    if name.lower() in allowed:
                         return bool(
                             self.checked("atspi_action_do_action", action, index)
                         )
-            return False
+            return None
         finally:
             self.release(action)
+
+    def press(self, node):
+        return bool(self._action(node, {"click", "press", "activate", "tap"}))
+
+    def scroll_up(self, node):
+        return self._action(node, {"scrollup"})
 
     def close(self):
         self.atspi.atspi_exit()
@@ -261,26 +267,29 @@ def identity(pid, executable):
         raise RuntimeError("Owned installed desktop process identity is unavailable")
 
 
-def observe(api, pid, executable, button=""):
+def observe(api, pid, executable, button="", *, reveal=False):
     if button and button not in BUTTONS:
         raise ValueError("Unsupported production GUI automation button")
+    if reveal and (not button or button == "Allow once"):
+        raise ValueError("Only onboarding controls can be revealed")
     identity(pid, executable)
     desktop = api.atspi.atspi_get_desktop(0)
     if not desktop:
         raise RuntimeError("AT-SPI registry did not expose a desktop")
-    pending = []
+    pending: list[tuple[Any, tuple[Any, ...]]] = []
     retained = []
     lines = []
     candidates = []
+    targets = []
     try:
         applications = api.children(desktop)
         retained.extend(applications)
         for application in applications:
             if api.checked("atspi_accessible_get_process_id", application) == pid:
-                pending.extend(api.children(application))
+                pending.extend((child, ()) for child in api.children(application))
         visited = set()
         while pending:
-            node = pending.pop()
+            node, ancestors = pending.pop()
             retained.append(node)
             if node in visited:
                 continue
@@ -288,22 +297,38 @@ def observe(api, pid, executable, button=""):
             if len(visited) > MAX_NODES:
                 raise RuntimeError("Installed desktop accessibility tree is too large")
             states = api.state(node)
+            name = api.text("atspi_accessible_get_name", node)
+            role = api.text("atspi_accessible_get_role_name", node)
+            enabled_button = role in {"push button", "button"} and {8, 24} <= states
+            if enabled_button and name == button:
+                targets.append((node, ancestors))
             if 25 in states and 30 in states:
-                name = api.text("atspi_accessible_get_name", node)
-                role = api.text("atspi_accessible_get_role_name", node)
-                enabled_button = role in {"push button", "button"} and {8, 24} <= states
                 if name:
                     label = name.replace("\r", "\\r").replace("\n", "\\n")
                     lines.append(("BUTTON:" if enabled_button else "TEXT:") + label)
                     if enabled_button and name == button:
                         candidates.append(node)
-            pending.extend(api.children(node))
+            pending.extend((child, (*ancestors, node)) for child in api.children(node))
             if len(pending) + len(visited) > MAX_NODES:
                 raise RuntimeError("Installed desktop accessibility tree is too large")
         snapshot = "\n".join(lines)
         if button:
             if CAPTURE in snapshot:
                 raise RuntimeError("GUI automation refuses a capture approval dialog")
+            if reveal:
+                if len(targets) > 1:
+                    raise RuntimeError("Refusing ambiguous onboarding controls")
+                if targets and not candidates:
+                    for ancestor in reversed(targets[0][1]):
+                        identity(pid, executable)
+                        scrolled = api.scroll_up(ancestor)
+                        if scrolled is True:
+                            return "SCROLLED:" + button
+                        if scrolled is False:
+                            raise RuntimeError(
+                                "Onboarding accessibility scroll was refused"
+                            )
+                return snapshot
             if len(candidates) > 1:
                 raise RuntimeError("Refusing ambiguous installed desktop buttons")
             if candidates:
@@ -313,7 +338,7 @@ def observe(api, pid, executable, button=""):
                 raise RuntimeError("Installed accessibility action was refused")
         return snapshot
     finally:
-        for node in [*pending, *retained, desktop]:
+        for node in [*(node for node, _ in pending), *retained, desktop]:
             api.release(node)
 
 
@@ -322,11 +347,12 @@ def main():
     parser.add_argument("--pid", type=int, required=True)
     parser.add_argument("--executable", type=Path, required=True)
     parser.add_argument("--button", default="")
+    parser.add_argument("--reveal", action="store_true")
     args = parser.parse_args()
     executable = args.executable.resolve(strict=True)
     api = AtSpi()
     try:
-        print(observe(api, args.pid, executable, args.button))
+        print(observe(api, args.pid, executable, args.button, reveal=args.reveal))
     finally:
         api.close()
 

@@ -40,8 +40,10 @@ registry, display or session bus fail the gate. No user desktop settings change.
 
 Each observation/action runs in a bounded subprocess and rechecks the canonical
 GUI executable and same-user PID. Only the named onboarding controls and a single
-unambiguous enabled **Allow once** button can be activated. Other applications,
-pre-existing approval dialogs and capture consent are refused. Owned registry and
+unambiguous enabled **Allow once** button can be activated. Offscreen onboarding controls are revealed by the nearest owned ancestor's
+public `ScrollUp` action, then observed again before their button is pressed.
+Reveal never activates a hidden button and cannot target **Allow once**.
+Other applications, pre-existing approval dialogs and capture consent are refused. Owned registry and
 bus processes are verified again before bounded shutdown; forced cleanup fails
 acceptance. Their logs and process identities remain with the GUI evidence.
 

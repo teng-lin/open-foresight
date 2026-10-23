@@ -668,3 +668,13 @@ def test_pending_launcher_requires_the_owned_effective_user(linux_owned, monkeyp
     assert not host._owned_launcher()
     process.terminate.assert_not_called()
     host.process = None
+
+
+def test_linux_onboarding_reveal_is_a_distinct_bounded_helper_operation(linux_owned):
+    host, _, _ = linux_owned
+    host.start()
+    host._ui("Skip for now", reveal=True)
+    command = gui.subprocess.run.call_args.args[0]
+    assert command[-3:] == ["--button", "Skip for now", "--reveal"]
+    assert gui.subprocess.run.call_args.kwargs["timeout"] == host.timeout
+    host.close()

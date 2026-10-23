@@ -344,3 +344,72 @@ def test_flutter_public_tap_action_is_supported_but_focus_is_not_activation():
     api.text = Mock(return_value="Focus")
     assert not api.press(1)
     api.checked.assert_called_once_with("atspi_action_get_n_actions", 22)
+
+
+def test_onboarding_reveal_scrolls_only_owned_target_ancestor_then_requires_visibility(
+    identify,
+):
+    button = Node("Skip for now", "button", {8, 24, 25})
+    inner = Node(children=[button])
+    outer = Node(children=[inner])
+    tree = Tree([outer], foreign=True)
+    tree.scroll_up = Mock(side_effect=[None, True])
+    assert (
+        linux.observe(tree, 123, Path("/selected"), "Skip for now", reveal=True)
+        == "SCROLLED:Skip for now"
+    )
+    assert tree.scroll_up.call_args_list == [((inner,),), ((outer,),)]
+    assert not tree.pressed
+    button.states.add(30)
+    tree.scroll_up.reset_mock()
+    assert "BUTTON:Skip for now" in linux.observe(
+        tree, 123, Path("/selected"), "Skip for now", reveal=True
+    )
+    tree.scroll_up.assert_not_called()
+    assert not tree.pressed
+    assert (
+        linux.observe(tree, 123, Path("/selected"), "Skip for now")
+        == "CLICKED:Skip for now"
+    )
+
+
+@pytest.mark.parametrize("kind", ["capture", "ambiguous", "refused", "identity"])
+def test_reveal_refuses_capture_ambiguity_replacement_and_failed_scroll(identify, kind):
+    children = [Node("Continue", "button", {8, 24, 25})]
+    if kind == "capture":
+        children.append(Node(linux.CAPTURE))
+    if kind == "ambiguous":
+        children.append(Node("Continue", "button", {8, 24, 25}))
+    container = Node(children=children)
+    tree = Tree([container])
+    tree.scroll_up = Mock(return_value=False if kind == "refused" else True)
+    if kind == "identity":
+        identify.side_effect = [None, RuntimeError("Replaced owned GUI")]
+    with pytest.raises(RuntimeError):
+        linux.observe(tree, 123, Path("/selected"), "Continue", reveal=True)
+    if kind != "refused":
+        tree.scroll_up.assert_not_called()
+    assert not tree.pressed
+    assert tree.desktop in tree.released and all(
+        node in tree.released for node in children
+    )
+
+
+def test_reveal_cannot_target_consent_or_scroll_without_named_control(identify):
+    tree = Tree([Node("Other")])
+    tree.scroll_up = Mock()
+    with pytest.raises(ValueError, match="Only onboarding"):
+        linux.observe(tree, 123, Path("/selected"), "Allow once", reveal=True)
+    linux.observe(tree, 123, Path("/selected"), "Continue", reveal=True)
+    tree.scroll_up.assert_not_called()
+
+
+def test_native_scroll_action_uses_exact_public_flutter_action():
+    api = object.__new__(linux.AtSpi)
+    api.atspi = SimpleNamespace(atspi_accessible_get_action_iface=lambda _: 22)
+    api.release = Mock()
+    api.checked = Mock(side_effect=[2, True])
+    api.text = Mock(side_effect=["Focus", "ScrollUp"])
+    assert api.scroll_up(1) is True
+    api.checked.assert_called_with("atspi_action_do_action", 22, 1)
+    api.release.assert_called_once_with(22)

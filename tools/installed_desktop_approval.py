@@ -198,7 +198,7 @@ class InstalledDesktop:
         except OSError:
             return False
 
-    def _ui(self, button=""):
+    def _ui(self, button="", *, reveal=False):
         process = self._identity()
         if self.accessibility is not None:
             self.accessibility.check()
@@ -216,6 +216,10 @@ class InstalledDesktop:
                 button,
             ]
         )
+        if reveal:
+            if sys.platform != "linux":
+                raise ValueError("This platform does not use onboarding reveal actions")
+            command.append("--reveal")
         result = subprocess.run(
             command,
             env=self.environment if sys.platform == "linux" else None,
@@ -329,6 +333,8 @@ class InstalledDesktop:
                     if step != clicked_step and "BUTTON:" + button in visible:
                         if self._ui(button) == "CLICKED:" + button:
                             clicked_step = step
+                    elif step != clicked_step and sys.platform == "linux":
+                        self._ui(button, reveal=True)
                 if time.monotonic() >= deadline:
                     raise TimeoutError("Installed desktop onboarding timed out")
                 time.sleep(0.1)
