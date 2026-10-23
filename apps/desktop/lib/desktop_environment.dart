@@ -36,14 +36,15 @@ class DesktopEnvironment {
         ((macOS ?? Platform.isMacOS)
             ? _macHome(runSync ?? Process.runSync)
             : null);
+    final hasHome = home != null && home.isNotEmpty;
     return DesktopEnvironment(
       variables: values,
       configDirectory:
           values['XDG_CONFIG_HOME'] ??
-          (home == null ? '/dev/null/foresight-config' : '$home/.config'),
+          (hasHome ? '$home/.config' : '/dev/null/foresight-config'),
       dataDirectory:
           values['XDG_DATA_HOME'] ??
-          (home == null ? '/dev/null/foresight-data' : '$home/.local/share'),
+          (hasHome ? '$home/.local/share' : '/dev/null/foresight-data'),
       launcher:
           '${File(Platform.resolvedExecutable).parent.parent.path}/open-foresight',
       run: Process.run,

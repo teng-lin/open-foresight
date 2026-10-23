@@ -80,6 +80,17 @@ void main() {
     expect(environment.dataDirectory, '/dev/null/foresight-data');
   });
 
+  test('empty HOME cannot resolve host-effect paths under filesystem root', () {
+    final environment = DesktopEnvironment.production(
+      variables: const {'HOME': ''},
+      macOS: false,
+      runSync: (_, _) => throw StateError('No host probe on Linux'),
+    );
+    expect(environment.variables['HOME'], '');
+    expect(environment.configDirectory, '/dev/null/foresight-config');
+    expect(environment.dataDirectory, '/dev/null/foresight-data');
+  });
+
   test(
     'Finder without HOME uses the account directory through the adapter',
     () {
