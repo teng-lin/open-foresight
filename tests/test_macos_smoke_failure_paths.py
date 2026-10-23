@@ -35,10 +35,30 @@ def test_smoke_rejects_incomplete_lifecycle_and_cleans_up(
 ):
     bundle, output, state, desktop = mac_smoke
     use_desktop = failure.startswith("desktop")
-    if failure == "desktop-exit":
-        desktop.poll.return_value = 1
-    elif failure == "desktop-closed":
-        desktop.poll.side_effect = [None, 1, None, None]
+    if failure in ("desktop-exit", "desktop-closed"):
+        # Process/status detection belongs to InstalledDesktop now. Inject its
+        # observed failure here; its real process cleanup has separate tests.
+        original_desktop = smoke.InstalledDesktop
+
+        class Desktop(original_desktop):
+            def start(self):
+                super().start()
+                if failure == "desktop-exit":
+                    self.evidence["failure"] = "Owned desktop exited during startup"
+                    self.close()
+                    raise RuntimeError(self.evidence["failure"])
+                return self
+
+            def close(self):
+                was_closed = state["gui_closed"]
+                super().close()
+                if failure == "desktop-closed" and not was_closed:
+                    self.evidence["failure"] = (
+                        "Installed desktop required forced cleanup"
+                    )
+                    raise RuntimeError(self.evidence["failure"])
+
+        monkeypatch.setattr(smoke, "InstalledDesktop", Desktop)
     original_status = smoke.service_command
     status_calls = []
 
@@ -106,9 +126,15 @@ def test_smoke_rejects_incomplete_lifecycle_and_cleans_up(
             return {}
 
         monkeypatch.setattr(smoke, "source_graph_probe", graph)
-    with pytest.raises(RuntimeError):
+    expected_error = (
+        subprocess.CalledProcessError if failure == "desktop-status" else RuntimeError
+    )
+    with pytest.raises(expected_error):
         smoke.smoke(bundle, output, desktop=use_desktop)
     assert not output.exists()
+    if failure in ("desktop-exit", "desktop-closed"):
+        assert state["gui_closed"] and desktop.terminate.called
+
     if failure == "desktop-status":
         assert state["stops"] == []  # An unidentified owner must never be killed.
     elif failure != "restart-owner":
