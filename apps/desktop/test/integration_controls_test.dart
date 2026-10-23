@@ -1,3 +1,4 @@
+import 'package:open_foresight/shell/workspace_tab.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -45,7 +46,7 @@ void main() {
     'connection help explains missing sign-in configuration and returns to settings',
     (tester) async {
       final f = await ControllerFixture.mount(tester);
-      f.shell.update(() => f.shell.tab = 6);
+      f.shell.update(() => f.shell.navigate(WorkspaceTab.settings));
       await tester.pumpAndSettle();
       final help = find.text('Connection help');
       await tester.ensureVisible(help);
@@ -209,16 +210,16 @@ void main() {
       messenger.setMockMethodCallHandler(channel, (_) async => null);
       addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
       for (final (command, tab) in [
-        ('sources', 0),
-        ('ask', 1),
-        ('settings', 6),
-        ('meetings', 3),
+        ('sources', WorkspaceTab.sources),
+        ('ask', WorkspaceTab.chat),
+        ('settings', WorkspaceTab.settings),
+        ('meetings', WorkspaceTab.meetings),
       ]) {
         await integration.activateMenuCommand(command);
         expect(f.shell.tab, tab);
       }
       await integration.activateMenuCommand('unknown');
-      expect(f.shell.tab, 3);
+      expect(f.shell.tab, WorkspaceTab.meetings);
       var editing = integration.changeQuickShortcut() as Future<void>;
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField).last, 'alt+shift+2');
@@ -270,7 +271,7 @@ void main() {
       await integration.refreshAudioDevices();
       expect(integration.audioDeviceState, isEmpty);
       f.store.setPreference('microphoneTarget', 'disconnected-microphone');
-      f.shell.update(() => f.shell.tab = 6);
+      f.shell.update(() => f.shell.navigate(WorkspaceTab.settings));
       await tester.pumpAndSettle();
       expect(find.text('Saved device unavailable'), findsOneWidget);
       expect(f.store.preference('microphoneTarget'), 'disconnected-microphone');

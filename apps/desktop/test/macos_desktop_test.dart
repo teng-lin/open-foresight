@@ -1,3 +1,4 @@
+import 'package:open_foresight/shell/workspace_tab.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/operations.dart';
 import 'desktop_connection_fixture.dart';
@@ -162,7 +163,7 @@ void main() {
       await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
       await tester.pump();
       final dynamic workspace = tester.state(find.byType(Workspace));
-      expect(workspace.tab, 2);
+      expect(workspace.tab, WorkspaceTab.notes);
       await tester.tap(find.text('Settings'));
       await tester.pumpAndSettle();
       expect(domain.requests, contains('audio.capabilities'));

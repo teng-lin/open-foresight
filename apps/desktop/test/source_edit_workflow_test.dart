@@ -1,3 +1,4 @@
+import 'package:open_foresight/shell/workspace_tab.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -142,7 +143,7 @@ void main() {
     tester,
   ) async {
     final f = await ControllerFixture.mount(tester);
-    f.shell.update(() => f.shell.tab = 2);
+    f.shell.update(() => f.shell.navigate(WorkspaceTab.notes));
     await tester.pumpAndSettle();
     await tester.tap(find.text('New note'));
     await tester.pumpAndSettle();

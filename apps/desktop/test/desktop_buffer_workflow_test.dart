@@ -1,3 +1,4 @@
+import 'package:open_foresight/shell/workspace_tab.dart';
 import 'store_reader_fixture.dart';
 import 'dart:async';
 import 'dart:io';
@@ -95,7 +96,7 @@ void main() {
       );
       f.connection.graphFailure = StateError('Embedding worker disconnected');
       f.shell.update(() {
-        f.shell.tab = 0;
+        f.shell.navigate(WorkspaceTab.sources);
         f.shell.sourceFeature.graphView = true;
       });
       await tester.pump();
@@ -168,7 +169,7 @@ void main() {
         };
       };
       f.shell.update(() {
-        f.shell.tab = 0;
+        f.shell.navigate(WorkspaceTab.sources);
         f.shell.sourceFeature.graphView = true;
       });
       await tester.pump();
@@ -225,7 +226,7 @@ void main() {
     final reply = Completer<Map<String, List<double>>>();
     f.connection.graphReply = (_) => reply.future;
     f.shell.update(() {
-      f.shell.tab = 0;
+      f.shell.navigate(WorkspaceTab.sources);
       f.shell.sourceFeature.graphView = true;
     });
     await tester.pump();
@@ -332,7 +333,7 @@ void main() {
         conversation: 'desktop',
       );
       final id = f.store.db.lastInsertRowId;
-      f.shell.update(() => f.shell.tab = 1);
+      f.shell.update(() => f.shell.navigate(WorkspaceTab.chat));
       await tester.pumpAndSettle();
       expect(
         find.text('Saved answer body', findRichText: true),
@@ -419,7 +420,7 @@ void main() {
         },
       };
       f.shell.update(() {
-        f.shell.tab = 0;
+        f.shell.navigate(WorkspaceTab.sources);
         f.shell.meetingFeature.meetingPanel = 'Transcript';
         f.shell.meetingFeature.syncCapture();
       });
@@ -428,7 +429,7 @@ void main() {
       // The capture pill's double-tap recognizer defers a single tap.
       await tester.pump(kDoubleTapTimeout);
       await tester.pumpAndSettle();
-      expect(f.shell.tab, 3);
+      expect(f.shell.tab, WorkspaceTab.meetings);
       expect(f.shell.meetingFeature.meetingId, id);
       expect(f.shell.meetingFeature.meetingSidecarVisible, true);
       expect(find.text('Live microphone words'), findsOneWidget);
@@ -454,11 +455,11 @@ void main() {
       }
 
       for (final (key, tab) in [
-        (LogicalKeyboardKey.digit1, 3),
-        (LogicalKeyboardKey.digit2, 1),
-        (LogicalKeyboardKey.digit3, 0),
-        (LogicalKeyboardKey.digit4, 5),
-        (LogicalKeyboardKey.digit5, 6),
+        (LogicalKeyboardKey.digit1, WorkspaceTab.meetings),
+        (LogicalKeyboardKey.digit2, WorkspaceTab.chat),
+        (LogicalKeyboardKey.digit3, WorkspaceTab.sources),
+        (LogicalKeyboardKey.digit4, WorkspaceTab.stats),
+        (LogicalKeyboardKey.digit5, WorkspaceTab.settings),
       ]) {
         await shortcut(key);
         expect(f.shell.tab, tab);
@@ -466,7 +467,7 @@ void main() {
       f.shell.meetingFeature.noteTitle.text = 'Old title';
       f.shell.meetingFeature.noteBody.text = 'Old draft';
       await shortcut(LogicalKeyboardKey.keyN);
-      expect(f.shell.tab, 2);
+      expect(f.shell.tab, WorkspaceTab.notes);
       expect(f.shell.meetingFeature.noteId, isNull);
       expect(f.shell.meetingFeature.noteTitle.text, isEmpty);
       expect(f.shell.meetingFeature.noteBody.text, isEmpty);
@@ -514,7 +515,7 @@ void main() {
         'text/plain',
         'fixture',
       );
-      f.shell.update(() => f.shell.tab = 6);
+      f.shell.update(() => f.shell.navigate(WorkspaceTab.settings));
       await tester.pumpAndSettle();
       final refresh = find.text('Refresh Google');
       await tester.ensureVisible(refresh);
@@ -637,7 +638,7 @@ void main() {
         );
         f.store.state(id, 'failed', 'Index interrupted');
         f.shell.update(() {
-          f.shell.tab = 0;
+          f.shell.navigate(WorkspaceTab.sources);
           f.shell.sourceFeature.gridView = grid;
         });
         await tester.pumpAndSettle();

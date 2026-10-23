@@ -1,3 +1,4 @@
+import 'package:open_foresight/shell/workspace_tab.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -96,16 +97,16 @@ void main() {
       await tester.pumpAndSettle();
       final dynamic shell = tester.state(find.byType(Workspace));
       for (final (label, tab) in [
-        ('Sources', 0),
-        ('Chat', 1),
-        ('Meetings', 3),
-        ('Stats', 5),
-        ('Settings', 6),
+        ('Sources', WorkspaceTab.sources),
+        ('Chat', WorkspaceTab.chat),
+        ('Meetings', WorkspaceTab.meetings),
+        ('Stats', WorkspaceTab.stats),
+        ('Settings', WorkspaceTab.settings),
         // Integrations' account/device controls currently share Settings' root.
-        // Tab 4 is model setup, not an independent Integrations screen.
-        ('Integrations', 6),
+        // Models is setup, not an independent Integrations screen.
+        ('Integrations', WorkspaceTab.settings),
       ]) {
-        shell.update(() => shell.tab = tab);
+        shell.navigate(tab);
         await tester.pumpAndSettle();
         if (label == 'Integrations') {
           expect(find.text('Connected services'), findsOneWidget);

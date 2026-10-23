@@ -1,3 +1,4 @@
+import 'package:open_foresight/shell/workspace_tab.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
@@ -69,7 +70,9 @@ void main() {
         final dynamic state = tester.state(find.byType(Workspace));
         void navigate(int? id) => state.update(() {
           state.meetingFeature.meetingId = id;
-          state.tab = id == null ? 1 : 3;
+          state.navigate(
+            id == null ? WorkspaceTab.chat : WorkspaceTab.meetings,
+          );
           state.meetingFeature.meetingPanel = 'Chat';
         });
         Finder composer() => find.byWidgetPredicate(

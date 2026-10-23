@@ -190,13 +190,14 @@ class _IntegrationsController extends _FeatureController {
       }
       await activateWindow(null);
       if (!mounted || shell.onboardingFeature.active) return;
-      final destination = const {
-        'meetings': 3,
-        'ask': 1,
-        'sources': 0,
-        'settings': 6,
-      }[command];
-      if (destination != null) setState(() => shell.tab = destination);
+      final destination = switch (command) {
+        'meetings' => WorkspaceTab.meetings,
+        'ask' => WorkspaceTab.chat,
+        'sources' => WorkspaceTab.sources,
+        'settings' => WorkspaceTab.settings,
+        _ => null,
+      };
+      if (destination != null) shell.navigate(destination);
     } catch (failure) {
       shell.reportAsyncError(failure);
     }

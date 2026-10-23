@@ -1,3 +1,4 @@
+import 'package:open_foresight/shell/workspace_tab.dart';
 import 'package:foresight_core/src/application.dart';
 import 'store_reader_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
@@ -44,7 +45,7 @@ void main() {
     await tester.pumpAndSettle();
     final dynamic state = tester.state(find.byType(Workspace));
     state.update(() {
-      state.tab = 3;
+      state.navigate(WorkspaceTab.meetings);
       state.meetingFeature.meetingId = id;
       state.meetingFeature.meetingPanel = 'Summary';
     });

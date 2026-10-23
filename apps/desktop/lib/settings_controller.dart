@@ -86,7 +86,7 @@ class _SettingsController extends _FeatureController {
         });
     },
     localSetup: () {
-      if (mounted) setState(() => shell.tab = 4);
+      if (mounted) setState(() => shell.navigate(WorkspaceTab.models));
     },
   );
 
@@ -1103,7 +1103,8 @@ class _SettingsController extends _FeatureController {
             'New editable note',
             '',
             TextButton(
-              onPressed: () => shell.update(() => shell.tab = 2),
+              onPressed: () =>
+                  shell.update(() => shell.navigate(WorkspaceTab.notes)),
               child: Text(Platform.isMacOS ? '⌘ + N' : 'Ctrl + N'),
             ),
           ),

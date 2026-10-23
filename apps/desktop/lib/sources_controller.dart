@@ -99,7 +99,7 @@ class _SourcesController extends _FeatureController {
   void syncGraphMotion() {
     final enabled =
         mounted &&
-        shell.tab == 0 &&
+        shell.tab == WorkspaceTab.sources &&
         graphView &&
         readRows(d.store.sourceSummaries).isNotEmpty &&
         !graphAnimationPaused &&
@@ -125,7 +125,7 @@ class _SourcesController extends _FeatureController {
         graphMousePointer != null ||
         graphAnimationPaused ||
         graphModalOpen ||
-        shell.tab != 0 ||
+        shell.tab != WorkspaceTab.sources ||
         !graphView)
       return;
     final seconds = (elapsed - previous).inMicroseconds / 1000000;
@@ -1800,7 +1800,7 @@ class _SourcesController extends _FeatureController {
 
   void scheduleGraphFit() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && shell.tab == 0 && graphView) fitGraph();
+      if (mounted && shell.tab == WorkspaceTab.sources && graphView) fitGraph();
     });
   }
 

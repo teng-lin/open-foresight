@@ -51,8 +51,9 @@ class _ChatController extends _FeatureController {
         TextEditingController.new,
       );
 
-  TextEditingController get question =>
-      questionFor(shell.tab == 3 ? meetingFeature.meetingId : null);
+  TextEditingController get question => questionFor(
+    shell.tab == WorkspaceTab.meetings ? meetingFeature.meetingId : null,
+  );
 
   void citation(Map c) {
     if (c['kind'] == 'web') {

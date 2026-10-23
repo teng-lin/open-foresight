@@ -1,3 +1,4 @@
+import 'package:open_foresight/shell/workspace_tab.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -114,7 +115,7 @@ void main() {
       }
 
       f.shell.update(() {
-        f.shell.tab = 2;
+        f.shell.navigate(WorkspaceTab.notes);
         f.shell.meetingFeature.noteTitle.text = 'private unsaved draft';
       });
       await tester.pumpAndSettle();

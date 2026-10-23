@@ -268,7 +268,7 @@ class _OnboardingController extends _FeatureController {
       if (mounted)
         setState(() {
           finished = true;
-          shell.tab = 0;
+          shell.navigate(WorkspaceTab.sources);
         });
     },
     generation: (done) =>

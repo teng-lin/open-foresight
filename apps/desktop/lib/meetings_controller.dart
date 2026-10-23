@@ -317,7 +317,7 @@ class _MeetingsController extends _FeatureController {
         // A reply from before a workspace reset names a dropped meeting.
         if (!mounted || d.workspaceEpoch != epoch) return;
         shell.update(() {
-          shell.tab = 3;
+          shell.navigate(WorkspaceTab.meetings);
           meetingId = created['id'] as int;
         });
         await startRecording(accessReviewed: true);
@@ -1039,7 +1039,7 @@ class _MeetingsController extends _FeatureController {
                 title: Text(speechSetupProblem(d.store)!),
                 trailing: TextButton(
                   onPressed: () => shell.update(() {
-                    shell.tab = 4;
+                    shell.navigate(WorkspaceTab.models);
                     settingsFeature.modelKind = 'speech';
                   }),
                   child: const Text('Set up speech'),
@@ -2123,7 +2123,7 @@ class _MeetingsController extends _FeatureController {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onDoubleTap: () => shell.update(() {
-        shell.tab = 3;
+        shell.navigate(WorkspaceTab.meetings);
         meetingId = recordingMeeting;
         meetingSidecarVisible = true;
         meetingImmersive = !meetingImmersive;
@@ -2205,7 +2205,7 @@ class _MeetingsController extends _FeatureController {
               constraints: const BoxConstraints.tightFor(width: 36, height: 36),
               padding: const EdgeInsets.all(6),
               onPressed: () => shell.update(() {
-                shell.tab = 3;
+                shell.navigate(WorkspaceTab.meetings);
                 meetingId = recordingMeeting;
                 meetingSidecarVisible = true;
               }),

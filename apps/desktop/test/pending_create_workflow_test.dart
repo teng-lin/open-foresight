@@ -1,3 +1,4 @@
+import 'package:open_foresight/shell/workspace_tab.dart';
 import 'package:foresight_core/src/application.dart';
 import 'dart:async';
 import 'dart:io';
@@ -80,7 +81,7 @@ void main() {
     tester,
   ) async {
     final dynamic state = await show(tester);
-    state.update(() => state.tab = 2);
+    state.update(() => state.navigate(WorkspaceTab.notes));
     await tester.pumpAndSettle();
     await tester.tap(find.text('New note'));
     await tester.pumpAndSettle();
@@ -131,7 +132,7 @@ void main() {
     tester,
   ) async {
     final dynamic state = await show(tester);
-    state.update(() => state.tab = 2);
+    state.update(() => state.navigate(WorkspaceTab.notes));
     await tester.pumpAndSettle();
     await tester.tap(find.text('New note'));
     await tester.pumpAndSettle();
@@ -165,7 +166,7 @@ void main() {
     tester,
   ) async {
     final dynamic state = await show(tester);
-    state.update(() => state.tab = 2);
+    state.update(() => state.navigate(WorkspaceTab.notes));
     await tester.pumpAndSettle();
     await tester.tap(find.text('New note'));
     await tester.pumpAndSettle();

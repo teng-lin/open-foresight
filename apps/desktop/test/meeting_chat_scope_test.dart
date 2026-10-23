@@ -1,3 +1,4 @@
+import 'package:open_foresight/shell/workspace_tab.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
@@ -69,7 +70,7 @@ void main() {
         }
         state.update(() {
           state.meetingFeature.meetingId = null;
-          state.tab = 1;
+          state.navigate(WorkspaceTab.chat);
         });
         await tester.pumpAndSettle();
         await tester.enterText(

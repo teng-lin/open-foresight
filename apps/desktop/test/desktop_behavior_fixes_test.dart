@@ -1,3 +1,4 @@
+import 'package:open_foresight/shell/workspace_tab.dart';
 import 'dart:async';
 import 'account_menu_workflow_test.dart' show SignedInAccount;
 import 'package:flutter/material.dart';
@@ -113,7 +114,7 @@ void main() {
           final first = store.saveNote(null, 'First note', 'First body');
           final second = store.saveNote(null, 'Second note', 'Second body');
           shell.update(() {
-            shell.tab = 2;
+            shell.navigate(WorkspaceTab.notes);
             shell.meetingFeature.noteId = create ? null : first;
             shell.meetingFeature.noteTitle.text = 'Saved first';
             shell.meetingFeature.noteBody.text = 'Saved body';
@@ -185,7 +186,7 @@ void main() {
       tester,
     ) async {
       final (connection, dynamic shell, _) = await mount(tester);
-      shell.update(() => shell.tab = 6);
+      shell.update(() => shell.navigate(WorkspaceTab.settings));
       await tester.pumpAndSettle();
       connection.failures[Operation.preferencesSet] = StateError(
         'Preference rejected',
@@ -216,7 +217,7 @@ void main() {
       tester,
     ) async {
       final (connection, dynamic shell, store) = await mount(tester);
-      shell.update(() => shell.tab = 6);
+      shell.update(() => shell.navigate(WorkspaceTab.settings));
       await tester.pumpAndSettle();
       connection.holdPreference = true;
       final dynamic control = tester.widget(
@@ -227,7 +228,7 @@ void main() {
       expect(connection.entered.isCompleted, isTrue);
       switch (boundary) {
         case 'selection':
-          shell.update(() => shell.tab = 3);
+          shell.update(() => shell.navigate(WorkspaceTab.meetings));
         case 'session':
           connection.replaceClientSessionForTesting();
         case 'clear':
@@ -263,8 +264,12 @@ void main() {
         createTestTempDirectorySync('account-'),
       );
       shell.update(() {
-        shell.tab = action == 'google refresh' || action == 'device' ? 6 : 3;
-        if (shell.tab == 3) {
+        shell.navigate(
+          action == 'google refresh' || action == 'device'
+              ? WorkspaceTab.settings
+              : WorkspaceTab.meetings,
+        );
+        if (shell.tab == WorkspaceTab.meetings) {
           shell.meetingFeature.meetingId = id;
           shell.meetingFeature.meetingPanel = 'Live Q&A';
         }

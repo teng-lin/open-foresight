@@ -1,4 +1,5 @@
 import 'desktop_environment.dart';
+import 'shell/workspace_tab.dart';
 import 'system_audio_setup_dialog.dart';
 import 'onboarding_view.dart';
 import 'model_terms_dialog.dart';
@@ -355,7 +356,11 @@ class _WorkspaceState extends State<Workspace>
     });
   }
 
-  int tab = 3;
+  WorkspaceTab tab = WorkspaceTab.meetings;
+
+  WorkspaceTab get selectedTab => tab;
+
+  void navigate(WorkspaceTab destination) => update(() => tab = destination);
 
   bool busy = false;
 
@@ -694,31 +699,31 @@ class _WorkspaceState extends State<Workspace>
         control: !Platform.isMacOS,
         meta: Platform.isMacOS,
       ): () =>
-          update(() => tab = 3),
+          navigate(WorkspaceTab.meetings),
       SingleActivator(
         LogicalKeyboardKey.digit2,
         control: !Platform.isMacOS,
         meta: Platform.isMacOS,
       ): () =>
-          update(() => tab = 1),
+          navigate(WorkspaceTab.chat),
       SingleActivator(
         LogicalKeyboardKey.digit3,
         control: !Platform.isMacOS,
         meta: Platform.isMacOS,
       ): () =>
-          update(() => tab = 0),
+          navigate(WorkspaceTab.sources),
       SingleActivator(
         LogicalKeyboardKey.digit4,
         control: !Platform.isMacOS,
         meta: Platform.isMacOS,
       ): () =>
-          update(() => tab = 5),
+          navigate(WorkspaceTab.stats),
       SingleActivator(
         LogicalKeyboardKey.digit5,
         control: !Platform.isMacOS,
         meta: Platform.isMacOS,
       ): () =>
-          update(() => tab = 6),
+          navigate(WorkspaceTab.settings),
       integrationFeature.quickActivator: () {
         if (!busy && meetingFeature.recording == null)
           unawaited(meetingFeature.quickStart());
@@ -735,7 +740,7 @@ class _WorkspaceState extends State<Workspace>
         control: !Platform.isMacOS,
         meta: Platform.isMacOS,
       ): () => update(() {
-        tab = 2;
+        navigate(WorkspaceTab.notes);
         meetingFeature.noteEditorGeneration++;
         meetingFeature.noteId = null;
         meetingFeature.noteBaseline = ('', '');
@@ -851,7 +856,8 @@ class _WorkspaceState extends State<Workspace>
                                     meetingFeature.quickStarting ||
                                     meetingFeature.meetingEnhancing
                                 ? null
-                                : tab == 3 && meetingFeature.meetingId != null
+                                : tab == WorkspaceTab.meetings &&
+                                      meetingFeature.meetingId != null
                                 ? () => meetingFeature.recordExistingMeeting(
                                     meetingFeature.meetingId!,
                                   )
@@ -894,30 +900,30 @@ class _WorkspaceState extends State<Workspace>
                           child: ListView(
                             children: [
                               navItem(
-                                3,
+                                WorkspaceTab.meetings,
                                 'Meetings',
-                                tab == 3
+                                tab == WorkspaceTab.meetings
                                     ? Icons.description
                                     : Icons.description_outlined,
                               ),
                               navItem(
-                                1,
+                                WorkspaceTab.chat,
                                 'Ask',
-                                tab == 1
+                                tab == WorkspaceTab.chat
                                     ? Icons.chat_bubble
                                     : Icons.chat_bubble_outline,
                               ),
                               navItem(
-                                0,
+                                WorkspaceTab.sources,
                                 'Sources',
-                                tab == 0
+                                tab == WorkspaceTab.sources
                                     ? Icons.snippet_folder
                                     : Icons.snippet_folder_outlined,
                               ),
                               navItem(
-                                5,
+                                WorkspaceTab.stats,
                                 'Stats',
-                                tab == 5
+                                tab == WorkspaceTab.stats
                                     ? Icons.emoji_events
                                     : Icons.emoji_events_outlined,
                               ),
@@ -925,9 +931,10 @@ class _WorkspaceState extends State<Workspace>
                           ),
                         ),
                         navItem(
-                          6,
+                          WorkspaceTab.settings,
                           'Settings',
-                          tab == 6 || tab == 4
+                          tab == WorkspaceTab.settings ||
+                                  tab == WorkspaceTab.models
                               ? Icons.settings
                               : Icons.settings_outlined,
                         ),
@@ -969,23 +976,25 @@ class _WorkspaceState extends State<Workspace>
                   Expanded(
                     child: Padding(
                       padding: EdgeInsets.fromLTRB(
-                        tab == 1 ||
-                                (tab == 3 && meetingFeature.meetingId != null)
+                        tab == WorkspaceTab.chat ||
+                                (tab == WorkspaceTab.meetings &&
+                                    meetingFeature.meetingId != null)
                             ? 16
                             : MediaQuery.sizeOf(context).width > 1000
                             ? 56
                             : 16,
-                        tab == 3 && meetingFeature.meetingId != null
+                        tab == WorkspaceTab.meetings &&
+                                meetingFeature.meetingId != null
                             ? 12
-                            : tab == 1
+                            : tab == WorkspaceTab.chat
                             ? 22
                             : 34,
                         MediaQuery.sizeOf(context).width > 1000
-                            ? (tab == 1 ||
-                                      (tab == 3 &&
+                            ? (tab == WorkspaceTab.chat ||
+                                      (tab == WorkspaceTab.meetings &&
                                           meetingFeature.meetingId != null)
                                   ? 40
-                                  : tab == 6
+                                  : tab == WorkspaceTab.settings
                                   ? 88
                                   : 68)
                             : 16,
@@ -1009,15 +1018,21 @@ class _WorkspaceState extends State<Workspace>
                           Expanded(
                             child: ValueListenableBuilder<int>(
                               valueListenable: serviceUiRevision,
-                              builder: (_, __, ___) => [
-                                () => _SourcesView(sourceFeature),
-                                () => _ChatView(chatFeature),
-                                sourceFeature.notes,
-                                () => _MeetingsView(meetingFeature),
-                                settingsFeature.models,
-                                settingsFeature.stats,
-                                () => _SettingsView(settingsFeature),
-                              ][tab](),
+                              builder: (_, __, ___) => switch (tab) {
+                                WorkspaceTab.sources => _SourcesView(
+                                  sourceFeature,
+                                ),
+                                WorkspaceTab.chat => _ChatView(chatFeature),
+                                WorkspaceTab.notes => sourceFeature.notes(),
+                                WorkspaceTab.meetings => _MeetingsView(
+                                  meetingFeature,
+                                ),
+                                WorkspaceTab.models => settingsFeature.models(),
+                                WorkspaceTab.stats => settingsFeature.stats(),
+                                WorkspaceTab.settings => _SettingsView(
+                                  settingsFeature,
+                                ),
+                              },
                             ),
                           ),
                         ],
@@ -1033,16 +1048,22 @@ class _WorkspaceState extends State<Workspace>
     ),
   );
 
-  Widget navItem(int index, String title, IconData icon) => Padding(
+  Widget navItem(
+    WorkspaceTab destination,
+    String title,
+    IconData icon,
+  ) => Padding(
     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
     child: Material(
-      color: tab == index || index == 6 && tab == 4
+      color:
+          tab == destination ||
+              destination == WorkspaceTab.settings && tab == WorkspaceTab.models
           ? _blue
           : Colors.transparent,
       borderRadius: BorderRadius.circular(16),
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
-        onTap: () => update(() => tab = index),
+        onTap: () => navigate(destination),
         child: SizedBox(
           width: 56 * MediaQuery.textScalerOf(context).scale(1).clamp(1, 2),
           height: 54 * MediaQuery.textScalerOf(context).scale(1).clamp(1, 2),
@@ -1052,7 +1073,7 @@ class _WorkspaceState extends State<Workspace>
               Icon(
                 icon,
                 size: 20,
-                color: tab == index ? _ink : const Color(0xff45494b),
+                color: tab == destination ? _ink : const Color(0xff45494b),
               ),
               const SizedBox(height: 4),
               Text(

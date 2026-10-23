@@ -1,3 +1,4 @@
+import 'package:open_foresight/shell/workspace_tab.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
@@ -67,7 +68,7 @@ void main() {
       );
       final dynamic state = tester.state(find.byType(Workspace));
       state.update(() {
-        state.tab = 4;
+        state.navigate(WorkspaceTab.models);
       });
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField).at(0), candidate.path);

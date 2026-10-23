@@ -1,3 +1,4 @@
+import 'package:open_foresight/shell/workspace_tab.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -195,7 +196,7 @@ class _GraphFixture {
     await tester.pumpAndSettle();
     expect(shell.serviceUiTimer, isNull);
     shell.update(() {
-      shell.tab = 0;
+      shell.navigate(WorkspaceTab.sources);
       shell.sourceFeature.graphAnimationPaused = true;
       shell.sourceFeature.graphView = true;
     });

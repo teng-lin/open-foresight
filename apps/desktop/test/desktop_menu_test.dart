@@ -1,3 +1,4 @@
+import 'package:open_foresight/shell/workspace_tab.dart';
 import 'package:foresight_core/src/application.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -81,10 +82,10 @@ void main() {
       await tester.pumpAndSettle();
       final dynamic state = tester.state(find.byType(Workspace));
       for (final route in {
-        'settings': 6,
-        'ask': 1,
-        'sources': 0,
-        'meetings': 3,
+        'settings': WorkspaceTab.settings,
+        'ask': WorkspaceTab.chat,
+        'sources': WorkspaceTab.sources,
+        'meetings': WorkspaceTab.meetings,
       }.entries) {
         final navigating = command(route.key);
         await tester.pumpAndSettle();

@@ -1,3 +1,4 @@
+import 'package:open_foresight/shell/workspace_tab.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
@@ -77,7 +78,7 @@ void main() {
       ),
     );
     final dynamic state = tester.state(find.byType(Workspace));
-    state.update(() => state.tab = 1);
+    state.update(() => state.navigate(WorkspaceTab.chat));
     await tester.pumpAndSettle();
     return state;
   }
@@ -111,7 +112,7 @@ void main() {
         tester.widget<IconButton>(toggle).tooltip,
         'Answer include web search result',
       );
-      expect(state.tab, 1);
+      expect(state.tab, WorkspaceTab.chat);
       final input = find.byWidgetPredicate(
         (w) => w is TextField && w.controller == state.chatFeature.question,
       );
@@ -181,7 +182,7 @@ void main() {
     await tester.tap(webToggle());
     await tester.pumpAndSettle();
     state.update(() {
-      state.tab = 3;
+      state.navigate(WorkspaceTab.meetings);
       state.meetingFeature.meetingId = alpha;
       state.meetingFeature.meetingPanel = 'Chat';
     });
@@ -196,7 +197,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.widget<IconButton>(webToggle()).isSelected, isFalse);
     state.update(() {
-      state.tab = 3;
+      state.navigate(WorkspaceTab.meetings);
       state.meetingFeature.meetingId = alpha;
       state.meetingFeature.meetingPanel = 'Chat';
     });

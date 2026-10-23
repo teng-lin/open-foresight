@@ -1,3 +1,4 @@
+import 'package:open_foresight/shell/workspace_tab.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -48,7 +49,7 @@ void main() {
       expect(f.shell.error, isEmpty);
       expect(settings.modelState, '${gemmaModels.last.name} ready');
       setup.localSetup();
-      expect(f.shell.tab, 4);
+      expect(f.shell.tab, WorkspaceTab.models);
       final speech = settings.speechSetup() as SpeechSetupDialog;
       await speech.installSpeech!(
         File('/models/speech.bin'),
@@ -115,7 +116,7 @@ void main() {
     (tester) async {
       final f = await ControllerFixture.mount(tester);
       final dynamic settings = f.shell.settingsFeature;
-      f.shell.update(() => f.shell.tab = 4);
+      f.shell.update(() => f.shell.navigate(WorkspaceTab.models));
       await tester.pumpAndSettle();
       Future<void> select(String kind) async {
         await tester.tap(find.byType(DropdownButton<String>));
