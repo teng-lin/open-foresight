@@ -85,19 +85,14 @@ extension _MeetingAiViews on _MeetingsController {
     );
   }
 
-  Map? _workflow(int id, String kind) =>
-      (d.capture['meeting_workflows'] as Map?)?['$id:$kind'] as Map?;
+  MeetingRunPresentation? _workflow(int id, String kind) =>
+      d.capturePresentation.workflow(id, kind);
 
   Widget _workflowProgress(int id, String kind) {
     final state = _workflow(id, kind);
-    if (state?['active'] != true) {
-      return state?['error'] is String &&
-              (state!['error'] as String).isNotEmpty &&
-              state['cancelled'] != true
-          ? Padding(
-              padding: const EdgeInsets.all(12),
-              child: Text(state['error'] as String),
-            )
+    if (state?.active != true) {
+      return state != null && state.error.isNotEmpty && !state.cancelled
+          ? Padding(padding: const EdgeInsets.all(12), child: Text(state.error))
           : const SizedBox.shrink();
     }
     return Column(
@@ -108,11 +103,11 @@ extension _MeetingAiViews on _MeetingsController {
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.all(12),
-                child: Text(switch (state?['phase']) {
+                child: Text(switch (state?.phase) {
                   'extracting' =>
-                    'Extracting commitments ${state?['completed']}/${state?['total']}…',
+                    'Extracting commitments ${state?.completed}/${state?.total}…',
                   'documents' =>
-                    'Preparing documents ${state?['completed']}/${state?['total']}…',
+                    'Preparing documents ${state?.completed}/${state?.total}…',
                   'synthesizing' => 'Writing the preparation brief…',
                   'reducing' => 'Combining document topics…',
                   _ => 'Planning meeting generation…',
@@ -140,7 +135,7 @@ extension _MeetingAiViews on _MeetingsController {
     final identity = FeatureRequestIdentity.capture(d);
     final tasks = readRows(d.store.meetingTasks(id));
     final versions = readRows(d.store.meetingArtifacts(id, 'actions'));
-    final active = _workflow(id, 'actions')?['active'] == true;
+    final active = _workflow(id, 'actions')?.active == true;
     return Column(
       children: [
         Padding(
@@ -448,8 +443,8 @@ extension _MeetingAiViews on _MeetingsController {
   Widget meetingPreparationPanel(int id) {
     final identity = FeatureRequestIdentity.capture(d);
     final versions = readRows(d.store.meetingArtifacts(id, 'preparation'));
-    final active = _workflow(id, 'preparation')?['active'] == true;
-    final preview = _workflow(id, 'preparation')?['preview'] as String? ?? '';
+    final active = _workflow(id, 'preparation')?.active == true;
+    final preview = _workflow(id, 'preparation')?.preview ?? '';
     final artifact = versions.firstOrNull;
     final manifest = artifact?['manifest'] == null
         ? const {}

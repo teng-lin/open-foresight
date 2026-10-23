@@ -79,7 +79,7 @@ class _MeetingsController extends _FeatureController {
 
   int? loadedMeetingNotes;
 
-  Map<String, dynamic> meetingEnhancements = {};
+  Map<String, NoteEnhancementPresentation> meetingEnhancements = {};
 
   // Cancelled by the controller dispose lifecycle.
   // ignore: cancel_subscriptions
@@ -146,35 +146,31 @@ class _MeetingsController extends _FeatureController {
   }
 
   void syncCapture() {
-    final state = d.capture;
-    meetingEnhancements = Map<String, dynamic>.from(
-      state['note_enhancements'] as Map? ?? {},
-    );
+    final state = d.capturePresentation;
+    meetingEnhancements = state.noteEnhancements;
     meetingEnhancing =
         meetingEnhancementStarting ||
-        meetingEnhancements.values.any(
-          (value) => (value as Map)['active'] == true,
-        );
-    recording = state['active'] == true
-        ? RecordingSnapshot(Map<String, dynamic>.from(state))
-        : null;
-    recordingMeeting = state['meeting_id'] as int?;
-    recordingState = state['state'] as String? ?? 'idle';
-    final began = state['began'] as int?;
+        meetingEnhancements.values.any((value) => value.active);
+    // The immutable recording facade is the remaining legacy constructor seam;
+    // UI decisions below use the typed presentation.
+    recording = state.active ? RecordingSnapshot(d.capture) : null;
+    recordingMeeting = state.meetingId;
+    recordingState = state.state;
+    final began = state.beganMilliseconds;
     recordingBegan = began == null
         ? null
         : DateTime.fromMillisecondsSinceEpoch(began);
     recordingElapsedAt = DateTime.now();
     recordingElapsed = Duration(
-      milliseconds:
-          state['elapsed_ms'] as int? ??
-          (recordingBegan == null
-              ? 0
-              : recordingElapsedAt.difference(recordingBegan!).inMilliseconds),
+      milliseconds: state.elapsedMillisecondsProvided
+          ? state.elapsedMilliseconds
+          : recordingBegan == null
+          ? 0
+          : recordingElapsedAt.difference(recordingBegan!).inMilliseconds,
     );
     provisionalTranscript
       ..clear()
-      ..addAll(Map<String, String>.from(state['provisional'] as Map? ?? {}));
+      ..addAll(state.provisional);
   }
 
   Future<void> startRecording({bool accessReviewed = false}) async {
@@ -266,18 +262,18 @@ class _MeetingsController extends _FeatureController {
   }
 
   String get echoCancellationDescription {
-    final capture = d.capture;
-    final echo = capture['echo_cancellation'] as Map? ?? {};
-    if (capture['active'] != true)
+    final capture = d.capturePresentation;
+    final echo = capture.echoCancellation;
+    if (!capture.active)
       return 'Reduce system playback picked up by your microphone.';
-    if (capture['paused'] == true)
+    if (capture.paused)
       return 'The selected setting will apply when recording resumes.';
-    if (echo['pending'] == true) return 'Applying echo cancellation…';
-    if ((echo['fallback_status'] as num? ?? 0) != 0)
+    if (echo.pending) return 'Applying echo cancellation…';
+    if (echo.fallbackStatus != 0)
       return 'Echo cancellation is unavailable; microphone recording continues.';
-    if (echo['restart_required'] == true)
+    if (echo.restartRequired)
       return 'Restart recording to enable echo cancellation.';
-    return echo['active'] == true
+    return echo.active
         ? 'Echo cancellation is active for this microphone.'
         : 'Echo cancellation is off.';
   }
@@ -1183,9 +1179,10 @@ class _MeetingsController extends _FeatureController {
     Widget? assistantToggle,
   }) {
     final enhanced = d.store.enhancedNoteArtifacts(id).firstOrNull;
-    final progress = meetingEnhancements['$id'] as Map?;
-    final enhancedText =
-        progress?['body'] as String? ?? d.store.meetingEnhancedNotes(id);
+    final progress = meetingEnhancements['$id'];
+    final enhancedText = progress?.bodyProvided == true
+        ? progress!.body
+        : d.store.meetingEnhancedNotes(id);
     final live = d.store.preference('liveEnhance', 'true') == 'true';
     final editorField = TextField(
       key: const ValueKey('meeting-notes-editor'),
@@ -1285,29 +1282,32 @@ class _MeetingsController extends _FeatureController {
                       'Some notes were preserved without successful enhancement. Review or regenerate these notes.',
                     ),
                   ),
-                if (progress?['active'] == true) ...[
+                if (progress?.active == true) ...[
                   const LinearProgressIndicator(),
                   TextButton(
                     key: const ValueKey('cancel-note-enhancement'),
-                    onPressed: progress?['cancel_requested'] == true
+                    onPressed: progress?.cancelRequested == true
                         ? null
                         : () async {
                             await d.command(Operation.meetingsCancelEnhance, {
                               'id': id,
-                              'request_id': progress?['request_id'],
+                              'request_id':
+                                  progress?.requestId.isNotEmpty == true
+                                  ? progress!.requestId
+                                  : null,
                             });
                           },
                     child: Text(
-                      progress?['cancel_requested'] == true
+                      progress?.cancelRequested == true
                           ? 'Cancelling…'
                           : 'Cancel enhancement',
                     ),
                   ),
                 ],
-                if ((progress?['status'] as String? ?? '').isNotEmpty)
+                if ((progress?.status ?? '').isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.all(8),
-                    child: Text(progress!['status'] as String),
+                    child: Text(progress!.status),
                   ),
                 Expanded(
                   child: enhancedText.isEmpty && progress == null
@@ -1604,20 +1604,21 @@ class _MeetingsController extends _FeatureController {
               !detected.any((question) => question['question'] == row['text']),
         )
         .toList();
-    final pipeline = d.capture['proactive'] as Map? ?? const {};
-    final detectionError = (pipeline['errors'] as Map?)?['$id'] as String?;
+    final capture = d.capturePresentation;
+    final pipeline = capture.proactive;
+    final detectionError = pipeline.errors['$id'];
     return Column(
       children: [
-        if ((d.capture['question_detector'] as Map?)?['configured'] != true)
+        if (!capture.questionDetector.configured)
           const Padding(
             padding: EdgeInsets.all(12),
             child: Text(
               'Set up a dedicated question detector in Settings → Local models. Automatic answers retain queued work while setup is unavailable.',
             ),
           ),
-        if ((pipeline['queued_answers'] as int? ?? 0) > 0)
+        if (pipeline.queuedAnswers > 0)
           Text(
-            '${pipeline['queued_answers']} queued · oldest waiting ${((pipeline['oldest_queue_age_ms'] as int? ?? 0) / 1000).floor()}s',
+            '${pipeline.queuedAnswers} queued · oldest waiting ${(pipeline.oldestQueueAgeMs / 1000).floor()}s',
           ),
         SwitchListTile(
           dense: true,
@@ -1630,8 +1631,8 @@ class _MeetingsController extends _FeatureController {
             () => settingsFeature.preference('proactiveAnswers', '$enabled'),
           ),
         ),
-        if ((pipeline['running'] == true && pipeline['active_meeting'] == id) ||
-            (pipeline['pending_meetings'] as List? ?? []).contains(id))
+        if ((pipeline.running && pipeline.activeMeeting == id) ||
+            pipeline.pendingMeetings.contains(id))
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Text(
@@ -1927,11 +1928,9 @@ class _MeetingsController extends _FeatureController {
     final title = actions ? 'Action items' : 'Summary';
     final versions = readRows(d.store.meetingArtifacts(id, kind));
     final artifact = versions.firstOrNull;
-    final summary = actions
-        ? null
-        : (d.capture['meeting_summaries'] as Map?)?['$id'] as Map?;
-    final active = summary?['active'] == true;
-    final preview = summary?['preview'] as String? ?? '';
+    final summary = actions ? null : d.capturePresentation.summary(id);
+    final active = summary?.active == true;
+    final preview = summary?.preview ?? '';
     final manifest = artifact?['manifest'] as String?;
     final clipped =
         manifest != null &&
@@ -2008,17 +2007,15 @@ class _MeetingsController extends _FeatureController {
         ),
         if (active) ...[
           LinearProgressIndicator(
-            value: (summary?['total'] as int? ?? 0) > 0
-                ? ((summary?['completed'] as int? ?? 0) /
-                          (summary!['total'] as int))
-                      .clamp(0.0, 1.0)
+            value: (summary?.total ?? 0) > 0
+                ? ((summary?.completed ?? 0) / summary!.total).clamp(0.0, 1.0)
                 : null,
           ),
           Padding(
             padding: const EdgeInsets.all(8),
-            child: Text(switch (summary?['phase']) {
+            child: Text(switch (summary?.phase) {
               'mapping' =>
-                'Summarizing transcript ${summary?['completed']}/${summary?['total']}',
+                'Summarizing transcript ${summary?.completed}/${summary?.total}',
               'reducing' => 'Combining meeting topics…',
               'updating' => 'Updating the meeting brief…',
               'summarizing' => 'Writing the meeting brief…',
