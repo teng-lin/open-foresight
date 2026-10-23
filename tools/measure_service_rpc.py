@@ -389,6 +389,19 @@ def session_members(session: int) -> list[int]:
     return members
 
 
+def live_session_members(session: int) -> list[dict[str, Any]]:
+    """Snapshot executing survivors before releasing the pinned session leader."""
+    survivors = []
+    for member in session_members(session):
+        try:
+            fields = Path(f"/proc/{member}/stat").read_text().rpartition(")")[2].split()
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        if int(fields[3]) == session and fields[0] not in {"Z", "X"}:
+            survivors.append({"pid": member, "state": fields[0], "process_group": int(fields[2])})
+    return survivors
+
+
 def signal_session_members(session: int, kind: int) -> None:
     """Signal verified members through stable pidfds, never recycled PID/PGIDs.
 
@@ -637,6 +650,8 @@ class Measurement:
                                 continue
                             # The supervisor may itself be stuck. It still pins
                             # SID/PGID until this final bounded owner termination.
+                            self.report["owned_session_survivors_before_supervisor_kill"] = live_session_members(process.pid)
+                            self.report["status"] = "incomplete"
                             try:
                                 os.killpg(process.pid, signal.SIGKILL)
                             except ProcessLookupError:
@@ -644,6 +659,11 @@ class Measurement:
                             process.wait(timeout=self.cleanup_timeout)
                             break
             self.report["owned_supervisor_exit_code"] = process.returncode
+            if process.returncode != 0:
+                self.report["status"] = "incomplete"
+                self.report["owned_session_cleanup"] = "not certified by a successful supervisor exit"
+            else:
+                self.report["owned_session_cleanup"] = "supervisor verified the session empty"
             self.service_state()
         if self.thread is not None:
             self.thread.join(5)

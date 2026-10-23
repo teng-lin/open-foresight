@@ -557,6 +557,8 @@ def test_close_leaves_already_exited_process_alone(workload, monkeypatch):
     monkeypatch.setattr(rpc.os, "killpg", lambda *args: pytest.fail("must not signal exited PID"))
     workload.close()
     assert workload.report["owned_supervisor_exit_code"] == 3
+    assert workload.report["status"] == "incomplete"
+    assert "not certified" in workload.report["owned_session_cleanup"]
 
 
 def test_host_records_resource_limits_and_absent_optional_proc_files(monkeypatch):
@@ -736,6 +738,11 @@ def test_real_supervisor_cleans_descendant_after_service_exits(private, ignore_t
         assert measurement.report["owned_service_exit_code"] == 0
         assert measurement.report["owned_service_pid"] == service_state["pid"]
         assert measurement.report["owned_supervisor_exit_code"] == (-9 if stop_supervisor else 0)
+        if stop_supervisor:
+            assert measurement.report["status"] == "incomplete"
+            assert measurement.report["owned_session_survivors_before_supervisor_kill"] == []
+        else:
+            assert measurement.report["owned_session_cleanup"] == "supervisor verified the session empty"
         # The supervisor reaps on graceful exit; after SIGKILL, init may still
         # own a dead zombie briefly. Neither case leaves an executing child.
         def stopped():
@@ -972,3 +979,17 @@ def test_idle_refuses_paused_capture_even_without_progress():
     assert result["capture_present_count"] == 100
     with pytest.raises(RuntimeError, match="Idle condition"):
         rpc.validate_sample("warmed_idle", result)
+
+
+def test_cleanup_snapshot_records_only_live_members_of_pinned_session(monkeypatch):
+    monkeypatch.setattr(rpc, "session_members", lambda session: [11, 12, 13, 14, 15, 16])
+    def stat(path):
+        pid = int(path.parent.name)
+        if pid == 11:
+            raise FileNotFoundError()
+        if pid == 12:
+            raise ProcessLookupError()
+        state, session = {13: ("Z", 10), 14: ("X", 10), 15: ("S", 99), 16: ("D", 10)}[pid]
+        return f"{pid} (fixture) {state} 1 88 {session} 0"
+    monkeypatch.setattr(Path, "read_text", stat)
+    assert rpc.live_session_members(10) == [{"pid": 16, "state": "D", "process_group": 88}]
