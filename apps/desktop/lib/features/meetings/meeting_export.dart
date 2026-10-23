@@ -1,9 +1,11 @@
-import 'dart:convert';
+import 'dart:async';
+import 'read_model.dart';
 import '../../desktop_environment.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
-import 'package:foresight_core/desktop.dart' show StoreReader;
+import 'package:foresight_core/desktop.dart'
+    show StoreReader, StoreReadQueries, ExportNote;
 import '../../generated_content.dart';
 
 enum MeetingExportPeriod {
@@ -58,7 +60,7 @@ class MeetingExportContent {
 }
 
 MeetingExportContent composeMeetingExport(
-  StoreReader store, {
+  Iterable<ExportNote> notes, {
   DateTimeRange? range,
 }) {
   final start = range?.start;
@@ -70,29 +72,26 @@ MeetingExportContent composeMeetingExport(
   final output = <String>[];
   // Acquire the original global note limit before excluding empty bodies or
   // applying date filters. Legacy NULL save times retain SQLite's DESC order.
-  final notesToExport = store.exportNotes.map((note) => note.toRow());
+  final notesToExport = notes;
   for (final meeting in notesToExport) {
-    final date = meeting['export_date'] as int;
+    final date = meeting.date;
     if (lower != null && (date < lower || date >= upper!)) continue;
-    final enhanced = (meeting['enhanced_body'] as String?)?.trim();
+    final enhanced = meeting.enhancedBody?.trim();
     final notes = enhanced == null || enhanced.isEmpty
-        ? (meeting['body'] as String).trim()
+        ? meeting.body.trim()
         : enhanced;
     if (notes.isEmpty) continue;
     final begins = DateTime.fromMillisecondsSinceEpoch(date);
-    final end = meeting['export_end'] as int?;
+    final end = meeting.end;
     final ends = end == null ? null : DateTime.fromMillisecondsSinceEpoch(end);
     final dateLine =
         '${DateFormat('MMM d, yyyy').format(begins)} ${_exportClock(begins)}'
         '${ends == null ? '' : ' - ${_exportClock(ends)}'}';
-    final metadata = meeting['export_metadata'] as String?;
-    final event = metadata == null
-        ? null
-        : jsonDecode(metadata) as Map<String, dynamic>;
-    final url = event?['htmlLink'] as String?;
-    final noteTitle = (meeting['title'] as String).trim();
-    final associationTitle = meeting['association_title'] as String?;
-    final eventTitle = event?['summary'] as String?;
+    final event = meeting.metadata;
+    final url = event['htmlLink'] as String?;
+    final noteTitle = meeting.title.trim();
+    final associationTitle = meeting.associationTitle;
+    final eventTitle = event['summary'] as String?;
     final title = noteTitle.isNotEmpty
         ? noteTitle
         : associationTitle != null && associationTitle.isNotEmpty
@@ -110,6 +109,17 @@ MeetingExportContent composeMeetingExport(
   return MeetingExportContent(output.join('\n\n\n'), output.length);
 }
 
+Future<MeetingExportContent> readMeetingExport(
+  StoreReader reader, {
+  DateTimeRange? range,
+}) async {
+  final notes = await readCurrentMeeting(
+    reader,
+    StoreReadQueries.exportNotes(),
+  );
+  return composeMeetingExport(notes, range: range);
+}
+
 String _exportClock(DateTime time) =>
     DateFormat('h:mma').format(time).toLowerCase();
 
@@ -120,11 +130,13 @@ class MeetingExportDialog extends StatefulWidget {
     this.environment = const DesktopEnvironment(),
     required this.save,
     this.now,
+    this.current,
   });
   final DesktopEnvironment environment;
   final StoreReader store;
   final Future<bool> Function(String) save;
   final DateTime? now;
+  final bool Function()? current;
 
   @override
   State<MeetingExportDialog> createState() => _MeetingExportDialogState();
@@ -134,7 +146,10 @@ class _MeetingExportDialogState extends State<MeetingExportDialog> {
   MeetingExportPeriod period = MeetingExportPeriod.last7Days;
   late DateTimeRange custom;
   String status = '';
-  bool saving = false;
+  bool saving = false, loading = true;
+  List<ExportNote> notes = const [];
+  int request = 0;
+  bool get active => mounted && (widget.current?.call() ?? true);
 
   @override
   void initState() {
@@ -142,6 +157,29 @@ class _MeetingExportDialogState extends State<MeetingExportDialog> {
     final now = widget.now ?? DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     custom = DateTimeRange(start: today, end: today);
+    unawaited(loadNotes());
+  }
+
+  Future<void> loadNotes() async {
+    final owner = ++request;
+    try {
+      final value = await readCurrentMeeting(
+        widget.store,
+        StoreReadQueries.exportNotes(),
+      );
+      if (!active || owner != request) return;
+      setState(() {
+        notes = value;
+        loading = false;
+        status = '';
+      });
+    } catch (error) {
+      if (!active || owner != request) return;
+      setState(() {
+        loading = false;
+        status = 'Export failed: $error';
+      });
+    }
   }
 
   Future<void> filter() async {
@@ -239,21 +277,24 @@ class _MeetingExportDialogState extends State<MeetingExportDialog> {
       period = selection.$1;
       custom = selection.$2;
       status = '';
+      loading = true;
     });
+    await loadNotes();
   }
 
   Future<void> perform(Future<String> Function() action) async {
+    if (!active) return;
     setState(() {
       saving = true;
       status = '';
     });
     try {
       final result = await action();
-      if (mounted) setState(() => status = result);
+      if (active) setState(() => status = result);
     } catch (error) {
-      if (mounted) setState(() => status = 'Export failed: $error');
+      if (active) setState(() => status = 'Export failed: $error');
     } finally {
-      if (mounted) setState(() => saving = false);
+      if (active) setState(() => saving = false);
     }
   }
 
@@ -264,8 +305,8 @@ class _MeetingExportDialogState extends State<MeetingExportDialog> {
       widget.now ?? DateTime.now(),
       custom: custom,
     );
-    final content = composeMeetingExport(widget.store, range: range);
-    final canExport = !saving && content.count > 0;
+    final content = composeMeetingExport(notes, range: range);
+    final canExport = !loading && !saving && content.count > 0;
     return AlertDialog(
       scrollable: true,
       title: const Text('Export meeting notes'),
@@ -285,7 +326,9 @@ class _MeetingExportDialogState extends State<MeetingExportDialog> {
             const SizedBox(height: 8),
             Expanded(
               child: SingleChildScrollView(
-                child: content.count == 0
+                child: loading
+                    ? const Text('Loading saved notes…')
+                    : content.count == 0
                     ? const SelectableText(
                         'No meeting notes found for the selected date range.',
                         key: ValueKey('meeting-export-preview'),

@@ -159,7 +159,10 @@ void main() {
         'fixture',
       );
       expect(f.store.sourceById(imported).single['content'], 'Saved evidence');
-      expect(meeting.exportMeetingMarkdown(), contains('Hello **world**'));
+      expect(
+        await meeting.exportMeetingMarkdown(),
+        contains('Hello **world**'),
+      );
       await tester.pumpAndSettle();
     },
   );

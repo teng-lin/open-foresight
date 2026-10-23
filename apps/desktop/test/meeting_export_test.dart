@@ -1,3 +1,4 @@
+import 'pump_until.dart';
 import 'store_reader_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
@@ -67,7 +68,7 @@ void main() {
 
   test(
     'export uses canonical partial notes and respects an explicit empty override',
-    () {
+    () async {
       final id = meeting('Draft', today, notes: 'Raw fallback');
       store.artifact(
         id,
@@ -77,15 +78,15 @@ void main() {
       );
       store.saveMeetingEnhancedDraft(id, '- Current partial');
       expect(
-        composeMeetingExport(fixtureReader(store)).markdown,
+        (await readMeetingExport(fixtureReader(store))).markdown,
         contains('- Current partial'),
       );
       expect(
-        composeMeetingExport(fixtureReader(store)).markdown,
+        (await readMeetingExport(fixtureReader(store))).markdown,
         isNot(contains('Old generated enhancement')),
       );
       store.saveMeetingEnhancedDraft(id, '');
-      final cleared = composeMeetingExport(fixtureReader(store)).markdown;
+      final cleared = (await readMeetingExport(fixtureReader(store))).markdown;
       expect(cleared, contains('Raw fallback'));
       expect(cleared, isNot(contains('Old generated enhancement')));
       expect(
@@ -95,10 +96,13 @@ void main() {
     },
   );
 
-  test('export retains association title before current calendar title', () {
-    final id = meeting('  ', today);
-    store.db
-        .execute('INSERT INTO calendar_events VALUES(?,?,?,?,?,?,?,?,?,?,?)', [
+  test(
+    'export retains association title before current calendar title',
+    () async {
+      final id = meeting('  ', today);
+      store.db.execute(
+        'INSERT INTO calendar_events VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+        [
           'linked-event',
           'account',
           'primary',
@@ -110,50 +114,52 @@ void main() {
           'confirmed',
           '{"summary":"Captured title"}',
           today.millisecondsSinceEpoch,
-        ]);
-    store.saveMeetingNotes(id, 'Note body');
-    store.db.execute('UPDATE calendar_events SET metadata=?', [
-      '{"summary":"Current title"}',
-    ]);
-    expect(
-      composeMeetingExport(fixtureReader(store)).markdown,
-      startsWith('## Captured title\n'),
-    );
-    // Later nonempty names replace a duplicate ID's name without moving that
-    // ID behind another association. Empty names never erase the known name.
-    for (final link in [
-      ('another-event', 'Another title'),
-      ('linked-event', 'Updated association'),
-      ('linked-event', ''),
-    ]) {
-      store.db.execute(
-        'INSERT INTO meeting_note_events(meeting_id,event_key,title) VALUES(?,?,?)',
-        [id, link.$1, link.$2],
+        ],
       );
-    }
-    expect(
-      composeMeetingExport(fixtureReader(store)).markdown,
-      startsWith('## Updated association\n'),
-    );
-    store.db.execute('UPDATE meetings SET title=? WHERE id=?', [
-      ' User title ',
-      id,
-    ]);
-    expect(
-      composeMeetingExport(fixtureReader(store)).markdown,
-      startsWith('## User title\n'),
-    );
-    store.db.execute('UPDATE meetings SET title=? WHERE id=?', ['', id]);
-    store.db.execute('DELETE FROM calendar_events');
-    expect(
-      composeMeetingExport(fixtureReader(store)).markdown,
-      startsWith('## Updated association\n'),
-    );
-  });
+      store.saveMeetingNotes(id, 'Note body');
+      store.db.execute('UPDATE calendar_events SET metadata=?', [
+        '{"summary":"Current title"}',
+      ]);
+      expect(
+        (await readMeetingExport(fixtureReader(store))).markdown,
+        startsWith('## Captured title\n'),
+      );
+      // Later nonempty names replace a duplicate ID's name without moving that
+      // ID behind another association. Empty names never erase the known name.
+      for (final link in [
+        ('another-event', 'Another title'),
+        ('linked-event', 'Updated association'),
+        ('linked-event', ''),
+      ]) {
+        store.db.execute(
+          'INSERT INTO meeting_note_events(meeting_id,event_key,title) VALUES(?,?,?)',
+          [id, link.$1, link.$2],
+        );
+      }
+      expect(
+        (await readMeetingExport(fixtureReader(store))).markdown,
+        startsWith('## Updated association\n'),
+      );
+      store.db.execute('UPDATE meetings SET title=? WHERE id=?', [
+        ' User title ',
+        id,
+      ]);
+      expect(
+        (await readMeetingExport(fixtureReader(store))).markdown,
+        startsWith('## User title\n'),
+      );
+      store.db.execute('UPDATE meetings SET title=? WHERE id=?', ['', id]);
+      store.db.execute('DELETE FROM calendar_events');
+      expect(
+        (await readMeetingExport(fixtureReader(store))).markdown,
+        startsWith('## Updated association\n'),
+      );
+    },
+  );
 
   test(
     'export matches reference notes format and inclusive date boundaries',
-    () {
+    () async {
       meeting(
         'Before',
         DateTime(2026, 10, 9, 23, 59),
@@ -186,10 +192,10 @@ void main() {
       );
       meeting('Tomorrow', DateTime(2026, 10, 17), notes: 'excluded after');
       meeting('Empty calendar placeholder', today);
-      final result = composeMeetingExport(
+      final result = (await readMeetingExport(
         fixtureReader(store),
         range: meetingExportRange(MeetingExportPeriod.last7Days, today),
-      );
+      ));
       expect(result.count, 2);
       expect(result.markdown, contains('**中文 notes**'));
       expect(result.markdown, isNot(contains('Edited summary')));
@@ -226,7 +232,7 @@ void main() {
 
   test(
     'calendar start takes precedence and linked events do not duplicate a note',
-    () {
+    () async {
       final id = meeting(
         'Calendar meeting',
         DateTime(2026, 10, 1),
@@ -254,14 +260,14 @@ void main() {
         ['duplicate-event', 'second-calendar', 'event'],
       );
       expect(
-        composeMeetingExport(
+        (await readMeetingExport(
           fixtureReader(store),
           range: DateTimeRange(start: today, end: today),
-        ).count,
+        )).count,
         1,
       );
       expect(
-        composeMeetingExport(fixtureReader(store)).markdown,
+        (await readMeetingExport(fixtureReader(store))).markdown,
         contains(
           '[Oct 16, 2026 12:00am - 1:00am](https://calendar.example.test/event?id=123&view=full)',
         ),
@@ -271,7 +277,7 @@ void main() {
 
   test(
     'standalone notes use saved dates and share formatting and filtering',
-    () {
+    () async {
       store.saveNote(null, '  Standalone title  ', '  **Standalone body**\n');
       final standalone = store.db.lastInsertRowId;
       store.db.execute('UPDATE notes SET timestamp=? WHERE id=?', [
@@ -285,7 +291,7 @@ void main() {
         store.db.lastInsertRowId,
       ]);
       final before = store.rows('SELECT * FROM notes ORDER BY id');
-      final all = composeMeetingExport(fixtureReader(store));
+      final all = (await readMeetingExport(fixtureReader(store)));
       expect(all.count, 3);
       expect(
         all.markdown,
@@ -299,10 +305,10 @@ void main() {
           '## Untitled meeting\nOct 15, 2026 12:00pm\n\nFallback title body\n',
         ),
       );
-      final filtered = composeMeetingExport(
+      final filtered = (await readMeetingExport(
         fixtureReader(store),
         range: DateTimeRange(start: today, end: today),
-      );
+      ));
       expect(filtered.count, 2);
       expect(filtered.markdown, isNot(contains('Fallback title body')));
       expect(store.rows('SELECT * FROM notes ORDER BY id'), before);
@@ -311,7 +317,7 @@ void main() {
 
   test(
     'global latest 1000 cap precedes body and date filtering across note types',
-    () {
+    () async {
       final current = today.millisecondsSinceEpoch;
       store.db.execute('BEGIN');
       try {
@@ -381,13 +387,13 @@ void main() {
         store.db.execute('ROLLBACK');
         rethrow;
       }
-      final all = composeMeetingExport(fixtureReader(store));
+      final all = (await readMeetingExport(fixtureReader(store)));
       expect(all.count, 501);
       expect(all.markdown, isNot(contains('Excluded')));
-      final filtered = composeMeetingExport(
+      final filtered = (await readMeetingExport(
         fixtureReader(store),
         range: DateTimeRange(start: today, end: today),
-      );
+      ));
       expect(filtered.count, 2);
       expect(filtered.markdown, startsWith('## Included standalone\n'));
       expect(filtered.markdown, contains('Included meeting body'));
@@ -401,76 +407,82 @@ void main() {
     },
   );
 
-  test('export sorts newest first, trims edges and separates records', () {
-    meeting('First', DateTime(2026, 10, 12, 9), notes: '\n  First note\n\n');
-    meeting('Second', DateTime(2026, 10, 12, 10), notes: '  中文 note  \n');
-    expect(
-      composeMeetingExport(fixtureReader(store)).markdown,
-      '## Second\nOct 12, 2026 10:00am\n\n中文 note\n\n\n\n'
-      '## First\nOct 12, 2026 9:00am\n\nFirst note\n',
-    );
-    expect(
-      store
-          .rows('SELECT body FROM meeting_notes ORDER BY meeting_id')
-          .map((row) => row['body']),
-      ['\n  First note\n\n', '  中文 note  \n'],
-    );
-  });
-
-  test('export prefers the current enhanced notes and preserves raw notes', () {
-    final id = meeting('Enhanced', today, notes: 'Raw shorthand');
-    store.artifact(id, 'enhanced_notes', 'Old enhancement', 'fixture');
-    store.artifact(
-      id,
-      'enhanced_notes',
-      '  **Current enhancement**  \n',
-      'fixture',
-    );
-    final current =
+  test(
+    'export sorts newest first, trims edges and separates records',
+    () async {
+      meeting('First', DateTime(2026, 10, 12, 9), notes: '\n  First note\n\n');
+      meeting('Second', DateTime(2026, 10, 12, 10), notes: '  中文 note  \n');
+      expect(
+        (await readMeetingExport(fixtureReader(store))).markdown,
+        '## Second\nOct 12, 2026 10:00am\n\n中文 note\n\n\n\n'
+        '## First\nOct 12, 2026 9:00am\n\nFirst note\n',
+      );
+      expect(
         store
-                .rows(
-                  "SELECT id FROM artifacts WHERE kind='enhanced_notes' ORDER BY id DESC",
-                )
-                .first['id']
-            as int;
-    store.artifact(id, 'summary', 'Unrelated summary', 'fixture');
-    savedAt(id, today);
-    expect(
-      composeMeetingExport(fixtureReader(store)).markdown,
-      '## Enhanced\nOct 16, 2026 12:00am\n\n**Current enhancement**\n',
-    );
+            .rows('SELECT body FROM meeting_notes ORDER BY meeting_id')
+            .map((row) => row['body']),
+        ['\n  First note\n\n', '  中文 note  \n'],
+      );
+    },
+  );
 
-    store.editArtifact(current, '  User-edited enhancement  \n');
-    savedAt(id, today);
-    final before = store.rows('SELECT * FROM artifacts ORDER BY id');
-    expect(
-      composeMeetingExport(fixtureReader(store)).markdown,
-      '## Enhanced\nOct 16, 2026 12:00am\n\nUser-edited enhancement\n',
-    );
-    expect(store.rows('SELECT * FROM artifacts ORDER BY id'), before);
-    expect(
-      store.rows('SELECT body FROM meeting_notes WHERE meeting_id=?', [
+  test(
+    'export prefers the current enhanced notes and preserves raw notes',
+    () async {
+      final id = meeting('Enhanced', today, notes: 'Raw shorthand');
+      store.artifact(id, 'enhanced_notes', 'Old enhancement', 'fixture');
+      store.artifact(
         id,
-      ]).single['body'],
-      'Raw shorthand',
-    );
+        'enhanced_notes',
+        '  **Current enhancement**  \n',
+        'fixture',
+      );
+      final current =
+          store
+                  .rows(
+                    "SELECT id FROM artifacts WHERE kind='enhanced_notes' ORDER BY id DESC",
+                  )
+                  .first['id']
+              as int;
+      store.artifact(id, 'summary', 'Unrelated summary', 'fixture');
+      savedAt(id, today);
+      expect(
+        (await readMeetingExport(fixtureReader(store))).markdown,
+        '## Enhanced\nOct 16, 2026 12:00am\n\n**Current enhancement**\n',
+      );
 
-    // A cleared current enhancement falls back to the raw content. It does not
-    // resurrect an older enhancement or the pre-edit generated text.
-    store.editArtifact(current, ' \n\t');
-    savedAt(id, today);
-    expect(
-      composeMeetingExport(fixtureReader(store)).markdown,
-      '## Enhanced\nOct 16, 2026 12:00am\n\nRaw shorthand\n',
-    );
-  });
+      store.editArtifact(current, '  User-edited enhancement  \n');
+      savedAt(id, today);
+      final before = store.rows('SELECT * FROM artifacts ORDER BY id');
+      expect(
+        (await readMeetingExport(fixtureReader(store))).markdown,
+        '## Enhanced\nOct 16, 2026 12:00am\n\nUser-edited enhancement\n',
+      );
+      expect(store.rows('SELECT * FROM artifacts ORDER BY id'), before);
+      expect(
+        store.rows('SELECT body FROM meeting_notes WHERE meeting_id=?', [
+          id,
+        ]).single['body'],
+        'Raw shorthand',
+      );
 
-  test('enhanced-only notes export when the raw content is empty', () {
+      // A cleared current enhancement falls back to the raw content. It does not
+      // resurrect an older enhancement or the pre-edit generated text.
+      store.editArtifact(current, ' \n\t');
+      savedAt(id, today);
+      expect(
+        (await readMeetingExport(fixtureReader(store))).markdown,
+        '## Enhanced\nOct 16, 2026 12:00am\n\nRaw shorthand\n',
+      );
+    },
+  );
+
+  test('enhanced-only notes export when the raw content is empty', () async {
     final id = meeting('Enhanced only', today);
     store.saveMeetingNotes(id, ' \n');
     store.artifact(id, 'enhanced_notes', '\n  Enhanced content  \n', 'fixture');
     savedAt(id, today);
-    final result = composeMeetingExport(fixtureReader(store));
+    final result = (await readMeetingExport(fixtureReader(store)));
     expect(result.count, 1);
     expect(
       result.markdown,
@@ -480,12 +492,12 @@ void main() {
       store.rows('SELECT id FROM artifacts').single['id'] as int,
       '',
     );
-    expect(composeMeetingExport(fixtureReader(store)).count, 0);
+    expect((await readMeetingExport(fixtureReader(store))).count, 0);
   });
 
   test(
     'unscheduled export uses saved note time and preserves unknown legacy time',
-    () {
+    () async {
       final id = meeting(
         'Unscheduled',
         DateTime(2020, 1, 1),
@@ -494,16 +506,19 @@ void main() {
       savedAt(id, DateTime(2026, 10, 16, 14, 5));
       final range = DateTimeRange(start: today, end: today);
       expect(
-        composeMeetingExport(fixtureReader(store), range: range).markdown,
+        (await readMeetingExport(fixtureReader(store), range: range)).markdown,
         '## Unscheduled\nOct 16, 2026 2:05pm\n\nSaved recently\n',
       );
       store.db.execute(
         'UPDATE meeting_notes SET timestamp=NULL WHERE meeting_id=?',
         [id],
       );
-      expect(composeMeetingExport(fixtureReader(store), range: range).count, 0);
       expect(
-        composeMeetingExport(fixtureReader(store)).markdown,
+        (await readMeetingExport(fixtureReader(store), range: range)).count,
+        0,
+      );
+      expect(
+        (await readMeetingExport(fixtureReader(store))).markdown,
         contains('Jan 1, 2020 12:00am'),
       );
       expect(
@@ -517,7 +532,7 @@ void main() {
 
   test(
     'export trims note titles and falls back to event then default titles',
-    () {
+    () async {
       final id = meeting('  Manual title \n', today, notes: 'Raw notes');
       store.db.execute(
         'INSERT INTO calendar_events VALUES(?,?,?,?,?,?,?,?,?,?,?)',
@@ -536,12 +551,12 @@ void main() {
         ],
       );
       expect(
-        composeMeetingExport(fixtureReader(store)).markdown,
+        (await readMeetingExport(fixtureReader(store))).markdown,
         startsWith('## Manual title\n'),
       );
       store.db.execute('UPDATE meetings SET title=? WHERE id=?', [' \n ', id]);
       expect(
-        composeMeetingExport(fixtureReader(store)).markdown,
+        (await readMeetingExport(fixtureReader(store))).markdown,
         startsWith('## Calendar fallback\n'),
       );
       store.db.execute(
@@ -549,12 +564,12 @@ void main() {
         [id],
       );
       expect(
-        composeMeetingExport(fixtureReader(store)).markdown,
+        (await readMeetingExport(fixtureReader(store))).markdown,
         startsWith('## Untitled meeting\n'),
       );
       store.db.execute('DELETE FROM calendar_events WHERE meeting_id=?', [id]);
       expect(
-        composeMeetingExport(fixtureReader(store)).markdown,
+        (await readMeetingExport(fixtureReader(store))).markdown,
         '## Untitled meeting\nOct 16, 2026 12:00am\n\nRaw notes\n',
       );
       expect(
@@ -572,11 +587,11 @@ void main() {
       await initializeDateFormatting('fr_FR');
       meeting('Réunion', DateTime(2026, 10, 12, 15, 19), notes: 'Compte rendu');
       final result =
-          Intl.withLocale<MeetingExportContent>(
+          await (Intl.withLocale<Future<MeetingExportContent>>(
                 'fr_FR',
-                () => composeMeetingExport(fixtureReader(store)),
+                () => readMeetingExport(fixtureReader(store)),
               )
-              as MeetingExportContent;
+              as Future<MeetingExportContent>);
       expect(
         result.markdown,
         '## Réunion\noct. 12, 2026 3:19pm\n\nCompte rendu\n',
@@ -586,7 +601,7 @@ void main() {
 
   test(
     'single-note export matches the captured original file byte for byte',
-    () {
+    () async {
       final id = meeting(
         '[New Meeting]',
         DateTime(2026, 10, 12, 15, 19),
@@ -618,7 +633,7 @@ void main() {
         1000,
         'microphone',
       );
-      final result = composeMeetingExport(fixtureReader(store));
+      final result = (await readMeetingExport(fixtureReader(store)));
       expect(result.count, 1);
       expect(
         result.markdown,
@@ -629,54 +644,63 @@ void main() {
 
   test(
     'inclusive custom range keeps the entire daylight-saving transition day',
-    () {
+    () async {
       final day = DateTime(2026, 11, 1);
       meeting('Early', DateTime(2026, 11, 1, 0, 1), notes: 'early note');
       meeting('Late', DateTime(2026, 11, 1, 23, 59), notes: 'late note');
       meeting('Next day', DateTime(2026, 11, 2), notes: 'excluded next day');
-      final result = composeMeetingExport(
+      final result = (await readMeetingExport(
         fixtureReader(store),
         range: DateTimeRange(start: day, end: day),
-      );
+      ));
       expect(result.count, 2);
       expect(result.markdown, contains('late note'));
       expect(result.markdown, isNot(contains('excluded next day')));
     },
   );
 
-  test('preset boundaries retain the original elapsed-day DST behavior', () {
-    final midnight = DateTime(2026, 11, 5);
-    final range = meetingExportRange(MeetingExportPeriod.last7Days, midnight)!;
-    final first = midnight.subtract(const Duration(days: 6));
-    expect(range.start, first);
-    meeting(
-      'Before elapsed boundary',
-      first.subtract(const Duration(milliseconds: 1)),
-      notes: 'excluded',
-    );
-    meeting('At elapsed boundary', first, notes: 'included first');
-    meeting(
-      'At end',
-      DateTime(2026, 11, 5, 23, 59, 59, 999),
-      notes: 'included last',
-    );
-    meeting('After end', DateTime(2026, 11, 6), notes: 'excluded after');
-    final result = composeMeetingExport(fixtureReader(store), range: range);
-    expect(result.count, 2);
-    expect(result.markdown, contains('included first'));
-    expect(result.markdown, contains('included last'));
-    expect(result.markdown, isNot(contains('excluded')));
-    final custom = meetingExportRange(
-      MeetingExportPeriod.custom,
-      midnight,
-      custom: DateTimeRange(
-        start: DateTime(2026, 10, 30, 12),
-        end: DateTime(2026, 11, 5, 12),
-      ),
-    )!;
-    expect(custom.start, DateTime(2026, 10, 30));
-    expect(custom.end, midnight);
-  });
+  test(
+    'preset boundaries retain the original elapsed-day DST behavior',
+    () async {
+      final midnight = DateTime(2026, 11, 5);
+      final range = meetingExportRange(
+        MeetingExportPeriod.last7Days,
+        midnight,
+      )!;
+      final first = midnight.subtract(const Duration(days: 6));
+      expect(range.start, first);
+      meeting(
+        'Before elapsed boundary',
+        first.subtract(const Duration(milliseconds: 1)),
+        notes: 'excluded',
+      );
+      meeting('At elapsed boundary', first, notes: 'included first');
+      meeting(
+        'At end',
+        DateTime(2026, 11, 5, 23, 59, 59, 999),
+        notes: 'included last',
+      );
+      meeting('After end', DateTime(2026, 11, 6), notes: 'excluded after');
+      final result = (await readMeetingExport(
+        fixtureReader(store),
+        range: range,
+      ));
+      expect(result.count, 2);
+      expect(result.markdown, contains('included first'));
+      expect(result.markdown, contains('included last'));
+      expect(result.markdown, isNot(contains('excluded')));
+      final custom = meetingExportRange(
+        MeetingExportPeriod.custom,
+        midnight,
+        custom: DateTimeRange(
+          start: DateTime(2026, 10, 30, 12),
+          end: DateTime(2026, 11, 5, 12),
+        ),
+      )!;
+      expect(custom.start, DateTime(2026, 10, 30));
+      expect(custom.end, midnight);
+    },
+  );
 
   testWidgets(
     'preview, copy, save cancellation and errors use the selected content',
@@ -796,7 +820,7 @@ void main() {
         day.subtract(const Duration(days: 1)),
         notes: '_Suite_',
       );
-      final expected = composeMeetingExport(fixtureReader(store)).markdown;
+      final expected = (await readMeetingExport(fixtureReader(store))).markdown;
       final output = File('${directory.path}/selected.md');
       var calls = 0;
       final channel = const MethodChannel('plugins.flutter.io/file_selector');
@@ -832,6 +856,13 @@ void main() {
       await tester.pump(const Duration(milliseconds: 400));
       await tester.tap(find.text('Export meeting notes'));
       await tester.pump(const Duration(milliseconds: 400));
+      await pumpUntil(
+        tester,
+        () => find
+            .byKey(const ValueKey('meeting-export-preview'))
+            .evaluate()
+            .any((element) => element.widget is GeneratedContent),
+      );
       final preview = tester.widget<GeneratedContent>(
         find.byKey(const ValueKey('meeting-export-preview')),
       );

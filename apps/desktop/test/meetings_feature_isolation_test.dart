@@ -78,6 +78,12 @@ class _Integration implements IntegrationActivity, IntegrationCommands {
 }
 
 class _Settings implements SettingsCommands {
+  int speechPrompts = 0;
+  @override
+  Future<void> chooseSpeech() async {
+    speechPrompts++;
+  }
+
   @override
   dynamic noSuchMethod(Invocation invocation) =>
       throw UnimplementedError('${invocation.memberName}');
@@ -96,7 +102,120 @@ class _Chat implements ChatActivity, ChatCommands {
       throw UnimplementedError('${invocation.memberName}');
 }
 
+class _SpeechConnection extends ControllerConnection {
+  _SpeechConnection(super.application);
+  _SpeechReader? _speech;
+  @override
+  _SpeechReader get store => _speech ??= _SpeechReader(super.store);
+}
+
+class _SpeechReader implements StoreReader {
+  _SpeechReader(this.delegate);
+  final StoreReader delegate;
+  final reply = Completer<ReadResult<ModelRegistration?>>();
+  int reads = 0;
+  @override
+  String get workspaceEpoch => delegate.workspaceEpoch;
+  @override
+  String get dataRevision => delegate.dataRevision;
+  @override
+  Future<ReadResult<T>> read<T>(ReadQuery<T> query) {
+    if (query.projection != 'model') return delegate.read(query);
+    reads++;
+    return reply.future.then((result) => result.asType<T>());
+  }
+
+  @override
+  Stream<ReadResult<T>> watch<T>(ReadQuery<T> query) => delegate.watch(query);
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw StateError(
+    'Unexpected synchronous setup read ${invocation.memberName}',
+  );
+}
+
 void main() {
+  for (final boundary in ['session', 'selection', 'disposal', 'read failure']) {
+    testWidgets(
+      'fresh speech readiness respects $boundary before prompting or recording',
+      (tester) async {
+        final root = createTestTempDirectorySync('meeting-readiness-');
+        final store = Store('${root.path}/app.db');
+        final connection = _SpeechConnection(
+          Application(
+            Domain(
+              store,
+              OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+            ),
+          ),
+        );
+        final host = _Host(connection),
+            integration = _Integration(),
+            chat = _Chat(),
+            settings = _Settings();
+        final controller = MeetingsController(
+          host: host,
+          navigation: host,
+          operations: host,
+          dialogs: host,
+          integrations: integration,
+          integrationCommands: integration,
+          settings: settings,
+          chat: chat,
+          chatCommands: chat,
+        );
+        addTearDown(() async {
+          await pumpUntilCompleted(tester, controller.dispose());
+          connection.close();
+          await pumpUntilCompleted(tester, connection.closed);
+        });
+        final action = boundary == 'selection'
+            ? controller.recordExistingMeeting(1)
+            : controller.quickStart();
+        expect(connection.store.reads, 1);
+        switch (boundary) {
+          case 'session':
+            connection.replaceClientSessionForTesting();
+          case 'selection':
+            controller.meetingPreviewId = 2;
+          case 'disposal':
+            await controller.dispose();
+          case 'read failure':
+            break;
+        }
+        connection.store.reply.complete(
+          ReadResult(
+            freshness: boundary == 'read failure'
+                ? ReadFreshness.failed
+                : ReadFreshness.current,
+            value: null,
+            error: boundary == 'read failure'
+                ? RpcError(RpcErrorCode.unavailable, 'readiness unavailable')
+                : null,
+            requestTag: 'held',
+            sequence: 0,
+          ),
+        );
+        await action;
+        expect(settings.speechPrompts, 0);
+        expect(
+          connection.calls.where(
+            (call) =>
+                call.$1 == Operation.meetingsCreate ||
+                call.$1 == Operation.meetingsStart,
+          ),
+          isEmpty,
+        );
+        expect(
+          host.error,
+          boundary == 'read failure'
+              ? contains('readiness unavailable')
+              : isEmpty,
+        );
+        expect(controller.quickStarting, false);
+      },
+    );
+  }
+
   testWidgets(
     'Meetings mounts with explicit ports and settles its owned draft before closing',
     (tester) async {

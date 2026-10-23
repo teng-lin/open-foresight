@@ -9,7 +9,6 @@ import 'package:foresight_core/desktop.dart';
 import '../../failure_text.dart';
 import '../../feature_request_identity.dart';
 import '../../generated_content.dart';
-import '../../model_setup.dart';
 import '../../presentation/workspace_presentation.dart';
 import '../../service_edit_dialog.dart';
 import '../../shell/ports.dart';
@@ -121,6 +120,7 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
   Future<void> dispose() {
     if (_disposed) return _closing ?? Future<void>.value();
     _disposed = true;
+    quickStarting = false;
     unawaited(_reads.dispose());
     _noteReadGeneration++;
     recording?.dispose();
@@ -292,7 +292,7 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
 
   String recordingState = 'idle';
 
-  String exportMeetingMarkdown() => meetingMarkdown();
+  Future<String> exportMeetingMarkdown() => meetingMarkdown();
 
   Widget immersiveMeetingWorkspace() => _immersiveMeetingWorkspace();
 
@@ -457,31 +457,44 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
         : 'Echo cancellation is off.';
   }
 
+  Future<String?> _speechSetupProblem() async {
+    final registration = await readCurrentMeeting<ModelRegistration?>(
+      d.store,
+      StoreReadQueries.model('speech'),
+    );
+    return preparedSpeechSetupProblem(registration);
+  }
+
   @override
   Future<void> quickStart() async {
     if (!mounted || quickStarting || _operations.busy || recording != null)
       return;
+    final identity = FeatureRequestIdentity.capture(d);
+    bool current() => identity.isCurrent(d, alive: mounted);
     update(() => quickStarting = true);
     try {
-      if (speechSetupProblem(d.store) != null) {
+      final problem = await _speechSetupProblem();
+      if (!current()) return;
+      if (problem != null) {
         await _settings.chooseSpeech();
-        if (!mounted || speechSetupProblem(d.store) != null) return;
+        if (!current()) return;
+        final problem = await _speechSetupProblem();
+        if (!current() || problem != null) return;
       }
-      if (!await _integrationCommands.ensureRecordingAccess() || !mounted)
+      if (!await _integrationCommands.ensureRecordingAccess() || !current())
         return;
       await _operations.run(() async {
         final epoch = d.workspaceEpoch;
         final created =
             await quickStartKey.run(
                   {'title': '[New Meeting]'},
-                  (keyed) => d.command(Operation.meetingsCreate, {
+                  (keyed) => d.commandCurrent(Operation.meetingsCreate, {
                     ...keyed,
                     if (epoch != null) 'workspace_epoch': epoch,
-                  }),
+                  }, current),
                 )
                 as Map;
-        // A reply from before a workspace reset names a dropped meeting.
-        if (!mounted || d.workspaceEpoch != epoch) return;
+        if (!current()) return;
         update(() {
           _navigation.navigate(WorkspaceTab.meetings);
           meetingId = created['id'] as int;
@@ -489,7 +502,7 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
         await startRecording(accessReviewed: true);
       });
     } catch (failure, stack) {
-      if (mounted)
+      if (current())
         await _operations.run(() => Future<void>.error(failure, stack));
     } finally {
       if (mounted) update(() => quickStarting = false);
@@ -498,34 +511,54 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
 
   Future<void> recordExistingMeeting(int id) async {
     if (_operations.busy || recording != null || quickStarting) return;
+    final identity = FeatureRequestIdentity.capture(d),
+        selected = meetingId,
+        preview = meetingPreviewId;
+    bool current() =>
+        identity.isCurrent(d, alive: mounted) &&
+        meetingId == selected &&
+        meetingPreviewId == preview;
     update(() => quickStarting = true);
     try {
-      if (speechSetupProblem(d.store) != null) await _settings.chooseSpeech();
-      if (!mounted || speechSetupProblem(d.store) != null) return;
+      final problem = await _speechSetupProblem();
+      if (!current()) return;
+      if (problem != null) {
+        await _settings.chooseSpeech();
+        if (!current()) return;
+        final problem = await _speechSetupProblem();
+        if (!current() || problem != null) return;
+      }
       forgetPendingMeetingCreates();
       update(() => meetingId = id);
       await _operations.run(startRecording);
+    } catch (failure, stack) {
+      if (current())
+        await _operations.run(() => Future<void>.error(failure, stack));
     } finally {
       if (mounted) update(() => quickStarting = false);
     }
   }
 
   Future<void> exportMeetings() async {
+    final identity = FeatureRequestIdentity.capture(d);
+    bool current() => identity.isCurrent(d, alive: mounted);
     await saveMeetingNotes();
-    if (!mounted || !context.mounted) return;
+    if (!current() || !context.mounted) return;
     await showDialog<void>(
       context: context,
       builder: (_) => MeetingExportDialog(
         environment: _host.environment,
         store: d.store,
+        current: current,
         save: (markdown) async {
+          if (!current()) return false;
           final location = await getSaveLocation(
             suggestedName: 'meeting_notes.md',
             acceptedTypeGroups: [
               const XTypeGroup(label: 'Markdown', extensions: ['md']),
             ],
           );
-          if (location == null) return false;
+          if (location == null || !current()) return false;
           await writePrivateTextFile(File(location.path), markdown);
           return true;
         },
@@ -533,7 +566,8 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
     );
   }
 
-  String meetingMarkdown() => composeMeetingExport(d.store).markdown;
+  Future<String> meetingMarkdown() async =>
+      (await readMeetingExport(d.store)).markdown;
 
   Future<void> saveMeetingNotes() async {
     final id = loadedMeetingNotes;
