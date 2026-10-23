@@ -115,6 +115,38 @@ void main() {
       '${temp.path}/profile/.desktop-capability',
     ).readAsStringSync(),
   });
+
+  test(
+    'hiding retains the verified host and finishes capture before it can restart',
+    () async {
+      await attach();
+      final recording = CountingRecording();
+      service.application.recording = recording;
+      service.application.recordingMeeting = service.domain.store.meeting(
+        'Hidden capture',
+      );
+      await desktop.call('security.desktop_visibility', {'visible': false});
+      await eventually(
+        () => recording.stops == 1 && service.application.recording == null,
+      );
+      expect(service.access.hasHost, true);
+      expect(service.access.hasVisibleHost, false);
+      for (final operation in ['meetings.start', 'meetings.resume']) {
+        await expectLater(
+          desktop.call(operation, {'id': 999}),
+          throwsA(
+            isA<RpcError>().having(
+              (error) => error.code,
+              'code',
+              RpcErrorCode.denied,
+            ),
+          ),
+        );
+      }
+      await desktop.call('security.desktop_visibility', {'visible': true});
+      expect(service.access.hasVisibleHost, true);
+    },
+  );
   // Store one note so that the notes.list reply to request [id], with its
   // newline, is exactly [bytes] long.
   void sizeNotesReply(int bytes, {int id = 1}) {

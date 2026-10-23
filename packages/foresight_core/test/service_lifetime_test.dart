@@ -172,6 +172,7 @@ void main() {
     final client = await ServiceClient.connect(service.path);
     addTearDown(client.close);
     await client.call(host ? 'security.attach_desktop' : 'status', {
+      'visible': true,
       'desktop': true,
       'token': File('${profile.data}/.desktop-capability').readAsStringSync(),
     });

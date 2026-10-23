@@ -146,11 +146,12 @@ class AgentAccessGate {
   }
 
   void setVisible(Object client, bool visible) {
-    if (!isHost(client))
+    if (!isHost(client)) {
       throw RpcError(
         RpcErrorCode.denied,
         'Only the desktop host can report window visibility',
       );
+    }
     _visible = visible;
     if (!visible) {
       for (final pending in _pending.values) {

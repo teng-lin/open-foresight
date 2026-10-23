@@ -321,9 +321,9 @@ def running(tmp_path, request):
         check=True, capture_output=True, text=True, timeout=60,
     )
     flutter_desktop = (
-        ROOT / "apps/desktop/build/macos/Build/Products/Debug/open_foresight.app/Contents/MacOS/open_foresight"
+        ROOT / "apps/desktop/build/macos/Build/Products/Debug/Open Foresight.app/Contents/MacOS/Open Foresight"
         if sys.platform == "darwin"
-        else ROOT / "apps/desktop/build/linux/x64/debug/bundle/open_foresight"
+        else ROOT / "apps/desktop/build/linux/x64/debug/bundle/open-foresight"
     )
     model = fixtures / "model.litertlm"
     model.write_bytes(b"controlled embedding fixture")

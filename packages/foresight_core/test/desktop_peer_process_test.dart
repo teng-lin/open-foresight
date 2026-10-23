@@ -72,7 +72,20 @@ void main() {
           ? '${installation.path}/Contents/MacOS'
           : '${installation.path}/app',
     )..createSync(recursive: true);
-    executable = '${parent.path}/open_foresight';
+    // Derive the expected desktop independently from the actual build input.
+    // A verifier with a plausible but wrong synthetic filename must fail.
+    final buildInput = File(
+      Platform.isMacOS
+          ? '../../apps/desktop/macos/Runner/Configs/AppInfo.xcconfig'
+          : '../../apps/desktop/linux/CMakeLists.txt',
+    ).readAsStringSync();
+    final name =
+        (Platform.isMacOS
+                ? RegExp(r'^PRODUCT_NAME = (.+)$', multiLine: true)
+                : RegExp(r'set\(BINARY_NAME "([^"]+)"\)'))
+            .firstMatch(buildInput)!
+            .group(1)!;
+    executable = '${parent.path}/$name';
     final compile = await Process.run('c++', [
       '-std=c++17',
       'test/fixtures/desktop_peer.cpp',
@@ -324,6 +337,33 @@ Future<void> main(List<String> args) async {
       ]);
       expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
       expect((jsonDecode(result.stdout.toString()) as Map)['error'], isNotNull);
+      final kernel = '${directory.path}/script.dill';
+      final compile = await Process.run(Platform.resolvedExecutable, [
+        'compile',
+        'kernel',
+        script.path,
+        '-o',
+        kernel,
+      ]);
+      expect(
+        compile.exitCode,
+        0,
+        reason: '${compile.stdout}\n${compile.stderr}',
+      );
+      final renamed = File(
+        Platform.resolvedExecutable,
+      ).copySync('${directory.path}/copied-interpreter');
+      runtimeConfiguration
+              .environment['FORESIGHT_DEVELOPMENT_DESKTOP_EXECUTABLES'] =
+          jsonEncode([renamed.path]);
+      final copied = await Process.run(renamed.path, [
+        '--disable-dart-dev',
+        kernel,
+        serviceEndpoint(profile),
+        token(),
+      ]);
+      expect(copied.exitCode, 0, reason: '${copied.stdout}\n${copied.stderr}');
+      expect((jsonDecode(copied.stdout.toString()) as Map)['error'], isNotNull);
     },
   );
 }

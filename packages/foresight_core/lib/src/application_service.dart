@@ -516,8 +516,9 @@ class ApplicationService {
                   return;
                 }
                 final peer = request['_frontend_peer'] as Map;
-                if (peer['verified_desktop'] == true)
+                if (peer['verified_desktop'] == true) {
                   _verifiedDesktopClients.add(client);
+                }
                 return;
               }
               traceServiceTransport(

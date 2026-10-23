@@ -86,4 +86,18 @@ void main() {
       throwsA(denied),
     );
   });
+
+  test('stored speech runtimes cannot start outside the installation', () {
+    runtimeConfiguration.environment['FORESIGHT_INSTALL_ROOT'] = root.path;
+    final recording = Recording(
+      Platform.isMacOS ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6',
+      (_) {},
+      (_, _, _, _) {},
+    );
+    addTearDown(recording.dispose);
+    expect(
+      () => recording.start('/outside/speech', '/model-data'),
+      throwsA(denied),
+    );
+  });
 }

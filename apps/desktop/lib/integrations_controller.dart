@@ -170,7 +170,13 @@ class _IntegrationsController extends _FeatureController {
           ],
         ),
       );
-      if (allow == true && mounted) await activateQuickMeeting(token);
+      if (allow == true &&
+          mounted &&
+          !shell.onboardingFeature.active &&
+          !shell.busy &&
+          meetingFeature.recording == null) {
+        await meetingFeature.quickStart();
+      }
     } finally {
       _quickMeetingReviewPending = false;
     }

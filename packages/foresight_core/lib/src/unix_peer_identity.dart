@@ -26,8 +26,9 @@ UnixPeerIdentity unixPeerIdentity(Socket peer) {
   final int process, user;
   if (Platform.isLinux) {
     final bytes = peer.getRawOption(RawSocketOption(1, 17, Uint8List(12)));
-    if (bytes.length != 12)
+    if (bytes.length != 12) {
       throw StateError('Incomplete Unix peer credentials');
+    }
     final value = ByteData.sublistView(bytes);
     process = value.getInt32(0, Endian.host);
     user = value.getUint32(4, Endian.host);
@@ -85,8 +86,8 @@ bool verifyInstalledDesktopPeer(Socket peer) {
       if (root == null) return false;
       final candidate = File(
         Platform.isMacOS
-            ? '$root/Contents/MacOS/open_foresight'
-            : '$root/app/open_foresight',
+            ? '$root/Contents/MacOS/Open Foresight'
+            : '$root/app/open-foresight',
       ).resolveSymbolicLinksSync();
       return candidate.startsWith('$root/') &&
           identity.executable == candidate &&
@@ -104,13 +105,15 @@ bool verifyInstalledDesktopPeer(Socket peer) {
     final allowed = jsonDecode(development);
     if (allowed is! List ||
         allowed.length > 8 ||
-        allowed.any((entry) => entry is! String || !entry.startsWith('/')))
+        allowed.any((entry) => entry is! String || !entry.startsWith('/'))) {
       return false;
+    }
     for (final entry in allowed.cast<String>()) {
       final candidate = File(entry).resolveSymbolicLinksSync();
       if (identity.executable == candidate &&
-          _nativeDesktopExecutable(candidate))
+          _nativeDesktopExecutable(candidate)) {
         return true;
+      }
     }
     return false;
   } catch (_) {
@@ -122,8 +125,9 @@ bool _nativeDesktopExecutable(String path) {
   final name = File(path).uri.pathSegments.last;
   if (RegExp(
     r'^(dart|dartaotruntime|python[0-9.]*|bash|sh|zsh|node|deno|ruby|perl|lua|php|java)$',
-  ).hasMatch(name))
+  ).hasMatch(name)) {
     return false;
+  }
   final file = File(path);
   if (file.statSync().mode & 0x49 == 0) return false;
   final handle = file.openSync();
@@ -139,14 +143,16 @@ bool _nativeDesktopExecutable(String path) {
       0xcffaedfe,
       0xcafebabe,
       0xbebafeca,
-    }.contains(magic))
+    }.contains(magic)) {
       return false;
+    }
     final symbols = latin1.decode(bytes);
     // Reject generic SDK interpreters even when copied under another name.
     if (symbols.contains('Dart_Initialize') ||
         symbols.contains('Py_BytesMain') ||
-        symbols.contains('Py_Main'))
+        symbols.contains('Py_Main')) {
       return false;
+    }
     return true;
   } finally {
     handle.closeSync();
