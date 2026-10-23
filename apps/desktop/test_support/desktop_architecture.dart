@@ -8,12 +8,15 @@ const sharedDesktopLibraries = {
   'app_theme.dart',
   'commands.dart',
   'desktop_environment.dart',
+  'platform_capabilities.dart',
   'desktop_visuals.dart',
   'failure_text.dart',
   'feature_request_identity.dart',
   'generated_content.dart',
   'service_edit_dialog.dart',
 };
+
+String _normalPath(String path) => Uri(path: path).normalizePath().path;
 
 List<String> desktopArchitectureViolations(String relative, String source) {
   final unit = parseString(content: source, path: relative).unit;
@@ -34,45 +37,59 @@ List<String> desktopArchitectureViolations(String relative, String source) {
     }
   }
   for (final directive in unit.directives.whereType<UriBasedDirective>()) {
-    final uri = directive.uri.stringValue ?? '';
-    final core = uri.startsWith('package:foresight_core/');
-    if (core &&
-        uri != 'package:foresight_core/desktop.dart' &&
-        !(relative == 'main.dart' &&
-            uri == 'package:foresight_core/desktop_bootstrap.dart')) {
-      violations.add('$relative: implementation dependency $uri');
-    }
-    if (uri.startsWith('package:mcp_dart/')) {
-      violations.add('$relative: MCP dependency $uri');
-    }
-    if (directive is PartOfDirective ||
-        (directive is PartDirective && uri.endsWith('main.dart'))) {
-      violations.add('$relative: application part $uri');
-    }
-    if (directive is PartDirective) {
-      final target = Uri(path: relative).resolve(uri).normalizePath().path;
-      if (ownFeature == null || !target.startsWith('features/$ownFeature/')) {
+    final uris = [
+      directive.uri.stringValue ?? '',
+      if (directive is NamespaceDirective)
+        for (final configuration in directive.configurations)
+          configuration.uri.stringValue ?? '',
+    ];
+    for (final uri in uris) {
+      final parsed = Uri.parse(uri);
+      final package =
+          parsed.scheme == 'package' && parsed.pathSegments.isNotEmpty
+          ? parsed.pathSegments.first
+          : null;
+      final core = package == 'foresight_core';
+      final packagePath = _normalPath(parsed.path);
+      if (core &&
+          packagePath != 'foresight_core/desktop.dart' &&
+          !(relative == 'main.dart' &&
+              packagePath == 'foresight_core/desktop_bootstrap.dart')) {
+        violations.add('$relative: implementation dependency $uri');
+      }
+      if (package == 'mcp_dart')
+        violations.add('$relative: MCP dependency $uri');
+      if (parsed.scheme.isNotEmpty &&
+          parsed.scheme != 'dart' &&
+          parsed.scheme != 'package') {
+        violations.add('$relative: nonportable dependency $uri');
+      }
+      final target = package == 'open_foresight'
+          ? _normalPath(parsed.pathSegments.skip(1).join('/'))
+          : _normalPath(Uri(path: relative).resolve(uri).path);
+      if (parsed.scheme.isEmpty &&
+          (target.startsWith('../') || target.startsWith('/'))) {
+        violations.add('$relative: dependency escapes desktop library $uri');
+      }
+      if (directive is PartDirective &&
+          (ownFeature == null || !target.startsWith('features/$ownFeature/'))) {
         violations.add('$relative: part crosses feature ownership $target');
       }
+      if (ownFeature == null ||
+          core ||
+          parsed.scheme == 'dart' ||
+          (package != null && package != 'open_foresight'))
+        continue;
+      final allowed =
+          target.startsWith('features/$ownFeature/') ||
+          (target.startsWith('features/') && target.endsWith('/ports.dart')) ||
+          target.startsWith('presentation/') ||
+          target == 'shell/ports.dart' ||
+          target == 'shell/workspace_tab.dart' ||
+          sharedDesktopLibraries.contains(target);
+      if (!allowed)
+        violations.add('$relative: feature ownership dependency $target');
     }
-    if (ownFeature == null ||
-        core ||
-        uri.startsWith('dart:') ||
-        (uri.startsWith('package:') &&
-            !uri.startsWith('package:open_foresight/')))
-      continue;
-    final target = uri.startsWith('package:open_foresight/')
-        ? uri.substring('package:open_foresight/'.length)
-        : Uri(path: relative).resolve(uri).normalizePath().path;
-    final allowed =
-        target.startsWith('features/$ownFeature/') ||
-        (target.startsWith('features/') && target.endsWith('/ports.dart')) ||
-        target.startsWith('presentation/') ||
-        target == 'shell/ports.dart' ||
-        target == 'shell/workspace_tab.dart' ||
-        sharedDesktopLibraries.contains(target);
-    if (!allowed)
-      violations.add('$relative: feature ownership dependency $target');
   }
   for (final alias in unit.declarations.whereType<TypeAlias>()) {
     if (RegExp(r'\bReadQuery\b').hasMatch(alias.toSource())) {

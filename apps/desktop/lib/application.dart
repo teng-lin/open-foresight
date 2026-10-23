@@ -546,7 +546,7 @@ class _WorkspaceState extends State<Workspace>
 
   @override
   Future<void> run(Future<void> Function() action) async {
-    setState(() {
+    update(() {
       _operations++;
       busy = true;
       error = '';
@@ -554,13 +554,13 @@ class _WorkspaceState extends State<Workspace>
     try {
       await action();
     } catch (e) {
-      if (mounted) setState(() => error = failureText(e));
+      if (mounted) update(() => error = failureText(e));
       // The request may have committed: read the views again.
       if (mounted && outcomeUnknown(e)) serviceUiRevision.value++;
       await integrationFeature.notify('Operation failed: ${failureText(e)}');
     } finally {
       _operations--;
-      if (mounted) setState(() => busy = _operations != 0);
+      if (mounted) update(() => busy = _operations != 0);
     }
   }
 

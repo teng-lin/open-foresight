@@ -139,6 +139,10 @@ void main() {
   test('guard rejects alternate imports exports parts and query tear-offs', () {
     for (final source in [
       "import '../settings/settings_controller.dart';",
+      "import 'ports.dart' if (dart.library.io) '../settings/settings_controller.dart';",
+      "export 'ports.dart' if (dart.library.io) '../settings/settings_controller.dart';",
+      "import 'package:open_foresight/features/chat/../settings/settings_controller.dart';",
+      "import 'package:open_foresight/features/chat/%2e%2e/settings/settings_controller.dart';",
       "export 'package:open_foresight/features/settings/settings_controller.dart';",
       "part '../../application.dart';",
       "part '../settings/ports.dart';",
@@ -152,6 +156,17 @@ void main() {
     ]) {
       expect(
         desktopArchitectureViolations('features/chat/probe.dart', source),
+        isNotEmpty,
+        reason: source,
+      );
+    }
+    for (final source in [
+      "import '../../../packages/foresight_core/lib/src/store.dart' as writable;",
+      "export '../../../packages/foresight_core/lib/src/store.dart';",
+      "import 'file:///unowned/core/store.dart';",
+    ]) {
+      expect(
+        desktopArchitectureViolations('application.dart', source),
         isNotEmpty,
         reason: source,
       );

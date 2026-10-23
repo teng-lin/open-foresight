@@ -1,11 +1,10 @@
+import 'package:analyzer/dart/ast/ast.dart';
+import 'package:analyzer/dart/analysis/utilities.dart';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test('desktop fixtures share one deliberate core implementation boundary', () {
-    final imports = RegExp(
-      r'''(?:import|export)\s+['"]package:foresight_core/src/''',
-    );
     final violations = <String>[];
     for (final directory in ['test', 'integration_test', 'test_support']) {
       for (final file in Directory(
@@ -15,7 +14,14 @@ void main() {
             file.path == 'test_support/core_fixture.dart')
           continue;
         final source = file.readAsStringSync();
-        if (imports.hasMatch(source)) violations.add(file.path);
+        final unit = parseString(content: source, path: file.path).unit;
+        if (unit.directives.whereType<UriBasedDirective>().any(
+          (directive) => (directive.uri.stringValue ?? '').startsWith(
+            'package:foresight_core/src/',
+          ),
+        )) {
+          violations.add(file.path);
+        }
         // The only deliberate runtime writer probe attacks the connected facade.
         // Every Workspace, owner and painter access has a static interface.
         if (RegExp(r'\bas\s+dynamic\b').hasMatch(source) &&
