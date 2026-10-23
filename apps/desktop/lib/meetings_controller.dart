@@ -1568,9 +1568,8 @@ class _MeetingsController extends _FeatureController {
         MeetingAssistantHeader(
           selectedPanel: meetingPanel,
           onPanelSelected: (panel) => shell.update(() => meetingPanel = panel),
-          onFontSizeChanged: (delta) => shell.update(
-            () => chatFeature.answerFontSize =
-                (chatFeature.answerFontSize + delta).clamp(12, 24),
+          onFontSizeChanged: (delta) => chatFeature.setAnswerFontSize(
+            (chatFeature.answerFontSize + delta).clamp(12, 24),
           ),
           onClose: () => shell.update(() => meetingSidecarVisible = false),
         ),
@@ -1715,8 +1714,11 @@ class _MeetingsController extends _FeatureController {
                                             )
                                             as List)
                                       TextButton(
-                                        onPressed: () =>
-                                            chatFeature.citation(source as Map),
+                                        onPressed: () => chatFeature.citation(
+                                          Map<String, Object?>.from(
+                                            source as Map,
+                                          ),
+                                        ),
                                         child: Text(
                                           '[${source['citation']}] source revision ${source['revision']}',
                                         ),
@@ -1752,8 +1754,10 @@ class _MeetingsController extends _FeatureController {
                                   meetingEnhancing
                               ? null
                               : () {
-                                  chatFeature.questionFor(id).text =
-                                      row['text'] as String;
+                                  chatFeature.setQuestion(
+                                    id,
+                                    row['text'] as String,
+                                  );
                                   shell.update(() => meetingPanel = 'Chat');
                                   unawaited(
                                     chatFeature.askQuestion(meetingScope: id),
@@ -1884,8 +1888,10 @@ class _MeetingsController extends _FeatureController {
                                           meetingEnhancing
                                       ? null
                                       : () {
-                                          chatFeature.questionFor(id).text =
-                                              t['text'] as String;
+                                          chatFeature.setQuestion(
+                                            id,
+                                            t['text'] as String,
+                                          );
                                           shell.update(
                                             () => meetingPanel = 'Chat',
                                           );

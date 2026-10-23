@@ -1,4 +1,5 @@
 import 'desktop_environment.dart';
+import 'features/chat/chat_controller.dart';
 import 'features/integrations/integrations_controller.dart';
 import 'shell/workspace_tab.dart';
 import 'shell/ports.dart';
@@ -23,7 +24,6 @@ import 'package:foresight_core/desktop.dart';
 import 'model_setup.dart';
 import 'app_theme.dart';
 import 'meeting_visuals.dart';
-import 'desktop_visuals.dart';
 import 'commands.dart';
 import 'calendar_auth_links.dart';
 import 'desktop_menu.dart';
@@ -38,7 +38,6 @@ part 'onboarding_controller.dart';
 part 'workspace_controller.dart';
 part 'workspace_visuals.dart';
 
-part 'chat_controller.dart';
 part 'meetings_controller.dart';
 part 'meeting_ai_views.dart';
 part 'shell/legacy_feature_adapters.dart';
@@ -112,7 +111,13 @@ class _WorkspaceState extends State<Workspace>
     dialogs: this,
     integrations: integrationFeature,
   );
-  late final chatFeature = _ChatController(this);
+  late final chatFeature = ChatController(
+    host: this,
+    navigation: this,
+    operations: this,
+    meetings: meetingPorts,
+    sources: sourceFeature,
+  );
   late final meetingFeature = _MeetingsController(this);
   late final settingsFeature = SettingsController(
     host: this,
@@ -391,9 +396,9 @@ class _WorkspaceState extends State<Workspace>
     settingsFeature.dispose();
     integrationFeature.dispose();
     sourceFeature.dispose();
+    chatFeature.dispose();
     meetingFeature.recording?.dispose();
     for (final c in [
-      ...chatFeature.questionDrafts.values,
       meetingFeature.meetingNotesController,
       meetingFeature.meetingSearchController,
     ]) {
@@ -428,7 +433,7 @@ class _WorkspaceState extends State<Workspace>
         (loaded != null && meetings.meetingNoteSaves.isDirty(loaded)) ||
         sourceFeature.noteTitle.text != sourceFeature.noteBaseline.$1 ||
         sourceFeature.noteBody.text != sourceFeature.noteBaseline.$2 ||
-        chatFeature.questionDrafts.values.any((draft) => draft.text.isNotEmpty);
+        chatFeature.hasUnsavedDrafts;
   }
 
   /// Drop every view and draft that holds an ID from the cleared workspace,
@@ -452,12 +457,7 @@ class _WorkspaceState extends State<Workspace>
     sourceFeature.noteTitle.clear();
     sourceFeature.noteBody.clear();
     sourceFeature.noteBaseline = ('', '');
-    chatFeature.hiddenAnswers.clear();
-    chatFeature.answer = '';
-    // Drafts are keyed by meeting ID, which the new workspace can reuse.
-    for (final draft in chatFeature.questionDrafts.values) {
-      draft.clear();
-    }
+    chatFeature.resetWorkspaceViews();
     for (final key in [
       sourceFeature.newNoteKey,
       meetingFeature.newMeetingKey,
@@ -863,7 +863,7 @@ class _WorkspaceState extends State<Workspace>
                                 WorkspaceTab.sources => SourcesView(
                                   sourceFeature,
                                 ),
-                                WorkspaceTab.chat => _ChatView(chatFeature),
+                                WorkspaceTab.chat => chatFeature.chat(),
                                 WorkspaceTab.notes => sourceFeature.notes(),
                                 WorkspaceTab.meetings => _MeetingsView(
                                   meetingFeature,

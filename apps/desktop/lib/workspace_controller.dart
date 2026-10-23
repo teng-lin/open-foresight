@@ -10,7 +10,7 @@ abstract class _FeatureController {
   bool get mounted => shell.mounted;
   BuildContext get context => shell.context;
   SourceCommands get sourceFeature => shell.sourceFeature;
-  _ChatController get chatFeature => shell.chatFeature;
+  ChatPort get chatFeature => shell.chatFeature;
   _MeetingsController get meetingFeature => shell.meetingFeature;
   SettingsCommands get settingsFeature => shell.settingsFeature;
   IntegrationsPort get integrationFeature => shell.integrationFeature;

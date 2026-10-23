@@ -9,6 +9,7 @@ import 'workspace_tab.dart';
 
 export '../features/integrations/ports.dart';
 export '../features/sources/ports.dart';
+export '../features/chat/ports.dart';
 
 /// Host capabilities shared by features, without access to other controllers.
 /// [update] preserves the shell rebuild bridge while feature readers migrate.
@@ -73,17 +74,4 @@ abstract interface class MeetingCommands {
 
 abstract interface class OnboardingActivity {
   bool get active;
-}
-
-abstract interface class ChatActivity {
-  bool get asking;
-  double get answerFontSize;
-}
-
-abstract interface class ChatCommands {
-  void setAnswerFontSize(double value);
-  void setQuestion(int? meetingScope, String text);
-  Future<void> askQuestion({int? meetingScope});
-  void citation(Map<String, Object?> citation);
-  Widget chat({int? meetingScope, bool compact = false});
 }
