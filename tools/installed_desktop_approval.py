@@ -407,7 +407,26 @@ class InstalledDesktop:
                         "Installed GUI approval/request timed out: " + method
                     )
                 time.sleep(0.05)
-            result = future.result()
+            try:
+                result = future.result()
+            finally:
+                original = sys.exception()
+                if row["clicked"]:
+                    try:
+                        while True:
+                            if time.monotonic() >= deadline:
+                                raise TimeoutError(
+                                    "Clicked approval dialog did not close before deadline"
+                                )
+                            if "BUTTON:Allow once" not in self._ui().splitlines():
+                                row["dialog_closed"] = True
+                                break
+                            time.sleep(0.05)
+                    except Exception as error:
+                        row["dialog_settlement_error"] = str(error)
+                        if original is None:
+                            raise
+                        original.add_note("Approval dialog settlement: " + str(error))
             if not row["clicked"]:
                 raise RuntimeError(
                     "Installed request completed without observed production GUI consent: "

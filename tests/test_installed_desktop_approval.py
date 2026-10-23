@@ -270,6 +270,7 @@ def test_non_capture_request_needs_actual_correlated_gui_click(owned):
     def call(method, args):
         running.set()
         assert clicked.wait(1)
+        running.clear()
         return {"id": "saved"}
 
     host._ui = ui
@@ -463,6 +464,7 @@ def test_private_import_roots_are_displayed_for_consent(owned):
     def call(method, args):
         ready.set()
         assert clicked.wait(1)
+        ready.clear()
         return True
 
     assert host.call(
@@ -678,3 +680,80 @@ def test_linux_onboarding_reveal_is_a_distinct_bounded_helper_operation(linux_ow
     assert command[-3:] == ["--button", "Skip for now", "--reveal"]
     assert gui.subprocess.run.call_args.kwargs["timeout"] == host.timeout
     host.close()
+
+
+@pytest.mark.parametrize("operation_fails", [False, True])
+def test_clicked_dialog_settles_before_return_including_rpc_failure(
+    owned, operation_fails
+):
+    from threading import Event
+
+    host = owned.host.start()
+    pending, clicked = Event(), Event()
+    snapshots_after_click = []
+    clicks = []
+
+    def call(method, args):
+        pending.set()
+        assert clicked.wait(1)
+        if operation_fails:
+            raise RuntimeError("Expected post-write indexing failure")
+        return "done"
+
+    def ui(button=""):
+        if button:
+            clicks.append(button)
+            clicked.set()
+            return "CLICKED:" + button
+        if not pending.is_set():
+            return "BUTTON:Sources\nBUTTON:Settings"
+        if clicked.is_set():
+            snapshots_after_click.append(True)
+            if len(snapshots_after_click) > 2:
+                return "BUTTON:Sources\nBUTTON:Settings"
+        return "BUTTON:Allow once"
+
+    host._ui = ui
+    peer = SimpleNamespace(call=call, close=Mock())
+    if operation_fails:
+        with pytest.raises(RuntimeError, match="Expected post-write indexing failure"):
+            host.call(peer, "sources.import", {"text": "private fixture"})
+    else:
+        assert host.call(peer, "sources.import", {"text": "private fixture"}) == "done"
+    assert len(snapshots_after_click) == 3
+    assert clicks == ["Allow once"]
+    assert host.evidence["approvals"][-1]["dialog_closed"] is True
+
+
+@pytest.mark.parametrize("operation_fails", [False, True])
+def test_stuck_clicked_dialog_fails_and_preserves_original_rpc_error(
+    owned, operation_fails
+):
+    host = owned.host.start()
+    host.timeout = 0.2
+    pending, clicked = threading.Event(), threading.Event()
+
+    def ui(button=""):
+        if button:
+            clicked.set()
+            return "CLICKED:" + button
+        return "BUTTON:Allow once" if pending.is_set() else ""
+
+    def call(method, args):
+        pending.set()
+        assert clicked.wait(1)
+        if operation_fails:
+            raise RuntimeError("Original RPC failure")
+        return True
+
+    host._ui = ui
+    expected = RuntimeError if operation_fails else TimeoutError
+    with pytest.raises(expected) as failure:
+        host.call(SimpleNamespace(call=call, close=Mock()), "sources.import", {})
+    row = host.evidence["approvals"][-1]
+    assert row["clicked"] and row["status"] == "failed"
+    assert "did not close" in row["dialog_settlement_error"]
+    assert "dialog_closed" not in row
+    if operation_fails:
+        assert str(failure.value) == "Original RPC failure"
+        assert "Approval dialog settlement" in failure.value.__notes__[0]
