@@ -127,4 +127,71 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+  testWidgets(
+    'an open rename editor cannot save after client session replacement',
+    (tester) async {
+      final (f, id) = await open(tester);
+      await tester.tap(find.byTooltip('Rename meeting'));
+      await tester.pumpAndSettle();
+      await tester.enterText(nameField(), 'Retired editor overwrite');
+      final originalEpoch = f.connection.workspaceEpoch;
+      f.connection.replaceClientSessionForTesting();
+      await tester.pumpAndSettle();
+      expect(f.connection.workspaceEpoch, originalEpoch);
+      f.store.meetingStore.renameMeeting(id, 'Current owner title');
+      f.connection.calls.clear();
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await tester.pumpAndSettle();
+      expect(
+        f.store.meetingQueries.workspace(id)!.title,
+        'Current owner title',
+      );
+      expect(
+        f.connection.calls.where((call) => call.$1 == Operation.meetingsRename),
+        isEmpty,
+      );
+      expect(find.textContaining('The meeting view changed.'), findsOneWidget);
+      expect(
+        tester.widget<TextField>(nameField()).controller!.text,
+        'Retired editor overwrite',
+      );
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'a queued rename action cannot edit a reused ID after workspace clear',
+    (tester) async {
+      final (f, id) = await open(tester);
+      final rename = tester
+          .widget<IconButton>(
+            find.byWidgetPredicate(
+              (widget) =>
+                  widget is IconButton && widget.tooltip == 'Rename meeting',
+            ),
+          )
+          .onPressed!;
+      await tester.runAsync(
+        () => f.connection.application.call(Operation.workspaceClear.wire, {}),
+      );
+      await tester.pumpAndSettle();
+      final replacement = f.store.meeting('Replacement owner title');
+      expect(replacement, id);
+      f.connection.calls.clear();
+      rename();
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(
+        f.store.meetingQueries.workspace(replacement)!.title,
+        'Replacement owner title',
+      );
+      expect(
+        f.connection.calls.where((call) => call.$1 == Operation.meetingsRename),
+        isEmpty,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
 }

@@ -1,9 +1,12 @@
 part of 'meetings_controller.dart';
 
 extension _WorkspaceView on MeetingsController {
-  Future<void> _renameMeeting(MeetingDetails meeting) async {
-    if (!_dialogs.rowsAreCurrent()) return;
-    final epoch = d.workspaceEpoch;
+  Future<void> _renameMeeting(
+    MeetingDetails meeting,
+    FeatureRequestIdentity identity,
+  ) async {
+    bool current() => _meetingActionCurrent(meeting.id, identity);
+    if (!current() || !_dialogs.rowsAreCurrent()) return;
     final controller = TextEditingController(text: meeting.title);
     try {
       await _dialogs.showInputDialog<bool>(
@@ -14,17 +17,39 @@ extension _WorkspaceView on MeetingsController {
           height: 90,
           maxLines: 1,
           onSave: () async {
-            await d.command(Operation.meetingsRename, {
+            if (!current()) {
+              throw StateError(
+                'The meeting view changed. Close this editor and try again.',
+              );
+            }
+            await d.commandCurrent(Operation.meetingsRename, {
               'id': meeting.id,
               'title': controller.text.trim(),
-              if (epoch != null) 'workspace_epoch': epoch,
-            });
+              'workspace_epoch': identity.workspaceEpoch,
+            }, current);
           },
         ),
       );
     } finally {
       controller.dispose();
     }
+  }
+
+  Widget _meetingRenameButton(MeetingDetails meeting) {
+    final identity = _reads.presentationIdentity;
+    return IconButton(
+      tooltip: 'Rename meeting',
+      iconSize: 18,
+      padding: const EdgeInsets.all(4),
+      constraints: const BoxConstraints.tightFor(width: 32, height: 26),
+      style: IconButton.styleFrom(
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      icon: const Icon(Icons.edit_outlined),
+      onPressed: identity == null
+          ? null
+          : () => _renameMeeting(meeting, identity),
+    );
   }
 
   Widget _immersiveMeetingWorkspace() => CallbackShortcuts(
@@ -227,20 +252,7 @@ extension _WorkspaceView on MeetingsController {
                 Flexible(
                   child: Text(meeting.title, style: MeetingVisuals.title),
                 ),
-                IconButton(
-                  tooltip: 'Rename meeting',
-                  iconSize: 18,
-                  padding: const EdgeInsets.all(4),
-                  constraints: const BoxConstraints.tightFor(
-                    width: 32,
-                    height: 26,
-                  ),
-                  style: IconButton.styleFrom(
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  icon: const Icon(Icons.edit_outlined),
-                  onPressed: () => _renameMeeting(meeting),
-                ),
+                _meetingRenameButton(meeting),
               ],
             ),
             const SizedBox(height: 8),
