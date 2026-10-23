@@ -246,7 +246,7 @@ class IntegrationsController implements IntegrationsPort {
     } on MissingPluginException {
       /* pure widget tests */
     }
-    if (!Platform.isMacOS &&
+    if (environment.capabilities.supportsHyprland &&
         environment.variables['HYPRLAND_INSTANCE_SIGNATURE'] != null) {
       final active = await environment.run('/usr/bin/hyprctl', [
         'activewindow',
@@ -331,7 +331,7 @@ class IntegrationsController implements IntegrationsPort {
   @override
   Future<void> enableGlobalShortcuts() async {
     final shortcut = await preferenceModel.readCurrent('quickShortcut');
-    if (!Platform.isMacOS &&
+    if (environment.capabilities.supportsHyprland &&
         environment.variables['HYPRLAND_INSTANCE_SIGNATURE'] != null) {
       await hyprShortcuts.install(shortcut);
       globalShortcutState = 'Global shortcut installed';
@@ -345,6 +345,7 @@ class IntegrationsController implements IntegrationsPort {
             );
           }
         },
+        capabilities: environment.capabilities,
         changed: () {
           if (mounted)
             setState(() => globalShortcutState = globalShortcuts!.state);
@@ -364,7 +365,7 @@ class IntegrationsController implements IntegrationsPort {
 
   @override
   Future<void> disableGlobalShortcuts() async {
-    if (!Platform.isMacOS &&
+    if (environment.capabilities.supportsHyprland &&
         environment.variables['HYPRLAND_INSTANCE_SIGNATURE'] != null &&
         hyprShortcuts.installed)
       await hyprShortcuts.remove();
@@ -435,7 +436,7 @@ class IntegrationsController implements IntegrationsPort {
 
   @override
   Future<bool> ensureRecordingAccess() async {
-    if (!Platform.isMacOS) return true;
+    if (!environment.capabilities.requiresAudioPermissions) return true;
     final capabilities = AudioAccessPresentation.fromWire(
       await d.command(Operation.audioCapabilities) as Map,
     );
@@ -598,7 +599,7 @@ class IntegrationsController implements IntegrationsPort {
 
   @override
   Future<void> setMeetingReminders(bool value) async {
-    if (value && Platform.isMacOS) {
+    if (value && environment.capabilities.requiresNotificationPermission) {
       final result =
           await d.command(Operation.notificationsRequestPermission) as Map;
       if (result['granted'] != true) {
@@ -619,7 +620,7 @@ class IntegrationsController implements IntegrationsPort {
         setState(
           () => notificationState = result['available'] == true
               ? 'Notifications available'
-              : Platform.isMacOS
+              : environment.capabilities.requiresNotificationPermission
               ? 'Notification permission required; enable to request access'
               : 'Notifications unavailable',
         );
@@ -630,7 +631,7 @@ class IntegrationsController implements IntegrationsPort {
 
   @override
   Future<void> setNotifications(bool value) async {
-    if (value && Platform.isMacOS) {
+    if (value && environment.capabilities.requiresNotificationPermission) {
       final result =
           await d.command(Operation.notificationsRequestPermission) as Map;
       if (result['granted'] != true) {
@@ -746,7 +747,7 @@ class IntegrationsController implements IntegrationsPort {
     if (saved != true || !mounted) return;
     await _operations.run(() async {
       final normalized = HyprShortcuts.normalize(
-        Platform.isMacOS
+        environment.capabilities.usesNativeShortcuts
             ? value
                   .toUpperCase()
                   .replaceAll(RegExp(r'\b(CMD|COMMAND|META)\b'), 'SUPER')
@@ -755,7 +756,7 @@ class IntegrationsController implements IntegrationsPort {
             : value,
       );
       if (await preferenceModel.readCurrent('globalShortcut') == 'true') {
-        if (Platform.isMacOS) {
+        if (environment.capabilities.usesNativeShortcuts) {
           await globalShortcuts!.enable(
             preferredTrigger: normalized.replaceAll(' ', ''),
           );

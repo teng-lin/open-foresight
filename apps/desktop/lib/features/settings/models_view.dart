@@ -62,7 +62,8 @@ extension _ModelViews on SettingsController {
           ),
         if (modelKind == 'query-detection') _queryDownloadControls(),
         if (modelKind == 'query-detection' &&
-            (!Platform.isMacOS || !desktopRuntimeSettings.webContentAvailable))
+            (!_host.environment.capabilities.supportsWebContentAcquisition ||
+                !desktopRuntimeSettings.webContentAvailable))
           const Text(
             'Automatic download is unavailable in this distribution. You can import a supported local copy.',
           ),
@@ -96,7 +97,7 @@ extension _ModelViews on SettingsController {
         CheckboxListTile(
           value: _integrations.notifications,
           onChanged:
-              (Platform.isMacOS
+              (_host.environment.capabilities.requiresNotificationPermission
                   ? desktopRuntimeSettings['FORESIGHT_NOTIFICATIONS'] != null
                   : _integrations.notificationState.startsWith(
                       'Notifications available',
@@ -130,7 +131,7 @@ extension _ModelViews on SettingsController {
       OutlinedButton(
         onPressed:
             _operations.busy ||
-                !Platform.isMacOS ||
+                !_host.environment.capabilities.supportsWebContentAcquisition ||
                 !desktopRuntimeSettings.webContentAvailable
             ? null
             : () async {

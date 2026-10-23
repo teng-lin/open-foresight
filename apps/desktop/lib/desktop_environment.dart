@@ -1,6 +1,10 @@
 import 'dart:io';
+import 'platform_capabilities.dart';
+
 import 'package:foresight_core/desktop.dart'
     show openPlatformUri, platformNotification;
+
+export 'platform_capabilities.dart';
 
 typedef DesktopProcessRunner =
     Future<ProcessResult> Function(String executable, List<String> arguments);
@@ -12,6 +16,7 @@ typedef DesktopProcessStarter =
 class DesktopEnvironment {
   const DesktopEnvironment({
     this.variables = const {},
+    this.capabilities = const PlatformCapabilities.linux(),
     String? homeDirectory,
     this.configDirectory = '/dev/null/foresight-config',
     this.dataDirectory = '/dev/null/foresight-data',
@@ -25,8 +30,14 @@ class DesktopEnvironment {
   factory DesktopEnvironment.production({
     Map<String, String>? variables,
     bool? macOS,
+    PlatformCapabilities? capabilities,
     ProcessResult Function(String, List<String>)? runSync,
   }) {
+    final platform =
+        capabilities ??
+        ((macOS ?? Platform.isMacOS)
+            ? const PlatformCapabilities.macOS()
+            : const PlatformCapabilities.linux());
     final values = Map<String, String>.unmodifiable(
       variables ?? Platform.environment,
     );
@@ -34,12 +45,13 @@ class DesktopEnvironment {
     // Match its account-directory fallback for Finder launches without HOME.
     final home =
         values['HOME'] ??
-        ((macOS ?? Platform.isMacOS)
+        (platform.usesAccountHomeLookup
             ? _macHome(runSync ?? Process.runSync)
             : null);
     final hasHome = home != null && home.isNotEmpty;
     return DesktopEnvironment(
       variables: values,
+      capabilities: platform,
       homeDirectory: home,
       configDirectory:
           values['XDG_CONFIG_HOME'] ??
@@ -76,6 +88,7 @@ class DesktopEnvironment {
   }
 
   final Map<String, String> variables;
+  final PlatformCapabilities capabilities;
   final String? _homeDirectory;
   String? get homeDirectory {
     final home = _homeDirectory ?? variables['HOME'];

@@ -1,12 +1,14 @@
-import 'dart:io';
+import 'platform_capabilities.dart';
 import 'package:flutter/services.dart';
 
 /// Own-scheme delivery from Launch Services. Linux launchers use AppCommands.
 class CalendarAuthLinks {
   static const channel = MethodChannel('foresight/calendar-auth');
+  final PlatformCapabilities capabilities;
+  CalendarAuthLinks({this.capabilities = const PlatformCapabilities.linux()});
   bool _closed = false;
   Future<void> start(Future<void> Function(String) receive) async {
-    if (!Platform.isMacOS) return;
+    if (!capabilities.usesNativeCalendarLinks) return;
     channel.setMethodCallHandler((call) async {
       if (!_closed && call.method == 'open-url' && call.arguments is String) {
         await receive(call.arguments as String);
@@ -24,6 +26,7 @@ class CalendarAuthLinks {
 
   void close() {
     _closed = true;
-    if (Platform.isMacOS) channel.setMethodCallHandler(null);
+    if (capabilities.usesNativeCalendarLinks)
+      channel.setMethodCallHandler(null);
   }
 }

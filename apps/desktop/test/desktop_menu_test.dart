@@ -1,3 +1,5 @@
+import 'package:open_foresight/desktop_environment.dart';
+import '../test_support/platform_fixture.dart';
 import 'package:open_foresight/shell/workspace_tab.dart';
 import '../test_support/core_fixture.dart';
 import 'dart:io';
@@ -40,7 +42,10 @@ void main() {
     'menu commands work without enabling global shortcuts and stop on close',
     () async {
       final received = <String>[];
-      final menu = DesktopMenu((name) async => received.add(name), macOS: true);
+      final menu = DesktopMenu(
+        (name) async => received.add(name),
+        capabilities: const PlatformCapabilities.macOS(),
+      );
       for (final name in DesktopMenu.commands) {
         await command(name);
       }
@@ -77,6 +82,9 @@ void main() {
         Foresight(
           TestDesktopConnection(Application(domain)),
           deviceLoader: () async => [],
+          environment: DesktopEnvironment(
+            capabilities: testHostPlatformCapabilities,
+          ),
         ),
       );
       await tester.pumpAndSettle();

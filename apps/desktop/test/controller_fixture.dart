@@ -1,3 +1,4 @@
+import 'package:open_foresight/desktop_environment.dart';
 import '../test_support/core_fixture.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -168,6 +169,7 @@ class ControllerFixture {
   static Future<ControllerFixture> mount(
     WidgetTester tester, {
     Future<List<AudioDevice>> Function()? devices,
+    DesktopEnvironment environment = const DesktopEnvironment(),
   }) async {
     final root = createTestTempDirectorySync('desktop-controls-');
     final store = Store('${root.path}/app.db');
@@ -181,7 +183,11 @@ class ControllerFixture {
     );
     await tester.binding.setSurfaceSize(const Size(1400, 1000));
     await tester.pumpWidget(
-      Foresight(connection, deviceLoader: devices ?? () async => []),
+      Foresight(
+        connection,
+        environment: environment,
+        deviceLoader: devices ?? () async => [],
+      ),
     );
     await tester.pumpAndSettle();
     final fixture = ControllerFixture(

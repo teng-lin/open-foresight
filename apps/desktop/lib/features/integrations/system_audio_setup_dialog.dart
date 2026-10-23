@@ -1,4 +1,3 @@
-import 'dart:io';
 import '../../desktop_environment.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
@@ -24,7 +23,7 @@ Future<void> openSystemAudioSettings(
       'Unsupported Settings destination',
     );
   }
-  if (!Platform.isMacOS)
+  if (!environment.capabilities.supportsSystemAudioSettings)
     throw UnsupportedError('macOS System Settings is unavailable');
   final result = await environment.run('/usr/bin/open', [settings.toString()]);
   if (result.exitCode != 0) {

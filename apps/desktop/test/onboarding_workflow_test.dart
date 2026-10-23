@@ -1,3 +1,4 @@
+import '../test_support/platform_fixture.dart';
 import 'package:open_foresight/features/integrations/audio_access.dart';
 import 'package:open_foresight/desktop_environment.dart';
 import '../test_support/core_fixture.dart';
@@ -96,6 +97,9 @@ void main() {
         Foresight(
           ReadOnlyProfileConnection(Application(domain), reader),
           deviceLoader: () async => [],
+          environment: DesktopEnvironment(
+            capabilities: testHostPlatformCapabilities,
+          ),
         ),
       );
       await tester.pumpAndSettle();
@@ -162,6 +166,9 @@ void main() {
         commands: commands!,
         quickOnLaunch: quick,
         deviceLoader: () async => [],
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
       ),
     );
     await tester.pumpAndSettle();

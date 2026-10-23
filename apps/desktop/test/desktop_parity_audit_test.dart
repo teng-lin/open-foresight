@@ -1,3 +1,5 @@
+import 'package:open_foresight/desktop_environment.dart';
+import '../test_support/platform_fixture.dart';
 import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
@@ -32,6 +34,9 @@ void main() {
           Foresight(
             TestDesktopConnection(Application(Domain(store, helper))),
             deviceLoader: () async => [],
+            environment: DesktopEnvironment(
+              capabilities: testHostPlatformCapabilities,
+            ),
           ),
         );
         await tester.tap(find.text('Settings'));
@@ -154,6 +159,9 @@ void main() {
         Foresight(
           TestDesktopConnection(Application(Domain(store, helper))),
           deviceLoader: () async => [],
+          environment: DesktopEnvironment(
+            capabilities: testHostPlatformCapabilities,
+          ),
         ),
       );
       await tester.tap(find.text('Settings'));
@@ -276,6 +284,9 @@ void main() {
             child: Foresight(
               TestDesktopConnection(Application(Domain(store, helper))),
               deviceLoader: () async => [],
+              environment: DesktopEnvironment(
+                capabilities: testHostPlatformCapabilities,
+              ),
             ),
           ),
         );

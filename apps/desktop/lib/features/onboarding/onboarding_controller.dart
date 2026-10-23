@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:foresight_core/desktop.dart';
@@ -131,12 +130,12 @@ class OnboardingController implements OnboardingActivity {
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
       Text(
-        Platform.isMacOS
+        _host.environment.capabilities.requiresAudioPermissions
             ? 'Allow access for meeting transcription. You can skip this step and grant access before your first recording.'
             : 'This Linux build records through PipeWire. It does not need a separate macOS-style microphone or system-audio permission grant. Choose audio devices in Settings; desktop or sandbox policies may still restrict access.',
       ),
       const SizedBox(height: 20),
-      if (Platform.isMacOS) ...[
+      if (_host.environment.capabilities.requiresAudioPermissions) ...[
         action(
           Icons.mic_none,
           'Microphone access',
@@ -189,9 +188,7 @@ class OnboardingController implements OnboardingActivity {
       ),
       action(
         Icons.search,
-        Platform.isMacOS
-            ? 'Find files on this Mac'
-            : 'Find files on this computer',
+        'Find files on this ${_host.environment.capabilities.deviceName}',
         sourceFeature.findLocalFiles,
       ),
       action(

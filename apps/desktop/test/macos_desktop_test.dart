@@ -1,3 +1,5 @@
+import 'package:open_foresight/desktop_environment.dart';
+import '../test_support/platform_fixture.dart';
 import 'package:open_foresight/shell/workspace_tab.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import '../test_support/core_fixture.dart';
@@ -156,7 +158,13 @@ void main() {
         (call) async => call.method == 'login.get' ? false : null,
       );
       await tester.pumpWidget(
-        Foresight(TestDesktopConnection(app), deviceLoader: () async => []),
+        Foresight(
+          TestDesktopConnection(app),
+          deviceLoader: () async => [],
+          environment: DesktopEnvironment(
+            capabilities: testHostPlatformCapabilities,
+          ),
+        ),
       );
       await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
       await tester.sendKeyEvent(LogicalKeyboardKey.keyN);

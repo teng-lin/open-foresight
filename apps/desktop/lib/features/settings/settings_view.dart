@@ -117,7 +117,11 @@ extension _SettingsView on SettingsController {
             TextButton(
               onPressed: () =>
                   _host.update(() => _navigation.navigate(WorkspaceTab.notes)),
-              child: Text(Platform.isMacOS ? '⌘ + N' : 'Ctrl + N'),
+              child: Text(
+                _host.environment.capabilities.usesMetaShortcuts
+                    ? '⌘ + N'
+                    : 'Ctrl + N',
+              ),
             ),
           ),
         ),
@@ -240,7 +244,7 @@ extension _SettingsView on SettingsController {
         ),
         const Divider(height: 1),
         serviceIdleSetting(),
-        if (Platform.isMacOS) ...[
+        if (_host.environment.capabilities.supportsEchoCancellation) ...[
           const Divider(height: 1),
           settingRow(
             'Echo cancellation',
@@ -282,7 +286,7 @@ extension _SettingsView on SettingsController {
   Widget _audioSettings() => Card(
     child: Column(
       children: [
-        if (Platform.isMacOS) ...[
+        if (_host.environment.capabilities.requiresAudioPermissions) ...[
           ListTile(
             title: const Text('Recording access'),
             subtitle: Text(

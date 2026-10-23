@@ -1,3 +1,4 @@
+import '../test_support/platform_fixture.dart';
 import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 
@@ -133,6 +134,9 @@ void main() {
       Foresight(
         TestDesktopConnection(Application(domain)),
         deviceLoader: () async => [],
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
       ),
     );
     await tester.pumpAndSettle();
@@ -154,6 +158,9 @@ void main() {
         TestDesktopConnection(Application(domain)),
         commands: commands,
         deviceLoader: () async => [],
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
       ),
     );
     await tester.pumpAndSettle();
@@ -207,7 +214,13 @@ void main() {
       await tester.runAsync(registerSpeech);
       final connection = ConsentDesktopConnection(Application(domain));
       await tester.pumpWidget(
-        Foresight(connection, deviceLoader: () async => []),
+        Foresight(
+          connection,
+          deviceLoader: () async => [],
+          environment: DesktopEnvironment(
+            capabilities: testHostPlatformCapabilities,
+          ),
+        ),
       );
       await tester.pumpAndSettle();
       await tester.tap(find.text('Start transcribing'));

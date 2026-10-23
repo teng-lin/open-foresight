@@ -15,7 +15,7 @@ class DesktopSettings {
     this.launcher, {
     bool? macOS,
     this.environment = const DesktopEnvironment(),
-  }) : macOS = macOS ?? Platform.isMacOS;
+  }) : macOS = macOS ?? environment.capabilities.usesNativeLoginItems;
   Future<void> refresh() async {
     if (macOS)
       _macOpenAtLogin = await channel.invokeMethod<bool>('login.get') ?? false;

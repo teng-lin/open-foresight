@@ -13,7 +13,7 @@ import 'meeting_setup_test.dart' show OfflineHelper;
 void main() {
   test('host effects occur only in the environment adapter', () {
     final forbidden = RegExp(
-      r'Process\.\w+|Platform\.environment\b|\bopenPlatformUri\b|\bplatformNotification\b',
+      r'Process\.\w+|\bPlatform\s*\.\s*\w+|\bdefaultTargetPlatform\b|\bkIsWeb\b|\bopenPlatformUri\b|\bplatformNotification\b',
     );
     for (final file
         in Directory('lib')
@@ -42,6 +42,7 @@ void main() {
       expect(environment.openUri, openPlatformUri);
       expect(environment.notify, platformNotification);
       expect(environment.variables, Platform.environment);
+      expect(environment.capabilities.usesMetaShortcuts, Platform.isMacOS);
       expect(
         environment.configDirectory,
         Platform.environment['XDG_CONFIG_HOME'] ??
@@ -59,6 +60,8 @@ void main() {
     const environment = DesktopEnvironment();
     expect(environment.variables, isEmpty);
     expect(environment.homeDirectory, isNull);
+    expect(environment.capabilities.supportsHyprland, isTrue);
+    expect(environment.capabilities.usesMetaShortcuts, isFalse);
     await expectLater(
       environment.run('/usr/bin/hyprctl', []),
       throwsUnsupportedError,
@@ -239,6 +242,7 @@ void main() {
         ..writeAsStringSync('fixture');
       final calls = <(String, List<String>)>[];
       final environment = DesktopEnvironment(
+        capabilities: const PlatformCapabilities.linux(),
         variables: {
           'HOME': root.path,
           'HYPRLAND_INSTANCE_SIGNATURE': 'fake-instance',
@@ -304,6 +308,5 @@ void main() {
       expect(outside.readAsStringSync(), 'Preserve this');
       expect(data.listSync(), isEmpty);
     },
-    skip: Platform.isMacOS,
   );
 }

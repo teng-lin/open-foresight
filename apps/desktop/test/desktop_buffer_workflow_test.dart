@@ -1,3 +1,5 @@
+import 'package:open_foresight/desktop_environment.dart';
+import '../test_support/platform_fixture.dart';
 import 'package:open_foresight/shell/workspace_tab.dart';
 import 'store_reader_fixture.dart';
 import 'dart:async';
@@ -68,7 +70,12 @@ void main() {
   testWidgets(
     'graph embedding failure preserves documents and paused indexing does not start another request',
     (tester) async {
-      final f = await ControllerFixture.mount(tester);
+      final f = await ControllerFixture.mount(
+        tester,
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
+      );
       final ids = [
         for (final name in ['Alpha', 'Beta'])
           f.store.importText(
@@ -126,7 +133,12 @@ void main() {
   testWidgets(
     'graph embeddings for many sources arrive in bounded batches that survive a failure',
     (tester) async {
-      final f = await ControllerFixture.mount(tester);
+      final f = await ControllerFixture.mount(
+        tester,
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
+      );
       f.store.db.execute('BEGIN');
       final ids = [
         for (var i = 0; i < 1500; i++)
@@ -198,7 +210,12 @@ void main() {
   testWidgets('graph embeddings from a replaced model run are not cached', (
     tester,
   ) async {
-    final f = await ControllerFixture.mount(tester);
+    final f = await ControllerFixture.mount(
+      tester,
+      environment: DesktopEnvironment(
+        capabilities: testHostPlatformCapabilities,
+      ),
+    );
     final ids = [
       for (final name in ['Alpha', 'Beta'])
         f.store.importText(
@@ -249,7 +266,12 @@ void main() {
   testWidgets(
     'custom export dates stay ordered when either boundary crosses the other and cancelled edits do not apply',
     (tester) async {
-      final f = await ControllerFixture.mount(tester);
+      final f = await ControllerFixture.mount(
+        tester,
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
+      );
       final opened = showDialog<void>(
         context: tester.element(find.byType(Scaffold).first),
         builder: (_) => MeetingExportDialog(
@@ -324,7 +346,12 @@ void main() {
   testWidgets(
     'answer font controls and dismissal affect presentation without deleting saved answers',
     (tester) async {
-      final f = await ControllerFixture.mount(tester);
+      final f = await ControllerFixture.mount(
+        tester,
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
+      );
       f.store.answer(
         'Saved question',
         'Saved answer body',
@@ -362,7 +389,12 @@ void main() {
   testWidgets(
     'manual transcript questions route answers to their owning meeting',
     (tester) async {
-      final f = await ControllerFixture.mount(tester);
+      final f = await ControllerFixture.mount(
+        tester,
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
+      );
       final id = f.store.meeting('Manual question fixture');
       final other = f.store.meeting('Other meeting');
       f.store.transcript(
@@ -404,7 +436,12 @@ void main() {
   testWidgets(
     'capture indicator reopens its meeting and shows only nonempty provisional segments',
     (tester) async {
-      final f = await ControllerFixture.mount(tester);
+      final f = await ControllerFixture.mount(
+        tester,
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
+      );
       final id = f.store.meeting('Live transcript fixture');
       f.connection.captureState = {
         'active': true,
@@ -444,7 +481,12 @@ void main() {
   testWidgets(
     'desktop keyboard navigation, new note, cancelled import and help preserve workspace state',
     (tester) async {
-      final f = await ControllerFixture.mount(tester);
+      final f = await ControllerFixture.mount(
+        tester,
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
+      );
       Future<void> shortcut(LogicalKeyboardKey key) async {
         final modifier = Platform.isMacOS
             ? LogicalKeyboardKey.metaLeft
@@ -504,7 +546,12 @@ void main() {
   testWidgets(
     'connected service settings refresh, change interval, disconnect and cancel sign-in without deleting imports',
     (tester) async {
-      final f = await ControllerFixture.mount(tester);
+      final f = await ControllerFixture.mount(
+        tester,
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
+      );
       final account = SettingsAccount(Directory('${f.root.path}/google'));
       addTearDown(account.close);
       final google = SettingsSources();
@@ -565,7 +612,12 @@ void main() {
     testWidgets(
       'local discovery ${partial ? 'reports partial failure after attempting every selection' : 'imports every selected file'}',
       (tester) async {
-        final f = await ControllerFixture.mount(tester);
+        final f = await ControllerFixture.mount(
+          tester,
+          environment: DesktopEnvironment(
+            capabilities: testHostPlatformCapabilities,
+          ),
+        );
         final folder = Directory('${f.root.path}/documents')..createSync();
         final paths = [
           for (final name in ['alpha.txt', 'beta.md', 'gamma.txt'])
@@ -620,7 +672,12 @@ void main() {
     testWidgets(
       '${grid ? 'grid' : 'list'} source actions retry indexing and delete only the selected source',
       (tester) async {
-        final f = await ControllerFixture.mount(tester);
+        final f = await ControllerFixture.mount(
+          tester,
+          environment: DesktopEnvironment(
+            capabilities: testHostPlatformCapabilities,
+          ),
+        );
         final id = f.store.importText(
           'Action target',
           'Text',
@@ -675,7 +732,12 @@ void main() {
   testWidgets(
     'summary history keeps earlier edits separate from the current version and permits regeneration',
     (tester) async {
-      final f = await ControllerFixture.mount(tester);
+      final f = await ControllerFixture.mount(
+        tester,
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
+      );
       final id = f.store.meeting('Versioned summary');
       f.store.artifact(id, 'summary', 'Earlier summary', 'fixture');
       final previous = f.store.db.lastInsertRowId;
@@ -729,7 +791,12 @@ void main() {
   testWidgets(
     'meeting question detection errors have an explicit retry for the owning meeting',
     (tester) async {
-      final f = await ControllerFixture.mount(tester);
+      final f = await ControllerFixture.mount(
+        tester,
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
+        ),
+      );
       final id = f.store.meeting('Detection retry');
       f.connection.captureState = {
         'proactive': {

@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:math';
-import 'dart:io';
+import '../../platform_capabilities.dart';
 import 'package:flutter/services.dart';
 import 'package:dbus/dbus.dart';
 
@@ -31,8 +31,9 @@ class GlobalShortcuts {
     DBusClient? client,
     this.appId = 'io.openforesight.App',
     bool? macOS,
+    PlatformCapabilities capabilities = const PlatformCapabilities.linux(),
   }) : _client = client,
-       macOS = macOS ?? Platform.isMacOS {
+       macOS = macOS ?? capabilities.usesNativeShortcuts {
     if (this.macOS)
       channel.setMethodCallHandler((call) async {
         if (!_closed && _macEnabled && call.method == 'quick-meeting')

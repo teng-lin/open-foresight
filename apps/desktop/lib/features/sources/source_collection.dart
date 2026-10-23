@@ -492,9 +492,8 @@ extension _SourceCollection on SourcesController {
         value: 'find-files',
         child: DesktopImportMenuTile(
           icon: Icons.search,
-          label: Platform.isMacOS
-              ? 'Find files on this Mac'
-              : 'Find files on this computer',
+          label:
+              'Find files on this ${_host.environment.capabilities.deviceName}',
         ),
       ),
       PopupMenuItem(

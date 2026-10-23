@@ -18,7 +18,6 @@ import 'features/onboarding/onboarding_controller.dart';
 import 'failure_text.dart';
 
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:foresight_core/desktop.dart';
@@ -92,7 +91,9 @@ class _WorkspaceState extends State<Workspace>
         // The composition root implements the test contract; only tests consume it.
         // ignore: invalid_use_of_visible_for_testing_member
         WorkspaceTestAccess {
-  final calendarAuthLinks = CalendarAuthLinks();
+  late final calendarAuthLinks = CalendarAuthLinks(
+    capabilities: environment.capabilities,
+  );
   @override
   late final OnboardingController onboardingFeature = OnboardingController(
     host: featureHost(DesktopFeature.onboarding),
@@ -275,7 +276,10 @@ class _WorkspaceState extends State<Workspace>
     // No view holds an ID yet, so a clear before startup needs no reset.
     if (d.workspaceReplaced) d.adoptWorkspace();
     WidgetsBinding.instance.addObserver(this);
-    desktopMenu = DesktopMenu(integrationFeature.activateMenuCommand);
+    desktopMenu = DesktopMenu(
+      integrationFeature.activateMenuCommand,
+      capabilities: environment.capabilities,
+    );
     sourceFeature.initializeGraph();
     settingsFeature.start();
     onboardingFeature.start();
@@ -311,7 +315,7 @@ class _WorkspaceState extends State<Workspace>
     unawaited(_initializePreferences());
     integrationFeature.googleState = integrationFeature.googleAuth.loadError;
     unawaited(integrationFeature.refreshAudioDevices());
-    if (Platform.isMacOS) {
+    if (environment.capabilities.requiresAudioPermissions) {
       unawaited(integrationFeature.refreshCaptureCapabilities());
       unawaited(integrationFeature.refreshLoginSetting());
     }
@@ -416,7 +420,8 @@ class _WorkspaceState extends State<Workspace>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (Platform.isMacOS && state == AppLifecycleState.resumed) {
+    if (environment.capabilities.requiresAudioPermissions &&
+        state == AppLifecycleState.resumed) {
       unawaited(integrationFeature.refreshCaptureCapabilities());
     }
   }
@@ -639,32 +644,32 @@ class _WorkspaceState extends State<Workspace>
     bindings: {
       SingleActivator(
         LogicalKeyboardKey.digit1,
-        control: !Platform.isMacOS,
-        meta: Platform.isMacOS,
+        control: !environment.capabilities.usesMetaShortcuts,
+        meta: environment.capabilities.usesMetaShortcuts,
       ): () =>
           navigate(WorkspaceTab.meetings),
       SingleActivator(
         LogicalKeyboardKey.digit2,
-        control: !Platform.isMacOS,
-        meta: Platform.isMacOS,
+        control: !environment.capabilities.usesMetaShortcuts,
+        meta: environment.capabilities.usesMetaShortcuts,
       ): () =>
           navigate(WorkspaceTab.chat),
       SingleActivator(
         LogicalKeyboardKey.digit3,
-        control: !Platform.isMacOS,
-        meta: Platform.isMacOS,
+        control: !environment.capabilities.usesMetaShortcuts,
+        meta: environment.capabilities.usesMetaShortcuts,
       ): () =>
           navigate(WorkspaceTab.sources),
       SingleActivator(
         LogicalKeyboardKey.digit4,
-        control: !Platform.isMacOS,
-        meta: Platform.isMacOS,
+        control: !environment.capabilities.usesMetaShortcuts,
+        meta: environment.capabilities.usesMetaShortcuts,
       ): () =>
           navigate(WorkspaceTab.stats),
       SingleActivator(
         LogicalKeyboardKey.digit5,
-        control: !Platform.isMacOS,
-        meta: Platform.isMacOS,
+        control: !environment.capabilities.usesMetaShortcuts,
+        meta: environment.capabilities.usesMetaShortcuts,
       ): () =>
           navigate(WorkspaceTab.settings),
       integrationFeature.quickActivator: () {
@@ -673,15 +678,15 @@ class _WorkspaceState extends State<Workspace>
       },
       SingleActivator(
         LogicalKeyboardKey.keyO,
-        control: !Platform.isMacOS,
-        meta: Platform.isMacOS,
+        control: !environment.capabilities.usesMetaShortcuts,
+        meta: environment.capabilities.usesMetaShortcuts,
       ): () {
         if (!busy) unawaited(run(sourceFeature.import));
       },
       SingleActivator(
         LogicalKeyboardKey.keyN,
-        control: !Platform.isMacOS,
-        meta: Platform.isMacOS,
+        control: !environment.capabilities.usesMetaShortcuts,
+        meta: environment.capabilities.usesMetaShortcuts,
       ): () => update(() {
         navigate(WorkspaceTab.notes);
         sourceFeature.noteEditorGeneration++;
