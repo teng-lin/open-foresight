@@ -571,11 +571,12 @@ def test_linux_accessibility_cleanup_preserves_original_failure(linux_owned):
     host.process = None
 
 
+@pytest.mark.parametrize("interpreter", ["bash", "env"])
 def test_linux_launcher_is_only_a_transient_identity_before_native_exec(
-    linux_owned, monkeypatch
+    linux_owned, monkeypatch, interpreter
 ):
     host, accessibility, _ = linux_owned
-    image = {"value": Path("/usr/bin/bash").resolve()}
+    image = {"value": Path("/usr/bin/" + interpreter).resolve()}
     monkeypatch.setattr(gui, "process_path", lambda _: image["value"])
     original_stat = Path.stat
     monkeypatch.setattr(
@@ -587,7 +588,8 @@ def test_linux_launcher_is_only_a_transient_identity_before_native_exec(
             else original_stat(path, *args, **kwargs)
         ),
     )
-    reads = Mock(return_value=b"bash\0" + os.fsencode(host.launcher) + b"\0")
+    argv = b"env\0bash\0" if interpreter == "env" else b"bash\0"
+    reads = Mock(return_value=argv + os.fsencode(host.launcher) + b"\0")
     monkeypatch.setattr(Path, "read_bytes", reads)
     assert host._owned_launcher() is False  # No owned process exists yet.
 
@@ -642,5 +644,27 @@ def test_linux_launcher_cleanup_rejects_other_interpreter_commands(
     assert not host._owned_launcher()
     with pytest.raises(RuntimeError, match="process identity"):
         host.close()
+    process.terminate.assert_not_called()
+    host.process = None
+
+
+def test_pending_launcher_requires_the_owned_effective_user(linux_owned, monkeypatch):
+    host, _, process = linux_owned
+    host.process = process
+    monkeypatch.setattr(gui, "process_path", lambda _: Path("/usr/bin/bash").resolve())
+    monkeypatch.setattr(
+        Path, "read_bytes", lambda _: b"bash\0" + os.fsencode(host.launcher) + b"\0"
+    )
+    original_stat = Path.stat
+    monkeypatch.setattr(
+        Path,
+        "stat",
+        lambda path, *args, **kwargs: (
+            SimpleNamespace(st_uid=os.geteuid() + 1)
+            if str(path) == "/proc/123"
+            else original_stat(path, *args, **kwargs)
+        ),
+    )
+    assert not host._owned_launcher()
     process.terminate.assert_not_called()
     host.process = None

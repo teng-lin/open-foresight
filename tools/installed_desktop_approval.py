@@ -176,18 +176,25 @@ class InstalledDesktop:
         # pending wrapper may only be observed/cleaned up, never approve a call.
         if sys.platform != "linux" or self.process is None:
             return False
-        if process_path(self.process.pid) != Path("/usr/bin/bash").resolve():
-            return False
+        image = process_path(self.process.pid)
         try:
             arguments = (
                 Path(f"/proc/{self.process.pid}/cmdline").read_bytes().split(b"\0")
             )
-            return (
-                Path(f"/proc/{self.process.pid}").stat().st_uid == os.geteuid()
-                and len(arguments) == 3
-                and arguments[-1] == b""
-                and Path(os.fsdecode(arguments[1])).resolve() == self.launcher
-            )
+            if Path(f"/proc/{self.process.pid}").stat().st_uid != os.geteuid():
+                return False
+            if arguments[-1] != b"":
+                return False
+            arguments.pop()
+            if image == Path("/usr/bin/env").resolve():
+                if len(arguments) != 3 or arguments[1] != b"bash":
+                    return False
+            elif image == Path("/usr/bin/bash").resolve():
+                if len(arguments) != 2:
+                    return False
+            else:
+                return False
+            return Path(os.fsdecode(arguments[-1])).resolve() == self.launcher
         except OSError:
             return False
 
