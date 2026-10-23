@@ -6,7 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/src/domain.dart';
 import 'package:open_foresight/main.dart';
 import 'package:foresight_core/src/store.dart';
-import 'package:open_foresight/graph_label_controls.dart';
+import 'package:open_foresight/features/sources/graph_label_controls.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 void main() {

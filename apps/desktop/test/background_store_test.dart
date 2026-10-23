@@ -2,6 +2,7 @@ import 'store_reader_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/background_store.dart';
+import 'package:open_foresight/features/sources/background_store.dart';
 import 'package:foresight_core/src/store.dart';
 
 void main() {

@@ -4,7 +4,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/src/graph_labels.dart';
-import 'package:open_foresight/graph_rendering.dart';
+import 'package:open_foresight/features/sources/graph_rendering.dart';
 import 'package:foresight_core/src/store.dart';
 import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
 

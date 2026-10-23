@@ -3,10 +3,10 @@ import 'features/integrations/integrations_controller.dart';
 import 'shell/workspace_tab.dart';
 import 'shell/ports.dart';
 import 'features/settings/settings_controller.dart';
+import 'features/sources/sources_controller.dart';
 import 'presentation/workspace_presentation.dart';
 import 'onboarding_view.dart';
 
-import 'background_store.dart';
 import 'desktop_reader_adapters.dart';
 import 'service_edit_dialog.dart';
 import 'failure_text.dart';
@@ -16,14 +16,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
-import 'package:flutter/gestures.dart';
-import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:foresight_core/desktop.dart';
-import 'graph_label_controls.dart';
-import 'cluster_rendering.dart';
 import 'model_setup.dart';
 import 'app_theme.dart';
 import 'meeting_visuals.dart';
@@ -32,8 +28,6 @@ import 'commands.dart';
 import 'calendar_auth_links.dart';
 import 'desktop_menu.dart';
 import 'account_button.dart';
-import 'file_discovery_sheet.dart';
-import 'graph_rendering.dart';
 import 'meeting_export.dart';
 import 'note_save_scheduler.dart';
 import 'meeting_note_state.dart';
@@ -43,7 +37,7 @@ import 'agent_approval_surface.dart';
 part 'onboarding_controller.dart';
 part 'workspace_controller.dart';
 part 'workspace_visuals.dart';
-part 'sources_controller.dart';
+
 part 'chat_controller.dart';
 part 'meetings_controller.dart';
 part 'meeting_ai_views.dart';
@@ -111,7 +105,13 @@ class _WorkspaceState extends State<Workspace>
         WorkspaceLifecycle {
   final calendarAuthLinks = CalendarAuthLinks();
   late final onboardingFeature = _OnboardingController(this);
-  late final sourceFeature = _SourcesController(this);
+  late final sourceFeature = SourcesController(
+    host: this,
+    navigation: this,
+    operations: this,
+    dialogs: this,
+    integrations: integrationFeature,
+  );
   late final chatFeature = _ChatController(this);
   late final meetingFeature = _MeetingsController(this);
   late final settingsFeature = SettingsController(
@@ -237,20 +237,7 @@ class _WorkspaceState extends State<Workspace>
     if (d.workspaceReplaced) d.adoptWorkspace();
     WidgetsBinding.instance.addObserver(this);
     desktopMenu = DesktopMenu(integrationFeature.activateMenuCommand);
-    sourceFeature.graphMotionTicker = createTicker(
-      sourceFeature.tickGraphMotion,
-    );
-    sourceFeature.graphCameraController = AnimationController(vsync: this);
-    sourceFeature.graphCameraController.addListener(() {
-      final tween = sourceFeature.graphCameraTween;
-      if (mounted && tween != null) {
-        sourceFeature.graphTransform.value = tween.transform(
-          sourceFeature.graphCameraCurve.transform(
-            sourceFeature.graphCameraController.value,
-          ),
-        );
-      }
-    });
+    sourceFeature.initializeGraph();
     settingsFeature.embeddingGpu =
         d.store.model('embedding')?.backend == 'litert_lm_embedding_gpu';
     meetingFeature.systemAudioSetupReviewed =
@@ -404,17 +391,10 @@ class _WorkspaceState extends State<Workspace>
       );
     settingsFeature.dispose();
     integrationFeature.dispose();
-    sourceFeature.graphMotionTicker.dispose();
-    sourceFeature.graphCameraController.dispose();
-    sourceFeature.graphMotionFrames.dispose();
-    sourceFeature.graphTransform.dispose();
+    sourceFeature.dispose();
     meetingFeature.recording?.dispose();
     for (final c in [
       ...chatFeature.questionDrafts.values,
-      sourceFeature.sourceSearchController,
-      sourceFeature.graphLabelInput,
-      sourceFeature.noteTitle,
-      sourceFeature.noteBody,
       meetingFeature.meetingNotesController,
       meetingFeature.meetingSearchController,
     ]) {
@@ -881,7 +861,7 @@ class _WorkspaceState extends State<Workspace>
                             child: ValueListenableBuilder<int>(
                               valueListenable: serviceUiRevision,
                               builder: (_, __, ___) => switch (tab) {
-                                WorkspaceTab.sources => _SourcesView(
+                                WorkspaceTab.sources => SourcesView(
                                   sourceFeature,
                                 ),
                                 WorkspaceTab.chat => _ChatView(chatFeature),

@@ -2,7 +2,7 @@ import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/file_discovery_sheet.dart';
+import 'package:open_foresight/features/sources/file_discovery_sheet.dart';
 
 void main() {
   testWidgets(

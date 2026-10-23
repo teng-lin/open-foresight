@@ -1,10 +1,104 @@
-part of 'application.dart';
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math' as math;
+import 'package:flutter/gestures.dart';
+import 'package:flutter/scheduler.dart' show Ticker;
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:file_selector/file_selector.dart';
+import 'package:foresight_core/desktop.dart';
+import '../../desktop_reader_adapters.dart';
+import '../../desktop_visuals.dart';
+import '../../feature_request_identity.dart';
+import '../../service_edit_dialog.dart';
+import '../../presentation/workspace_presentation.dart';
+import '../../shell/ports.dart';
+import '../../shell/workspace_tab.dart';
+import 'background_store.dart';
+import 'file_discovery_sheet.dart';
+import 'graph_label_controls.dart';
+import 'graph_rendering.dart';
+import 'cluster_rendering.dart';
+import 'source_painters.dart';
+
+const _blue = workspaceBlue;
+const _ink = workspaceInk;
 
 // Each graph.embeddings reply must fit the service's 16 MiB frame limit.
 const _graphEmbeddingBatch = 128;
 
-class _SourcesController extends _FeatureController {
-  _SourcesController(super.shell);
+class SourcesController implements SourceCommands {
+  SourcesController({
+    required FeatureHost host,
+    required WorkspaceNavigation navigation,
+    required OperationGate operations,
+    required WorkspaceDialogs dialogs,
+    required IntegrationsPort integrations,
+  }) : _host = host,
+       _navigation = navigation,
+       _operations = operations,
+       _dialogs = dialogs,
+       integrationFeature = integrations;
+
+  final FeatureHost _host;
+  final WorkspaceNavigation _navigation;
+  final OperationGate _operations;
+  final WorkspaceDialogs _dialogs;
+  final IntegrationsPort integrationFeature;
+  bool _disposed = false;
+  DesktopConnection get d => _host.connection;
+  bool get mounted => !_disposed && _host.mounted;
+  BuildContext get context => _host.context;
+  void update(VoidCallback action) {
+    if (mounted) _host.update(action);
+  }
+
+  void setState(VoidCallback action) => update(action);
+  Widget pill(
+    String title,
+    VoidCallback? action, {
+    IconData? icon,
+    bool selected = false,
+  }) => workspacePill(title, action, icon: icon, selected: selected);
+  Widget heading(String title, {List<Widget> actions = const []}) =>
+      workspaceHeading(title, actions: actions);
+  Widget searchBox(
+    String hint,
+    ValueChanged<String> onChanged, {
+    TextEditingController? controller,
+  }) => workspaceSearchBox(
+    hint,
+    (value) => update(() => onChanged(value)),
+    controller: controller,
+  );
+  String timeLabel(Object? stamp) => workspaceTimeLabel(stamp);
+
+  void initializeGraph() {
+    graphMotionTicker = _host.vsync.createTicker(tickGraphMotion);
+    graphCameraController = AnimationController(vsync: _host.vsync);
+    graphCameraController.addListener(() {
+      final tween = graphCameraTween;
+      if (mounted && tween != null) {
+        graphTransform.value = tween.transform(
+          graphCameraCurve.transform(graphCameraController.value),
+        );
+      }
+    });
+  }
+
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    graphMotionTicker.dispose();
+    graphCameraController.dispose();
+    graphMotionFrames.dispose();
+    graphTransform.dispose();
+    sourceSearchController.dispose();
+    graphLabelInput.dispose();
+    noteTitle.dispose();
+    noteBody.dispose();
+  }
 
   final noteTitle = TextEditingController();
   final noteBody = TextEditingController();
@@ -110,7 +204,7 @@ class _SourcesController extends _FeatureController {
   void syncGraphMotion() {
     final enabled =
         mounted &&
-        shell.tab == WorkspaceTab.sources &&
+        _navigation.selectedTab == WorkspaceTab.sources &&
         graphView &&
         readRows(d.store.sourceSummaries).isNotEmpty &&
         !graphAnimationPaused &&
@@ -136,7 +230,7 @@ class _SourcesController extends _FeatureController {
         graphMousePointer != null ||
         graphAnimationPaused ||
         graphModalOpen ||
-        shell.tab != WorkspaceTab.sources ||
+        _navigation.selectedTab != WorkspaceTab.sources ||
         !graphView)
       return;
     final seconds = (elapsed - previous).inMicroseconds / 1000000;
@@ -149,6 +243,7 @@ class _SourcesController extends _FeatureController {
 
   Future<void> importFolderPath(String path) => importDirectory(path);
 
+  @override
   Future<void> findLocalFiles({List<String>? roots}) =>
       findFilesOnComputer(roots: roots);
 
@@ -156,6 +251,7 @@ class _SourcesController extends _FeatureController {
 
   Future<void> importSourceUrl(String address) => importAddress(address);
 
+  @override
   Future<void> import() async {
     final file = await openFile(
       acceptedTypeGroups: [
@@ -169,6 +265,7 @@ class _SourcesController extends _FeatureController {
     await importPath(file.path);
   }
 
+  @override
   Future<void> source(Map<String, Object?> s) async {
     if (!s.containsKey('content')) {
       final current = d.store.sourceById(s['id'] as String);
@@ -187,11 +284,13 @@ class _SourcesController extends _FeatureController {
         ),
         actions: [
           TextButton(
-            onPressed: shell.busy
+            onPressed: _operations.busy
                 ? null
                 : () {
                     Navigator.pop(context);
-                    unawaited(editSource(s).catchError(shell.reportAsyncError));
+                    unawaited(
+                      editSource(s).catchError(_operations.reportAsyncError),
+                    );
                   },
             child: const Text('Edit source'),
           ),
@@ -206,10 +305,10 @@ class _SourcesController extends _FeatureController {
 
   Future<void> editSource(Map<String, Object?> s) async {
     // The source ID belongs to the workspace of the rows on screen.
-    if (!shell.rowsAreCurrent()) return;
+    if (!_dialogs.rowsAreCurrent()) return;
     final epoch = d.workspaceEpoch;
     final text = TextEditingController(text: s['content'] as String);
-    final saved = await shell.showInputDialog<bool>(
+    final saved = await _dialogs.showInputDialog<bool>(
       builder: (context) => ServiceEditDialog(
         title: 'Edit ${s['title']}',
         controller: text,
@@ -297,7 +396,7 @@ class _SourcesController extends _FeatureController {
               ),
             ),
             FilledButton(
-              onPressed: () => shell.run(() async {
+              onPressed: () => _operations.run(() async {
                 // Every send names the workspace this save began in, and a
                 // reply that arrives after a reset is not shown: it names an
                 // ID the views have dropped.
@@ -361,7 +460,7 @@ class _SourcesController extends _FeatureController {
 
   Future<void> importPath(String path) async {
     await d.command(Operation.sourcesImportFile, {'path': path});
-    if (mounted) shell.update(() {});
+    if (mounted) update(() {});
   }
 
   Future<void> findFilesOnComputer({List<String>? roots}) async {
@@ -384,8 +483,8 @@ class _SourcesController extends _FeatureController {
         initialFolders:
             roots ??
             LocalFileDiscovery.defaultFolders(
-              widget.environment.homeDirectory ??
-                  widget.environment.dataDirectory,
+              _host.environment.homeDirectory ??
+                  _host.environment.dataDirectory,
             ),
         excludedPaths: excluded,
         pickFolder: () => getDirectoryPath(),
@@ -410,6 +509,7 @@ class _SourcesController extends _FeatureController {
       );
   }
 
+  @override
   Future<void> importFolder() async {
     final path = await getDirectoryPath();
     if (!mounted || path == null) return;
@@ -417,7 +517,7 @@ class _SourcesController extends _FeatureController {
   }
 
   Future<void> reviewFolderImport(String path) async {
-    final selected = await shell.showInputDialog<List<String>>(
+    final selected = await _dialogs.showInputDialog<List<String>>(
       builder: (_) => FileDiscoverySheet(
         initialFolders: [path],
         excludedPaths: const {},
@@ -437,10 +537,11 @@ class _SourcesController extends _FeatureController {
     await d.command(Operation.sourcesRefresh);
   }
 
+  @override
   Future<void> importUrl() async {
     final input = TextEditingController();
     var allowPrivateNetwork = false;
-    final accepted = await shell.showInputDialog<bool>(
+    final accepted = await _dialogs.showInputDialog<bool>(
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
           title: const Text('Please enter the URL'),
@@ -568,12 +669,12 @@ class _SourcesController extends _FeatureController {
       'labels': sourceLabels(source).where((label) => label != name).toList(),
     });
     await d.command(Operation.graphAcknowledge);
-    if (mounted) shell.update(() {});
+    if (mounted) update(() {});
   }
 
   Future<void> createOrganizationLabel() async {
     final input = TextEditingController();
-    final name = await shell.showInputDialog<String>(
+    final name = await _dialogs.showInputDialog<String>(
       builder: (context) => AlertDialog(
         title: const Text('Create New Organization Label'),
         content: Column(
@@ -607,13 +708,13 @@ class _SourcesController extends _FeatureController {
     );
     input.dispose();
     if (name != null && mounted)
-      await shell.run(() => autoAssignOrganizationLabel(name));
+      await _operations.run(() => autoAssignOrganizationLabel(name));
   }
 
   Future<void> autoAssignOrganizationLabel(String name) async {
     await d.command(Operation.labelsAutoAssign, {'name': name});
     if (mounted)
-      shell.update(() {
+      update(() {
         graphOrganizationRevision++;
         graphLayoutKey = '';
       });
@@ -627,7 +728,7 @@ class _SourcesController extends _FeatureController {
   }
 
   Future<void> deleteOrganizationLabel(String name) async {
-    final confirmed = await shell.showInputDialog<bool>(
+    final confirmed = await _dialogs.showInputDialog<bool>(
       builder: (context) => AlertDialog(
         title: const Text('Delete Label'),
         content: Text(
@@ -649,7 +750,7 @@ class _SourcesController extends _FeatureController {
       await d.command(Operation.labelsDelete, {'name': name});
       await d.command(Operation.graphAcknowledge);
       if (mounted)
-        shell.update(() {
+        update(() {
           if (labelFilter == name) labelFilter = '';
         });
     }
@@ -657,12 +758,12 @@ class _SourcesController extends _FeatureController {
 
   Future<void> editLabels(Map<String, Object?>? s) async {
     // The sources belong to the workspace of the rows on screen.
-    if (!shell.rowsAreCurrent()) return;
+    if (!_dialogs.rowsAreCurrent()) return;
     final epoch = d.workspaceEpoch;
     final input = TextEditingController(
       text: s == null ? '' : sourceLabels(s).join(', '),
     );
-    final ok = await shell.showInputDialog<bool>(
+    final ok = await _dialogs.showInputDialog<bool>(
       builder: (context) => AlertDialog(
         title: Text(
           s == null ? 'Add label to sources' : 'Labels · ${s['title']}',
@@ -700,7 +801,7 @@ class _SourcesController extends _FeatureController {
         if (epoch != null) 'workspace_epoch': epoch,
       });
     }
-    if (mounted) shell.update(() {});
+    if (mounted) update(() {});
   }
 
   Map<String, String> driveSourceMimes() => d.store.googleSourceMimes;
@@ -761,7 +862,7 @@ class _SourcesController extends _FeatureController {
             },
             onError: (Object error) {
               if (mounted && sourceSearchCacheKey == key)
-                update(() => shell.error = error.toString());
+                _operations.reportAsyncError(error);
             },
           ),
         );
@@ -866,7 +967,7 @@ class _SourcesController extends _FeatureController {
                           tooltip: d.sourcesPaused
                               ? 'Resume source imports and indexing'
                               : 'Pause source imports and indexing',
-                          onPressed: () => shell.update(() {
+                          onPressed: () => update(() {
                             if (d.sourcesPaused) {
                               d.resumeSources();
                             } else {
@@ -900,7 +1001,9 @@ class _SourcesController extends _FeatureController {
                           ),
                         pill(
                           'Import again',
-                          shell.busy ? null : () => shell.run(reimport),
+                          _operations.busy
+                              ? null
+                              : () => _operations.run(reimport),
                           icon: Icons.refresh,
                         ),
                       ],
@@ -912,12 +1015,12 @@ class _SourcesController extends _FeatureController {
                   children: [
                     pill(
                       'File list',
-                      () => shell.update(() => graphView = false),
+                      () => update(() => graphView = false),
                       selected: !graphView,
                     ),
                     pill(
                       'Graph view',
-                      () => shell.update(() => graphView = true),
+                      () => update(() => graphView = true),
                       selected: graphView,
                     ),
                   ],
@@ -934,10 +1037,10 @@ class _SourcesController extends _FeatureController {
                     ),
                     const SizedBox(width: 16),
                     PopupMenuButton<String>(
-                      enabled: !shell.busy,
+                      enabled: !_operations.busy,
                       tooltip: 'Add source',
                       position: PopupMenuPosition.under,
-                      onSelected: (choice) => shell.run(() async {
+                      onSelected: (choice) => _operations.run(() async {
                         switch (choice) {
                           case 'file':
                             await import();
@@ -991,7 +1094,8 @@ class _SourcesController extends _FeatureController {
                         PopupMenuItem(
                           value: 'drive-file',
                           enabled:
-                              !shell.busy && integrationFeature.driveAvailable,
+                              !_operations.busy &&
+                              integrationFeature.driveAvailable,
                           child: DesktopImportMenuTile(
                             icon: Icons.cloud_outlined,
                             label: 'Add files from Drive',
@@ -1000,7 +1104,8 @@ class _SourcesController extends _FeatureController {
                         PopupMenuItem(
                           value: 'drive-folder',
                           enabled:
-                              !shell.busy && integrationFeature.driveAvailable,
+                              !_operations.busy &&
+                              integrationFeature.driveAvailable,
                           child: DesktopImportMenuTile(
                             icon: Icons.folder_shared_outlined,
                             label: 'Add an entire Drive folder',
@@ -1009,7 +1114,8 @@ class _SourcesController extends _FeatureController {
                         PopupMenuItem(
                           value: 'drive-year',
                           enabled:
-                              !shell.busy && integrationFeature.driveAvailable,
+                              !_operations.busy &&
+                              integrationFeature.driveAvailable,
                           child: DesktopImportMenuTile(
                             icon: Icons.history,
                             label: 'Import last 1 year from Drive',
@@ -1043,7 +1149,7 @@ class _SourcesController extends _FeatureController {
                   children: [
                     ActionChip(
                       side: const BorderSide(color: Color(0xffaeb5bc)),
-                      shape: const _DashedStadiumBorder(
+                      shape: const DashedStadiumBorder(
                         side: BorderSide(color: Color(0xffaeb5bc)),
                       ),
                       color: WidgetStatePropertyAll(
@@ -1054,16 +1160,18 @@ class _SourcesController extends _FeatureController {
                         'Add label',
                         style: DesktopVisuals.control,
                       ),
-                      onPressed: shell.busy ? null : createOrganizationLabel,
+                      onPressed: _operations.busy
+                          ? null
+                          : createOrganizationLabel,
                     ),
                     ...labels.map(
                       (label) => FilterChip(
                         label: Text(label),
-                        onDeleted: shell.busy
+                        onDeleted: _operations.busy
                             ? null
                             : () => deleteOrganizationLabel(label),
                         selected: labelFilter == label,
-                        onSelected: (_) => shell.update(
+                        onSelected: (_) => update(
                           () => labelFilter = labelFilter == label ? '' : label,
                         ),
                       ),
@@ -1090,8 +1198,7 @@ class _SourcesController extends _FeatureController {
                           style: DesktopVisuals.control,
                         ),
                         selected: typeFilter == null,
-                        onSelected: (_) =>
-                            shell.update(() => typeFilter = null),
+                        onSelected: (_) => update(() => typeFilter = null),
                       ),
                       for (final type in SourceType.values.where(
                         (type) =>
@@ -1115,7 +1222,7 @@ class _SourcesController extends _FeatureController {
                               style: DesktopVisuals.control,
                             ),
                             selected: typeFilter == type,
-                            onSelected: (_) => shell.update(
+                            onSelected: (_) => update(
                               () =>
                                   typeFilter = typeFilter == type ? null : type,
                             ),
@@ -1131,7 +1238,7 @@ class _SourcesController extends _FeatureController {
                           sourceQuery.isNotEmpty ||
                           labelFilter.isNotEmpty)
                         TextButton(
-                          onPressed: () => shell.update(() {
+                          onPressed: () => update(() {
                             sourceQuery = '';
                             sourceSearchController.clear();
                             labelFilter = '';
@@ -1141,7 +1248,7 @@ class _SourcesController extends _FeatureController {
                         ),
                       pill(
                         ascending ? 'A → Z' : 'Z → A',
-                        () => shell.update(() => ascending = !ascending),
+                        () => update(() => ascending = !ascending),
                         icon: Icons.sort,
                       ),
                       if (!graphView)
@@ -1159,7 +1266,7 @@ class _SourcesController extends _FeatureController {
                                     child: IconButton(
                                       tooltip: grid ? 'Grid view' : 'List view',
                                       onPressed: () =>
-                                          shell.update(() => gridView = grid),
+                                          update(() => gridView = grid),
                                       style: IconButton.styleFrom(
                                         backgroundColor: gridView == grid
                                             ? _blue
@@ -1323,7 +1430,7 @@ class _SourcesController extends _FeatureController {
           flex: 2,
           child: header
               ? InkWell(
-                  onTap: () => shell.update(() => ascending = !ascending),
+                  onTap: () => update(() => ascending = !ascending),
                   child: cell(ascending ? 'Name ↑' : 'Name ↓'),
                 )
               : Padding(
@@ -1353,7 +1460,9 @@ class _SourcesController extends _FeatureController {
                     Expanded(child: cell(sourceLabels(source).join(', '))),
                     IconButton(
                       tooltip: 'Edit labels',
-                      onPressed: shell.busy ? null : () => editLabels(source),
+                      onPressed: _operations.busy
+                          ? null
+                          : () => editLabels(source),
                       visualDensity: VisualDensity.compact,
                       icon: const Icon(Icons.label_outline, size: 16),
                     ),
@@ -1370,9 +1479,9 @@ class _SourcesController extends _FeatureController {
                       width: 36,
                       child: IconButton(
                         tooltip: 'Index / retry',
-                        onPressed: shell.busy
+                        onPressed: _operations.busy
                             ? null
-                            : () => shell.run(
+                            : () => _operations.run(
                                 () => d.index(source['id'] as String),
                               ),
                         visualDensity: VisualDensity.compact,
@@ -1383,9 +1492,9 @@ class _SourcesController extends _FeatureController {
                       width: 36,
                       child: IconButton(
                         tooltip: 'Delete source',
-                        onPressed: shell.busy
+                        onPressed: _operations.busy
                             ? null
-                            : () => shell.run(
+                            : () => _operations.run(
                                 () => d.delete(source['id'] as String),
                               ),
                         visualDensity: VisualDensity.compact,
@@ -1455,21 +1564,21 @@ class _SourcesController extends _FeatureController {
       children: [
         IconButton(
           tooltip: 'Edit labels',
-          onPressed: shell.busy ? null : () => editLabels(s),
+          onPressed: _operations.busy ? null : () => editLabels(s),
           icon: const Icon(Icons.label_outline, size: 18),
         ),
         IconButton(
           tooltip: 'Index / retry',
-          onPressed: shell.busy
+          onPressed: _operations.busy
               ? null
-              : () => shell.run(() => d.index(s['id'] as String)),
+              : () => _operations.run(() => d.index(s['id'] as String)),
           icon: const Icon(Icons.refresh, size: 20),
         ),
         IconButton(
           tooltip: 'Delete source',
-          onPressed: shell.busy
+          onPressed: _operations.busy
               ? null
-              : () => shell.run(() => d.delete(s['id'] as String)),
+              : () => _operations.run(() => d.delete(s['id'] as String)),
           icon: const Icon(Icons.delete_outline, size: 20),
         ),
       ],
@@ -1488,7 +1597,7 @@ class _SourcesController extends _FeatureController {
     bool clearScene = false,
   }) {
     if (!_graphLayoutCurrent(key, owner)) return;
-    shell.update(() {
+    update(() {
       if (clearScene) {
         graphPoints = {};
         graphEdges = [];
@@ -1575,7 +1684,7 @@ class _SourcesController extends _FeatureController {
             labelSet: labelSet,
           );
           if (!current()) return;
-          shell.update(() {
+          update(() {
             graphPoints = saved.points;
             graphEdges = [];
             graphSceneVectors = saved.vectors;
@@ -1611,14 +1720,14 @@ class _SourcesController extends _FeatureController {
             );
             if (!current()) return;
             if (!published) {
-              shell.update(() {
+              update(() {
                 graphLayoutKey = '';
                 graphOrganizing = false;
               });
               return;
             }
           }
-          shell.update(() {
+          update(() {
             if (scene != null) graphPoints = scene.points;
             graphEdges = edges;
             graphOrganizing = false;
@@ -1696,7 +1805,7 @@ class _SourcesController extends _FeatureController {
                 vector;
           }
         }
-        shell.update(() {
+        update(() {
           graphPoints = saved.points;
           graphEdges = [];
           graphSceneVectors = saved.vectors;
@@ -1708,7 +1817,7 @@ class _SourcesController extends _FeatureController {
         if (saved.complete) {
           final edges = await graphEdgesInBackground(saved.vectors);
           if (!current() || helperChanged()) return;
-          shell.update(() {
+          update(() {
             graphEdges = edges;
             graphOrganizing = false;
           });
@@ -1783,14 +1892,14 @@ class _SourcesController extends _FeatureController {
           );
           if (!current() || helperChanged()) return;
           if (!published) {
-            shell.update(() {
+            update(() {
               graphLayoutKey = '';
               graphOrganizing = false;
             });
             return;
           }
         }
-        shell.update(() {
+        update(() {
           graphPoints = layout;
           graphEdges = scene.edges;
           graphSceneVectors = vectors;
@@ -1807,7 +1916,10 @@ class _SourcesController extends _FeatureController {
 
   void scheduleGraphFit() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && shell.tab == WorkspaceTab.sources && graphView) fitGraph();
+      if (mounted &&
+          _navigation.selectedTab == WorkspaceTab.sources &&
+          graphView)
+        fitGraph();
     });
   }
 
@@ -1926,7 +2038,7 @@ class _SourcesController extends _FeatureController {
         event.buttons != kSecondaryMouseButton &&
         event.buttons != kMiddleMouseButton)
       return;
-    shell.update(() {
+    update(() {
       graphMousePointer = event.pointer;
       graphPointerStart = graphPointerLast = event.localPosition;
       graphPointerRotates = event.buttons == kPrimaryMouseButton || modifier;
@@ -1937,7 +2049,7 @@ class _SourcesController extends _FeatureController {
   void moveGraphPointer(PointerMoveEvent event) {
     if (graphMousePointer != event.pointer || graphPointerLast == null) return;
     final delta = event.localPosition - graphPointerLast!;
-    shell.update(() {
+    update(() {
       graphPointerLast = event.localPosition;
       graphDragMoved =
           graphDragMoved ||
@@ -1962,14 +2074,14 @@ class _SourcesController extends _FeatureController {
 
   void endGraphPointer(PointerEvent event) {
     if (graphMousePointer != event.pointer) return;
-    shell.update(() {
+    update(() {
       graphMousePointer = null;
       graphPointerStart = graphPointerLast = null;
     });
   }
 
   void selectGraphDocument(String? document) {
-    shell.update(() {
+    update(() {
       graphSelectedDocument = document;
       labelFilter = '';
     });
@@ -1981,7 +2093,7 @@ class _SourcesController extends _FeatureController {
     final revision = ++graphSelectionRevision;
     final vectors = graphSceneVectors;
     final whole = graphEdges;
-    shell.update(() {
+    update(() {
       graphSelectionEdges = document == null
           ? []
           : whole
@@ -2017,13 +2129,13 @@ class _SourcesController extends _FeatureController {
           !identical(vectors, graphSceneVectors) ||
           !identical(whole, graphEdges))
         return;
-      shell.update(() {
+      update(() {
         graphSelectionEdges = edges;
         graphRelatedLoading = false;
       });
     } catch (e) {
       if (!mounted || revision != graphSelectionRevision) return;
-      shell.update(() {
+      update(() {
         graphRelatedLoading = false;
         graphRelatedError = e.toString();
       });
@@ -2082,8 +2194,7 @@ class _SourcesController extends _FeatureController {
                       final uri = Uri.tryParse(sourceUri);
                       if (uri == null || !allowedSourceUri(uri)) return;
                       try {
-                        await (widget.sourceLinkOpener ??
-                            widget.environment.openUri)(uri);
+                        await _host.sourceLinkOpener(uri);
                       } catch (_) {
                         if (context.mounted)
                           ScaffoldMessenger.of(context).showSnackBar(
@@ -2106,9 +2217,9 @@ class _SourcesController extends _FeatureController {
             GraphLabelControls(
               labels: labels,
               controller: graphLabelInput,
-              enabled: !shell.busy,
+              enabled: !_operations.busy,
               onAdd: (value) =>
-                  shell.run(() => addSelectedGraphLabel(id, value)),
+                  _operations.run(() => addSelectedGraphLabel(id, value)),
               onRemove: (name) => removeSelectedGraphLabel(id, name),
             ),
             const SizedBox(height: 8),
@@ -2315,7 +2426,7 @@ class _SourcesController extends _FeatureController {
                       CustomPaint(
                         key: const ValueKey('source-graph-links'),
                         size: const Size(graphSceneSize, graphSceneSize),
-                        painter: _SourceLinks(
+                        painter: SourceLinks(
                           rows,
                           positions,
                           selectionEdges,
@@ -2416,7 +2527,7 @@ class _SourcesController extends _FeatureController {
                         : 'Pause graph animation',
                     onPressed: MediaQuery.disableAnimationsOf(context)
                         ? null
-                        : () => shell.update(
+                        : () => update(
                             () => graphAnimationPaused = !graphAnimationPaused,
                           ),
                     icon: Icon(
@@ -2436,9 +2547,9 @@ class _SourcesController extends _FeatureController {
   );
 }
 
-class _SourcesView extends StatelessWidget {
-  final _SourcesController controller;
-  const _SourcesView(this.controller);
+class SourcesView extends StatelessWidget {
+  final SourcesController controller;
+  const SourcesView(this.controller, {super.key});
   @override
   Widget build(BuildContext context) => controller.sources();
 }

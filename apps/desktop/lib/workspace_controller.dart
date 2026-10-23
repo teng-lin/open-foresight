@@ -9,7 +9,7 @@ abstract class _FeatureController {
   DesktopConnection get d => widget.domain;
   bool get mounted => shell.mounted;
   BuildContext get context => shell.context;
-  _SourcesController get sourceFeature => shell.sourceFeature;
+  SourceCommands get sourceFeature => shell.sourceFeature;
   _ChatController get chatFeature => shell.chatFeature;
   _MeetingsController get meetingFeature => shell.meetingFeature;
   SettingsCommands get settingsFeature => shell.settingsFeature;

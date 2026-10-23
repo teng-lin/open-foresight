@@ -12,8 +12,8 @@ import 'package:foresight_test_support/capture_process.dart';
 import 'package:open_foresight/main.dart' as app;
 import 'package:foresight_core/desktop.dart';
 import '../test_support/integration_persistence.dart';
-import 'package:open_foresight/graph_rendering.dart';
-import 'package:open_foresight/cluster_rendering.dart';
+import 'package:open_foresight/features/sources/graph_rendering.dart';
+import 'package:open_foresight/features/sources/cluster_rendering.dart';
 
 import '../test_support/meeting_panel.dart';
 import '../test_support/file_manager_fixture.dart';
