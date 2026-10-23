@@ -50,10 +50,8 @@ void main() {
       fixture.requests.last['args'],
       containsPair('workspace_epoch', cleared),
     );
-    await tester.runAsync(() async {
-      fixture.remote.close();
-      await fixture.remote.closed;
-    });
+    fixture.remote.close();
+    await pumpUntilCompleted(tester, fixture.remote.closed);
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pumpAndSettle();
   });

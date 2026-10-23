@@ -1,3 +1,4 @@
+import 'pump_until.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_test_support/remote_service.dart';
 import 'dart:io';
@@ -61,10 +62,8 @@ void main() {
     expect(state.sourceFeature.sourceSearchController.text, isEmpty);
     expect(state.chatFeature.answer, isEmpty);
     expect(tester.takeException(), isNull);
-    await tester.runAsync(() async {
-      fixture.remote.close();
-      await fixture.remote.closed;
-    });
+    fixture.remote.close();
+    await pumpUntilCompleted(tester, fixture.remote.closed);
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pumpAndSettle();
   });

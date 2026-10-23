@@ -63,10 +63,8 @@ void main() {
       fixture.sockets.last.destroy();
       await pumpUntil(tester, () => state.sourceFeature.noteId == null);
       expect(state.sourceFeature.noteTitle.text, isEmpty);
-      await tester.runAsync(() async {
-        fixture.remote.close();
-        await fixture.remote.closed;
-      });
+      fixture.remote.close();
+      await pumpUntilCompleted(tester, fixture.remote.closed);
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pumpAndSettle();
     },
