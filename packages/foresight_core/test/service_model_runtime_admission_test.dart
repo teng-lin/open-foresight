@@ -8,32 +8,61 @@ import 'package:foresight_test_support/desktop_identity.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
 
+const _isolatedCase = 'FORESIGHT_NATIVE_ADMISSION_CASE';
+
+Future<void> _runIsolatedSelection(String selection) async {
+  // Native C++ inline globals can be GNU_UNIQUE across separately loaded copies.
+  // A process, rather than another Dart isolate or dlopen path, owns this cache.
+  final process = await Process.start(
+    Platform.resolvedExecutable,
+    [
+      'test',
+      '--reporter',
+      'expanded',
+      '--name',
+      'installed service maps legacy LiteRT $selection selection before admission',
+      'test/service_model_runtime_admission_test.dart',
+    ],
+    environment: {_isolatedCase: selection},
+  );
+  var running = true;
+  final exited = process.exitCode.whenComplete(() => running = false);
+  final output = Future.wait([
+    process.stdout.transform(const Utf8Decoder(allowMalformed: true)).join(),
+    process.stderr.transform(const Utf8Decoder(allowMalformed: true)).join(),
+  ]);
+  try {
+    final code = await exited.timeout(const Duration(seconds: 25));
+    final captured = await output.timeout(const Duration(seconds: 2));
+    final details = captured.join('\n');
+    expect(code, 0, reason: details);
+    expect(details, contains('All tests passed!'), reason: details);
+    for (final line in const LineSplitter().convert(details)) {
+      print('[native admission $selection] $line');
+    }
+  } finally {
+    if (running) process.kill(ProcessSignal.sigkill);
+    await exited.timeout(const Duration(seconds: 2));
+    await output.timeout(const Duration(seconds: 2));
+  }
+}
+
 void main() {
   final library = Platform.environment['FORESIGHT_NATIVE_LIBRARY'];
   group(
     'installed service model runtime admission',
     () {
-      late Directory directory;
-      late String isolatedLibrary;
-      setUpAll(() {
-        // Test files run in Dart isolates in one process. The production native
-        // library seals its environment process-wide; use a distinct loaded
-        // image so another fixture's profile cannot freeze this file's cache.
-        final nativeRoot = createTestTempDirectorySync('admission-native-');
-        isolatedLibrary = File(library!)
-            .copySync(
-              '${nativeRoot.path}/${Platform.isMacOS ? 'native.dylib' : 'native.so'}',
-            )
-            .path;
-      });
-      setUp(() {
-        directory = createTestTempDirectorySync('model-admission-');
-        File('${directory.path}/asset').writeAsStringSync('fixture');
-      });
       for (final selection in ['default', 'explicit', 'registration']) {
         test(
           'installed service maps legacy LiteRT $selection selection before admission',
           () async {
+            if (Platform.environment[_isolatedCase] == null) {
+              await _runIsolatedSelection(selection);
+              return;
+            }
+            expect(Platform.environment[_isolatedCase], selection);
+            final directory = createTestTempDirectorySync('model-admission-');
+            File('${directory.path}/asset').writeAsStringSync('fixture');
             final environment = Map.of(runtimeConfiguration.environment);
             addTearDown(
               () => runtimeConfiguration.environment
@@ -66,7 +95,7 @@ print(json.dumps({'native_stop_token_sequences':True}))
             runtimeConfiguration.environment.addAll({
               'FORESIGHT_INSTALL_ROOT': directory.path,
               'FORESIGHT_LITERT_RUNNER': alias.path,
-              'FORESIGHT_NATIVE': isolatedLibrary,
+              'FORESIGHT_NATIVE': library!,
               'FORESIGHT_HELPER': '',
             });
             final profile = ProfilePaths(
