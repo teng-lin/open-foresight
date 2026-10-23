@@ -103,6 +103,9 @@ def test_linux_smoke_checks_relocation_isolated_owners_and_cleanup(
         data, run = Path(env["FORESIGHT_DATA"]), Path(env["FORESIGHT_RUNTIME"])
         data.mkdir(mode=0o700)
         run.mkdir(mode=0o755 if failure == "permissions" else 0o700)
+        if failure == "permissions":
+            run.chmod(0o755)
+            assert run.stat().st_mode & 0o777 == 0o755
         if failure != "database":
             (data / "application.db").touch()
         assert "relocated bundle" in command[0]
@@ -382,6 +385,9 @@ def test_installer_smoke_validates_manifest_startup_and_service_stop(
             Path(kwargs["env"]["FORESIGHT_RUNTIME"]),
         )
         data.mkdir(mode=0o755 if failure == "permissions" else 0o700)
+        if failure == "permissions":
+            data.chmod(0o755)
+            assert data.stat().st_mode & 0o777 == 0o755
         runtime.mkdir(mode=0o700)
         (runtime / "helper.sock").touch()
         with sqlite3.connect(data / "application.db") as db:
