@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/remote.dart';
@@ -62,7 +64,124 @@ class ApprovalDomain implements RemoteDomain {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
+class HeldVisibilityDomain extends ApprovalDomain {
+  Future<void> Function()? visibleUpdate;
+  @override
+  Future<void> setDesktopVisible(bool value) async {
+    await super.setDesktopVisible(value);
+    if (value) await visibleUpdate?.call();
+  }
+}
+
 void main() {
+  testWidgets('a visible retry clears a failed initial approval attachment', (
+    tester,
+  ) async {
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    addTearDown(
+      () => tester.binding.handleAppLifecycleStateChanged(
+        AppLifecycleState.resumed,
+      ),
+    );
+    final fixture = RemoteFixture();
+    await tester.runAsync(fixture.start);
+    addTearDown(() => tester.runAsync(fixture.close));
+    var attachments = 0;
+    fixture.handler = (socket, request) {
+      if (request['method'] == Operation.securityAttachDesktop.wire &&
+          ++attachments == 1) {
+        socket.writeln(
+          jsonEncode({
+            'id': request['id'],
+            'error': {'code': 'denied', 'message': 'First attach unavailable'},
+            'done': true,
+          }),
+        );
+      } else {
+        fixture.reply(socket, request, true);
+      }
+    };
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AgentApprovalSurface(
+          domain: fixture.remote,
+          child: const Scaffold(),
+        ),
+      ),
+    );
+    final banner = find.textContaining('Agent approvals unavailable:');
+    await pumpUntil(tester, () => banner.evaluate().isNotEmpty);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await pumpUntil(tester, () => attachments == 2);
+    await pumpUntil(tester, () => banner.evaluate().isEmpty);
+    final requests = fixture.requests.where(
+      (request) => request['method'] == Operation.securityAttachDesktop.wire,
+    );
+    expect(requests.map((request) => (request['args'] as Map)['visible']), [
+      true,
+      true,
+    ]);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('an older visible success cannot clear the latest failure', (
+    tester,
+  ) async {
+    final domain = HeldVisibilityDomain();
+    final first = Completer<void>();
+    addTearDown(() {
+      if (!first.isCompleted) first.complete();
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AgentApprovalSurface(domain: domain, child: const Scaffold()),
+      ),
+    );
+    await tester.pumpAndSettle();
+    var attempts = 0;
+    domain.visibleUpdate = () async {
+      if (attempts++ == 0) {
+        await first.future;
+      } else {
+        throw StateError('Latest visible retry failed');
+      }
+    };
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await tester.pump();
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Latest visible retry failed'), findsOneWidget);
+    first.complete();
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Latest visible retry failed'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('a visible retry completion cannot update a disposed surface', (
+    tester,
+  ) async {
+    final domain = HeldVisibilityDomain();
+    final visible = Completer<void>();
+    addTearDown(() {
+      if (!visible.isCompleted) visible.complete();
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AgentApprovalSurface(domain: domain, child: const Scaffold()),
+      ),
+    );
+    await tester.pumpAndSettle();
+    domain.visibleUpdate = () => visible.future;
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await tester.pump();
+    await tester.pumpWidget(const SizedBox());
+    visible.complete();
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('visibility treats inactive consistently after a hidden window', (
     tester,
   ) async {

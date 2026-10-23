@@ -27,6 +27,7 @@ class _AgentApprovalSurfaceState extends State<AgentApprovalSurface>
   String? _activeId;
   DialogRoute<bool>? _route;
   String? _failure;
+  int _visibilityGeneration = 0;
   @override
   void initState() {
     super.initState();
@@ -52,18 +53,30 @@ class _AgentApprovalSurfaceState extends State<AgentApprovalSurface>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed ||
         state == AppLifecycleState.inactive) {
-      unawaited(
-        widget.domain.setDesktopVisible(true).catchError((Object error) {
-          if (mounted)
-            setState(() => _failure = 'Agent approvals unavailable: $error');
-        }),
-      );
+      unawaited(_setVisible(true));
     } else if (state == AppLifecycleState.hidden ||
         state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
-      unawaited(
-        widget.domain.setDesktopVisible(false).catchError((Object _) {}),
-      );
+      unawaited(_setVisible(false));
+    }
+  }
+
+  Future<void> _setVisible(bool visible) async {
+    final generation = ++_visibilityGeneration;
+    final domain = widget.domain;
+    bool current() =>
+        mounted &&
+        generation == _visibilityGeneration &&
+        identical(domain, widget.domain);
+    try {
+      await domain.setDesktopVisible(visible);
+      if (visible && current() && _failure != null) {
+        setState(() => _failure = null);
+      }
+    } catch (error) {
+      if (visible && current()) {
+        setState(() => _failure = 'Agent approvals unavailable: $error');
+      }
     }
   }
 
@@ -189,6 +202,7 @@ class _AgentApprovalSurfaceState extends State<AgentApprovalSurface>
 
   @override
   void dispose() {
+    _visibilityGeneration++;
     WidgetsBinding.instance.removeObserver(this);
     unawaited(
       widget.domain.disableDesktopApprovals().catchError((Object _) {}),
