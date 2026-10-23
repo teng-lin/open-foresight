@@ -120,16 +120,15 @@ def test_application_peer_streaming_replies_are_correlated(reply, expected):
     assert peer.reader.closed
 
 
-def test_application_peer_desktop_attachment_requires_owned_capability_file(tmp_path):
+def test_python_application_peer_cannot_attach_even_with_capability(tmp_path):
     peer = object.__new__(smoke.ApplicationPeer)
     peer.call = Mock()
-    assert peer.attach_test_desktop(tmp_path) is False
-    peer.call.assert_not_called()
-    (tmp_path / ".desktop-capability").write_text("capability")
-    assert peer.attach_test_desktop(tmp_path) is True
-    peer.call.assert_called_once_with(
-        "security.attach_desktop", {"token": "capability"}
-    )
+    for present in (False, True):
+        if present:
+            (tmp_path / ".desktop-capability").write_text("capability")
+        with pytest.raises(RuntimeError, match="cannot own installed desktop"):
+            peer.attach_test_desktop(tmp_path)
+        peer.call.assert_not_called()
 
 
 @pytest.fixture
@@ -163,7 +162,9 @@ def mac_smoke(tmp_path, monkeypatch):
         close=Mock(side_effect=lambda: state.update(graph_closed=True))
     )
     state["graph_peer"] = graph_peer
-    monkeypatch.setattr(smoke, "ApplicationPeer", lambda endpoint: graph_peer)
+    monkeypatch.setattr(
+        smoke, "ApprovedApplicationPeer", lambda endpoint, host: graph_peer
+    )
     monkeypatch.setattr(
         smoke,
         "copy_application",
@@ -249,7 +250,10 @@ def mac_smoke(tmp_path, monkeypatch):
 
     def install(source, destination, **kwargs):
         state["install_attempts"].append(kwargs.copy())
-        assert not state["graph_closed"], "Graph desktop closed before installer checks"
+        assert not state["graph_closed"], "Graph RPC closed before installer checks"
+        assert state["gui_closed"], (
+            "Real GUI must close before installer shutdown/replace"
+        )
         if not kwargs.get("stop_services"):
             raise smoke.Deferred("live service")
         state["owner"] = None
@@ -280,6 +284,28 @@ def mac_smoke(tmp_path, monkeypatch):
         returncode=0,
     )
     monkeypatch.setattr(smoke.subprocess, "Popen", Mock(return_value=desktop))
+
+    state["gui_starts"] = []
+    state["gui_closed"] = False
+
+    class Desktop:
+        def __init__(self, app, root, env, output):
+            self.process = desktop
+            self.evidence = {
+                "exit": 0,
+                "mode": "actual_installed_desktop_os_accessibility",
+            }
+
+        def start(self):
+            state["gui_starts"].append(state["peers"])
+            return self
+
+        def close(self):
+            if not state["gui_closed"]:
+                desktop.terminate()
+            state["gui_closed"] = True
+
+    monkeypatch.setattr(smoke, "InstalledDesktop", Desktop)
 
     def run(command, **kwargs):
         if command[0] == "/usr/bin/codesign":
@@ -313,7 +339,8 @@ def test_mac_smoke_orchestration_checks_ownership_upgrade_and_persistence(
     assert json.loads(output.read_text()) == report
     assert state["stops"] == [200]
     assert state["graph_closed"] is True
-    assert process.terminate.called is desktop
+    assert process.terminate.called
+    assert state["gui_starts"] == [0 if desktop else 2]
 
 
 def test_mac_smoke_waits_for_background_work_with_a_shrinking_status_budget(
@@ -558,7 +585,9 @@ def test_source_graph_probe_checks_real_sqlite_rows_and_restart_content(
             self.closed = True
 
     application = Application()
-    monkeypatch.setattr(smoke, "ApplicationPeer", lambda endpoint: application)
+    monkeypatch.setattr(
+        smoke, "ApprovedApplicationPeer", lambda endpoint, host: application
+    )
 
     class Mcp:
         def tool(self, method, args=None):
@@ -569,7 +598,9 @@ def test_source_graph_probe_checks_real_sqlite_rows_and_restart_content(
             )
 
     mcp = Mcp()
-    options = {"application_peer": application} if borrowed else {}
+    options = (
+        {"application_peer": application} if borrowed else {"approval_host": object()}
+    )
     if failure:
         with pytest.raises(RuntimeError):
             smoke.source_graph_probe(tmp_path / "socket", mcp, database, **options)

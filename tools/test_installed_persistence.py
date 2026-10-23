@@ -13,7 +13,8 @@ from installed_runtime import (
     service_command,
     wait_stopped,
 )
-from smoke_macos_bundle import McpPeer, ApplicationPeer
+from smoke_macos_bundle import McpPeer
+from installed_desktop_approval import ApprovedApplicationPeer, InstalledDesktop
 
 
 def run(bundle, profile, state_path, phase):
@@ -23,7 +24,7 @@ def run(bundle, profile, state_path, phase):
         (profile / name).mkdir(exist_ok=True, mode=0o700)
     env = clean_environment(profile / "home", profile / "data", profile / "run")
     executable, service = layout(bundle)
-    peer = app = None
+    peer = app = desktop = None
     try:
         peer = McpPeer(executable, env)
         status = peer.tool("get_status")
@@ -38,8 +39,10 @@ def run(bundle, profile, state_path, phase):
             note = peer.tool(
                 "save_note", {"title": "Installer persistence", "body": nonce}
             )
-            app = ApplicationPeer(profile / "run/application.sock")
-            app.attach_test_desktop(profile / "data")
+            desktop = InstalledDesktop(
+                bundle, profile, env, state_path.parent / "persistence-gui"
+            ).start()
+            app = ApprovedApplicationPeer(profile / "run/application.sock", desktop)
             source = app.call(
                 "sources.import",
                 {"title": "Installer source", "text": nonce, "index": False},
@@ -71,6 +74,8 @@ def run(bundle, profile, state_path, phase):
                 app.close()
             if peer is not None:
                 peer.close()
+            if desktop is not None:
+                desktop.close()
         finally:
             current = service_command(service, env, "--status")
             if process_path(current["pid"]) != service.resolve():

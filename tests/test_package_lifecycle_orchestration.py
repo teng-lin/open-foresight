@@ -20,6 +20,7 @@ import smoke_bundle as smoke
 import installed_documents as documents
 import installed_runtime as runtime
 import smoke_macos_bundle as peers
+import installed_desktop_approval as gui
 import verify_macos_release_runtime as release
 
 
@@ -176,17 +177,28 @@ def test_installed_document_probe_cleans_peers_and_stops_only_its_own_service(
             state["closed"].append("mcp")
 
     class Application:
-        def __init__(self, endpoint):
+        def __init__(self, endpoint, host):
             pass
-
-        def attach_test_desktop(self, profile):
-            return failure != "attach"
 
         def close(self):
             state["closed"].append("application")
 
     monkeypatch.setattr(peers, "McpPeer", Mcp)
-    monkeypatch.setattr(peers, "ApplicationPeer", Application)
+    monkeypatch.setattr(gui, "ApprovedApplicationPeer", Application)
+
+    class Desktop:
+        def __init__(self, *args):
+            pass
+
+        def start(self):
+            if failure == "attach":
+                raise RuntimeError("Actual GUI unavailable")
+            return self
+
+        def close(self):
+            state["closed"].append("actual_gui")
+
+    monkeypatch.setattr(gui, "InstalledDesktop", Desktop)
     monkeypatch.setattr(
         documents,
         "process_path",

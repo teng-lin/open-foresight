@@ -31,7 +31,7 @@ def import_document_fixtures(peer, directory, *, macos=False):
         + r"\par}",
         encoding="ascii",
     )
-    peer.call("security.allow_import_root", {"path": str(directory)})
+    peer.allow_import_root(directory)
     previous = {row["id"] for row in peer.call("sources.list")}
     report = {}
     for kind, path in files.items():
@@ -84,8 +84,9 @@ def import_document_fixtures(peer, directory, *, macos=False):
 
 
 def probe_installed_documents(bundle):
-    """Use the installed MCP launcher and service with an owned synthetic UI/profile."""
-    from smoke_macos_bundle import ApplicationPeer, McpPeer
+    """Use the installed service and actual GUI approval in a private profile."""
+    from smoke_macos_bundle import McpPeer
+    from installed_desktop_approval import ApprovedApplicationPeer, InstalledDesktop
 
     bundle = Path(bundle).resolve(strict=True)
     executable, service = layout(bundle)
@@ -96,7 +97,7 @@ def probe_installed_documents(bundle):
         for name in ("home", "data", "run"):
             (root / name).mkdir(mode=0o700)
         env = clean_environment(root / "home", root / "data", root / "run")
-        mcp = peer = None
+        mcp = peer = desktop = None
         owner = None
         try:
             mcp = McpPeer(executable, env)
@@ -108,20 +109,27 @@ def probe_installed_documents(bundle):
                 raise RuntimeError(
                     "Document probe attached outside its installed bundle"
                 )
-            peer = ApplicationPeer(root / "run/application.sock")
-            if not peer.attach_test_desktop(root / "data"):
-                raise RuntimeError(
-                    "Document acceptance requires a current installed service"
+            evidence = Path(
+                tempfile.mkdtemp(
+                    prefix="of-doc-evidence-",
+                    dir=os.environ.get("FORESIGHT_TEST_TEMP_ROOT", "/var/tmp"),  # noqa: S108 - mkdtemp creates private retained evidence
                 )
-            return import_document_fixtures(
+            )
+            desktop = InstalledDesktop(bundle, root, env, evidence).start()
+            peer = ApprovedApplicationPeer(root / "run/application.sock", desktop)
+            result = import_document_fixtures(
                 peer, root / "documents", macos=bundle.suffix == ".app"
             )
+            result["gui_approval_evidence"] = str(evidence)
+            return result
         finally:
             try:
                 if peer is not None:
                     peer.close()
                 if mcp is not None:
                     mcp.close()
+                if desktop is not None:
+                    desktop.close()
             finally:
                 try:
                     current = service_command(service, env, "--status")

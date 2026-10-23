@@ -54,7 +54,11 @@ def owned(tmp_path, monkeypatch):
     monkeypatch.setattr(
         gui.subprocess,
         "run",
-        Mock(return_value=SimpleNamespace(returncode=0, stdout="", stderr="")),
+        Mock(
+            return_value=SimpleNamespace(
+                returncode=0, stdout="BUTTON:Sources\nBUTTON:Settings", stderr=""
+            )
+        ),
     )
     monkeypatch.setattr(gui, "process_path", lambda pid: executable)
     monkeypatch.setattr(
@@ -167,7 +171,11 @@ def test_actual_onboarding_actions_acknowledged_by_read_only_state(owned):
                     )
                 db.commit()
             return "CLICKED:" + button
-        return "\n".join("BUTTON:" + button for button in gui.ONBOARDING)
+        return (
+            "BUTTON:Sources\nBUTTON:Settings"
+            if len(clicked) == 6
+            else "\n".join("BUTTON:" + button for button in gui.ONBOARDING)
+        )
 
     owned.host._ui = ui
     owned.host.timeout = 3

@@ -13,6 +13,10 @@ import sys
 import tempfile
 import time
 
+from installed_desktop_approval import ApprovedApplicationPeer, InstalledDesktop
+from installed_runtime import layout
+from test_packaged_model_runtime import packaged_paths
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests/service"))
 import test_service_process as protocol  # noqa: E402 - Imports follow the local tools path setup.
@@ -26,12 +30,24 @@ def main():
     p.add_argument("--backend", choices=["cpu", "gpu"], default="gpu")
     p.add_argument("--output", type=Path, required=True)
     args = p.parse_args()
+    args.output.parent.mkdir(parents=True, exist_ok=True)
     bundle = args.bundle.resolve()
-    protocol.MCP = bundle / "open-foresight-mcp"
-    with tempfile.TemporaryDirectory(prefix="foresight-native-service-") as temporary:
+    if sys.platform != "darwin" or bundle.suffix != ".app":
+        p.error(
+            "Installed GUI approvals currently require a macOS application and existing OS Accessibility permission. Linux production GUI automation is not implemented; no acceptance was run."
+        )
+    protocol.MCP, service = layout(bundle)
+    bundled_runner, _, _ = packaged_paths(bundle)
+    with tempfile.TemporaryDirectory(
+        prefix="foresight-native-service-",
+        dir=os.environ.get("FORESIGHT_TEST_TEMP_ROOT", "/var/tmp"),
+    ) as temporary:
         root = Path(temporary)
+        for name in ("home", "data", "run"):
+            (root / name).mkdir(mode=0o700)
         env = dict(
             os.environ,
+            HOME=str(root / "home"),
             FORESIGHT_DATA=str(root / "data"),
             FORESIGHT_RUNTIME=str(root / "run"),
             FORESIGHT_LITERT_BACKEND=args.backend,
@@ -48,33 +64,41 @@ def main():
         assert shutil.which("python3", path=env["PATH"]) is None
         env.pop("FORESIGHT_MODEL_MANIFEST", None)
         env.pop("FORESIGHT_MODEL_WORKER", None)
-        log = (root / "service.log").open("w+")
+        log = (args.output.parent / "native-service.log").open("w+")
         process = None
         peer = None
         mcp = None
+        desktop = None
 
         def start():
+            nonlocal desktop, process
             proc = subprocess.Popen(
-                [str(bundle / "open-foresight-service")],
+                [str(service)],
                 env=env,
                 stdout=log,
                 stderr=log,
             )
+            process = proc
             deadline = time.monotonic() + 30
             while True:
                 try:
                     connection = protocol.Peer(root / "run/application.sock")
                     connection.socket.settimeout(300)
-                    token = root / "data/.desktop-capability"
-                    if token.exists():
-                        connection.call(
-                            "security.attach_desktop", {"token": token.read_text()}
-                        )
-                    return proc, connection
+                    connection.close()
+                    desktop = InstalledDesktop(
+                        bundle,
+                        root,
+                        env,
+                        args.output.parent / ("gui-" + str(proc.pid)),
+                        timeout=300,
+                    ).start()
+                    return proc, ApprovedApplicationPeer(
+                        root / "run/application.sock", desktop
+                    )
                 except (FileNotFoundError, ConnectionRefusedError):
-                    assert proc.poll() is None, (root / "service.log").read_text()[
-                        -3000:
-                    ]
+                    assert proc.poll() is None, (
+                        args.output.parent / "native-service.log"
+                    ).read_text()[-3000:]
                     assert time.monotonic() < deadline, "Service startup timeout"
                     time.sleep(0.05)
 
@@ -96,7 +120,7 @@ def main():
             runtime = configured.execute(
                 "SELECT runtime FROM models WHERE kind='generation'"
             ).fetchone()[0]
-            assert runtime == str(bundle / "bin/foresight-model"), runtime
+            assert runtime == str(bundled_runner), runtime
             configured.close()
             source = peer.call(
                 "sources.import",
@@ -116,6 +140,8 @@ def main():
             ), answer
             mcp.close()
             mcp = None
+            desktop.close()
+            desktop = None
             process.send_signal(signal.SIGTERM)
             process.wait(timeout=30)
             peer.close()
@@ -157,6 +183,8 @@ def main():
                 mcp.close()
             if peer:
                 peer.close()
+            if desktop is not None:
+                desktop.close()
             if process and process.poll() is None:
                 process.terminate()
                 try:

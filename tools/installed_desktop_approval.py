@@ -56,19 +56,19 @@ SCRIPT = """on run argv
   set observed to ""
   tell targetProcess
    repeat with targetWindow in windows
-    repeat with element in entire contents of targetWindow
+    repeat with uiElement in entire contents of targetWindow
      try
-      set elementRole to role of element
-      set elementName to name of element as text
+      set elementRole to role of uiElement
+      set elementName to name of uiElement as text
       if elementRole is "AXStaticText" then
        try
-        set observed to observed & "TEXT:" & value of element & linefeed
+        set observed to observed & "TEXT:" & value of uiElement & linefeed
        end try
       end if
-      if elementRole is "AXButton" and enabled of element then
+      if elementRole is "AXButton" and enabled of uiElement then
        set observed to observed & "BUTTON:" & elementName & linefeed
        if wanted is not "" and elementName is wanted then
-        perform action "AXPress" of element
+        perform action "AXPress" of uiElement
         return "CLICKED:" & elementName
        end if
       end if
@@ -120,7 +120,8 @@ class InstalledDesktop:
             ("FORESIGHT_DATA", "data"),
             ("FORESIGHT_RUNTIME", "run"),
         ]:
-            if Path(self.environment.get(key, "")).resolve() != self.profile / name:
+            selected = Path(self.environment.get(key, ""))
+            if not selected.is_absolute() or selected.resolve() != self.profile / name:
                 raise ValueError("GUI environment does not name its private profile")
         info = plistlib.loads((self.bundle / "Contents/Info.plist").read_bytes())
         self.executable: Path = (
@@ -219,15 +220,21 @@ class InstalledDesktop:
                             "SELECT key,value FROM preferences WHERE key IN ('onboarding.step','onboarding.complete')"
                         )
                     )
-                if preferences.get("onboarding.complete") == "true":
+                complete = preferences.get("onboarding.complete") == "true"
+                visible = set(snapshot.splitlines())
+                if complete and all(
+                    "BUTTON:" + title in visible or "TEXT:" + title in visible
+                    for title in ("Sources", "Settings")
+                ):
                     break
-                step = int(preferences.get("onboarding.step", "0"))
-                if step not in range(len(ONBOARDING)):
-                    raise RuntimeError("Invalid observed onboarding step")
-                button = ONBOARDING[step]
-                if step != clicked_step and "BUTTON:" + button in snapshot.splitlines():
-                    if self._ui(button) == "CLICKED:" + button:
-                        clicked_step = step
+                if not complete:
+                    step = int(preferences.get("onboarding.step", "0"))
+                    if step not in range(len(ONBOARDING)):
+                        raise RuntimeError("Invalid observed onboarding step")
+                    button = ONBOARDING[step]
+                    if step != clicked_step and "BUTTON:" + button in visible:
+                        if self._ui(button) == "CLICKED:" + button:
+                            clicked_step = step
                 if time.monotonic() >= deadline:
                     raise TimeoutError("Installed desktop onboarding timed out")
                 time.sleep(0.1)
@@ -316,6 +323,15 @@ class InstalledDesktop:
         finally:
             if not future.done():
                 peer.close()  # RPC close shuts down the socket before reader.close.
+                try:
+                    future.result(timeout=2)
+                except TimeoutError:
+                    self.evidence["cleanup_error"] = (
+                        "RPC worker did not stop after socket shutdown"
+                    )
+                    raise RuntimeError(self.evidence["cleanup_error"]) from None
+                except Exception as error:
+                    self.evidence["cancelled_rpc_error"] = str(error)
             executor.shutdown(wait=False, cancel_futures=True)
             self._save()
 
