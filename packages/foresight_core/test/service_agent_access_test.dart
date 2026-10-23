@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/desktop_identity.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_test_support/poll.dart';
 import 'dart:async';
@@ -61,6 +62,7 @@ void main() {
   Future<void> startService(Duration grace, {Clock? clock}) async {
     service = await ApplicationService.start(
       ProfilePaths('${temp.path}/profile', '${temp.path}/run'),
+      desktopPeerVerifier: trustInProcessDesktop,
       desktopDetachGrace: grace,
       clock: clock,
     );
@@ -108,6 +110,7 @@ void main() {
     timeout: const Duration(seconds: 30),
   );
   Future<void> attach() async => desktop.call('security.attach_desktop', {
+    'visible': true,
     'token': File(
       '${temp.path}/profile/.desktop-capability',
     ).readAsStringSync(),
@@ -558,6 +561,7 @@ void main() {
     service.access.attach(
       host,
       File('${temp.path}/profile/.desktop-capability').readAsStringSync(),
+      verifiedDesktop: true,
     );
     await expectLater(
       agent.call('sources.delete', {'id': 'source'}),
@@ -712,7 +716,10 @@ void main() {
         );
       }
       await expectLater(
-        agent.call('security.attach_desktop', {'token': 'forged'}),
+        agent.call('security.attach_desktop', {
+          'visible': true,
+          'token': 'forged',
+        }),
         throwsA(
           isA<RpcError>().having(
             (error) => error.code,

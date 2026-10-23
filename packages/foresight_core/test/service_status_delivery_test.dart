@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -129,6 +130,7 @@ void main() {
     addTearDown(helper.shutdown);
     service = await ApplicationService.start(
       profile,
+      desktopPeerVerifier: trustInProcessDesktop,
       clock: Clock.fixed(DateTime.utc(2026, 10, 22)),
       createTimer: (delay, callback) {
         final timer = _HeldTimer(delay, callback);
@@ -145,6 +147,7 @@ void main() {
     });
     addTearDown(events.cancel);
     await client.call('security.attach_desktop', {
+      'visible': true,
       'token': File('${profile.data}/.desktop-capability').readAsStringSync(),
     });
   });

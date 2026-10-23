@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -43,6 +44,7 @@ void main() {
         );
         service = await ApplicationService.start(
           profile,
+          desktopPeerVerifier: trustInProcessDesktop,
           clock: Clock(() => now),
           createTimer: (delay, callback) {
             reevaluate = callback;
@@ -52,6 +54,7 @@ void main() {
         await service.ready;
         client = await ServiceClient.connect(service.path);
         await client.call('security.attach_desktop', {
+          'visible': true,
           'token': File(
             '${profile.data}/.desktop-capability',
           ).readAsStringSync(),

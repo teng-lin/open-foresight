@@ -18,6 +18,7 @@ class _IntegrationsController extends _FeatureController {
   GlobalShortcuts? globalShortcuts;
 
   String globalShortcutState = 'disabled';
+  bool _quickMeetingReviewPending = false;
 
   GoogleAccount get googleAuth => d.googleAuth;
 
@@ -137,6 +138,42 @@ class _IntegrationsController extends _FeatureController {
         !shell.busy &&
         meetingFeature.recording == null)
       await meetingFeature.quickStart();
+  }
+
+  Future<void> requestQuickMeeting(String? token) async {
+    await activateWindow(token);
+    if (!mounted ||
+        !context.mounted ||
+        _quickMeetingReviewPending ||
+        shell.onboardingFeature.active ||
+        shell.busy ||
+        meetingFeature.recording != null)
+      return;
+    _quickMeetingReviewPending = true;
+    try {
+      final allow = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Start microphone and system audio recording?'),
+          content: const Text(
+            'Another process requested a quick meeting. Recording starts only after you confirm here.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Start recording'),
+            ),
+          ],
+        ),
+      );
+      if (allow == true && mounted) await activateQuickMeeting(token);
+    } finally {
+      _quickMeetingReviewPending = false;
+    }
   }
 
   Future<void> activateMenuCommand(String command) async {

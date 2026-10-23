@@ -30,6 +30,7 @@ class ApprovalDomain implements RemoteDomain {
   final capture = <String, dynamic>{};
   void Function(Map<String, dynamic>)? events;
   bool attached = false;
+  bool visible = true;
   bool failAttach = false;
   @override
   Future<void> enableDesktopApprovals(
@@ -43,6 +44,11 @@ class ApprovalDomain implements RemoteDomain {
   @override
   Future<void> disableDesktopApprovals() async {
     attached = false;
+  }
+
+  @override
+  Future<void> setDesktopVisible(bool value) async {
+    visible = value;
   }
 
   @override
@@ -228,10 +234,12 @@ void main() {
       expect(find.text('Stop recording'), findsNothing);
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
       await tester.pumpAndSettle();
-      expect(domain.attached, false);
+      expect(domain.attached, true);
+      expect(domain.visible, false);
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pumpAndSettle();
       expect(domain.attached, true);
+      expect(domain.visible, true);
       await tester.pumpWidget(const SizedBox());
       expect(domain.attached, false);
     },

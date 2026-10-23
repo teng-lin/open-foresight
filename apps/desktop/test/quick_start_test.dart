@@ -12,6 +12,7 @@ import 'package:open_foresight/main.dart';
 import 'package:foresight_core/src/store.dart';
 import 'package:open_foresight/speech_setup_view.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
+import 'package:open_foresight/commands.dart';
 
 class QuickStartDomain extends CommandFixtureDomain {
   final operations = <String>[];
@@ -83,7 +84,7 @@ class ConsentDesktopConnection extends TestDesktopConnection {
     void Function(Map<String, dynamic>) events,
   ) async {
     this.events = events;
-    gate.attach(this, 'fixture-token');
+    gate.attach(this, gate.desktopToken, verifiedDesktop: true);
   }
 
   @override
@@ -135,6 +136,47 @@ void main() {
     );
     await tester.pumpAndSettle();
   }
+
+  testWidgets('commands socket quick meeting waits for visible confirmation', (
+    tester,
+  ) async {
+    await registerSpeech();
+    final commands = await tester.runAsync(
+      () => AppCommands.bind('${directory.path}/commands.sock'),
+    );
+    await tester.pumpWidget(
+      Foresight(
+        TestDesktopConnection(Application(domain)),
+        commands: commands,
+        deviceLoader: () async => [],
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      await tester.runAsync(() => AppCommands.forward(commands!.path)),
+      true,
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Start microphone and system audio recording?'),
+      findsOneWidget,
+    );
+    expect(domain.operations, isNot(contains('meetings.create')));
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pumpAndSettle();
+    expect(domain.operations, isNot(contains('meetings.start')));
+    expect(
+      await tester.runAsync(() => AppCommands.forward(commands!.path)),
+      true,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Start recording'));
+    await tester.pumpAndSettle();
+    expect(domain.operations, contains('meetings.create'));
+    expect(domain.operations, contains('meetings.start'));
+    await tester.pumpWidget(const SizedBox());
+    await tester.runAsync(commands!.close);
+  });
 
   Future<void> dispose(WidgetTester tester) =>
       tester.pumpWidget(const SizedBox.shrink());

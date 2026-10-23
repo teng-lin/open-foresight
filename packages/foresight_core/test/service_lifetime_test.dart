@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:clock/clock.dart';
@@ -134,6 +135,7 @@ void main() {
     fireEnhancement = null;
     service = await ApplicationService.start(
       profile,
+      desktopPeerVerifier: trustInProcessDesktop,
       clock: Clock(() => readClock?.call() ?? now),
       createTimer: (delay, callback) {
         lastTimerDelay = delay;
@@ -235,7 +237,11 @@ void main() {
       if (!rag.release.isCompleted) rag.release.complete();
       if (!rag.configured.isCompleted) rag.configured.complete();
     });
-    service = await ApplicationService.start(profile, clock: Clock(() => now));
+    service = await ApplicationService.start(
+      profile,
+      desktopPeerVerifier: trustInProcessDesktop,
+      clock: Clock(() => now),
+    );
     agent = await ServiceClient.connect(service.path);
     return body(rag);
   }

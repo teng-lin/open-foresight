@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/desktop_identity.dart';
 import 'package:foresight_core/src/helper_protocol_version.dart';
 import 'package:foresight_test_support/test_recording.dart';
 import 'package:foresight_test_support/helper_adoption.dart';
@@ -31,7 +32,10 @@ void main() {
     };
     directory = createTestTempDirectorySync('of-idle-');
     profile = ProfilePaths('${directory.path}/data', '${directory.path}/run');
-    service = await ApplicationService.start(profile);
+    service = await ApplicationService.start(
+      profile,
+      desktopPeerVerifier: trustInProcessDesktop,
+    );
     client = await ServiceClient.connect('${profile.runtime}/application.sock');
   });
   setUp(() {
@@ -121,6 +125,7 @@ void main() {
     'a recording request awaiting readiness prevents idle shutdown acceptance',
     () async {
       await client.call('security.attach_desktop', {
+        'visible': true,
         'token': File('${profile.data}/.desktop-capability').readAsStringSync(),
       });
       final id = service.domain.store.meeting('competing start');
@@ -230,6 +235,7 @@ void main() {
           '/must-not-launch-a-second-helper';
       service = await ApplicationService.start(
         profile,
+        desktopPeerVerifier: trustInProcessDesktop,
         helperStartupProbeTimeout: const Duration(seconds: 10),
       );
       client = await ServiceClient.connect(service.path);

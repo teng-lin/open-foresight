@@ -149,6 +149,7 @@ class HookedServiceBuild {
         '#!/bin/sh\n'
         // exec keeps this pid, so the record names the service itself.
         'printf \'%s\\n\' "\$\$" >> ${_quote(launches.path)}\n'
+        '${testHooks ? 'FORESIGHT_TEST_DESKTOP_EXECUTABLE=${_quote(Platform.resolvedExecutable)}; export FORESIGHT_TEST_DESKTOP_EXECUTABLE\n' : ''}'
         '${gates == null ? '' : 'FORESIGHT_SERVICE_GATES=${_quote(gates.directory.path)}; export FORESIGHT_SERVICE_GATES\n'}'
         'exec ${_quote(Platform.resolvedExecutable)} ${_quote(kernel)} "\$@" '
         '>> ${_quote(log.path)} 2>&1\n',
@@ -288,6 +289,8 @@ class HookedServiceProcess {
         'FORESIGHT_RUNTIME': profile.runtime,
         'FORESIGHT_HELPER': '',
         'FORESIGHT_SERVICE_GATES': control.directory.path,
+        if (build.testHooks)
+          'FORESIGHT_TEST_DESKTOP_EXECUTABLE': Platform.resolvedExecutable,
         ...environment,
       },
       includeParentEnvironment: false,

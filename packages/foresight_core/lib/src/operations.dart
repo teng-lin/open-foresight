@@ -159,6 +159,10 @@ enum Operation {
     'security.detach_desktop',
     contracts.securityDetachDesktopDescriptor,
   ),
+  securityDesktopVisibility(
+    'security.desktop_visibility',
+    contracts.securityDesktopVisibilityDescriptor,
+  ),
   securityDecide('security.decide', contracts.securityDecideDescriptor),
   securityAllowImportRoot(
     'security.allow_import_root',

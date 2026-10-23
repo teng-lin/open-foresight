@@ -158,6 +158,7 @@ abstract interface class DesktopConnection {
     void Function(Map<String, dynamic>) events,
   );
   Future<void> disableDesktopApprovals();
+  Future<void> setDesktopVisible(bool visible);
   void close();
 }
 

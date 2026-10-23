@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/desktop_identity.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_test_support/google_connections.dart'
     show AdapterDomain;
@@ -662,7 +663,10 @@ void main() {
     });
 
     Future<T> serve<T>(Future<T> Function(ServiceClient) body) async {
-      final service = await ApplicationService.start(profile);
+      final service = await ApplicationService.start(
+        profile,
+        desktopPeerVerifier: trustInProcessDesktop,
+      );
       try {
         final client = await ServiceClient.connect(service.path);
         try {
@@ -678,11 +682,15 @@ void main() {
     test(
       'a request from a cleared workspace fails before asking the desktop',
       () async {
-        final service = await ApplicationService.start(profile);
+        final service = await ApplicationService.start(
+          profile,
+          desktopPeerVerifier: trustInProcessDesktop,
+        );
         final desktop = await ServiceClient.connect(service.path);
         final agent = await ServiceClient.connect(service.path);
         try {
           await desktop.call('security.attach_desktop', {
+            'visible': true,
             'token': File(
               '${profile.data}/.desktop-capability',
             ).readAsStringSync(),
@@ -729,7 +737,10 @@ void main() {
     test(
       'a desktop edit from before another client\'s clear cannot land',
       () async {
-        final service = await ApplicationService.start(profile);
+        final service = await ApplicationService.start(
+          profile,
+          desktopPeerVerifier: trustInProcessDesktop,
+        );
         RemoteDomain? desktop;
         try {
           desktop = await RemoteDomain.connect(profile);
@@ -770,6 +781,7 @@ void main() {
     test('a stale workspace epoch is still rejected after a restart', () async {
       final (stale, note, cleared) = await serve((client) async {
         await client.call('security.attach_desktop', {
+          'visible': true,
           'token': File(
             '${profile.data}/.desktop-capability',
           ).readAsStringSync(),

@@ -36,6 +36,11 @@ class _AgentApprovalSurfaceState extends State<AgentApprovalSurface>
 
   Future<void> _attach() async {
     try {
+      final state = WidgetsBinding.instance.lifecycleState;
+      await widget.domain.setDesktopVisible(
+        state == AppLifecycleState.resumed ||
+            state == AppLifecycleState.inactive,
+      );
       await widget.domain.enableDesktopApprovals(_event);
       if (mounted) setState(() => _failure = null);
     } catch (e) {
@@ -46,11 +51,16 @@ class _AgentApprovalSurfaceState extends State<AgentApprovalSurface>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      unawaited(_attach());
+      unawaited(
+        widget.domain.setDesktopVisible(true).catchError((Object error) {
+          if (mounted)
+            setState(() => _failure = 'Agent approvals unavailable: $error');
+        }),
+      );
     } else if (state == AppLifecycleState.hidden ||
         state == AppLifecycleState.detached) {
       unawaited(
-        widget.domain.disableDesktopApprovals().catchError((Object _) {}),
+        widget.domain.setDesktopVisible(false).catchError((Object _) {}),
       );
     }
   }

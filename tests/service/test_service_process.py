@@ -94,18 +94,59 @@ class Peer:
         self.reader.close()
         self.socket.close()
 
+    def shutdown(self):
+        self.socket.shutdown(socket.SHUT_RDWR)
+
+
+class DesktopPeer(Peer):
+    """A distinct native executable, authenticated by real Unix credentials."""
+
+    def __init__(self, executable, path):
+        self.process = subprocess.Popen(
+            [str(executable), str(path)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.reader = self.process.stdout
+        self.sequence = 0
+        self.events = []
+
+    def send(self, method, args=None):
+        self.sequence += 1
+        self.process.stdin.write(
+            json.dumps({"id": self.sequence, "method": method, "args": args or {}})
+            + "\n"
+        )
+        self.process.stdin.flush()
+        return self.sequence
+
+    def shutdown(self):
+        self.process.stdin.close()
+
+    def close(self):
+        try:
+            self.process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.wait(timeout=3)
+        self.reader.close()
+        self.process.stderr.close()
+
 
 class ApprovalDesktop:
     """Explicit synthetic UI host for tests that exercise approved operations."""
 
     def __init__(self, path, profile, root, preferences=None):
-        self.peer = Peer(path)
+        self.peer = DesktopPeer(root / "fixtures/desktop-peer", path)
+        self.closed = False
         self.peer.call(
             "status"
         )  # Wait until service initialization publishes the capability.
         self.peer.call(
             "security.attach_desktop",
-            {"token": (profile / ".desktop-capability").read_text()},
+            {"token": (profile / ".desktop-capability").read_text(), "visible": True},
         )
         self.peer.call("security.allow_import_root", {"path": str(root)})
         # The review thread owns the reader after it starts. Set preferences
@@ -128,10 +169,11 @@ class ApprovalDesktop:
             pass
 
     def close(self):
-        if self.peer.socket.fileno() < 0:
+        if self.closed:
             return
+        self.closed = True
         try:
-            self.peer.socket.shutdown(socket.SHUT_RDWR)
+            self.peer.shutdown()
         except OSError:
             pass
         self.thread.join(timeout=3)
@@ -271,6 +313,18 @@ def running(tmp_path, request):
             preferences["serviceIdleMinutes"] = option.removeprefix("idle=")
     fixtures = tmp_path / "fixtures"
     fixtures.mkdir(mode=0o700)
+    desktop_peer = fixtures / "desktop-peer"
+    subprocess.run(
+        [os.environ.get("CXX", "c++"), "-std=c++17",
+         str(ROOT / "packages/foresight_core/test/fixtures/desktop_peer.cpp"),
+         "-o", str(desktop_peer)],
+        check=True, capture_output=True, text=True, timeout=60,
+    )
+    flutter_desktop = (
+        ROOT / "apps/desktop/build/macos/Build/Products/Debug/open_foresight.app/Contents/MacOS/open_foresight"
+        if sys.platform == "darwin"
+        else ROOT / "apps/desktop/build/linux/x64/debug/bundle/open_foresight"
+    )
     model = fixtures / "model.litertlm"
     model.write_bytes(b"controlled embedding fixture")
     asset = fixtures / "asset.bin"
@@ -307,11 +361,18 @@ def running(tmp_path, request):
     capture.chmod(0o700)
     env = os.environ.copy()
     env.pop("FORESIGHT_MODEL_MANIFEST", None)
+    # This gate runs an unbundled development service. Production install-root
+    # identity acceptance lives in desktop_peer_process_test and package gates.
+    env.pop("FORESIGHT_INSTALL_ROOT", None)
+    env.pop("FORESIGHT_RUNTIME_REVISION", None)
     env.update(
         FORESIGHT_DATA=str(tmp_path / "data"),
         FORESIGHT_RUNTIME=str(tmp_path / "run"),
         FORESIGHT_SERVICE=str(SERVICE),
         FORESIGHT_SERVICE_TRACE="1",
+        FORESIGHT_DEVELOPMENT_DESKTOP_EXECUTABLES=json.dumps([
+            str(desktop_peer.resolve()), str(flutter_desktop.resolve()),
+        ]),
         FORESIGHT_HELPER=str(HELPER),
         FORESIGHT_NATIVE=str(NATIVE),
         FORESIGHT_CAPTURE_RUNTIME=str(capture),

@@ -194,6 +194,9 @@ class TestDesktopConnection implements DesktopConnection {
   ) async {}
   @override
   Future<void> disableDesktopApprovals() async {}
+
+  @override
+  Future<void> setDesktopVisible(bool visible) async {}
   @override
   void close() {
     if (_closing != null) return;

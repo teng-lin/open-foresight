@@ -395,7 +395,7 @@ class _WorkspaceState extends State<Workspace>
       (command, token) => command == 'calendar-auth'
           ? integrationFeature.completeCalendarSignIn(token!)
           : command == 'quick-meeting'
-          ? integrationFeature.activateQuickMeeting(token)
+          ? integrationFeature.requestQuickMeeting(token)
           : command == 'stop-meeting'
           ? (meetingFeature.recording != null &&
                     !meetingFeature.recording!.finishing
@@ -411,7 +411,7 @@ class _WorkspaceState extends State<Workspace>
     if (widget.quickOnLaunch)
       WidgetsBinding.instance.addPostFrameCallback(
         (_) => unawaited(
-          integrationFeature.activateQuickMeeting(
+          integrationFeature.requestQuickMeeting(
             widget.environment.variables['XDG_ACTIVATION_TOKEN'],
           ),
         ),

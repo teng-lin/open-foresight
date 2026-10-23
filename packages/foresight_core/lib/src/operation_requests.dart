@@ -130,6 +130,8 @@ OperationRequest decodeOperationRequest(
     Operation.securityDetachDesktop => SecurityDetachDesktopRequest.decode(
       context,
     ),
+    Operation.securityDesktopVisibility =>
+      SecurityDesktopVisibilityRequest.decode(context),
     Operation.securityDecide => SecurityDecideRequest.decode(context),
     Operation.securityAllowImportRoot => SecurityAllowImportRootRequest.decode(
       context,

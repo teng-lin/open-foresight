@@ -9,6 +9,7 @@ const foresightTestHooksEnabled = bool.fromEnvironment(
   'FORESIGHT_ENABLE_TEST_HOOKS',
 );
 const _testHookKeys = {
+  'FORESIGHT_TEST_DESKTOP_EXECUTABLE',
   'FORESIGHT_CRASH_AT',
   'FORESIGHT_TEST_DELAY_MS',
   'FORESIGHT_SERVICE_GATES',

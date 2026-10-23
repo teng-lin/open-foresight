@@ -72,6 +72,7 @@ class RemoteDomain
   void Function(Map<String, dynamic>)? _approvalEvents;
   // The connection the desktop approval host is attached on.
   ServiceClient? _attached;
+  bool _desktopVisible = false;
   @override
   Future<void> enableDesktopApprovals(
     void Function(Map<String, dynamic>) events,
@@ -94,8 +95,27 @@ class RemoteDomain
   Future<void> _attachDesktop(ServiceClient connection) async {
     await connection.call(Operation.securityAttachDesktop.wire, {
       'token': File('${_profile.data}/.desktop-capability').readAsStringSync(),
+      'visible': _desktopVisible,
     });
     _attached = connection;
+  }
+
+  @override
+  Future<void> setDesktopVisible(bool visible) async {
+    _desktopVisible = visible;
+    if (_approvalEvents == null) return;
+    await enableDesktopApprovals(_approvalEvents!);
+    try {
+      await _call(Operation.securityDesktopVisibility.wire, {
+        'visible': visible,
+      });
+    } on RpcError catch (error) {
+      if (error.code != RpcErrorCode.denied) rethrow;
+      // Another verified desktop took the host while this window was hidden.
+      // A newly visible verified window can take ownership with the fresh token.
+      _attached = null;
+      await enableDesktopApprovals(_approvalEvents!);
+    }
   }
 
   @override

@@ -38,6 +38,7 @@ void main() {
       Operation.googleAddAccount,
       Operation.securityAttachDesktop,
       Operation.securityDetachDesktop,
+      Operation.securityDesktopVisibility,
       Operation.securityDecide,
       Operation.securityAllowImportRoot,
       Operation.serviceStopIfIdle,

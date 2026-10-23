@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -1066,10 +1067,16 @@ void main() {
         Future<void> Function()? close;
         try {
           if (isolated) {
-            final host = await IsolatedApplicationService.start(profile);
+            final host = await IsolatedApplicationService.start(
+              profile,
+              desktopPeerVerifier: trustInProcessDesktop,
+            );
             close = host.close;
           } else {
-            final service = await ApplicationService.start(profile);
+            final service = await ApplicationService.start(
+              profile,
+              desktopPeerVerifier: trustInProcessDesktop,
+            );
             close = service.close;
           }
           final shutdown = close();

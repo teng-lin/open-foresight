@@ -48,7 +48,7 @@ void main() {
               ).readAsStringSync(),
             )
             as Map;
-    expect(Operation.values, hasLength(83));
+    expect(Operation.values, hasLength(84));
     for (final operation in Operation.values) {
       final old = baseline[operation.wire] as Map;
       final descriptor = operation.descriptor;

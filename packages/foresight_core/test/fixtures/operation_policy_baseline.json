@@ -1469,5 +1469,14 @@
     "workspace_epoch": false,
     "idempotency_key": false,
     "tools": []
+  },
+  "security.desktop_visibility": {
+    "requires_helper": false,
+    "approval": true,
+    "approval_web_search": true,
+    "notifies_changes": false,
+    "workspace_epoch": false,
+    "idempotency_key": false,
+    "tools": []
   }
 }

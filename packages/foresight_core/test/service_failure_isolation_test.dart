@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -92,7 +93,10 @@ void main() {
         port: 0,
       );
       addTearDown(server.shutdown);
-      final service = await ApplicationService.start(profile);
+      final service = await ApplicationService.start(
+        profile,
+        desktopPeerVerifier: trustInProcessDesktop,
+      );
       addTearDown(service.close);
       final client = await ServiceClient.connect(service.path);
       addTearDown(client.close);
@@ -137,7 +141,13 @@ void main() {
         ..writeAsStringSync('retained');
       final capability = Link('${profile.data}/.desktop-capability')
         ..createSync(target.path);
-      await expectLater(ApplicationService.start(profile), throwsStateError);
+      await expectLater(
+        ApplicationService.start(
+          profile,
+          desktopPeerVerifier: trustInProcessDesktop,
+        ),
+        throwsStateError,
+      );
       expect(target.readAsStringSync(), 'retained');
       expect(File('${profile.runtime}/application.sock').existsSync(), isFalse);
       capability.deleteSync();
@@ -152,7 +162,10 @@ void main() {
         port: 0,
       );
       addTearDown(server.shutdown);
-      final service = await ApplicationService.start(profile);
+      final service = await ApplicationService.start(
+        profile,
+        desktopPeerVerifier: trustInProcessDesktop,
+      );
       addTearDown(service.close);
       final client = await ServiceClient.connect(service.path);
       addTearDown(client.close);
@@ -169,7 +182,10 @@ void main() {
   test(
     'malformed requests and security errors are scoped to one frame',
     () async {
-      final service = await ApplicationService.start(profile);
+      final service = await ApplicationService.start(
+        profile,
+        desktopPeerVerifier: trustInProcessDesktop,
+      );
       addTearDown(service.close);
       final socket = await Socket.connect(
         InternetAddress(service.path, type: InternetAddressType.unix),
@@ -234,7 +250,10 @@ void main() {
         port: 0,
       );
       addTearDown(server.shutdown);
-      final service = await ApplicationService.start(profile);
+      final service = await ApplicationService.start(
+        profile,
+        desktopPeerVerifier: trustInProcessDesktop,
+      );
       addTearDown(service.close);
       final entered = Completer<void>(), release = Completer<void>();
       service.domain.helper.onReady = () async {
@@ -304,7 +323,10 @@ void main() {
   test(
     'capture-level events reach clients independently of pending calls',
     () async {
-      final service = await ApplicationService.start(profile);
+      final service = await ApplicationService.start(
+        profile,
+        desktopPeerVerifier: trustInProcessDesktop,
+      );
       addTearDown(service.close);
       final client = await ServiceClient.connect(service.path);
       addTearDown(client.close);

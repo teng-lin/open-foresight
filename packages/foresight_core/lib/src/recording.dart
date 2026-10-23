@@ -7,6 +7,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 import 'native.dart';
+import 'runtime_execution_policy.dart';
 
 class _AudioSegment {
   final int channel, startSamples, sampleRate;
@@ -198,6 +199,7 @@ class Recording implements RecordingStatus {
     String playbackTarget = 'auto',
     bool echoCancellation = false,
   }) {
+    requireInstalledRuntime(runtime);
     if (captures.isNotEmpty ||
         speeches.isNotEmpty ||
         paused ||

@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -37,7 +38,10 @@ void main() {
         Future<void>? shutdown;
         final clients = <Socket>[];
         try {
-          host = await IsolatedApplicationService.start(profile);
+          host = await IsolatedApplicationService.start(
+            profile,
+            desktopPeerVerifier: trustInProcessDesktop,
+          );
           final endpoint = serviceEndpoint(profile);
           shutdown = host.close();
           await gates.reached('close.before_frontend_release');
@@ -133,7 +137,10 @@ void main() {
       final worker = File('${profile.runtime}/worker.sock');
       final moved = File('${profile.runtime}/held-worker.sock');
       try {
-        host = await IsolatedApplicationService.start(profile);
+        host = await IsolatedApplicationService.start(
+          profile,
+          desktopPeerVerifier: trustInProcessDesktop,
+        );
         worker.renameSync(moved.path);
         broken = await ServiceClient.connect(serviceEndpoint(profile));
         await expectLater(

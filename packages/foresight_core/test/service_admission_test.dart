@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -29,6 +30,7 @@ void main() {
     root = createTestTempDirectorySync('admit-');
     service = await ApplicationService.start(
       ProfilePaths('${root.path}/d', '${root.path}/r'),
+      desktopPeerVerifier: trustInProcessDesktop,
     );
     await service.ready;
     agent = await ServiceClient.connect(service.path);
@@ -50,8 +52,10 @@ void main() {
   });
   String token() =>
       File('${root.path}/d/.desktop-capability').readAsStringSync();
-  Future<void> attach() async =>
-      host.call(Operation.securityAttachDesktop.wire, {'token': token()});
+  Future<void> attach() async => host.call(
+    Operation.securityAttachDesktop.wire,
+    {'visible': true, 'token': token()},
+  );
 
   test(
     'malformed approval-requiring request sends correlated invalidArgument without approval',
@@ -101,7 +105,10 @@ void main() {
     'malformed bootstrap cannot attach or reserve desktop presence',
     () async {
       await expectLater(
-        host.call(Operation.securityAttachDesktop.wire, {'token': 42}),
+        host.call(Operation.securityAttachDesktop.wire, {
+          'visible': true,
+          'token': 42,
+        }),
         throwsA(code(RpcErrorCode.invalidArgument)),
       );
       await expectLater(
@@ -149,6 +156,7 @@ void main() {
     'bootstrap retains no epoch admission and no dispatched activity',
     () async {
       await host.call(Operation.securityAttachDesktop.wire, {
+        'visible': true,
         'token': token(),
         'workspace_epoch': 'historically-ignored',
       });

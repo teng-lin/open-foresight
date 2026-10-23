@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -105,6 +106,7 @@ void main() {
       var releases = 0;
       final service = await ApplicationService.start(
         profile,
+        desktopPeerVerifier: trustInProcessDesktop,
         beforeReleaseOwnership: () async {
           releases++;
           reached.complete();
@@ -156,7 +158,10 @@ void main() {
         reason: 'Failed cleanup must retain the recovery record',
       );
       // A new real owner can acquire the released lock and adopt that record.
-      final replacement = await ApplicationService.start(profile);
+      final replacement = await ApplicationService.start(
+        profile,
+        desktopPeerVerifier: trustInProcessDesktop,
+      );
       addTearDown(replacement.close);
       await replacement.ready;
       final next = await ServiceClient.connect(replacement.path);
@@ -194,7 +199,10 @@ void main() {
       );
       await expectLater(
         IOOverrides.runWithIOOverrides(
-          () => ApplicationService.start(profile),
+          () => ApplicationService.start(
+            profile,
+            desktopPeerVerifier: trustInProcessDesktop,
+          ),
           race,
         ),
         throwsA(isA<AnotherProfileServing>()),
@@ -221,7 +229,10 @@ void main() {
       );
       await rival.close();
       File(endpoint).deleteSync();
-      final replacement = await ApplicationService.start(profile);
+      final replacement = await ApplicationService.start(
+        profile,
+        desktopPeerVerifier: trustInProcessDesktop,
+      );
       addTearDown(replacement.close);
       await replacement.ready;
       final client = await ServiceClient.connect(replacement.path);
@@ -239,6 +250,7 @@ void main() {
       void Function()? reevaluate;
       final service = await ApplicationService.start(
         profile,
+        desktopPeerVerifier: trustInProcessDesktop,
         createTimer: (_, callback) {
           reevaluate = callback;
           return Timer(const Duration(days: 1), callback);
@@ -278,13 +290,17 @@ void main() {
   test(
     'streamed setup failure settles the service lease before the next request',
     () async {
-      final service = await ApplicationService.start(profile);
+      final service = await ApplicationService.start(
+        profile,
+        desktopPeerVerifier: trustInProcessDesktop,
+      );
       addTearDown(service.close);
       await service.ready;
       expect(service.application.googleAuth.client, isNull);
       final client = await ServiceClient.connect(service.path);
       addTearDown(client.close);
       await client.call('security.attach_desktop', {
+        'visible': true,
         'token': File('${profile.data}/.desktop-capability').readAsStringSync(),
       });
       for (final method in ['google.sign_in', 'google.add_account']) {

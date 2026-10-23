@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'dart:isolate';
 import 'dart:io';
@@ -104,6 +105,7 @@ void main() {
     await expectLater(
       IsolatedApplicationService.start(
         ProfilePaths(blocked.path, '${directory.path}/run'),
+        desktopPeerVerifier: trustInProcessDesktop,
       ),
       throwsA(anything),
     );
@@ -228,7 +230,10 @@ void main() {
         'FORESIGHT_RUNTIME': runtime,
       }, macOS: true);
       expect(utf8.encode('${profile.runtime}/application.sock').length, 103);
-      host = await IsolatedApplicationService.start(profile);
+      host = await IsolatedApplicationService.start(
+        profile,
+        desktopPeerVerifier: trustInProcessDesktop,
+      );
       expect(FileStat.statSync('$runtime/worker.sock').mode & 0x1ff, 0x180);
       client = await ServiceClient.connect(serviceEndpoint(profile));
       expect((await client.call('status') as Map)['pid'], pid);
@@ -275,7 +280,10 @@ void main() {
               '${directory.path}/$index/data',
               '${directory.path}/$index/run',
             );
-            final host = await IsolatedApplicationService.start(profile);
+            final host = await IsolatedApplicationService.start(
+              profile,
+              desktopPeerVerifier: trustInProcessDesktop,
+            );
             hosts.add(host);
             for (final name in ['application.sock', 'worker.sock']) {
               final mode = FileStat.statSync('${profile.runtime}/$name').mode;
@@ -319,7 +327,10 @@ void main() {
         '${directory.path}/data',
         '${directory.path}/run',
       );
-      final host = await IsolatedApplicationService.start(profile);
+      final host = await IsolatedApplicationService.start(
+        profile,
+        desktopPeerVerifier: trustInProcessDesktop,
+      );
       ServiceClient? client;
       try {
         for (final name in ['application.sock', 'worker.sock']) {
@@ -389,7 +400,10 @@ void main() {
       IsolatedApplicationService? host;
       ServiceClient? client, latecomer;
       try {
-        host = await IsolatedApplicationService.start(profile);
+        host = await IsolatedApplicationService.start(
+          profile,
+          desktopPeerVerifier: trustInProcessDesktop,
+        );
         client = await ServiceClient.connect(serviceEndpoint(profile));
         expect(await client.call('status'), isA<Map>());
         var workerClosed = false;
@@ -498,7 +512,10 @@ void main() {
       ServiceClient? latecomer;
       Socket? raw;
       try {
-        host = await IsolatedApplicationService.start(profile);
+        host = await IsolatedApplicationService.start(
+          profile,
+          desktopPeerVerifier: trustInProcessDesktop,
+        );
         final endpoint = serviceEndpoint(profile);
         final shutdown = host.close();
         await gates.reached('close.before_frontend_release');
@@ -591,7 +608,10 @@ void main() {
     IsolatedApplicationService? crashed, replacement;
     ServiceClient? client;
     try {
-      crashed = await IsolatedApplicationService.start(profile);
+      crashed = await IsolatedApplicationService.start(
+        profile,
+        desktopPeerVerifier: trustInProcessDesktop,
+      );
       // Hold the frontend once its listener is closed, just before it would
       // unlink the public socket path.
       gates.hold('frontend.listener_closed');
@@ -609,7 +629,10 @@ void main() {
       // it would be gone. Remove only its path, which nothing reaches now.
       File('${profile.runtime}/worker.sock').deleteSync();
       runtimeConfiguration.environment.remove('FORESIGHT_SERVICE_GATES');
-      replacement = await IsolatedApplicationService.start(profile);
+      replacement = await IsolatedApplicationService.start(
+        profile,
+        desktopPeerVerifier: trustInProcessDesktop,
+      );
       gates.release('frontend.listener_closed');
       await expectLater(crashed.close(), throwsStateError);
       final probe = await ServiceClient.connect(serviceEndpoint(profile));

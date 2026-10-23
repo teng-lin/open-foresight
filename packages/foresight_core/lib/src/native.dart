@@ -8,6 +8,7 @@ import 'dart:isolate';
 import 'package:ffi/ffi.dart';
 import 'reference_tools.dart';
 import 'reference_tool_parser.dart';
+import 'runtime_execution_policy.dart';
 
 /// Packaged installations always use their bundled native worker, including
 /// profiles that still contain the former Python runner path.
@@ -23,9 +24,13 @@ Future<int> probeNativeModel(
   String model, {
   String backend = 'llama_cpp',
   int modelType = 0,
-}) => Isolate.run(
-  () => _createAndProbe(libraryPath, runtime, model, backend, modelType),
-);
+}) async {
+  requireInstalledRuntime(runtime);
+  return Isolate.run(
+    () => _createAndProbe(libraryPath, runtime, model, backend, modelType),
+  );
+}
+
 int _createAndProbe(
   String path,
   String runtime,
@@ -238,6 +243,7 @@ class NativeRuntime implements GenerationStatus {
     String backend = 'llama_cpp',
   }) async {
     if (backend == 'litert_lm') runtime = liteRtRunner(runtime);
+    requireInstalledRuntime(runtime);
     if (!['llama_cpp', 'litert_lm'].contains(backend)) {
       throw ArgumentError.value(backend);
     }

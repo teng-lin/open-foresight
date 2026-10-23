@@ -11,10 +11,16 @@ import 'service_lifetime.dart';
 
 /// Per-request transport state; never retained by the dispatch metadata.
 class ServiceRequestContext {
-  const ServiceRequestContext(this.client, this.id, [this.lease]);
+  const ServiceRequestContext(
+    this.client,
+    this.id, [
+    this.lease,
+    this.verifiedDesktop = false,
+  ]);
   final Socket client;
   final int id;
   final ServiceRequestLease? lease;
+  final bool verifiedDesktop;
 }
 
 /// Concrete service-only handler ownership. Request transport state is bound
@@ -52,9 +58,28 @@ class ServiceOperationHandlers {
           Operation.securityAttachDesktop,
           (request, {current}) {
             final client = context!.client;
-            access.attach(client, request.token);
+            access.attach(
+              client,
+              request.token,
+              verifiedDesktop: context.verifiedDesktop,
+              visible: request.visible,
+            );
             desktopClients.add(client);
             onAttached();
+            return true;
+          },
+        ),
+        TypedOperationHandler<SecurityDesktopVisibilityRequest>(
+          Operation.securityDesktopVisibility,
+          (request, {current}) {
+            access.setVisible(context!.client, request.visible);
+            if (!request.visible) {
+              unawaited(
+                stopRecording().catchError((Object error) {
+                  stderr.writeln('Stop recording after desktop hidden: $error');
+                }),
+              );
+            }
             return true;
           },
         ),
