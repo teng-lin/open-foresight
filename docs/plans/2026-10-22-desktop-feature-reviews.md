@@ -424,8 +424,96 @@ package analysis, formatting and 552 tests passed with 17 documented skips at
 helper inputs were explicitly reused and remained unchanged. These checks are
 fixture qualification, not evidence that the actual workflow passed. Failed-only
 compiled meeting attempt r9 subsequently passed 1/0 with the original deadline,
-current0ec8 fixture source and unchanged83runtime; runtime qualification is
+current `0ec8ea49` fixture source and unchanged `83a26aa9` runtime; runtime qualification is
 recorded separately in the execution record. Claude round11 reviewed exact
 0ec8 and found no actionable issue. It confirmed error propagation, read-only
 callbacks, one unreset deadline, preserved expected assertions and stricter
 graph currentness. Output SHA256: `3700e1230347cc2093ca34dd654db2ea94cc508a0ec555a92519a4196b49cdbb`.
+
+## Final local evidence handoff (delivery pending)
+
+Application/native/runtime source remains `83a26aa9`; dependent reviewed code is
+`0ec8ea49`, with its unchanged Python portion qualified at `6ff877a6`. The initial
+two-document aggregate was integrated at `45a7334f`. Native/root review and Claude
+round 11 converged with no actionable source findings. Final applicable local
+Linux and HanSolo acceptance is complete within the recorded supported scopes;
+required hosted checks and final single-PR delivery remain pending. Four passing
+DMG fixture tests do not establish a new DMG for app `83a26aa9`.
+
+Linux compiled workflow r9 and the five installed Mac core scenarios passed.
+The broad Mac workflow then passed six staged scopes through receipt-preserving
+continuations: real model registration, Settings, approved source imports and
+rendered Graph/Inspector, cited Ask, actual note Enhance/full output, and actual
+close/reconnect/restart. R86 restored Graph/Pause/Fit/Cedar selection and the
+populated Inspector. Exactly four known sources remain indexed at revision 1;
+four current vectors each contain 768 finite float32 values/3,072 bytes, unit
+norms and the exact six-part registered embedding identity. Original source
+vector hashes and exact note/transcript/artifact/preference data were preserved.
+All 1,479 source blobs/modes, sealed-app identities and owned cleanup were
+verified. Evidence:
+`/var/tmp/of-pr7/mac-final-83a26aa9-r1/broad-r86-evidence/root-evidence-review.json`.
+
+The actual `.txt` UI import accepted exactly one final transcript at 0–0 ms,
+source `imported transcript`, advancing meeting 1 to revision 1 while preserving
+note revision 1. Actual Enhance produced new artifact 1 using the pinned real CPU
+model, nondegraded `notes-v2`, no failed batches, input/note revision 1, prompt
+`meeting-v1`, complete-candidate-history and text-markers-v1. Native noneditable
+output contained every ordered generated word inside the enhanced pane and
+outside all editors; observation took 5.799 seconds within the original
+60-second bound. No accepted creation, import, note input, Ask or generation was
+replayed. The transcript import and enhancement are supported synthetic-input
+flows, with no physical capture claim.
+
+The native selected-style AX criterion remains failed/unqualified. R76's
+original 60-second selected-Concise oracle failed; r78 typed native reads
+returned successful `CFBoolean false` for both Standard and Concise and empty
+`AXValue`. R86 retains this as an unsupported check with `passing=false`.
+Actual earlier Concise selection, persisted preference, exact owned native
+controls and saved data are verified separately. The plan requires Settings
+smoke; the selected-attribute assertion came from the external harness. No
+committed test, gate, deadline, product or SDK changed to qualify that separate
+supported scope. Tooltip-only icons, anonymous editors, merged labels and empty
+editable AX values after layout further limit generic AX discovery. Source-bound
+native elements/owned geometry establish the specific interactions; they do not
+establish comprehensive VoiceOver or general label-based automation. Evidence:
+`/var/tmp/of-pr7/mac-final-83a26aa9-r1/settings-discovery-r78-evidence/root-evidence-review.json` and
+`/var/tmp/of-pr7/mac-final-83a26aa9-r1/root-selected-style-AX-scope-decision-r78.json`.
+
+All original failed outputs remain retained. Empty-transcript r49/r51 Enhance
+attempts produced no artifact; the supported coordinator intentionally returns
+without a final transcript. Later setup/chooser/card/count refusals and the
+r80 bootstrap failure remain distinct from accepted mutations. The r84 metadata
+invariant failure has no retained immediate comparison tree, so its exact cause
+is unproven; four-vector publication already preceded it. R86 retained the first
+strict read-only metadata refusal and then passed the unchanged guard within the
+original shared 120-second bound, without action retries. No cache-readiness or
+animation cause is claimed.
+
+Root also checked 13 executed Mac compiled desktop/service/MCP recording
+assertions: denial/fresh approval, active capture, MCP-disconnect survival,
+desktop-close stop, persistence and capture-denial recovery. These use controlled
+capture/runtime fixtures; public-file Whisper inference is qualified separately.
+They establish no physical microphone, system playback or OS capture-permission
+acceptance. Evidence:
+`/var/tmp/of-pr7/mac-final-83a26aa9-r1/root-mac-recording-scope-review.json`.
+
+Owned desktop/service cleanup passed. After final Mac proof, the exact task-owned
+bounded keep-awake process was identity-checked and stopped; no OS setting or
+permission changed. Receipt:
+`/var/tmp/of-pr7/mac-final-83a26aa9-r1/owned-awake-final-cleanup-r86.json` and
+`/var/tmp/of-pr7/mac-final-83a26aa9-r1/final-owned-process-cleanup-r86.json`.
+
+The 95-row semantic handoff retains every requirement's positive source/assertion
+and execution bindings. For 59 implementation/contract rows, 168 selected claims
+bind to 1,796 passing case references (1,287 unique cases); independent review
+rehashed 94 test files and nine event reports, and root verified those bindings.
+All eight API-negotiation cases passed on each host. This does not establish
+every conditional branch. Version/license widgets, constants and route context
+are preserved, with no actual LicensePage tap claim. Detector readiness/queue age
+have nondefault decoder assertions and preserved presentation wiring, with no
+dedicated real-UI queue-age or authenticated detector-quality claim. Deferred
+work, explicit platform limits, the selected-style AX gap and hosted/delivery
+clauses remain distinct; no whole-goal completion follows before delivery.
+Evidence: `/var/tmp/of-pr7/final-semantic-audit-95-45a.json`,
+`/var/tmp/of-pr7/semantic-handoff-independent-r29.json` and
+`/var/tmp/of-pr7/root-semantic-handoff-review-r29.json`.

@@ -4,44 +4,87 @@ The source of requirements is revision 24 of
 [the plan](2026-10-20-core-desktop-refactor-plan.md). This record does not replace
 its acceptance criteria. PR 8 and the follow-ups explicitly marked separate
 remain outside the feature moves. Implementation and the qualified matrices
-below are integrated; completion still requires the explicitly remaining UI,
-hosted checks and single-PR delivery work.
+below are integrated. Applicable local Linux and macOS acceptance is complete
+within the limits recorded here; hosted checks and single-PR delivery remain pending.
 
 ## Current qualification and remaining work
 
-The application/runtime candidate is `83a26aa9`; the current reviewed source
-`0ec8ea49` adds only Python automation/gate corrections and Dart integration-
-test readiness observations, the startup barrier and awaited export assertion.
-All production Dart, native, service, protocol, lock and
-build inputs remain identical to the qualified application. Runtime outputs are
-never relabeled as a newer compilation. Evidence paths below are beneath
-`/var/tmp/of-pr7/` unless stated otherwise.
+The qualified application/native/runtime source is `83a26aa9`. Code
+`0ec8ea49` adds only Python automation/gate corrections and one Dart integration
+fixture: startup readiness, current-read observations and an awaited export.
+Production Dart, native, service, protocol, lock and build inputs remain identical
+to the qualified application. Existing runtime outputs retain their source
+identity. The initial two-document evidence aggregate was integrated at `45a7334f`;
+this update reconciles the final supported Mac workflow and its explicit accessibility gap.
+Final single-PR delivery and required hosted checks remain pending.
+
+Counts below are passed/skipped. Percentages are line coverage, except Python's
+combined line/branch coverage. Evidence paths are under `/var/tmp/of-pr7/` unless
+an absolute path is shown.
 
 | Gate | Current executed qualification |
 |---|---|
-| Whole Linux canonical, exact83 |Native30/0;core2,065/18 skips at95.011138%;desktop552/17 at93.667726%;compiledservice/nativeUI34/0;fast2/0;platform619/3/1 deliberate Arch deselection. Unmodified concurrent schedule1 passed; `canonical-combined-render-final/qualification-report.json` |
-| Native sanitizers, exact83 |Fresh full-root ASan/UBSan and TSan,30/0 each,with real fatal/race controls; `final-durable-render-final/root-sanitizers-review.json` |
-| HanSolo available matrix, exact83 |Native33/0;core2,068/14 at95.427365%;desktop554/13 at93.563401%;compiled/nativeUI32/2 Linux-layout skips;fast1/0;platform512/9/1 deliberate deselection;DMG4/0;contracts126/0. Package/runtime/ownedSQLite/public-fileWhisper passed; actual installed scenarios and broad model UI are reported separately |
-| Current Python Quality, exact6ff |5,564 passed/31 skipped,95.820505% combined line/branch;Ruff,mypy166files,timeoutguard clean. Full1479sourceblobs/modes verified; `final-python-6ff877a6/host-logs/quality-python-final6ffr1/root-evidence-review.json` |
-| Current Dart fixture package |Author `a2f7d987` has exactly the integrated `0ec8ea49` source tree: 552 passed / 17 skipped, 93.679074%; analysis and changed-file formatting clean, existing startup contract 1/0. Byte-bound AST checks preserve 146 assertion matchers, command order and four existing polling sites; all 31 newly observed sites are read-only. Reused qualified83 native/helper on private Xvfb/D-Bus; `/var/tmp/of-moc-checks-r1/qualification.json` |
-| Actual responsiveness, exact83 |100 samples in each4conditions;p95ms1.058948/0.955492/1.243546/0.841808,all<50;actual native generation/progressingPCM and clean shutdown. Synthetic native peer disclosed; baseline/runtime differences prevent causal code-only attribution; `combined-pristine-render-final/model-acceptance/rpc-render-finalr3/root-evidence-review.json` |
-| Real public models, exact83 |Canonical desktop5/core1 passed,zero skips;all SDK/runtime/package bindings unchanged; `combined-pristine-render-final/model-acceptance/models-render-finalr5/root-evidence-review.json` |
-| Supported installed Linux GUI |Actual onboarding,PDF/RTF approval/import,source/note replacement persistence,graph service stale/current persistence/restart,refusal/cancellation and exact setupCancel passed; `linux-final-gui83/qualified-report.json`. Graph persistence is not rendered-graph evidence |
-| Mac actual installed GUI |Five actual installed scenarios passed: relocated MCP, desktop-first attachment, document approval/import, persistence creation and restart verification. Exact83 source and sealed app before/after identities match; `mac-final-83a26aa9-r1/actual-gui-core-evidence-r4/gui-final-attached-r4/progress.json`. Broad real-model feature UI remains separate |
-| Current helper smoke |Exact6ff Linux helper startup,setupCancel and one correlated approval/write+DB passed with83app unchanged; `helper-qualification-6ff877a6/actual-linux-review.json`. Exactead Mac helper supported smoke separately passed; broad Mac real-model UI remains required |
-| Virtual audio |Desktop 2/core 1 passed with real Whisper/private PipeWire. Compiled meeting attempt r8 at `dfeb202d` failed on a valid noncurrent asynchronous source read after refresh. The independent review and full package checks passed for read-only observation batch `a2f7d987`, integrated `0ec8ea49`. Failed-only compiled attempt r9 passed 1/0 with `0ec8ea49` test source and unchanged83 runtime. Actual CPU generation/768-dimensional embeddings, record/transcript, Enhance, cited Ask, imports, rendered graph/Inspector/settings, clear/cancel and close/reconnect passed; 15 screenshots. All1479 source blobs, runtime/package/SDK identities unchanged, owned cleanup verified; `combined-pristine-render-final/model-acceptance/virtual-audio-render-finalr9/qualification.json` |
-| Supported software GPU |Whisper Vulkan0 transcript passed on CPU-type Mesa lavapipe; LiteRT GPU startup/decode explicitly skipped for the CPU-only adapter. No physical GPU claim. Runtime83/test source03, all source/SDK/package inputs unchanged; `combined-pristine-render-final/model-acceptance/software-gpu-render-gpur1/root-evidence-review.json` |
-| Source reviews |Independent native role reviews cover83production; root reviewed dependent Python/test corrections and Claude rounds 8–11 converged through `0ec8ea49` with no actionable findings. Review approval is separate from runtime execution |
+| Whole Linux canonical, `83a26aa9` | Native 30/0; core 2,065/18 at 95.011138%; desktop 552/17 at 93.667726%; compiled service/native UI 34/0; fast 2/0; platform Python 619/3, plus one deliberate Arch deselection. Unmodified concurrent schedule 1 passed. `canonical-combined-render-final/qualification-report.json` |
+| Native sanitizers, `83a26aa9` | Fresh full-root ASan/UBSan and TSan, 30/0 each, with real fatal/race controls. `final-durable-render-final/root-sanitizers-review.json` |
+| HanSolo matrix, `83a26aa9` | Native 33/0; core 2,068/14 at 95.427365%; desktop 554/13 at 93.563401%; compiled/native UI 32/2 Linux-layout skips; fast 1/0; platform Python 512/9, plus one deliberate deselection; DMG **fixture tests** 4/0; approval contracts 126/0. Fresh app packaging, ad-hoc codesign, runtime closure, relocation, owned SQLite and public-file Whisper passed. Installed and broad model UI are separate rows below. |
+| Current Python Quality, `6ff877a6` | 5,564/31 at 95.820505% combined line/branch coverage. Ruff, mypy (166 files) and timeout guard passed; all 1,479 source blobs/modes verified. No later Python changes. `final-python-6ff877a6/host-logs/quality-python-final6ffr1/root-evidence-review.json` |
+| Current Dart fixture, `0ec8ea49` | Author `a2f7d987` has the same entire Git tree: 552/17 at 93.679074%. Analysis and changed-file formatting passed; startup contract 1/0. Byte-bound AST checks preserve 146 expected-value/matcher expressions, command order and four existing polling sites; the 31 newly observed read sites have no mutations in their retry callbacks. Qualified `83a26aa9` native/helper bytes were reused on private Xvfb/D-Bus. `/var/tmp/of-moc-checks-r1/qualification.json` |
+| Actual responsiveness, `83a26aa9` | 100 samples each for idle, warm idle, active native generation and progressing PCM capture. Corresponding p95 values: 1.058948, 0.955492, 1.243546 and 0.841808 ms, all below 50 ms. Actual generation/capture and clean shutdown verified. Synthetic native peer and baseline/runtime differences are disclosed. `combined-pristine-render-final/model-acceptance/rpc-render-finalr3/root-evidence-review.json` |
+| Real public models, `83a26aa9` | Canonical desktop 5/0 and core 1/0; SDK, runtime and package bindings unchanged. `combined-pristine-render-final/model-acceptance/models-render-finalr5/root-evidence-review.json` |
+| Installed Linux GUI | Actual onboarding, PDF/RTF approval/import, source/note replacement persistence, graph service stale/current persistence/restart, refusal/cancellation and setup Cancel passed. `linux-final-gui83/qualified-report.json`. Graph service persistence is separate from the rendered graph qualified below. |
+| Installed Mac GUI | Five actual scenarios passed: relocated MCP, desktop-first attachment, document approval/import, persistence creation and restart verification. Source `83a26aa9` and sealed app identities match before/after. `mac-final-83a26aa9-r1/actual-gui-core-evidence-r4/gui-final-attached-r4/progress.json`. Broad real-model feature UI is qualified separately below. |
+| Mac trusted model UI | All three pinned public models have actual UI registration and native Ready evidence at `83a26aa9`; embedding registration is preserved from its accepted earlier attempt. Product/app identities and owned cleanup match. `mac-final-83a26aa9-r1/root-r26-trusted-model-stage-review.json` |
+| Mac broad feature and restart UI | Six stages passed across receipt-preserving continuations: model registration, Settings, approved source imports/rendered Graph/Inspector, real cited Ask, actual note Enhance/full native output, and actual close/reconnect/restart. R86 completed restored Graph/Pause/Fit, Cedar selection and populated Inspector with four exact known sources. Source/app identities and owned cleanup passed. Native selected-style AX remains explicitly unsupported/unqualified; persisted Concise and exact owned controls are qualified separately. `mac-final-83a26aa9-r1/broad-r86-evidence/root-evidence-review.json` |
+| Mac native generation and embeddings | Artifact 1 uses the pinned real CPU generation model, nondegraded `notes-v2`, no failed batches, input/note revision 1, prompt `meeting-v1`, complete-candidate-history and text-markers-v1. Complete native noneditable output was observed outside every editor in 5.799 seconds, within the original 60-second bound. Exactly four current revision-1 vectors each decode to 768 finite float32 values/3,072 bytes with unit norms and exact six-part registered model identity; original source-vector hashes and full saved data survive restart. `mac-final-83a26aa9-r1/broad-r76-evidence/root-evidence-review.json`, `mac-final-83a26aa9-r1/broad-r86-evidence/root-evidence-review.json` |
+| Mac controlled recording boundary | The executed compiled native desktop/service/MCP suite passed 13 reviewed recording assertions: denial/fresh approval, active capture, MCP-disconnect survival, stop on desktop close, restart/transcript/artifact persistence and capture-denial recovery. Controlled capture/runtime fixtures establish these boundaries; real Whisper file inference is separate. No physical microphone, system playback or OS capture-permission acceptance claim. `mac-final-83a26aa9-r1/root-mac-recording-scope-review.json` |
+| Committed helper smoke | Exact Linux `6ff877a6` helper startup, setup Cancel and one correlated approved write with database verification passed with app `83a26aa9` unchanged. `helper-qualification-6ff877a6/actual-linux-review.json`. Exact Mac `ead10ff1` helper smoke passed separately; this is not broad Mac model UI acceptance. |
+| Virtual audio and compiled Linux workflow | Low-level desktop 2/0 and core 1/0 passed with real Whisper/private PipeWire. After retained attempt r8 rejected a noncurrent read, reviewed fixture `0ec8ea49` passed failed-only compiled attempt r9: 1/0 against unchanged `83a26aa9` runtime. CPU generation, 768-dimensional embeddings, record/transcribe/Enhance/cited Ask/import/rendered graph/Inspector/settings/clear/cancel/close/reconnect passed; 15 screenshots. All source/runtime/package/SDK identities and cleanup verified. `combined-pristine-render-final/model-acceptance/virtual-audio-render-finalr9/root-evidence-review.json` |
+| Supported software GPU | Whisper Vulkan device 0 produced the expected transcript on CPU-type Mesa lavapipe. LiteRT GPU startup/decode was explicitly skipped for the CPU adapter. No physical GPU claim. Runtime `83a26aa9` / test source `03ee17b3`, all source/SDK/package inputs unchanged. `combined-pristine-render-final/model-acceptance/software-gpu-render-gpur1/root-evidence-review.json` |
+| Source reviews | Independent native reviews cover production `83a26aa9`; root reviewed dependent Python/test corrections, and Claude rounds 8–11 converged through `0ec8ea49` with no actionable findings. Source review does not establish runtime execution. |
 
-Remaining work is the broad Mac real-model UI workflow, final evidence reconciliation,
-required hosted packaging/acceptance checks and one final PR. Only the failed compiled meeting stage was rerun; previous RPC, models, low-level audio and supported software GPU results are retained. Readiness observation retries preserve the original deadline, strict current/revision requirements, assertion matchers and mutation order. This is a compiled Debug development UI test; installed-package acceptance remains separately qualified. Actual backends were CPU: inherited raw report keys mentioning GPU embeddings or Mac graph styling do not establish those platforms.
+The four DMG checks above are fixture tests. No new DMG was created for app `83a26aa9`.
+The existing October 22 image is
+`/private/var/tmp/ofb7-8p4j73b8/dmg/Open-Foresight-local-bc7-macos-arm64.dmg`;
+the current qualified app is
+`/private/var/tmp/ofcf.1HXxMBf7/dist/Open Foresight.app`. The older image is not
+current app acceptance evidence.
 
-Final architecture metrics are 87 desktop Dart files,203-line `main.dart`,
-largest file796 and largest widget method149. Seven-screen status stimuli
-admit zero new reads/watches/worker operations and coalesce one UI notification;
-actual guarded builders separately prove the scoped no-SQL-render correction.
-See [the execution plan](2026-10-20-core-desktop-refactor-plan.md) and
-`reader-admissions-comparison-83a26aa9.md` for the comparison and limits.
+Applicable local UI acceptance is complete within the supported scopes above.
+Remaining delivery work is one final PR, its required hosted packaging/acceptance
+checks and review resolution. Only the failed Linux compiled
+meeting stage was rerun; prior RPC, models, low-level audio and supported software
+GPU results are retained. Its readiness observations preserve the original
+deadline, strict current/revision requirements, assertion matchers and mutation
+order. This is a compiled Debug development UI test; installed-package acceptance
+is qualified separately. Actual inference backends were CPU. Inherited raw report
+keys mentioning GPU embeddings or Mac graph styling do not establish those
+platforms.
+
+The Mac selected-style accessibility assertion remains unqualified. The original
+60-second Concise-selected oracle failed; direct native reads returned
+`AXSelected=false` for both Standard and Concise and empty `AXValue`. Actual
+Concise selection, persisted preference, native controls and saved data are
+verified separately. R86 retains that failed oracle and an explicit unsupported
+check with `passing=false`; no selected-state pass is claimed. Tooltip-only icons,
+anonymous editors and merged labels also limit general AX discovery. The
+supported Settings smoke does not establish comprehensive VoiceOver support.
+No committed test, gate, deadline, product or SDK input was weakened to qualify
+that separate scope.
+
+Owned desktop/service cleanup passed. After final Mac proof, the exact task-owned
+bounded keep-awake process was identity-checked and stopped; no OS setting or
+permission changed. Receipt:
+`/var/tmp/of-pr7/mac-final-83a26aa9-r1/owned-awake-final-cleanup-r86.json` and
+`/var/tmp/of-pr7/mac-final-83a26aa9-r1/final-owned-process-cleanup-r86.json`.
+
+Architecture metrics are 87 desktop Dart files, a 203-line `main.dart`, a largest
+file of 796 lines and a largest widget method of 149 lines. Under the committed
+seven-screen stimulus, 20 status notifications admit no new projection/read/
+watch/worker operations and produce one coalesced UI notification per screen.
+These fixture counts measure work admission and rebuilds, not latency. Separate
+actual-builder guards establish the scoped SQL-during-render correction. See
+the plan and `reader-admissions-comparison-83a26aa9.md` for exact comparisons and
+limits.
 
 ## Historical execution checkpoints
 
@@ -1085,7 +1128,151 @@ after restart and an 11-point/11-edge rendered graph. Source import/refresh,
 Find Files selection, graph selection/Inspector/labels/clusters/restoration,
 settings, clear cancellation/confirmation and reconnect assertions passed.
 Fifteen screenshots and all retained failed attempts remain in the evidence.
-All1,479 source blobs/modes and SDK, runtime and package identities remained
+All 1,479 source blobs/modes and SDK, runtime and package identities remained
 unchanged; disposable private ownership was restored and no owned process or
 container survived. This is functional smoke coverage, with no physical
 microphone/GPU, pixel-baseline or comprehensive accessibility claim.
+
+On the current Mac build, tooltip-only `IconButton` controls lack individual AX
+labels, the Ask and note fields are anonymous, and some rendered text appears in
+group labels. The graph zoom percentage is merged into the root `AXImage` label.
+After note-pane layout changes, native editable AX values can become empty even
+while the exact previously typed note remains saved. This limits text discovery
+and does not establish a cause related to keyboard focus.
+The empty-transcript Copy control also exposes `AXenabled=true` even though
+the frozen source disables Copy. This flag alone cannot distinguish it from
+Import. Specific Graph, Inspector, input and note controls use independently
+reviewed native AX elements bound to source structure and actual owned-window geometry.
+This does not establish comprehensive VoiceOver support or general label-based
+automation. Product and SDK bytes remain unchanged; the broad Mac workflow is
+still pending.
+
+Mac attempts r49 and r51 retained their original generation-wait failures and
+produced no enhancement artifact. Source review found that the supported
+Enhance operation intentionally returns when the meeting has no final
+transcript; the synthetic meeting had none. A supported transcript import is
+therefore a prerequisite to the remaining Enhance test. Production bytes remain
+unchanged.
+
+The subsequent setup failures remain retained. The approval guard refused r56
+before RPC send because its generic title did not establish method-specific
+consent. The native context guard refused r58 before Import; r60 then opened
+the actual picker but refused its unexpected Open/Cancel structure before
+selection. In r68 the fixed path was present in both the Cocoa field and its
+known `_NS:39` text mirror; an overly narrow placeholder-state oracle refused
+before Return. This did not establish a product or AX-identity defect. Root
+verified unchanged source/app identities and owned cleanup for these attempts.
+The later r70 attempt selected the exact fixed file after Return, then refused
+before Open because Foundation presented `/var` while the fixture path used
+`/private/var`; both resolved to the same inode. This is a selector-path
+normalization issue, with no transcript or enhancement artifact accepted.
+R72 then completed the actual supported `.txt` chooser action in 2.773 seconds,
+with live ownership, AX identity, focus, exact path and canonical-file/inode
+checks intact. It imported exactly one final transcript (0–0 ms, source
+`imported transcript`) into meeting 1, advancing the meeting to revision 1
+while preserving the original note at revision 1. The source `meeting-1`
+indexed at revision 1 without error. Its immediate graph-vector assertion
+failed before Enhance: read-only diagnosis confirmed that the graph cache
+still held the original two sources. Indexing and graph-scene publication
+are separate; the strict 3,072-byte/revision-1 vector check remains required
+after actual final scene materialization. No enhancement artifact or earlier
+transcript graph-vector pass is claimed. This attempt's unchanged source/app
+identities and owned cleanup were independently verified. Actual generation,
+rendered output and final restart remain pending; the accepted import must not
+be replayed.
+R74 preserved that import but stopped before card selection or Enhance: the
+0–0 ms transcript changed the collection card's end time and added its Transcript
+badge, so the old 30-minute card selector refused. This differs from the
+expanded workspace's unchanged 30-minute fallback; output and Enhance guards
+remain unchanged. Source/app identities and owned cleanup again passed.
+Root-reviewed evidence includes:
+`mac-final-83a26aa9-r1/broad-r56-evidence/root-evidence-review.json`,
+`mac-final-83a26aa9-r1/broad-r58-evidence/root-evidence-review.json`,
+`mac-final-83a26aa9-r1/broad-r60-evidence/root-evidence-review.json`,
+`mac-final-83a26aa9-r1/broad-r68-evidence/root-evidence-review.json` and
+`mac-final-83a26aa9-r1/broad-r72-evidence/root-evidence-review.json` and
+`mac-final-83a26aa9-r1/broad-r74-evidence/root-evidence-review.json`.
+
+R76 subsequently passed the actual Enhance and rendered-output stage. Artifact
+1 uses the pinned public CPU generation model and a nondegraded `notes-v2`
+manifest with no failed batches, input/note revision 1, prompt `meeting-v1`,
+`complete-candidate-history` and `text-markers-v1`. The complete generated
+content appeared in native noneditable output inside the enhanced pane and
+outside every editor, observed in 5.799 seconds within the original 60-second
+bound. Root independently checked the terminal stage, unchanged source/app identities
+and owned cleanup. The original selected-style oracle failed after restart;
+final supported persistence and exact four-source graph/vector scope remain
+pending. Evidence:
+`mac-final-83a26aa9-r1/broad-r76-evidence/root-evidence-review.json`.
+
+
+R76's original 60-second restart oracle failed to establish Concise selection
+through native accessibility attributes. R78's read-only typed diagnostic found
+`AXSelected` was a successful `CFBoolean false` for both Standard and Concise;
+both `AXValue` fields were empty. The persisted preference remained Concise and
+the exact note, transcript and generated artifact were unchanged. Native
+selected-style state is therefore an unsupported, unverified accessibility gap;
+it is never counted as passing. The failed oracle and raw output remain retained.
+The plan requires Settings smoke, while this selected-attribute assertion came
+from the external harness. Required supported scope remains prior actual Concise
+selection, persisted preference and actual owned native controls after restart,
+plus unchanged data and strict final graph/vector/Inspector proof. No committed
+test, gate, deadline, product or SDK input changed. Evidence:
+`/var/tmp/of-pr7/mac-final-83a26aa9-r1/settings-discovery-r78-evidence/root-evidence-review.json` and
+`/var/tmp/of-pr7/mac-final-83a26aa9-r1/root-selected-style-AX-scope-decision-r78.json`.
+
+R80 retained a failed restarted accessibility bootstrap before Settings or Graph
+actions. The unchanged bootstrap succeeded on the failed-only r82 retry, which
+proved actual close/reconnect/restart and supported Settings persistence: exact
+owned native controls, persisted Concise and the original note/transcript/artifact
+with full metadata. Root's fresh read-only snapshot confirmed exactly four known
+sources indexed at revision 1 without error. Native selected-style state remains
+failed/unqualified as above. The old two-source Graph-view preflight then refused
+the actual four-source collection before AXPress; the graph cache still held two
+vectors. Final four-source finite 768-dimensional vectors, exact model identity,
+rendered Graph and Inspector remain pending. Both attempts preserved source/app
+identities and owned cleanup. Evidence:
+`mac-final-83a26aa9-r1/broad-r80-evidence/root-evidence-review.json` and
+`mac-final-83a26aa9-r1/broad-r82-evidence/root-evidence-review.json`.
+
+R84 passed the actual native Graph-view action in 9.858 seconds with exact four
+current-source binding preserved before/after. A later strict native read-only
+observation on the same PID exposed all four known enabled node buttons. Root
+independently decoded all four persisted vectors: 3,072 bytes/768 finite float32
+values each, unit norms, revision 1 and exact six-part model identity. Original
+source-vector hashes and full persisted note/transcript/artifact/preferences were
+preserved. The attempt still failed an earlier metadata snapshot invariant;
+its immediate rejected comparison tree was not retained, so the exact cause is
+unproven. The four-vector cache already existed before that failure; no cache
+readiness or animation explanation is established. Source/app identities and
+owned cleanup passed. Camera/Fit/Inspector and final supported-stage proof remain
+pending. Evidence:
+`mac-final-83a26aa9-r1/broad-r84-evidence/root-evidence-review.json` and
+`mac-final-83a26aa9-r1/root-r84-four-vector-persistence-review.json`.
+
+R86 completed the remaining supported workflow after actual close/reconnect/
+restart: exact native Settings controls, persisted Concise, original note and
+transcript, artifact 1 with unchanged full generation metadata, and exactly four
+known indexed revision-1 sources/native vectors. Actual Graph/Pause/Fit/Cedar
+selection restored the populated Inspector. A first read-only metadata refusal
+was retained, then the same strict metadata guard passed within the original
+shared 120-second bound; no action was retried. All six staged scopes passed,
+source/app identities remained unchanged and owned cleanup/service exit passed.
+Accepted imports, note input, Ask and enhancement were preserved without replay.
+The selected-style AX criterion remains explicitly unsupported with `passing=false`.
+Evidence: `mac-final-83a26aa9-r1/broad-r86-evidence/root-evidence-review.json`.
+
+## Final semantic reconciliation
+
+The 95-row requirement handoff has completed its source, assertion and actual
+execution review. For 59 implementation and contract rows, 168 selected positive
+claims bind to 1,796 passing case references (1,287 unique cases). Independent
+review rehashed 94 source files and nine event reports, then root separately
+verified the bindings. All eight API-negotiation cases also passed on each host.
+The supported Mac feature/restart scope is now qualified separately by the
+terminal r86 review, with selected-style AX still unqualified. Final delivery and
+hosted clauses remain incomplete; the audit does not promote unexecuted paths
+to passing results.
+Evidence: `/var/tmp/of-pr7/final-semantic-audit-95-45a.json`,
+`/var/tmp/of-pr7/semantic-handoff-independent-r29.json` and
+`/var/tmp/of-pr7/root-semantic-handoff-review-r29.json`.

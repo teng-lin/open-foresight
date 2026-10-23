@@ -35,10 +35,10 @@ branch before validating the combined result.
 
 | Work package | State |
 |---|---|
-| Phase 0: baseline and inventories | Done for core and for the desktop consumer inventory. Most per-feature desktop characterization exists; see [7A](#7a-establish-composition-ports-and-invalidation) for the residual gaps |
+| Phase 0: baseline and inventories | Complete: inventories, scoped characterizations and final admission/build comparisons are recorded in the [execution record](2026-10-22-desktop-feature-execution.md) |
 | PR 6 (6A–6E): core service structure | **Merged** in #170 as `75898380` on 2026-10-22, from head `0f24e09c` (tree-identical to `75898380`) |
-| Core follow-ups found after the merge | Implemented locally with focused reviews and checkpoint evidence; final combined acceptance remains pending. See the [execution record](2026-10-22-desktop-feature-execution.md) |
-| PR 7 (7A–7C): desktop feature modules | **Implementation integrated locally:** all six feature owners use prepared reads; shell extraction, size cleanup, synchronous-reader removal, platform injection, typed fixtures and architecture guards are integrated. Review fixes and final combined acceptance remain in progress; see the [execution record](2026-10-22-desktop-feature-execution.md) |
+| Core follow-ups found after the merge | Implemented and independently reviewed locally; applicable combined Linux/HanSolo acceptance passed within the explicit limits in the [execution record](2026-10-22-desktop-feature-execution.md). Final single-PR delivery and required hosted checks remain pending |
+| PR 7 (7A–7C): desktop feature modules | Implementation, independent source reviews and applicable local combined acceptance complete. All six feature owners use prepared reads; shell extraction, size cleanup, synchronous-reader removal, platform injection, typed fixtures and architecture guards are integrated. Mac selected-style AX remains unqualified. Final single-PR delivery and required hosted checks remain pending; see the [execution record](2026-10-22-desktop-feature-execution.md) |
 | PR 8: native split, backend removal, detector consolidation | Deferred by the owner; unchanged |
 
 #170 merged the core work on its own. Revision 16 and #170's description both required the desktop work (7A–7C) to land in the same PR. The owner has now selected one final PR for the remaining implementation; see [Current delivery decision](#current-delivery-decision).
@@ -140,7 +140,7 @@ Two function-size exceptions are retained with justification: `rankAnswerPassage
 
 ## Core follow-ups
 
-The 2026-10-22 audits ([consolidated](../audit/2026-10-22-consolidated.md)) found most of these; the review of revisions 17 and 18 found F-10 and F-12. An item whose "When" names a step is a prerequisite of that step and lands in the PR the Delivery table assigns. Items marked "Separate" or "Any time" must not ride along in PR 7's feature moves.
+The 2026-10-22 consolidated audits found most of these; the review of revisions 17 and 18 found F-10 and F-12. Their current resolution and acceptance evidence are recorded in the [execution record](2026-10-22-desktop-feature-execution.md). An item whose "When" names a step is a prerequisite of that step and lands in the PR the Delivery table assigns. Items marked "Separate" or "Any time" must not ride along in PR 7's feature moves.
 
 | # | Item | Source | When |
 |---|---|---|---|
