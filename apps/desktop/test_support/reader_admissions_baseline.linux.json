@@ -1,0 +1,128 @@
+{
+  "production_base": "be26024ed328b3f2a406f56b9686ee4841bb311c",
+  "platform": "Linux x86_64",
+  "toolchain": "Flutter 3.35.7 / Dart 3.9.2, debug widget tests",
+  "surface_size": [
+    1440,
+    1000
+  ],
+  "stimulus": "20 coarse helper notifications, one 100ms pump, then pumpAndSettle",
+  "fixture": "One source; workspace also has one meeting and saved answer. Onboarding uses library step 5 with one source.",
+  "interpretation": [
+    "Counts cover only the notification window after the initial screen settles; initial load admissions are excluded.",
+    "Sync counts include metadata getter admissions and synchronous projections; they are not SQL statement counts.",
+    "Worker counts use the in-process fixture worker and do not prove production isolate placement.",
+    "Integrations currently renders its account and audio controls inside Settings, so both measurements use tab 6 and share its root.",
+    "These historical Linux build counts are comparison evidence, not portable pixel or widget-count goldens."
+  ],
+  "reproduce": "FORESIGHT_DESKTOP_READ_BASELINE=<private-output.json> flutter test test/reader_admissions_baseline_test.dart",
+  "screens": {
+    "Sources": {
+      "admissions_delta": {
+        "sync": {
+          "workspaceEpoch": 40,
+          "failure": 20,
+          "sourceSummaries": 1,
+          "googleSourceMimes": 1,
+          "documentLabels": 1,
+          "documentClusters": 1,
+          "documentClusterNames": 1
+        },
+        "read": {},
+        "watch": {},
+        "worker": {}
+      },
+      "service_ui_notifications": 1,
+      "widget_builds": 604
+    },
+    "Chat": {
+      "admissions_delta": {
+        "sync": {
+          "workspaceEpoch": 40,
+          "preference": 2,
+          "failure": 20,
+          "conversationAnswers": 1
+        },
+        "read": {},
+        "watch": {},
+        "worker": {}
+      },
+      "service_ui_notifications": 1,
+      "widget_builds": 270
+    },
+    "Meetings": {
+      "admissions_delta": {
+        "sync": {
+          "workspaceEpoch": 40,
+          "failure": 20,
+          "meetingCollection": 1
+        },
+        "read": {},
+        "watch": {},
+        "worker": {}
+      },
+      "service_ui_notifications": 1,
+      "widget_builds": 332
+    },
+    "Stats": {
+      "admissions_delta": {
+        "sync": {
+          "workspaceEpoch": 42,
+          "model": 1,
+          "failure": 20,
+          "dataRevision": 2
+        },
+        "read": {},
+        "watch": {},
+        "worker": {}
+      },
+      "service_ui_notifications": 1,
+      "widget_builds": 218
+    },
+    "Settings": {
+      "admissions_delta": {
+        "sync": {
+          "workspaceEpoch": 40,
+          "model": 5,
+          "preference": 10,
+          "failure": 20
+        },
+        "read": {},
+        "watch": {},
+        "worker": {}
+      },
+      "service_ui_notifications": 1,
+      "widget_builds": 925
+    },
+    "Integrations": {
+      "admissions_delta": {
+        "sync": {
+          "workspaceEpoch": 40,
+          "model": 5,
+          "preference": 10,
+          "failure": 20
+        },
+        "read": {},
+        "watch": {},
+        "worker": {}
+      },
+      "service_ui_notifications": 1,
+      "widget_builds": 925
+    },
+    "Onboarding": {
+      "admissions_delta": {
+        "sync": {
+          "workspaceEpoch": 40,
+          "model": 2,
+          "failure": 20,
+          "sourceSummaries": 1
+        },
+        "read": {},
+        "watch": {},
+        "worker": {}
+      },
+      "service_ui_notifications": 1,
+      "widget_builds": 110
+    }
+  }
+}

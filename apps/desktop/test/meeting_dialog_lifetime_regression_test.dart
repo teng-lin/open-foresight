@@ -67,7 +67,7 @@ void main() {
     },
   );
 
-  for (final boundary in ['session', 'clear']) {
+  for (final boundary in ['session', 'clear', 'selection']) {
     testWidgets('an open task editor cannot mutate a replacement after $boundary', (
       tester,
     ) async {
@@ -101,6 +101,10 @@ void main() {
         await tester.pump(const Duration(milliseconds: 100));
         expect(f.connection.workspaceEpoch, epoch);
         expect(f.connection.clientSessionGeneration, isNot(same(generation)));
+      } else if (boundary == 'selection') {
+        final replacement = f.store.meeting('New selected meeting');
+        f.shell.update(() => f.shell.meetingFeature.meetingId = replacement);
+        await tester.pumpAndSettle();
       } else {
         await tester.runAsync(
           () =>
@@ -126,6 +130,92 @@ void main() {
       expect(
         f.store.rows('SELECT task FROM meeting_tasks').single['task'],
         expected,
+      );
+      expect(
+        f.connection.calls.where(
+          (call) => call.$1 == Operation.meetingsEditTask,
+        ),
+        isEmpty,
+      );
+      expect(tester.takeException(), isNull);
+    });
+  }
+  for (final kind in ['source picker', 'preparation']) {
+    testWidgets('an open $kind cannot write after meeting selection changes', (
+      tester,
+    ) async {
+      final f = await ControllerFixture.mount(tester);
+      final original = f.store.meeting('Original source owner');
+      final replacement = f.store.meeting('New selected source owner');
+      f.store.importText(
+        'Original document',
+        'Original evidence',
+        'text/plain',
+        'fixture',
+        id: 'original-document',
+      );
+      f.store.setPreference(
+        'preparationSources.$original',
+        '["original-document"]',
+      );
+      f.shell.update(() {
+        f.shell.meetingFeature.meetingId = original;
+        f.shell.meetingFeature.meetingPanel = kind == 'preparation'
+            ? 'Preparation'
+            : 'Chat';
+      });
+      await tester.pumpAndSettle();
+      if (kind == 'preparation') {
+        await tester.tap(find.byTooltip('Prepare from local documents'));
+      } else {
+        final row = find
+            .ancestor(
+              of: find.text('Answer sources: '),
+              matching: find.byType(Row),
+            )
+            .first;
+        tester
+            .widget<DropdownButton<String>>(
+              find.descendant(
+                of: row,
+                matching: find.byType(DropdownButton<String>),
+              ),
+            )
+            .onChanged!('selected');
+      }
+      // The operation gate stays busy until this dialog completes.
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('Select local documents'), findsOneWidget);
+      if (kind == 'source picker') {
+        await tester.tap(
+          find.widgetWithText(CheckboxListTile, 'Original document'),
+        );
+        await tester.pump(const Duration(milliseconds: 400));
+      }
+      final keys = [
+        'preparationSources.$original',
+        'answerSources.meeting:$original',
+        'answerSourcesSelection.$original',
+        'answerScope.meeting:$original',
+        'preparationSources.$replacement',
+        'answerSources.meeting:$replacement',
+        'answerSourcesSelection.$replacement',
+        'answerScope.meeting:$replacement',
+      ];
+      final before = {for (final key in keys) key: f.store.preference(key)};
+      f.shell.update(() => f.shell.meetingFeature.meetingId = replacement);
+      await tester.pump(const Duration(milliseconds: 400));
+      f.connection.calls.clear();
+      await tester.tap(find.text('Use selected documents'));
+      await pumpUntil(tester, () => !f.shell.busy);
+      expect({for (final key in keys) key: f.store.preference(key)}, before);
+      expect(
+        f.connection.calls.where(
+          (call) =>
+              call.$1 == Operation.preferencesSet ||
+              call.$1 == Operation.meetingsPrepare,
+        ),
+        isEmpty,
       );
       expect(tester.takeException(), isNull);
     });
