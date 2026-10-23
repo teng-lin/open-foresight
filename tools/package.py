@@ -41,6 +41,7 @@ def write_runtime_configuration(bundle, revision, backend, whisper_device, web_k
         "FORESIGHT_SERVICE": "../../bin/foresight-service",
         "FORESIGHT_HELPER": "../../bin/ForesightHelper",
         "FORESIGHT_NATIVE": "../../lib/libforesight_native.so",
+        "FORESIGHT_SQLITE_LIBRARY": "../../lib/libsqlite3.so",
         "FORESIGHT_MODEL_WORKER": "../../bin/foresight-model",
         "FORESIGHT_LITERT_LIBRARY": "../../lib/liblitert-lm.so",
         "FORESIGHT_LITERT_RUNNER": "../../bin/foresight-model",

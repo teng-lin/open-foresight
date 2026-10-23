@@ -228,6 +228,9 @@ void main() {
         'FORESIGHT_RESOURCES': '/untrusted/env/resources',
         'FORESIGHT_RUNTIME_REVISION': 'untrusted-revision',
         'FORESIGHT_DEVELOPMENT_DESKTOP_EXECUTABLES': '["/untrusted/desktop"]',
+        'FORESIGHT_MODEL_MANIFEST': '${scratch.path}/evaluated-models.json',
+        'FORESIGHT_SERVICE': '/untrusted/env/service',
+        'LD_LIBRARY_PATH': '/existing/loader/path',
       };
       for (final role in [
         'bin/foresight-service',
@@ -250,6 +253,15 @@ void main() {
           '${root.path}/share/open-foresight/../../lib/native.so',
         );
         expect(config['FORESIGHT_DEVELOPMENT_DESKTOP_EXECUTABLES'], isNull);
+        expect(
+          config['FORESIGHT_MODEL_MANIFEST'],
+          injected['FORESIGHT_MODEL_MANIFEST'],
+        );
+        expect(config['FORESIGHT_SERVICE'], isNull);
+        expect(
+          config['LD_LIBRARY_PATH'],
+          '${root.path}/lib:${root.path}/app/lib:/existing/loader/path',
+        );
       }
       file.deleteSync();
       expect(
@@ -259,6 +271,15 @@ void main() {
         ),
         throwsStateError,
       );
+      file.parent.deleteSync();
+      expect(
+        () => RuntimeConfiguration.resolve(
+          environment: injected,
+          executable: '${root.path}/bin/foresight-service',
+        ),
+        throwsStateError,
+      );
+      file.parent.createSync();
       file.writeAsStringSync(
         jsonEncode({'FORESIGHT_NATIVE': '../../lib/native.so'}),
       );

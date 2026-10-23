@@ -110,6 +110,7 @@ int fs_set_runtime_environment(const char *key, const char *value) {
         ..addAll({
           'FORESIGHT_NATIVE': path,
           'FORESIGHT_HELPER': '/owned/helper',
+          'LD_LIBRARY_PATH': '/owned/lib',
           'UNRELATED_SECRET': 'do not forward',
         });
       expect(() => configureProfileRuntime(root.path), throwsStateError);
@@ -128,6 +129,7 @@ int fs_set_runtime_environment(const char *key, const char *value) {
           )()
           .toDartString();
       expect(values, contains('FORESIGHT_HELPER=/owned/helper'));
+      expect(values, contains('LD_LIBRARY_PATH=/owned/lib'));
       expect(
         values,
         contains('FORESIGHT_LITERT_CACHE=${root.path}/cache/litert'),

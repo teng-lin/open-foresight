@@ -311,6 +311,10 @@ def test_direct_packaged_entrypoints_enforce_identity_without_launcher(tmp_path,
     for source, name in ((SERVICE, "bin/foresight-service"), (MCP, "bin/foresight-mcp"),
                          (NATIVE, "lib/libforesight_native.so"), (HELPER, "bin/ForesightHelper")):
         shutil.copy2(source, bundle / name)
+    sqlite = Path(subprocess.run(["ldd", str(HELPER)], check=True, capture_output=True,
+                                 text=True, timeout=30).stdout.split("libsqlite3.so.0 => ", 1)[1].split()[0])
+    shutil.copy2(sqlite, bundle / "lib/libsqlite3.so.0")
+    (bundle / "lib/libsqlite3.so").symlink_to("libsqlite3.so.0")
     desktop = bundle / "app/open-foresight"
     subprocess.run([os.environ.get("CXX", "c++"), "-std=c++17",
                     str(ROOT / "packages/foresight_core/test/fixtures/desktop_peer.cpp"),
@@ -320,9 +324,9 @@ def test_direct_packaged_entrypoints_enforce_identity_without_launcher(tmp_path,
     write_runtime_configuration(bundle, "a" * 40, "cpu", 0)
     # No launcher-selected resources, code paths, installation root or revision.
     env = {key: value for key, value in os.environ.items() if not key.startswith("FORESIGHT_")}
+    env.pop("LD_LIBRARY_PATH", None)
     env.update(FORESIGHT_DATA=str(tmp_path / "data"), FORESIGHT_RUNTIME=str(tmp_path / "r"),
-               FORESIGHT_DEVELOPMENT_DESKTOP_EXECUTABLES=json.dumps([str(impostor)]),
-               LD_LIBRARY_PATH=str(bundle / "lib") + os.pathsep + env.get("LD_LIBRARY_PATH", ""))
+               FORESIGHT_DEVELOPMENT_DESKTOP_EXECUTABLES=json.dumps([str(impostor)]))
     log = (tmp_path / "packaged-service.log").open("w+")
     owner = None
     mcp = None
@@ -345,6 +349,8 @@ def test_direct_packaged_entrypoints_enforce_identity_without_launcher(tmp_path,
         status = peer.call("status")
         assert status["installation_root"] == str(bundle.resolve())
         assert status["runtime_revision"] == "a" * 40
+        mapped = Path(f"/proc/{status['pid']}/maps").read_text()
+        assert str((bundle / "lib/libsqlite3.so.0").resolve()) in mapped
         thief = DesktopPeer(impostor, socket_path)
         peers.append(thief)
         token = tmp_path / "data/.desktop-capability"
@@ -382,6 +388,11 @@ def test_direct_packaged_entrypoints_enforce_identity_without_launcher(tmp_path,
                                  env=env, capture_output=True, text=True, timeout=30)
         assert missing.returncode != 0
         assert "runtime configuration is missing" in missing.stderr
+        (bundle / "share/open-foresight").rmdir()
+        no_directory = subprocess.run([str(bundle / "bin/foresight-service"), "--status"],
+                                      env=env, capture_output=True, text=True, timeout=30)
+        assert no_directory.returncode != 0
+        assert "runtime configuration is missing" in no_directory.stderr
 
 
 @pytest.fixture

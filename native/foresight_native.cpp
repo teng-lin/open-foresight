@@ -1935,7 +1935,7 @@ extern "C" int fs_set_runtime_environment(const char *key, const char *value) {
         "FORESIGHT_WHISPER_BACKEND", "FORESIGHT_WHISPER_DEVICE",
         "FORESIGHT_HELPER",          "FORESIGHT_LITERT_CACHE",
         "FORESIGHT_WHISPER_RUNTIME", "FORESIGHT_WHISPER_WORKER",
-        "PYTHONPYCACHEPREFIX"};
+        "PYTHONPYCACHEPREFIX",       "LD_LIBRARY_PATH"};
     if (!allowed.count(key))
       return -1;
     std::lock_guard lock(foresight::launch_mutex);

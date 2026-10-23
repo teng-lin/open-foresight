@@ -53,8 +53,7 @@ String? _linuxBundleRoot(String executable) {
   }
   final root = entry.parent.parent;
   if (!Directory('${root.path}/app').existsSync() ||
-      !Directory('${root.path}/lib').existsSync() ||
-      !Directory('${root.path}/share/open-foresight').existsSync()) {
+      !Directory('${root.path}/lib').existsSync()) {
     return null;
   }
   return root.resolveSymbolicLinksSync();
@@ -62,7 +61,8 @@ String? _linuxBundleRoot(String executable) {
 
 class RuntimeConfiguration {
   final Map<String, String> environment;
-  RuntimeConfiguration(this.environment);
+  final String? linuxBundleRoot;
+  RuntimeConfiguration(this.environment, {this.linuxBundleRoot});
   factory RuntimeConfiguration.resolve({
     Map<String, String>? environment,
     String? executable,
@@ -98,6 +98,7 @@ class RuntimeConfiguration {
               'FORESIGHT_SERVICE_TRACE',
               // The service checks that it names a file in its runtime.
               'FORESIGHT_STARTUP_STATUS',
+              if (linuxRoot != null) 'FORESIGHT_MODEL_MANIFEST',
             }.contains(key),
       );
     }
@@ -148,6 +149,13 @@ class RuntimeConfiguration {
       }
       if (linuxRoot != null) {
         values['FORESIGHT_INSTALL_ROOT'] = linuxRoot;
+        final libraries = ['$linuxRoot/lib', '$linuxRoot/app/lib'];
+        values['LD_LIBRARY_PATH'] = [
+          ...libraries,
+          ...?values['LD_LIBRARY_PATH']
+              ?.split(':')
+              .where((path) => path.isNotEmpty && !libraries.contains(path)),
+        ].join(':');
         if ((values['FORESIGHT_RUNTIME_REVISION'] ?? '').isEmpty) {
           throw StateError(
             'The application runtime revision is missing. Reinstall Open Foresight.',
@@ -165,7 +173,7 @@ class RuntimeConfiguration {
         values.remove(key);
       }
     }
-    return RuntimeConfiguration(values);
+    return RuntimeConfiguration(values, linuxBundleRoot: linuxRoot);
   }
   String? operator [](String key) => environment[key];
   String get nativeLibrary =>
@@ -184,6 +192,7 @@ RuntimeConfiguration get runtimeConfiguration =>
 void installServiceWorkerEnvironment(Map<String, String> environment) {
   _runtimeConfiguration = RuntimeConfiguration(
     Map<String, String>.from(environment),
+    linuxBundleRoot: _linuxBundleRoot(Platform.resolvedExecutable),
   );
 }
 
@@ -486,6 +495,7 @@ const _nativeEnvironmentKeys = {
   'FORESIGHT_WHISPER_RUNTIME',
   'FORESIGHT_WHISPER_WORKER',
   'PYTHONPYCACHEPREFIX',
+  'LD_LIBRARY_PATH',
 };
 bool _nativeEnvironmentConfigured = false;
 
