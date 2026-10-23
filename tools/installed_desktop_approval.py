@@ -176,25 +176,37 @@ class InstalledDesktop:
         # pending wrapper may only be observed/cleaned up, never approve a call.
         if sys.platform != "linux" or self.process is None:
             return False
-        image = process_path(self.process.pid)
+        interpreters = {Path("/usr/bin/env").resolve(), Path("/usr/bin/bash").resolve()}
         try:
-            arguments = (
-                Path(f"/proc/{self.process.pid}/cmdline").read_bytes().split(b"\0")
-            )
-            if Path(f"/proc/{self.process.pid}").stat().st_uid != os.geteuid():
-                return False
-            if arguments[-1] != b"":
-                return False
-            arguments.pop()
-            if image == Path("/usr/bin/env").resolve():
-                if len(arguments) != 3 or arguments[1] != b"bash":
+            for _ in range(3):
+                image = process_path(self.process.pid)
+                if image not in interpreters:
                     return False
-            elif image == Path("/usr/bin/bash").resolve():
-                if len(arguments) != 2:
+                arguments = (
+                    Path(f"/proc/{self.process.pid}/cmdline").read_bytes().split(b"\0")
+                )
+                uid = Path(f"/proc/{self.process.pid}").stat().st_uid
+                current_image = process_path(self.process.pid)
+                self.evidence["launcher_observation"] = {
+                    "image": str(image),
+                    "current_image": str(current_image),
+                    "uid": uid,
+                    "argv": [os.fsdecode(arg) for arg in arguments[:4]],
+                }
+                # /proc image and argv are separate reads. Retry a real exec
+                # transition instead of combining observations from two images.
+                if current_image != image:
+                    continue
+                if uid != os.geteuid() or arguments[-1] != b"":
                     return False
-            else:
-                return False
-            return Path(os.fsdecode(arguments[-1])).resolve() == self.launcher
+                arguments.pop()
+                if image == Path("/usr/bin/env").resolve():
+                    if len(arguments) != 3 or arguments[1] != b"bash":
+                        return False
+                elif len(arguments) != 2:
+                    return False
+                return Path(os.fsdecode(arguments[-1])).resolve() == self.launcher
+            return False
         except OSError:
             return False
 

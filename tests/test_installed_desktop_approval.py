@@ -757,3 +757,29 @@ def test_stuck_clicked_dialog_fails_and_preserves_original_rpc_error(
     if operation_fails:
         assert str(failure.value) == "Original RPC failure"
         assert "Approval dialog settlement" in failure.value.__notes__[0]
+
+
+def test_owned_launcher_samples_coherent_image_and_argv_across_exec(
+    linux_owned, monkeypatch
+):
+    host, _, process = linux_owned
+    host.process = process
+    env, bash = Path("/usr/bin/env").resolve(), Path("/usr/bin/bash").resolve()
+    monkeypatch.setattr(gui, "process_path", Mock(side_effect=[env, bash, bash, bash]))
+    monkeypatch.setattr(
+        Path,
+        "read_bytes",
+        Mock(return_value=b"bash\0" + os.fsencode(host.launcher) + b"\0"),
+    )
+    original_stat = Path.stat
+    monkeypatch.setattr(
+        Path,
+        "stat",
+        lambda path, *args, **kwargs: (
+            SimpleNamespace(st_uid=os.geteuid())
+            if str(path) == "/proc/123"
+            else original_stat(path, *args, **kwargs)
+        ),
+    )
+    assert host._owned_launcher()
+    host.process = None
