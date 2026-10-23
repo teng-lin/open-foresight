@@ -5,6 +5,7 @@ import 'package:foresight_core/src/web_content.dart';
 import 'package:foresight_core/src/web_search.dart';
 import 'package:grpc/grpc.dart';
 import 'package:test/test.dart';
+import 'package:foresight_test_support/poll.dart';
 
 List<int> hex(String text) => [
   for (var i = 0; i < text.length; i += 2)
@@ -20,6 +21,7 @@ class Fixture extends ForesightServiceBase {
 
   final requests = <FetchExternalWebsiteRequest>[];
   final credentials = <String?>[];
+  final calls = <ServiceCall>[];
   late Future<FetchExternalWebsiteResponse> Function(
     FetchExternalWebsiteRequest,
   )
@@ -30,6 +32,7 @@ class Fixture extends ForesightServiceBase {
     FetchExternalWebsiteRequest request,
   ) {
     requests.add(request);
+    calls.add(call);
     credentials.add(call.clientMetadata?['x-goog-api-key']);
     return respond(request);
   }
@@ -116,6 +119,7 @@ void main() {
         expect(request.summaryTimeoutMillis, -1);
         expect(request.maxInputTokens, 131072);
         expect(fixture.credentials, ['release-fixture']);
+        expect(fixture.calls.single.deadline, isNotNull);
         expect(result.title, 'Title');
         expect(result.summary, '摘要 café');
         expect(result.content, 'raw caf');
@@ -152,6 +156,73 @@ void main() {
       expect(result.title, '');
       expect(result.content, '');
       expect(fixture.requests, isEmpty);
+    });
+
+    test('stalled RPCs expire and the server observes cancellation', () async {
+      final replies = <Completer<FetchExternalWebsiteResponse>>[];
+      fixture.respond = (_) {
+        final reply = Completer<FetchExternalWebsiteResponse>();
+        replies.add(reply);
+        return reply.future;
+      };
+      try {
+        for (var i = 0; i < 3; i++) {
+          await expectLater(
+            service.fetchWebContent(
+              'stalled-$i',
+              timeout: const Duration(milliseconds: 150),
+            ),
+            throwsA(
+              isA<GrpcError>().having(
+                (error) => error.code,
+                'code',
+                StatusCode.deadlineExceeded,
+              ),
+            ),
+          );
+        }
+        expect(fixture.calls, hasLength(3));
+        await eventually(() => fixture.calls.every((call) => call.isCanceled));
+        expect(fixture.calls.every((call) => call.deadline != null), isTrue);
+        fixture.respond = (_) async =>
+            FetchExternalWebsiteResponse(summary: 'recovered');
+        expect(
+          (await service.fetchWebContent('healthy'))?.summary,
+          'recovered',
+        );
+      } finally {
+        for (final reply in replies) {
+          reply.complete(FetchExternalWebsiteResponse());
+        }
+      }
+    });
+
+    test('callback budget reaches and cancels its underlying RPC', () async {
+      final reply = Completer<FetchExternalWebsiteResponse>();
+      fixture.respond = (_) => reply.future;
+      final callbacks = SearchCallbacks(
+        search: (_) async => [const WebSearchItem(link: 'stalled')],
+        summarize: service.summarizeSearchPage,
+        timeout: const Duration(milliseconds: 150),
+      );
+      try {
+        // A raced deadline may yield the existing empty-summary fallback or
+        // the callback's timeout. In either case the transport must be gone.
+        await callbacks.handleGoogleSearch({'query': 'q'}).catchError((
+          Object error,
+        ) {
+          expect(error, isA<TimeoutException>());
+          return (
+            results: <String>[],
+            sources: <(String, String)>[],
+            error: 'timeout',
+          );
+        });
+        expect(fixture.calls, hasLength(1));
+        await eventually(() => fixture.calls.single.isCanceled);
+      } finally {
+        reply.complete(FetchExternalWebsiteResponse());
+      }
     });
 
     test(

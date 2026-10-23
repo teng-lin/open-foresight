@@ -246,7 +246,9 @@ void main() {
 
   Future<void> backgroundRefusal() async {
     await expectLater(
-      agent.call('service.stop_if_idle'),
+      agent.call('service.stop_if_idle', {
+        'token': File('${profile.data}/.desktop-capability').readAsStringSync(),
+      }),
       throwsA(
         isA<RpcError>()
             .having((e) => e.code, 'code', RpcErrorCode.busy)
@@ -331,7 +333,11 @@ void main() {
       expect((await lifetime())['busy'], true);
       expect((await lifetime())['exit_after'], null);
       await expectLater(
-        agent.call('service.stop_if_idle'),
+        agent.call('service.stop_if_idle', {
+          'token': File(
+            '${profile.data}/.desktop-capability',
+          ).readAsStringSync(),
+        }),
         throwsA(
           isA<RpcError>().having(
             (e) => e.message,
@@ -1354,7 +1360,11 @@ void main() {
         expect(service.dispatchedCount, 1);
         expect((await lifetime())['exit_after'], null);
         await expectLater(
-          agent.call('service.stop_if_idle'),
+          agent.call('service.stop_if_idle', {
+            'token': File(
+              '${profile.data}/.desktop-capability',
+            ).readAsStringSync(),
+          }),
           throwsA(
             isA<RpcError>().having(
               (e) => e.message,

@@ -240,8 +240,11 @@ int run(Worker &w, std::vector<std::string> args,
       close_fd(pipes[1]);
       return -1;
     }
-    // Keep descriptors away from stdio, including a host with closed stdin.
-    for (auto slot : {&pipes[0], &pipes[1], &input[0], &input[1]}) {
+  }
+  // Every launch mode must keep owned descriptors away from spawn's stdio
+  // actions, including hosts with any standard descriptor closed.
+  for (auto slot : {&pipes[0], &pipes[1], &input[0], &input[1]}) {
+    if (*slot >= 0) {
       int moved = fcntl(*slot, F_DUPFD_CLOEXEC, 10);
       if (moved < 0) {
         int error = errno;
@@ -254,6 +257,8 @@ int run(Worker &w, std::vector<std::string> args,
       close(*slot);
       *slot = moved;
     }
+  }
+  if (duplex) {
 #ifdef __APPLE__
     int enabled = 1;
     if (setsockopt(input[1], SOL_SOCKET, SO_NOSIGPIPE, &enabled,

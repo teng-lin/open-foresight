@@ -148,7 +148,7 @@ const notesListDescriptor = OperationDescriptor(
 const notesSaveDescriptor = OperationDescriptor(
   scope: OperationScope.application,
   readOnly: false,
-  approval: ApprovalPolicy.never,
+  approval: ApprovalPolicy.overwrite,
   capability: CapabilityPolicy.ordinary,
   requiresHelper: false,
   modelGate: ModelGatePolicy.none,
@@ -206,7 +206,7 @@ const workspaceClearDescriptor = OperationDescriptor(
 const artifactsEditDescriptor = OperationDescriptor(
   scope: OperationScope.application,
   readOnly: false,
-  approval: ApprovalPolicy.never,
+  approval: ApprovalPolicy.overwrite,
   capability: CapabilityPolicy.ordinary,
   requiresHelper: false,
   modelGate: ModelGatePolicy.none,
@@ -280,5 +280,6 @@ const serviceStopIfIdleDescriptor = OperationDescriptor(
     ArgumentField("expected_pid", ArgumentKind.integer, nullable: true),
     ArgumentField("installation_root", ArgumentKind.string, nullable: true),
     ArgumentField("runtime_revision", ArgumentKind.string, nullable: true),
+    ArgumentField('token', ArgumentKind.string, nullable: true),
   ]),
 );

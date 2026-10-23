@@ -42,7 +42,7 @@ void main() {
               ),
             ];
           },
-          summarize: (_, _) async => '',
+          summarize: (_, _, {Duration? timeout}) async => '',
         ),
       )..generator = runtime;
       final app = Application(domain);

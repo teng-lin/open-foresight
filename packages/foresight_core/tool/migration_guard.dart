@@ -57,6 +57,7 @@ const migrationClosures = <int, List<String>>{
   14: ['rows'],
   15: [],
   16: ['_restoreGoogleModificationTimes', 'rows'],
+  18: ['_createContentHistory'],
   17: [
     '_canonicalizeLabels',
     'rows',

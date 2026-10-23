@@ -129,7 +129,7 @@ SearchCallbacks fixtureSearch({
             const WebSearchItem(title: 'C', link: 'https://c', snippet: 'c'),
           ];
   },
-  summarize: (_, _) async => '',
+  summarize: (_, _, {Duration? timeout}) async => '',
 );
 
 Map<String, dynamic> canonicalAssistant(String text) => referenceTextMessage(
@@ -460,7 +460,7 @@ void main() {
             ),
           ];
         },
-        summarize: (_, _) async => '',
+        summarize: (_, _, {Duration? timeout}) async => '',
       ),
     )..generator = runtime;
     app = Application(domain);
@@ -663,7 +663,7 @@ void main() {
               ),
             ];
           },
-          summarize: (_, _) async => '',
+          summarize: (_, _, {Duration? timeout}) async => '',
         ),
       )..generator = runtime;
       app = Application(domain);

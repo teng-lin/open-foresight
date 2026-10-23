@@ -10,6 +10,8 @@ import 'package:test/test.dart';
 
 class MemoryProfileSecrets implements SecretStore {
   final values = <String, String>{};
+  final failedDeletes = <String>{};
+  final deleted = <String>[];
   @override
   Future<bool> write(String key, String value) async {
     values[key] = value;
@@ -20,6 +22,8 @@ class MemoryProfileSecrets implements SecretStore {
   Future<String?> read(String key) async => values[key];
   @override
   Future<void> delete(String key) async {
+    deleted.add(key);
+    if (failedDeletes.contains(key)) throw StateError('fixture keyring locked');
     values.remove(key);
   }
 }
@@ -359,6 +363,39 @@ void main() {
       await auth.addAccount(fixture.consent);
       expect(auth.accounts, hasLength(1));
       expect(auth.displayName, 'Updated Person');
+    },
+  );
+
+  test(
+    'failed key deletion does not orphan other accounts and retries after restart',
+    () async {
+      await auth.close();
+      final vault = MemoryProfileSecrets();
+      secrets = vault;
+      auth = createAuth();
+      await auth.signIn(fixture.consent);
+      identity['sub'] = 'second-account';
+      await auth.addAccount(fixture.consent);
+      final failed = vault.values.keys.last;
+      vault.failedDeletes.add(failed);
+      final forgetting = auth.forget();
+      expect(auth.accounts, isEmpty);
+      expect(File('${root.path}/tokens.json').existsSync(), isFalse);
+      await expectLater(forgetting, throwsStateError);
+      expect(vault.values.keys, [failed]);
+      expect(vault.deleted, containsAll(vault.values.keys));
+      final journal = File('${root.path}/credential-cleanup.json');
+      expect(jsonDecode(journal.readAsStringSync())['keys'], {failed: true});
+      expect(journal.readAsStringSync(), isNot(contains('fixture-refresh')));
+      expect(journal.statSync().mode & 0x3f, 0);
+      await auth.close();
+      vault.failedDeletes.clear();
+      auth = createAuth();
+      expect(auth.accounts, isEmpty);
+      await auth.disconnect();
+      expect(vault.values, isEmpty);
+      expect(journal.existsSync(), isFalse);
+      await auth.disconnect();
     },
   );
 

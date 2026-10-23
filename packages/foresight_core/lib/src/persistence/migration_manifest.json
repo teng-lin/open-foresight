@@ -113,6 +113,12 @@
         "graphLabelPalette",
         "rows"
       ]
+    },
+    "18": {
+      "sha256": "a238d4818b952c6c7e508d7e12bf11c2f17d801996d4b42fc6fe76ad761d145a",
+      "symbols": [
+        "_createContentHistory"
+      ]
     }
   },
   "fixtures": {

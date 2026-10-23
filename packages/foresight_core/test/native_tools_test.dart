@@ -358,7 +358,7 @@ print(json.dumps({'native_stop_token_sequences':True}))
                 ),
               ];
             },
-            summarize: (_, _) async => '',
+            summarize: (_, _, {Duration? timeout}) async => '',
           );
           String? delivered;
           final dispatcher = ReferenceToolDispatcher({

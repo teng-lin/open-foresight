@@ -58,7 +58,9 @@ void main() {
   test(
     'idle shutdown acknowledges only after cleanup and rejects a following mutation',
     () async {
-      final stopped = client.call('service.stop_if_idle');
+      final stopped = client.call('service.stop_if_idle', {
+        'token': File('${profile.data}/.desktop-capability').readAsStringSync(),
+      });
       final rejected = expectLater(
         client.call('meetings.create', {'title': 'must not commit'}),
         throwsA(
@@ -94,7 +96,11 @@ void main() {
         for (final finishing in [false, true]) {
           recording.finishing = finishing;
           await expectLater(
-            client.call('service.stop_if_idle'),
+            client.call('service.stop_if_idle', {
+              'token': File(
+                '${profile.data}/.desktop-capability',
+              ).readAsStringSync(),
+            }),
             throwsA(
               isA<RpcError>()
                   .having((error) => error.code, 'code', RpcErrorCode.busy)
@@ -115,7 +121,12 @@ void main() {
         service.application.recording = null;
       }
       expect(
-        (await client.call('service.stop_if_idle') as Map)['stopped'],
+        (await client.call('service.stop_if_idle', {
+              'token': File(
+                '${profile.data}/.desktop-capability',
+              ).readAsStringSync(),
+            })
+            as Map)['stopped'],
         true,
       );
     },
@@ -134,14 +145,18 @@ void main() {
           .listen((_) {}, onError: (Object _) {});
       try {
         await expectLater(
-          client.call('service.stop_if_idle'),
+          client.call('service.stop_if_idle', {
+            'token': File(
+              '${profile.data}/.desktop-capability',
+            ).readAsStringSync(),
+          }),
           throwsA(
             isA<RpcError>()
                 .having((error) => error.code, 'code', RpcErrorCode.busy)
                 .having(
                   (error) => error.message,
                   'message',
-                  contains('operations are in progress'),
+                  contains('Close the desktop'),
                 ),
           ),
         );
@@ -169,7 +184,11 @@ void main() {
         () => Process.runSync('/bin/chmod', ['700', profile.runtime]),
       );
       await expectLater(
-        client.call('service.stop_if_idle'),
+        client.call('service.stop_if_idle', {
+          'token': File(
+            '${profile.data}/.desktop-capability',
+          ).readAsStringSync(),
+        }),
         throwsA(
           isA<RpcError>()
               .having((error) => error.code, 'code', RpcErrorCode.internal)
@@ -188,7 +207,12 @@ void main() {
     'idle shutdown pins authenticated service ownership without closing a replacement',
     () async {
       await expectLater(
-        client.call('service.stop_if_idle', {'expected_pid': pid + 1}),
+        client.call('service.stop_if_idle', {
+          'expected_pid': pid + 1,
+          'token': File(
+            '${profile.data}/.desktop-capability',
+          ).readAsStringSync(),
+        }),
         throwsA(
           isA<RpcError>()
               .having((error) => error.code, 'code', RpcErrorCode.cancelled)
@@ -243,7 +267,11 @@ void main() {
       await rag.entered.future;
       expect(service.domain.helper.starting, true);
       await expectLater(
-        client.call('service.stop_if_idle'),
+        client.call('service.stop_if_idle', {
+          'token': File(
+            '${profile.data}/.desktop-capability',
+          ).readAsStringSync(),
+        }),
         throwsA(
           isA<RpcError>()
               .having((e) => e.code, 'code', RpcErrorCode.busy)
@@ -270,7 +298,11 @@ void main() {
         if (!initialized.isCompleted) initialized.complete();
       });
       await expectLater(
-        client.call('service.stop_if_idle'),
+        client.call('service.stop_if_idle', {
+          'token': File(
+            '${profile.data}/.desktop-capability',
+          ).readAsStringSync(),
+        }),
         throwsA(
           isA<RpcError>()
               .having((e) => e.code, 'code', RpcErrorCode.busy)
@@ -284,10 +316,14 @@ void main() {
       expect((await client.call('status') as Map)['pid'], pid);
       initialized.complete();
       await eventually(() => !service.domain.initializationPending);
-      expect(await client.call('service.stop_if_idle'), {
-        'stopped': true,
-        'shutdown_verified': true,
-      });
+      expect(
+        await client.call('service.stop_if_idle', {
+          'token': File(
+            '${profile.data}/.desktop-capability',
+          ).readAsStringSync(),
+        }),
+        {'stopped': true, 'shutdown_verified': true},
+      );
     },
   );
 
@@ -296,7 +332,11 @@ void main() {
     () async {
       service.domain.helper.snapshot = control.State(instanceId: '0-1');
       await expectLater(
-        client.call('service.stop_if_idle'),
+        client.call('service.stop_if_idle', {
+          'token': File(
+            '${profile.data}/.desktop-capability',
+          ).readAsStringSync(),
+        }),
         throwsA(
           isA<RpcError>()
               .having((error) => error.code, 'code', RpcErrorCode.busy)

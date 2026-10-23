@@ -32,6 +32,23 @@ void main() {
       // The decoder already enforces these limits. Publish them to MCP clients
       // while retaining every frozen approval, exposure and ownership assertion.
       sourceIds.addAll({'minItems': 1, 'maxItems': 100, 'uniqueItems': true});
+      // Audit P0.3 deliberately requires approval for replacements and labels
+      // those MCP writers destructive. Preserve the historical fixture itself.
+      for (final method in [
+        'notes.save',
+        'artifacts.edit',
+        'meetings.notes',
+        'meetings.edit_task',
+        'meetings.prepare',
+        'meetings.enhance',
+        'meetings.generate',
+      ]) {
+        expected[method]['approval'] = true;
+        expected[method]['approval_web_search'] = true;
+        for (final tool in expected[method]['tools'] as List) {
+          tool['destructive'] = true;
+        }
+      }
       final actual = <String, Object?>{};
       for (final operation in Operation.values) {
         actual[operation.wire] = {

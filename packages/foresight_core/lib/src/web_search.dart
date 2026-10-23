@@ -23,7 +23,8 @@ class WebSearchItem {
 typedef SearchItems = Future<List<WebSearchItem>?> Function(String query);
 
 /// The reference requests a summary of at most 100 words from its page service.
-typedef SummarizeSearchPage = Future<String> Function(String url, int maxWords);
+typedef SummarizeSearchPage =
+    Future<String> Function(String url, int maxWords, {Duration? timeout});
 
 typedef WebSearchResult = ({
   List<String> results,
@@ -100,7 +101,11 @@ class SearchCallbacks {
     Map<String, String> summaries,
   ) async {
     if (link.isEmpty) return;
-    final summary = await _summarize(link, 100).timeout(timeout);
+    final summary = await _summarize(
+      link,
+      100,
+      timeout: timeout,
+    ).timeout(timeout);
     if (summary.isNotEmpty) summaries[link] = summary;
   }
 }

@@ -58,6 +58,149 @@ void main() {
   );
 
   test(
+    'idle shutdown requires a current owner token and refuses a pinned desktop',
+    () async {
+      for (final args in [
+        <String, dynamic>{},
+        {'token': 'wrong'},
+      ]) {
+        await expectLater(
+          agent.call('service.stop_if_idle', args),
+          throwsA(code(RpcErrorCode.denied)),
+        );
+        expect((await agent.call('status') as Map)['pid'], pid);
+      }
+      await attach();
+      await expectLater(
+        agent.call('service.stop_if_idle', {'token': token()}),
+        throwsA(code(RpcErrorCode.busy)),
+      );
+      expect((await agent.call('status') as Map)['pid'], pid);
+      expect(approvals, isEmpty);
+      await host.close();
+      await eventually(() => !service.access.hasHost);
+      expect(await agent.call('service.stop_if_idle', {'token': token()}), {
+        'stopped': true,
+        'shutdown_verified': true,
+      });
+    },
+  );
+
+  test(
+    'agent note creation needs no replacement consent; overwrites do',
+    () async {
+      final created =
+          await agent.call('notes.save', {
+                'title': 'original',
+                'body': 'trusted',
+              })
+              as Map;
+      final id = created['id'];
+      await attach();
+      final work = agent.call('notes.save', {
+        'id': id,
+        'title': 'agent',
+        'body': 'replacement',
+      });
+      await eventually(() => approvals.isNotEmpty);
+      expect(service.domain.store.notes().single['body'], 'trusted');
+      await host.call('security.decide', {
+        'approval_id': approvals.single['approval_id'],
+        'allow': true,
+      });
+      await work;
+      expect(service.domain.store.notes().single['body'], 'replacement');
+      expect(
+        service.domain.store.contentHistory
+            .revisions('notes', id as int)
+            .single['snapshot'],
+        containsPair('body', 'trusted'),
+      );
+    },
+  );
+
+  test(
+    'a replacement approval cannot authorize bytes changed by the desktop',
+    () async {
+      final id = service.domain.store.saveNote(null, 'original', 'trusted');
+      await attach();
+      final work = agent.call('notes.save', {
+        'id': id,
+        'title': 'agent',
+        'body': 'replacement',
+      });
+      final refused = expectLater(work, throwsA(code(RpcErrorCode.cancelled)));
+      await eventually(() => approvals.isNotEmpty);
+      await host.call('notes.save', {
+        'id': id,
+        'title': 'desktop',
+        'body': 'new trusted',
+      });
+      await host.call('security.decide', {
+        'approval_id': approvals.single['approval_id'],
+        'allow': true,
+      });
+      await refused;
+      expect(service.domain.store.notes().single['body'], 'new trusted');
+    },
+  );
+
+  for (final method in [
+    'meetings.notes',
+    'artifacts.edit',
+    'meetings.edit_task',
+    'meetings.prepare',
+    'meetings.enhance',
+    'meetings.generate',
+  ]) {
+    test('$method cannot replace trusted content without approval', () async {
+      final store = service.domain.store;
+      final meeting = store.meeting('protected');
+      store.saveMeetingNotes(meeting, 'trusted raw notes');
+      store.saveMeetingEnhancedDraft(meeting, 'trusted enhanced notes');
+      for (final kind in [
+        'summary',
+        'actions',
+        'preparation',
+        'enhanced_notes',
+      ]) {
+        store.artifact(meeting, kind, 'trusted $kind', 'fixture');
+      }
+      final artifact = store
+          .rows("SELECT id FROM artifacts WHERE kind='summary'")
+          .single['id'];
+      store.db.execute(
+        "INSERT INTO meeting_tasks(meeting_id,task_key,task,status,evidence,input_revision) VALUES(?,'task','trusted task','open','[]',0)",
+        [meeting],
+      );
+      final task = store.db.lastInsertRowId;
+      final args = switch (method) {
+        'artifacts.edit' => {'id': artifact, 'text': 'replacement'},
+        'meetings.edit_task' => {'id': task, 'task': 'replacement'},
+        'meetings.notes' => {'id': meeting, 'body': 'replacement'},
+        'meetings.prepare' => {
+          'id': meeting,
+          'source_ids': ['source'],
+        },
+        'meetings.generate' => {'id': meeting, 'kind': 'summary'},
+        _ => {'id': meeting},
+      };
+      final before = store.rows('SELECT * FROM content_revisions');
+      await attach();
+      final work = agent.call(method, args);
+      final refused = expectLater(work, throwsA(code(RpcErrorCode.denied)));
+      await eventually(() => approvals.isNotEmpty);
+      await host.call('security.decide', {
+        'approval_id': approvals.single['approval_id'],
+        'allow': false,
+      });
+      await refused;
+      expect(store.rows('SELECT * FROM content_revisions'), before);
+      expect(service.dispatchedCount, 0);
+    });
+  }
+
+  test(
     'malformed approval-requiring request sends correlated invalidArgument without approval',
     () async {
       await attach();
@@ -175,7 +318,7 @@ void main() {
           'expected_pid': pid + 1,
           'workspace_epoch': 'historically-ignored',
         }),
-        throwsA(code(RpcErrorCode.cancelled)),
+        throwsA(code(RpcErrorCode.denied)),
       );
       expect(service.lastAgentActivity, isNull);
       expect(service.dispatchedCount, 0);

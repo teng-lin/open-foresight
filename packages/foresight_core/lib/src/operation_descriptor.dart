@@ -2,7 +2,7 @@ import 'operation_argument_schema.dart';
 
 enum OperationScope { application, service }
 
-enum ApprovalPolicy { never, desktop, webSearch }
+enum ApprovalPolicy { never, desktop, webSearch, overwrite }
 
 enum CapabilityPolicy {
   ordinary,
@@ -47,9 +47,13 @@ class OperationDescriptor {
   final bool stampsAgentActivity, leaseBusy, createsLease;
   final OperationArgumentSchema arguments;
 
-  bool requiresApproval({required bool webSearch}) => switch (approval) {
+  bool requiresApproval({
+    required bool webSearch,
+    bool existingContent = true,
+  }) => switch (approval) {
     ApprovalPolicy.never => false,
     ApprovalPolicy.desktop => true,
     ApprovalPolicy.webSearch => webSearch,
+    ApprovalPolicy.overwrite => existingContent,
   };
 }

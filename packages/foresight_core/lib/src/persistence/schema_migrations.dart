@@ -85,9 +85,105 @@ class ApplicationMigrations {
         _restoreGoogleModificationTimes();
       case 17:
         _canonicalizeLabels();
+      case 18:
+        _createContentHistory();
       default:
         throw StateError('Missing application database migration $version');
     }
+  }
+
+  void _createContentHistory() {
+    db.execute(
+      'CREATE TABLE content_revisions(id INTEGER PRIMARY KEY,entity TEXT NOT NULL,entity_id TEXT NOT NULL,snapshot TEXT NOT NULL,created INTEGER NOT NULL)',
+    );
+    db.execute(
+      'CREATE INDEX content_revisions_entity ON content_revisions(entity,entity_id,id)',
+    );
+    const entities = {
+      'notes': ['id', 'title', 'body', 'revision', 'timestamp'],
+      'meeting_notes': [
+        'meeting_id',
+        'body',
+        'revision',
+        'enhanced_body',
+        'timestamp',
+        'last_enhanced',
+        'last_manual_edit',
+      ],
+      'artifacts': [
+        'id',
+        'meeting_id',
+        'kind',
+        'generated',
+        'edited',
+        'input_revision',
+        'model',
+        'prompt_version',
+        'created',
+        'manifest',
+      ],
+      'meeting_tasks': [
+        'id',
+        'meeting_id',
+        'task_key',
+        'task',
+        'owner',
+        'due',
+        'status',
+        'evidence',
+        'input_revision',
+        'stale',
+        'manual',
+      ],
+      'sources': [
+        'id',
+        'title',
+        'content',
+        'mime',
+        'revision',
+        'state',
+        'error',
+        'deleted',
+        'provenance',
+        'locally_edited',
+      ],
+    };
+    for (final entity in entities.entries) {
+      final table = entity.key;
+      final id = entity.value.first;
+      final snapshot = entity.value
+          .map((column) => "'$column',OLD.$column")
+          .join(',');
+      const content = {
+        'notes': ['title', 'body'],
+        'meeting_notes': ['body', 'enhanced_body'],
+        'artifacts': ['generated', 'edited'],
+        'meeting_tasks': [
+          'task',
+          'owner',
+          'due',
+          'status',
+          'evidence',
+          'manual',
+        ],
+        'sources': ['title', 'content', 'mime', 'provenance'],
+      };
+      final changed = content[table]!
+          .map((column) => 'OLD.$column IS NOT NEW.$column')
+          .join(' OR ');
+      db.execute(
+        'CREATE TRIGGER ${table}_retain_revision BEFORE UPDATE ON $table WHEN $changed BEGIN '
+        "INSERT INTO content_revisions(entity,entity_id,snapshot,created) VALUES('$table',CAST(OLD.$id AS TEXT),json_object($snapshot),CAST(strftime('%s','now') AS INTEGER)*1000); END",
+      );
+      db.execute(
+        'CREATE TRIGGER ${table}_erase_revisions AFTER DELETE ON $table BEGIN '
+        "DELETE FROM content_revisions WHERE entity='$table' AND entity_id=CAST(OLD.$id AS TEXT); END",
+      );
+    }
+    // Source deletion is soft; history must obey the same erasure boundary.
+    db.execute(
+      "CREATE TRIGGER sources_erase_deleted_revisions AFTER UPDATE OF deleted ON sources WHEN NEW.deleted=1 BEGIN DELETE FROM content_revisions WHERE entity='sources' AND entity_id=NEW.id; END",
+    );
   }
 
   void _canonicalizeLabels() {

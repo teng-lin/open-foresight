@@ -1,3 +1,4 @@
+import '../operation_descriptor.dart';
 import 'package:mcp_dart/mcp_dart.dart';
 import '../operations.dart';
 import 'operation_tool_projection.dart';
@@ -44,7 +45,9 @@ RpcTool _projectedTool(
     projection.properties,
     projection.required,
     readOnly: operation.descriptor.readOnly,
-    destructive: destructive,
+    destructive:
+        destructive ||
+        operation.descriptor.approval == ApprovalPolicy.overwrite,
     openWorld: openWorld,
   );
 }

@@ -1,5 +1,6 @@
 import 'rpc_error.dart';
 import 'operations.dart';
+import 'operation_descriptor.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -189,10 +190,15 @@ class AgentAccessGate {
     if (!pending.done.isCompleted) pending.done.complete(allow);
   }
 
-  static bool needsApproval(String method, Map<String, dynamic> args) {
-    return Operation.parse(
-      method,
-    ).requiresApproval(webSearch: args['web_search'] == true);
+  static bool needsApproval(
+    String method,
+    Map<String, dynamic> args, {
+    bool existingContent = true,
+  }) {
+    return Operation.parse(method).requiresApproval(
+      webSearch: args['web_search'] == true,
+      existingContent: existingContent,
+    );
   }
 
   Future<void> authorize(
@@ -200,8 +206,9 @@ class AgentAccessGate {
     String method,
     Map<String, dynamic> args, {
     required bool Function() current,
+    bool existingContent = true,
   }) async {
-    if (!needsApproval(method, args)) return;
+    if (!needsApproval(method, args, existingContent: existingContent)) return;
     // The authenticated desktop's Start/Resume controls are direct user
     // consent. External clients still require a per-operation desktop decision.
     // Embedding's runtime field is tokenizer data, not executable code.
@@ -266,6 +273,10 @@ class AgentAccessGate {
           ? 'Desktop connection (identity unverified)'
           : 'External client (identity unverified)',
       'risk_flags': [
+        if (Operation.parse(method).descriptor.approval ==
+                ApprovalPolicy.overwrite &&
+            existingContent)
+          'Replaces existing saved content',
         if (args['allow_private_network'] == true)
           'Private network access requested',
         if (method == Operation.sourcesImport.wire && args['id'] != null)
