@@ -217,11 +217,13 @@ def test_meeting_workflow_waits_until_the_desktop_mounts():
     source = (
         ROOT / "apps/desktop/integration_test/meeting_workflow_test.dart"
     ).read_text()
-    start = source.index("Future<dynamic> startedWorkspace")
+    start = source.index("Future<app.WorkspaceTestAccess> startedWorkspace")
     helper = source[start : source.index("Future<void> captureWindow")]
     assert "find.text('Open Foresight could not start')" in helper
     assert "find.byType(app.Workspace)" in helper
     assert "Desktop did not start:" in helper
+    assert helper.index("await waitUntil(tester,") < helper.index("return tester.state(")
+    assert "as app.WorkspaceTestAccess" in helper
     assert source.count("await startedWorkspace(tester)") == 4
     assert (
         "await tester.pump();\n      final dynamic workspace = tester.state"
