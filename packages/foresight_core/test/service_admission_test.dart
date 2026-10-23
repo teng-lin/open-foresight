@@ -145,6 +145,65 @@ void main() {
     },
   );
 
+  for (final kind in ['action_items', 'enhanced_notes']) {
+    test('generation $kind checks the content its writer replaces', () async {
+      final store = service.domain.store;
+      final meeting = store.meeting('protected');
+      if (kind == 'action_items') {
+        store.artifact(meeting, 'actions', 'saved actions', 'fixture');
+      } else {
+        store.saveMeetingEnhancedDraft(meeting, 'current draft');
+      }
+      await attach();
+      final work = agent.call('meetings.generate', {
+        'id': meeting,
+        'kind': kind,
+      });
+      final refused = expectLater(work, throwsA(code(RpcErrorCode.cancelled)));
+      await eventually(() => approvals.isNotEmpty);
+      if (kind == 'action_items') {
+        store.artifact(meeting, 'actions', 'new saved actions', 'fixture');
+      } else {
+        store.saveMeetingEnhancedDraft(meeting, 'new current draft');
+      }
+      await host.call('security.decide', {
+        'approval_id': approvals.single['approval_id'],
+        'allow': true,
+      });
+      await refused;
+      expect(service.dispatchedCount, 0);
+    });
+  }
+
+  test(
+    'artifact edit consent includes the enhanced draft it replaces',
+    () async {
+      final store = service.domain.store;
+      final meeting = store.meeting('protected');
+      store.artifact(meeting, 'enhanced_notes', 'completed draft', 'fixture');
+      final artifact = store.db.lastInsertRowId;
+      await attach();
+      final work = agent.call('artifacts.edit', {
+        'id': artifact,
+        'text': 'agent replacement',
+      });
+      final refused = expectLater(work, throwsA(code(RpcErrorCode.cancelled)));
+      await eventually(() => approvals.isNotEmpty);
+      store.saveMeetingEnhancedDraft(meeting, 'new streamed draft');
+      await host.call('security.decide', {
+        'approval_id': approvals.single['approval_id'],
+        'allow': true,
+      });
+      await refused;
+      expect(store.meetingEnhancedNotes(meeting), 'new streamed draft');
+      expect(
+        store.contentHistory.row('artifacts', artifact).single['edited'],
+        isNull,
+      );
+      expect(service.dispatchedCount, 0);
+    },
+  );
+
   test(
     'a future schema while approval is pending refuses the replacement',
     () async {

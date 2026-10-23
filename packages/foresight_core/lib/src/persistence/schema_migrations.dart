@@ -171,8 +171,11 @@ class ApplicationMigrations {
       final changed = content[table]!
           .map((column) => 'OLD.$column IS NOT NEW.$column')
           .join(' OR ');
+      final retained = table == 'sources'
+          ? 'OLD.deleted=0 AND ($changed)'
+          : changed;
       db.execute(
-        'CREATE TRIGGER ${table}_retain_revision BEFORE UPDATE ON $table WHEN $changed BEGIN '
+        'CREATE TRIGGER ${table}_retain_revision BEFORE UPDATE ON $table WHEN $retained BEGIN '
         "INSERT INTO content_revisions(entity,entity_id,snapshot,created) VALUES('$table',CAST(OLD.$id AS TEXT),json_object($snapshot),CAST(strftime('%s','now') AS INTEGER)*1000); END",
       );
       db.execute(

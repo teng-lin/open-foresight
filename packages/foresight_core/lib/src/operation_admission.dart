@@ -79,24 +79,31 @@ void enforceOperationCapability(
 String? replacementSnapshot(ContentHistory history, OperationRequest request) {
   final rows = switch (request) {
     NotesSaveRequest(:final id?) => history.row('notes', id),
-    ArtifactsEditRequest(:final id) => history.row('artifacts', id),
+    ArtifactsEditRequest(:final id) => history.artifactEdit(id),
     MeetingsNotesRequest(:final id) => history.row('meeting_notes', id),
     MeetingsEditTaskRequest(:final id) => history.row('meeting_tasks', id),
     MeetingsPrepareRequest(:final id) => history.meetingArtifacts(
       id,
       'preparation',
     ),
+    MeetingsGenerateRequest(:final id, kind: 'enhanced_notes') =>
+      _enhancementSnapshot(history, id),
     MeetingsGenerateRequest(:final id, :final kind) => history.meetingArtifacts(
       id,
-      kind,
+      kind == 'action_items' ? 'actions' : kind,
     ),
-    MeetingsEnhanceRequest(:final id) => [
-      ...history
-          .row('meeting_notes', id)
-          .where((row) => row['enhanced_body'] != null),
-      ...history.meetingArtifacts(id, 'enhanced_notes'),
-    ],
+    MeetingsEnhanceRequest(:final id) => _enhancementSnapshot(history, id),
     _ => <Map<String, Object?>>[],
   };
   return rows.isEmpty ? null : jsonEncode(rows);
 }
+
+List<Map<String, Object?>> _enhancementSnapshot(
+  ContentHistory history,
+  int id,
+) => [
+  ...history
+      .row('meeting_notes', id)
+      .where((row) => row['enhanced_body'] != null),
+  ...history.meetingArtifacts(id, 'enhanced_notes'),
+];

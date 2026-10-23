@@ -38,6 +38,7 @@ void main() {
       () => store.contentHistory.revisions('notes', id),
       () => store.contentHistory.row('notes', id),
       () => store.contentHistory.meetingArtifacts(1, 'summary'),
+      () => store.contentHistory.artifactEdit(1),
     ]) {
       expect(read, throwsA(isA<IncompatibleReadSchema>()));
     }
@@ -83,6 +84,13 @@ void main() {
     expect(store.contentHistory.revisions('sources', id), hasLength(1));
     store.db.execute('UPDATE sources SET deleted=1 WHERE id=?', [id]);
     expect(store.contentHistory.revisions('sources', id), isEmpty);
+    store.importText('revived', 'new content', 'text/plain', 'fixture', id: id);
+    expect(store.contentHistory.revisions('sources', id), isEmpty);
+    store.importText('next', 'next content', 'text/plain', 'fixture', id: id);
+    expect(
+      store.contentHistory.revisions('sources', id).single['snapshot'],
+      containsPair('content', 'new content'),
+    );
   });
 
   test('a failed transaction rolls back both replacement and history', () {

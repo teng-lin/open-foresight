@@ -60,4 +60,19 @@ final class ContentHistory {
     ))
       Map<String, Object?>.from(row),
   ];
+
+  /// Editing the newest enhanced artifact also replaces its live Note draft.
+  /// Include that state using the same latest-artifact rule as MeetingStore.
+  List<Map<String, Object?>> artifactEdit(int id) {
+    final artifact = row('artifacts', id);
+    if (artifact.isEmpty || artifact.single['kind'] != 'enhanced_notes') {
+      return artifact;
+    }
+    final meeting = artifact.single['meeting_id'] as int;
+    final latest = meetingArtifacts(meeting, 'enhanced_notes').last;
+    return [
+      ...artifact,
+      if (latest['id'] == id) ...row('meeting_notes', meeting),
+    ];
+  }
 }

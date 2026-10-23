@@ -207,8 +207,9 @@ void main() {
         );
       } finally {
         for (final reply in replies) {
-          if (!reply.isCompleted)
+          if (!reply.isCompleted) {
             reply.complete(FetchExternalWebsiteResponse());
+          }
         }
       }
     });
