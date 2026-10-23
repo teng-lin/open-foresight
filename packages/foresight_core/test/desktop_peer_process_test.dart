@@ -310,6 +310,7 @@ void main() {
       final result = await desktop.frame('models.generation', {
         'path': '/missing-model-fixture',
         'runtime': '/outside-installation',
+        'backend': 'llama_cpp',
       });
       expect((result['error'] as Map)['code'], 'denied');
       expect((result['error'] as Map)['message'], contains('bundled runtime'));

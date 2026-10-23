@@ -6,6 +6,7 @@ import 'dart:io';
 import 'dart:math' show Random;
 import 'profile_paths.dart';
 import 'runtime_execution_policy.dart';
+import 'native.dart' show liteRtRunner;
 
 /// Agent imports are limited to folders explicitly selected in the desktop.
 /// Canonical paths prevent both '..' and symlink escapes into private state.
@@ -211,7 +212,14 @@ class AgentAccessGate {
     if (method.startsWith('models.') &&
         !embeddingData &&
         args['runtime'] is String) {
-      requireInstalledRuntime(args['runtime'] as String);
+      final generation =
+          (method == Operation.modelsGeneration.wire &&
+              (args['backend'] ?? 'litert_lm') == 'litert_lm') ||
+          (method == Operation.modelsRegister.wire &&
+              args['kind'] == 'generation' &&
+              args['backend'] == 'litert_lm');
+      final runtime = args['runtime'] as String;
+      requireInstalledRuntime(generation ? liteRtRunner(runtime) : runtime);
     }
     if (isHost(client) && hasVisibleHost) return;
     final host = _host;
