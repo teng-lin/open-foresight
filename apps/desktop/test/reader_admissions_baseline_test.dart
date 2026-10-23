@@ -161,7 +161,8 @@ void main() {
     expect(find.text('Documents added (1)'), findsOneWidget);
     final dynamic shell = tester.state(find.byType(Workspace));
     await _measure(tester, 'Onboarding', shell, helper, admissions);
-    expect(admissions.synchronous['sourceSummaries'], greaterThan(0));
+    expect(admissions.synchronous['sourceSummaries'] ?? 0, 0);
+    expect(admissions.watches['sources'], greaterThan(0));
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pumpAndSettle();
     var closed = false;

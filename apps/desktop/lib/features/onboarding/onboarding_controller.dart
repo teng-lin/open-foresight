@@ -2,7 +2,9 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:foresight_core/desktop.dart';
-import '../../desktop_reader_adapters.dart';
+import 'dart:async';
+import '../../feature_request_identity.dart';
+import 'read_model.dart';
 import '../../shell/ports.dart';
 import '../../shell/workspace_tab.dart';
 import 'onboarding_view.dart';
@@ -39,17 +41,38 @@ class OnboardingController implements OnboardingActivity {
     if (mounted) _host.update(action);
   }
 
-  void dispose() => _disposed = true;
+  Object? _preparedOwner;
+  int _actionGeneration = 0;
+  late final OnboardingReadModel _reads = OnboardingReadModel(
+    connection: () => d,
+    changed: () {
+      if (!mounted) return;
+      _host.update(() {
+        if (!identical(_preparedOwner, _reads.ownerKey)) {
+          _preparedOwner = _reads.ownerKey;
+          _actionGeneration++;
+          working = false;
+          failure = '';
+        }
+      });
+    },
+  );
+  void start() => _reads.start();
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    unawaited(_reads.dispose());
+  }
+
   bool finished = false, ready = false, working = false;
   String failure = '';
   @override
-  bool get active =>
-      _host.commands != null &&
-      !finished &&
-      d.store.preference('onboarding.complete') != 'true';
+  bool get active => _host.commands != null && !finished && !_reads.complete;
 
   Future<void> perform(Future<void> Function() action) async {
     if (working) return;
+    final identity = FeatureRequestIdentity.capture(d);
+    final generation = ++_actionGeneration;
     setState(() {
       working = true;
       failure = '';
@@ -57,7 +80,8 @@ class OnboardingController implements OnboardingActivity {
     try {
       await action();
     } catch (error) {
-      if (mounted) {
+      if (generation == _actionGeneration &&
+          identity.isCurrent(d, alive: mounted)) {
         setState(
           () => failure = error is StateError
               ? error.message.toString()
@@ -65,7 +89,9 @@ class OnboardingController implements OnboardingActivity {
         );
       }
     } finally {
-      if (mounted) setState(() => working = false);
+      if (mounted && generation == _actionGeneration) {
+        setState(() => working = false);
+      }
     }
   }
 
@@ -182,8 +208,8 @@ class OnboardingController implements OnboardingActivity {
   Widget library(BuildContext context) => ValueListenableBuilder<int>(
     valueListenable: _host.serviceUiRevision,
     builder: (_, __, ___) {
-      final sources = readRows(d.store.sourceSummaries);
-      final indexed = sources.where((s) => s['state'] == 'indexed').length;
+      final sources = _reads.sources;
+      final indexed = sources.where((s) => s.state == 'indexed').length;
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -197,8 +223,7 @@ class OnboardingController implements OnboardingActivity {
               'Add documents to see them here. You can also do this later from Knowledge sources.',
             ),
           if (sources.isNotEmpty) ...[
-            if (d.store.model('embedding')?.toRow() == null &&
-                indexed < sources.length) ...[
+            if (_reads.embedding == null && indexed < sources.length) ...[
               const Text(
                 'Documents are saved. Finish model setup to make them searchable.',
               ),
@@ -230,7 +255,7 @@ class OnboardingController implements OnboardingActivity {
                     child: ListTile(
                       leading: const Icon(Icons.description_outlined),
                       title: Text(
-                        '${source['title']}',
+                        source.title,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -241,7 +266,7 @@ class OnboardingController implements OnboardingActivity {
                             ? null
                             : () => perform(() async {
                                 await d.command(Operation.sourcesDelete, {
-                                  'id': source['id'],
+                                  'id': source.id,
                                 });
                                 _lifecycle.serviceChanged();
                               }),
@@ -258,10 +283,10 @@ class OnboardingController implements OnboardingActivity {
     },
   );
 
-  String sourceStatus(Map<String, Object?> source) {
-    final state = source['state'];
-    final error = source['error']?.toString() ?? '';
-    if (d.store.model('embedding')?.toRow() == null &&
+  String sourceStatus(SourceSummary source) {
+    final state = source.state;
+    final error = source.error;
+    if (_reads.embedding == null &&
         (state == 'pending' ||
             (state == 'failed' &&
                 error.contains('Pipeline not initialized')))) {
@@ -276,49 +301,70 @@ class OnboardingController implements OnboardingActivity {
     };
   }
 
-  Widget build() => OnboardingView(
-    initialStep: int.tryParse(d.store.preference('onboarding.step', '0')) ?? 0,
-    runtimeReady: ready,
-    externalBusy: working,
-    runtimeError: _operations.error,
-    retryRuntime: () async {
-      _operations.setError('');
-      final connection = d;
-      await connection.initialize();
-      await connection.resume();
-      // A successful resume can replace its underlying client session. Runtime
-      // readiness belongs to this connection, rather than to a data snapshot.
-      if (mounted && identical(d, connection)) setState(() => ready = true);
-    },
-    saveStep: (step) async {
-      await d.command(Operation.preferencesSet, {
-        'key': 'onboarding.step',
-        'value': '$step',
-      });
-    },
-    complete: () async {
-      if (working) throw StateError('Wait for the current import to finish.');
-      await d.command(Operation.preferencesSet, {
-        'key': 'onboarding.complete',
-        'value': 'true',
-      });
-      if (mounted)
-        setState(() {
-          finished = true;
-          _navigation.navigate(WorkspaceTab.sources);
-        });
-    },
-    generation: (done) =>
-        settingsFeature.gemmaSetup(firstRun: true, onDone: done),
-    transcription: (done) => settingsFeature.speechSetup(onDone: done),
-    permissions: permissions,
-    imports: imports,
-    library: library,
-    googleConnected: integrationFeature.googlePresentation.connected,
-    googleEmail: integrationFeature.googlePresentation.email,
-    connectGoogle: () async {
-      await integrationFeature.connectGoogle();
-      return integrationFeature.googlePresentation.connected;
-    },
-  );
+  Future<void> _preference(String key, String value) async {
+    final identity = FeatureRequestIdentity.capture(d);
+    await d.command(Operation.preferencesSet, {'key': key, 'value': value});
+    if (!identity.isCurrent(d, alive: mounted)) {
+      throw RpcError(RpcErrorCode.cancelled, 'Setup owner changed');
+    }
+  }
+
+  Widget build() {
+    if (!_reads.preferencesReady) {
+      return Center(
+        child: _reads.problem == null
+            ? const CircularProgressIndicator()
+            : Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('Setup could not load. Retry to continue.'),
+                  TextButton(
+                    onPressed: _reads.retry,
+                    child: const Text('Retry setup'),
+                  ),
+                ],
+              ),
+      );
+    }
+    return OnboardingView(
+      key: ValueKey(_reads.ownerKey),
+      initialStep: _reads.step,
+      runtimeReady: ready,
+      externalBusy: working,
+      runtimeError: _operations.error,
+      retryRuntime: () async {
+        _operations.setError('');
+        final connection = d;
+        await connection.initialize();
+        await connection.resume();
+        // A successful resume can replace its underlying client session. Runtime
+        // readiness belongs to this connection, rather than to a data snapshot.
+        if (mounted && identical(d, connection)) setState(() => ready = true);
+      },
+      saveStep: (step) async {
+        await _preference('onboarding.step', '$step');
+      },
+      complete: () async {
+        if (working) throw StateError('Wait for the current import to finish.');
+        await _preference('onboarding.complete', 'true');
+        if (mounted)
+          setState(() {
+            finished = true;
+            _navigation.navigate(WorkspaceTab.sources);
+          });
+      },
+      generation: (done) =>
+          settingsFeature.gemmaSetup(firstRun: true, onDone: done),
+      transcription: (done) => settingsFeature.speechSetup(onDone: done),
+      permissions: permissions,
+      imports: imports,
+      library: library,
+      googleConnected: integrationFeature.googlePresentation.connected,
+      googleEmail: integrationFeature.googlePresentation.email,
+      connectGoogle: () async {
+        await integrationFeature.connectGoogle();
+        return integrationFeature.googlePresentation.connected;
+      },
+    );
+  }
 }

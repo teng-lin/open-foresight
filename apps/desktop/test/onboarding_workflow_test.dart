@@ -35,6 +35,7 @@ class SetupDomain extends QuickStartDomain {
   ]) async {
     if (operation == Operation.sourcesDelete) {
       store.tombstone(args['id'] as String);
+      helper.changed?.call();
       return null;
     }
     if (operation == Operation.audioCapabilities) {
@@ -305,7 +306,7 @@ void main() {
   testWidgets(
     'manual import page shows real source states, removes documents and completes setup',
     (tester) async {
-      final (store, _, commands) = await mount(tester, step: 5);
+      final (store, domain, commands) = await mount(tester, step: 5);
       final source = store.importText(
         'Project brief',
         'Project notes',
@@ -313,8 +314,7 @@ void main() {
         'fixture',
       );
       store.state(source, 'indexed');
-      final dynamic state = tester.state(find.byType(Workspace));
-      state.serviceChanged();
+      domain.helper.changed?.call();
       await tester.pumpAndSettle();
       expect(find.text('Project brief'), findsOneWidget);
       expect(find.text('1 sources added · 1 indexed'), findsOneWidget);
@@ -343,7 +343,7 @@ void main() {
   testWidgets(
     'large onboarding libraries render lazily and keep the final source reachable',
     (tester) async {
-      final (store, _, commands) = await mount(tester, step: 5);
+      final (store, domain, commands) = await mount(tester, step: 5);
       for (var i = 0; i < 250; i++) {
         store.importText(
           'Document ${i.toString().padLeft(3, '0')}',
@@ -352,8 +352,7 @@ void main() {
           'fixture',
         );
       }
-      final dynamic state = tester.state(find.byType(Workspace));
-      state.serviceChanged();
+      domain.helper.changed?.call();
       await tester.pumpAndSettle();
       expect(find.text('Documents added (250)'), findsOneWidget);
       expect(
@@ -384,7 +383,7 @@ void main() {
   testWidgets(
     'saved imports waiting for models show recovery guidance instead of raw gRPC errors',
     (tester) async {
-      final (store, _, _) = await mount(tester, step: 5);
+      final (store, domain, _) = await mount(tester, step: 5);
       store.importText('Saved document', 'Content', 'text/plain', 'fixture');
       final legacy = store.importText(
         'Calendar event',
@@ -397,8 +396,7 @@ void main() {
         'failed',
         'gRPC Error (code: 9, codeName: FAILED_PRECONDITION, message: Pipeline not initialized, details: [])',
       );
-      final dynamic state = tester.state(find.byType(Workspace));
-      state.serviceChanged();
+      domain.helper.changed?.call();
       await tester.pumpAndSettle();
       expect(find.text('Waiting for model setup'), findsNWidgets(2));
       expect(find.text('Set up indexing model'), findsOneWidget);
@@ -406,7 +404,7 @@ void main() {
       expect(find.text('2 sources added · 0 indexed'), findsOneWidget);
       expect(store.sources, hasLength(2));
       store.state(legacy, 'failed', 'gRPC Error: another genuine failure');
-      state.serviceChanged();
+      domain.helper.changed?.call();
       await tester.pumpAndSettle();
       expect(
         find.text(

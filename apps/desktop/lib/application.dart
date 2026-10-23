@@ -253,6 +253,7 @@ class _WorkspaceState extends State<Workspace>
     desktopMenu = DesktopMenu(integrationFeature.activateMenuCommand);
     sourceFeature.initializeGraph();
     settingsFeature.start();
+    onboardingFeature.start();
     meetingFeature.systemAudioSetupReviewed =
         d.store.preference('audio.systemSetupReviewed') == 'true';
     integrationFeature.commands = widget.commands;
