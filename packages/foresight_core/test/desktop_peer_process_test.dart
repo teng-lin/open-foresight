@@ -5,6 +5,8 @@ import 'dart:io';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/service.dart';
 import 'package:foresight_test_support/test_paths.dart';
+import 'package:foresight_test_support/native_fixture.dart';
+import 'package:foresight_test_support/poll.dart';
 import 'package:test/test.dart';
 
 final class _DesktopProcess {
@@ -128,6 +130,61 @@ void main() {
     addTearDown(result.close);
     return result;
   }
+
+  test(
+    'a hidden verified replacement finalizes capture and retains the host pin',
+    () async {
+      await service.close();
+      final library =
+          '${installation.path}/recording.${Platform.isMacOS ? 'dylib' : 'so'}';
+      await buildCachedNativeFixture(
+        source: 'test/fixtures/recording_native_stub.cpp',
+        output: library,
+      );
+      final owner = await ApplicationService.start(profile);
+      addTearDown(owner.close);
+      runtimeConfiguration.environment['FORESIGHT_NATIVE'] = library;
+      owner.domain.store.setPreference('liveEnhance', 'false');
+      final runner = File(
+        '/usr/bin/true',
+      ).copySync('${installation.path}/speech-runner');
+      final model = File('${directory.path}/speech')
+        ..writeAsStringSync('ABI fixture');
+      await owner.domain.store.register('speech', model.path, runner.path);
+      final meeting = owner.domain.store.meeting('Hidden replacement');
+      final first = await peer();
+      expect(
+        await first.frame('security.attach_desktop', {
+          'token': token(),
+          'visible': true,
+        }),
+        {'result': true},
+      );
+      expect(
+        (await first.frame('meetings.start', {'id': meeting}))['error'],
+        isNull,
+      );
+      expect(owner.application.recording, isNotNull);
+      final replacement = await peer();
+      expect(
+        await replacement.frame('security.attach_desktop', {
+          'token': token(),
+          'visible': false,
+        }),
+        {'result': true},
+      );
+      expect(owner.access.hasHost, true);
+      expect(owner.access.hasVisibleHost, false);
+      await eventually(() => owner.application.recording == null);
+      expect(owner.application.recordingMeeting, isNull);
+      final state = (await replacement.frame('status'))['result'] as Map;
+      expect((state['lifetime'] as Map)['pinned_by_desktop'], true);
+      expect(
+        (await replacement.frame('meetings.start', {'id': meeting}))['error'],
+        isNotNull,
+      );
+    },
+  );
 
   test(
     'OS executable identity rejects a token thief and allows verified replacement',

@@ -66,6 +66,15 @@ class ServiceOperationHandlers {
             );
             desktopClients.add(client);
             onAttached();
+            if (!access.hasVisibleHost) {
+              unawaited(
+                stopRecording().catchError((Object error) {
+                  stderr.writeln(
+                    'Stop recording after hidden desktop attach: $error',
+                  );
+                }),
+              );
+            }
             return true;
           },
         ),

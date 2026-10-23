@@ -73,19 +73,29 @@ class RemoteDomain
   // The connection the desktop approval host is attached on.
   ServiceClient? _attached;
   bool _desktopVisible = false;
+  bool? _attachedVisible;
+  bool _desktopDisplaced = false;
+  int _approvalGeneration = 0;
+  final _attachments = <ServiceClient, Future<void>>{};
+  final _visibilityUpdates = <ServiceClient, Future<void>>{};
+  bool _approvalsCurrent(int generation) =>
+      !_disposed &&
+      _approvalEvents != null &&
+      generation == _approvalGeneration;
   @override
   Future<void> enableDesktopApprovals(
     void Function(Map<String, dynamic>) events,
   ) async {
     _approvalEvents = events;
+    final generation = _approvalGeneration;
     for (var attempt = 0; ; attempt++) {
+      if (!_approvalsCurrent(generation)) return;
       final current = client;
-      // A reconnect attaches its new connection itself.
-      if (identical(_attached, current)) return;
       try {
         await _attachDesktop(current);
         return;
       } on RpcError catch (error) {
+        if (!_approvalsCurrent(generation)) return;
         if (attempt > 0 || !_resendable(error)) rethrow;
         await _awaitReconnect(current, error);
       }
@@ -93,27 +103,94 @@ class RemoteDomain
   }
 
   Future<void> _attachDesktop(ServiceClient connection) async {
+    final generation = _approvalGeneration;
+    while (_approvalsCurrent(generation) && identical(client, connection)) {
+      if (_desktopDisplaced && !_desktopVisible) return;
+      if (identical(_attached, connection)) {
+        await _syncDesktopVisibility(connection, generation);
+        return;
+      }
+      // Reconnect and lifecycle callbacks share one token-consuming attach.
+      final existing = _attachments[connection];
+      if (existing != null) {
+        await existing;
+        continue;
+      }
+      final pending = _performDesktopAttach(connection, generation);
+      _attachments[connection] = pending;
+      try {
+        await pending;
+      } finally {
+        unawaited(_attachments.remove(connection));
+      }
+    }
+  }
+
+  Future<void> _performDesktopAttach(
+    ServiceClient connection,
+    int generation,
+  ) async {
+    final visible = _desktopVisible;
     await connection.call(Operation.securityAttachDesktop.wire, {
       'token': File('${_profile.data}/.desktop-capability').readAsStringSync(),
-      'visible': _desktopVisible,
+      'visible': visible,
     });
+    if (!_approvalsCurrent(generation) || !identical(client, connection)) {
+      return;
+    }
     _attached = connection;
+    _attachedVisible = visible;
+    _desktopDisplaced = false;
+    await _syncDesktopVisibility(connection, generation);
+  }
+
+  Future<void> _syncDesktopVisibility(
+    ServiceClient connection,
+    int generation,
+  ) async {
+    while (_approvalsCurrent(generation) &&
+        identical(_attached, connection) &&
+        _attachedVisible != _desktopVisible) {
+      final existing = _visibilityUpdates[connection];
+      if (existing != null) {
+        await existing;
+        continue;
+      }
+      final visible = _desktopVisible;
+      final pending = connection.call(
+        Operation.securityDesktopVisibility.wire,
+        {'visible': visible},
+      );
+      final update = pending.then<void>((_) {
+        if (_approvalsCurrent(generation) && identical(_attached, connection)) {
+          _attachedVisible = visible;
+        }
+      });
+      _visibilityUpdates[connection] = update;
+      try {
+        await update;
+      } finally {
+        unawaited(_visibilityUpdates.remove(connection));
+      }
+    }
   }
 
   @override
   Future<void> setDesktopVisible(bool visible) async {
     _desktopVisible = visible;
     if (_approvalEvents == null) return;
-    await enableDesktopApprovals(_approvalEvents!);
+    final generation = _approvalGeneration;
     try {
-      await _call(Operation.securityDesktopVisibility.wire, {
-        'visible': visible,
-      });
+      await enableDesktopApprovals(_approvalEvents!);
     } on RpcError catch (error) {
       if (error.code != RpcErrorCode.denied) rethrow;
       // Another verified desktop took the host while this window was hidden.
       // A newly visible verified window can take ownership with the fresh token.
+      if (!_approvalsCurrent(generation)) return;
       _attached = null;
+      _attachedVisible = null;
+      _desktopDisplaced = true;
+      if (!_desktopVisible) return;
       await enableDesktopApprovals(_approvalEvents!);
     }
   }
@@ -123,8 +200,11 @@ class RemoteDomain
     // The service denies the approvals still open, but their
     // approval_closed would find no listener; close their dialogs first.
     _closeOpenApprovals();
+    _approvalGeneration++;
     _approvalEvents = null;
     _attached = null;
+    _attachedVisible = null;
+    _desktopDisplaced = false;
     await client.call(Operation.securityDetachDesktop.wire);
   }
 
