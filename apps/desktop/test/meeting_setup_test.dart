@@ -122,6 +122,7 @@ void main() {
         'INSERT INTO meeting_answers(meeting_id,answer_id) VALUES(?,?)',
         [meeting, store.db.lastInsertRowId],
       );
+      helper.changed?.call();
       workspace.update(() {});
       await tester.pumpAndSettle();
       expect(find.text('[S1] source revision 1').hitTestable(), findsNothing);
