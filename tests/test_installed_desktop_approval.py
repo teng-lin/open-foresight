@@ -167,8 +167,14 @@ def owned(tmp_path, monkeypatch):
         gui.subprocess,
         "run",
         Mock(
-            return_value=SimpleNamespace(
-                returncode=0, stdout="BUTTON:Sources\nBUTTON:Settings", stderr=""
+            side_effect=lambda command, **_: SimpleNamespace(
+                returncode=0,
+                stdout=(
+                    "ENABLED"
+                    if command[2] == gui.SEMANTICS_SCRIPT
+                    else "BUTTON:Sources\nBUTTON:Settings"
+                ),
+                stderr="",
             )
         ),
     )
@@ -308,6 +314,7 @@ def test_start_failure_retains_diagnostic_and_closes_owned_process(
     owned, monkeypatch, kind
 ):
     if kind == "permission":
+        gui.subprocess.run.side_effect = None
         gui.subprocess.run.return_value = SimpleNamespace(
             returncode=1,
             stdout="",
@@ -325,7 +332,7 @@ def test_start_failure_retains_diagnostic_and_closes_owned_process(
         owned.host.start()
     report = json.loads((owned.host.output / "gui-approval.json").read_text())
     if kind == "permission":
-        assert "-25211" in report["accessibility_error"]
+        assert "-25211" in report["owned_semantics_bootstrap"]["stderr"]
     assert owned.host.log.closed
     # Don't permit teardown to act on an unrelated PID identity.
     owned.host.process = None
@@ -363,6 +370,135 @@ def test_actual_onboarding_actions_acknowledged_by_read_only_state(owned):
     owned.host.timeout = 3
     owned.host.start()
     assert clicked == list(gui.ONBOARDING)
+
+
+def test_mac_semantics_bootstrap_is_owned_verified_and_precedes_snapshot(owned):
+    owned.host.start()
+    calls = gui.subprocess.run.call_args_list
+    assert calls[0].args[0] == ["/usr/bin/osascript", "-e", gui.SEMANTICS_SCRIPT, "123"]
+    assert calls[0].kwargs["timeout"] == owned.host.timeout
+    assert calls[1].args[0][2] == gui.SCRIPT
+    assert owned.host.evidence["owned_semantics_bootstrap"] == {
+        "pid": 123,
+        "exit": 0,
+        "stdout": "ENABLED",
+        "stderr": "",
+    }
+
+
+@pytest.mark.parametrize("failure", ["refused", "unacknowledged", "replaced"])
+def test_mac_semantics_bootstrap_failure_never_reaches_ui(owned, monkeypatch, failure):
+    calls = []
+
+    def run(command, **_):
+        calls.append(command)
+        if failure == "replaced":
+            monkeypatch.setattr(gui, "process_path", lambda _: Path("/different"))
+        return SimpleNamespace(
+            returncode=1 if failure == "refused" else 0,
+            stdout="wrong" if failure == "unacknowledged" else "ENABLED",
+            stderr="not settable" if failure == "refused" else "",
+        )
+
+    monkeypatch.setattr(gui.subprocess, "run", run)
+    with pytest.raises(RuntimeError):
+        owned.host.start()
+    assert len(calls) == 1 and calls[0][2] == gui.SEMANTICS_SCRIPT
+    assert owned.host.log.closed
+    owned.host.process = None  # A replaced PID must never be used by fixture teardown.
+
+
+@pytest.mark.parametrize("fixture", ["owned", "linux_owned"])
+def test_completed_onboarding_cancels_only_exact_initial_model_setup(request, fixture):
+    value = request.getfixturevalue(fixture)
+    host = value.host if fixture == "owned" else value[0]
+    snapshot = (
+        "TEXT:Set up local models\nBUTTON:Use local models\nBUTTON:Cancel\n"
+        "BUTTON:Download models\n"
+        "TEXT:You can cancel setup without changing existing model registrations.\n"
+        "TEXT:Sources\nTEXT:Settings"
+    )
+    clicks = []
+
+    def ui(button="", **kwargs):
+        if button:
+            assert button == "Cancel" and kwargs == {"expected_snapshot": snapshot}
+            clicks.append(button)
+            return "CLICKED:Cancel"
+        return "TEXT:Sources\nTEXT:Settings" if clicks else snapshot
+
+    host._ui = ui
+    host.start()
+    assert clicks == ["Cancel"]
+    assert host.evidence["initial_model_setup_cancelled"] == [snapshot]
+    with closing(sqlite3.connect(host.profile / "data/application.db")) as db:
+        assert db.execute("SELECT * FROM preferences").fetchall() == [
+            ("onboarding.complete", "true")
+        ]
+
+
+@pytest.mark.parametrize(
+    "unsafe",
+    [
+        "incomplete",
+        "approval",
+        "capture",
+        "no_ack",
+        "missing_fact",
+        "missing_download",
+        "missing_safety",
+    ],
+)
+def test_startup_model_setup_refusals_never_approve_an_operation(
+    owned, monkeypatch, unsafe
+):
+    snapshot = (
+        "TEXT:Set up local models\nBUTTON:Use local models\nBUTTON:Cancel\n"
+        "BUTTON:Download models\n"
+        "TEXT:You can cancel setup without changing existing model registrations."
+    )
+    if unsafe == "incomplete":
+        with closing(sqlite3.connect(owned.profile / "data/application.db")) as db:
+            db.execute("DELETE FROM preferences")
+            db.commit()
+    elif unsafe == "approval":
+        snapshot += "\nBUTTON:Allow once"
+    elif unsafe == "capture":
+        snapshot += "\nTEXT:Allow microphone and system audio recording?"
+    elif unsafe.startswith("missing_"):
+        missing = {
+            "missing_fact": "TEXT:Set up local models",
+            "missing_download": "BUTTON:Download models",
+            "missing_safety": "TEXT:You can cancel setup without changing existing model registrations.",
+        }[unsafe]
+        snapshot = snapshot.replace(missing, "TEXT:Another dialog")
+        clock = iter([0, 1])
+        monkeypatch.setattr(gui.time, "monotonic", lambda: next(clock))
+    clicks = []
+
+    def ui(button="", **kwargs):
+        if button:
+            assert kwargs["expected_snapshot"] == snapshot
+            clicks.append(button)
+            return snapshot
+        return snapshot
+
+    owned.host._ui = ui
+    with pytest.raises((RuntimeError, TimeoutError)):
+        owned.host.start()
+    assert clicks == (["Cancel"] if unsafe == "no_ack" else [])
+
+
+def test_snapshot_rejects_process_replacement_after_os_call(owned, monkeypatch):
+    host = owned.host.start()
+    gui.subprocess.run.side_effect = lambda *args, **kwargs: (
+        monkeypatch.setattr(gui, "process_path", lambda _: Path("/different"))
+        or SimpleNamespace(returncode=0, stdout="BUTTON:Allow once", stderr="")
+    )
+    with pytest.raises(RuntimeError, match="identity"):
+        host._ui()
+    host.process = None
+    host.log.close()
 
 
 def test_non_capture_request_needs_actual_correlated_gui_click(owned):

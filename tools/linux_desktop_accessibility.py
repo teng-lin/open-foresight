@@ -16,7 +16,23 @@ from typing import Any, BinaryIO
 from installed_runtime import process_path
 
 BUTTONS = frozenset(
-    {"Start Foresight", "Skip for now", "Continue", "Get started", "Allow once"}
+    {
+        "Start Foresight",
+        "Skip for now",
+        "Continue",
+        "Get started",
+        "Allow once",
+        "Cancel",
+    }
+)
+INITIAL_MODEL_SETUP_FACTS = frozenset(
+    {
+        "TEXT:Set up local models",
+        "BUTTON:Use local models",
+        "BUTTON:Cancel",
+        "BUTTON:Download models",
+        "TEXT:You can cancel setup without changing existing model registrations.",
+    }
 )
 CAPTURE = "Allow microphone and system audio recording?"
 MAX_NODES = 2048
@@ -285,7 +301,7 @@ def identity(pid, executable):
 def observe(api, pid, executable, button="", *, reveal=False, expected_snapshot=None):
     if button and button not in BUTTONS:
         raise ValueError("Unsupported production GUI automation button")
-    if reveal and (not button or button == "Allow once"):
+    if reveal and (not button or button in {"Allow once", "Cancel"}):
         raise ValueError("Only onboarding controls can be revealed")
     identity(pid, executable)
     desktop = api.atspi.atspi_get_desktop(0)
@@ -338,6 +354,12 @@ def observe(api, pid, executable, button="", *, reveal=False, expected_snapshot=
                 raise RuntimeError("Production approval dialog changed before action")
             if CAPTURE in snapshot:
                 raise RuntimeError("GUI automation refuses a capture approval dialog")
+            if button == "Cancel" and (
+                expected_snapshot is None
+                or not INITIAL_MODEL_SETUP_FACTS <= set(snapshot.splitlines())
+                or "BUTTON:Allow once" in snapshot.splitlines()
+            ):
+                raise RuntimeError("Refusing unrelated initial model setup Cancel")
             if reveal:
                 if len(targets) > 1:
                     raise RuntimeError("Refusing ambiguous onboarding controls")
@@ -355,6 +377,10 @@ def observe(api, pid, executable, button="", *, reveal=False, expected_snapshot=
             if len(candidates) > 1:
                 raise RuntimeError("Refusing ambiguous installed desktop buttons")
             if candidates:
+                if button == "Cancel" and observe(api, pid, executable) != snapshot:
+                    raise RuntimeError(
+                        "Initial model setup changed immediately before action"
+                    )
                 identity(pid, executable)
                 if api.press(candidates[0]):
                     return "CLICKED:" + button

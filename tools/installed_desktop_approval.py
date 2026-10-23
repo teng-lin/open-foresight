@@ -21,7 +21,10 @@ import sys
 import time
 
 from installed_runtime import layout, process_path, service_command
-from linux_desktop_accessibility import LinuxAccessibilitySession
+from linux_desktop_accessibility import (
+    INITIAL_MODEL_SETUP_FACTS,
+    LinuxAccessibilitySession,
+)
 
 # These are the exact non-capture operations used by installed acceptance probes.
 APPROVABLE = frozenset(
@@ -48,6 +51,19 @@ ONBOARDING = (
     "Skip for now",
     "Get started",
 )
+SEMANTICS_SCRIPT = r"""on run argv
+ tell application "System Events"
+  set targetProcess to first application process whose unix id is (item 1 of argv as integer)
+  tell targetProcess
+   set frontmost to true
+   set enhanced to attribute "AXEnhancedUserInterface"
+   if not settable of enhanced then error "Owned enhanced UI attribute is read-only"
+   set value of enhanced to true
+   if value of enhanced is not true then error "Owned enhanced UI did not enable"
+  end tell
+ end tell
+ return "ENABLED"
+end run"""
 SCRIPT = r"""on replaceText(needle, replacement, original)
  set oldDelimiters to AppleScript's text item delimiters
  set AppleScript's text item delimiters to needle
@@ -74,7 +90,8 @@ on run argv
  set matchingButtons to {}
   tell targetProcess
    repeat with targetWindow in windows
-    repeat with uiElement in entire contents of targetWindow
+    set ownedElements to entire contents of targetWindow
+    repeat with uiElement in ownedElements
      try
       set elementRole to role of uiElement
       set elementName to name of uiElement as text
@@ -95,6 +112,11 @@ on run argv
   end tell
   if wanted is not "" then
    if observed contains "Allow microphone and system audio recording?" then error "GUI automation refuses a capture approval dialog"
+   if wanted is "Cancel" then
+    if (count of argv) is not 3 or observed contains "BUTTON:Allow once" then error "Refusing unrelated Cancel action"
+    if observed does not contain ("TEXT:Set up local models" & linefeed) or observed does not contain ("BUTTON:Use local models" & linefeed) or observed does not contain ("BUTTON:Cancel" & linefeed) then error "Refusing unrelated Cancel dialog"
+    if observed does not contain ("BUTTON:Download models" & linefeed) or observed does not contain ("TEXT:You can cancel setup without changing existing model registrations." & linefeed) then error "Refusing incomplete model setup dialog"
+   end if
    if (count of argv) > 2 then
     set expectedSnapshot to item 3 of argv
     if observed is not expectedSnapshot and observed is not (expectedSnapshot & linefeed) then error "Production approval dialog changed before action"
@@ -365,6 +387,7 @@ class InstalledDesktop:
             text=True,
             timeout=min(5, self.timeout),
         )
+        self._identity()
         if result.returncode:
             self.evidence["accessibility_error"] = result.stderr
             self.evidence["accessibility_stdout"] = result.stdout
@@ -373,6 +396,28 @@ class InstalledDesktop:
                 "Production GUI automation unavailable: " + result.stderr.strip()
             )
         return result.stdout.strip()
+
+    def _enable_macos_semantics(self):
+        # Request the unchanged Flutter app's accessibility tree, not OS permission.
+        process = self._identity()
+        result = subprocess.run(
+            ["/usr/bin/osascript", "-e", SEMANTICS_SCRIPT, str(process.pid)],
+            capture_output=True,
+            text=True,
+            timeout=min(5, self.timeout),
+        )
+        self._identity()
+        self.evidence["owned_semantics_bootstrap"] = {
+            "pid": process.pid,
+            "exit": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }
+        self._save()
+        if result.returncode or result.stdout.strip() != "ENABLED":
+            raise RuntimeError(
+                "Owned macOS accessibility bootstrap failed: " + result.stderr
+            )
 
     def start(self):
         if self.process is not None:
@@ -441,6 +486,8 @@ class InstalledDesktop:
                     "GUI service does not belong to the selected installation/profile"
                 )
             self.evidence["service_pid"] = state["pid"]
+            if sys.platform == "darwin":
+                self._enable_macos_semantics()
             # Read-only observations acknowledge the real UI's own service writes.
             # No database write or production hook seeds/skips onboarding.
             clicked_step = None
@@ -459,6 +506,26 @@ class InstalledDesktop:
                     )
                 complete = preferences.get("onboarding.complete") == "true"
                 visible = set(snapshot.splitlines())
+                if INITIAL_MODEL_SETUP_FACTS <= visible:
+                    if (
+                        not complete
+                        or "BUTTON:Allow once" in visible
+                        or "Allow microphone and system audio recording?" in snapshot
+                    ):
+                        raise RuntimeError(
+                            "Refusing unexpected initial model setup dialog"
+                        )
+                    if (
+                        self._ui("Cancel", expected_snapshot=snapshot)
+                        != "CLICKED:Cancel"
+                    ):
+                        raise RuntimeError(
+                            "Initial model setup Cancel was not acknowledged"
+                        )
+                    self.evidence.setdefault(
+                        "initial_model_setup_cancelled", []
+                    ).append(snapshot)
+                    visible = set()
                 if complete and all(
                     "BUTTON:" + title in visible or "TEXT:" + title in visible
                     for title in ("Sources", "Settings")

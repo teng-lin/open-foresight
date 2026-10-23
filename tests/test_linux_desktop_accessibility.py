@@ -159,6 +159,100 @@ def test_missing_application_control_and_unapproved_button_never_click(identify)
         linux.observe(tree, 123, Path("/selected"), "Quit")
 
 
+def model_setup_tree():
+    return Tree(
+        [
+            Node("Set up local models"),
+            Node("Use local models", "button"),
+            Node("Cancel", "button"),
+            Node("Download models", "button"),
+            Node("You can cancel setup without changing existing model registrations."),
+        ]
+    )
+
+
+def test_initial_model_setup_cancel_requires_full_owned_snapshot(identify):
+    tree = model_setup_tree()
+    snapshot = linux.observe(tree, 123, Path("/selected"))
+    assert (
+        linux.observe(
+            tree, 123, Path("/selected"), "Cancel", expected_snapshot=snapshot
+        )
+        == "CLICKED:Cancel"
+    )
+    assert len(tree.pressed) == 1 and tree.pressed[0].name == "Cancel"
+
+
+@pytest.mark.parametrize(
+    "unsafe",
+    [
+        "no_snapshot",
+        "changed",
+        "missing_fact",
+        "missing_download",
+        "missing_safety",
+        "approval",
+        "capture",
+        "ambiguous",
+        "hidden",
+        "reveal",
+    ],
+)
+def test_unrelated_or_changed_model_setup_cancel_never_clicks(identify, unsafe):
+    tree = model_setup_tree()
+    if unsafe == "missing_fact":
+        tree.owned.children[0].name = "Another dialog"
+    elif unsafe == "missing_download":
+        tree.owned.children[3].name = "Another action"
+    elif unsafe == "missing_safety":
+        tree.owned.children[4].name = "Another description"
+    elif unsafe == "approval":
+        tree.owned.children.append(Node("Allow once", "button"))
+    elif unsafe == "capture":
+        tree.owned.children.append(Node(linux.CAPTURE))
+    elif unsafe == "ambiguous":
+        tree.owned.children.append(Node("Cancel", "button"))
+    elif unsafe == "hidden":
+        tree.owned.children[2].states = {8, 24}
+    snapshot = linux.observe(tree, 123, Path("/selected"))
+    if unsafe == "changed":
+        tree.owned.children.append(Node("Unexpected change"))
+    with pytest.raises((RuntimeError, ValueError)):
+        linux.observe(
+            tree,
+            123,
+            Path("/selected"),
+            "Cancel",
+            reveal=unsafe == "reveal",
+            expected_snapshot=None if unsafe == "no_snapshot" else snapshot,
+        )
+    assert not tree.pressed
+
+
+def test_initial_model_setup_rechecks_tree_immediately_before_cancel(
+    identify, monkeypatch
+):
+    tree = model_setup_tree()
+    snapshot = linux.observe(tree, 123, Path("/selected"))
+    original = tree.children
+    reads = 0
+
+    def children(node):
+        nonlocal reads
+        if node is tree.desktop:
+            reads += 1
+            if reads == 2:
+                tree.owned.children.append(Node("Changed during action lookup"))
+        return original(node)
+
+    monkeypatch.setattr(tree, "children", children)
+    with pytest.raises(RuntimeError, match="immediately before"):
+        linux.observe(
+            tree, 123, Path("/selected"), "Cancel", expected_snapshot=snapshot
+        )
+    assert not tree.pressed
+
+
 def test_unavailable_registry_is_an_error(identify):
     tree = Tree([])
     tree.atspi.atspi_get_desktop = lambda _: None
