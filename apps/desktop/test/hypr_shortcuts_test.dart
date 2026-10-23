@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_test_support/test_paths.dart';
-import 'package:open_foresight/hypr_shortcuts.dart';
+import 'package:open_foresight/features/integrations/hypr_shortcuts.dart';
 
 void main() {
   late Directory root;

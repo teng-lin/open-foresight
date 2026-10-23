@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/system_audio_setup_dialog.dart';
+import 'package:open_foresight/features/integrations/system_audio_setup_dialog.dart';
 
 void main() {
   testWidgets(

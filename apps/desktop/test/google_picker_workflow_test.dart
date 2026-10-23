@@ -2,7 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/src/google_connections.dart';
-import 'package:open_foresight/google_picker.dart';
+import 'package:open_foresight/features/integrations/google_picker.dart';
 
 class PendingDrive extends Fake implements GoogleConnections {
   final requests = <Completer<List<Map<String, dynamic>>>>[];

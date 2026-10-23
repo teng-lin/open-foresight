@@ -9,7 +9,7 @@ import 'package:foresight_core/src/domain.dart';
 import 'package:foresight_core/src/store.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/google_sign_in_dialog.dart';
+import 'package:open_foresight/features/integrations/google_sign_in_dialog.dart';
 import 'controller_fixture.dart';
 import 'google_sign_in_workflow_test.dart' show PendingGoogleAuth;
 import 'meeting_setup_test.dart' show OfflineHelper;

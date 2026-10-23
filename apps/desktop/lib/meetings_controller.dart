@@ -356,7 +356,7 @@ class _MeetingsController extends _FeatureController {
   Widget meetingListHeading() => heading(
     'Meetings',
     actions: [
-      if (!integrationFeature.googleAuth.connected)
+      if (!integrationFeature.googlePresentation.connected)
         OutlinedButton.icon(
           onPressed: shell.busy
               ? null
@@ -364,16 +364,16 @@ class _MeetingsController extends _FeatureController {
           icon: const Icon(Icons.calendar_today, size: 18),
           label: const Text('Connect Calendar'),
         ),
-      if (integrationFeature.googleAuth.connected)
+      if (integrationFeature.googlePresentation.connected)
         OutlinedButton.icon(
           onPressed: shell.busy || integrationFeature.googleSyncing
               ? null
-              : () => shell.run(integrationFeature.google.syncCalendar),
+              : () => shell.run(integrationFeature.syncCalendar),
           icon: const Icon(Icons.calendar_today, size: 18),
           label: Text(
-            integrationFeature.google.lastCompletedRefreshMs == 0
+            integrationFeature.lastCompletedRefreshMilliseconds == 0
                 ? 'Import Calendar'
-                : 'Last imported: ${timeLabel(integrationFeature.google.lastCompletedRefreshMs)}',
+                : 'Last imported: ${timeLabel(integrationFeature.lastCompletedRefreshMilliseconds)}',
           ),
         ),
       OutlinedButton.icon(
@@ -513,7 +513,7 @@ class _MeetingsController extends _FeatureController {
     final id = meeting['id'] as int;
     final start = meetingStart(meeting);
     final end = meetingEnd(meeting);
-    final attachmentCount = integrationFeature.google.attachments(id).length;
+    final attachmentCount = readRows(d.store.calendarAttachments(id)).length;
     final state = meeting['state'] as String;
     final active = state == 'recording' || state == 'transcribing';
     void open() => shell.update(() {
@@ -1808,15 +1808,16 @@ class _MeetingsController extends _FeatureController {
                       : () => shell.run(() => importMeetingTranscript(id)),
                   icon: const Icon(Icons.file_upload_outlined),
                 ),
-                if (integrationFeature.google.attachments(id).isNotEmpty)
+                if (readRows(d.store.calendarAttachments(id)).isNotEmpty)
                   IconButton(
                     tooltip: 'Import meeting attachments',
                     onPressed:
-                        shell.busy || !integrationFeature.googleAuth.connected
+                        shell.busy ||
+                            !integrationFeature.googlePresentation.connected
                         ? null
                         : () => shell.run(
                             () =>
-                                integrationFeature.google.importAttachments(id),
+                                integrationFeature.importMeetingAttachments(id),
                           ),
                     icon: const Icon(Icons.attach_file),
                   ),

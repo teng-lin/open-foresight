@@ -3,8 +3,8 @@ import 'dart:io';
 import 'package:dbus/dbus.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/global_shortcuts.dart';
-import 'package:open_foresight/hypr_shortcuts.dart';
+import 'package:open_foresight/features/integrations/global_shortcuts.dart';
+import 'package:open_foresight/features/integrations/hypr_shortcuts.dart';
 
 class Portal extends DBusObject {
   final calls = <DBusMethodCall>[];

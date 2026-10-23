@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/google_auth.dart';
-import 'package:open_foresight/google_sign_in_dialog.dart';
+import 'package:open_foresight/features/integrations/google_sign_in_dialog.dart';
 import 'package:open_foresight/main.dart';
 import 'package:foresight_core/src/store.dart';
 import 'desktop_connection_fixture.dart';

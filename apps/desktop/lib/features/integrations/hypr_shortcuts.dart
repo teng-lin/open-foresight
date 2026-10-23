@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
-import 'desktop_environment.dart';
+import '../../desktop_environment.dart';
 
 /// Managed Omarchy user-config block; never replaces an unrelated binding.
 class HyprShortcuts {

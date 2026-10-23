@@ -1,22 +1,135 @@
-part of 'application.dart';
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
-class _IntegrationsController extends _FeatureController {
-  _IntegrationsController(super.shell);
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:foresight_core/desktop.dart';
+
+import '../../commands.dart';
+import '../../desktop_environment.dart';
+import '../../desktop_visuals.dart';
+import '../../feature_request_identity.dart';
+import '../../shell/ports.dart'
+    show
+        FeatureHost,
+        WorkspaceNavigation,
+        OperationGate,
+        WorkspaceDialogs,
+        PreferenceCommands,
+        MeetingActivity,
+        MeetingCommands,
+        OnboardingActivity;
+import '../../shell/workspace_tab.dart';
+import 'audio_access.dart';
+import 'desktop_settings.dart';
+import 'global_shortcuts.dart';
+import 'google_picker.dart';
+import 'google_sign_in_dialog.dart';
+import 'hypr_shortcuts.dart';
+import 'ports.dart';
+import 'system_audio_setup_dialog.dart';
+
+class IntegrationsController implements IntegrationsPort {
+  IntegrationsController({
+    required FeatureHost host,
+    required WorkspaceNavigation navigation,
+    required OperationGate operations,
+    required WorkspaceDialogs dialogs,
+    required PreferenceCommands preferences,
+    required MeetingActivity meetings,
+    required MeetingCommands meetingCommands,
+    required OnboardingActivity onboarding,
+  }) : _host = host,
+       _navigation = navigation,
+       _operations = operations,
+       _dialogs = dialogs,
+       _preferences = preferences,
+       _meetings = meetings,
+       _meetingCommands = meetingCommands,
+       _onboarding = onboarding;
+
+  final FeatureHost _host;
+  final WorkspaceNavigation _navigation;
+  final OperationGate _operations;
+  final WorkspaceDialogs _dialogs;
+  final PreferenceCommands _preferences;
+  final MeetingActivity _meetings;
+  final MeetingCommands _meetingCommands;
+  final OnboardingActivity _onboarding;
+
+  DesktopConnection get d => _host.connection;
+  DesktopEnvironment get environment => _host.environment;
+  BuildContext get context => _host.context;
+  bool get mounted => !_disposed && _host.mounted;
+  bool _disposed = false;
+  void setState(VoidCallback action) => _host.update(action);
+
+  /// The shared gate keeps nesting and notifications; this owner retires stale
+  /// failures on tab, selection, preview, client-session or workspace changes.
+  Future<void> runAction(Future<void> Function() action) async {
+    final identity = FeatureRequestIdentity.capture(d);
+    final tab = _navigation.selectedTab;
+    final selectedMeeting = _meetings.selectedMeetingId;
+    final preview = _meetings.previewMeetingId;
+    bool current() =>
+        identity.isCurrent(d, alive: mounted) &&
+        _navigation.selectedTab == tab &&
+        _meetings.selectedMeetingId == selectedMeeting &&
+        _meetings.previewMeetingId == preview;
+    if (!current()) return;
+    await _operations.run(() async {
+      try {
+        await action();
+      } catch (_) {
+        if (current()) rethrow;
+      }
+    });
+  }
+
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    unawaited(googleAuth.close());
+    unawaited(commands?.close() ?? Future<void>.value());
+    unawaited(globalShortcuts?.close() ?? Future<void>.value());
+  }
+
+  @override
+  bool get openAtLogin => desktopSettings.openAtLogin;
+  @override
+  bool get microphoneAuthorized => captureCapabilities.microphoneAuthorized;
+  @override
+  int get lastCompletedRefreshMilliseconds => google.lastCompletedRefreshMs;
+  @override
+  void cancelGoogleSignIn() => googleAuth.cancelSignIn();
+  @override
+  Future<void> refreshGoogle() => google.refresh();
+  @override
+  Future<void> syncCalendar() => google.syncCalendar();
+  @override
+  Future<void> importLastYear() => google.importLastYear();
+  @override
+  Future<void> importMeetingAttachments(int meeting) =>
+      google.importAttachments(meeting);
 
   late final DesktopSettings desktopSettings = DesktopSettings(
-    Directory(widget.environment.configDirectory),
-    widget.environment.launcher,
-    environment: widget.environment,
+    Directory(environment.configDirectory),
+    environment.launcher,
+    environment: environment,
   );
 
+  @override
   bool notifications = false;
 
+  @override
   String notificationState = 'checking notify-send';
 
   AppCommands? commands;
 
   GlobalShortcuts? globalShortcuts;
 
+  @override
   String globalShortcutState = 'disabled';
   bool _quickMeetingReviewPending = false;
 
@@ -24,19 +137,24 @@ class _IntegrationsController extends _FeatureController {
 
   ConnectedSources get google => d.google;
 
+  @override
   String googleState = '';
 
   List<AudioDevice> availableAudioDevices = [];
 
+  @override
   String audioDeviceState = '';
 
   AudioAccessPresentation captureCapabilities =
       AudioAccessPresentation.fromWire(const {});
 
+  @override
   String captureCapabilityError = '';
 
+  @override
   String loginState = '';
 
+  @override
   String get microphoneAccessLabel =>
       const {
         'authorized': 'Allowed',
@@ -46,10 +164,14 @@ class _IntegrationsController extends _FeatureController {
       }[captureCapabilities.microphone] ??
       'Checking';
 
+  @override
   GooglePresentation get googlePresentation => d.googlePresentation;
+  @override
   bool get granolaCalendar => googlePresentation.provider == 'granola';
+  @override
   bool get driveAvailable => googlePresentation.driveAvailable;
 
+  @override
   Future<void> connectGranolaCalendar() async {
     // The service flushes the provider status before the configure reply.
     // The connection owns that snapshot; features only read its typed value.
@@ -62,14 +184,17 @@ class _IntegrationsController extends _FeatureController {
     await activateWindow(null);
   }
 
+  @override
   bool get googleSyncing => googlePresentation.syncing;
 
+  @override
   bool get systemAudioSetupComplete =>
       captureCapabilities.systemAudio != 'denied' &&
       captureCapabilities.systemAudioRequest != 'failed' &&
-      (meetingFeature.systemAudioSetupReviewed ||
+      (_meetings.systemAudioSetupReviewed ||
           captureCapabilities.permissionVerified);
 
+  @override
   String get systemAudioAccessLabel {
     if (captureCapabilities.systemAudio == 'denied') {
       return 'Not allowed · Enable Open Foresight in System Settings.';
@@ -78,7 +203,7 @@ class _IntegrationsController extends _FeatureController {
       return 'Setup needs attention · Retry the access request.';
     }
     if (captureCapabilities.permissionVerified) return 'Allowed';
-    if (meetingFeature.systemAudioSetupReviewed) {
+    if (_meetings.systemAudioSetupReviewed) {
       return 'Setup complete · Access is checked when recording starts.';
     }
     if (captureCapabilities.systemAudioRequest == 'completed') {
@@ -93,7 +218,7 @@ class _IntegrationsController extends _FeatureController {
   HyprShortcuts get hyprShortcuts => HyprShortcuts(
     desktopSettings.config,
     desktopSettings.launcher,
-    environment: widget.environment,
+    environment: environment,
   );
 
   Future<void> activateWindow(String? token) async {
@@ -106,14 +231,14 @@ class _IntegrationsController extends _FeatureController {
       /* pure widget tests */
     }
     if (!Platform.isMacOS &&
-        widget.environment.variables['HYPRLAND_INSTANCE_SIGNATURE'] != null) {
-      final active = await widget.environment.run('/usr/bin/hyprctl', [
+        environment.variables['HYPRLAND_INSTANCE_SIGNATURE'] != null) {
+      final active = await environment.run('/usr/bin/hyprctl', [
         'activewindow',
         '-j',
       ]);
       if (active.exitCode == 0 &&
           (jsonDecode(active.stdout as String) as Map)['pid'] != pid) {
-        await widget.environment.run('/usr/bin/hyprctl', [
+        await environment.run('/usr/bin/hyprctl', [
           'eval',
           'hl.dispatch(hl.dsp.focus({window="pid:$pid"}))',
         ]);
@@ -124,19 +249,19 @@ class _IntegrationsController extends _FeatureController {
   void reportShortcutFailure(Object failure) {
     if (!mounted) return;
     setState(() {
-      shell.error = 'Global shortcut failed: $failure';
-      globalShortcutState = shell.error;
+      _operations.setError('Global shortcut failed: $failure');
+      globalShortcutState = _operations.error;
     });
-    unawaited(notify(shell.error));
+    unawaited(notify(_operations.error));
   }
 
   Future<void> activateQuickMeeting(String? token) async {
     await activateWindow(token);
     if (mounted &&
-        !shell.onboardingFeature.active &&
-        !shell.busy &&
-        meetingFeature.recording == null)
-      await meetingFeature.quickStart();
+        !_onboarding.active &&
+        !_operations.busy &&
+        _meetings.recording == null)
+      await _meetingCommands.quickStart();
   }
 
   Future<void> requestQuickMeeting(String? token) async {
@@ -144,9 +269,9 @@ class _IntegrationsController extends _FeatureController {
     if (!mounted ||
         !context.mounted ||
         _quickMeetingReviewPending ||
-        shell.onboardingFeature.active ||
-        shell.busy ||
-        meetingFeature.recording != null)
+        _onboarding.active ||
+        _operations.busy ||
+        _meetings.recording != null)
       return;
     _quickMeetingReviewPending = true;
     try {
@@ -171,10 +296,10 @@ class _IntegrationsController extends _FeatureController {
       );
       if (allow == true &&
           mounted &&
-          !shell.onboardingFeature.active &&
-          !shell.busy &&
-          meetingFeature.recording == null) {
-        await meetingFeature.quickStart();
+          !_onboarding.active &&
+          !_operations.busy &&
+          _meetings.recording == null) {
+        await _meetingCommands.quickStart();
       }
     } finally {
       _quickMeetingReviewPending = false;
@@ -188,7 +313,7 @@ class _IntegrationsController extends _FeatureController {
         return;
       }
       await activateWindow(null);
-      if (!mounted || shell.onboardingFeature.active) return;
+      if (!mounted || _onboarding.active) return;
       final destination = switch (command) {
         'meetings' => WorkspaceTab.meetings,
         'ask' => WorkspaceTab.chat,
@@ -196,15 +321,16 @@ class _IntegrationsController extends _FeatureController {
         'settings' => WorkspaceTab.settings,
         _ => null,
       };
-      if (destination != null) shell.navigate(destination);
+      if (destination != null) _navigation.navigate(destination);
     } catch (failure) {
-      shell.reportAsyncError(failure);
+      _operations.reportAsyncError(failure);
     }
   }
 
+  @override
   Future<void> enableGlobalShortcuts() async {
     if (!Platform.isMacOS &&
-        widget.environment.variables['HYPRLAND_INSTANCE_SIGNATURE'] != null) {
+        environment.variables['HYPRLAND_INSTANCE_SIGNATURE'] != null) {
       await hyprShortcuts.install(
         d.store.preference('quickShortcut', 'CTRL + SHIFT + F'),
       );
@@ -238,9 +364,10 @@ class _IntegrationsController extends _FeatureController {
     if (mounted) setState(() {});
   }
 
+  @override
   Future<void> disableGlobalShortcuts() async {
     if (!Platform.isMacOS &&
-        widget.environment.variables['HYPRLAND_INSTANCE_SIGNATURE'] != null &&
+        environment.variables['HYPRLAND_INSTANCE_SIGNATURE'] != null &&
         hyprShortcuts.installed)
       await hyprShortcuts.remove();
     await globalShortcuts?.disable();
@@ -260,6 +387,7 @@ class _IntegrationsController extends _FeatureController {
     }
   }
 
+  @override
   Future<void> setOpenAtLogin(bool value) async {
     try {
       await desktopSettings.setOpenAtLogin(value);
@@ -270,6 +398,7 @@ class _IntegrationsController extends _FeatureController {
     }
   }
 
+  @override
   Future<void> refreshCaptureCapabilities() async {
     try {
       final result = AudioAccessPresentation.fromWire(
@@ -287,6 +416,7 @@ class _IntegrationsController extends _FeatureController {
     }
   }
 
+  @override
   Future<void> requestMicrophoneAccess() async {
     try {
       final result = AudioAccessPresentation.fromWire(
@@ -305,6 +435,7 @@ class _IntegrationsController extends _FeatureController {
     }
   }
 
+  @override
   Future<bool> ensureRecordingAccess() async {
     if (!Platform.isMacOS) return true;
     final capabilities = AudioAccessPresentation.fromWire(
@@ -317,7 +448,7 @@ class _IntegrationsController extends _FeatureController {
       );
     }
     if (capabilities.microphoneAuthorized) {
-      if (meetingFeature.systemAudioSetupReviewed ||
+      if (_meetings.systemAudioSetupReviewed ||
           capabilities.systemAudioRequest == 'completed')
         return true;
       return setupSystemAudioAccess(forRecording: true);
@@ -351,12 +482,13 @@ class _IntegrationsController extends _FeatureController {
             : 'Microphone access is required. Enable Open Foresight in System Settings > Privacy & Security > Microphone.',
       );
     }
-    if (meetingFeature.systemAudioSetupReviewed ||
+    if (_meetings.systemAudioSetupReviewed ||
         capabilities.systemAudioRequest == 'completed')
       return true;
     return setupSystemAudioAccess(forRecording: true);
   }
 
+  @override
   Future<bool> setupSystemAudioAccess({bool forRecording = false}) async {
     final proceed = await showDialog<bool>(
       context: context,
@@ -370,7 +502,7 @@ class _IntegrationsController extends _FeatureController {
           await d.command(Operation.audioCapabilities) as Map,
         ),
         openSettings: (uri) =>
-            openSystemAudioSettings(uri, environment: widget.environment),
+            openSystemAudioSettings(uri, environment: environment),
         capabilitiesChanged: (result) {
           if (mounted)
             setState(
@@ -385,17 +517,18 @@ class _IntegrationsController extends _FeatureController {
         'value': 'true',
       });
       if (!mounted) return false;
-      setState(() => meetingFeature.systemAudioSetupReviewed = true);
+      setState(() => _meetingCommands.setSystemAudioSetupReviewed(true));
       return true;
     }
     return false;
   }
 
+  @override
   Future<void> refreshAudioDevices() async {
     try {
       final devices =
-          await (widget.deviceLoader?.call() ??
-              audioDevices(runProcess: widget.environment.run));
+          await (_host.deviceLoader?.call() ??
+              audioDevices(runProcess: environment.run));
       if (mounted)
         setState(() {
           availableAudioDevices = devices;
@@ -406,6 +539,7 @@ class _IntegrationsController extends _FeatureController {
     }
   }
 
+  @override
   Future<void> connectGoogle({bool addAccount = false}) async {
     if (googleAuth.client == null) {
       throw StateError(
@@ -417,7 +551,7 @@ class _IntegrationsController extends _FeatureController {
       barrierDismissible: false,
       builder: (_) => GoogleSignInDialog(
         auth: googleAuth,
-        openBrowser: widget.environment.openUri,
+        openBrowser: environment.openUri,
         returnToApp: () => activateWindow(null),
         addAccount: addAccount,
         calendarThroughGranola: granolaCalendar,
@@ -444,6 +578,7 @@ class _IntegrationsController extends _FeatureController {
     await google.syncCalendar();
   }
 
+  @override
   Future<void> disconnectGoogle() async {
     await googleAuth.disconnect();
     if (mounted) {
@@ -455,8 +590,10 @@ class _IntegrationsController extends _FeatureController {
     }
   }
 
+  @override
   Future<void> addGoogleAccount() => connectGoogle(addAccount: true);
 
+  @override
   Future<void> switchGoogleAccount(String id) async {
     if (id == googleAuth.account) return;
     await googleAuth.switchAccount(id);
@@ -465,6 +602,7 @@ class _IntegrationsController extends _FeatureController {
     await google.syncCalendar();
   }
 
+  @override
   Future<void> signOutGoogleAccount(String id) async {
     await googleAuth.signOutAccount(id);
     if (!mounted) return;
@@ -475,6 +613,7 @@ class _IntegrationsController extends _FeatureController {
     );
   }
 
+  @override
   Future<void> setMeetingReminders(bool value) async {
     if (value && Platform.isMacOS) {
       final result =
@@ -485,7 +624,7 @@ class _IntegrationsController extends _FeatureController {
         );
       }
     }
-    await settingsFeature.preference('googleReminders', value.toString());
+    await _preferences.preference('googleReminders', value.toString());
     await refreshNotifications();
   }
 
@@ -506,6 +645,7 @@ class _IntegrationsController extends _FeatureController {
     }
   }
 
+  @override
   Future<void> setNotifications(bool value) async {
     if (value && Platform.isMacOS) {
       final result =
@@ -527,16 +667,18 @@ class _IntegrationsController extends _FeatureController {
     await refreshNotifications();
   }
 
+  @override
   Future<void> notify(String message) async {
     if (!notifications) return;
     try {
-      await widget.environment.notify('Open Foresight', message);
+      await environment.notify('Open Foresight', message);
     } catch (e) {
       if (mounted)
         setState(() => notificationState = 'notification unavailable: $e');
     }
   }
 
+  @override
   Future<void> chooseDrive({bool folder = false}) async {
     if (!driveAvailable)
       throw StateError(
@@ -583,7 +725,7 @@ class _IntegrationsController extends _FeatureController {
             action: SnackBarAction(
               label: 'Retry failed $kind',
               onPressed: () => unawaited(
-                shell.run(
+                _operations.run(
                   () => importDriveSelection(failedIds, folder: folder),
                 ),
               ),
@@ -618,11 +760,12 @@ class _IntegrationsController extends _FeatureController {
     );
   }
 
+  @override
   Future<void> changeQuickShortcut() async {
     final input = TextEditingController(
       text: d.store.preference('quickShortcut', 'CTRL + SHIFT + F'),
     );
-    final saved = await shell.showInputDialog<bool>(
+    final saved = await _dialogs.showInputDialog<bool>(
       builder: (context) => AlertDialog(
         title: const Text('Meeting shortcut'),
         content: TextField(
@@ -644,7 +787,7 @@ class _IntegrationsController extends _FeatureController {
     final value = input.text;
     input.dispose();
     if (saved != true || !mounted) return;
-    await shell.run(() async {
+    await _operations.run(() async {
       final normalized = HyprShortcuts.normalize(
         Platform.isMacOS
             ? value
@@ -659,9 +802,7 @@ class _IntegrationsController extends _FeatureController {
           await globalShortcuts!.enable(
             preferredTrigger: normalized.replaceAll(' ', ''),
           );
-        } else if (widget
-                .environment
-                .variables['HYPRLAND_INSTANCE_SIGNATURE'] !=
+        } else if (environment.variables['HYPRLAND_INSTANCE_SIGNATURE'] !=
             null) {
           await hyprShortcuts.install(normalized);
         } else {
@@ -669,10 +810,11 @@ class _IntegrationsController extends _FeatureController {
           return;
         }
       }
-      await settingsFeature.preference('quickShortcut', normalized);
+      await _preferences.preference('quickShortcut', normalized);
     });
   }
 
+  @override
   String googleSyncStatus() {
     if (googleSyncing) return 'Syncing…';
     final timestamp = google.lastCompletedRefreshMs;
@@ -689,6 +831,7 @@ class _IntegrationsController extends _FeatureController {
     return 'Last synced $days days ago';
   }
 
+  @override
   Widget deviceChoice(bool playback) {
     final key = playback ? 'playbackTarget' : 'microphoneTarget';
     final current = d.store.preference(key, 'auto');
@@ -713,9 +856,9 @@ class _IntegrationsController extends _FeatureController {
           ),
         ),
       ],
-      onChanged: meetingFeature.recording != null
+      onChanged: _meetings.recording != null
           ? null
-          : (value) => runAction(() => settingsFeature.preference(key, value!)),
+          : (value) => runAction(() => _preferences.preference(key, value!)),
     );
   }
 }

@@ -1,9 +1,8 @@
 import 'desktop_environment.dart';
-import 'features/integrations/audio_access.dart';
+import 'features/integrations/integrations_controller.dart';
 import 'shell/workspace_tab.dart';
 import 'shell/ports.dart';
 import 'presentation/workspace_presentation.dart';
-import 'system_audio_setup_dialog.dart';
 import 'onboarding_view.dart';
 import 'model_terms_dialog.dart';
 
@@ -30,15 +29,10 @@ import 'cluster_rendering.dart';
 import 'model_setup.dart';
 import 'app_theme.dart';
 import 'meeting_visuals.dart';
-import 'desktop_settings.dart';
 import 'desktop_visuals.dart';
 import 'commands.dart';
 import 'calendar_auth_links.dart';
-import 'global_shortcuts.dart';
 import 'desktop_menu.dart';
-import 'hypr_shortcuts.dart';
-import 'google_picker.dart';
-import 'google_sign_in_dialog.dart';
 import 'account_button.dart';
 import 'gemma_setup_view.dart';
 import 'speech_setup_view.dart';
@@ -58,7 +52,6 @@ part 'chat_controller.dart';
 part 'meetings_controller.dart';
 part 'meeting_ai_views.dart';
 part 'settings_controller.dart';
-part 'integrations_controller.dart';
 part 'shell/legacy_feature_adapters.dart';
 
 class Foresight extends StatelessWidget {
@@ -127,7 +120,16 @@ class _WorkspaceState extends State<Workspace>
   late final chatFeature = _ChatController(this);
   late final meetingFeature = _MeetingsController(this);
   late final settingsFeature = _SettingsController(this);
-  late final integrationFeature = _IntegrationsController(this);
+  late final integrationFeature = IntegrationsController(
+    host: this,
+    navigation: this,
+    operations: this,
+    dialogs: this,
+    preferences: preferenceCommands,
+    meetings: meetingPorts,
+    meetingCommands: meetingPorts,
+    onboarding: onboardingActivity,
+  );
 
   late final PreferenceCommands preferenceCommands = _LegacyPreferenceCommands(
     settingsFeature,
@@ -397,11 +399,7 @@ class _WorkspaceState extends State<Workspace>
           },
         ),
       );
-    unawaited(integrationFeature.googleAuth.close());
-    unawaited(integrationFeature.commands?.close() ?? Future<void>.value());
-    unawaited(
-      integrationFeature.globalShortcuts?.close() ?? Future<void>.value(),
-    );
+    integrationFeature.dispose();
     sourceFeature.graphMotionTicker.dispose();
     sourceFeature.graphCameraController.dispose();
     sourceFeature.graphMotionFrames.dispose();

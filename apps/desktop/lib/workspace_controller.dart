@@ -13,7 +13,7 @@ abstract class _FeatureController {
   _ChatController get chatFeature => shell.chatFeature;
   _MeetingsController get meetingFeature => shell.meetingFeature;
   _SettingsController get settingsFeature => shell.settingsFeature;
-  _IntegrationsController get integrationFeature => shell.integrationFeature;
+  IntegrationsPort get integrationFeature => shell.integrationFeature;
 
   /// UI futures share the shell's gate while retaining their original owner.
   Future<void> runAction(

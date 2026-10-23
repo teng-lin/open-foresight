@@ -876,7 +876,7 @@ class _SourcesController extends _FeatureController {
                         ),
                         if (d.sourcesPaused)
                           const Text('Paused', style: TextStyle(fontSize: 12)),
-                        if (integrationFeature.googleAuth.connected)
+                        if (integrationFeature.googlePresentation.connected)
                           Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
@@ -949,11 +949,15 @@ class _SourcesController extends _FeatureController {
                           case 'drive-folder':
                             await integrationFeature.chooseDrive(folder: true);
                           case 'drive-year':
-                            if (!integrationFeature.googleAuth.connected)
+                            if (!integrationFeature
+                                .googlePresentation
+                                .connected)
                               await integrationFeature.connectGoogle();
                             if (mounted &&
-                                integrationFeature.googleAuth.connected) {
-                              await integrationFeature.google.importLastYear();
+                                integrationFeature
+                                    .googlePresentation
+                                    .connected) {
+                              await integrationFeature.importLastYear();
                             }
                         }
                       }),

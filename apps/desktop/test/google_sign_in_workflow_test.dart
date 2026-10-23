@@ -10,7 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/src/domain.dart';
 import 'package:foresight_core/src/google_auth.dart';
-import 'package:open_foresight/google_sign_in_dialog.dart';
+import 'package:open_foresight/features/integrations/google_sign_in_dialog.dart';
 import 'package:open_foresight/main.dart';
 import 'package:foresight_core/src/store.dart';
 import 'package:foresight_core/remote.dart' show RpcError, RpcErrorCode;

@@ -2,7 +2,7 @@ import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
-import 'package:open_foresight/desktop_settings.dart';
+import 'package:open_foresight/features/integrations/desktop_settings.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

@@ -14,7 +14,7 @@ import 'package:foresight_core/src/sqlite_read_session.dart';
 import 'package:foresight_core/src/sqlite_store_reader.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/desktop_settings.dart';
+import 'package:open_foresight/features/integrations/desktop_settings.dart';
 import 'controller_fixture.dart' show ControllerConnection;
 import 'meeting_setup_test.dart' show OfflineHelper;
 import 'pump_until.dart';

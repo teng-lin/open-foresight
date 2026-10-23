@@ -77,7 +77,7 @@ class _OnboardingController extends _FeatureController {
           'Microphone access',
           integrationFeature.requestMicrophoneAccess,
           subtitle: integrationFeature.microphoneAccessLabel,
-          complete: integrationFeature.captureCapabilities.microphoneAuthorized,
+          complete: integrationFeature.microphoneAuthorized,
         ),
         action(
           Icons.volume_up_outlined,
@@ -275,11 +275,11 @@ class _OnboardingController extends _FeatureController {
     permissions: permissions,
     imports: imports,
     library: library,
-    googleConnected: integrationFeature.googleAuth.connected,
-    googleEmail: integrationFeature.googleAuth.email,
+    googleConnected: integrationFeature.googlePresentation.connected,
+    googleEmail: integrationFeature.googlePresentation.email,
     connectGoogle: () async {
       await integrationFeature.connectGoogle();
-      return integrationFeature.googleAuth.connected;
+      return integrationFeature.googlePresentation.connected;
     },
   );
 }

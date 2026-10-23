@@ -1,5 +1,5 @@
 import 'dart:io';
-import 'desktop_environment.dart';
+import '../../desktop_environment.dart';
 import 'package:flutter/services.dart';
 
 /// Native macOS login items or a managed Freedesktop autostart entry.

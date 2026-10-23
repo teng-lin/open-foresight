@@ -862,7 +862,7 @@ class _SettingsController extends _FeatureController {
                       ? 'Automatically open Foresight when you log in to your computer.'
                       : integrationFeature.loginState,
                 ),
-                value: integrationFeature.desktopSettings.openAtLogin,
+                value: integrationFeature.openAtLogin,
                 onChanged: shell.busy
                     ? null
                     : (value) => shell.run(
@@ -1199,8 +1199,8 @@ class _SettingsController extends _FeatureController {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  integrationFeature.googleAuth.connected
-                      ? 'Connected as ${integrationFeature.googleAuth.email}'
+                  integrationFeature.googlePresentation.connected
+                      ? 'Connected as ${integrationFeature.googlePresentation.email}'
                       : integrationFeature.granolaCalendar
                       ? 'Google Calendar through Granola'
                       : 'Google Drive and Calendar',
@@ -1215,8 +1215,8 @@ class _SettingsController extends _FeatureController {
                       ? 'Calendar only. Sign-in and calendar sync use Granola’s hosted service. Drive is unavailable. This experimental connection depends on Granola accepting the return to Foresight.'
                       : 'Connect to import files and upcoming meetings. Foresight requests read-only access; imported text is indexed on this computer.',
                 ),
-                if (!integrationFeature.googleAuth.connected &&
-                    integrationFeature.googleAuth.client == null)
+                if (!integrationFeature.googlePresentation.connected &&
+                    !integrationFeature.googlePresentation.configured)
                   const Padding(
                     padding: EdgeInsets.only(top: 8),
                     child: Text(
@@ -1232,7 +1232,7 @@ class _SettingsController extends _FeatureController {
                   spacing: 8,
                   runSpacing: 8,
                   children: [
-                    if (!integrationFeature.googleAuth.connected) ...[
+                    if (!integrationFeature.googlePresentation.connected) ...[
                       FilledButton(
                         onPressed: shell.busy
                             ? null
@@ -1255,7 +1255,9 @@ class _SettingsController extends _FeatureController {
                             content: SelectableText(
                               integrationFeature.granolaCalendar
                                   ? 'This connects to Google through Granola’s existing WorkOS project and hosted calendar API. Granola processes authorization and calendar data. Drive is unavailable. Google consent may include calendar write access, matching Granola’s initial sign-in. Disconnect removes the saved session from Foresight; manage service access in Google or Granola. If your browser opens Granola, paste the return link into the waiting Foresight sign-in dialog.'
-                                  : integrationFeature.googleAuth.client != null
+                                  : integrationFeature
+                                        .googlePresentation
+                                        .configured
                                   ? 'Choose Connect Google, select your account in the browser, and grant Drive and Calendar read access. This app already has its application sign-in configuration.\n\nYour Google password is never entered into Foresight. After signing in, you return to the app automatically.'
                                   : 'Google sign-in is unavailable in this build. Install a distribution with Google sign-in included.\n\nSign-in opens your default browser and asks for read access. Your Google password is never entered into Foresight.',
                             ),
@@ -1268,8 +1270,7 @@ class _SettingsController extends _FeatureController {
                         onPressed:
                             shell.busy || integrationFeature.googleSyncing
                             ? null
-                            : () =>
-                                  shell.run(integrationFeature.google.refresh),
+                            : () => shell.run(integrationFeature.refreshGoogle),
                         child: const Text('Refresh Google'),
                       ),
                       TextButton(
@@ -1281,9 +1282,9 @@ class _SettingsController extends _FeatureController {
                         child: const Text('Disconnect Google'),
                       ),
                     ],
-                    if (integrationFeature.googleAuth.signingIn)
+                    if (integrationFeature.googlePresentation.signingIn)
                       TextButton(
-                        onPressed: integrationFeature.googleAuth.cancelSignIn,
+                        onPressed: integrationFeature.cancelGoogleSignIn,
                         child: const Text('Cancel sign-in'),
                       ),
                   ],
