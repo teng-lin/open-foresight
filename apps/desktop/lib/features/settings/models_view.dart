@@ -60,71 +60,7 @@ extension _ModelViews on SettingsController {
           const Text(
             'Download the dedicated question model using this distribution, or import an already-decrypted copy. Its identity and bundled runtime are verified before replacing the current model.',
           ),
-        if (modelKind == 'query-detection')
-          Row(
-            children: [
-              OutlinedButton(
-                onPressed:
-                    _operations.busy ||
-                        !Platform.isMacOS ||
-                        !desktopRuntimeSettings.webContentAvailable
-                    ? null
-                    : () async {
-                        setState(() => queryModelDownloading = true);
-                        try {
-                          await _operations.run(() async {
-                            final terms = dedicatedQueryTermsUri();
-                            if (terms == null)
-                              throw StateError(
-                                'This distribution has not supplied question model terms.',
-                              );
-                            if (_reads.preference(dedicatedQueryTermsKey) !=
-                                'accepted') {
-                              if (!await confirmQueryModelTerms(
-                                context,
-                                terms,
-                                dedicatedQueryModelDigest,
-                                openUri: _host.environment.openUri,
-                              ))
-                                return;
-                              await d.command(Operation.preferencesSet, {
-                                'key': dedicatedQueryTermsKey,
-                                'value': 'accepted',
-                              });
-                            }
-                            await d.command(Operation.modelsAcquireQuery, {});
-                            modelState = 'Automatic question model ready';
-                          });
-                        } finally {
-                          if (mounted)
-                            setState(() => queryModelDownloading = false);
-                        }
-                      },
-                child: Text(
-                  queryModelDownloading
-                      ? 'Downloading and verifying…'
-                      : 'Download question model',
-                ),
-              ),
-              if (queryModelDownloading)
-                TextButton(
-                  onPressed: () async {
-                    try {
-                      await d.command(
-                        Operation.modelsCancelQueryAcquisition,
-                        {},
-                      );
-                    } catch (failure) {
-                      if (mounted)
-                        setState(
-                          () => _operations.setError(failure.toString()),
-                        );
-                    }
-                  },
-                  child: const Text('Cancel download'),
-                ),
-            ],
-          ),
+        if (modelKind == 'query-detection') _queryDownloadControls(),
         if (modelKind == 'query-detection' &&
             (!Platform.isMacOS || !desktopRuntimeSettings.webContentAvailable))
           const Text(
@@ -146,42 +82,7 @@ extension _ModelViews on SettingsController {
                 ? null
                 : (value) => setState(() => embeddingGpu = value!),
           ),
-        FilledButton(
-          onPressed: _operations.busy
-              ? null
-              : () => _operations.run(() async {
-                  await d.command(
-                    modelKind == 'embedding'
-                        ? Operation.modelsEmbedding
-                        : modelKind == 'generation'
-                        ? Operation.modelsGeneration
-                        : Operation.modelsRegister,
-                    {
-                      'kind': modelKind,
-                      'path': modelPath.text,
-                      'runtime':
-                          modelKind == 'query-detection' && !portableQuery
-                          ? ''
-                          : runtimePath.text,
-                      if (modelKind == 'query-detection')
-                        'backend': portableQuery
-                            ? 'raw_query_jsonl_v1'
-                            : 'legacy_query_cpu',
-                      if (modelKind == 'query-detection' && portableQuery)
-                        'digest': queryDigest.trim(),
-                      'gpu': embeddingGpu,
-                    },
-                  );
-                  modelState = modelKind == 'query-detection'
-                      ? 'Automatic question model ready'
-                      : '$modelKind ready';
-                }),
-          child: Text(
-            modelKind == 'query-detection'
-                ? 'Verify and import'
-                : 'Register and load',
-          ),
-        ),
+        _registerModelButton(),
         if (modelState.isNotEmpty) Text('Last setup: $modelState'),
         Text(
           'Embedding: ${d.helper.snapshot?.pipeline ?? 'unconfigured'} · Index: ${d.helper.snapshot?.index ?? 'empty'}',
@@ -222,6 +123,100 @@ extension _ModelViews on SettingsController {
               .toList(),
         ),
       ],
+    ),
+  );
+  Widget _queryDownloadControls() => Row(
+    children: [
+      OutlinedButton(
+        onPressed:
+            _operations.busy ||
+                !Platform.isMacOS ||
+                !desktopRuntimeSettings.webContentAvailable
+            ? null
+            : () async {
+                setState(() => queryModelDownloading = true);
+                try {
+                  await _operations.run(() async {
+                    final terms = dedicatedQueryTermsUri();
+                    if (terms == null)
+                      throw StateError(
+                        'This distribution has not supplied question model terms.',
+                      );
+                    if (_reads.preference(dedicatedQueryTermsKey) !=
+                        'accepted') {
+                      if (!await confirmQueryModelTerms(
+                        context,
+                        terms,
+                        dedicatedQueryModelDigest,
+                        openUri: _host.environment.openUri,
+                      ))
+                        return;
+                      await d.command(Operation.preferencesSet, {
+                        'key': dedicatedQueryTermsKey,
+                        'value': 'accepted',
+                      });
+                    }
+                    await d.command(Operation.modelsAcquireQuery, {});
+                    modelState = 'Automatic question model ready';
+                  });
+                } finally {
+                  if (mounted) setState(() => queryModelDownloading = false);
+                }
+              },
+        child: Text(
+          queryModelDownloading
+              ? 'Downloading and verifying…'
+              : 'Download question model',
+        ),
+      ),
+      if (queryModelDownloading)
+        TextButton(
+          onPressed: () async {
+            try {
+              await d.command(Operation.modelsCancelQueryAcquisition, {});
+            } catch (failure) {
+              if (mounted)
+                setState(() => _operations.setError(failure.toString()));
+            }
+          },
+          child: const Text('Cancel download'),
+        ),
+    ],
+  );
+
+  Widget _registerModelButton() => FilledButton(
+    onPressed: _operations.busy
+        ? null
+        : () => _operations.run(() async {
+            await d.command(
+              modelKind == 'embedding'
+                  ? Operation.modelsEmbedding
+                  : modelKind == 'generation'
+                  ? Operation.modelsGeneration
+                  : Operation.modelsRegister,
+              {
+                'kind': modelKind,
+                'path': modelPath.text,
+                'runtime': modelKind == 'query-detection' && !portableQuery
+                    ? ''
+                    : runtimePath.text,
+                if (modelKind == 'query-detection')
+                  'backend': portableQuery
+                      ? 'raw_query_jsonl_v1'
+                      : 'legacy_query_cpu',
+                if (modelKind == 'query-detection' && portableQuery)
+                  'digest': queryDigest.trim(),
+                'gpu': embeddingGpu,
+              },
+            );
+            modelState = modelKind == 'query-detection'
+                ? 'Automatic question model ready'
+                : '$modelKind ready';
+          }),
+    child: Text(
+      modelKind == 'query-detection'
+          ? 'Verify and import'
+          : 'Register and load',
     ),
   );
 }

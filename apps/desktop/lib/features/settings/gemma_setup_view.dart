@@ -397,50 +397,7 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
                 ),
               ],
               const SizedBox(height: 20),
-              if (widget.needsGeneration)
-                RadioGroup<GemmaModel>(
-                  groupValue: selected,
-                  onChanged: (value) => setState(() => selected = value!),
-                  child: Column(
-                    children: [
-                      for (final model in gemmaModels)
-                        RadioListTile<GemmaModel>(
-                          title: Text(model.name),
-                          subtitle: Text(
-                            '${model.minimumMemoryGb} GB memory · ${(model.bytes / 1e9).toStringAsFixed(2)} GB${isCurrent(model)
-                                ? ' · Current model'
-                                : downloaded[model] == true
-                                ? ' · Downloaded'
-                                : ' download'}',
-                          ),
-                          secondary:
-                              isCurrent(model) || downloaded[model] == true
-                              ? null
-                              : TextButton(
-                                  onPressed:
-                                      working ||
-                                          checkingCache ||
-                                          !enoughMemory(model)
-                                      ? null
-                                      : () {
-                                          setState(() => selected = model);
-                                          // This task catches failures and publishes them in the view state.
-                                          // ignore: discarded_futures
-                                          if (embeddingReady) install();
-                                        },
-                                  child: Text(
-                                    embeddingReady
-                                        ? 'Click to download'
-                                        : 'Select',
-                                  ),
-                                ),
-                          value: model,
-                          enabled:
-                              !working && !checkingCache && enoughMemory(model),
-                        ),
-                    ],
-                  ),
-                ),
+              if (widget.needsGeneration) _generationChoices(),
               if (widget.needsGeneration && widget.memoryGb <= 0)
                 const Text(
                   'Device memory could not be determined. Automatic generation model setup is unavailable.',
@@ -516,38 +473,75 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
             },
             child: const Text('Cancel'),
           ),
-        FilledButton(
-          onPressed:
-              working ||
-                  checkingCache ||
-                  (!done &&
-                      (widget.runner.isEmpty ||
-                          (widget.needsGeneration &&
-                              !isCurrent(selected) &&
-                              !enoughMemory(selected))))
-              ? null
-              : install,
-          child: Text(
-            done
-                ? 'Done'
-                : error.isNotEmpty
-                ? 'Retry'
-                : !embeddingReady
-                ? widget.needsGeneration
-                      ? (embeddingCached &&
-                                (isCurrent(selected) ||
-                                    downloaded[selected] == true)
-                            ? 'Use models'
-                            : 'Download models')
-                      : embeddingCached
-                      ? 'Use EmbeddingGemma 2'
-                      : 'Download EmbeddingGemma 2'
-                : downloaded[selected] == true
-                ? 'Use model'
-                : 'Continue',
-          ),
-        ),
+        _installationButton(),
       ],
+    ),
+  );
+  Widget _generationChoices() => RadioGroup<GemmaModel>(
+    groupValue: selected,
+    onChanged: (value) => setState(() => selected = value!),
+    child: Column(
+      children: [
+        for (final model in gemmaModels)
+          RadioListTile<GemmaModel>(
+            title: Text(model.name),
+            subtitle: Text(
+              '${model.minimumMemoryGb} GB memory · ${(model.bytes / 1e9).toStringAsFixed(2)} GB${isCurrent(model)
+                  ? ' · Current model'
+                  : downloaded[model] == true
+                  ? ' · Downloaded'
+                  : ' download'}',
+            ),
+            secondary: isCurrent(model) || downloaded[model] == true
+                ? null
+                : TextButton(
+                    onPressed: working || checkingCache || !enoughMemory(model)
+                        ? null
+                        : () {
+                            setState(() => selected = model);
+                            // This task catches failures and publishes them in the view state.
+                            // ignore: discarded_futures
+                            if (embeddingReady) install();
+                          },
+                    child: Text(
+                      embeddingReady ? 'Click to download' : 'Select',
+                    ),
+                  ),
+            value: model,
+            enabled: !working && !checkingCache && enoughMemory(model),
+          ),
+      ],
+    ),
+  );
+
+  Widget _installationButton() => FilledButton(
+    onPressed:
+        working ||
+            checkingCache ||
+            (!done &&
+                (widget.runner.isEmpty ||
+                    (widget.needsGeneration &&
+                        !isCurrent(selected) &&
+                        !enoughMemory(selected))))
+        ? null
+        : install,
+    child: Text(
+      done
+          ? 'Done'
+          : error.isNotEmpty
+          ? 'Retry'
+          : !embeddingReady
+          ? widget.needsGeneration
+                ? (embeddingCached &&
+                          (isCurrent(selected) || downloaded[selected] == true)
+                      ? 'Use models'
+                      : 'Download models')
+                : embeddingCached
+                ? 'Use EmbeddingGemma 2'
+                : 'Download EmbeddingGemma 2'
+          : downloaded[selected] == true
+          ? 'Use model'
+          : 'Continue',
     ),
   );
 }
