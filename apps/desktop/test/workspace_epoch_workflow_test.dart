@@ -1,3 +1,4 @@
+import 'package:foresight_core/desktop.dart' show MeetingArtifact;
 import 'package:open_foresight/shell/workspace_tab.dart';
 import '../test_support/core_fixture.dart';
 import 'package:flutter/material.dart';

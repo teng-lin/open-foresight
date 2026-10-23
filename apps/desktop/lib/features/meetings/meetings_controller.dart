@@ -121,7 +121,6 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
   Future<void> dispose() {
     if (_disposed) return _closing ?? Future<void>.value();
     _disposed = true;
-    unawaited(noteEnhancementChanges?.cancel());
     unawaited(_reads.dispose());
     _noteReadGeneration++;
     recording?.dispose();
@@ -253,7 +252,6 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
 
   // Cancelled by the controller dispose lifecycle.
   // ignore: cancel_subscriptions
-  StreamSubscription<void>? noteEnhancementChanges;
 
   bool meetingEnhancementStarting = false;
 

@@ -1,3 +1,4 @@
+import 'package:foresight_core/desktop.dart' show Citation;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -14,11 +15,13 @@ void main() {
         'text/plain',
         'fixture',
       );
-      f.shell.chatFeature.citation(<String, Object?>{
-        'document_id': id,
-        'revision': 1,
-        'excerpt': 'Original evidence',
-      });
+      f.shell.chatFeature.cite(
+        Citation.fromRow({
+          'document_id': id,
+          'revision': 1,
+          'excerpt': 'Original evidence',
+        }),
+      );
       await tester.pumpAndSettle();
       final edit = find.widgetWithText(TextButton, 'Edit source');
       expect(edit, findsOneWidget);

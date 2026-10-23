@@ -120,7 +120,11 @@ void main() {
             beforeSourceProjections,
             reason: 'Sources rebuilds use prepared snapshots',
           );
-          expect(admissions.watches['sources'], 1);
+          expect(
+            admissions.watches['sources'],
+            2,
+            reason: 'Sources and Onboarding each own one stable source watch',
+          );
         }
       }
       // Retain the frozen pre-migration JSON; this test records current

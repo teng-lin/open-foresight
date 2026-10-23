@@ -321,8 +321,6 @@ class _WorkspaceState extends State<Workspace>
         ),
       );
     unawaited(_initializePreferences());
-    integrationFeature
-        .google; // Create the independently versioned connection tables.
     integrationFeature.googleState = integrationFeature.googleAuth.loadError;
     unawaited(integrationFeature.refreshAudioDevices());
     if (Platform.isMacOS) {
@@ -460,25 +458,19 @@ class _WorkspaceState extends State<Workspace>
     unawaited(captureLevels?.cancel());
     unawaited(connectionChanges?.cancel());
     captureVolumes.dispose();
-    void releaseDomain() {
-      d.close();
-    }
-
-    void closeDomain() => releaseDomain();
-
     final hasPendingNoteSave = meetingFeature.hasPendingNoteSave;
     final pendingNoteSave = meetingFeature.dispose();
     if (!hasPendingNoteSave)
-      closeDomain();
+      d.close();
     else
       unawaited(
         pendingNoteSave.then(
-          (_) => closeDomain(),
+          (_) => d.close(),
           onError: (Object failure, StackTrace stack) {
             FlutterError.reportError(
               FlutterErrorDetails(exception: failure, stack: stack),
             );
-            closeDomain();
+            d.close();
           },
         ),
       );
