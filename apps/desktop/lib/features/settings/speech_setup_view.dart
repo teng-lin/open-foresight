@@ -3,6 +3,7 @@ import 'model_setup_surface.dart';
 import 'dart:io';
 import 'dart:async';
 import 'model_terms_dialog.dart';
+import 'read_model.dart';
 import 'package:flutter/material.dart';
 import 'package:foresight_core/desktop.dart';
 
@@ -11,6 +12,7 @@ class SpeechSetupDialog extends StatefulWidget {
   final VoidCallback? onDone;
   bool get embedded => onDone != null;
   final StoreReader store;
+  final bool Function()? ownerCurrent;
   final ModelPreferenceWriter savePreference;
   final GemmaDownload Function()? createDownload;
   final LocalModelFinder findLocalModel;
@@ -24,6 +26,7 @@ class SpeechSetupDialog extends StatefulWidget {
     this.environment = const DesktopEnvironment(),
     this.onDone,
     required this.store,
+    this.ownerCurrent,
     required this.savePreference,
     this.createDownload,
     this.findLocalModel = localModelFile,
@@ -37,9 +40,10 @@ class SpeechSetupDialog extends StatefulWidget {
 }
 
 class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
+  bool get active => mounted && (widget.ownerCurrent?.call() ?? true);
   late GemmaModel selected;
   String? currentDigest, currentPath, currentRunner;
-  Map<String, Object?>? registration;
+  ModelRegistration? registration;
   bool working = false, cancelled = false;
   String status = '', error = '';
   double? progress;
@@ -50,15 +54,31 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
   @override
   void initState() {
     super.initState();
-    currentDigest = widget.store.model('speech')?.digest;
-    registration = widget.store.model('speech')?.toRow();
-    currentPath = registration?['path'] as String?;
-    currentRunner = registration?['runtime'] as String?;
-    selected =
-        speechModels.where((m) => m.digest == currentDigest).firstOrNull ??
-        speechModels.where(cached).firstOrNull ??
-        speechModels[3];
-    unawaited(checkLocalModels());
+    selected = speechModels[3];
+    unawaited(prepareModel());
+  }
+
+  Future<void> prepareModel() async {
+    final epoch = widget.store.workspaceEpoch;
+    try {
+      registration = await readSetupModel(widget.store, 'speech');
+      if (!active || widget.store.workspaceEpoch != epoch) return;
+      currentDigest = registration?.digest;
+      currentPath = registration?.path;
+      currentRunner = registration?.runtime;
+      selected =
+          speechModels
+              .where((model) => model.digest == currentDigest)
+              .firstOrNull ??
+          selected;
+      await checkLocalModels();
+    } catch (failure) {
+      if (active)
+        setState(() {
+          error = failure.toString();
+          checkingCache = false;
+        });
+    }
   }
 
   bool isCurrent(GemmaModel model) =>
@@ -76,12 +96,12 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
       final file = await widget.findLocalModel(
         model,
         widget.directory,
-        registration: registration,
+        registration: cacheRegistration(registration),
       );
-      if (!mounted) return;
+      if (!active) return;
       if (file != null) verifiedFiles[model] = file;
     }
-    if (mounted) setState(() => checkingCache = false);
+    if (active) setState(() => checkingCache = false);
   }
 
   bool cached(GemmaModel model) => localFile(model) != null;
@@ -130,13 +150,13 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
             openUri: widget.environment.openUri,
           ))
         return;
-      if (!mounted || cancelled) return;
+      if (!active || cancelled) return;
       final asset = await download!.download(
         model,
         widget.directory,
         existingFile: localFile(model),
         phase: (phase) {
-          if (mounted && !cancelled)
+          if (active && !cancelled)
             setState(
               () => status = switch (phase) {
                 ModelDownloadPhase.checkingCache =>
@@ -150,11 +170,10 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
             );
         },
         progress: (received, total) {
-          if (mounted && !cancelled)
-            setState(() => progress = received / total);
+          if (active && !cancelled) setState(() => progress = received / total);
         },
       );
-      if (!mounted || cancelled) return;
+      if (!active || cancelled) return;
       setState(() {
         status = 'Loading ${model.name} on the configured device...';
         progress = null;
@@ -166,17 +185,17 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
         asset,
         widget.runner,
         model.digest,
-        () => mounted && !cancelled,
+        () => active && !cancelled,
       );
-      if (!mounted || cancelled) return;
+      if (!active || cancelled) return;
       widget.installed();
-      if (mounted) finish();
+      if (active) finish();
     } on ModelDownloadCancelled {
       // Closing this dialog leaves the previous registration intact.
     } catch (failure) {
-      if (mounted && !cancelled) setState(() => error = failure.toString());
+      if (active && !cancelled) setState(() => error = failure.toString());
     } finally {
-      if (mounted) setState(() => working = false);
+      if (active) setState(() => working = false);
     }
   }
 

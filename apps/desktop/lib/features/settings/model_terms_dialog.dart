@@ -14,7 +14,15 @@ Future<bool> confirmModelTerms(
   Future<void> Function(Uri)? openUri,
 }) async {
   final key = 'modelTerms.${model.repository}.${model.revision}';
-  if (store.preference(key) == 'accepted') return true;
+  final result = await store.read(StoreReadQueries.preference(key));
+  if (result.error != null) throw result.error!;
+  if (!context.mounted) return false;
+  if (!result.current)
+    throw RpcError(
+      RpcErrorCode.unavailable,
+      'Model terms state is not current; retry setup.',
+    );
+  if (result.value == 'accepted') return true;
   final card = Uri.https(
     'huggingface.co',
     '/${model.repository}/blob/${model.revision}/README.md',

@@ -3,6 +3,7 @@ import 'model_setup_surface.dart';
 import 'dart:io';
 import 'dart:async';
 import 'model_terms_dialog.dart';
+import 'read_model.dart';
 import 'package:flutter/material.dart';
 import 'package:foresight_core/desktop.dart';
 
@@ -11,6 +12,7 @@ class GemmaSetupDialog extends StatefulWidget {
   final VoidCallback? onDone;
   bool get embedded => onDone != null;
   final StoreReader store;
+  final bool Function()? ownerCurrent;
   final ModelPreferenceWriter savePreference;
   final GemmaDownload Function()? createDownload;
   final LocalModelFinder findLocalModel;
@@ -28,6 +30,7 @@ class GemmaSetupDialog extends StatefulWidget {
     this.environment = const DesktopEnvironment(),
     this.onDone,
     required this.store,
+    this.ownerCurrent,
     required this.savePreference,
     this.createDownload,
     this.findLocalModel = localModelFile,
@@ -48,9 +51,10 @@ class GemmaSetupDialog extends StatefulWidget {
 }
 
 class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
+  bool get active => mounted && (widget.ownerCurrent?.call() ?? true);
   late GemmaModel selected;
   late bool embeddingReady;
-  Map<String, Object?>? registeredGeneration;
+  ModelRegistration? registeredGeneration, registeredEmbedding;
   final downloaded = <GemmaModel, bool>{};
   final verifiedFiles = <GemmaModel, File>{};
   bool checkingCache = true;
@@ -58,11 +62,11 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
   bool isCurrent(GemmaModel model) {
     final registration = registeredGeneration;
     if (registration == null ||
-        registration['digest'] != model.digest ||
-        registration['backend'] != 'litert_lm')
+        registration.digest != model.digest ||
+        registration.backend != 'litert_lm')
       return false;
-    final file = File(registration['path'] as String);
-    final runner = File(registration['runtime'] as String);
+    final file = File(registration.path);
+    final runner = File(registration.runtime);
     return verifiedFiles[model]?.path == file.path &&
         file.existsSync() &&
         file.lengthSync() == model.bytes &&
@@ -89,20 +93,22 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
       final file = await widget.findLocalModel(
         model,
         model == embeddingGemmaModel ? embeddingDirectory : widget.directory,
-        registration: model == embeddingGemmaModel
-            ? widget.store.model('embedding')?.toRow()
-            : registeredGeneration,
+        registration: cacheRegistration(
+          model == embeddingGemmaModel
+              ? registeredEmbedding
+              : registeredGeneration,
+        ),
       );
-      if (!mounted) return;
+      if (!active) return;
       if (file != null) verifiedFiles[model] = file;
     }
-    if (!mounted) return;
+    if (!active) return;
     setState(() {
       for (final model in gemmaModels)
         downloaded[model] = verifiedFiles.containsKey(model);
       selected =
           gemmaModels
-              .where((model) => model.digest == registeredGeneration?['digest'])
+              .where((model) => model.digest == registeredGeneration?.digest)
               .firstOrNull ??
           gemmaModels
               .where(
@@ -126,25 +132,44 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
   void initState() {
     super.initState();
     embeddingReady = !widget.needsEmbedding;
-    registeredGeneration = widget.store.model('generation')?.toRow();
-    final digest = registeredGeneration?['digest'];
     for (final model in gemmaModels) {
       downloaded[model] = false;
     }
-    unawaited(checkLocalModels());
-    selected =
-        gemmaModels.where((model) => model.digest == digest).firstOrNull ??
-        gemmaModels
-            .where((model) => downloaded[model] == true && enoughMemory(model))
-            .firstOrNull ??
-        (widget.memoryGb == 0
-            ? gemmaModels.last
-            : gemmaModels
-                      .where(
-                        (model) => widget.memoryGb >= model.minimumMemoryGb,
-                      )
-                      .firstOrNull ??
-                  gemmaModels.last);
+    selected = widget.memoryGb == 0
+        ? gemmaModels.last
+        : gemmaModels
+                  .where((model) => widget.memoryGb >= model.minimumMemoryGb)
+                  .firstOrNull ??
+              gemmaModels.last;
+    unawaited(prepareModels());
+  }
+
+  Future<void> prepareModels() async {
+    final epoch = widget.store.workspaceEpoch;
+    try {
+      final values = await Future.wait([
+        readSetupModel(widget.store, 'generation'),
+        readSetupModel(widget.store, 'embedding'),
+      ]);
+      if (!active || widget.store.workspaceEpoch != epoch) return;
+      registeredGeneration = values[0];
+      registeredEmbedding = values[1];
+      embeddingReady =
+          !widget.needsEmbedding ||
+          !preparedNeedsModel(registeredEmbedding, 'embedding');
+      selected =
+          gemmaModels
+              .where((model) => model.digest == registeredGeneration?.digest)
+              .firstOrNull ??
+          selected;
+      await checkLocalModels();
+    } catch (failure) {
+      if (active)
+        setState(() {
+          error = failure.toString();
+          checkingCache = false;
+        });
+    }
   }
 
   void finish() {
@@ -201,7 +226,7 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
           openUri: widget.environment.openUri,
         ))
           return;
-        if (!mounted || cancelled) return;
+        if (!active || cancelled) return;
       }
       download = widget.createDownload?.call() ?? GemmaDownload();
       final process = preflight = await widget.environment.start(
@@ -211,14 +236,14 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
       final out = process.stdout.listen((_) {}),
           err = process.stderr.listen((_) {});
       try {
-        if (!mounted || cancelled) {
+        if (!active || cancelled) {
           process.kill();
           return;
         }
         final code = await process.exitCode.timeout(
           const Duration(seconds: 30),
         );
-        if (!mounted || cancelled) return;
+        if (!active || cancelled) return;
         if (code != 0)
           throw StateError(
             'The local Gemma runtime is not ready. Use local model setup to install or configure it.',
@@ -229,7 +254,7 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
         await err.cancel();
         preflight = null;
       }
-      if (!mounted || cancelled) return;
+      if (!active || cancelled) return;
       if (!embeddingReady) {
         setState(() => status = 'Checking downloaded EmbeddingGemma 2...');
         final embedding = await download!.download(
@@ -239,14 +264,14 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
           progress: reportProgress,
           phase: (phase) => reportPhase(embeddingGemmaModel, phase),
         );
-        if (!mounted || cancelled) return;
+        if (!active || cancelled) return;
         setState(() => status = 'Loading EmbeddingGemma 2...');
-        await widget.installEmbedding!(embedding, () => mounted && !cancelled);
-        if (!mounted || cancelled) return;
+        await widget.installEmbedding!(embedding, () => active && !cancelled);
+        if (!active || cancelled) return;
         embeddingReady = true;
       }
       if (!installGeneration) {
-        if (mounted) finish();
+        if (active) finish();
         return;
       }
       setState(() {
@@ -261,7 +286,7 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
         progress: reportProgress,
         phase: (phase) => reportPhase(model, phase),
       );
-      if (!mounted || cancelled) return;
+      if (!active || cancelled) return;
       setState(() {
         downloaded[model] = true;
         verifiedFiles[model] = asset;
@@ -273,18 +298,18 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
       final ready = await install(
         asset.path,
         widget.runner,
-        () => mounted && !cancelled,
+        () => active && !cancelled,
       );
-      if (!mounted || cancelled) {
+      if (!active || cancelled) {
         ready.close();
         return;
       }
       widget.installed(ready, model);
-      if (mounted) finish();
+      if (active) finish();
     } on ModelDownloadCancelled {
-      if (mounted) setState(() => status = 'Download cancelled.');
+      if (active) setState(() => status = 'Download cancelled.');
     } catch (failure) {
-      if (mounted && !cancelled)
+      if (active && !cancelled)
         setState(() {
           error = failure is StateError
               ? failure.message.toString()
@@ -292,12 +317,12 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
         });
     } finally {
       clock.stop();
-      if (mounted) setState(() => working = false);
+      if (active) setState(() => working = false);
     }
   }
 
   void reportPhase(GemmaModel model, ModelDownloadPhase phase) {
-    if (!mounted || cancelled) return;
+    if (!active || cancelled) return;
     setState(
       () => status = switch (phase) {
         ModelDownloadPhase.checkingCache =>
@@ -312,7 +337,7 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
   }
 
   void reportProgress(int count, int size) {
-    if (!mounted || cancelled) return;
+    if (!active || cancelled) return;
     if (count != size && clock.elapsedMilliseconds - lastUpdate < 100) return;
     lastUpdate = clock.elapsedMilliseconds;
     setState(() {

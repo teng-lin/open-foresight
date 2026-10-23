@@ -43,7 +43,7 @@ class _Host
   String error = '';
   @override
   bool clearingWorkspace = false;
-  late StateSetter rebuild;
+  StateSetter rebuild = (action) => action();
   @override
   void update(VoidCallback action) {
     if (mounted) rebuild(action);
@@ -149,6 +149,7 @@ void main() {
         integrationCommands: integrations,
         meetings: _MeetingFacts(),
       );
+      controller.start();
       await tester.binding.setSurfaceSize(const Size(1400, 1000));
       await tester.pumpWidget(
         MaterialApp(

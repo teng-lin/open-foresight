@@ -1,3 +1,4 @@
+export '../features/settings/ports.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:foresight_core/desktop.dart';
@@ -53,10 +54,6 @@ abstract interface class WorkspaceLifecycle {
   void serviceChanged();
 }
 
-abstract interface class PreferenceCommands {
-  Future<void> preference(String key, String value);
-}
-
 // Outward feature contracts live here until their owner's 7B move. Dependants
 // receive each required port separately; the host is not a feature locator.
 abstract interface class MeetingActivity {
@@ -75,18 +72,6 @@ abstract interface class MeetingCommands {
 
 abstract interface class OnboardingActivity {
   bool get active;
-}
-
-abstract interface class SettingsCommands implements PreferenceCommands {
-  Future<void> chooseSpeech();
-  Future<void> chooseGemma({bool firstRun = false, bool embeddingOnly = false});
-  void showModelSetup(String kind);
-  Widget gemmaSetup({
-    bool firstRun = false,
-    bool embeddingOnly = false,
-    VoidCallback? onDone,
-  });
-  Widget speechSetup({VoidCallback? onDone});
 }
 
 abstract interface class ChatActivity {
