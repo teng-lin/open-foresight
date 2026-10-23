@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 import select
 import signal
+import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -352,6 +354,39 @@ def private_pipewire(env, output):
 
 
 def meeting_environment(args, env, private):
+    # The compiled integration app has its own native Debug executable. A sealed
+    # installed service correctly accepts only its installed Release desktop.
+    # Reuse identical service bytes outside the installation for this explicitly
+    # development-only fixture; installed package acceptance remains separate.
+    service_source = args.bundle.resolve() / "bin/foresight-service"
+    service = args.output.resolve() / "meeting-service"
+    if service.is_relative_to(args.bundle.resolve()):
+        raise ValueError("Meeting integration output must be outside the bundle")
+    mode = stat.S_IMODE(service_source.stat().st_mode)
+    if not service_source.is_file() or not mode & 0o111:
+        raise ValueError("Meeting integration requires an executable service")
+    with service_source.open("rb") as source, service.open("xb") as target:
+        shutil.copyfileobj(source, target)
+    service.chmod(mode)
+    original_digest = hashlib.sha256(service_source.read_bytes()).hexdigest()
+    copied_digest = hashlib.sha256(service.read_bytes()).hexdigest()
+    if copied_digest != original_digest:
+        raise RuntimeError("Meeting integration service copy differs from bundle")
+    desktop = (
+        ROOT / "apps/desktop/build/linux/x64/debug/bundle/open-foresight"
+    ).resolve()
+    (args.output / "meeting-service-identity.json").write_text(
+        json.dumps(
+            {
+                "source": str(service_source),
+                "copy": str(service),
+                "sha256": copied_digest,
+                "mode": mode,
+                "desktop": str(desktop),
+                "scope": "Unbundled native Debug integration; installed package acceptance is separate",
+            }
+        ) + "\n"
+    )
     data = args.output / "meeting-data"
     screenshots = args.output / "meeting-screenshots"
     # File reveal is observed by a test-only FileManager1 receiver on the
@@ -395,7 +430,8 @@ def meeting_environment(args, env, private):
         FORESIGHT_MEETING_REPORT=str(args.output / "meeting-workflow.json"),
         FORESIGHT_LINK_OPEN_REPORT=str(args.output / "link-open.json"),
         FORESIGHT_MODEL_MANIFEST=str(manifest),
-        FORESIGHT_SERVICE=str(args.bundle.resolve() / "bin/foresight-service"),
+        FORESIGHT_SERVICE=str(service),
+        FORESIGHT_DEVELOPMENT_DESKTOP_EXECUTABLES=json.dumps([str(desktop)]),
     )
     return meeting
 

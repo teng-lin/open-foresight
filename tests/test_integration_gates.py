@@ -122,10 +122,15 @@ def test_waveform_inspector_does_not_inherit_whisper_runtime(tmp_path):
     runner = tmp_path / "bin/whisper-cli-vulkan"
     runner.parent.mkdir()
     runner.touch()
+    service = runner.parent / "foresight-service"
+    service.write_bytes(b"fixture service")
+    service.chmod(0o755)
+    output = tmp_path.parent / (tmp_path.name + "-reports")
+    output.mkdir()
     args = SimpleNamespace(
         bundle=tmp_path,
         models=tmp_path,
-        output=tmp_path,
+        output=output,
         flutter="flutter",
         dart="dart",
     )
