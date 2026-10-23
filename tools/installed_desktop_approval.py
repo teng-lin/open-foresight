@@ -190,9 +190,27 @@ class InstalledDesktop:
                 if time.monotonic() >= deadline:
                     raise TimeoutError("Installed desktop startup timed out")
                 time.sleep(0.05)
-            state = service_command(
-                layout(self.bundle)[1], self.environment, "--status"
-            )
+            while True:
+                self._identity()
+                try:
+                    state = service_command(
+                        layout(self.bundle)[1], self.environment, "--status"
+                    )
+                    break
+                except subprocess.CalledProcessError as error:
+                    self.evidence.setdefault("service_startup_errors", []).append(
+                        {
+                            "returncode": error.returncode,
+                            "stdout": error.stdout or "",
+                            "stderr": error.stderr or "",
+                        }
+                    )
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(
+                            "Installed desktop did not establish its service: "
+                            + (error.stderr or "")
+                        ) from None
+                    time.sleep(0.05)
             expected_profile = hashlib.sha256(
                 str(self.profile / "data").encode()
             ).hexdigest()[:24]

@@ -92,9 +92,11 @@ def main():
                         args.output.parent / ("gui-" + str(proc.pid)),
                         timeout=300,
                     ).start()
-                    return proc, ApprovedApplicationPeer(
+                    approved = ApprovedApplicationPeer(
                         root / "run/application.sock", desktop
                     )
+                    approved.socket.settimeout(300)
+                    return proc, approved
                 except (FileNotFoundError, ConnectionRefusedError):
                     assert proc.poll() is None, (
                         args.output.parent / "native-service.log"

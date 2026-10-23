@@ -7,6 +7,7 @@ from pathlib import Path
 import plistlib
 import socket
 import sqlite3
+import subprocess
 import sys
 import threading
 from types import SimpleNamespace
@@ -100,6 +101,70 @@ def test_actual_image_private_profile_and_osascript_pid_are_recorded(owned):
     host.close()
     assert host.evidence["status"] == "closed"
     assert host.log.closed
+
+
+def test_desktop_first_start_waits_for_delayed_service_and_retains_failures(
+    owned, monkeypatch
+):
+    state = gui.service_command()
+    failures = [
+        subprocess.CalledProcessError(
+            1, "status", output=f"starting {attempt}", stderr=f"no owner {attempt}"
+        )
+        for attempt in range(2)
+    ]
+    command = Mock(side_effect=[*failures, state])
+    monkeypatch.setattr(gui, "service_command", command)
+    monkeypatch.setattr(gui.time, "sleep", lambda _: None)
+    owned.host.start()
+    assert command.call_count == 3
+    assert owned.host.evidence["service_startup_errors"] == [
+        {"returncode": 1, "stdout": f"starting {attempt}", "stderr": f"no owner {attempt}"}
+        for attempt in range(2)
+    ]
+
+
+def test_service_startup_retries_share_the_original_deadline(owned, monkeypatch):
+    failure = subprocess.CalledProcessError(
+        1, "status", output="still starting", stderr="service not listening"
+    )
+    command = Mock(side_effect=failure)
+    monkeypatch.setattr(gui, "service_command", command)
+    clock = iter([0, 0, 1])
+    monkeypatch.setattr(gui.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(gui.time, "sleep", lambda _: None)
+    with pytest.raises(TimeoutError, match="service not listening"):
+        owned.host.start()
+    assert command.call_count == 2
+    assert owned.host.evidence["status"] == "closed_after_failure"
+    assert owned.host.evidence["service_startup_errors"][-1]["stdout"] == "still starting"
+    owned.process.terminate.assert_called_once()
+
+
+def test_desktop_exit_during_service_startup_is_fatal(owned, monkeypatch):
+    def starting(*_):
+        owned.process.poll.return_value = 1
+        raise subprocess.CalledProcessError(1, "status", stderr="no service yet")
+
+    command = Mock(side_effect=starting)
+    monkeypatch.setattr(gui, "service_command", command)
+    monkeypatch.setattr(gui.time, "sleep", lambda _: None)
+    with pytest.raises(RuntimeError, match="process identity"):
+        owned.host.start()
+    command.assert_called_once()
+    assert owned.host.evidence["status"] == "closed_after_failure"
+    owned.process.terminate.assert_not_called()
+
+
+@pytest.mark.parametrize("field", ["installation_root", "profile_id"])
+def test_successful_foreign_service_is_never_retried(owned, monkeypatch, field):
+    state = gui.service_command()
+    command = Mock(return_value={**state, field: "/wrong"})
+    monkeypatch.setattr(gui, "service_command", command)
+    with pytest.raises(RuntimeError, match="selected installation/profile"):
+        owned.host.start()
+    command.assert_called_once()
+    assert owned.host.evidence["status"] == "closed_after_failure"
 
 
 @pytest.mark.parametrize("change", ["platform", "public", "environment", "escape"])
