@@ -20,7 +20,12 @@ supervisor pins the owned session until service descendants settle.
 LD_LIBRARY_PATH is recorded. All regular files directly in its explicit search
 directories (including resolved symlinks), plus repeated --runtime-file inputs,
 are hashed; the directory scan is non-recursive. Default system-loader files
-outside those directories must be named with --runtime-file for this inventory.
+outside those directories may also be named with --runtime-file. In addition,
+/proc maps snapshots before/after each measured condition inventory actual
+file-backed mappings across the owned service session and optional native host.
+New mapped objects are pinned and hashed after workload/cleanup; snapshot and
+hashing costs are recorded outside RPC sample windows. Already qualified model
+hashes are reused only when full file identity metadata is unchanged.
 Child environment inheritance is allowlisted and loader injection is refused.
 --desktop-host opts into a hashed native stdio/socket relay for a synthetic visible
 UI peer. This proves native host attachment, not graphical desktop acceptance.
@@ -36,6 +41,7 @@ import argparse
 import ctypes
 import hashlib
 import importlib
+from io import BufferedReader
 import json
 import math
 import os
@@ -87,11 +93,19 @@ while True:
 """
 
 
+def file_metadata(metadata: os.stat_result) -> dict[str, int]:
+    return {"device": metadata.st_dev, "inode": metadata.st_ino, "bytes": metadata.st_size,
+            "mtime_ns": metadata.st_mtime_ns, "ctime_ns": metadata.st_ctime_ns, "links": metadata.st_nlink}
+
+
 def file_identity(path: Path) -> dict[str, Any]:
     with path.open("rb") as stream:
+        before = file_metadata(os.fstat(stream.fileno()))
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        if before != file_metadata(os.fstat(stream.fileno())):
+            raise ValueError(f"File changed while hashing: {path}")
     return {"path": str(path.absolute()), "resolved_path": str(path.resolve()),
-            "bytes": path.stat().st_size, "sha256": digest}
+            **before, "sha256": digest}
 
 
 def git(repository: Path, *arguments: str) -> bytes:
@@ -639,6 +653,177 @@ def service_supervisor(service: Path, state: Path) -> None:
             time.sleep(.02)
 
 
+class RuntimeInventory:
+    """Pin mapped files outside sample windows; hash new objects after workloads.
+
+    Known model/runtime hashes are reused only for the same device, inode, size,
+    mtime and ctime. Open file descriptors pin newly observed files until hashing.
+    Anonymous/special mappings are listed separately; deleted/inaccessible file
+    mappings cannot silently qualify. Snapshots include all owned session PGIDs.
+    """
+
+    def __init__(self, report: dict[str, Any]):
+        self.report = report
+        self.objects: dict[tuple[int, ...], dict[str, Any]] = {}
+        self.pending: dict[tuple[int, ...], BufferedReader] = {}
+        self.known: dict[tuple[int, ...], dict[str, Any]] = {}
+        self.finished = False
+        self.mounts: list[dict[str, Any]] | None = None
+
+    @staticmethod
+    def key(identity: dict[str, Any]) -> tuple[int, ...]:
+        return tuple(identity[name] for name in ("device", "inode", "bytes", "mtime_ns", "ctime_ns", "links"))
+
+    def seed(self, value: Any) -> None:
+        if isinstance(value, dict):
+            if "sha256" in value and "device" in value:
+                self.known[self.key(value)] = value
+            else:
+                for child in value.values():
+                    self.seed(child)
+        elif isinstance(value, list):
+            for child in value:
+                self.seed(child)
+
+    def btrfs_device(self, path: Path, device: tuple[int, int]) -> dict[str, Any] | None:
+        # Btrfs maps report the filesystem device, whereas stat reports an
+        # anonymous device per subvolume. Match the actual covering mount.
+        if self.mounts is None:
+            text = Path("/proc/self/mountinfo").read_text()
+            self.report["mapped_runtime_mountinfo_sha256"] = hashlib.sha256(text.encode()).hexdigest()
+            self.mounts = []
+            for line in text.splitlines():
+                before, _, after = line.partition(" - ")
+                fields = before.split()
+                mount_path = re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), fields[4])
+                self.mounts.append({"path": mount_path, "filesystem": after.split()[0],
+                                    "device": [int(part) for part in fields[2].split(":")]})
+        covering = [mount for mount in self.mounts if path.is_relative_to(mount["path"])]
+        if covering:
+            mount = max(covering, key=lambda entry: len(entry["path"]))
+            if mount["filesystem"] == "btrfs" and tuple(mount["device"]) == device:
+                return mount
+        return None
+
+    def mapped_file(self, path: Path, device: str, inode: str, permissions: str) -> dict[str, Any]:
+        stream = path.open("rb")
+        try:
+            metadata = os.fstat(stream.fileno())
+            major, minor = (int(part, 16) for part in device.split(":"))
+            actual_device = (os.major(metadata.st_dev), os.minor(metadata.st_dev))
+            mount = None
+            if actual_device != (major, minor):
+                mount = self.btrfs_device(path.resolve(), (major, minor))
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_ino != int(inode) or (
+                actual_device != (major, minor) and mount is None
+            ):
+                raise ValueError(f"Mapped file identity changed: {path}")
+            identity = {"path": str(path), "resolved_path": str(path.resolve()), **file_metadata(metadata)}
+            key = self.key(identity)
+            if key not in self.objects:
+                if key in self.known:
+                    identity.update(sha256=self.known[key]["sha256"], hash_source="qualified input with identical file metadata")
+                self.pending[key] = stream
+                identity.update(mapping_permissions=[], mutable_shared_data=False,
+                                mapped_device=[major, minor], btrfs_mount=mount)
+                self.objects[key] = identity
+                self.report.setdefault("mapped_runtime_files", []).append(identity)
+            result = self.objects[key]
+            result["mapping_permissions"] = sorted(set([*result["mapping_permissions"], permissions]))
+            result["mutable_shared_data"] = any(p.endswith("s") and "w" in p for p in result["mapping_permissions"]) and not any("x" in p for p in result["mapping_permissions"])
+            return result
+        finally:
+            if stream not in self.pending.values():
+                stream.close()
+
+    def capture(self, session: int, condition: str) -> None:
+        self.seed(self.report.get("inputs", {}))
+        started = time.perf_counter_ns()
+        snapshot: dict[str, Any] = {"condition": condition, "session": session,
+                                    "status": "incomplete", "processes": []}
+        self.report.setdefault("mapped_runtime_snapshots", []).append(snapshot)
+        try:
+            for pid in [session, *session_members(session)]:
+                process: dict[str, Any] = {"pid": pid}
+                snapshot["processes"].append(process)
+                try:
+                    descriptor = os.pidfd_open(pid)
+                except ProcessLookupError:
+                    process["status"] = "exited before snapshot"
+                    continue
+                try:
+                    if os.getsid(pid) != session:
+                        process["status"] = "left owned session"
+                        continue
+                    try:
+                        maps = Path(f"/proc/{pid}/maps").read_text()
+                    except FileNotFoundError:
+                        signal.pidfd_send_signal(descriptor, 0)
+                        raise
+                    signal.pidfd_send_signal(descriptor, 0)
+                    process.update(maps_sha256=hashlib.sha256(maps.encode()).hexdigest(), files=[], special_mappings=[])
+                    seen = set()
+                    for line in maps.splitlines():
+                        fields = line.split(None, 5)
+                        if len(fields) < 6 or fields[5].startswith("["):
+                            process["special_mappings"].append(fields[5] if len(fields) == 6 else "anonymous")
+                            continue
+                        name = re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), fields[5])
+                        if name.endswith(" (deleted)"):
+                            raise ValueError(f"Deleted mapped file cannot be qualified: {name}")
+                        if not name.startswith("/"):
+                            raise ValueError(f"Unsupported mapped file path: {name}")
+                        identity = self.mapped_file(Path(name), fields[3], fields[4], fields[1])
+                        key = self.key(identity)
+                        if key not in seen:
+                            process["files"].append(identity)
+                            seen.add(key)
+                    process["status"] = "complete"
+                except ProcessLookupError:
+                    process["status"] = "exited during snapshot"
+                finally:
+                    os.close(descriptor)
+            snapshot["status"] = "complete"
+        except BaseException as error:
+            snapshot["error"] = repr(error)
+            self.report["status"] = "incomplete"
+            raise
+        finally:
+            snapshot["elapsed_ms"] = (time.perf_counter_ns() - started) / 1e6
+
+    def finish(self) -> None:
+        if self.finished:
+            return
+        self.finished = True
+        started = time.perf_counter_ns()
+        try:
+            for key, stream in self.pending.items():
+                identity = self.objects[key]
+                before = file_metadata(os.fstat(stream.fileno()))
+                changed = self.key(before) != key
+                # Unlink only changes ownership metadata for this pinned inode.
+                unlinked = before["links"] == 0 and identity["links"] > 0 and self.key(before)[:4] == key[:4]
+                if changed and not identity["mutable_shared_data"] and not unlinked:
+                    raise ValueError(f"Mapped runtime changed since snapshot: {identity['path']}")
+                if "sha256" in identity and not changed:
+                    identity.update(final_metadata=before, changed_since_snapshot=False)
+                    continue
+                digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                if before != file_metadata(os.fstat(stream.fileno())):
+                    raise ValueError(f"Mapped file changed while hashing: {identity['path']}")
+                identity.update(sha256=digest, hash_source="pinned mapped file, hashed after workloads",
+                                hashed_metadata=before, changed_since_snapshot=self.key(before) != key)
+        except BaseException as error:
+            self.report["mapped_runtime_error"] = repr(error)
+            self.report["status"] = "incomplete"
+            raise
+        finally:
+            self.report["mapped_runtime_hash_ms"] = (time.perf_counter_ns() - started) / 1e6
+            for stream in self.pending.values():
+                stream.close()
+            self.pending.clear()
+
+
 class Measurement:
     def __init__(self, args: argparse.Namespace, run: Path, report: dict[str, Any]):
         self.args, self.run, self.report = args, run, report
@@ -650,6 +835,7 @@ class Measurement:
         self.last_chunk: str | None = None
         self.summary_id: int | None = None
         self.cleanup_timeout = 30.0
+        self.runtime_inventory = RuntimeInventory(report)
 
     def connect(self) -> Peer:
         peer = Peer(self.run / "run/application.sock")
@@ -659,7 +845,11 @@ class Measurement:
     def record(self, label: str, peer: Peer) -> None:
         result: dict[str, Any] = {}
         self.report["samples"][label] = result
-        result.update(sample(peer, evidence=result, on_status=self.summary_preview))
+        self.capture_runtime_mappings(label + ":before samples")
+        try:
+            result.update(sample(peer, evidence=result, on_status=self.summary_preview))
+        finally:
+            self.capture_runtime_mappings(label + ":after samples")
         if label == "warmed_streaming":
             result["stream_chunks_during_samples"] = [
                 chunk for chunk in self.stream_chunks
@@ -667,6 +857,13 @@ class Measurement:
             ]
         # Retain raw failing qualifications before raising.
         validate_sample(label, result)
+
+    def capture_runtime_mappings(self, condition: str) -> None:
+        if self.process is not None:
+            self.runtime_inventory.capture(self.process.pid, condition)
+        for peer in self.peers:
+            if isinstance(peer, DesktopHostPeer):
+                self.runtime_inventory.capture(peer.process.pid, condition + ":native desktop relay")
 
     def summary_preview(self, status: dict[str, Any], received_ns: int) -> None:
         summaries = (status.get("capture") or {}).get("meeting_summaries") or {}
@@ -885,7 +1082,10 @@ def measure(args: argparse.Namespace) -> dict[str, Any]:
         raise
     finally:
         try:
-            measurement.close()
+            try:
+                measurement.close()
+            finally:
+                measurement.runtime_inventory.finish()
         except BaseException as error:
             report["status"], report["cleanup_error"] = "incomplete", repr(error)
             raise

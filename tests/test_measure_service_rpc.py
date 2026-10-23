@@ -422,6 +422,7 @@ class FakeThread:
 def workload(inputs, private, monkeypatch):
     inputs.temp_root = private
     state = {}
+    monkeypatch.setattr(rpc.Measurement, "capture_runtime_mappings", lambda self, condition: None)
     monkeypatch.setattr(rpc, "Peer", lambda path: WorkPeer(path, state))
     monkeypatch.setattr(rpc.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
     class PhaseThread(FakeThread):
@@ -1441,3 +1442,258 @@ def test_term_once_does_not_certify_failed_signal_or_signal_process_that_left_se
     monkeypatch.setattr(rpc.signal, "pidfd_send_signal", lambda *args: pytest.fail("moved outside session"), raising=False)
     rpc.signal_session_members(10, rpc.signal.SIGTERM, once=once)
     assert not once
+
+
+def map_line(path, permissions="r--p"):
+    metadata = path.stat()
+    return f"1000-2000 {permissions} 00000000 {os.major(metadata.st_dev):x}:{os.minor(metadata.st_dev):x} {metadata.st_ino} {path}\n"
+
+
+def fake_maps(monkeypatch, text, session=41):
+    original = Path.read_text
+    monkeypatch.setattr(rpc, "session_members", lambda sid: [])
+    monkeypatch.setattr(rpc.os, "pidfd_open", lambda pid: pid, raising=False)
+    monkeypatch.setattr(rpc.os, "getsid", lambda pid: session)
+    monkeypatch.setattr(rpc.os, "close", lambda fd: None)
+    monkeypatch.setattr(rpc.signal, "pidfd_send_signal", lambda fd, kind: None, raising=False)
+    monkeypatch.setattr(Path, "read_text", lambda path: text if str(path).startswith("/proc/") else original(path))
+
+
+def test_maps_inventory_reuses_qualified_model_hash_and_deduplicates_snapshots(private, monkeypatch):
+    model = private / "mapped model"
+    model.write_bytes(b"known model bytes")
+    identity = rpc.file_identity(model)
+    fake_maps(monkeypatch, map_line(model) + map_line(model) + "2000-3000 rw-p 0 00:00 0\n" +
+              "3000-4000 r-xp 0 00:00 0 [vdso]\n")
+    report = {"inputs": {"models": [identity]}}
+    inventory = rpc.RuntimeInventory(report)
+    monkeypatch.setattr(rpc.hashlib, "file_digest", lambda *args: pytest.fail("known model rehashed"))
+    inventory.capture(41, "idle:before")
+    inventory.capture(41, "idle:after")
+    inventory.finish()
+    inventory.finish()
+    assert not inventory.pending
+    assert len(report["mapped_runtime_files"]) == 1
+    assert report["mapped_runtime_files"][0]["sha256"] == identity["sha256"]
+    assert report["mapped_runtime_files"][0]["hash_source"].startswith("qualified input")
+    assert all(snapshot["status"] == "complete" for snapshot in report["mapped_runtime_snapshots"])
+    assert report["mapped_runtime_snapshots"][0]["processes"][0]["special_mappings"] == ["anonymous", "[vdso]"]
+
+
+def test_maps_inventory_pins_unlisted_files_and_hashes_only_after_workload(private, monkeypatch):
+    path = private / "implicit runtime.so"
+    path.write_bytes(b"actual mapped dependency")
+    fake_maps(monkeypatch, map_line(path, "r-xp"))
+    report = {}
+    inventory = rpc.RuntimeInventory(report)
+    inventory.capture(41, "streaming:before")
+    assert "sha256" not in report["mapped_runtime_files"][0]
+    pending = list(inventory.pending.values())
+    path.unlink()  # Open descriptors retain the actual observed inode.
+    inventory.finish()
+    assert all(stream.closed for stream in pending)
+    identity = report["mapped_runtime_files"][0]
+    assert identity["sha256"] == hashlib.sha256(b"actual mapped dependency").hexdigest()
+    assert identity["changed_since_snapshot"]  # unlink changed ctime, not mapped contents
+    assert report["mapped_runtime_hash_ms"] >= 0
+
+
+@pytest.mark.parametrize("failure", ["deleted", "missing", "inode", "relative", "maps-denied", "maps-missing"])
+def test_maps_refuse_unqualified_mapping_and_keep_failure_snapshot(private, monkeypatch, failure):
+    path = private / "runtime.so"
+    path.write_bytes(b"runtime")
+    text = map_line(path)
+    if failure == "deleted":
+        text = text.rstrip() + " (deleted)\n"
+    elif failure == "missing":
+        path.unlink()
+    elif failure == "inode":
+        text = text.replace(str(path.stat().st_ino), "999999")
+    elif failure == "relative":
+        text = "1000-2000 r--p 0 00:00 1 relative-path\n"
+    fake_maps(monkeypatch, text)
+    if failure in {"maps-denied", "maps-missing"}:
+        error = PermissionError if failure == "maps-denied" else FileNotFoundError
+        monkeypatch.setattr(Path, "read_text", lambda path: (_ for _ in ()).throw(error("cannot read maps")))
+    report = {"status": "passed"}
+    inventory = rpc.RuntimeInventory(report)
+    try:
+        with pytest.raises((ValueError, FileNotFoundError, PermissionError)):
+            inventory.capture(41, "warmed_streaming:before")
+    finally:
+        inventory.finish()
+    snapshot = report["mapped_runtime_snapshots"][0]
+    assert snapshot["status"] == "incomplete" and snapshot["error"]
+    assert snapshot["elapsed_ms"] >= 0
+    assert report["status"] == "incomplete"
+
+
+@pytest.mark.parametrize("race", ["open-exited", "left-session", "read-exited"])
+def test_maps_snapshot_accounts_for_exited_and_moved_processes(private, monkeypatch, race):
+    fake_maps(monkeypatch, "")
+    if race == "open-exited":
+        monkeypatch.setattr(rpc.os, "pidfd_open", lambda pid: (_ for _ in ()).throw(ProcessLookupError()), raising=False)
+    elif race == "left-session":
+        monkeypatch.setattr(rpc.os, "getsid", lambda pid: 99)
+    else:
+        monkeypatch.setattr(rpc.signal, "pidfd_send_signal", lambda *args: (_ for _ in ()).throw(ProcessLookupError()), raising=False)
+    report = {}
+    rpc.RuntimeInventory(report).capture(41, "capture:after")
+    snapshot = report["mapped_runtime_snapshots"][0]
+    assert snapshot["status"] == "complete"
+    assert snapshot["processes"][0]["status"] != "complete"
+
+
+@pytest.mark.parametrize("mutable", [False, True])
+def test_maps_record_mutable_shared_data_and_refuse_changed_runtime(private, monkeypatch, mutable):
+    path = private / "mapped"
+    path.write_bytes(b"before")
+    fake_maps(monkeypatch, map_line(path, "rw-s" if mutable else "r-xp"))
+    report = {}
+    inventory = rpc.RuntimeInventory(report)
+    inventory.capture(41, "before")
+    pending = list(inventory.pending.values())
+    path.write_bytes(b"after changed")
+    if mutable:
+        inventory.finish()
+        assert report["mapped_runtime_files"][0]["changed_since_snapshot"]
+        assert report["mapped_runtime_files"][0]["sha256"] == hashlib.sha256(b"after changed").hexdigest()
+    else:
+        with pytest.raises(ValueError, match="changed since snapshot"):
+            inventory.finish()
+        assert report["status"] == "incomplete" and report["mapped_runtime_error"]
+    assert all(stream.closed for stream in pending)
+
+
+def test_maps_observations_surround_rpc_window_and_survive_sampling_failure(workload, monkeypatch):
+    events = []
+    monkeypatch.setattr(workload, "capture_runtime_mappings", lambda label: events.append(label))
+    def fail(peer, *, evidence, on_status):
+        events.append("RPC sample window")
+        evidence.update(raw_ms=[1, 2], status="incomplete")
+        raise RuntimeError("sample failed")
+    monkeypatch.setattr(rpc, "sample", fail)
+    with pytest.raises(RuntimeError, match="sample failed"):
+        workload.record("warmed_streaming", None)
+    assert events == ["warmed_streaming:before samples", "RPC sample window", "warmed_streaming:after samples"]
+    assert workload.report["samples"]["warmed_streaming"]["raw_ms"] == [1, 2]
+
+
+def test_real_maps_inventory_discovers_implicit_native_library_in_worker_subgroup(private):
+    library = private / "implicit runtime.so"
+    compiled = subprocess.run(["c++", "-x", "c++", "-shared", "-fPIC", "-o", str(library), "-"],
+                              input='extern "C" int fixture_value() { return 7; }',
+                              text=True, capture_output=True, timeout=30)
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    ready = private / "worker.ready"
+    child_code = f"import ctypes,time; runtime=ctypes.CDLL({str(library)!r}); assert runtime.fixture_value()==7; open({str(ready)!r},'w').close(); time.sleep(20)"
+    service = private / "maps-service"
+    service.write_text(f"#!{sys.executable}\nimport subprocess,time\nsubprocess.Popen([{sys.executable!r},'-c',{child_code!r}],process_group=0)\ntime.sleep(20)\n")
+    service.chmod(0o700)
+    state = private / "service-state.json"
+    process = subprocess.Popen([sys.executable, str(Path(rpc.__file__).resolve()), "_supervise", str(service), str(state)],
+                               start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    report = {}
+    inventory = rpc.RuntimeInventory(report)
+    measurement = rpc.Measurement(SimpleNamespace(), private, report)
+    measurement.process, measurement.cleanup_timeout = process, 2
+    try:
+        rpc.wait_until(lambda: ready.exists() and state.exists(), timeout=5)
+        inventory.capture(process.pid, "warmed_streaming:before samples")
+        mapped = [entry for entry in report["mapped_runtime_files"] if entry["path"] == str(library)]
+        assert len(mapped) == 1 and "sha256" not in mapped[0]
+        owner = next(entry for entry in report["mapped_runtime_snapshots"][0]["processes"]
+                     if mapped[0] in entry.get("files", []))
+        assert owner["pid"] != process.pid and os.getpgid(owner["pid"]) == owner["pid"]
+        inventory.finish()
+        assert mapped[0]["sha256"] == rpc.file_identity(library)["sha256"]
+        assert "r-xp" in mapped[0]["mapping_permissions"]
+        measurement.close()
+        assert report["owned_supervisor_exit_code"] == 0
+    finally:
+        inventory.finish()
+        if process.poll() is None:
+            rpc.signal_session_members(process.pid, rpc.signal.SIGKILL)
+            process.kill()
+        out, err = process.communicate(timeout=5)
+        assert process.returncode in {0, -9}, (out, err)
+
+
+def test_file_and_deferred_mapping_hash_reject_concurrent_content_change(private, monkeypatch):
+    path = private / "changing-runtime"
+    path.write_bytes(b"before")
+    original = rpc.hashlib.file_digest
+    def changed(stream, algorithm):
+        digest = original(stream, algorithm)
+        path.write_bytes(b"different bytes")
+        return digest
+    monkeypatch.setattr(rpc.hashlib, "file_digest", changed)
+    with pytest.raises(ValueError, match="File changed while hashing"):
+        rpc.file_identity(path)
+    fake_maps(monkeypatch, map_line(path, "r-xp"))
+    inventory = rpc.RuntimeInventory({})
+    inventory.capture(41, "before")
+    streams = list(inventory.pending.values())
+    with pytest.raises(ValueError, match="Mapped file changed while hashing"):
+        inventory.finish()
+    assert all(stream.closed for stream in streams)
+    assert inventory.report["status"] == "incomplete"
+
+
+def test_btrfs_device_alias_requires_matching_most_specific_filesystem_mount(private):
+    inventory = rpc.RuntimeInventory({})
+    inventory.mounts = [
+        {"path": "/", "filesystem": "btrfs", "device": [0, 29]},
+        {"path": str(private), "filesystem": "ext4", "device": [0, 30]},
+    ]
+    assert inventory.btrfs_device(Path("/home/fixture"), (0, 29))["filesystem"] == "btrfs"
+    assert inventory.btrfs_device(private / "file", (0, 29)) is None
+    assert inventory.btrfs_device(Path("/home/fixture"), (0, 99)) is None
+    inventory.mounts = []
+    assert inventory.btrfs_device(private / "file", (0, 29)) is None
+
+
+def test_non_btrfs_mapping_device_mismatch_cannot_qualify(private):
+    path = private / "runtime"
+    path.write_bytes(b"runtime")
+    inventory = rpc.RuntimeInventory({})
+    inventory.mounts = [{"path": "/", "filesystem": "ext4", "device": [0, 29]}]
+    with pytest.raises(ValueError, match="identity changed"):
+        inventory.mapped_file(path, "ff:ff", str(path.stat().st_ino), "r-xp")
+    assert not inventory.pending
+
+
+def test_measurement_inventories_both_owned_service_and_explicit_native_host(native_relay, relay_server, private):
+    service = relay_server(lambda connection, stop: stop.wait(3))
+    peer = rpc.DesktopHostPeer(native_relay, service.path, private / "relay.log", {}, {})
+    measurement = rpc.Measurement(SimpleNamespace(), private, {})
+    measurement.peers = [peer]
+    measurement.process = FakeProcess()
+    captures = []
+    measurement.runtime_inventory.capture = lambda pid, condition: captures.append((pid, condition))
+    try:
+        measurement.capture_runtime_mappings("warmed_streaming:before samples")
+        assert captures == [(FakeProcess.pid, "warmed_streaming:before samples"),
+                            (peer.process.pid, "warmed_streaming:before samples:native desktop relay")]
+    finally:
+        peer.close()
+
+
+@pytest.mark.parametrize("seeded", [False, True])
+def test_maps_reject_same_size_runtime_rewrite_even_when_mtime_restored(private, monkeypatch, seeded):
+    path = private / "rewritten-runtime"
+    path.write_bytes(b"original")
+    metadata = path.stat()
+    report = {"inputs": {"runtime": rpc.file_identity(path)}} if seeded else {}
+    fake_maps(monkeypatch, map_line(path, "r-xp"))
+    inventory = rpc.RuntimeInventory(report)
+    inventory.capture(41, "before samples")
+    streams = list(inventory.pending.values())
+    path.write_bytes(b"modified")
+    os.utime(path, ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
+    assert path.stat().st_size == metadata.st_size
+    assert path.stat().st_mtime_ns == metadata.st_mtime_ns
+    with pytest.raises(ValueError, match="Mapped runtime changed since snapshot"):
+        inventory.finish()
+    assert report["status"] == "incomplete"
+    assert all(stream.closed for stream in streams)
