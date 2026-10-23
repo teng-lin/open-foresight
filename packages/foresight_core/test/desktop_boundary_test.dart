@@ -131,6 +131,11 @@ void main() {
             names,
             containsAll([
               'DesktopConnection',
+              'DesktopPresentation',
+              'GenerationPresentationValue',
+              'CapturePresentation',
+              'GooglePresentation',
+              'GenerationPresentation',
               'StoreReader',
               'HelperStatus',
               'SourceSummary',

@@ -1,7 +1,15 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:clock/clock.dart';
+import 'package:foresight_core/desktop.dart'
+    show
+        DesktopPresentation,
+        GenerationPresentationValue,
+        CapturePresentation,
+        GooglePresentation,
+        GenerationPresentation;
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/read_models.dart';
 import 'package:foresight_core/src/read_coordinator.dart';
@@ -73,6 +81,11 @@ class _StreamingSummary extends NativeRuntime {
   bool cancel({String? requestId}) => true;
 }
 
+class _InterfaceGeneration extends _StreamingSummary {
+  @override
+  bool get generating => true;
+}
+
 void main() {
   late Directory root;
   late ProfilePaths profile;
@@ -134,6 +147,52 @@ void main() {
     await client.call('security.attach_desktop', {
       'token': File('${profile.data}/.desktop-capability').readAsStringSync(),
     });
+  });
+
+  test('typed desktop values decode real service producer JSON', () async {
+    final application = service.application;
+    application.provisionalTranscript['microphone'] = 'Live text';
+    final runtime = _StreamingSummary();
+    service.domain.generator = runtime;
+    addTearDown(() async {
+      final drained = runtime.chunks.stream.drain<void>();
+      await runtime.chunks.close();
+      await drained;
+      runtime.close();
+    });
+    final remote = await RemoteDomain.connect(profile);
+    addTearDown(() async {
+      remote.close();
+      await remote.closed;
+    });
+    final wire = jsonDecode(jsonEncode(await client.call('status'))) as Map;
+    final capture = CapturePresentation.fromWire(wire['capture']);
+    expect(capture, CapturePresentation.fromWire(application.captureState));
+    expect(capture.provisional['microphone'], 'Live text');
+    expect(capture.echoCancellation.requested, isFalse);
+    expect(capture.questionDetector.configured, isFalse);
+    expect(capture.proactive.stage, 'idle');
+    expect(remote.capturePresentation, capture);
+    final google = GooglePresentation.fromWire(wire['google']);
+    expect(google, GooglePresentation.fromWire(application.googleState));
+    expect(remote.googlePresentation, google);
+    expect(google.connected, isFalse);
+    expect(google.accounts, isEmpty);
+    expect(
+      remote.generator!.presentation,
+      GenerationPresentation.fromWire(wire['generation']),
+    );
+    // NativeRuntime.effectiveState has no 'generating' key: the interface
+    // supplies that fact for both production and desktop test runtimes.
+    final local = _InterfaceGeneration();
+    addTearDown(() async {
+      final drained = local.chunks.stream.drain<void>();
+      await local.chunks.close();
+      await drained;
+      local.close();
+    });
+    expect(local.effectiveState.containsKey('generating'), isFalse);
+    expect(local.presentation.generating, isTrue);
   });
 
   test(

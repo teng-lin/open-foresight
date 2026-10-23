@@ -16,7 +16,7 @@ extension DesktopPresentation on DesktopConnection {
 
 extension GenerationPresentationValue on GenerationStatus {
   GenerationPresentation get presentation =>
-      GenerationPresentation.fromWire(effectiveState);
+      GenerationPresentation.fromWire(effectiveState, generating: generating);
 }
 
 /// Capabilities exposed to a desktop. Worker mutation and credentials stay in

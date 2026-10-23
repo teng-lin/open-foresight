@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:foresight_core/desktop.dart';
 import 'package:test/test.dart';
 
@@ -138,6 +140,7 @@ void main() {
     final capture = CapturePresentation.fromWire(null);
     expect(capture.meetingId, isNull);
     expect(capture.active, isFalse);
+    expect(capture.state, 'idle');
     expect(capture.elapsedMilliseconds, 0);
     expect(capture.samples, isEmpty);
     expect(capture.peaks, isEmpty);
@@ -165,6 +168,113 @@ void main() {
     expect(generation.state, 'unconfigured');
     expect(generation.generating, isFalse);
     expect(generation.contextLength, isNull);
+    expect(generation.tools, isNull);
+    expect(generation.thinking, isNull);
+    expect(generation.text, isNull);
+  });
+
+  test(
+    'native v1 generation JSON retains diagnostics and absent capabilities',
+    () {
+      const litert =
+          '{"state":"ready","backend":"litert-lm-cpu-native",'
+          '"load_policy":"persistent_worker","native_stop_token_sequences":true,'
+          '"context_length":4096,"temperature":0.4,"top_k":40,"top_p":0.9,'
+          '"thinking":false,"json":"ll_guidance_and_application_validation",'
+          '"text":true,"tools":true,"error":""}';
+      const llama =
+          '{"state":"ready","backend":"llama.cpp-cpu-cli",'
+          '"load_policy":"per_request","context_length":4096,'
+          '"max_output_tokens":256,"temperature":0,"text":true,'
+          '"tools":false,"error":""}';
+      final first = GenerationPresentation.fromWire(jsonDecode(litert));
+      final second = GenerationPresentation.fromWire(jsonDecode(llama));
+      expect(first.tools, isTrue);
+      expect(second.tools, isFalse);
+      expect(first.thinking, isFalse);
+      expect(second.thinking, isNull);
+      expect(first.temperature, 0.4);
+      expect(second.temperature, 0);
+      expect(first.diagnosticText, jsonDecode(litert).toString());
+      expect(second.diagnosticText, jsonDecode(llama).toString());
+      final diagnostic = {'state': 'loading', 'future_native_detail': 'kept'};
+      final value = GenerationPresentation.fromWire(diagnostic);
+      diagnostic.clear();
+      expect(
+        value.diagnosticText,
+        '{state: loading, future_native_detail: kept}',
+      );
+      expect(value.tools, isNull);
+    },
+  );
+
+  test('macOS echo fallback keeps a zero status with a startup reason', () {
+    final echo = EchoCancellationPresentation.fromWire(
+      jsonDecode('''{
+      "type":"echo_cancellation", "supported":true, "requested":true,
+      "active":false, "restart_required":true, "fallback_status":0,
+      "fallback_reason":"tap_startup_timeout"
+    }'''),
+    );
+    expect(echo.supported, isTrue);
+    expect(echo.fallbackStatus, 0);
+    expect(echo.fallbackReason, 'tap_startup_timeout');
+  });
+
+  test('value-equal status slices preserve selector and hash identities', () {
+    final constructors = <Object Function(Object?)>[
+      EchoCancellationPresentation.fromWire,
+      MeetingRunPresentation.fromWire,
+      NoteEnhancementPresentation.fromWire,
+      QuestionDetectorPresentation.fromWire,
+      ProactivePresentation.fromWire,
+      CapturePresentation.fromWire,
+      GoogleAccountPresentation.fromWire,
+      GooglePresentation.fromWire,
+      GenerationPresentation.fromWire,
+    ];
+    for (final decode in constructors) {
+      final first = decode(null), second = decode({});
+      expect(first, second);
+      expect(first.hashCode, second.hashCode);
+      expect(first, isNot(equals(Object())));
+    }
+    final wire = {
+      'meeting_summaries': {
+        '3': {'phase': 'synthesizing', 'preview': 'same'},
+      },
+      'proactive': {
+        'pending_meetings': [3, 4],
+        'errors': {'3': 'one', '4': 'two'},
+      },
+    };
+    final first = CapturePresentation.fromWire(wire);
+    final equal = CapturePresentation.fromWire(jsonDecode(jsonEncode(wire)));
+    expect(first, equal);
+    expect(first.hashCode, equal.hashCode);
+    expect(first.summary(3), equal.summary(3));
+    expect(first.proactive, equal.proactive);
+    expect(
+      first.proactive,
+      ProactivePresentation.fromWire({
+        'pending_meetings': [3, 4],
+        'errors': {'4': 'two', '3': 'one'},
+      }),
+    );
+    expect(
+      first.proactive.hashCode,
+      ProactivePresentation.fromWire({
+        'pending_meetings': [3, 4],
+        'errors': {'4': 'two', '3': 'one'},
+      }).hashCode,
+    );
+    expect(first, isNot(CapturePresentation.fromWire({'meeting_id': 4})));
+    expect(first.summary(3), isNot(MeetingRunPresentation.fromWire({})));
+    expect(first.proactive, isNot(ProactivePresentation.fromWire({})));
+    expect(
+      EchoCancellationPresentation.fromWire({}),
+      isNot(QuestionDetectorPresentation.fromWire({})),
+    );
   });
 
   test('Google status exposes typed account values without credentials', () {
