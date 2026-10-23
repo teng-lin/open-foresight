@@ -44,8 +44,8 @@ void main() {
     );
     await tester.pumpAndSettle();
     final dynamic state = tester.state(find.byType(Workspace));
-    state.meetingFeature.noteTitle.text = 'Local title';
-    state.meetingFeature.noteBody.text = 'Local body';
+    state.sourceFeature.noteTitle.text = 'Local title';
+    state.sourceFeature.noteBody.text = 'Local body';
     state.meetingFeature.meetingNotesController.text = 'Local meeting notes';
     state.sourceFeature.sourceSearchController.text = 'Local search';
     state.chatFeature.answer = 'Local answer';
@@ -55,8 +55,8 @@ void main() {
     await tester.pump();
     await tester.runAsync(() async => clear);
     await tester.pumpAndSettle();
-    expect(state.meetingFeature.noteTitle.text, isEmpty);
-    expect(state.meetingFeature.noteBody.text, isEmpty);
+    expect(state.sourceFeature.noteTitle.text, isEmpty);
+    expect(state.sourceFeature.noteBody.text, isEmpty);
     expect(state.meetingFeature.meetingNotesController.text, isEmpty);
     expect(state.sourceFeature.sourceSearchController.text, isEmpty);
     expect(state.chatFeature.answer, isEmpty);

@@ -27,17 +27,17 @@ void main() {
     await tester.pumpAndSettle();
     final dynamic state = tester.state(find.byType(Workspace));
     state.update(() {
-      state.meetingFeature.noteId = 3;
-      state.meetingFeature.noteTitle.text = 'Note 3';
-      state.meetingFeature.noteBody.text = 'Body of note 3';
+      state.sourceFeature.noteId = 3;
+      state.sourceFeature.noteTitle.text = 'Note 3';
+      state.sourceFeature.noteBody.text = 'Body of note 3';
     });
     // The clear commits to the profile before its event arrives.
     fixture.owner.renewWorkspaceEpoch();
     final cleared = fixture.owner.workspaceEpoch;
     fixture.event({...fixture.status, 'workspace_epoch': cleared});
-    await pumpUntil(tester, () => state.meetingFeature.noteId == null);
-    expect(state.meetingFeature.noteTitle.text, isEmpty);
-    expect(state.meetingFeature.noteBody.text, isEmpty);
+    await pumpUntil(tester, () => state.sourceFeature.noteId == null);
+    expect(state.sourceFeature.noteTitle.text, isEmpty);
+    expect(state.sourceFeature.noteBody.text, isEmpty);
     // The reset views now edit the new workspace.
     await tester.runAsync(
       () => fixture.remote.command(Operation.notesSave, {
@@ -116,7 +116,7 @@ void main() {
 
       f.shell.update(() {
         f.shell.navigate(WorkspaceTab.notes);
-        f.shell.meetingFeature.noteTitle.text = 'private unsaved draft';
+        f.shell.sourceFeature.noteTitle.text = 'private unsaved draft';
       });
       await tester.pumpAndSettle();
       await clearElsewhere();
@@ -132,7 +132,7 @@ void main() {
       expect(find.text(notice), findsNothing);
       // This desktop's own clear discards edits on purpose.
       f.shell.update(
-        () => f.shell.meetingFeature.noteTitle.text = 'discarded on purpose',
+        () => f.shell.sourceFeature.noteTitle.text = 'discarded on purpose',
       );
       final clear = f.shell.settingsFeature.clearWorkspace() as Future<void>;
       await tester.pumpAndSettle();
@@ -140,7 +140,7 @@ void main() {
       await tester.pump();
       await tester.runAsync(() async => clear);
       await tester.pumpAndSettle();
-      expect(f.shell.meetingFeature.noteTitle.text, isEmpty);
+      expect(f.shell.sourceFeature.noteTitle.text, isEmpty);
       expect(find.text(notice), findsNothing);
     },
   );

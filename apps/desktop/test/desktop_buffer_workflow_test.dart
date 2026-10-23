@@ -464,13 +464,13 @@ void main() {
         await shortcut(key);
         expect(f.shell.tab, tab);
       }
-      f.shell.meetingFeature.noteTitle.text = 'Old title';
-      f.shell.meetingFeature.noteBody.text = 'Old draft';
+      f.shell.sourceFeature.noteTitle.text = 'Old title';
+      f.shell.sourceFeature.noteBody.text = 'Old draft';
       await shortcut(LogicalKeyboardKey.keyN);
       expect(f.shell.tab, WorkspaceTab.notes);
-      expect(f.shell.meetingFeature.noteId, isNull);
-      expect(f.shell.meetingFeature.noteTitle.text, isEmpty);
-      expect(f.shell.meetingFeature.noteBody.text, isEmpty);
+      expect(f.shell.sourceFeature.noteId, isNull);
+      expect(f.shell.sourceFeature.noteTitle.text, isEmpty);
+      expect(f.shell.sourceFeature.noteBody.text, isEmpty);
       const picker = MethodChannel('plugins.flutter.io/file_selector');
       var openings = 0;
       tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(picker, (

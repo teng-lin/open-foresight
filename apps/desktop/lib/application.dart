@@ -412,8 +412,8 @@ class _WorkspaceState extends State<Workspace>
       ...chatFeature.questionDrafts.values,
       sourceFeature.sourceSearchController,
       sourceFeature.graphLabelInput,
-      meetingFeature.noteTitle,
-      meetingFeature.noteBody,
+      sourceFeature.noteTitle,
+      sourceFeature.noteBody,
       meetingFeature.meetingNotesController,
       meetingFeature.meetingSearchController,
     ]) {
@@ -446,8 +446,8 @@ class _WorkspaceState extends State<Workspace>
     final loaded = meetings.loadedMeetingNotes;
     return meetings.meetingNoteSaves.hasWork ||
         (loaded != null && meetings.meetingNoteSaves.isDirty(loaded)) ||
-        meetings.noteTitle.text != meetings.noteBaseline.$1 ||
-        meetings.noteBody.text != meetings.noteBaseline.$2 ||
+        sourceFeature.noteTitle.text != sourceFeature.noteBaseline.$1 ||
+        sourceFeature.noteBody.text != sourceFeature.noteBaseline.$2 ||
         chatFeature.questionDrafts.values.any((draft) => draft.text.isNotEmpty);
   }
 
@@ -467,11 +467,11 @@ class _WorkspaceState extends State<Workspace>
     sourceFeature.sourceSearchController.clear();
     meetingFeature.meetingQuery = '';
     sourceFeature.labelFilter = '';
-    meetingFeature.noteEditorGeneration++;
-    meetingFeature.noteId = null;
-    meetingFeature.noteTitle.clear();
-    meetingFeature.noteBody.clear();
-    meetingFeature.noteBaseline = ('', '');
+    sourceFeature.noteEditorGeneration++;
+    sourceFeature.noteId = null;
+    sourceFeature.noteTitle.clear();
+    sourceFeature.noteBody.clear();
+    sourceFeature.noteBaseline = ('', '');
     chatFeature.hiddenAnswers.clear();
     chatFeature.answer = '';
     // Drafts are keyed by meeting ID, which the new workspace can reuse.
@@ -479,7 +479,7 @@ class _WorkspaceState extends State<Workspace>
       draft.clear();
     }
     for (final key in [
-      meetingFeature.newNoteKey,
+      sourceFeature.newNoteKey,
       meetingFeature.newMeetingKey,
       meetingFeature.quickStartKey,
       meetingFeature.transcriptImportKey,
@@ -602,12 +602,12 @@ class _WorkspaceState extends State<Workspace>
         meta: Platform.isMacOS,
       ): () => update(() {
         navigate(WorkspaceTab.notes);
-        meetingFeature.noteEditorGeneration++;
-        meetingFeature.noteId = null;
-        meetingFeature.noteBaseline = ('', '');
-        meetingFeature.newNoteKey.reset();
-        meetingFeature.noteTitle.clear();
-        meetingFeature.noteBody.clear();
+        sourceFeature.noteEditorGeneration++;
+        sourceFeature.noteId = null;
+        sourceFeature.noteBaseline = ('', '');
+        sourceFeature.newNoteKey.reset();
+        sourceFeature.noteTitle.clear();
+        sourceFeature.noteBody.clear();
       }),
     },
     child: Focus(

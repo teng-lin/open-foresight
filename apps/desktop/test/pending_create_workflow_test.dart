@@ -92,12 +92,12 @@ void main() {
     await tester.tap(find.text('Save note'));
     await tester.pumpAndSettle();
     expect(state.error, outcomeUnknownText);
-    expect(state.meetingFeature.noteId, isNull);
+    expect(state.sourceFeature.noteId, isNull);
     await tester.tap(find.text('Save note'));
     await tester.pumpAndSettle();
     final note = store.rows('SELECT id,title FROM notes').single;
     expect(note['title'], 'Kept once');
-    expect(state.meetingFeature.noteId, note['id']);
+    expect(state.sourceFeature.noteId, note['id']);
     final sent = keys(Operation.notesSave);
     expect(sent, hasLength(2));
     expect(sent.toSet(), hasLength(1));
@@ -148,7 +148,7 @@ void main() {
     await tester.pumpAndSettle();
     final note = store.rows('SELECT id,body FROM notes').single;
     expect(note['body'], 'Edited');
-    expect(state.meetingFeature.noteId, note['id']);
+    expect(state.sourceFeature.noteId, note['id']);
     expect(state.error, isEmpty);
     // The key only ever carried the first text; the edit went by ID.
     final saves = [
@@ -184,8 +184,8 @@ void main() {
     final reused = store.saveNote(null, 'After the clear', '');
     reply.complete();
     await tester.pumpAndSettle();
-    expect(state.meetingFeature.noteId, isNull, reason: 'note $reused');
-    expect(state.meetingFeature.noteTitle.text, isEmpty);
+    expect(state.sourceFeature.noteId, isNull, reason: 'note $reused');
+    expect(state.sourceFeature.noteTitle.text, isEmpty);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 

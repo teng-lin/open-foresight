@@ -115,9 +115,9 @@ void main() {
           final second = store.saveNote(null, 'Second note', 'Second body');
           shell.update(() {
             shell.navigate(WorkspaceTab.notes);
-            shell.meetingFeature.noteId = create ? null : first;
-            shell.meetingFeature.noteTitle.text = 'Saved first';
-            shell.meetingFeature.noteBody.text = 'Saved body';
+            shell.sourceFeature.noteId = create ? null : first;
+            shell.sourceFeature.noteTitle.text = 'Saved first';
+            shell.sourceFeature.noteBody.text = 'Saved body';
           });
           await tester.pumpAndSettle();
           connection.holdSave = true;
@@ -133,15 +133,15 @@ void main() {
             await tester.tap(find.text('Saved first'));
             await tester.pump();
           }
-          final expectedId = shell.meetingFeature.noteId;
-          final expectedTitle = shell.meetingFeature.noteTitle.text;
-          final expectedBaseline = shell.meetingFeature.noteBaseline;
+          final expectedId = shell.sourceFeature.noteId;
+          final expectedTitle = shell.sourceFeature.noteTitle.text;
+          final expectedBaseline = shell.sourceFeature.noteBaseline;
           connection.release.complete();
           await tester.pumpAndSettle();
-          expect(shell.meetingFeature.noteId, expectedId);
+          expect(shell.sourceFeature.noteId, expectedId);
           if (target == 'different note') expect(expectedId, second);
-          expect(shell.meetingFeature.noteTitle.text, expectedTitle);
-          expect(shell.meetingFeature.noteBaseline, expectedBaseline);
+          expect(shell.sourceFeature.noteTitle.text, expectedTitle);
+          expect(shell.sourceFeature.noteBaseline, expectedBaseline);
         },
       );
     }

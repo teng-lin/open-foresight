@@ -152,7 +152,7 @@ void main() {
     await tester.enterText(fields.at(1), 'First body');
     await tester.tap(find.text('Save note'));
     await tester.pumpAndSettle();
-    final id = f.shell.meetingFeature.noteId as int;
+    final id = f.shell.sourceFeature.noteId as int;
     expect(f.store.noteBody(id), 'First body');
     await tester.tap(find.text('New note'));
     await tester.pumpAndSettle();

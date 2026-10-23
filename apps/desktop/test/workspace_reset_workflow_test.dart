@@ -54,15 +54,15 @@ void main() {
       await tester.pumpAndSettle();
       final dynamic state = tester.state(find.byType(Workspace));
       state.update(() {
-        state.meetingFeature.noteId = 3;
-        state.meetingFeature.noteTitle.text = 'Note 3';
+        state.sourceFeature.noteId = 3;
+        state.sourceFeature.noteTitle.text = 'Note 3';
       });
       // The workspace is cleared while the desktop is disconnected.
       fixture.owner.renewWorkspaceEpoch();
       fixture.status['workspace_epoch'] = fixture.owner.workspaceEpoch;
       fixture.sockets.last.destroy();
-      await pumpUntil(tester, () => state.meetingFeature.noteId == null);
-      expect(state.meetingFeature.noteTitle.text, isEmpty);
+      await pumpUntil(tester, () => state.sourceFeature.noteId == null);
+      expect(state.sourceFeature.noteTitle.text, isEmpty);
       await tester.runAsync(() async {
         fixture.remote.close();
         await fixture.remote.closed;

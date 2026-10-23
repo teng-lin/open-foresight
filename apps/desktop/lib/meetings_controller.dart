@@ -21,14 +21,6 @@ class _MeetingsController extends _FeatureController {
 
   bool systemAudioSetupReviewed = false;
 
-  final noteTitle = TextEditingController();
-
-  final noteBody = TextEditingController();
-
-  int? noteId;
-
-  int noteEditorGeneration = 0;
-
   int? meetingId;
 
   int? recordingMeeting;
@@ -40,8 +32,7 @@ class _MeetingsController extends _FeatureController {
   final meetingNotesController = TextEditingController();
 
   /// A retry of an unconfirmed create reuses its key, so it creates once.
-  final newNoteKey = PendingRequestKey(),
-      newMeetingKey = PendingRequestKey(),
+  final newMeetingKey = PendingRequestKey(),
       quickStartKey = PendingRequestKey(),
       transcriptImportKey = PendingRequestKey();
 
@@ -49,9 +40,6 @@ class _MeetingsController extends _FeatureController {
   /// [transcriptImportKey] belongs to. Choosing the same file again retries
   /// that import; any other choice is a new import.
   (int, String, String)? transcriptImport;
-
-  /// The note editor's text as last loaded or saved.
-  (String, String) noteBaseline = ('', '');
 
   /// The user moved to another meeting: an unconfirmed create is not retried
   /// later, where its stored result would name an old meeting.

@@ -6,6 +6,17 @@ const _graphEmbeddingBatch = 128;
 class _SourcesController extends _FeatureController {
   _SourcesController(super.shell);
 
+  final noteTitle = TextEditingController();
+  final noteBody = TextEditingController();
+  int? noteId;
+  int noteEditorGeneration = 0;
+
+  /// A retry of an unconfirmed create reuses its key, so it creates once.
+  final newNoteKey = PendingRequestKey();
+
+  /// The note editor's text as last loaded or saved.
+  (String, String) noteBaseline = ('', '');
+
   bool graphView = false;
 
   bool gridView = false;
@@ -232,12 +243,12 @@ class _SourcesController extends _FeatureController {
             FilledButton(
               onPressed: () {
                 setState(() {
-                  meetingFeature.noteEditorGeneration++;
-                  meetingFeature.noteId = null;
-                  meetingFeature.noteBaseline = ('', '');
-                  meetingFeature.newNoteKey.reset();
-                  meetingFeature.noteTitle.clear();
-                  meetingFeature.noteBody.clear();
+                  noteEditorGeneration++;
+                  noteId = null;
+                  noteBaseline = ('', '');
+                  newNoteKey.reset();
+                  noteTitle.clear();
+                  noteBody.clear();
                 });
               },
               child: const Text('New note'),
@@ -251,17 +262,12 @@ class _SourcesController extends _FeatureController {
                         subtitle: Text('Revision ${n['revision']}'),
                         onTap: () => setState(() {
                           // Opening a note abandons an unconfirmed new one.
-                          meetingFeature.newNoteKey.reset();
-                          meetingFeature.noteEditorGeneration++;
-                          meetingFeature.noteId = n['id'] as int;
-                          meetingFeature.noteTitle.text = n['title'] as String;
-                          meetingFeature.noteBody.text = d.store.noteBody(
-                            n['id'] as int,
-                          );
-                          meetingFeature.noteBaseline = (
-                            meetingFeature.noteTitle.text,
-                            meetingFeature.noteBody.text,
-                          );
+                          newNoteKey.reset();
+                          noteEditorGeneration++;
+                          noteId = n['id'] as int;
+                          noteTitle.text = n['title'] as String;
+                          noteBody.text = d.store.noteBody(n['id'] as int);
+                          noteBaseline = (noteTitle.text, noteBody.text);
                         }),
                       ),
                     )
@@ -276,12 +282,12 @@ class _SourcesController extends _FeatureController {
         child: Column(
           children: [
             TextField(
-              controller: meetingFeature.noteTitle,
+              controller: noteTitle,
               decoration: const InputDecoration(labelText: 'Title'),
             ),
             Expanded(
               child: TextField(
-                controller: meetingFeature.noteBody,
+                controller: noteBody,
                 maxLines: null,
                 expands: true,
                 decoration: const InputDecoration(
@@ -297,25 +303,22 @@ class _SourcesController extends _FeatureController {
                 // ID the views have dropped.
                 final epoch = d.workspaceEpoch;
                 final identity = FeatureRequestIdentity.capture(d);
-                var originalId = meetingFeature.noteId;
-                final editorGeneration = meetingFeature.noteEditorGeneration;
+                var originalId = noteId;
+                final editorGeneration = noteEditorGeneration;
                 bool current() =>
                     identity.isCurrent(d, alive: mounted) &&
-                    meetingFeature.noteId == originalId &&
-                    meetingFeature.noteEditorGeneration == editorGeneration;
+                    noteId == originalId &&
+                    noteEditorGeneration == editorGeneration;
                 Map<String, dynamic> scoped(Map<String, dynamic> args) => {
                   ...args,
                   if (epoch != null) 'workspace_epoch': epoch,
                 };
-                final note = {
-                  'title': meetingFeature.noteTitle.text,
-                  'body': meetingFeature.noteBody.text,
-                };
+                final note = {'title': noteTitle.text, 'body': noteBody.text};
                 void saved(int id) => setState(() {
-                  meetingFeature.noteId = id;
-                  meetingFeature.noteBaseline = (note['title']!, note['body']!);
+                  noteId = id;
+                  noteBaseline = (note['title']!, note['body']!);
                 });
-                final id = meetingFeature.noteId;
+                final id = noteId;
                 if (id != null) {
                   await d.command(
                     Operation.notesSave,
@@ -325,7 +328,7 @@ class _SourcesController extends _FeatureController {
                   return;
                 }
                 final created =
-                    await meetingFeature.newNoteKey.run(
+                    await newNoteKey.run(
                           note,
                           (keyed) =>
                               d.command(Operation.notesSave, scoped(keyed)),
@@ -336,7 +339,7 @@ class _SourcesController extends _FeatureController {
                             if (current()) {
                               setState(() {
                                 originalId = id;
-                                meetingFeature.noteId = id;
+                                noteId = id;
                               });
                             }
                             return d.command(
