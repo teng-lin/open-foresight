@@ -14,7 +14,8 @@ export '../features/chat/ports.dart';
 export '../features/onboarding/ports.dart';
 
 /// Host capabilities shared by features, without access to other controllers.
-/// [update] preserves the shell rebuild bridge while feature readers migrate.
+/// [update] publishes the owning feature's changes; composition refreshes its
+/// consumers while preserving unrelated presentation identities.
 abstract interface class FeatureHost {
   DesktopConnection get connection;
   BuildContext get context;

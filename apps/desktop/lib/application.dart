@@ -1,3 +1,6 @@
+import 'shell/feature_updates.dart';
+import 'shell/test_access.dart';
+export 'shell/test_access.dart' show WorkspaceTestAccess;
 import 'desktop_environment.dart';
 import 'features/chat/chat_controller.dart';
 import 'features/meetings/meetings_controller.dart';
@@ -78,34 +81,6 @@ class Workspace extends StatefulWidget {
   State<Workspace> createState() => _WorkspaceState();
 }
 
-/// Typed access for workflow fixtures while features retain their public ports.
-/// Production composition never discovers features through this interface.
-@visibleForTesting
-abstract interface class WorkspaceTestAccess
-    implements
-        FeatureHost,
-        WorkspaceNavigation,
-        OperationGate,
-        WorkspaceLifecycle {
-  DesktopConnection get d;
-  SourcesController get sourceFeature;
-  MeetingsController get meetingFeature;
-  ChatController get chatFeature;
-  SettingsController get settingsFeature;
-  IntegrationsController get integrationFeature;
-  OnboardingController get onboardingFeature;
-  MeetingPortsBridge get meetingPorts;
-  PreferenceCommands get preferenceCommands;
-  OnboardingActivity get onboardingActivity;
-  WorkspaceTab get tab;
-  set tab(WorkspaceTab value);
-  set busy(bool value);
-  set error(String value);
-  Timer? get serviceUiTimer;
-  @override
-  ValueNotifier<int> get serviceUiRevision;
-}
-
 class _WorkspaceState extends State<Workspace>
     with TickerProviderStateMixin, WidgetsBindingObserver
     implements
@@ -114,11 +89,13 @@ class _WorkspaceState extends State<Workspace>
         OperationGate,
         WorkspaceDialogs,
         WorkspaceLifecycle,
+        // The composition root implements the test contract; only tests consume it.
+        // ignore: invalid_use_of_visible_for_testing_member
         WorkspaceTestAccess {
   final calendarAuthLinks = CalendarAuthLinks();
   @override
   late final OnboardingController onboardingFeature = OnboardingController(
-    host: this,
+    host: featureHost(DesktopFeature.onboarding),
     navigation: this,
     operations: this,
     lifecycle: this,
@@ -128,7 +105,7 @@ class _WorkspaceState extends State<Workspace>
   );
   @override
   late final SourcesController sourceFeature = SourcesController(
-    host: this,
+    host: featureHost(DesktopFeature.sources),
     navigation: this,
     operations: this,
     dialogs: this,
@@ -136,7 +113,7 @@ class _WorkspaceState extends State<Workspace>
   );
   @override
   late final ChatController chatFeature = ChatController(
-    host: this,
+    host: featureHost(DesktopFeature.chat),
     navigation: this,
     operations: this,
     meetings: meetingPorts,
@@ -144,7 +121,7 @@ class _WorkspaceState extends State<Workspace>
   );
   @override
   late final MeetingsController meetingFeature = MeetingsController(
-    host: this,
+    host: featureHost(DesktopFeature.meetings),
     navigation: this,
     operations: this,
     dialogs: this,
@@ -156,7 +133,7 @@ class _WorkspaceState extends State<Workspace>
   );
   @override
   late final SettingsController settingsFeature = SettingsController(
-    host: this,
+    host: featureHost(DesktopFeature.settings),
     navigation: this,
     operations: this,
     lifecycle: this,
@@ -166,7 +143,7 @@ class _WorkspaceState extends State<Workspace>
   );
   @override
   late final IntegrationsController integrationFeature = IntegrationsController(
-    host: this,
+    host: featureHost(DesktopFeature.integrations),
     navigation: this,
     operations: this,
     dialogs: this,
@@ -208,7 +185,18 @@ class _WorkspaceState extends State<Workspace>
   AppCommands? get commands => widget.commands;
 
   @override
-  void update(VoidCallback action) => setState(action);
+  void update(VoidCallback action) {
+    featureUpdates.all();
+    setState(action);
+  }
+
+  final featureUpdates = FeatureUpdates();
+  FeatureHost featureHost(DesktopFeature feature) =>
+      FeatureHostBridge(this, (action) {
+        if (!mounted) return;
+        featureUpdates.changed(feature);
+        setState(action);
+      });
 
   @override
   final ValueNotifier<int> serviceUiRevision = ValueNotifier<int>(0);
@@ -599,7 +587,11 @@ class _WorkspaceState extends State<Workspace>
         : meetingFeature.meetingImmersive && meetingFeature.meetingId != null
         ? ValueListenableBuilder<int>(
             valueListenable: serviceUiRevision,
-            builder: (_, __, ___) => meetingFeature.immersiveMeetingWorkspace(),
+            builder: (_, __, ___) => featureUpdates.view(
+              WorkspaceTab.meetings,
+              serviceUiRevision.value,
+              meetingFeature.immersiveMeetingWorkspace,
+            ),
           )
         : screenshotWorkspace(context);
     return AgentApprovalSurface(
@@ -608,6 +600,40 @@ class _WorkspaceState extends State<Workspace>
       child: workspace,
     );
   }
+
+  Widget workspaceHeader() => featureUpdates.presentation(
+    'header',
+    (
+      serviceUiRevision.value,
+      tab,
+      busy,
+      meetingFeature.quickStarting,
+      meetingFeature.meetingEnhancing,
+      meetingFeature.meetingId,
+      meetingFeature.recording,
+      settingsFeature.embeddingName(),
+      settingsFeature.localWords(),
+      settingsFeature.helperEmbeddingHealthy,
+    ),
+    () => WorkspaceHeader(
+      embeddingName: settingsFeature.embeddingName(),
+      localWords: settingsFeature.localWords(),
+      helperHealthy: settingsFeature.helperEmbeddingHealthy,
+      showHelperMonitor: settingsFeature.showHelperMonitor,
+      recordingHeader: meetingFeature.recording == null
+          ? null
+          : meetingFeature.recordingHeader(),
+      onRecord:
+          busy ||
+              meetingFeature.quickStarting ||
+              meetingFeature.meetingEnhancing
+          ? null
+          : tab == WorkspaceTab.meetings && meetingFeature.meetingId != null
+          ? () =>
+                meetingFeature.recordExistingMeeting(meetingFeature.meetingId!)
+          : meetingFeature.quickStart,
+    ),
+  );
 
   Widget screenshotWorkspace(BuildContext context) => CallbackShortcuts(
     bindings: {
@@ -674,48 +700,34 @@ class _WorkspaceState extends State<Workspace>
           children: [
             ValueListenableBuilder<int>(
               valueListenable: serviceUiRevision,
-              builder: (_, __, ___) => WorkspaceHeader(
-                embeddingName: settingsFeature.embeddingName(),
-                localWords: settingsFeature.localWords(),
-                helperHealthy: settingsFeature.helperEmbeddingHealthy,
-                showHelperMonitor: settingsFeature.showHelperMonitor,
-                recordingHeader: meetingFeature.recording == null
-                    ? null
-                    : meetingFeature.recordingHeader(),
-                onRecord:
-                    busy ||
-                        meetingFeature.quickStarting ||
-                        meetingFeature.meetingEnhancing
-                    ? null
-                    : tab == WorkspaceTab.meetings &&
-                          meetingFeature.meetingId != null
-                    ? () => meetingFeature.recordExistingMeeting(
-                        meetingFeature.meetingId!,
-                      )
-                    : meetingFeature.quickStart,
-              ),
+              builder: (_, __, ___) => workspaceHeader(),
             ),
             Expanded(
               child: Row(
                 children: [
-                  WorkspaceSidebar(
-                    tab: tab,
-                    navigate: navigate,
-                    account: AccountButton(
-                      connected: integrationFeature.googleAuth.connected,
-                      busy: busy,
-                      displayName: integrationFeature.googleAuth.displayName,
-                      email: integrationFeature.googleAuth.email,
-                      photoUrl: integrationFeature.googleAuth.photoUrl,
-                      account: integrationFeature.googleAuth.account,
-                      accounts: integrationFeature.googleAuth.accounts,
-                      onSignIn: () => run(integrationFeature.connectGoogle),
-                      onAddAccount: () =>
-                          run(integrationFeature.addGoogleAccount),
-                      onSwitchAccount: (id) =>
-                          run(() => integrationFeature.switchGoogleAccount(id)),
-                      onSignOutAccount: (id) => run(
-                        () => integrationFeature.signOutGoogleAccount(id),
+                  featureUpdates.presentation(
+                    'sidebar',
+                    (tab, busy, integrationFeature.googlePresentation),
+                    () => WorkspaceSidebar(
+                      tab: tab,
+                      navigate: navigate,
+                      account: AccountButton(
+                        connected: integrationFeature.googleAuth.connected,
+                        busy: busy,
+                        displayName: integrationFeature.googleAuth.displayName,
+                        email: integrationFeature.googleAuth.email,
+                        photoUrl: integrationFeature.googleAuth.photoUrl,
+                        account: integrationFeature.googleAuth.account,
+                        accounts: integrationFeature.googleAuth.accounts,
+                        onSignIn: () => run(integrationFeature.connectGoogle),
+                        onAddAccount: () =>
+                            run(integrationFeature.addGoogleAccount),
+                        onSwitchAccount: (id) => run(
+                          () => integrationFeature.switchGoogleAccount(id),
+                        ),
+                        onSignOutAccount: (id) => run(
+                          () => integrationFeature.signOutGoogleAccount(id),
+                        ),
                       ),
                     ),
                   ),
@@ -727,17 +739,23 @@ class _WorkspaceState extends State<Workspace>
                       error: error,
                       child: ValueListenableBuilder<int>(
                         valueListenable: serviceUiRevision,
-                        builder: (_, __, ___) => switch (tab) {
-                          WorkspaceTab.sources => SourcesView(sourceFeature),
-                          WorkspaceTab.chat => chatFeature.chat(),
-                          WorkspaceTab.notes => sourceFeature.notes(),
-                          WorkspaceTab.meetings => MeetingsView(meetingFeature),
-                          WorkspaceTab.models => settingsFeature.models(),
-                          WorkspaceTab.stats => settingsFeature.stats(),
-                          WorkspaceTab.settings => SettingsView(
-                            settingsFeature,
-                          ),
-                        },
+                        builder: (_, __, ___) => featureUpdates.view(
+                          tab,
+                          serviceUiRevision.value,
+                          () => switch (tab) {
+                            WorkspaceTab.sources => SourcesView(sourceFeature),
+                            WorkspaceTab.chat => chatFeature.chat(),
+                            WorkspaceTab.notes => sourceFeature.notes(),
+                            WorkspaceTab.meetings => MeetingsView(
+                              meetingFeature,
+                            ),
+                            WorkspaceTab.models => settingsFeature.models(),
+                            WorkspaceTab.stats => settingsFeature.stats(),
+                            WorkspaceTab.settings => SettingsView(
+                              settingsFeature,
+                            ),
+                          },
+                        ),
                       ),
                     ),
                   ),
