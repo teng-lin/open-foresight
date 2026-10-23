@@ -77,6 +77,56 @@ class _Connection implements DesktopConnection {
 
 void main() {
   test(
+    'value-equal worker replies preserve snapshots and suppress feature publications',
+    () async {
+      final reader = _Reader();
+      final connection = _Connection(reader);
+      var publications = 0;
+      final model = SettingsReadModel(
+        connection: () => connection,
+        changed: () => publications++,
+      );
+      model.start();
+      ModelRegistration registration([String digest = 'known']) =>
+          ModelRegistration.fromRow({
+            'kind': 'speech',
+            'path': '/fixture/model',
+            'digest': digest,
+          });
+      reader.reply(0, [registration()]);
+      reader.reply(1, '120');
+      await Future<void>(() {});
+      final published = publications, snapshot = model.models;
+      reader.reply(0, [registration()]);
+      reader.reply(1, '120');
+      for (var i = 2; i < 1 + SettingsReadModel.defaults.length; i++) {
+        reader.reply(i, SettingsReadModel.defaults.values.elementAt(i - 1));
+      }
+      await Future<void>(() {});
+      expect(publications, published);
+      expect(model.models, same(snapshot));
+      reader.reply(0, [registration()], freshness: ReadFreshness.preview);
+      await Future<void>(() {});
+      expect(
+        publications,
+        published + 1,
+        reason:
+            'readiness freshness is observable even with equal display values',
+      );
+      expect(model.currentModel('speech'), isNull);
+      reader.reply(0, [registration('replacement')]);
+      await Future<void>(() {});
+      expect(publications, published + 2);
+      expect(model.currentModel('speech')!.digest, 'replacement');
+      await model.dispose();
+      for (final stream in reader.streams) {
+        await stream.close();
+      }
+      await connection.events.close();
+    },
+  );
+
+  test(
     'Settings retains stable factory watches across data events and retires an old owner',
     () async {
       final reader = _Reader();

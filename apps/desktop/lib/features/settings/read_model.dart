@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:foresight_core/desktop.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 
 import '../../feature_request_identity.dart';
 
@@ -81,11 +82,20 @@ class SettingsReadModel {
       return;
     }
     _watch(owner.store, StoreReadQueries.models(), generation, (result) {
+      var changed = modelsCurrent != result.current;
       modelsCurrent = result.current;
       if (result.value != null &&
           (result.current || result.freshness == ReadFreshness.preview)) {
-        models = List.unmodifiable(result.value!);
+        final next = result.value!;
+        if (!listEquals(
+          models.map(_modelFields).toList(),
+          next.map(_modelFields).toList(),
+        )) {
+          models = List.unmodifiable(next);
+          changed = true;
+        }
       }
+      return changed;
     });
     for (final entry in defaults.entries) {
       _watch(
@@ -95,8 +105,11 @@ class SettingsReadModel {
         (result) {
           if (result.value != null &&
               (result.current || result.freshness == ReadFreshness.preview)) {
+            final changed = preference(entry.key) != result.value!;
             _preferences[entry.key] = result.value!;
+            return changed;
           }
+          return false;
         },
       );
     }
@@ -107,7 +120,7 @@ class SettingsReadModel {
     StoreReader reader,
     ReadQuery<T> query,
     int generation,
-    void Function(ReadResult<T>) accept,
+    bool Function(ReadResult<T>) accept,
   ) {
     _subscriptions.add(
       reader
@@ -115,13 +128,17 @@ class SettingsReadModel {
           .listen(
             (result) {
               if (!owns(generation)) return;
-              accept(result);
-              if (result.error != null) problem = result.error.toString();
-              _notify();
+              final changed = accept(result);
+              final error = result.error?.toString();
+              final errorChanged = error != null && problem != error;
+              if (error != null) problem = error;
+              if (changed || errorChanged) _notify();
             },
             onError: (Object error) {
               if (!owns(generation)) return;
-              problem = error.toString();
+              final next = error.toString();
+              if (problem == next) return;
+              problem = next;
               _notify();
             },
           ),
@@ -161,3 +178,12 @@ Future<ModelRegistration?> readSetupModel(
 /// no persistence API and do not decode a row or issue a synchronous query.
 Map<String, Object?>? cacheRegistration(ModelRegistration? model) =>
     model == null ? null : {'path': model.path, 'digest': model.digest};
+
+Object _modelFields(ModelRegistration model) => (
+  model.kind,
+  model.path,
+  model.digest,
+  model.runtime,
+  model.backend,
+  model.modelType,
+);

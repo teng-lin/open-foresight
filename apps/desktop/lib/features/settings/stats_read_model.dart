@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:foresight_core/desktop.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 
 import '../../feature_request_identity.dart';
 
@@ -101,9 +102,17 @@ class SettingsStatsModel {
                       result.freshness == ReadFreshness.preview) ||
                   (stats.period != null && stats.period!.key != period.key))
                 return;
+              final sameValue =
+                  value?.words == stats.words &&
+                  value?.recordedMeetings == stats.recordedMeetings &&
+                  value?.sources == stats.sources &&
+                  value?.completedAnswers == stats.completedAnswers &&
+                  listEquals(value?.weekly, stats.weekly) &&
+                  displayPeriod?.key == period.key;
+              problem = null;
+              if (sameValue) return;
               value = stats;
               displayPeriod = period;
-              problem = null;
               _notify();
             },
             onError: (Object error) {

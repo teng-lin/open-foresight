@@ -106,6 +106,11 @@ void main() {
         reader.succeed(0, 17);
         async.flushMicrotasks();
         final weekly = model.value!.weekly;
+        final publishedBeforeEqual = publications;
+        reader.succeed(0, 17);
+        async.flushMicrotasks();
+        expect(publications, publishedBeforeEqual);
+        expect(model.value!.weekly, same(weekly));
         for (var i = 0; i < 20; i++) connection.events.add(null);
         reader.dataRevision = '2';
         connection.events.add(null);
