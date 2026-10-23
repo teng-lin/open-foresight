@@ -436,6 +436,36 @@ void main() {
   );
 
   test(
+    'old cleanup work cannot erase a newly authorized account credential',
+    () async {
+      await auth.close();
+      final vault = MemoryProfileSecrets();
+      secrets = vault;
+      auth = createAuth();
+      await auth.signIn(fixture.consent);
+      final key = vault.values.keys.single;
+      vault.failedDeletes.add(key);
+      await expectLater(auth.forget(), throwsStateError);
+      vault.failedDeletes.clear();
+      await auth.signIn(fixture.consent);
+      await auth.retryCredentialCleanup();
+      expect(auth.connected, isTrue);
+      expect(vault.values.keys, [key]);
+      await auth.close();
+      auth = createAuth();
+      await auth.retryCredentialCleanup();
+      expect(auth.connected, isTrue);
+      expect(vault.values.keys, [key]);
+      await auth.disconnect();
+      expect(vault.values, isEmpty);
+      expect(
+        File('${root.path}/credential-cleanup.json').existsSync(),
+        isFalse,
+      );
+    },
+  );
+
+  test(
     'switching during account consent prevents late account adoption',
     () async {
       await auth.signIn(fixture.consent);

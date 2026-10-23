@@ -1,4 +1,8 @@
+import 'dart:io';
+
 import 'package:foresight_core/src/store.dart';
+import 'package:foresight_core/src/persistence/schema_migrations.dart';
+import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
 import 'package:foresight_core/src/meeting_workflow_store.dart';
 import 'package:foresight_core/src/persistence/application_queries.dart';
 import 'package:foresight_test_support/test_paths.dart';
@@ -24,6 +28,48 @@ void main() {
     store.saveNote(id, saved['title'] as String, saved['body'] as String);
     expect(store.notes().single['body'], 'trusted');
     expect(store.contentHistory.revisions('notes', id), hasLength(2));
+  });
+
+  test('schema 17 upgrades without changing existing content', () {
+    store.close();
+    path =
+        '${createTestTempDirectorySync('history-upgrade-').path}/application.db';
+    final db = sqlite3.open(path);
+    db.execute(
+      File(
+        'test/fixtures/persistence-c28a1561/schema15.sql',
+      ).readAsStringSync(),
+    );
+    final migrations = ApplicationMigrations(db);
+    migrations.run(16);
+    migrations.run(17);
+    db.execute('PRAGMA user_version=17');
+    db.execute(
+      "INSERT INTO notes(id,title,body,revision) VALUES(42,'old title','old body',7)",
+    );
+    db.dispose();
+    store = Store(path);
+    expect(store.rows('PRAGMA user_version').single.values.single, 18);
+    expect(store.notes().single['body'], 'old body');
+    expect(store.contentHistory.revisions('notes', 42), isEmpty);
+    store.saveNote(42, 'new title', 'new body');
+    expect(
+      store.contentHistory.revisions('notes', 42).single['snapshot'],
+      containsPair('revision', 7),
+    );
+  });
+
+  test('source history ignores indexing metadata and obeys soft deletion', () {
+    final id = store.importText('first', 'trusted', 'text/plain', 'fixture');
+    store.importText('second', 'replacement', 'text/plain', 'fixture', id: id);
+    expect(
+      store.contentHistory.revisions('sources', id).single['snapshot'],
+      containsPair('content', 'trusted'),
+    );
+    store.db.execute("UPDATE sources SET state='ready' WHERE id=?", [id]);
+    expect(store.contentHistory.revisions('sources', id), hasLength(1));
+    store.db.execute('UPDATE sources SET deleted=1 WHERE id=?', [id]);
+    expect(store.contentHistory.revisions('sources', id), isEmpty);
   });
 
   test('a failed transaction rolls back both replacement and history', () {
