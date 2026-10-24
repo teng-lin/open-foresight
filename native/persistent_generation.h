@@ -114,6 +114,9 @@ bool start_persistent(Engine &engine, Worker &request) {
         [&](const std::string &message) {
           std::lock_guard lock(worker->frame_mutex);
           worker->protocol_error = message;
+        },
+        [&] {
+          std::lock_guard lock(worker->frame_mutex);
           worker->exit_status = -1;
           worker->finished = true;
           worker->active = false;
