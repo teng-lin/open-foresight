@@ -135,6 +135,7 @@ class Application implements ModelGate, GenerationReservationGate {
     );
     domain.modelGate = this;
     domain.onBackgroundSettled = changed;
+    domain.indexMeetingTranscript = _meetingIndexer.indexMeeting;
     _googleMaintenance.initialize();
   }
 
@@ -313,6 +314,7 @@ class Application implements ModelGate, GenerationReservationGate {
   int get proactiveWork => _automaticAnswers.activeWork;
   int get transcriptComputing => _notes.computing;
   bool get backgroundBusy =>
+      _meetingIndexer.busy ||
       _generation.configuring ||
       domain.resumeInProgress ||
       domain.initializationPending ||
@@ -515,31 +517,59 @@ class Application implements ModelGate, GenerationReservationGate {
   void pauseRecording([int? id]) => _recordingController.pauseRecording(id);
   void resumeRecording([int? id]) => _recordingController.resumeRecording(id);
 
+  Future<void> recoverMeetingIndexes() => _meetingIndexer.recover();
+  @visibleForTesting
+  Map<String, int> get meetingIndexWork => _meetingIndexer.workMetrics;
+
   Future<void> close() => _closing ??= _close();
 
   Future<void> _close() async {
     if (_closed) return;
     _closed = true;
-    _summary.stop();
-    _workflow.stop();
-    _googleMaintenance.stop();
-    _models.stop();
-    _recordingController.stopScheduling();
-    _notes.stop();
-    await _models.cancelAcquisition();
-    await proactive.close();
-    await _automaticAnswers.close();
-    await _generation.close();
-    await _summary.close();
-    await _workflow.close();
-    await _notes.close();
-    await _models.close();
-    try {
-      await _googleMaintenance.close();
-      await _recordingController.close();
-    } finally {
-      await captureLevelChanges.close();
-      await changes.close();
+    Object? failure;
+    StackTrace? failureStack;
+    void attempt(void Function() operation) {
+      try {
+        operation();
+      } catch (error, stack) {
+        failure ??= error;
+        failureStack ??= stack;
+      }
     }
+
+    Future<void> join(Future<void> Function() operation) async {
+      try {
+        await operation();
+      } catch (error, stack) {
+        failure ??= error;
+        failureStack ??= stack;
+      }
+    }
+
+    attempt(_meetingIndexer.stop);
+    attempt(_summary.stop);
+    attempt(_workflow.stop);
+    attempt(_googleMaintenance.stop);
+    attempt(_models.stop);
+    attempt(_recordingController.stopScheduling);
+    // Stop physical capture now. Canceled/paused index producers must already
+    // know they are closing before the recording owner joins their Futures.
+    final recordingClose = _recordingController.close();
+    recordingClose.ignore();
+    attempt(_notes.stop);
+    await join(_models.cancelAcquisition);
+    await join(proactive.close);
+    await join(_automaticAnswers.close);
+    await join(_generation.close);
+    await join(_summary.close);
+    await join(_workflow.close);
+    await join(_notes.close);
+    await join(_models.close);
+    await join(_googleMaintenance.close);
+    await join(() => recordingClose);
+    await join(_meetingIndexer.close);
+    await join(captureLevelChanges.close);
+    await join(changes.close);
+    if (failure != null) Error.throwWithStackTrace(failure!, failureStack!);
   }
 }

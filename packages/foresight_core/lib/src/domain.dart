@@ -51,6 +51,8 @@ class Domain {
        clock = clock ?? const Clock(),
        createTimer = createTimer ?? Timer.new,
        _discoverGeneration = discoverGeneration ?? discoverGenerationRuntime;
+  Future<void> Function(int, {bool Function()? current})?
+  indexMeetingTranscript;
   ModelGate modelGate;
   SearchCallbacks? _webSearch;
   WebContentService? _ownedWebContent;
@@ -207,9 +209,18 @@ class Domain {
 
   void close() {
     _closed = true;
+    indexMeetingTranscript = null;
     checkCancellations();
     if (_ownedWebContent != null) unawaited(_ownedWebContent!.close());
     _wakeSourceWork();
+  }
+
+  /// Join owned RPC cancellation and channel teardown before the helper or
+  /// Store is released. Call [close] first to refuse later mutation admission.
+  Future<void> drain() async {
+    if (!_closed) throw StateError('Close Domain before draining its work');
+    checkCancellations();
+    await _mutationTail;
   }
 
   void _checkOpen() {
@@ -385,6 +396,18 @@ class Domain {
   }
 
   Future<void> index(String id, {bool Function()? current}) async {
+    _checkOpen();
+    checkCancellations();
+    final route = indexMeetingTranscript;
+    if (route != null) {
+      final mapping = store.rows(
+        'SELECT m.meeting_id FROM meeting_transcript_sources m JOIN sources s ON s.id=m.source_id WHERE s.id=? AND s.generated=1 AND s.deleted=0',
+        [id],
+      );
+      if (mapping.isNotEmpty) {
+        return route(mapping.single['meeting_id'] as int, current: current);
+      }
+    }
     final generation = workspaceGeneration;
     while (true) {
       // Wait outside the mutation queue so deletions can still proceed.
@@ -469,6 +492,7 @@ class Domain {
   Future<void> delete(String id) {
     _checkOpen();
     store.tombstone(id);
+    checkCancellations();
     return _serialize(() => _delete(id));
   }
 

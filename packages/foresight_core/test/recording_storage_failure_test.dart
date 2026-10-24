@@ -7,6 +7,9 @@ import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/application.dart';
+import 'package:foresight_core/src/generated/transcript_index.pb.dart'
+    as transcript;
+import 'package:foresight_test_support/google_connections.dart';
 import 'package:foresight_core/src/service.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'package:foresight_test_support/native_fixture.dart';
@@ -15,20 +18,41 @@ import 'package:foresight_test_support/test_paths.dart';
 import 'package:sqlite3/sqlite3.dart';
 import 'package:test/test.dart';
 
-final class HeldIndexDomain extends Domain {
+final class HeldIndexDomain extends AdapterDomain {
   HeldIndexDomain(super.store, super.helper, {super.createTimer});
-  final indexed = <String>[];
   final entered = Completer<void>(), release = Completer<void>();
-  bool hold = false, reject = false;
+  final cancelled = Completer<void>(), cleanup = Completer<void>();
+  bool hold = false, reject = false, holdCancellationCleanup = false;
+  Future<void> waitForRelease(bool Function()? current) async {
+    if (!hold) return;
+    if (!entered.isCompleted) entered.complete();
+    final watch = whenCancelled(() => !closed && (current?.call() ?? true));
+    try {
+      await Future.any([release.future, watch.future]);
+    } catch (_) {
+      if (!cancelled.isCompleted) cancelled.complete();
+      if (holdCancellationCleanup) await cleanup.future;
+      rethrow;
+    } finally {
+      watch.dispose();
+    }
+  }
+
   @override
   Future<void> index(String id, {bool Function()? current}) async {
-    if (hold) {
-      if (!entered.isCompleted) entered.complete();
-      await release.future;
-    }
+    await waitForRelease(current);
     if (reject) throw StateError('controlled index failure');
-    indexed.add(id);
-    store.state(id, 'indexed');
+    await super.index(id, current: current);
+  }
+
+  @override
+  Future<transcript.TranscriptDeltaResult> applyTranscriptDelta(
+    transcript.TranscriptDelta delta, {
+    bool Function()? current,
+  }) async {
+    await waitForRelease(current);
+    if (reject) throw StateError('controlled index failure');
+    return super.applyTranscriptDelta(delta, current: current);
   }
 }
 
@@ -442,6 +466,7 @@ void main() {
     'next recording starts while previous indexing is held; close still joins it',
     () async {
       domain.hold = true;
+      domain.holdCancellationCleanup = true;
       await app.startRecording(meeting);
       final owner = app.recording!;
       pcm();
@@ -456,11 +481,18 @@ void main() {
       await app.stopRecording();
       var closed = false;
       final closing = app.close().then((_) => closed = true);
-      await Future<void>.delayed(Duration.zero);
+      await domain.cancelled.future;
       expect(closed, false);
-      domain.release.complete();
+      domain.cleanup.complete();
       await closing;
-      expect(domain.indexed, contains('meeting-$meeting'));
+      expect(domain.indexed, isNot(contains('meeting-$meeting')));
+      expect(
+        store.rows('SELECT * FROM meeting_index_jobs WHERE meeting_id=?', [
+          meeting,
+        ]),
+        hasLength(1),
+        reason: 'Cancelled owned work survives close as durable intent',
+      );
     },
   );
 

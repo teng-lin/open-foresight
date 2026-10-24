@@ -29,7 +29,7 @@ import 'persistence/sqlite_runtime.dart';
 class Store {
   final Database db;
   final String path;
-  static const schemaVersion = 21;
+  static const schemaVersion = 22;
   ContentHistory get contentHistory =>
       ContentHistory(db, supportedVersion: schemaVersion);
 

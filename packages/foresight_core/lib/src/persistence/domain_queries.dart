@@ -1,6 +1,7 @@
 import 'package:sqlite3/sqlite3.dart';
 
 import '../read_models.dart';
+import 'source_contents.dart';
 import '../store.dart';
 import 'model_store.dart';
 import 'read_schema_guard.dart';
@@ -51,9 +52,13 @@ final class DomainQueries {
 
   String graphSourceContent(Object? id) => _snapshot(
     () =>
-        db.select('SELECT content FROM sources WHERE id=? AND deleted=0', [
-              id,
-            ]).single['content']
+        db
+                .select('SELECT * FROM sources WHERE id=? AND deleted=0', [id])
+                .map(
+                  (row) =>
+                      materializeSource(db, Map<String, Object?>.from(row)),
+                )
+                .single['content']
             as String,
   );
 
@@ -61,7 +66,11 @@ final class DomainQueries {
     final rows = db.select('SELECT * FROM sources WHERE id=? AND deleted=0', [
       id,
     ]);
-    return rows.isEmpty ? null : SourceDocument.fromRow(rows.first);
+    return rows.isEmpty
+        ? null
+        : SourceDocument.fromRow(
+            materializeSource(db, Map<String, Object?>.from(rows.first)),
+          );
   });
 
   void sourceState(String id, String state, [String error = '']) => _snapshot(

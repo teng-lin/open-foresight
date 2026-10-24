@@ -6,6 +6,7 @@ import 'package:foresight_core/src/application.dart';
 import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
 import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
 import 'package:foresight_test_support/test_paths.dart';
+import 'package:foresight_test_support/transcript_index_service.dart';
 import 'package:grpc/grpc.dart';
 import 'package:test/test.dart';
 
@@ -42,13 +43,28 @@ void main() {
   late Application app;
   late Server server;
   late MeetingIndexService service;
+  late ControlledTranscriptIndex incremental;
   late int meeting;
   setUp(() async {
     root = createTestTempDirectorySync('meeting-index-');
     store = Store('${root.path}/app.db');
     reader = Store.readOnly(store.path);
     service = MeetingIndexService();
-    server = Server.create(services: [service]);
+    incremental = ControlledTranscriptIndex()
+      ..beforeApply = (call, request) async {
+        service.requests.add(
+          IndexRequest(
+            documentId: request.documentId,
+            content: request.upserts.map((piece) => piece.text).join('\n'),
+          ),
+        );
+        if (!service.entered.isCompleted) service.entered.complete();
+        await service.release.future;
+        if (service.reject) {
+          throw GrpcError.unavailable('fixture index failure');
+        }
+      };
+    server = Server.create(services: [service, incremental]);
     final socket = '${root.path}/helper.sock';
     await server.serve(
       address: InternetAddress(socket, type: InternetAddressType.unix),
@@ -83,7 +99,6 @@ void main() {
       root.deleteSync(recursive: true);
     });
   });
-  Future<void> drainMutations() => domain.delete('queue-barrier');
   test(
     'paused live and stop requests share one index and publish to read-only clients',
     () async {
@@ -95,7 +110,7 @@ void main() {
       await service.entered.future.timeout(const Duration(seconds: 5));
       expect(reader.sources.single['state'], 'indexing');
       service.release.complete();
-      await drainMutations();
+      await app.indexMeeting(meeting);
       expect(service.requests, hasLength(1));
       expect(reader.sources.single['state'], 'indexed');
       expect(reader.sources.single['revision'], 1);
@@ -103,8 +118,14 @@ void main() {
       expect(service.requests, hasLength(1));
       // A later explicit retry must not reuse an already completed future.
       store.state('meeting-$meeting', 'pending');
+      final cursorReads = incremental.cursorReads;
       await app.indexMeeting(meeting);
-      expect(service.requests, hasLength(2));
+      expect(incremental.cursorReads, greaterThan(cursorReads));
+      expect(
+        service.requests,
+        hasLength(1),
+        reason: 'Confirmed incremental state needs no duplicate embedding',
+      );
       expect(reader.sources.single['state'], 'indexed');
     },
   );

@@ -2,6 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:crypto/crypto.dart';
+// ignore: implementation_imports
+import 'package:foresight_core/src/generated/transcript_index.pb.dart'
+    as transcript;
 import 'package:matcher/expect.dart';
 // Shared fixtures exercise internal wire protocol types.
 // ignore: implementation_imports
@@ -264,7 +267,33 @@ class GoogleFixture {
 
 class AdapterDomain extends Domain {
   final indexed = <String>[];
-  AdapterDomain(super.store, super.helper);
+  AdapterDomain(super.store, super.helper, {super.createTimer, super.clock});
+  final transcriptCursors = <String, transcript.TranscriptCursor>{};
+  @override
+  Future<transcript.TranscriptCursor> transcriptCursor(
+    String id, {
+    bool Function()? current,
+  }) async => transcriptCursors[id] ?? transcript.TranscriptCursor();
+  @override
+  Future<transcript.TranscriptDeltaResult> applyTranscriptDelta(
+    transcript.TranscriptDelta delta, {
+    bool Function()? current,
+  }) async {
+    indexed.add(delta.documentId);
+    transcriptCursors[delta.documentId] = transcript.TranscriptCursor(
+      exists: true,
+      workspaceEpoch: delta.workspaceEpoch,
+      revision: delta.revision,
+      lastSegmentId: delta.upserts.isEmpty
+          ? null
+          : delta.upserts.last.key.segmentId,
+    );
+    return transcript.TranscriptDeltaResult(
+      applied: true,
+      revision: delta.revision,
+    );
+  }
+
   @override
   Future<void> index(String id, {bool Function()? current}) async {
     indexed.add(id);

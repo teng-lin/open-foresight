@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'source_contents.dart';
 
 import 'package:sqlite3/sqlite3.dart';
 
@@ -55,10 +56,16 @@ final class ContentHistory {
   List<Map<String, Object?>> row(String entity, Object id) {
     if (!entities.contains(entity)) throw ArgumentError.value(entity, 'entity');
     final column = entity == 'meeting_notes' ? 'meeting_id' : 'id';
-    return [
-      for (final row in _rows('SELECT * FROM $entity WHERE $column=?', [id]))
-        Map<String, Object?>.from(row),
-    ];
+    return readSnapshot(
+      db,
+      () => [
+        for (final row in _rows('SELECT * FROM $entity WHERE $column=?', [id]))
+          entity == 'sources'
+              ? materializeSource(db, Map<String, Object?>.from(row))
+              : Map<String, Object?>.from(row),
+      ],
+      supportedVersion: supportedVersion,
+    );
   }
 
   List<Map<String, Object?>> meetingArtifacts(int id, String kind) => [

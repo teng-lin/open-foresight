@@ -61,6 +61,7 @@ const migrationClosures = <int, List<String>>{
   19: ['rows'],
   20: ['_boundContentHistory', 'rows'],
   21: ['_routeBackupErasure'],
+  22: ['_createMeetingIndex'],
   17: [
     '_canonicalizeLabels',
     'rows',

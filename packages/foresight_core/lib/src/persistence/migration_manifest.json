@@ -138,6 +138,12 @@
       "symbols": [
         "_routeBackupErasure"
       ]
+    },
+    "22": {
+      "sha256": "e36b872368b4ad4ceb65e7effe1186686efff6336162f58fe0df2503c58ae873",
+      "symbols": [
+        "_createMeetingIndex"
+      ]
     }
   },
   "fixtures": {

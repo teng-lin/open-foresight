@@ -99,9 +99,124 @@ class ApplicationMigrations {
         _boundContentHistory();
       case 21:
         _routeBackupErasure();
+      case 22:
+        _createMeetingIndex();
       default:
         throw StateError('Missing application database migration $version');
     }
+  }
+
+  /// Ordered22: current derived pieces; outbox holds identities/hashes only.
+  void _createMeetingIndex() {
+    db.execute('''
+  CREATE INDEX IF NOT EXISTS source_details_uri ON source_details(source_uri,source_id);
+  CREATE INDEX IF NOT EXISTS transcript_meeting_final_id ON transcript(meeting_id,final,id);
+  CREATE TABLE meeting_transcript_sources(
+   source_id TEXT PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+   meeting_id INTEGER NOT NULL UNIQUE REFERENCES meetings(id) ON DELETE CASCADE);
+  CREATE TABLE meeting_index_progress(
+   meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,
+   workspace_epoch TEXT NOT NULL DEFAULT '',reset_required INTEGER NOT NULL DEFAULT 1,
+   pending_changes INTEGER NOT NULL DEFAULT 0,pending_deletes INTEGER NOT NULL DEFAULT 0,
+   seeding INTEGER NOT NULL DEFAULT 1,seed_after_id INTEGER NOT NULL DEFAULT 0,
+   confirmed_revision INTEGER NOT NULL DEFAULT 0);
+  CREATE TABLE meeting_transcript_changes(
+   meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+   transcript_id INTEGER NOT NULL,version INTEGER NOT NULL DEFAULT 1,
+   projected INTEGER NOT NULL DEFAULT 0,changed INTEGER NOT NULL,
+   PRIMARY KEY(meeting_id,transcript_id));
+  CREATE TABLE meeting_index_segments(
+   id INTEGER PRIMARY KEY AUTOINCREMENT,
+   meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+   transcript_id INTEGER NOT NULL REFERENCES transcript(id) ON DELETE CASCADE,
+   channel INTEGER NOT NULL,ordinal INTEGER NOT NULL,
+   text TEXT NOT NULL CHECK(length(CAST(text AS BLOB))<=65536),digest TEXT NOT NULL,
+   acknowledged INTEGER NOT NULL DEFAULT 0,UNIQUE(transcript_id,ordinal));
+  CREATE INDEX meeting_index_segments_pending ON meeting_index_segments(meeting_id,acknowledged,id);
+  CREATE TABLE meeting_index_deletes(
+   meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+   segment_id INTEGER NOT NULL,channel INTEGER NOT NULL,created INTEGER NOT NULL,
+   PRIMARY KEY(meeting_id,segment_id));
+  CREATE TABLE meeting_index_batches(
+   meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,
+   workspace_epoch TEXT NOT NULL,metadata TEXT NOT NULL CHECK(length(CAST(metadata AS BLOB))<=16384),
+   created INTEGER NOT NULL);
+  INSERT INTO meeting_transcript_sources
+   SELECT s.id,m.id FROM meetings m JOIN sources s ON s.id='meeting-'||m.id
+   WHERE s.generated=1 AND s.locally_edited=0 AND
+    EXISTS(SELECT 1 FROM transcript t WHERE t.meeting_id=m.id AND t.final=1);
+  CREATE TRIGGER meeting_changes_count_insert AFTER INSERT ON meeting_transcript_changes BEGIN
+   INSERT OR IGNORE INTO meeting_index_progress(meeting_id) VALUES(NEW.meeting_id);
+   UPDATE meeting_index_progress SET pending_changes=pending_changes+1 WHERE meeting_id=NEW.meeting_id;
+   UPDATE meeting_index_progress SET reset_required=2 WHERE meeting_id=NEW.meeting_id AND pending_changes>4096;
+   DELETE FROM meeting_transcript_changes WHERE meeting_id=NEW.meeting_id AND
+    (SELECT reset_required FROM meeting_index_progress WHERE meeting_id=NEW.meeting_id)=2;
+  UPDATE meeting_index_progress SET reset_required=1 WHERE meeting_id=NEW.meeting_id AND reset_required=2;
+  END;
+  CREATE TRIGGER meeting_changes_count_delete AFTER DELETE ON meeting_transcript_changes BEGIN
+   UPDATE meeting_index_progress SET pending_changes=pending_changes-1 WHERE meeting_id=OLD.meeting_id;
+  END;
+  CREATE TRIGGER meeting_deletes_count_insert AFTER INSERT ON meeting_index_deletes BEGIN
+   INSERT OR IGNORE INTO meeting_index_progress(meeting_id) VALUES(NEW.meeting_id);
+   UPDATE meeting_index_progress SET pending_deletes=pending_deletes+1 WHERE meeting_id=NEW.meeting_id;
+   UPDATE meeting_index_progress SET reset_required=2 WHERE meeting_id=NEW.meeting_id AND pending_deletes>4096;
+   DELETE FROM meeting_index_deletes WHERE meeting_id=NEW.meeting_id AND
+    (SELECT reset_required FROM meeting_index_progress WHERE meeting_id=NEW.meeting_id)=2;
+  UPDATE meeting_index_progress SET reset_required=1 WHERE meeting_id=NEW.meeting_id AND reset_required=2;
+  END;
+  CREATE TRIGGER meeting_deletes_count_delete AFTER DELETE ON meeting_index_deletes BEGIN
+   UPDATE meeting_index_progress SET pending_deletes=pending_deletes-1 WHERE meeting_id=OLD.meeting_id;
+  END;
+  CREATE TRIGGER meeting_piece_delete AFTER DELETE ON meeting_index_segments
+   WHEN EXISTS(SELECT 1 FROM meeting_transcript_sources WHERE meeting_id=OLD.meeting_id) BEGIN
+   INSERT OR IGNORE INTO meeting_index_deletes VALUES(OLD.meeting_id,OLD.id,OLD.channel,unixepoch()*1000);
+  END;
+  CREATE TRIGGER meeting_transcript_insert AFTER INSERT ON transcript WHEN NEW.final=1 BEGIN
+   INSERT INTO meeting_transcript_changes(meeting_id,transcript_id,changed) VALUES(NEW.meeting_id,NEW.id,unixepoch()*1000)
+   ON CONFLICT(meeting_id,transcript_id) DO UPDATE SET version=version+1,projected=0,changed=excluded.changed;
+   UPDATE sources SET revision=revision+1,state='pending',error='' WHERE generated=1 AND deleted=0 AND
+   id IN(SELECT source_id FROM meeting_transcript_sources WHERE meeting_id=NEW.meeting_id);
+  END;
+  CREATE TRIGGER meeting_transcript_update AFTER UPDATE OF text,final,source,start_ms,end_ms ON transcript
+   WHEN OLD.text IS NOT NEW.text OR OLD.final IS NOT NEW.final OR OLD.source IS NOT NEW.source OR
+   OLD.start_ms IS NOT NEW.start_ms OR OLD.end_ms IS NOT NEW.end_ms BEGIN
+   DELETE FROM meeting_index_segments WHERE transcript_id=OLD.id;
+   INSERT INTO meeting_transcript_changes(meeting_id,transcript_id,changed) VALUES(NEW.meeting_id,NEW.id,unixepoch()*1000)
+   ON CONFLICT(meeting_id,transcript_id) DO UPDATE SET version=version+1,projected=0,changed=excluded.changed;
+   UPDATE meetings SET revision=revision+1 WHERE id=NEW.meeting_id;
+   UPDATE sources SET revision=revision+1,state='pending',error='' WHERE generated=1 AND deleted=0 AND
+   id IN(SELECT source_id FROM meeting_transcript_sources WHERE meeting_id=NEW.meeting_id);
+  END;
+  CREATE TRIGGER meeting_transcript_delete BEFORE DELETE ON transcript
+   WHEN EXISTS(SELECT 1 FROM meeting_transcript_sources WHERE meeting_id=OLD.meeting_id) BEGIN
+   DELETE FROM meeting_index_segments WHERE transcript_id=OLD.id;
+   DELETE FROM meeting_transcript_changes WHERE meeting_id=OLD.meeting_id AND transcript_id=OLD.id;
+   UPDATE meetings SET revision=revision+1 WHERE id=OLD.meeting_id;
+   UPDATE sources SET revision=revision+1,state='pending',error='' WHERE generated=1 AND deleted=0 AND
+   id IN(SELECT source_id FROM meeting_transcript_sources WHERE meeting_id=OLD.meeting_id);
+  END;
+  CREATE TRIGGER meeting_source_retired AFTER UPDATE OF deleted,generated ON sources
+   WHEN NEW.deleted!=0 OR (OLD.generated=1 AND NEW.generated=0) BEGIN
+   DELETE FROM meeting_index_segments WHERE meeting_id IN(SELECT meeting_id FROM meeting_transcript_sources WHERE source_id=NEW.id);
+   DELETE FROM meeting_index_deletes WHERE meeting_id IN(SELECT meeting_id FROM meeting_transcript_sources WHERE source_id=NEW.id);
+   DELETE FROM meeting_transcript_changes WHERE meeting_id IN(SELECT meeting_id FROM meeting_transcript_sources WHERE source_id=NEW.id);
+   DELETE FROM meeting_index_batches WHERE meeting_id IN(SELECT meeting_id FROM meeting_transcript_sources WHERE source_id=NEW.id);
+   DELETE FROM meeting_index_jobs WHERE meeting_id IN(SELECT meeting_id FROM meeting_transcript_sources WHERE source_id=NEW.id);
+   UPDATE meeting_index_progress SET reset_required=1 WHERE meeting_id IN(SELECT meeting_id FROM meeting_transcript_sources WHERE source_id=NEW.id);
+  END;
+  ''');
+    // The correlated read is intentionally absent from metadata/listing/index
+    // writes. A requested body is assembled in transcript order, once per read.
+    db.execute('''
+  CREATE VIEW source_contents AS SELECT s.id,CASE WHEN s.generated=1 AND m.meeting_id IS NOT NULL
+  THEN COALESCE((SELECT group_concat(body,char(10)) FROM (
+   SELECT '['||CASE trim(substr(t.source,1,instr(t.source||';',';')-1),char(9,10,11,12,13,32,133,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279))
+   WHEN 'microphone' THEN 'Microphone' WHEN 'microphone-capture-interruption' THEN 'Microphone'
+   WHEN 'playback' THEN 'Remote' WHEN 'playback-capture-interruption' THEN 'Remote' ELSE 'Unknown' END||' '||
+   CAST(COALESCE(t.start_ms,0) AS INTEGER)||'–'||CAST(COALESCE(t.end_ms,0) AS INTEGER)||' ms] '||COALESCE(t.text,'') AS body
+   FROM transcript t WHERE t.meeting_id=m.meeting_id AND t.final=1 ORDER BY t.id)), '')
+  ELSE s.content END AS content FROM sources s LEFT JOIN meeting_transcript_sources m ON m.source_id=s.id;
+  ''');
   }
 
   void _createContentHistory() {

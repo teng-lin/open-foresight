@@ -5,6 +5,7 @@ import 'package:foresight_core/src/application.dart';
 import 'package:foresight_core/src/google_auth.dart';
 import 'package:foresight_test_support/google_connections.dart';
 import 'package:foresight_test_support/delayed_index_service.dart';
+import 'package:foresight_test_support/transcript_index_service.dart';
 import 'package:foresight_test_support/test_recording.dart';
 import 'package:foresight_test_support/poll.dart';
 import 'package:test/test.dart';
@@ -19,7 +20,6 @@ class PausingDomain extends Domain {
   int waits = 0;
   int? pauseAt;
   final paused = Completer<void>();
-  Completer<void>? indexEntered, indexRelease;
   @override
   Future<void> waitForSourceWork({bool Function()? current}) {
     waits++;
@@ -28,15 +28,6 @@ class PausingDomain extends Domain {
       if (!paused.isCompleted) paused.complete();
     }
     return super.waitForSourceWork(current: current);
-  }
-
-  @override
-  Future<void> index(String id, {bool Function()? current}) async {
-    if (indexEntered != null && !indexEntered!.isCompleted) {
-      indexEntered!.complete();
-    }
-    await indexRelease?.future;
-    await super.index(id, current: current);
   }
 }
 
@@ -240,7 +231,13 @@ void main() {
     () async {
       final temporary = createTestTempDirectorySync('stop-cancel-');
       final rag = DelayedIndexService()..release.complete();
-      final server = Server.create(services: [rag]);
+      final indexEntered = Completer<void>(), indexRelease = Completer<void>();
+      final incremental = ControlledTranscriptIndex()
+        ..beforeApply = (call, request) async {
+          if (!indexEntered.isCompleted) indexEntered.complete();
+          await indexRelease.future;
+        };
+      final server = Server.create(services: [rag, incremental]);
       final socket = '${temporary.path}/h.sock';
       await server.serve(
         address: InternetAddress(socket, type: InternetAddressType.unix),
@@ -248,13 +245,11 @@ void main() {
       );
       final helper = Helper(socket, '${temporary.path}/helper');
       final store = Store('${temporary.path}/app.db');
-      final domain = PausingDomain(store, helper)
-        ..indexEntered = Completer<void>()
-        ..indexRelease = Completer<void>();
+      final domain = PausingDomain(store, helper);
       final app = Application(domain);
       addTearDown(() async {
         domain.resumeSources();
-        if (!domain.indexRelease!.isCompleted) domain.indexRelease!.complete();
+        if (!indexRelease.isCompleted) indexRelease.complete();
         await app.close();
         domain.close();
         await helper.close();
@@ -293,14 +288,22 @@ void main() {
       recording.release.complete();
       await second;
       expect(app.recording, isNull);
-      await domain.indexEntered!.future;
+      expect(app.backgroundBusy, true);
       expect(
-        domain.indexRelease!.isCompleted,
+        incremental.requests,
+        isEmpty,
+        reason:
+            'Paused durable indexing retains intent without helper admission',
+      );
+      domain.resumeSources();
+      await indexEntered.future;
+      expect(
+        indexRelease.isCompleted,
         false,
         reason: 'Indexing no longer owns capture finalization',
       );
-      domain.indexRelease!.complete();
-      domain.resumeSources();
+      indexRelease.complete();
+      await app.indexMeeting(meeting);
       expect(
         store.rows('SELECT state FROM meetings WHERE id=?', [
           meeting,
