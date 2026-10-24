@@ -1,3 +1,4 @@
+import 'gemma_download.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
@@ -351,6 +352,115 @@ class ModelBlobDownloader {
 /// Inclusive parallel ranges and resume cursors follow original ChunkDownloader.
 /// This returns transport bytes; authentication and atomic registration happen
 /// separately, before replacing an installed model.
+/// Public assets retain their resumable file engine inside the same reaped
+/// transport worker used for question-model acquisition. Only a short final path
+/// returns to the parent; multi-gigabyte model contents never enter its buffer.
+class PublicModelFileDownloader implements ModelDownloader {
+  PublicModelFileDownloader({
+    this.deadlines = const ModelTransportDeadlines(),
+    ModelDownloadRetryPolicy? retryPolicy,
+  }) : retryPolicy = retryPolicy ?? ModelDownloadRetryPolicy.reference() {
+    deadlines.validate();
+    if (this.retryPolicy.maxAttempts <= 0 ||
+        this.retryPolicy.maxAttempts > 20) {
+      throw ArgumentError.value(this.retryPolicy.maxAttempts, 'maxAttempts');
+    }
+  }
+  final ModelTransportDeadlines deadlines;
+  final ModelDownloadRetryPolicy retryPolicy;
+  _ModelTransportProcess? _worker;
+  final _cancelledSignal = Completer<void>();
+  bool _cancelled = false, _active = false;
+
+  @override
+  void cancel() {
+    _cancelled = true;
+    if (!_cancelledSignal.isCompleted) _cancelledSignal.complete();
+    unawaited(_worker?.cancel());
+  }
+
+  void _check() {
+    if (_cancelled) throw const ModelDownloadCancelled();
+  }
+
+  @override
+  Future<File> download(
+    GemmaModel model,
+    Directory root, {
+    void Function(int, int)? progress,
+    void Function(ModelDownloadPhase)? phase,
+    Uri? sourceForTesting,
+    File? existingFile,
+  }) async {
+    if (_active || _cancelled) {
+      throw StateError('Download is active or cancelled');
+    }
+    _active = true;
+    final elapsed = Stopwatch()..start();
+    try {
+      for (var attempt = 1; ; attempt++) {
+        _check();
+        final remaining = deadlines.total - elapsed.elapsed;
+        if (remaining <= Duration.zero) {
+          throw const ModelTransportException('total_timeout');
+        }
+        final worker = _worker = _ModelTransportProcess();
+        try {
+          final path = await worker.run(
+            {
+              'kind': 'public_file',
+              'apiKey': '',
+              'name': model.name,
+              'repository': model.repository,
+              'revision': model.revision,
+              'filename': model.filename,
+              'digest': model.digest,
+              'bytes': model.bytes,
+              'memory': model.minimumMemoryGb,
+              'root': root.path,
+              'existing': existingFile?.path,
+              'source': sourceForTesting?.toString(),
+              'connect': deadlines.connect.inMicroseconds,
+              'headers': deadlines.headers.inMicroseconds,
+              'bodyIdle': deadlines.bodyIdle.inMicroseconds,
+            },
+            remaining < deadlines.attempt ? remaining : deadlines.attempt,
+            16384,
+            progressTotal: model.bytes,
+            onProgress: progress,
+            onPhase: phase,
+          );
+          _check();
+          return File(utf8.decode(path));
+        } on ModelTransportException catch (error) {
+          _check();
+          if (!{
+                'total_timeout',
+                'public_interrupted',
+              }.contains(error.failureType) ||
+              attempt >= retryPolicy.maxAttempts) {
+            rethrow;
+          }
+          final left = deadlines.total - elapsed.elapsed;
+          final delay = retryPolicy.delay(attempt);
+          if (left <= Duration.zero || delay >= left) {
+            throw const ModelTransportException('total_timeout');
+          }
+          await Future.any<void>([
+            Future<void>.delayed(delay),
+            _cancelledSignal.future,
+          ]);
+        } finally {
+          await worker.cancel();
+          if (identical(_worker, worker)) _worker = null;
+        }
+      }
+    } finally {
+      _active = false;
+    }
+  }
+}
+
 class _LocalModelBlobDownloader {
   _LocalModelBlobDownloader({
     required String apiKey,
@@ -632,13 +742,21 @@ class _ModelTransportProcess {
     Duration timeout,
     int maximum, {
     void Function(int, int)? onProgress,
+    void Function(ModelDownloadPhase)? onPhase,
+    int? progressTotal,
   }) async {
     final encoded = utf8.encode(jsonEncode(config));
     if (encoded.length > _maxTransportConfiguration) {
       throw const ModelTransportException('configuration_too_large');
     }
     try {
-      return await _run(encoded, maximum, onProgress).timeout(
+      return await _run(
+        encoded,
+        maximum,
+        onProgress,
+        onPhase,
+        progressTotal ?? maximum,
+      ).timeout(
         timeout,
         onTimeout: () => throw const ModelTransportException('total_timeout'),
       );
@@ -651,6 +769,8 @@ class _ModelTransportProcess {
     List<int> config,
     int maximum,
     void Function(int, int)? onProgress,
+    void Function(ModelDownloadPhase)? onPhase,
+    int progressTotal,
   ) async {
     final service = runtimeConfiguration['FORESIGHT_SERVICE'];
     final List<String> command;
@@ -732,13 +852,29 @@ class _ModelTransportProcess {
           final value = decoded;
           if (value['progress'] is int &&
               value['total'] is int &&
-              value['total'] == maximum &&
+              value['total'] == progressTotal &&
               value['progress'] >= 0 &&
-              value['progress'] <= maximum) {
-            onProgress?.call(value['progress'] as int, maximum);
+              value['progress'] <= progressTotal) {
+            onProgress?.call(value['progress'] as int, progressTotal);
+            continue;
+          }
+          if (value['phase'] case final String phase) {
+            final decodedPhase = ModelDownloadPhase.values
+                .where((value) => value.name == phase)
+                .firstOrNull;
+            if (decodedPhase == null) {
+              throw const ModelTransportException('invalid_worker_frame');
+            }
+            onPhase?.call(decodedPhase);
             continue;
           }
           if (value['ok'] == false) {
+            if (value['kind'] == 'public_interrupted') {
+              throw const ModelTransportException('public_interrupted');
+            }
+            if (value['kind'] == 'public_invalid') {
+              throw const ModelTransportException('public_invalid');
+            }
             final attempts = value['attempts'];
             if (value['kind'] == 'connect_timeout' &&
                 attempts is int &&
@@ -846,6 +982,53 @@ Future<void> runModelTransportWorker() async {
       } finally {
         await service.close();
         await channel.terminate();
+      }
+    } else if (config['kind'] == 'public_file') {
+      final downloader = GemmaDownload(
+        timeout: Duration(microseconds: config['bodyIdle'] as int),
+        connectTimeout: Duration(microseconds: config['connect'] as int),
+        headerTimeout: Duration(microseconds: config['headers'] as int),
+        bodyIdleTimeout: Duration(microseconds: config['bodyIdle'] as int),
+      );
+      final model = GemmaModel(
+        config['name'] as String,
+        config['repository'] as String,
+        config['revision'] as String,
+        config['filename'] as String,
+        config['digest'] as String,
+        config['bytes'] as int,
+        config['memory'] as int,
+      );
+      try {
+        final file = await downloader.download(
+          model,
+          Directory(config['root'] as String),
+          existingFile: config['existing'] == null
+              ? null
+              : File(config['existing'] as String),
+          sourceForTesting: config['source'] == null
+              ? null
+              : Uri.parse(config['source'] as String),
+          progress: (received, total) => stdout.writeln(
+            jsonEncode({'progress': received, 'total': total}),
+          ),
+          phase: (phase) => stdout.writeln(jsonEncode({'phase': phase.name})),
+        );
+        result = Uint8List.fromList(utf8.encode(file.path));
+      } on StateError catch (error) {
+        final interrupted =
+            error.message ==
+            'Model transfer interrupted. Retry to resume the saved download.';
+        stdout.writeln(
+          jsonEncode({
+            'ok': false,
+            'kind': interrupted ? 'public_interrupted' : 'public_invalid',
+          }),
+        );
+        await stdout.flush();
+        return;
+      } finally {
+        downloader.cancel();
       }
     } else if (config['kind'] == 'download') {
       final delays = (config['delays'] as List).cast<int>();

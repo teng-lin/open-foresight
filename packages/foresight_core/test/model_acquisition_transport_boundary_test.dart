@@ -1,3 +1,5 @@
+import 'package:crypto/crypto.dart';
+import 'package:foresight_core/src/gemma_download.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -48,6 +50,96 @@ void main() {
     // setup; the unchanged transport budgets still include OS process startup.
     runtimeConfiguration.environment['FORESIGHT_SERVICE'] = transportService;
   });
+  test(
+    'public file worker returns a verified cache path without buffering the asset',
+    () async {
+      final root = createTestTempDirectorySync('public-model-worker-');
+      final bytes = List<int>.generate(1024 * 1024, (i) => i % 251);
+      final existing = File('${root.path}/registered.bin')
+        ..writeAsBytesSync(bytes);
+      final model = GemmaModel(
+        'fixture',
+        'fixture/model',
+        'revision',
+        'fixture.bin',
+        sha256.convert(bytes).toString(),
+        bytes.length,
+        0,
+      );
+      final phases = <ModelDownloadPhase>[];
+      final progress = <(int, int)>[];
+      final downloader = PublicModelFileDownloader();
+      addTearDown(downloader.cancel);
+      final result = await downloader.download(
+        model,
+        Directory('${root.path}/cache'),
+        existingFile: existing,
+        phase: phases.add,
+        progress: (n, total) => progress.add((n, total)),
+      );
+      expect(result.path, existing.path);
+      expect(result.readAsBytesSync(), bytes);
+      expect(phases, [
+        ModelDownloadPhase.checkingCache,
+        ModelDownloadPhase.verifyingCache,
+      ]);
+      expect(progress.last, (bytes.length, bytes.length));
+      expect(Directory('${root.path}/cache').existsSync(), isFalse);
+    },
+  );
+
+  test('public file cancellation reaps a stalled TLS producer', () async {
+    final root = createTestTempDirectorySync('public-model-cancel-');
+    final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final accepted = Completer<void>(), closed = Completer<void>();
+    Socket? peer;
+    final subscription = server.listen((socket) {
+      peer = socket;
+      socket.listen(
+        (_) {},
+        onDone: () {
+          socket.destroy();
+          if (!closed.isCompleted) closed.complete();
+        },
+        onError: (Object _) {
+          socket.destroy();
+          if (!closed.isCompleted) closed.complete();
+        },
+      );
+      if (!accepted.isCompleted) accepted.complete();
+    });
+    final downloader = PublicModelFileDownloader();
+    addTearDown(() async {
+      downloader.cancel();
+      peer?.destroy();
+      await subscription.cancel();
+      await server.close();
+    });
+    final model = GemmaModel(
+      'fixture',
+      'fixture/model',
+      'revision',
+      'fixture.bin',
+      sha256.convert([1, 2, 3, 4]).toString(),
+      4,
+      0,
+    );
+    final work = downloader.download(
+      model,
+      root,
+      sourceForTesting: Uri.parse('https://127.0.0.1:${server.port}/fixture'),
+    );
+    final rejected = expectLater(work, throwsA(isA<ModelDownloadCancelled>()));
+    await accepted.future.timeout(const Duration(seconds: 5));
+    downloader.cancel();
+    await rejected.timeout(const Duration(seconds: 3));
+    await closed.future.timeout(const Duration(seconds: 2));
+    expect(
+      File('${root.path}/${model.directory}/${model.filename}').existsSync(),
+      isFalse,
+    );
+  });
+
   test(
     'transport worker executable cannot escape an installed application',
     () async {

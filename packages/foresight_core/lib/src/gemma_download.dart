@@ -33,6 +33,7 @@ class GemmaDownload implements ModelDownloader {
   final HttpClient Function() createClient;
   final Future<int> Function(Directory) availableBytes;
   final Duration timeout;
+  final Duration? connectTimeout, headerTimeout, bodyIdleTimeout;
   final int parallelism, rangeThreshold;
   HttpClient? _client;
   bool _cancelled = false, _active = false;
@@ -40,6 +41,9 @@ class GemmaDownload implements ModelDownloader {
     HttpClient Function()? createClient,
     Future<int> Function(Directory)? availableBytes,
     this.timeout = const Duration(seconds: 30),
+    this.connectTimeout,
+    this.headerTimeout,
+    this.bodyIdleTimeout,
     this.parallelism = 4,
     this.rangeThreshold = 64 * 1024 * 1024,
   }) : createClient = createClient ?? (() => HttpClient()),
@@ -191,7 +195,7 @@ class GemmaDownload implements ModelDownloader {
       phase?.call(ModelDownloadPhase.downloading);
       final client = _client = createClient();
       client.autoUncompress = false;
-      client.connectionTimeout = timeout;
+      client.connectionTimeout = connectTimeout ?? timeout;
       final uri = sourceForTesting ?? model.url;
       var received = retained;
       progress?.call(received, model.bytes);
@@ -354,11 +358,13 @@ class GemmaDownload implements ModelDownloader {
         throw StateError('Model downloads require HTTPS');
       }
       _check();
-      final request = await client.getUrl(uri).timeout(timeout);
+      final request = await client
+          .getUrl(uri)
+          .timeout(connectTimeout ?? timeout);
       request.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
       if (range != null) request.headers.set(HttpHeaders.rangeHeader, range);
       request.followRedirects = false;
-      final response = await request.close().timeout(timeout);
+      final response = await request.close().timeout(headerTimeout ?? timeout);
       if (![301, 302, 303, 307, 308].contains(response.statusCode)) {
         return response;
       }
@@ -382,7 +388,7 @@ class GemmaDownload implements ModelDownloader {
       throw StateError('Model download size does not match');
     }
     var received = 0, pending = 0;
-    await for (final chunk in response.timeout(timeout)) {
+    await for (final chunk in response.timeout(bodyIdleTimeout ?? timeout)) {
       _check();
       received += chunk.length;
       if (received > expected) throw StateError('Model download is too large');
