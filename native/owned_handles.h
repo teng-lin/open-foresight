@@ -72,11 +72,25 @@ NativeOperation::Result native_finish(NativeOperation &operation) {
   capture.join();
   return NativeOperation::Result::succeeded;
 }
+NativeOperation::Result native_speech_join(NativeOperation &operation) {
+  auto &control = *static_cast<NativeControl *>(operation.context);
+  {
+    std::unique_lock lock(control.users_mutex);
+    control.users_changed.wait(lock, [&] { return control.users == 0; });
+  }
+  static_cast<Speech *>(control.object.get())->join();
+  return NativeOperation::Result::succeeded;
+}
+void discard_idle_operations(const std::shared_ptr<NativeControl> &control);
 NativeOperation::Result native_retire(NativeOperation &operation) {
   auto &control = *static_cast<NativeControl *>(operation.context);
   {
     std::unique_lock lock(control.users_mutex);
     control.users_changed.wait(lock, [&] { return control.users == 0; });
+  }
+  for (auto token : {control.probe, control.finish}) {
+    if (auto idle = native_handles().operations.find(token))
+      native_handles().operations.discard(idle);
   }
   auto *object = control.object.get();
   if (control.kind != NativeKind::engine) {
@@ -185,6 +199,17 @@ uint64_t retire_native(void *handle, NativeKind kind) {
   }
   return control->retire;
 }
+bool prepare_native_speech_join(const std::shared_ptr<NativeControl> &control) {
+  auto &registry = native_handles();
+  std::lock_guard lock(registry.mutex);
+  if (control->closing)
+    return false;
+  if (auto previous = registry.operations.find(control->finish))
+    registry.operations.discard(previous);
+  control->finish =
+      registry.operations.create(native_speech_join, control.get())->token;
+  return true;
+}
 uint64_t request_native_work(void *handle, NativeKind kind, bool probe) {
   auto &registry = native_handles();
   std::lock_guard lock(registry.mutex);
@@ -195,7 +220,7 @@ uint64_t request_native_work(void *handle, NativeKind kind, bool probe) {
   const auto &control = found->second;
   const auto token = probe ? control->probe : control->finish;
   if (auto operation = registry.operations.find(token)) {
-    if (!probe)
+    if (!probe && kind == NativeKind::capture)
       static_cast<Capture *>(handle)->cancel = true;
     registry.operations.submit(operation, control);
     return token;

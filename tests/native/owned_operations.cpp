@@ -64,6 +64,24 @@ void operator delete(void *value, std::size_t) noexcept {
 }
 
 int main() {
+  {
+    foresight::OwnedOperations bounded(2);
+    auto first = bounded.create(failed, nullptr);
+    auto second = bounded.create(failed, nullptr);
+    bool refused = false;
+    try {
+      (void)bounded.create(failed, nullptr);
+    } catch (const std::length_error &) {
+      refused = true;
+    }
+    require(refused, "unacknowledged metadata grew beyond its fixed capacity");
+    require(bounded.discard(first), "unpublished capacity rollback failed");
+    auto replacement = bounded.create(failed, nullptr);
+    require(replacement->token > second->token,
+            "capacity reuse must not recycle a completion identity");
+    require(bounded.discard(second) && bounded.discard(replacement),
+            "bounded unpublished cleanup failed");
+  }
   foresight::OwnedOperations operations;
   Gate gate;
   auto resource = std::make_shared<Lease>(gate);

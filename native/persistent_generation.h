@@ -128,7 +128,7 @@ bool start_persistent(Engine &engine, Worker &request) {
         });
   });
   auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
-  while (!request.cancel && std::chrono::steady_clock::now() < deadline) {
+  while (!request.cancelled() && std::chrono::steady_clock::now() < deadline) {
     std::string line;
     if (worker->next(line)) {
       if (line == "ready 1")
@@ -152,7 +152,7 @@ int run_persistent(Engine &engine, Worker &request, const std::string &json,
   bool cancelling = false;
   auto cancel_deadline = std::chrono::steady_clock::time_point::max();
   while (true) {
-    if (request.cancel && !cancelling) {
+    if (request.cancelled() && !cancelling) {
       cancelling = true;
       cancel_deadline =
           std::chrono::steady_clock::now() + std::chrono::seconds(2);
@@ -177,7 +177,7 @@ int run_persistent(Engine &engine, Worker &request, const std::string &json,
       if (line == "done completed")
         return 0;
       if (line == "done cancelled")
-        return request.cancel ? 0 : 1;
+        return request.cancelled() ? 0 : 1;
       if (line == "done failed")
         return 1;
       if (!cancelling)

@@ -2,6 +2,7 @@
 #include "exception_barrier.h"
 #include <atomic>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -62,7 +63,11 @@ private:
 
 class OwnedOperations {
 public:
-  OwnedOperations() : worker_([this] { run(); }) {}
+  // A lost acknowledgement retains its token, never an unbounded completion
+  // history. Refuse new admission at capacity rather than evicting an owner or
+  // making a still-observable completion ambiguous.
+  explicit OwnedOperations(std::size_t capacity = 4096)
+      : capacity_(capacity), worker_([this] { run(); }) {}
   OwnedOperations(const OwnedOperations &) = delete;
   OwnedOperations &operator=(const OwnedOperations &) = delete;
   ~OwnedOperations() noexcept {
@@ -81,6 +86,8 @@ public:
   std::shared_ptr<OwnedOperation> create(OwnedOperation::Action action,
                                          void *context) {
     std::lock_guard lock(registry_mutex_);
+    if (operations_.size() >= capacity_)
+      throw std::length_error("Native operation capacity exhausted");
     if (next_token_ >
         static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
       throw std::overflow_error("Native operation identity exhausted");
@@ -180,6 +187,7 @@ private:
   }
 
   std::mutex registry_mutex_;
+  const std::size_t capacity_;
   std::unordered_map<uint64_t, std::shared_ptr<OwnedOperation>> operations_;
   uint64_t next_token_ = 1;
   std::mutex queue_mutex_;

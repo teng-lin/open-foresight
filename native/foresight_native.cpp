@@ -98,9 +98,10 @@ void retire_events(Events *events) {
 struct Worker : Events {
   std::thread thread;
   std::atomic<bool> cancel{false}, active{false};
-  const std::atomic<bool> *owner_closing = nullptr;
+  std::atomic<const std::atomic<bool> *> owner_closing{nullptr};
   bool cancelled() const {
-    return cancel || (owner_closing && owner_closing->load());
+    const auto *owner = owner_closing.load(std::memory_order_acquire);
+    return cancel || (owner && owner->load());
   }
   std::atomic<pid_t> pid{-1};
   foresight::OwnedSpawn *owned_process = nullptr;
@@ -629,6 +630,11 @@ uint64_t fs_engine_probe_async(void *h) {
       [&] { return request_native_work(h, NativeKind::engine, true); },
       uint64_t{0});
 }
+uint64_t fs_speech_join_async(void *h) {
+  return foresight::ffi_barrier(
+      [&] { return request_native_work(h, NativeKind::speech, false); },
+      uint64_t{0});
+}
 uint64_t fs_capture_finish_async(void *h) {
   return foresight::ffi_barrier(
       [&] { return request_native_work(h, NativeKind::capture, false); },
@@ -1058,7 +1064,7 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
                     if (complete - lead < width)
                       complete = lead;
                   }
-                  if (complete && !c.cancel) {
+                  if (complete && !c.cancelled()) {
                     c.emit(
                         event("delta", c.request, seq++,
                               ",\"text\":" + quote(utf8.substr(0, complete))));
@@ -1068,7 +1074,7 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
                 duplex);
           }
           c.finish_input = false;
-          if (!c.cancel && !tools) {
+          if (!c.cancelled() && !tools) {
             size_t marker = utf8.find(" [end of text]");
             if (marker != std::string::npos)
               utf8.erase(marker);
@@ -1079,15 +1085,16 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
           std::string terminal =
               (tool_protocol_failed || worker_error_received ||
                (!tools && e.persistent_protocol && !plain_text_received &&
-                !c.cancel))
+                !c.cancelled()))
                   ? "failed"
-              : c.cancel    ? "cancelled"
-              : status == 0 ? "completed"
-                            : "failed";
-          if (tools && (!utf8.empty() || !tool_answer_received) && !c.cancel)
+              : c.cancelled() ? "cancelled"
+              : status == 0   ? "completed"
+                              : "failed";
+          if (tools && (!utf8.empty() || !tool_answer_received) &&
+              !c.cancelled())
             terminal = "failed";
           bool cpu_recovered = false;
-          if (terminal == "failed" && !c.cancel && !tool_protocol_failed &&
+          if (terminal == "failed" && !c.cancelled() && !tool_protocol_failed &&
               e.backend == 1 && !e.cpu_fallback &&
               std::getenv("FORESIGHT_LITERT_BACKEND") &&
               std::string(std::getenv("FORESIGHT_LITERT_BACKEND")) == "gpu") {
@@ -1208,7 +1215,8 @@ int fs_generation_tool_reply(void *h, const char *id, const char *message) {
           return -1;
         auto &c = *static_cast<Conversation *>(h);
         std::lock_guard life(c.life);
-        if (!c.active || c.cancel || c.request != id || !c.awaiting_tool.load())
+        if (!c.active || c.cancelled() || c.request != id ||
+            !c.awaiting_tool.load())
           return -1;
         std::lock_guard lock(c.input_mutex);
         c.input.push_back(std::string(message) + "\n");
@@ -1355,10 +1363,15 @@ int fs_speech_finish(void *h, const char *id) {
         const auto previous_rate = s.input_rate;
         std::shared_ptr<std::vector<int16_t>> samples;
         bool finalized_tail = false;
-        bool queued_published = false;
+        bool queued_published = false, join_prepared = false;
         std::string queued_event;
         foresight::ScopeExit rollback([&] {
           s.active = false;
+          if (join_prepared) {
+            if (auto operation =
+                    native_handles().operations.find(use.control->finish))
+              native_handles().operations.discard(operation);
+          }
           if (samples) {
             s.samples = std::move(*samples);
           }
@@ -1373,6 +1386,9 @@ int fs_speech_finish(void *h, const char *id) {
               s.events.pop_back();
           }
         });
+        if (!prepare_native_speech_join(use.control))
+          return -1;
+        join_prepared = true;
         s.cancel = false;
         s.active = true;
         std::string request = id;
@@ -1445,10 +1461,10 @@ int fs_speech_finish(void *h, const char *id) {
                                             std::defer_lock);
                       while (
                           !lock.try_lock_for(std::chrono::milliseconds(20))) {
-                        if (s.cancel)
+                        if (s.cancelled())
                           return -1;
                       }
-                      if (s.cancel)
+                      if (s.cancelled())
                         return -1;
                       admission();
                       auto &engine = s.worker_engine->engine;
@@ -1472,7 +1488,7 @@ int fs_speech_finish(void *h, const char *id) {
                           });
                       return result == 0 && received && !invalid ? 0 : 1;
                     }
-                    if (s.cancel)
+                    if (s.cancelled())
                       return -1;
                     admission();
                     return run(s, arguments(cpu_only),
@@ -1481,7 +1497,7 @@ int fs_speech_finish(void *h, const char *id) {
                                });
                   };
                   status = recognize(cpu);
-                  if (status != 0 && !cpu && !s.cancel) {
+                  if (status != 0 && !cpu && !s.cancelled()) {
                     // The failed attempt must not contaminate the CPU
                     // transcript.
                     transcript.clear();
@@ -1492,7 +1508,7 @@ int fs_speech_finish(void *h, const char *id) {
                     status = recognize(true);
                   }
                 }
-                std::string terminal = s.cancel      ? "cancelled"
+                std::string terminal = s.cancelled() ? "cancelled"
                                        : status == 0 ? "completed"
                                                      : "failed";
                 if (terminal == "completed")

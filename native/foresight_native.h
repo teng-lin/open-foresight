@@ -28,6 +28,10 @@ uint64_t fs_engine_probe_async(void *engine);
 uint64_t fs_engine_retire(void *engine);
 uint64_t fs_conversation_retire(void *conversation);
 uint64_t fs_speech_retire(void *speech);
+/* Join the accepted speech request's actual worker exit without canceling it.
+ * A done event alone does not prove exit. Await this token before reusing the
+ * handle for another push/finish, or retire the handle instead. */
+uint64_t fs_speech_join_async(void *speech);
 /* Stop/join capture but retain its final PCM queue for polling. */
 uint64_t fs_capture_finish_async(void *capture);
 uint64_t fs_capture_retire(void *capture);

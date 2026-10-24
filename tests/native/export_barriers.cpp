@@ -1,3 +1,4 @@
+#define FORESIGHT_ENABLE_TEST_HOOKS 1
 #include <atomic>
 #include <cstdlib>
 #include <exception>
@@ -69,6 +70,23 @@ int main(int argc, char **argv) {
     if (!reached_success)
       return 4;
   }
+  auto *speech_handle = fs_speech_create(argv[0], "/dev/null");
+  if (!speech_handle)
+    return 9;
+  auto &speech = *static_cast<Speech *>(speech_handle);
+  speech.samples = {1, 2, 3};
+  setenv("FORESIGHT_TEST_THREAD_FAILURE", "speech", 1);
+  for (long position = 0; position < 40; ++position) {
+    remaining = position;
+    const auto accepted =
+        fs_speech_finish(speech_handle, "rollback-long-request-identity");
+    remaining = -1;
+    if (accepted != -1 || speech.active || !speech.events.empty() ||
+        speech.samples != std::vector<int16_t>({1, 2, 3}))
+      return 10;
+  }
+  unsetenv("FORESIGHT_TEST_THREAD_FAILURE");
+  fs_speech_destroy(speech_handle);
   auto *engine = fs_engine_create(argv[0], "/dev/null");
   if (!engine)
     return 5;

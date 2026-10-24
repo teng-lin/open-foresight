@@ -17,32 +17,36 @@ template <class Predicate> void until(Predicate predicate) {
   }
 }
 struct HeldWorker {
-  std::mutex mutex;
-  std::condition_variable changed;
-  bool entered = false, released = false;
+  struct Gate {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool entered = false, released = false;
+  };
+  const std::shared_ptr<Gate> gate = std::make_shared<Gate>();
   std::thread start() {
-    return std::thread([this] {
-      std::unique_lock lock(mutex);
-      entered = true;
-      changed.notify_all();
-      changed.wait(lock, [&] { return released; });
+    return std::thread([owned = gate] {
+      std::unique_lock lock(owned->mutex);
+      owned->entered = true;
+      owned->changed.notify_all();
+      owned->changed.wait(lock, [&] { return owned->released; });
     });
   }
   void ready() {
-    std::unique_lock lock(mutex);
-    check(changed.wait_for(lock, std::chrono::seconds(2),
-                           [&] { return entered; }),
+    std::unique_lock lock(gate->mutex);
+    check(gate->changed.wait_for(lock, std::chrono::seconds(2),
+                                 [&] { return gate->entered; }),
           "worker entered");
   }
   void release() {
-    std::lock_guard lock(mutex);
-    released = true;
-    changed.notify_all();
+    std::lock_guard lock(gate->mutex);
+    gate->released = true;
+    gate->changed.notify_all();
   }
   ~HeldWorker() {
     release();
   }
 };
+
 void generation(const char *executable) {
   auto *engine = fs_engine_create(executable, "/dev/null");
   check(engine, "engine created");
@@ -133,6 +137,40 @@ void media() {
             fs_operation_release(retire_token) == 0,
         "capture finish and actual destruction are separate");
 }
+void speech_exit() {
+  auto speech = std::make_unique<Speech>();
+  HeldWorker held;
+  speech->thread = held.start();
+  held.ready();
+  auto *handle = publish_native(std::move(speech), NativeKind::speech);
+  {
+    NativeUse use(handle, NativeKind::speech);
+    check(bool(use) && prepare_native_speech_join(use.control),
+          "speech join prepared");
+  }
+  static_cast<Speech *>(handle)->emit("done-before-thread-exit");
+  fs_string_free(fs_event_poll(handle, 0));
+  const auto start = std::chrono::steady_clock::now();
+  const auto joined = fs_speech_join_async(handle);
+  check(joined && std::chrono::steady_clock::now() - start <
+                      std::chrono::milliseconds(100),
+        "speech join request must not block the caller");
+  until([&] {
+    const auto operation = native_handles().operations.find(joined);
+    return operation->state.load() == NativeOperation::State::running ||
+           operation->terminal();
+  });
+  check(fs_operation_status(joined) == 0, "done receipt is not worker exit");
+  const auto retired = fs_speech_retire(handle);
+  check(retired && fs_operation_status(retired) == 0,
+        "speech handle remains owned through actual worker exit");
+  held.release();
+  until([&] { return fs_operation_status(retired) == 1; });
+  check(fs_operation_status(joined) == 1,
+        "join completion precedes destruction");
+  check(fs_operation_release(joined) == 0 && fs_operation_release(retired) == 0,
+        "speech join and destruction acknowledge independently");
+}
 void held_api(const char *executable) {
   auto *engine = fs_engine_create(executable, "/dev/null");
   check(engine, "leased engine created");
@@ -165,6 +203,7 @@ int main(int argc, char **argv) {
           "separate ABI negotiation");
     generation(argv[0]);
     media();
+    speech_exit();
     held_api(argv[0]);
     const char *scratch = std::getenv("FORESIGHT_TEST_TEMP_ROOT");
     check(scratch, "private fixture root required");
