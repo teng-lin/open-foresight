@@ -28,8 +28,9 @@ decision, not a passed implementation check.
 | --- | --- | --- | --- |
 | A1 | Recording start/stop/error-path cleanup, persistence retry and indexing ownership: F1/F6, persistence part of F9 | Baseline; coordinate final indexing contract with A3/A4 | Committed locally as `65bfb275`; dependent A4 scheduling and qualification remain |
 | A2 | RPC duplicate ownership, model acquisition deadlines, capture temp root and install-lock interoperability: F5/F7/F8 | Baseline; owns relevant native FIFO/lock surfaces | Committed locally as `9e4bdaaa`; legacy upgrade guard follow-up in progress |
-| A3 | Application backup/restore/erasure, history retention and SQLite transactional/busy-timeout fixes: F2/F20, part of F23 | Baseline; coordinate generated transcript handling with A4 | Local commits `065690b3` and Darwin fix `99f3224c`; focused Linux/Mac checks passed; independent review pending |
+| A3 | Application backup/restore/erasure, history retention and SQLite transactional/busy-timeout fixes: F2/F20, part of F23 | Baseline; coordinate generated transcript handling with A4 | Local commits `065690b3` and Darwin fix `99f3224c`; focused Linux/Mac checks passed; independent review requires locking, pruning, publication and maintenance fixes |
 | A4 | Incremental helper indexing and remaining speech/drain performance: F3, remaining F9 | Coordinate A1/A2 ownership; helper schema/protocol compatibility | Native/protocol unit `9681e096` committed; application integration in progress in separate worktree |
+| A5 | F9 metadata-only import identity and bounded asynchronous directory enumeration | A4 application migration supplies the URI index; independent code review and platform checks | Local commit `bb7666f0`; focused checks passed; review pending |
 | B | Complete logging steps 0–4 and safe RPC errors, including nonthrowing reporter before new exports | Integrate after A runtime changes; independent foundation may develop earlier | Foundation in progress in separate worktree |
 | C | Ownership, compile boundaries, service operations and local security | A/B contracts | Pending |
 | D/E | Verification/release/dependencies/docs and Python tooling quality | Independent files may progress alongside runtime; final consumers integrate together | Baseline verification underway; native relay measurement correction under local review |
@@ -145,3 +146,50 @@ service/MCP, isolated-display integration and applicable Mac checks remain
 required. Physical audio/GPU, real models, installed upgrade, signing/notarization,
 release authority and owner review have not been qualified by these focused
 results. No hosted implementation PR has been opened, pushed or merged.
+
+### Independent review and Mac consumer follow-up
+
+Claude CLI completed the independent A3 static review with `CHANGES_REQUIRED`,
+exit zero, no tool denials. Full findings remain in
+`/var/tmp/of-exec-1024/a3-review/stdout-2.json`. Verified defects include closing
+an extra live-database descriptor and thereby releasing SQLite POSIX locks;
+stale/corrupt owned snapshots blocking future migration and expiry; a hard-link
+publication crash window; and synchronous full-backup verification/per-delete
+VACUUM. The unit remains outside integration while these are repaired and
+regression-tested. A3 owns new migration 21 for separate backup-erasure versus
+full-clear maintenance markers; A4 application projections move to migration 22.
+Committed migration 20 stays frozen. The review also identifies the pending
+production `generated: true` producer integration, owned by A4; direct Store
+fixtures alone cannot establish that acceptance.
+
+HanSolo's full Dart checks on `9681e096` produced **2,158 core passes, 14 skips,
+five failures** and **564 desktop passes, 13 skips, one failure**. Core analysis
+and desktop analysis passed. Coverage was not qualified because the core test
+command failed before formatting/checking its coverage output. Two core failures
+were infrastructure errors caused by the coordinator's temporary path exceeding
+the fixture's socket limit; both failed cases passed when rerun individually
+under the shorter physical root `/private/var/tmp/of4m24`. The other core failures
+exposed compatible protocol fixtures still reporting the old version and an
+old cancellation oracle. Follow-up `f75e0f15` updates compatible fixtures while
+retaining deliberately incompatible cases, and checks actual server cancellation,
+lease settlement, persisted pending content and refusal of a late acknowledgement.
+
+The desktop failure exposed a recording fake missing its new capture-ownership
+field. Follow-up `727a9251` supplies the empty owned handle list, retaining all
+paused/error/resume assertions; the failed widget passed locally, and targeted
+analysis/format passed. The initial missing-import compilation failure and all
+original Mac failures remain retained. The combined consumer source `bf7a6cd3`
+is now being tested under `/private/var/tmp/of-rem-a4-consumers-1024/` with short
+physical temporary storage, failed consumers first. Its source archive SHA-256 is
+`822d977560c882ee6c515975856c3e342deaf5408a0616fe155b09fd97f6dba5`.
+Native binaries are explicitly reused from qualified `9681e096`: only four Dart
+fixture/test files changed, with no native, CMake or protocol input changes.
+
+A5 import unit `bb7666f0` passed **49 focused cases, zero skips**, analysis and
+formatting; after making its event-loop test independent of wall-clock timing,
+the five enumeration cases passed again. It replaces all-document URI admission
+with a limited metadata query and recursive synchronous listing with bounded
+asynchronous directory/stat operations. The production URI index is pending in
+A4 migration 22; indexed production performance is not yet accepted. Evidence:
+`/var/tmp/of-a5-import/`. Independent Claude review is running; no integration,
+compiled boundary, real-capture or final coverage result is implied.
