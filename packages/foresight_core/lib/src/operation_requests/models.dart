@@ -2,6 +2,43 @@ import '../operations.dart';
 import 'request_context.dart';
 import '../operation_argument_schema.dart';
 
+class ModelsDownloadAssetRequest extends OperationRequest {
+  ModelsDownloadAssetRequest._(super.context, this.kind, this.digest);
+  final String kind, digest;
+  @override
+  Operation get operation => Operation.modelsDownloadAsset;
+  factory ModelsDownloadAssetRequest.decode(OperationRequestContext context) {
+    final values = Operation.modelsDownloadAsset.descriptor.arguments.decode(
+      context.rawArguments,
+    );
+    if (context.requestId == null || context.requestId!.isEmpty) {
+      invalidArgument('requestId', 'is required');
+    }
+    return ModelsDownloadAssetRequest._(
+      context,
+      values.value<String>('kind'),
+      values.value<String>('digest'),
+    );
+  }
+}
+
+class ModelsInspectAssetRequest extends OperationRequest {
+  ModelsInspectAssetRequest._(super.context, this.kind, this.digest);
+  final String kind, digest;
+  @override
+  Operation get operation => Operation.modelsInspectAsset;
+  factory ModelsInspectAssetRequest.decode(OperationRequestContext context) {
+    final values = Operation.modelsInspectAsset.descriptor.arguments.decode(
+      context.rawArguments,
+    );
+    return ModelsInspectAssetRequest._(
+      context,
+      values.value<String>('kind'),
+      values.value<String>('digest'),
+    );
+  }
+}
+
 class ModelsCancelQueryAcquisitionRequest extends OperationRequest {
   ModelsCancelQueryAcquisitionRequest._(super.context);
   @override

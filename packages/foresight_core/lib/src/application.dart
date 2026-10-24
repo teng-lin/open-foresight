@@ -1,3 +1,4 @@
+import 'application_services/model_asset_acquisition.dart';
 import 'operations.dart';
 import 'operation_requests.dart';
 import 'operation_registry.dart';
@@ -254,9 +255,12 @@ class Application implements ModelGate, GenerationReservationGate {
     proactive: proactive,
     accounts: _googleMaintenance,
   );
+  late final ModelAssetAcquisitionCoordinator _assetDownloads =
+      ModelAssetAcquisitionCoordinator(store: store, changed: changed);
   late final RuntimeOperations _runtime = RuntimeOperations(
     domain: domain,
     identity: _identity,
+    assetDownloads: _assetDownloads,
     generation: _generation,
     models: _models,
     workflow: _workflow,
@@ -296,6 +300,7 @@ class Application implements ModelGate, GenerationReservationGate {
         ..._sources.handlers,
         ..._googleMaintenance.handlers,
         ..._models.handlers,
+        ..._assetDownloads.handlers,
       ]);
   Set<Operation> get registeredOperations => _registry.operations;
 
@@ -327,6 +332,7 @@ class Application implements ModelGate, GenerationReservationGate {
       _notes.computing > 0 ||
       domain.mutating > 0 ||
       _models.acquiring ||
+      _assetDownloads.busy ||
       (domain.generator?.generating ?? false);
 
   void changed() {
@@ -553,6 +559,7 @@ class Application implements ModelGate, GenerationReservationGate {
     attempt(_workflow.stop);
     attempt(_googleMaintenance.stop);
     attempt(_models.stop);
+    attempt(_assetDownloads.stop);
     attempt(_recordingController.stopScheduling);
     // Stop physical capture now. Canceled/paused index producers must already
     // know they are closing before the recording owner joins their Futures.
@@ -560,6 +567,7 @@ class Application implements ModelGate, GenerationReservationGate {
     recordingClose.ignore();
     attempt(_notes.stop);
     await join(_models.cancelAcquisition);
+    await join(_assetDownloads.close);
     await join(proactive.close);
     await join(_automaticAnswers.close);
     await join(_generation.close);

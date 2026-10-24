@@ -105,6 +105,8 @@ OperationRequest decodeOperationRequest(
     Operation.meetingsPause => MeetingsPauseRequest.decode(context),
     Operation.meetingsResume => MeetingsResumeRequest.decode(context),
     Operation.artifactsEdit => ArtifactsEditRequest.decode(context),
+    Operation.modelsDownloadAsset => ModelsDownloadAssetRequest.decode(context),
+    Operation.modelsInspectAsset => ModelsInspectAssetRequest.decode(context),
     Operation.modelsCancelQueryAcquisition =>
       ModelsCancelQueryAcquisitionRequest.decode(context),
     Operation.modelsAcquireQuery => ModelsAcquireQueryRequest.decode(context),

@@ -1,3 +1,4 @@
+import 'model_asset_status.dart';
 import 'desktop_status.dart';
 import 'cancellation.dart';
 export 'recording_status.dart' show RemoteRecording;
@@ -28,7 +29,14 @@ bool _resendable(RpcError error) =>
 /// Desktop facade: reads use SQLite WAL snapshots; all writes and workers are
 /// delegated to the single application service. No migrations run in this client.
 class RemoteDomain
-    implements DesktopConnection, CaptureLevelEvents, RemoteGoogleOwner {
+    implements
+        DesktopConnection,
+        CaptureLevelEvents,
+        RemoteGoogleOwner,
+        ModelAssetProgressSource {
+  @override
+  ModelAssetDownloadPresentation modelAssetDownload =
+      const ModelAssetDownloadPresentation();
   @override
   StoreReader get store => _reader;
   final SqliteStoreReader _reader;
@@ -303,6 +311,9 @@ class RemoteDomain
       final volumes = (event['volumes'] as List)
           .map((n) => (n as num).toDouble())
           .toList();
+      modelAssetDownload = ModelAssetDownloadPresentation.fromWire(
+        event['model_asset_download'],
+      );
       capture = {...capture, 'volumes': volumes};
       _captureLevels.add(volumes);
       return;

@@ -27,6 +27,8 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Fixed
 
+- Keep public model downloads, cache verification and runtime preflight in the application service. Setup dialogs retain publisher consent and receive progress while cancellation joins the owned transfer.
+
 - Bound question-model metadata and download phases, retry attempts and cancellation. An owned transport subprocess can terminate and reap stalled TLS work on the pinned Dart runtime.
 
 - Let search wait briefly for already-stopped meeting transcripts to finish

@@ -448,7 +448,23 @@ reliably close a stalled TLS connection on the pinned Dart runtime.
 The production service accepts the internal `--model-transport-worker` mode
 before ordinary profile/service startup. Transport boundary tests compile the
 actual service before starting their operation budgets and separately retain a
-source/JIT total-deadline case. These bounded question-model downloads retain
-their existing buffered-byte semantics. Public Gemma and speech model resumable
-file downloads are a separate remaining client/service ownership migration;
-this transport change does not claim that migration is complete.
+source/JIT total-deadline case. Question-model downloads retain their existing
+buffered-byte semantics. Public
+Gemma and speech assets reuse that worker ownership and deadline policy while
+retaining their disk-backed resumable parts, bounded-memory assembly and final
+checksum verification. Only the final path returns to the service parent.
+
+`models.inspect_asset` verifies a pinned model's existing cache/registration and
+returns its path or null. `models.download_asset` requires a pinned kind/digest
+and request ID, verifies publisher consent before network work, and performs
+Gemma runtime preflight in the service. Progress is published in the normal
+`model_asset_download` status value. A desktop owns its subscription/current
+predicate; the service retains its busy owner until download and worker cleanup
+settle. Shutdown revokes new work synchronously and joins that producer before
+model/runtime teardown. Existing model install operations keep their separate
+configuration reservation and native ownership.
+
+Desktop setup imports model/catalog values, read-only cache helpers and the
+remote downloader interface. Its compile closure excludes the HTTP download
+engine and model transport worker. Tests inject explicit local download doubles;
+production composition supplies the service proxy.

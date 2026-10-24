@@ -1,3 +1,4 @@
+import 'model_asset_acquisition.dart';
 import 'dart:io';
 import '../answer_contract.dart' show answerValidationFailures;
 import 'audio_operations.dart';
@@ -25,6 +26,7 @@ final class RuntimeOperations {
   RuntimeOperations({
     required this.domain,
     required this.identity,
+    required this.assetDownloads,
     required this.generation,
     required this.models,
     required this.workflow,
@@ -36,6 +38,7 @@ final class RuntimeOperations {
   });
   final Domain domain;
   final ApplicationIdentity identity;
+  final ModelAssetAcquisitionCoordinator assetDownloads;
   final GenerationCoordinator generation;
   final ModelRegistry models;
   final MeetingWorkflowCoordinator workflow;
@@ -66,6 +69,7 @@ final class RuntimeOperations {
     'runtime_revision': runtimeConfiguration['FORESIGHT_RUNTIME_REVISION'],
     'models_busy': generation.modelBusy,
     'query_model_download': models.acquisitionState,
+    'model_asset_download': assetDownloads.state.toWire(),
     'capture': captureState,
     'sources_paused': domain.sourcesPaused,
     'helper': domain.helper.snapshot?.toProto3Json(),

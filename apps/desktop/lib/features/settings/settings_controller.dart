@@ -184,6 +184,14 @@ class SettingsController
   }) {
     final generation = _reads.generation;
     return GemmaSetupDialog(
+      createDownload: () => RemoteModelDownloader(
+        d,
+        ownerCurrent: () => mounted && _reads.owns(generation),
+      ),
+      findLocalModel: DesktopModelAssetClient(
+        d,
+        current: () => mounted && _reads.owns(generation),
+      ).findLocalModel,
       environment: _host.environment,
       store: d.store,
       ownerCurrent: () => mounted && _reads.owns(generation),
@@ -265,6 +273,14 @@ class SettingsController
     final generation = _reads.generation;
     final registration = _reads.model('speech');
     return SpeechSetupDialog(
+      createDownload: () => RemoteModelDownloader(
+        d,
+        ownerCurrent: () => mounted && _reads.owns(generation),
+      ),
+      findLocalModel: DesktopModelAssetClient(
+        d,
+        current: () => mounted && _reads.owns(generation),
+      ).findLocalModel,
       environment: _host.environment,
       store: d.store,
       ownerCurrent: () => mounted && _reads.owns(generation),
