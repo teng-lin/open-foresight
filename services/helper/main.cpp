@@ -217,8 +217,13 @@ class Service : public rpc::RagService::Service,
     std::ifstream in(storage_root + "/.crash-at");
     std::getline(in, value);
     const char *env = getenv("FORESIGHT_CRASH_AT");
-    if (value == step || (env && std::string(env) == step))
+    if (value == step || (env && std::string(env) == step)) {
+      // Model abrupt process death at the transaction boundary. Sanitizers
+      // intercept _exit and can run shutdown checks on deliberately unjoined
+      // server threads; SIGKILL must bypass orderly process teardown.
+      kill(getpid(), SIGKILL);
       _exit(86);
+    }
 #else
     (void)step;
 #endif

@@ -281,7 +281,7 @@ int main(int argc, char **argv) {
       int status = 0;
       REQUIRE(waitpid(f.pid, &status, 0) == f.pid);
       f.pid = -1;
-      REQUIRE(WIFEXITED(status) && WEXITSTATUS(status) == 86);
+      REQUIRE(WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL);
       fs::remove(f.dir + "/.crash-at");
       f.start();
       const bool committed = std::string(boundary) == "transcript_after_commit";
