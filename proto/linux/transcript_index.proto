@@ -1,0 +1,48 @@
+// Application-owned incremental transcript index; recovered RAG stays frozen.
+syntax = "proto3";
+package foresight.transcript.v1;
+
+message TranscriptKey {
+  enum Channel { MICROPHONE = 0; PLAYBACK = 1; IMPORTED = 2; }
+  Channel channel = 1;
+  uint64 segment_id = 2;
+}
+message TranscriptSegment {
+  TranscriptKey key = 1;
+  string text = 2;
+  uint64 start_ms = 3;
+  uint64 end_ms = 4;
+}
+message TranscriptCursorRequest { string document_id = 1; }
+message TranscriptCursor {
+  bool exists = 1;
+  string workspace_epoch = 2;
+  uint64 revision = 3;
+  // Monotonic committed application transcript row cursor (across channels).
+  // Retained across explicit deletes; reset starts a fresh cursor.
+  uint64 last_segment_id = 4;
+  uint64 segment_count = 5;
+}
+message TranscriptDelta {
+  string document_id = 1;
+  string workspace_epoch = 2;
+  uint64 expected_revision = 3;
+  uint64 revision = 4;
+  repeated TranscriptSegment upserts = 5;
+  repeated TranscriptKey deletes = 6;
+  // Explicit reconciliation starts a fresh index for this parent, atomically.
+  bool reset = 7;
+}
+message TranscriptDeltaResult {
+  uint64 revision = 1;
+  bool applied = 2;
+  uint64 tokenized_bytes = 3;
+  uint64 tokenized_tokens = 4;
+  uint64 embedded_bytes = 5;
+  uint64 embedded_chunks = 6;
+  uint64 snapshot_constructed_chunks = 7;
+}
+service TranscriptIndex {
+  rpc GetCursor(TranscriptCursorRequest) returns (TranscriptCursor);
+  rpc ApplyDelta(TranscriptDelta) returns (TranscriptDeltaResult);
+}

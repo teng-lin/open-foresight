@@ -76,7 +76,7 @@ int main(int argc, char **argv) {
       REQUIRE(sqlite3_prepare_v2(database, "PRAGMA user_version", -1, &query,
                                  nullptr) == SQLITE_OK);
       REQUIRE(sqlite3_step(query) == SQLITE_ROW &&
-              sqlite3_column_int(query, 0) == 1);
+              sqlite3_column_int(query, 0) == 2);
       sqlite3_finalize(query);
       sqlite3_close(database);
     }

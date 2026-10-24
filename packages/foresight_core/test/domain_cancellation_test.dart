@@ -40,6 +40,16 @@ class PausingDomain extends Domain {
   }
 }
 
+class HeldStopRecording extends TestRecording {
+  final entered = Completer<void>(), release = Completer<void>();
+  @override
+  Future<void> stop() async {
+    if (!entered.isCompleted) entered.complete();
+    await release.future;
+    await super.stop();
+  }
+}
+
 void main() {
   test(
     'cancelled parked index settles and leaves durable pending source',
@@ -226,7 +236,7 @@ void main() {
     expect(domain.cancellationWatchCount, 0);
   });
   test(
-    'one cancelled recording-stop waiter leaves the shared finalizer and other waiter intact',
+    'one cancelled Stop waiter leaves capture drain shared and indexing separate',
     () async {
       final temporary = createTestTempDirectorySync('stop-cancel-');
       final rag = DelayedIndexService()..release.complete();
@@ -253,8 +263,12 @@ void main() {
       });
       final meeting = store.meeting('Shared finalizer');
       store.transcript(meeting, 'Captured speech', true, 0, 1000, 'microphone');
-      app.recording = TestRecording();
+      final recording = HeldStopRecording();
+      app.recording = recording;
       app.recordingMeeting = meeting;
+      addTearDown(() {
+        if (!recording.release.isCompleted) recording.release.complete();
+      });
       var current = true;
       final first = app.call('meetings.stop', {}, current: () => current);
       final cancelled = expectLater(
@@ -268,17 +282,25 @@ void main() {
         secondDone = true;
         return v;
       });
-      await domain.indexEntered!.future;
+      await recording.entered.future;
       domain.pauseSources();
-      domain.indexRelease!.complete();
       await eventually(() => domain.cancellationWatchCount >= 2);
       current = false;
       domain.checkCancellations();
       await cancelled;
       expect(secondDone, false);
-      expect(app.recording, isNotNull);
-      domain.resumeSources();
+      expect(app.recording, same(recording));
+      recording.release.complete();
       await second;
+      expect(app.recording, isNull);
+      await domain.indexEntered!.future;
+      expect(
+        domain.indexRelease!.isCompleted,
+        false,
+        reason: 'Indexing no longer owns capture finalization',
+      );
+      domain.indexRelease!.complete();
+      domain.resumeSources();
       expect(
         store.rows('SELECT state FROM meetings WHERE id=?', [
           meeting,

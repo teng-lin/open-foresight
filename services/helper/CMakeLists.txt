@@ -19,13 +19,16 @@ set(GEN "${CMAKE_CURRENT_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY "${GEN}")
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(RECOVERED_STEM "rag_service")
-set(GENERATED "${GEN}/${RECOVERED_STEM}.pb.cc" "${GEN}/${RECOVERED_STEM}.grpc.pb.cc" "${GEN}/helper_control.pb.cc" "${GEN}/helper_control.grpc.pb.cc")
+set(GENERATED "${GEN}/${RECOVERED_STEM}.pb.cc" "${GEN}/${RECOVERED_STEM}.grpc.pb.cc" "${GEN}/helper_control.pb.cc" "${GEN}/helper_control.grpc.pb.cc" "${GEN}/transcript_index.pb.cc" "${GEN}/transcript_index.grpc.pb.cc")
 add_custom_command(OUTPUT "${GEN}/${RECOVERED_STEM}.pb.cc" "${GEN}/${RECOVERED_STEM}.pb.h" "${GEN}/${RECOVERED_STEM}.grpc.pb.cc" "${GEN}/${RECOVERED_STEM}.grpc.pb.h"
  COMMAND ${Python3_EXECUTABLE} "${REPO_ROOT}/tools/generate_bindings.py" --language cpp --output ${GEN} --protoc $<TARGET_FILE:protobuf::protoc> --grpc-plugin $<TARGET_FILE:gRPC::grpc_cpp_plugin>
  DEPENDS "${REPO_ROOT}/proto/rag/rag_service.descriptor.pb" "${REPO_ROOT}/proto/rag/rag_service.proto" "${REPO_ROOT}/tools/generate_bindings.py" VERBATIM)
 add_custom_command(OUTPUT "${GEN}/helper_control.pb.cc" "${GEN}/helper_control.pb.h" "${GEN}/helper_control.grpc.pb.cc" "${GEN}/helper_control.grpc.pb.h"
  COMMAND protobuf::protoc ARGS --proto_path=${REPO_ROOT}/proto/linux --cpp_out=${GEN} --grpc_out=${GEN} --plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin> ${REPO_ROOT}/proto/linux/helper_control.proto
  DEPENDS "${REPO_ROOT}/proto/linux/helper_control.proto" VERBATIM)
+add_custom_command(OUTPUT "${GEN}/transcript_index.pb.cc" "${GEN}/transcript_index.pb.h" "${GEN}/transcript_index.grpc.pb.cc" "${GEN}/transcript_index.grpc.pb.h"
+ COMMAND protobuf::protoc ARGS --proto_path=${REPO_ROOT}/proto/linux --cpp_out=${GEN} --grpc_out=${GEN} --plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin> ${REPO_ROOT}/proto/linux/transcript_index.proto
+ DEPENDS "${REPO_ROOT}/proto/linux/transcript_index.proto" VERBATIM)
 add_library(foresight_protocol ${GENERATED})
 target_include_directories(foresight_protocol PUBLIC "${GEN}")
 target_link_libraries(foresight_protocol PUBLIC protobuf::libprotobuf gRPC::grpc++)
@@ -66,6 +69,10 @@ if(BUILD_TESTING)
   set(FORESIGHT_CONTRACT_HELPER ForesightHelperTest)
  endif()
  add_test(NAME helper_release_hooks COMMAND ${Python3_EXECUTABLE} "${REPO_ROOT}/tests/helper/release_hooks.py" $<TARGET_FILE:ForesightHelper> --expected-enabled ${FORESIGHT_PRODUCTION_TEST_HOOKS})
+ add_executable(helper_transcript_index_test "${REPO_ROOT}/tests/helper/transcript_index.cpp")
+ target_link_libraries(helper_transcript_index_test PRIVATE foresight_protocol SQLite3::SQLite3)
+ add_test(NAME helper_transcript_index COMMAND helper_transcript_index_test $<TARGET_FILE:${FORESIGHT_CONTRACT_HELPER}>)
+ set_tests_properties(helper_transcript_index PROPERTIES TIMEOUT 90)
  add_executable(helper_contract_test "${REPO_ROOT}/tests/helper/contract.cpp")
  target_link_libraries(helper_contract_test PRIVATE foresight_protocol SQLite3::SQLite3)
  add_test(NAME helper_contract COMMAND helper_contract_test $<TARGET_FILE:${FORESIGHT_CONTRACT_HELPER}>)
