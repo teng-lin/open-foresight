@@ -115,7 +115,11 @@ Future<void> main(List<String> arguments) async {
     profile,
     DiagnosticIdentity.random(),
     role,
-    ownedSlots: arguments.contains('shared') ? {0, 1, 2, 3, 4} : {},
+    ownedSlots: mode == 'cleanup'
+        ? {0, 1, 2, 4, 5, 6, 7, 8, 9}
+        : arguments.contains('shared')
+        ? {0, 1, 2, 3, 4}
+        : {},
   );
   if (storage == null) {
     stdout.writeln(jsonEncode({'slot': null}));

@@ -1,10 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:foresight_core/src/diagnostics/storage.dart';
+import 'package:foresight_core/src/diagnostics/events.dart';
 import 'package:foresight_core/src/persistence/backup_files.dart';
 import 'package:foresight_test_support/test_paths.dart';
+import 'package:foresight_test_support/native_fixture.dart';
 import 'package:test/test.dart';
 
 String _profile() {
@@ -74,6 +77,88 @@ void main() {
     return (process: process, proof: proof);
   }
 
+  test(
+    'compiled cleanup crash preserves classification and later reclaim',
+    () async {
+      final profile = _profile();
+      DiagnosticStorage.admit(
+        profile,
+        DiagnosticIdentity.random(),
+        DiagnosticRole.desktop,
+      )!.close();
+      final slot = BackupDirectory('$profile/logs/slot-3');
+      final manifestFile = slot.openOrCreate('manifest.json');
+      final manifest = <String, Object>{
+        'schema': 1,
+        'session': DiagnosticIdentity.random().value,
+        'pid': 1,
+        'role': DiagnosticRole.desktop.name,
+        'opened': DateTime.now().millisecondsSinceEpoch,
+        'has_error': false,
+        'failure_order': 0,
+        'failed': 0,
+      };
+      manifestFile.truncate();
+      manifestFile.writeOnce(
+        Uint8List.fromList(utf8.encode(jsonEncode(manifest))),
+      );
+      manifestFile.close();
+      for (var i = 0; i < 3; i++) {
+        final file = slot.openOrCreate('$i.jsonl');
+        file.writeOnce(
+          Uint8List.fromList(
+            utf8.encode('{"prior":"synthetic retained payload"}\n'),
+          ),
+        );
+        file.close();
+      }
+      slot.close();
+      final fault =
+          '${createTestTempDirectorySync('cleanup-fault-').path}/fault.${Platform.isMacOS ? 'dylib' : 'so'}';
+      await buildCachedNativeFixture(
+        source: 'test/fixtures/diagnostics_cleanup_fault.cpp',
+        output: fault,
+      );
+      final child = await Process.start(
+        executable,
+        ['cleanup', profile, 'desktop'],
+        environment: {
+          (Platform.isMacOS ? 'DYLD_INSERT_LIBRARIES' : 'LD_PRELOAD'): fault,
+          'FORESIGHT_CLEANUP_CRASH_GATE': '1',
+        },
+      );
+      final errors = child.stderr.transform(utf8.decoder).join();
+      var exited = false;
+      final exit = child.exitCode.then((value) {
+        exited = true;
+        return value;
+      });
+      try {
+        final marker = await child.stdout
+            .transform(utf8.decoder)
+            .transform(const LineSplitter())
+            .first
+            .timeout(const Duration(seconds: 5));
+        expect(marker, 'cleanup-stopped');
+        expect(File('$profile/logs/slot-3/0.jsonl').existsSync(), isFalse);
+        expect(File('$profile/logs/slot-3/manifest.json').existsSync(), isTrue);
+        expect(File('$profile/logs/slot-3/1.jsonl').existsSync(), isTrue);
+      } finally {
+        if (!exited) child.kill(ProcessSignal.sigkill);
+        expect(await exit.timeout(const Duration(seconds: 5)), isNot(0));
+        exited = true;
+        expect(await errors, isEmpty);
+      }
+      final reclaimed = await once(['cleanup', profile, 'desktop']);
+      expect(reclaimed['slot'], 3);
+      final next =
+          jsonDecode(
+                File('$profile/logs/slot-3/manifest.json').readAsStringSync(),
+              )
+              as Map;
+      expect(next['session'], isNot(manifest['session']));
+    },
+  );
   test(
     'compiled leases bound ten concurrent writers and crash releases the exact lease',
     () async {
