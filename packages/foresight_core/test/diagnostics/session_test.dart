@@ -9,6 +9,119 @@ import 'test_sinks.dart';
 
 void main() {
   tearDown(LoggingSession.resetForTesting);
+  test(
+    'active tracks registration and retirement without saturation',
+    () async {
+      final session = await LoggingSession.startForTesting(
+        configuration: const DiagnosticConfiguration(),
+      );
+      final producer = session.registerProducer(DiagnosticProducerKind.domain);
+      expect(producer.active, isFalse);
+      await producer.ready;
+      expect(producer.active, isTrue);
+      while (producer.emit(
+        DiagnosticEvent.serviceStarting,
+        DiagnosticComponent.service,
+      )) {}
+      expect(producer.active, isTrue);
+      producer.close();
+      expect(producer.active, isFalse);
+      for (var i = 0; i < 20; i++) {
+        final extra = session.registerProducer(DiagnosticProducerKind.domain);
+        await extra.ready;
+        if (i >= 14) expect(extra.active, isFalse);
+      }
+      await session.close();
+      expect(session.producer.active, isFalse);
+      final off = await LoggingSession.startForTesting(
+        configuration: const DiagnosticConfiguration(
+          level: DiagnosticLevel.off,
+        ),
+      );
+      expect(off.producer.active, isFalse);
+      await off.close();
+    },
+  );
+  test(
+    'lazy stack obeys filtering credits retirement and reentrancy',
+    () async {
+      final session = await LoggingSession.startForTesting(
+        configuration: const DiagnosticConfiguration(),
+      );
+      var built = 0;
+      SafeDiagnosticStack build() {
+        built++;
+        throw StateError('synthetic private stack failure');
+      }
+
+      expect(
+        session.producer.emit(
+          DiagnosticEvent.transportActivity,
+          DiagnosticComponent.service,
+          stackBuilder: build,
+        ),
+        isFalse,
+      );
+      expect(built, 0);
+      expect(
+        session.producer.emit(
+          DiagnosticEvent.runtimeFailed,
+          DiagnosticComponent.service,
+          stackBuilder: build,
+        ),
+        isFalse,
+      );
+      expect(built, 1);
+      var recursiveFields = 0;
+      expect(
+        session.producer.emit(
+          DiagnosticEvent.serviceStarting,
+          DiagnosticComponent.service,
+          fields: () {
+            expect(
+              session.producer.emit(
+                DiagnosticEvent.runtimeFailed,
+                DiagnosticComponent.service,
+                fields: () {
+                  recursiveFields++;
+                  return {};
+                },
+                stackBuilder: build,
+              ),
+              isFalse,
+            );
+            return {};
+          },
+        ),
+        isTrue,
+      );
+      expect(recursiveFields, 0);
+      expect(built, 1);
+      while (session.producer.emit(
+        DiagnosticEvent.runtimeFailed,
+        DiagnosticComponent.service,
+      )) {}
+      expect(
+        session.producer.emit(
+          DiagnosticEvent.runtimeFailed,
+          DiagnosticComponent.service,
+          stackBuilder: build,
+        ),
+        isFalse,
+      );
+      expect(built, 1);
+      await session.close();
+      expect(
+        session.producer.emit(
+          DiagnosticEvent.runtimeFailed,
+          DiagnosticComponent.service,
+          stackBuilder: build,
+        ),
+        isFalse,
+      );
+      expect(built, 1);
+    },
+  );
   test('off creates no writer endpoint and never evaluates fields', () async {
     final session = await LoggingSession.start(
       configuration: const DiagnosticConfiguration(level: DiagnosticLevel.off),
@@ -302,6 +415,139 @@ void main() {
       expect((await session.close()).writerExited, isTrue);
       await capture.closed.future.timeout(const Duration(seconds: 2));
       expect(capture.records.single['producer'], 'domain:1');
+    },
+  );
+  test('an exited ticket cannot attach after its completion barrier', () async {
+    final session = await LoggingSession.startForTesting(
+      configuration: const DiagnosticConfiguration(),
+      role: DiagnosticRole.transient,
+    );
+    addTearDown(session.close);
+    final exited = session.reserveProducer(DiagnosticProducerKind.domain);
+    session.producerExited(exited);
+    final barrier = session
+        .reserveProducer(DiagnosticProducerKind.setup)
+        .connect();
+    addTearDown(barrier.close);
+    await barrier.ready;
+    final late = exited.connect();
+    addTearDown(late.close);
+    await late.ready;
+    expect(
+      late.emit(DiagnosticEvent.runtimeFailed, DiagnosticComponent.domain),
+      isFalse,
+    );
+  });
+  test(
+    'overflow off and closed registration retain bounded producer handles',
+    () async {
+      for (final level in [DiagnosticLevel.info, DiagnosticLevel.off]) {
+        final session = await LoggingSession.startForTesting(
+          configuration: DiagnosticConfiguration(level: level),
+          role: DiagnosticRole.transient,
+        );
+        addTearDown(session.close);
+        for (var i = 0; i < 1000; i++) {
+          session.registerProducer(DiagnosticProducerKind.setup);
+        }
+        expect(
+          session.retainedProducerCount,
+          lessThanOrEqualTo(LoggingSession.maximumProducers),
+        );
+        await session.close();
+        for (var i = 0; i < 1000; i++) {
+          session.registerProducer(DiagnosticProducerKind.setup);
+        }
+        expect(
+          session.retainedProducerCount,
+          lessThanOrEqualTo(LoggingSession.maximumProducers),
+        );
+      }
+    },
+  );
+  test('all registered rate keys retain later new failure evidence', () async {
+    final capture = SinkCapture();
+    addTearDown(capture.dispose);
+    final session = await LoggingSession.startForTesting(
+      configuration: const DiagnosticConfiguration(
+        level: DiagnosticLevel.trace,
+      ),
+      profilePath: 'selected-private-profile',
+      sinkFactory: memorySink(capture.port.sendPort),
+    );
+    addTearDown(session.close);
+    final elapsed = Stopwatch()..start();
+    Future<void> send(
+      DiagnosticEvent event,
+      DiagnosticCategory category,
+    ) async {
+      while (!session.producer.emit(
+        event,
+        DiagnosticComponent.service,
+        fields: () => {DiagnosticField.category: category},
+      )) {
+        if (elapsed.elapsed > const Duration(seconds: 10)) {
+          fail('producer did not regain bounded credits');
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    for (final event in DiagnosticEvent.values) {
+      if (!event.fields.contains(DiagnosticField.category)) continue;
+      for (final category in DiagnosticCategory.values) {
+        if (event == DiagnosticEvent.nativeWorkerFailed &&
+            category == DiagnosticCategory.process) {
+          continue;
+        }
+        await send(event, category);
+      }
+    }
+    await send(DiagnosticEvent.nativeWorkerFailed, DiagnosticCategory.process);
+    await session.close();
+    await capture.closed.future.timeout(const Duration(seconds: 2));
+    expect(
+      capture.records.any(
+        (record) =>
+            (record['event'] == DiagnosticEvent.nativeWorkerFailed.wire &&
+                (record['fields'] as Map)['category'] ==
+                    DiagnosticCategory.process.name) ||
+            (record['event'] == DiagnosticEvent.recordsDropped.wire &&
+                (record['fields'] as Map)['event'] ==
+                    DiagnosticEvent.nativeWorkerFailed.wire &&
+                (record['fields'] as Map)['category'] ==
+                    DiagnosticCategory.process.name),
+      ),
+      isTrue,
+    );
+  });
+  test(
+    'healthy close finalizes missing ownership as unprotected unknown',
+    () async {
+      final capture = SinkCapture();
+      addTearDown(capture.dispose);
+      final session = await LoggingSession.startForTesting(
+        configuration: const DiagnosticConfiguration(),
+        profilePath: 'selected-private-profile',
+        sinkFactory: memorySink(capture.port.sendPort),
+      );
+      session.expectOwnershipDecision();
+      session.producer.emit(
+        DiagnosticEvent.runtimeFailed,
+        DiagnosticComponent.service,
+      );
+      final result = await session.close();
+      expect(result.writerExited, isTrue);
+      expect(result.flushed, isTrue);
+      await capture.closed.future.timeout(const Duration(seconds: 2));
+      expect(capture.records, hasLength(1));
+      expect(
+        capture.messages.whereType<Map>().any(
+          (value) => value['classified'] == 'service',
+        ),
+        isFalse,
+      );
     },
   );
 }
