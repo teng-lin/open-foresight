@@ -344,3 +344,58 @@ These are local unit qualifications. Final merged-source gates, remaining C/D/E/
 requirements, upgrade safety and owner-controlled signing/settings acceptance
 remain incomplete. Evidence is retained under `/var/tmp`; no skipped or reused
 path is represented as fresh acceptance.
+
+
+### Helper gate repair and first tooling ratchet integrated
+
+Commit `756c0d01` fixes an integration gap discovered by the full Python run:
+`meeting_incremental_native_test.dart` was absent from the skip inventory, and
+staged CI did not export or retain its controlled test helper. The core gate now
+exports a separate `FORESIGHT_TEST_HELPER`; both exact native-runtime allowlists
+retain `ForesightHelperTest`. Production packaging still selects `ForesightHelper`
+explicitly. Agent review and Claude review both returned **CONVERGED**. The exact
+allowlist addition remains in the final owner-review scope; neither review is
+owner approval.
+
+The first combined run retained **30 failures, 24 errors, 5,534 passes and 31
+skips**. Most failures came from an unconfigured host CMake shim; the missing skip
+inventory was a real source integration defect. With the inventory repaired and
+pinned CMake/Ninja on PATH, failed-first verification passed **54/54**. The real
+core-gate fixture passed **50/50**, and artifact/stage tests passed **66/66**.
+A complete Git-free export passed those **66** cases in each unrelated PR, main
+and explicitly unset-ref environment; module origins were asserted inside the
+export. Initial ref runs from worktree cwd are retained separately and are not
+used as export-only evidence.
+
+The repaired full Python suite passed **5,588 tests / 31 skips**. The separate
+required coverage command passed the same counts with **95.82%** combined
+line/branch coverage against the **95%** floor. It reported 187 warnings,
+including unclosed SQLite connections requiring further ownership investigation;
+no warnings were suppressed. Evidence, original failures, input hashes and reports:
+`/var/tmp/of-int-a4/`. This was executed as `b41ea253` plus the recorded seven-file
+diff, byte-equivalent to the `756c0d01` source tree, before the E merge.
+
+Merge `5a6a92f7` adds reviewed Stage E checkpoint `3cb7a618`: 370 tracked Python
+files, 167 production modules, 138 entrypoints, 88 path mutations and 68 dynamic
+loader calls are inventoried with caller candidates. The conservative graph has
+unresolved computed targets and is not complete semantic import conversion. The
+first explicit per-module typing ratchet covers only the standard-library timing
+leaf. Existing timing tests passed **6/6**; removing annotations failed the new
+ratchet, then source was restored exactly. A failed `strict` shorthand experiment
+is retained; explicit supported per-module flags avoid its unintended global
+expansion. Native review and Claude follow-up converged. Post-merge ruff, mypy
+(167 files), timeout/link checks and timing tests pass. Package/import migration,
+remaining CI typing/complexity work, and Stage E completion remain open.
+
+C1 native `a9b36f3f` now has fresh **36/36 Linux and 39/39 HanSolo** root CTests,
+zero skips. Exact library/helper hashes are retained under
+`/var/tmp/of-c1-a9-native/{linux,mac}/binary-provenance.json`. This is the first
+native iteration: subsequent speech-join repairs still require new qualification.
+
+B1 draft-three Claude review found eight remaining design issues, including
+staging lifecycle, Darwin descriptor inheritance, concrete IPC scheduling,
+enumeration memory, platform floors, executable trust, build identity and
+producer-lifetime exhaustion. The author is verifying these against pinned
+sources and revising the design; broad storage-worker implementation remains
+pending. Earlier native convergence is not substituted for resolving the new
+findings. No push or hosted PR has occurred.
