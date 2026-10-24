@@ -1,95 +1,70 @@
-part of 'meetings_controller.dart';
+import 'package:flutter/material.dart';
+import 'package:foresight_core/desktop.dart';
+import '../../presentation/workspace_presentation.dart';
+import 'meeting_visuals.dart';
 
-extension _CollectionView on MeetingsController {
-  String meetingClock(int milliseconds) {
-    final date = DateTime.fromMillisecondsSinceEpoch(milliseconds).toLocal();
-    return '${date.hour % 12 == 0 ? 12 : date.hour % 12}:${date.minute.toString().padLeft(2, '0')} ${date.hour < 12 ? 'AM' : 'PM'}';
-  }
+String meetingClockLabel(int milliseconds) {
+  final date = DateTime.fromMillisecondsSinceEpoch(milliseconds).toLocal();
+  return '${date.hour % 12 == 0 ? 12 : date.hour % 12}:${date.minute.toString().padLeft(2, '0')} ${date.hour < 12 ? 'AM' : 'PM'}';
+}
 
-  int meetingStart(MeetingDetails meeting) =>
-      (meeting.starts ?? meeting.created ?? 0);
+int meetingStartMilliseconds(MeetingDetails meeting) =>
+    (meeting.starts ?? meeting.created ?? 0);
 
-  int meetingEnd(MeetingDetails meeting) =>
-      (meeting.ends ??
-      meetingStart(meeting) +
-          (meeting.durationMs ?? const Duration(minutes: 30).inMilliseconds));
+int meetingEndMilliseconds(MeetingDetails meeting) =>
+    (meeting.ends ??
+    meetingStartMilliseconds(meeting) +
+        (meeting.durationMs ?? const Duration(minutes: 30).inMilliseconds));
 
-  String meetingDay(int timestamp) {
-    if (timestamp == 0) return 'Saved meetings';
-    final date = DateTime.fromMillisecondsSinceEpoch(timestamp).toLocal();
-    final now = DateTime.now();
-    if (date.year == now.year && date.month == now.month && date.day == now.day)
-      return 'Today';
-    return '${['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][date.weekday - 1]}, ${['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][date.month - 1]} ${date.day}';
-  }
+String meetingDayLabel(int timestamp) {
+  if (timestamp == 0) return 'Saved meetings';
+  final date = DateTime.fromMillisecondsSinceEpoch(timestamp).toLocal();
+  final now = DateTime.now();
+  if (date.year == now.year && date.month == now.month && date.day == now.day)
+    return 'Today';
+  return '${['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][date.weekday - 1]}, ${['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][date.month - 1]} ${date.day}';
+}
 
-  Widget meetingListHeading() => heading(
-    'Meetings',
-    actions: [
-      if (!_integrations.googlePresentation.connected)
-        OutlinedButton.icon(
-          onPressed: _operations.busy
-              ? null
-              : () => _operations.run(
-                  _integrations.granolaCalendar
-                      ? _integrationCommands.connectGranolaCalendar
-                      : _integrationCommands.connectGoogle,
-                ),
-          icon: const Icon(Icons.calendar_today, size: 18),
-          label: const Text('Connect Calendar'),
-        ),
-      if (_integrations.googlePresentation.connected)
-        OutlinedButton.icon(
-          onPressed: _operations.busy || _integrations.googleSyncing
-              ? null
-              : () => _operations.run(_integrationCommands.syncCalendar),
-          icon: const Icon(Icons.calendar_today, size: 18),
-          label: Text(
-            _integrations.lastCompletedRefreshMilliseconds == 0
-                ? 'Import Calendar'
-                : 'Last imported: ${timeLabel(_integrations.lastCompletedRefreshMilliseconds)}',
-          ),
-        ),
-      OutlinedButton.icon(
-        onPressed: _operations.busy
-            ? null
-            : () => _operations.run(exportMeetings),
-        icon: const Icon(Icons.ios_share, size: 18),
-        label: const Text('Export meeting notes'),
-      ),
-      pill(
-        'New meeting',
-        _operations.busy || recording != null
-            ? null
-            : () => _operations.run(() async {
-                final epoch = d.workspaceEpoch;
-                final created =
-                    await newMeetingKey.run(
-                          {'title': '[New Meeting]'},
-                          (keyed) => d.command(Operation.meetingsCreate, {
-                            ...keyed,
-                            if (epoch != null) 'workspace_epoch': epoch,
-                          }),
-                        )
-                        as Map;
-                if (mounted && d.workspaceEpoch == epoch)
-                  update(() => meetingId = created['id'] as int);
-              }),
-        icon: Icons.add,
-      ),
-    ],
-  );
+final class MeetingTimelineEntry {
+  const MeetingTimelineEntry({
+    required this.meeting,
+    required this.dayLabel,
+    required this.attachmentCount,
+    required this.selected,
+    required this.canRecord,
+  });
+  final MeetingCollectionEntry meeting;
+  final String dayLabel;
+  final int attachmentCount;
+  final bool selected, canRecord;
+}
 
-  Widget meetingList({bool showHeading = true}) {
-    final rows = _reads.meetings
-        .where(
-          (m) => m.title.toLowerCase().contains(meetingQuery.toLowerCase()),
-        )
-        .toList();
-    final now = DateTime.now().millisecondsSinceEpoch;
+class MeetingTimeline extends StatelessWidget {
+  MeetingTimeline({
+    super.key,
+    required List<MeetingTimelineEntry> entries,
+    required this.now,
+    required this.nowClock,
+    required this.nowKey,
+    required this.search,
+    this.heading,
+    required this.onNow,
+    required this.onOpen,
+    required this.onRecord,
+  }) : entries = List.unmodifiable(entries);
+  final List<MeetingTimelineEntry> entries;
+  final int now;
+  final String nowClock;
+  final GlobalKey nowKey;
+  final Widget search;
+  final Widget? heading;
+  final VoidCallback onNow;
+  final ValueChanged<int> onOpen, onRecord;
+  @override
+  Widget build(BuildContext context) {
     var insertedNow = false;
     Widget nowMarker() => Padding(
-      key: meetingNowKey,
+      key: nowKey,
       padding: const EdgeInsets.symmetric(vertical: 24),
       child: Row(
         children: [
@@ -98,7 +73,7 @@ extension _CollectionView on MeetingsController {
           Chip(
             backgroundColor: workspaceBlue,
             label: Text(
-              '●  Now · ${meetingClock(now)}',
+              '●  Now · $nowClock',
               style: const TextStyle(
                 color: workspaceInk,
                 fontWeight: FontWeight.w600,
@@ -110,16 +85,17 @@ extension _CollectionView on MeetingsController {
         ],
       ),
     );
-    final entries = <Widget>[];
+    final widgets = <Widget>[];
     String? previousDay;
-    for (final meeting in rows) {
-      if (!insertedNow && meetingStart(meeting) > now) {
-        entries.add(nowMarker());
+    for (final entry in entries) {
+      final meeting = entry.meeting;
+      if (!insertedNow && meetingStartMilliseconds(meeting) > now) {
+        widgets.add(nowMarker());
         insertedNow = true;
       }
-      final day = meetingDay(meetingStart(meeting));
+      final day = entry.dayLabel;
       if (day != previousDay) {
-        entries.add(
+        widgets.add(
           Padding(
             padding: const EdgeInsets.only(top: 12, bottom: 16),
             child: Text(day, style: MeetingVisuals.dateHeading),
@@ -127,40 +103,26 @@ extension _CollectionView on MeetingsController {
         );
         previousDay = day;
       }
-      entries.add(
+      widgets.add(
         Padding(
           padding: const EdgeInsets.only(bottom: 16),
-          child: meetingListTile(meeting),
+          child: MeetingCollectionTile(
+            entry: entry,
+            onOpen: () => onOpen(meeting.id),
+            onRecord: () => onRecord(meeting.id),
+          ),
         ),
       );
     }
-    if (!insertedNow && rows.isNotEmpty) entries.add(nowMarker());
+    if (!insertedNow && entries.isNotEmpty) widgets.add(nowMarker());
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (showHeading) meetingListHeading(),
-        searchBox(
-          'Search meetings',
-          (value) => meetingQuery = value,
-          controller: meetingSearchController,
-        ),
+        if (heading != null) heading!,
+        search,
         const SizedBox(height: 16),
         OutlinedButton.icon(
-          onPressed: () {
-            meetingSearchController.clear();
-            update(() => meetingQuery = '');
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              final target = meetingNowKey.currentContext;
-              if (target != null)
-                // The callback intentionally schedules work owned by its controller.
-                // ignore: discarded_futures
-                Scrollable.ensureVisible(
-                  target,
-                  duration: const Duration(milliseconds: 250),
-                  alignment: .5,
-                );
-            });
-          },
+          onPressed: onNow,
           icon: const Icon(Icons.schedule, size: 18),
           label: const Text('Now'),
         ),
@@ -170,14 +132,14 @@ extension _CollectionView on MeetingsController {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                if (rows.isEmpty)
+                if (entries.isEmpty)
                   const Padding(
                     padding: EdgeInsets.all(40),
                     child: Text(
                       'No meetings yet. Start transcribing or create a new meeting.',
                     ),
                   ),
-                ...entries,
+                ...widgets,
               ],
             ),
           ),
@@ -185,24 +147,31 @@ extension _CollectionView on MeetingsController {
       ],
     );
   }
+}
 
-  Widget meetingListTile(MeetingCollectionEntry meeting) {
-    final id = meeting.id;
-    final start = meetingStart(meeting);
-    final end = meetingEnd(meeting);
-    final attachmentCount = _reads.attachments(id).length;
+class MeetingCollectionTile extends StatelessWidget {
+  const MeetingCollectionTile({
+    super.key,
+    required this.entry,
+    required this.onOpen,
+    required this.onRecord,
+  });
+  final MeetingTimelineEntry entry;
+  final VoidCallback onOpen, onRecord;
+  @override
+  Widget build(BuildContext context) {
+    final meeting = entry.meeting;
+    final start = meetingStartMilliseconds(meeting);
+    final end = meetingEndMilliseconds(meeting);
+    final attachmentCount = entry.attachmentCount;
     final state = meeting.state;
     final active = state == 'recording' || state == 'transcribing';
-    void open() => update(() {
-      forgetPendingMeetingCreates();
-      meetingPreviewId = id;
-    });
     return Card(
       margin: EdgeInsets.zero,
       shape: const RoundedRectangleBorder(
         borderRadius: MeetingVisuals.previewRadius,
       ),
-      color: meetingPreviewId == id ? const Color(0xffd2deee) : Colors.white,
+      color: entry.selected ? const Color(0xffd2deee) : Colors.white,
       child: LayoutBuilder(
         builder: (context, constraints) {
           final narrow = constraints.maxWidth < 650;
@@ -217,7 +186,7 @@ extension _CollectionView on MeetingsController {
               ),
               if (narrow && start > 0)
                 Text(
-                  '${meetingClock(start)} – ${meetingClock(end)}',
+                  '${meetingClockLabel(start)} – ${meetingClockLabel(end)}',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               if (meeting.hasTranscript)
@@ -273,7 +242,7 @@ extension _CollectionView on MeetingsController {
             ],
           );
           return InkWell(
-            onTap: open,
+            onTap: onOpen,
             borderRadius: BorderRadius.circular(16),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
@@ -283,14 +252,14 @@ extension _CollectionView on MeetingsController {
                     SizedBox(
                       width: 155,
                       child: Text(
-                        '${meetingClock(start)} – ${meetingClock(end)}',
+                        '${meetingClockLabel(start)} – ${meetingClockLabel(end)}',
                         style: MeetingVisuals.metadata,
                       ),
                     ),
                   Expanded(child: details),
                   const SizedBox(width: 8),
                   OutlinedButton(
-                    onPressed: open,
+                    onPressed: onOpen,
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(horizontal: 10),
                       minimumSize: const Size(40, 28),
@@ -308,10 +277,7 @@ extension _CollectionView on MeetingsController {
                   ),
                   const SizedBox(width: 8),
                   OutlinedButton.icon(
-                    onPressed:
-                        _operations.busy || recording != null || quickStarting
-                        ? null
-                        : () => recordExistingMeeting(id),
+                    onPressed: entry.canRecord ? onRecord : null,
                     icon: const Icon(Icons.graphic_eq, size: 18),
                     label: const Text('Start'),
                   ),
@@ -323,45 +289,25 @@ extension _CollectionView on MeetingsController {
       ),
     );
   }
+}
 
-  Widget meetingCollection() {
-    final id = meetingPreviewId;
-    if (id == null) return meetingList();
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final preview = meetingPreview(id);
-        if (constraints.maxWidth < 900) return preview;
-        return Column(
-          children: [
-            meetingListHeading(),
-            Expanded(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Expanded(flex: 6, child: meetingList(showHeading: false)),
-                  const SizedBox(width: 24),
-                  Expanded(flex: 4, child: preview),
-                ],
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget meetingPreview(int id) {
-    final meeting = _reads.meeting(id, preview: true);
-    if (meeting == null)
-      return Center(
-        child: Text(
-          _reads.meetingLoaded(id, preview: true)
-              ? 'Meeting no longer exists.'
-              : 'Loading meeting…',
-        ),
-      );
-    final start = meetingStart(meeting);
-    final end = meetingEnd(meeting);
+class MeetingPreviewCard extends StatelessWidget {
+  const MeetingPreviewCard({
+    super.key,
+    required this.title,
+    required this.metadata,
+    required this.selectedTab,
+    required this.content,
+    required this.onExpand,
+    required this.onClose,
+    required this.onTab,
+  });
+  final String title, metadata, selectedTab;
+  final Widget content;
+  final VoidCallback onExpand, onClose;
+  final ValueChanged<String> onTab;
+  @override
+  Widget build(BuildContext context) {
     return Container(
       key: const ValueKey('meeting-preview'),
       clipBehavior: Clip.antiAlias,
@@ -379,35 +325,20 @@ extension _CollectionView on MeetingsController {
               children: [
                 Row(
                   children: [
-                    Expanded(
-                      child: Text(meeting.title, style: MeetingVisuals.title),
-                    ),
+                    Expanded(child: Text(title, style: MeetingVisuals.title)),
                     IconButton(
                       tooltip: 'Expand meeting',
-                      onPressed: () => update(() {
-                        forgetPendingMeetingCreates();
-                        meetingId = id;
-                      }),
+                      onPressed: onExpand,
                       icon: const Icon(Icons.open_in_full, size: 18),
                     ),
                     IconButton(
                       tooltip: 'Close meeting preview',
-                      onPressed: () async {
-                        try {
-                          await flushMeetingNotesDraft();
-                        } catch (_) {
-                          return;
-                        }
-                        if (mounted) update(() => meetingPreviewId = null);
-                      },
+                      onPressed: onClose,
                       icon: const Icon(Icons.close, size: 18),
                     ),
                   ],
                 ),
-                Text(
-                  '${meetingDay(start)} · ${meetingClock(start)} – ${meetingClock(end)}',
-                  style: MeetingVisuals.metadata,
-                ),
+                Text(metadata, style: MeetingVisuals.metadata),
               ],
             ),
           ),
@@ -418,12 +349,12 @@ extension _CollectionView on MeetingsController {
               children: [
                 for (final tab in ['Notes', 'AI summary', 'Transcript'])
                   TextButton(
-                    onPressed: () => update(() => meetingPreviewTab = tab),
+                    onPressed: () => onTab(tab),
                     style: TextButton.styleFrom(
-                      backgroundColor: meetingPreviewTab == tab
+                      backgroundColor: selectedTab == tab
                           ? workspaceBlue
                           : Colors.transparent,
-                      foregroundColor: meetingPreviewTab == tab
+                      foregroundColor: selectedTab == tab
                           ? workspaceInk
                           : const Color(0xff50555b),
                     ),
@@ -432,13 +363,7 @@ extension _CollectionView on MeetingsController {
               ],
             ),
           ),
-          Expanded(
-            child: switch (meetingPreviewTab) {
-              'Transcript' => meetingTranscriptPanel(id),
-              'AI summary' => meetingSummaryPanel(id),
-              _ => meetingNotesEditor(id, false, preview: true),
-            },
-          ),
+          Expanded(child: content),
         ],
       ),
     );
