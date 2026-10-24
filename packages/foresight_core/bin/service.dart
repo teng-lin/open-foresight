@@ -1,3 +1,5 @@
+import 'package:foresight_core/src/model_acquisition.dart'
+    show runModelTransportWorker;
 import 'package:foresight_core/src/platform_services.dart';
 import 'dart:async';
 import 'dart:io';
@@ -10,6 +12,10 @@ import 'package:foresight_core/src/service_compatibility.dart';
 import 'package:foresight_core/src/service_socket.dart' show probeSocketPath;
 
 Future<void> main(List<String> args) async {
+  if (args.length == 1 && args.single == '--model-transport-worker') {
+    await runModelTransportWorker();
+    return;
+  }
   IsolatedApplicationService? service;
   try {
     final profile = ProfilePaths.resolve(runtimeConfiguration.environment);

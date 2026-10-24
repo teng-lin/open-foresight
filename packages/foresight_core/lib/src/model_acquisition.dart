@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:convert';
+import 'dart:isolate';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -8,6 +10,9 @@ import 'package:path/path.dart' as path;
 
 import 'generated/web_content.pbgrpc.dart';
 import 'web_content.dart' show referenceWebContentHost;
+import 'platform_services.dart' show runtimeConfiguration;
+import 'runtime_execution_policy.dart' show requireInstalledRuntime;
+import 'rpc_error.dart' show RpcError;
 
 export 'generated/web_content.pb.dart'
     show ForesightSharedConfig, GetSharedConfigRequest, OnDeviceModelMetadata;
@@ -48,46 +53,90 @@ ModelDownloadPlan? referenceModelDownloadPlan(
 /// Public metadata RPC recovered from the original OdmlService.
 /// The credential comes from the same distribution configuration as web content.
 class ModelConfigService {
-  ModelConfigService({required String apiKey, ClientChannel? channel})
-    : _ownsChannel = channel == null,
-      _channel =
-          channel ??
-          ClientChannel(
-            referenceWebContentHost,
-            port: 443,
-            options: const ChannelOptions(
-              credentials: ChannelCredentials.secure(),
-            ),
-          ) {
+  ModelConfigService({
+    required String apiKey,
+    ClientChannel? channel,
+    Duration timeout = const Duration(seconds: 30),
+  }) : _apiKey = apiKey,
+       _timeout = timeout,
+       _ownsChannel = channel == null,
+       _channel =
+           channel ??
+           ClientChannel(
+             referenceWebContentHost,
+             port: 443,
+             options: const ChannelOptions(
+               credentials: ChannelCredentials.secure(),
+             ),
+           ) {
+    if (timeout <= Duration.zero) throw ArgumentError.value(timeout, 'timeout');
     _client = ForesightServiceClient(
       _channel,
       options: CallOptions(metadata: {'X-Goog-Api-Key': apiKey}),
     );
   }
 
+  final String _apiKey;
+  final Duration _timeout;
+  final _workers = <_ModelTransportProcess>{};
   final bool _ownsChannel;
   final ClientChannel _channel;
   late final ForesightServiceClient _client;
   final _requests = <ResponseFuture<ForesightSharedConfig>>{};
   bool _closed = false;
+  Future<void>? _closing;
 
   Future<ForesightSharedConfig> fetch({required String appVersion}) {
     if (_closed) throw StateError('Model configuration service is closed.');
     if (appVersion.isEmpty) throw ArgumentError.value(appVersion, 'appVersion');
+    if (_ownsChannel) return _fetchInWorker(appVersion);
     final request = _client.getSharedConfig(
       GetSharedConfigRequest(
         appVersion: appVersion,
         platform: 'macos',
         fallbackMode: referenceClosestLowerFallback,
       ),
+      options: CallOptions(timeout: _timeout),
     );
     _requests.add(request);
-    return request.whenComplete(() => _requests.remove(request));
+    return request
+        .timeout(
+          _timeout,
+          onTimeout: () {
+            unawaited(request.cancel());
+            throw const ModelTransportException('metadata_timeout');
+          },
+        )
+        .whenComplete(() => _requests.remove(request));
   }
 
-  Future<void> close() async {
+  Future<ForesightSharedConfig> _fetchInWorker(String appVersion) async {
+    final worker = _ModelTransportProcess();
+    _workers.add(worker);
+    try {
+      final bytes = await worker.run(
+        {
+          'kind': 'metadata',
+          'apiKey': _apiKey,
+          'appVersion': appVersion,
+          'timeout': _timeout.inMicroseconds,
+        },
+        _timeout,
+        1024 * 1024,
+      );
+      return ForesightSharedConfig.fromBuffer(bytes);
+    } finally {
+      _workers.remove(worker);
+    }
+  }
+
+  Future<void> close() => _closing ??= _close();
+  Future<void> _close() async {
     if (_closed) return;
     _closed = true;
+    await Future.wait([
+      for (final worker in _workers.toList()) worker.cancel(),
+    ]);
     await Future.wait([
       for (final request in _requests.toList()) request.cancel(),
     ]);
@@ -139,9 +188,29 @@ class ModelDownloadRetryPolicy {
   final Duration Function(int failedAttempt) delay;
 }
 
-/// Inclusive parallel ranges and resume cursors follow original ChunkDownloader.
-/// This returns transport bytes; authentication and atomic registration happen
-/// separately, before replacing an installed model.
+/// Every transport phase and each attempt is bounded independently of progress.
+/// The total includes retry delays and all parallel ranges.
+class ModelTransportDeadlines {
+  const ModelTransportDeadlines({
+    this.connect = const Duration(seconds: 30),
+    this.headers = const Duration(seconds: 30),
+    this.bodyIdle = const Duration(seconds: 30),
+    this.attempt = const Duration(minutes: 5),
+    this.total = const Duration(minutes: 15),
+  });
+  final Duration connect, headers, bodyIdle, attempt, total;
+
+  void validate() {
+    for (final duration in [connect, headers, bodyIdle, attempt, total]) {
+      if (duration <= Duration.zero) {
+        throw ArgumentError.value(duration, 'transport deadline');
+      }
+    }
+  }
+}
+
+/// The parent owns transport process termination, including a stalled TLS
+/// handshake which the pinned Dart socket cancellation cannot reliably close.
 class ModelBlobDownloader {
   ModelBlobDownloader({
     required String apiKey,
@@ -150,20 +219,169 @@ class ModelBlobDownloader {
     HttpClient? client,
     Uri? origin,
     Future<void> Function(Duration)? sleep,
+    this.deadlines = const ModelTransportDeadlines(),
+  }) : retryPolicy = retryPolicy ?? ModelDownloadRetryPolicy.reference(),
+       _apiKey = apiKey,
+       _origin = origin ?? Uri.https(referenceWebContentHost) {
+    deadlines.validate();
+    if (parallelCount != null && (parallelCount! <= 0 || parallelCount! > 8)) {
+      throw ArgumentError.value(parallelCount, 'parallelCount');
+    }
+    if (this.retryPolicy.maxAttempts <= 0 ||
+        this.retryPolicy.maxAttempts > 20) {
+      throw ArgumentError.value(this.retryPolicy.maxAttempts, 'maxAttempts');
+    }
+    // Injection preserves offline fixture semantics. Production transport has
+    // its own OS process and never borrows a caller's HttpClient or handles.
+    if (client != null || sleep != null) {
+      _local = _LocalModelBlobDownloader(
+        apiKey: apiKey,
+        parallelCount: parallelCount,
+        retryPolicy: this.retryPolicy,
+        client: client,
+        origin: origin,
+        sleep: sleep,
+        deadlines: deadlines,
+      );
+    }
+  }
+  final String _apiKey;
+  final Uri _origin;
+  final int? parallelCount;
+  final ModelDownloadRetryPolicy retryPolicy;
+  final ModelTransportDeadlines deadlines;
+  _LocalModelBlobDownloader? _local;
+  final _workers = <_ModelTransportProcess>{};
+  bool _closed = false;
+  final _closedSignal = Completer<void>();
+  Uri downloadUri(String blobId) => _origin.replace(
+    path:
+        '/v1/medias/foresight/${blobId.startsWith('/') ? blobId.substring(1) : blobId}:download',
+    queryParameters: {'alt': 'media', 'key': _apiKey},
+  );
+
+  Future<Uint8List> download({
+    required String blobId,
+    required int size,
+    void Function(int, int)? onProgress,
+  }) async {
+    if (_closed) throw StateError('Model downloader is closed.');
+    if (blobId.isEmpty || size <= 0) return Uint8List(0);
+    if (size > _maxTransportBytes) throw ArgumentError.value(size, 'size');
+    if (_local case final local?) {
+      return local.download(blobId: blobId, size: size, onProgress: onProgress);
+    }
+    final total = Stopwatch()..start();
+    var attemptsUsed = 0;
+    while (true) {
+      if (_closed) throw StateError('Model downloader is closed.');
+      final remaining = deadlines.total - total.elapsed;
+      if (remaining <= Duration.zero) {
+        throw const ModelTransportException('total_timeout');
+      }
+      final worker = _ModelTransportProcess();
+      _workers.add(worker);
+      try {
+        return await worker.run(
+          {
+            'kind': 'download',
+            'apiKey': _apiKey,
+            'origin': _origin.toString(),
+            'blobId': blobId,
+            'size': size,
+            'parallelCount': parallelCount,
+            'attempts': retryPolicy.maxAttempts - attemptsUsed,
+            'delays': [
+              for (var i = attemptsUsed + 1; i < retryPolicy.maxAttempts; i++)
+                retryPolicy.delay(i).inMicroseconds,
+            ],
+            'connect': deadlines.connect.inMicroseconds,
+            'headers': deadlines.headers.inMicroseconds,
+            'bodyIdle': deadlines.bodyIdle.inMicroseconds,
+            'attempt': deadlines.attempt.inMicroseconds,
+            'total': remaining.inMicroseconds,
+          },
+          remaining,
+          size,
+          onProgress: onProgress,
+        );
+      } on _ModelConnectDeadline catch (error) {
+        attemptsUsed += error.attempts;
+        if (attemptsUsed >= retryPolicy.maxAttempts) {
+          throw const ModelTransportException('connect_timeout');
+        }
+        // run() has already terminated and reaped the old process. No TLS
+        // socket from that attempt survives into this retry.
+        final delay = retryPolicy.delay(attemptsUsed);
+        if (delay < Duration.zero) {
+          throw ArgumentError.value(delay, 'retry delay');
+        }
+        if (delay >= deadlines.total - total.elapsed) {
+          throw const ModelTransportException('total_timeout');
+        }
+        final pause = Completer<void>();
+        final timer = Timer(delay, pause.complete);
+        try {
+          await Future.any([pause.future, _closedSignal.future]);
+        } finally {
+          timer.cancel();
+        }
+      } catch (_) {
+        if (_closed) throw StateError('Model downloader is closed.');
+        rethrow;
+      } finally {
+        _workers.remove(worker);
+      }
+    }
+  }
+
+  void close() {
+    if (_closed) return;
+    _closed = true;
+    _closedSignal.complete();
+    _local?.close();
+    for (final worker in _workers.toList()) {
+      // The owned download Future joins and reports teardown failure. This
+      // eager signal must not create an unhandled secondary Future.
+      unawaited(worker.cancel().catchError((Object _) {}));
+    }
+  }
+}
+
+/// Inclusive parallel ranges and resume cursors follow original ChunkDownloader.
+/// This returns transport bytes; authentication and atomic registration happen
+/// separately, before replacing an installed model.
+class _LocalModelBlobDownloader {
+  _LocalModelBlobDownloader({
+    required String apiKey,
+    this.parallelCount,
+    ModelDownloadRetryPolicy? retryPolicy,
+    HttpClient? client,
+    Uri? origin,
+    Future<void> Function(Duration)? sleep,
+    this.deadlines = const ModelTransportDeadlines(),
+    this.earlyFailure = false,
   }) : retryPolicy = retryPolicy ?? ModelDownloadRetryPolicy.reference(),
        _apiKey = apiKey,
        _client = client ?? HttpClient(),
        _ownsClient = client == null,
        _origin = origin ?? Uri.https(referenceWebContentHost),
        _sleep = sleep ?? Future<void>.delayed {
-    if (parallelCount != null && parallelCount! <= 0) {
+    deadlines.validate();
+    // The operation timer owns the earlier deadline. The SDK's own timeout
+    // cannot cancel an established TCP socket during a stalled TLS handshake.
+    _client.connectionTimeout = deadlines.connect * 2;
+    if (parallelCount != null && (parallelCount! <= 0 || parallelCount! > 8)) {
       throw ArgumentError.value(parallelCount, 'parallelCount');
     }
-    if (this.retryPolicy.maxAttempts <= 0) {
+    if (this.retryPolicy.maxAttempts <= 0 ||
+        this.retryPolicy.maxAttempts > 20) {
       throw ArgumentError.value(this.retryPolicy.maxAttempts, 'maxAttempts');
     }
   }
 
+  final ModelTransportDeadlines deadlines;
+  final bool earlyFailure;
   final String _apiKey;
   final int? parallelCount;
   final ModelDownloadRetryPolicy retryPolicy;
@@ -174,7 +392,9 @@ class ModelBlobDownloader {
   final _requests = <HttpClientRequest>{};
   final _streams = <StreamIterator<List<int>>>{};
   final _closedSignal = Completer<void>();
+  final _closeEvents = StreamController<void>.broadcast(sync: true);
   bool _closed = false;
+  var _attemptsUsed = 0;
 
   Uri downloadUri(String blobId) {
     // OdmlService.downloadMediaInParallel removes exactly one leading slash
@@ -209,6 +429,7 @@ class ModelBlobDownloader {
               bytes,
               index * chunkSize,
               ((index + 1) * chunkSize - 1).clamp(0, size - 1),
+              stopwatch,
               (count) {
                 received += count;
                 final now = stopwatch.elapsedMicroseconds;
@@ -218,9 +439,12 @@ class ModelBlobDownloader {
                 }
               },
             ),
-      ]);
+      ], eagerError: earlyFailure);
     } catch (error) {
-      if (error is NonRetryableModelDownloadException) rethrow;
+      if (error is NonRetryableModelDownloadException ||
+          error is _ModelConnectDeadline) {
+        rethrow;
+      }
       if (_closed) throw StateError('Model downloader is closed.');
       // Retryability has already been decided inside each chunk. Do not expose
       // HttpException.uri or SocketException text through setup/UI failures.
@@ -234,23 +458,81 @@ class ModelBlobDownloader {
     Uint8List bytes,
     int start,
     int end,
+    Stopwatch total,
     void Function(int) received,
   ) async {
     var cursor = start;
     for (var attempt = 1; ; attempt++) {
+      _attemptsUsed = max(_attemptsUsed, attempt);
       HttpClientRequest? request;
       StreamIterator<List<int>>? stream;
+      final attemptClock = Stopwatch()..start();
+      Duration remaining(Duration phase) {
+        final totalLeft = deadlines.total - total.elapsed;
+        final attemptLeft = deadlines.attempt - attemptClock.elapsed;
+        final bound = phase < totalLeft ? phase : totalLeft;
+        final result = bound < attemptLeft ? bound : attemptLeft;
+        if (result <= Duration.zero) {
+          throw TimeoutException('Model transport deadline');
+        }
+        return result;
+      }
+
+      Future<T> bounded<T>(Future<T> future, Duration phase) async {
+        final cancelled = Completer<T>();
+        final subscription = _closeEvents.stream.listen((_) {
+          if (!cancelled.isCompleted) {
+            cancelled.completeError(StateError('Model downloader is closed.'));
+          }
+        });
+        try {
+          if (_closed) throw StateError('Model downloader is closed.');
+          return await Future.any<T>([future, cancelled.future]).timeout(
+            remaining(phase),
+            onTimeout: () {
+              request?.abort();
+              if (stream != null) unawaited(stream.cancel());
+              throw TimeoutException('Model transport deadline');
+            },
+          );
+        } finally {
+          await subscription.cancel();
+        }
+      }
+
       try {
         if (_closed) throw StateError('Model downloader is closed.');
         if (cursor > end) return;
-        request = await _client.getUrl(uri);
-        _requests.add(request);
+        // A timed-out/cancelled connect can complete later. Retire that
+        // request too; connectionTimeout bounds the underlying socket attempt.
+        var connecting = true;
+        final connection = _client.getUrl(uri).then((value) {
+          if (!connecting || _closed) value.abort();
+          return value;
+        });
+        try {
+          request = await bounded(connection, deadlines.connect);
+        } on TimeoutException {
+          // Force an OS-process resource boundary before retrying TLS. Closing
+          // HttpClient alone leaves the pinned SDK handshake socket alive.
+          throw _ModelConnectDeadline(_attemptsUsed);
+        } finally {
+          connecting = false;
+        }
+        final activeRequest = request!;
+        _requests.add(activeRequest);
         if (_closed) {
-          request.abort();
+          activeRequest.abort();
           throw StateError('Model downloader is closed.');
         }
-        request.headers.set(HttpHeaders.rangeHeader, 'bytes=$cursor-$end');
-        final response = await request.close();
+        activeRequest.headers.set(
+          HttpHeaders.rangeHeader,
+          'bytes=$cursor-$end',
+        );
+        final response = await bounded(
+          activeRequest.close(),
+          deadlines.headers,
+        );
         final status = response.statusCode;
         if (status != HttpStatus.ok && status != HttpStatus.partialContent) {
           await response.listen(null).cancel();
@@ -271,7 +553,7 @@ class ModelBlobDownloader {
         }
         stream = StreamIterator(response);
         _streams.add(stream);
-        while (await stream.moveNext()) {
+        while (await bounded(stream.moveNext(), deadlines.bodyIdle)) {
           if (_closed) throw StateError('Model downloader is closed.');
           final block = stream.current;
           // The original destination buffer performs this bounds check too.
@@ -288,14 +570,24 @@ class ModelBlobDownloader {
             error is HttpException ||
             error is SocketException ||
             error is TimeoutException;
-        if (!retryable || attempt >= retryPolicy.maxAttempts || _closed) {
+        request?.abort();
+        if (stream != null) await stream.cancel();
+        if (!retryable ||
+            attempt >= retryPolicy.maxAttempts ||
+            _closed ||
+            total.elapsed >= deadlines.total) {
           rethrow;
         }
+        final delay = retryPolicy.delay(attempt);
+        if (delay < Duration.zero) {
+          throw ArgumentError.value(delay, 'retry delay');
+        }
         await Future.any([
-          _sleep(retryPolicy.delay(attempt)),
+          _sleep(delay),
           _closedSignal.future,
-        ]);
+        ]).timeout(deadlines.total - total.elapsed);
       } finally {
+        request?.abort();
         if (request != null) _requests.remove(request);
         if (stream != null) {
           _streams.remove(stream);
@@ -309,6 +601,8 @@ class ModelBlobDownloader {
     if (_closed) return;
     _closed = true;
     _closedSignal.complete();
+    _closeEvents.add(null);
+    unawaited(_closeEvents.close());
     for (final request in _requests) {
       request.abort();
     }
@@ -317,4 +611,308 @@ class ModelBlobDownloader {
     }
     if (_ownsClient) _client.close(force: true);
   }
+}
+
+class _ModelConnectDeadline implements Exception {
+  const _ModelConnectDeadline(this.attempts);
+  final int attempts;
+}
+
+const _maxTransportBytes = 512 * 1024 * 1024;
+const _maxTransportConfiguration = 16 * 1024;
+
+class _ModelTransportProcess {
+  Process? _process;
+  Future<Process>? _launching;
+  bool _cancelled = false;
+  Future<void>? _cancelling;
+
+  Future<Uint8List> run(
+    Map<String, Object?> config,
+    Duration timeout,
+    int maximum, {
+    void Function(int, int)? onProgress,
+  }) async {
+    final encoded = utf8.encode(jsonEncode(config));
+    if (encoded.length > _maxTransportConfiguration) {
+      throw const ModelTransportException('configuration_too_large');
+    }
+    try {
+      return await _run(encoded, maximum, onProgress).timeout(
+        timeout,
+        onTimeout: () => throw const ModelTransportException('total_timeout'),
+      );
+    } finally {
+      await cancel();
+    }
+  }
+
+  Future<Uint8List> _run(
+    List<int> config,
+    int maximum,
+    void Function(int, int)? onProgress,
+  ) async {
+    final service = runtimeConfiguration['FORESIGHT_SERVICE'];
+    final List<String> command;
+    if (service != null &&
+        service.startsWith('/') &&
+        File(service).existsSync()) {
+      try {
+        command = [
+          requireInstalledRuntime(service),
+          '--model-transport-worker',
+        ];
+      } on RpcError {
+        throw const ModelTransportException('worker_unavailable');
+      }
+    } else {
+      // Source development only: use this Dart SDK and this package's source.
+      // A compiled application must have its validated bundled service path.
+      final source = await Isolate.resolvePackageUri(
+        Uri.parse('package:foresight_core/src/model_transport_worker.dart'),
+      );
+      if (!Platform.resolvedExecutable.endsWith('/dart') ||
+          source == null ||
+          source.scheme != 'file' ||
+          !File.fromUri(source).existsSync()) {
+        throw const ModelTransportException('worker_unavailable');
+      }
+      command = [Platform.resolvedExecutable, source.toFilePath()];
+    }
+    if (_cancelled) throw const ModelTransportException('cancelled');
+    final launch = _launching = Process.start(
+      command.first,
+      command.skip(1).toList(),
+      includeParentEnvironment: false,
+      environment: {
+        if (Platform.environment['SYSTEMROOT'] case final root?)
+          'SYSTEMROOT': root,
+      },
+    );
+    final Process process;
+    try {
+      process = await launch;
+    } on ProcessException {
+      throw const ModelTransportException('worker_start');
+    }
+    _process = process;
+    // No diagnostic bytes from the child are trusted or retained. Draining is
+    // independent of stdout and cannot grow an in-memory stderr tail.
+    final errors = process.stderr.drain<void>();
+    if (_cancelled) {
+      await cancel();
+      throw const ModelTransportException('cancelled');
+    }
+    process.stdin.add(config);
+    await process.stdin.close();
+    final header = BytesBuilder(copy: false);
+    Uint8List? result;
+    var offset = 0;
+    await for (final chunk in process.stdout) {
+      var begin = 0;
+      if (result == null) {
+        while (begin < chunk.length && result == null) {
+          final end = chunk.indexOf(10, begin);
+          final stop = end < 0 ? chunk.length : end;
+          if (header.length + stop - begin > 1024) {
+            throw const ModelTransportException('invalid_worker_frame');
+          }
+          header.add(chunk.sublist(begin, stop));
+          begin = end < 0 ? chunk.length : end + 1;
+          if (end < 0) continue;
+          final Object? decoded;
+          try {
+            decoded = jsonDecode(utf8.decode(header.takeBytes()));
+          } on FormatException {
+            throw const ModelTransportException('invalid_worker_frame');
+          }
+          if (decoded is! Map) {
+            throw const ModelTransportException('invalid_worker_frame');
+          }
+          final value = decoded;
+          if (value['progress'] is int &&
+              value['total'] is int &&
+              value['total'] == maximum &&
+              value['progress'] >= 0 &&
+              value['progress'] <= maximum) {
+            onProgress?.call(value['progress'] as int, maximum);
+            continue;
+          }
+          if (value['ok'] == false) {
+            final attempts = value['attempts'];
+            if (value['kind'] == 'connect_timeout' &&
+                attempts is int &&
+                attempts > 0 &&
+                attempts <= 20) {
+              throw _ModelConnectDeadline(attempts);
+            }
+            if (value['kind'] == 'non_retryable') {
+              final status = value['status'];
+              if (status == null ||
+                  status is int && status >= 100 && status <= 599) {
+                throw NonRetryableModelDownloadException(
+                  'Unexpected response.',
+                  statusCode: status as int?,
+                );
+              }
+            }
+            throw const ModelTransportException('worker_transport');
+          }
+          final size = value['size'];
+          if (value['ok'] != true ||
+              size is! int ||
+              size < 0 ||
+              size > maximum ||
+              size > _maxTransportBytes) {
+            throw const ModelTransportException('invalid_worker_frame');
+          }
+          result = Uint8List(size);
+        }
+      }
+      if (result != null && begin < chunk.length) {
+        final count = chunk.length - begin;
+        if (offset + count > result.length) {
+          throw const ModelTransportException('worker_overflow');
+        }
+        result.setRange(offset, offset + count, chunk, begin);
+        offset += count;
+      }
+    }
+    await errors;
+    if (await process.exitCode != 0 ||
+        result == null ||
+        offset != result.length) {
+      throw const ModelTransportException('worker_incomplete');
+    }
+    return result;
+  }
+
+  Future<void> cancel() {
+    _cancelled = true;
+    return _cancelling ??= () async {
+      final launch = _launching;
+      if (launch == null) return;
+      final Process process;
+      try {
+        process = _process ?? await launch;
+      } on ProcessException {
+        return;
+      } // No child exists to retire.
+      await _stop(process);
+    }();
+  }
+
+  Future<void> _stop(Process process) async {
+    process.kill(ProcessSignal.sigterm);
+    try {
+      await process.exitCode.timeout(const Duration(milliseconds: 250));
+    } on TimeoutException {
+      process.kill(ProcessSignal.sigkill);
+      await process.exitCode.timeout(const Duration(seconds: 2));
+    }
+  }
+}
+
+/// Private service subprocess mode. It resolves no profile, opens no database,
+/// loads no native application library, and has no service/logging authority.
+Future<void> runModelTransportWorker() async {
+  try {
+    final input = BytesBuilder(copy: false);
+    await for (final chunk in stdin) {
+      if (input.length + chunk.length > _maxTransportConfiguration) {
+        throw const FormatException('configuration');
+      }
+      input.add(chunk);
+    }
+    final config = jsonDecode(utf8.decode(input.takeBytes())) as Map;
+    final apiKey = config['apiKey'] as String;
+    if (apiKey.length > 8192) throw const FormatException('configuration');
+    late Uint8List result;
+    if (config['kind'] == 'metadata') {
+      final channel = ClientChannel(
+        referenceWebContentHost,
+        port: 443,
+        options: const ChannelOptions(credentials: ChannelCredentials.secure()),
+      );
+      final service = ModelConfigService(
+        apiKey: apiKey,
+        channel: channel,
+        timeout: Duration(microseconds: config['timeout'] as int),
+      );
+      try {
+        result = (await service.fetch(
+          appVersion: config['appVersion'] as String,
+        )).writeToBuffer();
+      } finally {
+        await service.close();
+        await channel.terminate();
+      }
+    } else if (config['kind'] == 'download') {
+      final delays = (config['delays'] as List).cast<int>();
+      final size = config['size'] as int;
+      if (size <= 0 ||
+          size > _maxTransportBytes ||
+          delays.length > 19 ||
+          delays.any((d) => d < 0)) {
+        throw const FormatException('configuration');
+      }
+      final downloader = _LocalModelBlobDownloader(
+        earlyFailure: true,
+        apiKey: apiKey,
+        parallelCount: config['parallelCount'] as int?,
+        origin: Uri.parse(config['origin'] as String),
+        retryPolicy: ModelDownloadRetryPolicy(
+          maxAttempts: config['attempts'] as int,
+          delay: (attempt) => Duration(microseconds: delays[attempt - 1]),
+        ),
+        deadlines: ModelTransportDeadlines(
+          connect: Duration(microseconds: config['connect'] as int),
+          headers: Duration(microseconds: config['headers'] as int),
+          bodyIdle: Duration(microseconds: config['bodyIdle'] as int),
+          attempt: Duration(microseconds: config['attempt'] as int),
+          total: Duration(microseconds: config['total'] as int),
+        ),
+      );
+      try {
+        result = await downloader.download(
+          blobId: config['blobId'] as String,
+          size: size,
+          onProgress: (received, total) => stdout.writeln(
+            jsonEncode({'progress': received, 'total': total}),
+          ),
+        );
+      } finally {
+        downloader.close();
+      }
+    } else {
+      throw const FormatException('configuration');
+    }
+    stdout.writeln(jsonEncode({'ok': true, 'size': result.length}));
+    stdout.add(result);
+    await stdout.flush();
+  } on _ModelConnectDeadline catch (error) {
+    stdout.writeln(
+      jsonEncode({
+        'ok': false,
+        'kind': 'connect_timeout',
+        'attempts': error.attempts,
+      }),
+    );
+    await stdout.flush();
+  } on NonRetryableModelDownloadException catch (error) {
+    stdout.writeln(
+      jsonEncode({
+        'ok': false,
+        'kind': 'non_retryable',
+        'status': error.statusCode,
+      }),
+    );
+    await stdout.flush();
+  } catch (_) {
+    stdout.writeln('{"ok":false,"kind":"transport"}');
+    await stdout.flush();
+  }
+  // Pending TLS handshakes in the pinned SDK may survive HttpClient.close and
+  // isolate termination. OS process exit is the transport resource boundary.
+  exit(0);
 }

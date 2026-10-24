@@ -434,3 +434,21 @@ import grants remains deferred with the typed import-grant architecture. Approva
 dialogs label peer identity as unverified, highlight risky options and limit
 repeated identical requests; OS-verified requester attribution and distinct local
 capture gestures remain deferred with the desktop peer-verification design.
+
+### Model transport ownership
+
+Question-model metadata and blob downloads run in a dedicated service transport
+subprocess. Metadata calls cancel their live RPC at the deadline. Downloads bound
+connect, response-header and body-idle phases to 30 seconds, each attempt to five
+minutes and the complete retry operation to 15 minutes. Retry delays and parallel
+ranges share the total budget. Timeout and cancellation terminate and reap the
+owned process before releasing its operation; cancelling a Future alone cannot
+reliably close a stalled TLS connection on the pinned Dart runtime.
+
+The production service accepts the internal `--model-transport-worker` mode
+before ordinary profile/service startup. Transport boundary tests compile the
+actual service before starting their operation budgets and separately retain a
+source/JIT total-deadline case. These bounded question-model downloads retain
+their existing buffered-byte semantics. Public Gemma and speech model resumable
+file downloads are a separate remaining client/service ownership migration;
+this transport change does not claim that migration is complete.

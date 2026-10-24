@@ -24,6 +24,8 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Fixed
 
+- Bound question-model metadata and download phases, retry attempts and cancellation. An owned transport subprocess can terminate and reap stalled TLS work on the pinned Dart runtime.
+
 - Update meeting transcript search incrementally and recover saved indexing work
   after restart. Preserve manual edits and deletion while indexing waits for a
   model to become ready.
