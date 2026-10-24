@@ -42,6 +42,11 @@ Future<void> main(List<String> arguments) async {
     return;
   }
 
+  if (mode == 'mount-refusal') {
+    _mountRefusal(profile);
+    return;
+  }
+
   final role = DiagnosticRole.values.byName(arguments[2]);
   if (mode == 'metrics') {
     final rssBefore = ProcessInfo.currentRss;
@@ -302,4 +307,67 @@ final class _BlockingSink implements DiagnosticSink {
 
   @override
   void close() => inner.close();
+}
+
+// Explicit Linux namespace fixture. The caller supplies a private selected
+// profile and invokes it through unshare --user --map-root-user --mount.
+void _mountRefusal(String path) {
+  final profile = BackupDirectory(path, create: false);
+  final root = profile.child('logs');
+  final mounted = root.child('slot-3');
+  final mount = Process.runSync('/usr/bin/mount', [
+    '-t',
+    'tmpfs',
+    '-o',
+    'mode=700,size=1m',
+    'tmpfs',
+    mounted.path,
+  ]);
+  if (mount.exitCode != 0) {
+    throw StateError('mount infrastructure: ${mount.stderr}');
+  }
+  final nested = BackupDirectory(mounted.path);
+  final storage = DiagnosticStorage.admit(
+    profile.path,
+    DiagnosticIdentity.random(),
+    DiagnosticRole.desktop,
+    ownedSlots: {0, 1, 2, 4, 5, 6, 7, 8, 9},
+  );
+  final directoryRefused = storage == null;
+  final source = File('${mounted.path}/foreign-file');
+  source.writeAsBytesSync([]);
+  Process.runSync('/usr/bin/chmod', ['600', source.path]);
+  final admission = root.openOrCreate('admission.lock');
+  admission.close();
+  final bind = Process.runSync('/usr/bin/mount', [
+    '--bind',
+    source.path,
+    '${root.path}/admission.lock',
+  ]);
+  if (bind.exitCode != 0) {
+    throw StateError('bind infrastructure: ${bind.stderr}');
+  }
+  var fileRefused = false;
+  try {
+    DiagnosticStorage.admit(
+      profile.path,
+      DiagnosticIdentity.random(),
+      DiagnosticRole.desktop,
+    );
+  } on DiagnosticStorageUnavailable catch (e) {
+    fileRefused = e.reason == DiagnosticHealthReason.unsupportedFilesystem;
+  }
+  stdout.writeln(
+    jsonEncode({
+      'root': root.localFileSystem.name,
+      'nested': nested.localFileSystem.name,
+      'nested_slot_refused': directoryRefused,
+      'mounted_admission_file_refused': fileRefused,
+    }),
+  );
+  nested.close();
+  mounted.close();
+  root.close();
+  profile.close();
+  if (!directoryRefused || !fileRefused) exitCode = 1;
 }

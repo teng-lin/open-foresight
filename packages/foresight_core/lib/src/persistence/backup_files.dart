@@ -133,6 +133,34 @@ final _fstatfs = _libc
 /// lease fixtures. Unknown/network filesystems never become persistent sinks.
 enum ScopedLocalFileSystem { ext4, btrfs, xfs, overlay, apfs, unsupported }
 
+ScopedLocalFileSystem _localFileSystem(int descriptor) {
+  final buffer = calloc<Uint8>(4096);
+  try {
+    if (_fstatfs(descriptor, buffer) != 0) {
+      return ScopedLocalFileSystem.unsupported;
+    }
+    if (Platform.isLinux) {
+      final type = ByteData.sublistView(
+        buffer.asTypedList(4096),
+      ).getUint64(0, Endian.host);
+      return switch (type) {
+        0xef53 => ScopedLocalFileSystem.ext4,
+        0x9123683e => ScopedLocalFileSystem.btrfs,
+        0x58465342 => ScopedLocalFileSystem.xfs,
+        0x794c7630 => ScopedLocalFileSystem.overlay,
+        _ => ScopedLocalFileSystem.unsupported,
+      };
+    }
+    if (Platform.isMacOS &&
+        (buffer + 72).cast<Utf8>().toDartString(length: 4) == 'apfs') {
+      return ScopedLocalFileSystem.apfs;
+    }
+    return ScopedLocalFileSystem.unsupported;
+  } finally {
+    calloc.free(buffer);
+  }
+}
+
 int _relocate(int fd, int minimum) {
   if (fd < 0 || fd >= minimum) return fd;
   final next = _fcntlInt(fd, Platform.isMacOS ? 67 : 1030, minimum);
@@ -418,31 +446,7 @@ final class BackupDirectory {
   }
 
   String get identity => _identity;
-  ScopedLocalFileSystem get localFileSystem {
-    final buffer = calloc<Uint8>(4096);
-    try {
-      if (_fstatfs(_fd, buffer) != 0) return ScopedLocalFileSystem.unsupported;
-      if (Platform.isLinux) {
-        final type = ByteData.sublistView(
-          buffer.asTypedList(4096),
-        ).getUint64(0, Endian.host);
-        return switch (type) {
-          0xef53 => ScopedLocalFileSystem.ext4,
-          0x9123683e => ScopedLocalFileSystem.btrfs,
-          0x58465342 => ScopedLocalFileSystem.xfs,
-          0x794c7630 => ScopedLocalFileSystem.overlay,
-          _ => ScopedLocalFileSystem.unsupported,
-        };
-      }
-      if (Platform.isMacOS &&
-          (buffer + 72).cast<Utf8>().toDartString(length: 4) == 'apfs') {
-        return ScopedLocalFileSystem.apfs;
-      }
-      return ScopedLocalFileSystem.unsupported;
-    } finally {
-      calloc.free(buffer);
-    }
-  }
+  ScopedLocalFileSystem get localFileSystem => _localFileSystem(_fd);
 
   BackupDirectory child(String name, {bool create = true}) {
     if (p.basename(name) != name || name == '.' || name == '..') _refuse();
@@ -600,6 +604,8 @@ final class BackupFile {
     final flags = _fcntlEmpty(_fd, 1);
     return flags >= 0 && flags & 1 == 1;
   }
+
+  ScopedLocalFileSystem get localFileSystem => _localFileSystem(_fd);
 
   bool tryExclusiveLease() => _flock(_fd, 2 | 4) == 0;
   static String? inspectDescriptorIdentity(int descriptor) {

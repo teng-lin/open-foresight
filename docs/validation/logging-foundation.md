@@ -127,7 +127,7 @@ and parser temporaries remain explicit worker-accounting qualification work.
 | publish no-replace | renameat2 flag1 | renameatx_np flag4 | backup publication retained; no two-link crash state |
 | `renameat` replace | four fixed arguments | same | logging manifests only; validate target/source anchored inode and no links |
 | `flock` | LOCK_EX2 / LOCK_NB4 | same | permanent independent lease; failed probe means unavailable, never inferred errno |
-| `fstatfs` | Linux magic at0 | APFS type string at72 | reject unknown/network filesystems; target support requires actual fixture qualification |
+| `fstatfs` | Linux magic at0 | APFS type string at72 | qualify every actual directory and regular-file FD, including nested mounts; reject unknown/network filesystems |
 | `write` | one system write | same | short/error disables sink; no business-operation retries or fd2 output |
 | blocked-FFI proof | poll nfds_t UintPtr | nfds_t Uint32 | synchronous infinite poll demonstrates isolate kill cannot interrupt FFI |
 
@@ -185,3 +185,20 @@ loaded application-native exit, real filesystem ENOSPC/EROFS/quota, app timing/R
 compiled service/MCP, Flutter, and final coverage/full integration remain external
 qualification. A3's actual Darwin stat/VFS/atomic-rename results do not qualify
 B1's new flock/fcntl/fstatfs or blocked-FFI behavior. No such unrun path is passing.
+
+The Linux `mount-refusal` fixture runs in its own user/mount namespace with an
+explicit private profile, for example:
+
+```sh
+install -d -m 700 /var/tmp/of-mount /var/tmp/of-mount/profile
+export TMPDIR=/var/tmp/of-mount FORESIGHT_TEST_TEMP_ROOT=/var/tmp/of-mount
+(cd packages/foresight_core && unshare --user --map-root-user --mount \
+  /absolute/pinned/dart test/fixtures/diagnostics_storage_process.dart \
+  mount-refusal /var/tmp/of-mount/profile)
+```
+
+It mounts a tmpfs slot below a qualified btrfs root and bind-mounts a tmpfs
+regular file as the admission lock. Both must be refused from their actual
+FD filesystem type. No host mount namespace is changed. If namespace/mount
+creation is unavailable, that is missing fixture infrastructure, not a passing
+refusal. This Linux proof does not qualify APFS or Darwin's mount behavior.

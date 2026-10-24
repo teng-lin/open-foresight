@@ -237,7 +237,7 @@ final class DiagnosticStorage implements DiagnosticSink {
         );
       }
       _validateRoot(root);
-      admission = root.openOrCreate('admission.lock');
+      admission = _file(root, 'admission.lock', create: true);
       if (admission.size != 0 || !admission.tryExclusiveLease()) return null;
       final manifests = <int, _Manifest>{};
       final directories = <int, BackupDirectory>{};
@@ -278,7 +278,7 @@ final class DiagnosticStorage implements DiagnosticSink {
                   failureRetention.inMilliseconds) {
             continue;
           }
-          final lease = directory.openOrCreate('lease');
+          final lease = _file(directory, 'lease', create: true);
           var retained = false;
           try {
             if (lease.size != 0 || !lease.tryExclusiveLease()) continue;
@@ -366,6 +366,27 @@ final class DiagnosticStorage implements DiagnosticSink {
     }
   }
 
+  static BackupFile _file(
+    BackupDirectory directory,
+    String name, {
+    bool create = false,
+  }) {
+    final file = create ? directory.openOrCreate(name) : directory.open(name);
+    try {
+      // A bind-mounted regular file can differ from its parent directory.
+      // Qualification follows the actual descriptor, never a pathname guess.
+      if (file.localFileSystem == ScopedLocalFileSystem.unsupported) {
+        throw const DiagnosticStorageUnavailable(
+          DiagnosticHealthReason.unsupportedFilesystem,
+        );
+      }
+      return file;
+    } catch (_) {
+      file.close();
+      rethrow;
+    }
+  }
+
   static bool _eligible(int index, DiagnosticRole role) =>
       index >= 5 ||
       (role == DiagnosticRole.service && index < 3) ||
@@ -385,6 +406,11 @@ final class DiagnosticStorage implements DiagnosticSink {
   }
 
   static void _validateSlot(BackupDirectory directory) {
+    if (directory.localFileSystem == ScopedLocalFileSystem.unsupported) {
+      throw const DiagnosticStorageUnavailable(
+        DiagnosticHealthReason.unsupportedFilesystem,
+      );
+    }
     final entries = directory.entries();
     if (entries.any((name) => !_slotEntries.contains(name))) {
       throw const DiagnosticStorageUnavailable(
@@ -392,7 +418,7 @@ final class DiagnosticStorage implements DiagnosticSink {
       );
     }
     for (final name in entries) {
-      final file = directory.open(name);
+      final file = _file(directory, name);
       try {
         final maximum = name == 'lease'
             ? 0
@@ -418,7 +444,7 @@ final class DiagnosticStorage implements DiagnosticSink {
 
   static _Manifest? _readManifest(BackupDirectory directory) {
     if (!directory.entries().contains('manifest.json')) return null;
-    final file = directory.open('manifest.json');
+    final file = _file(directory, 'manifest.json');
     try {
       return _Manifest.parse(file.readSmall(manifestBytes));
     } finally {
@@ -427,7 +453,7 @@ final class DiagnosticStorage implements DiagnosticSink {
   }
 
   static void _writeManifest(BackupDirectory directory, _Manifest manifest) {
-    final file = directory.openOrCreate('manifest.next');
+    final file = _file(directory, 'manifest.next', create: true);
     try {
       final bytes = Uint8List.fromList(
         utf8.encode(jsonEncode(manifest.toJson())),
@@ -467,7 +493,7 @@ final class DiagnosticStorage implements DiagnosticSink {
     }
     BackupFile? admission;
     try {
-      admission = _root.open('admission.lock');
+      admission = _file(_root, 'admission.lock');
       if (!admission.tryExclusiveLease()) return false;
       _validateRoot(_root);
       _validateSlot(_directory);
@@ -530,7 +556,7 @@ final class DiagnosticStorage implements DiagnosticSink {
         _segmentSize = 0;
       }
       if (_segment == null) {
-        _segment = _directory.openOrCreate('$_segmentIndex.jsonl');
+        _segment = _file(_directory, '$_segmentIndex.jsonl', create: true);
         _segment!.truncate();
       }
       // An already-open descriptor must still be the validated private entry;
