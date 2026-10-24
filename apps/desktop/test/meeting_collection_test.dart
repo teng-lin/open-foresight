@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import '../test_support/core_fixture.dart';
@@ -11,7 +12,7 @@ import 'meeting_setup_test.dart' show OfflineHelper;
 void main() {
   testWidgets(
     'cancelled Calendar meetings keep their status and saved transcript badge',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final root = createTestTempDirectorySync('calendar-status-ui-');
       addTearDown(() {
         if (root.existsSync()) root.deleteSync(recursive: true);
@@ -62,12 +63,12 @@ void main() {
         await tester.pumpWidget(const SizedBox.shrink());
         root.deleteSync(recursive: true);
       }
-    },
+    }),
   );
 
   testWidgets(
     'meetings group by date, preview saves notes, and narrow previews close and expand',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       tester.view.physicalSize = const Size(1280, 800);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
@@ -151,6 +152,6 @@ void main() {
         await tester.pumpWidget(const SizedBox.shrink());
         root.deleteSync(recursive: true);
       }
-    },
+    }),
   );
 }

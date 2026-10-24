@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import '../test_support/platform_fixture.dart';
 import 'package:open_foresight/features/integrations/audio_access.dart';
 import 'package:open_foresight/desktop_environment.dart';
@@ -79,7 +80,7 @@ void main() {
   });
   testWidgets(
     'Gemma and speech terms persist through the service with a read-only desktop profile',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final root = createTestTempDirectorySync('of-terms-reader-');
       final writer = Store('${root.path}/application.db');
       final reader = Store.readOnly(writer.path);
@@ -134,7 +135,7 @@ void main() {
       );
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
-    },
+    }),
   );
   Future<(Store, SetupDomain, AppCommands)> mount(
     WidgetTester tester, {
@@ -181,7 +182,7 @@ void main() {
 
   testWidgets(
     'finishing system audio setup updates the row and persists review without claiming authorization',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final (store, _, _) = await mount(tester, step: 3);
       await tester.tap(find.text('System audio capture'));
       await tester.pump();
@@ -202,13 +203,13 @@ void main() {
       );
       expect(tile.onTap, isNotNull);
       expect((tile.trailing as Icon).icon, Icons.check_circle_outline);
-    },
+    }),
     skip: !Platform.isMacOS,
   );
 
   testWidgets(
     'saved system audio setup stays complete after relaunch',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       await mount(tester, step: 3, audioReviewed: true);
       expect(
         find.text('Setup complete · Access is checked when recording starts.'),
@@ -231,13 +232,13 @@ void main() {
         find.text('Setup complete · Access is checked when recording starts.'),
         findsNothing,
       );
-    },
+    }),
     skip: !Platform.isMacOS,
   );
 
   testWidgets(
     'production workspace starts setup before quick recording and saves progress',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final (store, domain, commands) = await mount(tester, quick: true);
       expect(find.text('Start Foresight'), findsOneWidget);
       expect(domain.operations, isNot(contains('meetings.create')));
@@ -268,12 +269,12 @@ void main() {
       expect(store.preference('onboarding.step'), '2');
       await tester.pumpWidget(const SizedBox());
       await tester.runAsync(() => eventually(() => commands.isClosed));
-    },
+    }),
   );
 
   testWidgets(
     'permission actions are explicit and notification failures remain visible',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final (_, domain, commands) = await mount(tester, step: 3);
       expect(domain.operations, isNot(contains('audio.request_microphone')));
       if (Platform.isMacOS) {
@@ -307,12 +308,12 @@ void main() {
       expect(find.text('Notifications enabled'), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
       await tester.runAsync(() => eventually(() => commands.isClosed));
-    },
+    }),
   );
 
   testWidgets(
     'manual import page shows real source states, removes documents and completes setup',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final (store, domain, commands) = await mount(tester, step: 5);
       final source = store.importText(
         'Project brief',
@@ -344,12 +345,12 @@ void main() {
       expect(find.text('Knowledge Sources'), findsWidgets);
       await tester.pumpWidget(const SizedBox());
       await tester.runAsync(() => eventually(() => commands.isClosed));
-    },
+    }),
   );
 
   testWidgets(
     'large onboarding libraries render lazily and keep the final source reachable',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final (store, domain, commands) = await mount(tester, step: 5);
       for (var i = 0; i < 250; i++) {
         store.importText(
@@ -384,12 +385,12 @@ void main() {
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       await tester.runAsync(() => eventually(() => commands.isClosed));
-    },
+    }),
   );
 
   testWidgets(
     'saved imports waiting for models show recovery guidance instead of raw gRPC errors',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final (store, domain, _) = await mount(tester, step: 5);
       store.importText('Saved document', 'Content', 'text/plain', 'fixture');
       final legacy = store.importText(
@@ -420,12 +421,12 @@ void main() {
         findsOneWidget,
       );
       expect(find.textContaining('gRPC Error'), findsNothing);
-    },
+    }),
   );
 
   testWidgets(
     'workspace acceptance completes onboarding through visible actions',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final (store, domain, commands) = await mount(tester);
       expect(find.byType(OnboardingView), findsOneWidget);
       await finishOnboarding(tester);
@@ -438,16 +439,17 @@ void main() {
       expect(domain.operations, isNot(contains('google.sign_in')));
       await tester.pumpWidget(const SizedBox());
       await tester.runAsync(() => eventually(() => commands.isClosed));
-    },
+    }),
   );
 
-  testWidgets('completed profiles open the workspace without onboarding', (
-    tester,
-  ) async {
-    final (_, _, commands) = await mount(tester, complete: true);
-    expect(find.byType(OnboardingView), findsNothing);
-    expect(find.text('Start Foresight'), findsNothing);
-    await tester.pumpWidget(const SizedBox());
-    await tester.runAsync(() => eventually(() => commands.isClosed));
-  });
+  testWidgets(
+    'completed profiles open the workspace without onboarding',
+    (tester) async => withDesktopFixtures(tester, () async {
+      final (_, _, commands) = await mount(tester, complete: true);
+      expect(find.byType(OnboardingView), findsNothing);
+      expect(find.text('Start Foresight'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(() => eventually(() => commands.isClosed));
+    }),
+  );
 }

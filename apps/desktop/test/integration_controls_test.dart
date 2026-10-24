@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'package:open_foresight/desktop_environment.dart';
 import '../test_support/platform_fixture.dart';
 import 'package:open_foresight/features/integrations/audio_access.dart';
@@ -19,7 +20,7 @@ class RefreshStatusSources implements ConnectedSources {
 void main() {
   testWidgets(
     'calendar sync status distinguishes first sync, in-progress and calendar-day age',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(
         tester,
         environment: DesktopEnvironment(
@@ -48,11 +49,11 @@ void main() {
         expect(integration.googleSyncStatus(), label);
       }
       f.connection.connectedSources = null;
-    },
+    }),
   );
   testWidgets(
     'connection help explains missing sign-in configuration and returns to settings',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(
         tester,
         environment: DesktopEnvironment(
@@ -76,11 +77,11 @@ void main() {
       Navigator.pop(context);
       await tester.pumpAndSettle();
       expect(find.text('Google connection setup'), findsNothing);
-    },
+    }),
   );
   testWidgets(
     'capability refresh and microphone requests report denial, malformed bundle and retry',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(
         tester,
         environment: DesktopEnvironment(
@@ -159,11 +160,11 @@ void main() {
       expect(integration.systemAudioAccessLabel, startsWith('Setup complete'));
       expect(integration.systemAudioSetupComplete, true);
       await tester.pumpAndSettle();
-    },
+    }),
   );
   testWidgets(
     'system audio setup persists review only after explicit completion',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(
         tester,
         environment: DesktopEnvironment(
@@ -186,11 +187,11 @@ void main() {
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
       expect(await again, false);
-    },
+    }),
   );
   testWidgets(
     'notification preferences persist and unavailable service errors remain visible',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(
         tester,
         environment: DesktopEnvironment(
@@ -227,11 +228,11 @@ void main() {
       expect(f.store.preference('globalShortcut'), 'false');
       expect(integration.globalShortcutState, 'disabled');
       await tester.pumpAndSettle();
-    },
+    }),
   );
   testWidgets(
     'menu navigation, shortcut editing and activation errors are controlled',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(
         tester,
         environment: DesktopEnvironment(
@@ -283,11 +284,11 @@ void main() {
       await integration.activateMenuCommand('ask');
       expect(f.shell.error, contains('activation failed'));
       await tester.pumpAndSettle();
-    },
+    }),
   );
   testWidgets(
     'audio device refresh failures recover without losing saved unavailable routes',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       var reject = true;
       final f = await ControllerFixture.mount(
         tester,
@@ -314,6 +315,6 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Saved device unavailable'), findsOneWidget);
       expect(f.store.preference('microphoneTarget'), 'disconnected-microphone');
-    },
+    }),
   );
 }

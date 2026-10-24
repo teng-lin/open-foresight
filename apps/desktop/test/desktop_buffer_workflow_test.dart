@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'package:open_foresight/desktop_environment.dart';
 import '../test_support/platform_fixture.dart';
 import 'package:open_foresight/shell/workspace_tab.dart';
@@ -69,7 +70,7 @@ class SettingsSources implements ConnectedSources {
 void main() {
   testWidgets(
     'graph embedding failure preserves documents and paused indexing does not start another request',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(
         tester,
         environment: DesktopEnvironment(
@@ -128,11 +129,11 @@ void main() {
         f.store.sources.map((row) => row['content']),
         unorderedEquals(['Alpha evidence', 'Beta evidence']),
       );
-    },
+    }),
   );
   testWidgets(
     'graph embeddings for many sources arrive in bounded batches that survive a failure',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(
         tester,
         environment: DesktopEnvironment(
@@ -205,67 +206,68 @@ void main() {
         f.shell.sourceFeature.graphVectorCache,
         hasLength(ids.length - requests.last.length),
       );
-    },
+    }),
   );
-  testWidgets('graph embeddings from a replaced model run are not cached', (
-    tester,
-  ) async {
-    final f = await ControllerFixture.mount(
-      tester,
-      environment: DesktopEnvironment(
-        capabilities: testHostPlatformCapabilities,
-      ),
-    );
-    final ids = [
-      for (final name in ['Alpha', 'Beta'])
-        f.store.importText(
-          name,
-          '$name evidence',
-          'text/plain',
-          'fixture:$name',
+  testWidgets(
+    'graph embeddings from a replaced model run are not cached',
+    (tester) async => withDesktopFixtures(tester, () async {
+      final f = await ControllerFixture.mount(
+        tester,
+        environment: DesktopEnvironment(
+          capabilities: testHostPlatformCapabilities,
         ),
-    ];
-    for (final id in ids) {
-      f.store.state(id, 'indexed');
-    }
-    control.State snapshot(String instance) => control.State(
-      pipeline: 'ready',
-      instanceId: instance,
-      model: control.ModelIdentity(
-        modelDigest: 'fixture',
-        tokenizerDigest: 'fixture',
-        preprocessing: 'fixture',
-        backend: 'fixture',
-        dimensions: 3,
-      ),
-    );
-    f.connection.domain.helper.snapshot = snapshot('fixture');
-    final reply = Completer<Map<String, List<double>>>();
-    f.connection.graphReply = (_) => reply.future;
-    f.connection.domain.helper.changed?.call();
-    f.shell.update(() {
-      f.shell.navigate(WorkspaceTab.sources);
-      f.shell.sourceFeature.graphView = true;
-    });
-    await tester.pump();
-    await pumpUntil(tester, () => f.connection.graphRequests.isNotEmpty);
-    // The helper restarts while the batch is in flight, before any rebuild
-    // recomputes the layout key.
-    f.connection.domain.helper.snapshot = snapshot('replacement');
-    // Registered after the controller's await, so it runs after that
-    // continuation.
-    var delivered = false;
-    unawaited(reply.future.then((_) => delivered = true));
-    reply.complete({
-      for (final id in ids) id: [1.0, 0, 0],
-    });
-    await pumpUntil(tester, () => delivered);
-    expect(f.shell.sourceFeature.graphVectorCache, isEmpty);
-    expect(f.connection.graphRequests, hasLength(1));
-  });
+      );
+      final ids = [
+        for (final name in ['Alpha', 'Beta'])
+          f.store.importText(
+            name,
+            '$name evidence',
+            'text/plain',
+            'fixture:$name',
+          ),
+      ];
+      for (final id in ids) {
+        f.store.state(id, 'indexed');
+      }
+      control.State snapshot(String instance) => control.State(
+        pipeline: 'ready',
+        instanceId: instance,
+        model: control.ModelIdentity(
+          modelDigest: 'fixture',
+          tokenizerDigest: 'fixture',
+          preprocessing: 'fixture',
+          backend: 'fixture',
+          dimensions: 3,
+        ),
+      );
+      f.connection.domain.helper.snapshot = snapshot('fixture');
+      final reply = Completer<Map<String, List<double>>>();
+      f.connection.graphReply = (_) => reply.future;
+      f.connection.domain.helper.changed?.call();
+      f.shell.update(() {
+        f.shell.navigate(WorkspaceTab.sources);
+        f.shell.sourceFeature.graphView = true;
+      });
+      await tester.pump();
+      await pumpUntil(tester, () => f.connection.graphRequests.isNotEmpty);
+      // The helper restarts while the batch is in flight, before any rebuild
+      // recomputes the layout key.
+      f.connection.domain.helper.snapshot = snapshot('replacement');
+      // Registered after the controller's await, so it runs after that
+      // continuation.
+      var delivered = false;
+      unawaited(reply.future.then((_) => delivered = true));
+      reply.complete({
+        for (final id in ids) id: [1.0, 0, 0],
+      });
+      await pumpUntil(tester, () => delivered);
+      expect(f.shell.sourceFeature.graphVectorCache, isEmpty);
+      expect(f.connection.graphRequests, hasLength(1));
+    }),
+  );
   testWidgets(
     'custom export dates stay ordered when either boundary crosses the other and cancelled edits do not apply',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(
         tester,
         environment: DesktopEnvironment(
@@ -341,11 +343,11 @@ void main() {
       await tester.tap(find.text('Close'));
       await tester.pumpAndSettle();
       await opened;
-    },
+    }),
   );
   testWidgets(
     'answer font controls and dismissal affect presentation without deleting saved answers',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(
         tester,
         environment: DesktopEnvironment(
@@ -383,12 +385,12 @@ void main() {
         ]).single['body'],
         'Saved answer body',
       );
-    },
+    }),
   );
 
   testWidgets(
     'manual transcript questions route answers to their owning meeting',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(
         tester,
         environment: DesktopEnvironment(
@@ -430,12 +432,12 @@ void main() {
       expect(f.shell.meetingFeature.meetingPanel, 'Chat');
       expect(f.shell.chatFeature.questionFor(id).text, isEmpty);
       expect(f.shell.chatFeature.asking, false);
-    },
+    }),
   );
 
   testWidgets(
     'capture indicator reopens its meeting and shows only nonempty provisional segments',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(
         tester,
         environment: DesktopEnvironment(
@@ -476,11 +478,11 @@ void main() {
       f.connection.captureState = {};
       f.shell.update(() => f.shell.meetingFeature.syncCapture());
       await tester.pumpAndSettle();
-    },
+    }),
   );
   testWidgets(
     'desktop keyboard navigation, new note, cancelled import and help preserve workspace state',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(
         tester,
         environment: DesktopEnvironment(
@@ -540,12 +542,12 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
       expect(find.byType(AlertDialog), findsNothing);
-    },
+    }),
   );
 
   testWidgets(
     'connected service settings refresh, change interval, disconnect and cancel sign-in without deleting imports',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(
         tester,
         environment: DesktopEnvironment(
@@ -605,13 +607,13 @@ void main() {
       await tester.pumpAndSettle();
       expect(account.cancellations, 1);
       expect(account.signingIn, false);
-    },
+    }),
   );
 
   for (final partial in [false, true]) {
     testWidgets(
       'local discovery ${partial ? 'reports partial failure after attempting every selection' : 'imports every selected file'}',
-      (tester) async {
+      (tester) async => withDesktopFixtures(tester, () async {
         final f = await ControllerFixture.mount(
           tester,
           environment: DesktopEnvironment(
@@ -664,14 +666,14 @@ void main() {
         } else {
           expect(f.shell.error, isEmpty);
         }
-      },
+      }),
     );
   }
 
   for (final grid in [false, true]) {
     testWidgets(
       '${grid ? 'grid' : 'list'} source actions retry indexing and delete only the selected source',
-      (tester) async {
+      (tester) async => withDesktopFixtures(tester, () async {
         final f = await ControllerFixture.mount(
           tester,
           environment: DesktopEnvironment(
@@ -725,13 +727,13 @@ void main() {
         expect(f.connection.deleted, [id]);
         expect(f.store.sourceById(id), isEmpty);
         expect(f.store.sourceById(retained), hasLength(1));
-      },
+      }),
     );
   }
 
   testWidgets(
     'summary history keeps earlier edits separate from the current version and permits regeneration',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(
         tester,
         environment: DesktopEnvironment(
@@ -785,12 +787,12 @@ void main() {
         'kind': 'summary',
         'workspace_epoch': summaryEpoch,
       });
-    },
+    }),
   );
 
   testWidgets(
     'meeting question detection errors have an explicit retry for the owning meeting',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(
         tester,
         environment: DesktopEnvironment(
@@ -814,6 +816,6 @@ void main() {
       await tester.pumpAndSettle();
       expect(f.connection.calls.last.$1, Operation.meetingsRetryDetection);
       expect(f.connection.calls.last.$2, {'id': id});
-    },
+    }),
   );
 }

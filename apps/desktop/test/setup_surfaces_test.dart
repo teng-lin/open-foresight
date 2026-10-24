@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'package:foresight_core/desktop.dart';
 import 'dart:async';
 import 'dart:io';
@@ -13,7 +14,7 @@ import 'pump_until.dart';
 void main() {
   testWidgets(
     'copilot panel applies readable dark styles and inverse branding',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       await tester.pumpWidget(
         MaterialApp(
           theme: foresightTheme(),
@@ -30,11 +31,11 @@ void main() {
           foresightTheme().segmentedButtonTheme.style!.backgroundColor!;
       expect(scheme.resolve({WidgetState.selected}), const Color(0xffbfe8ff));
       expect(scheme.resolve({}), const Color(0xffdee3e9));
-    },
+    }),
   );
   testWidgets(
     'dedicated model terms require explicit acceptance and show exact revision',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       BuildContext? context;
       await tester.pumpWidget(
         MaterialApp(
@@ -59,11 +60,11 @@ void main() {
         await tester.pumpAndSettle();
         expect(await pending, accept);
       }
-    },
+    }),
   );
   testWidgets(
     'file discovery adds folders, filters names, selects visible files and rescans on removal',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final fixture = createTestTempDirectorySync('discovery-dialog-');
       final root = Directory('${fixture.path}/documents')..createSync();
       final selected = Link('${fixture.path}/selected-documents')
@@ -123,11 +124,11 @@ void main() {
       );
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
-    },
+    }),
   );
   testWidgets(
     'onboarding errors retain progress, reject concurrent actions and expose source status',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(tester);
       final onboarding = f.shell.onboardingFeature;
       for (final (state, expected) in [
@@ -174,6 +175,6 @@ void main() {
       await onboarding.perform(() async {});
       expect(onboarding.failure, isEmpty);
       await tester.pumpAndSettle();
-    },
+    }),
   );
 }

@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'package:foresight_core/desktop.dart'
     show CapturePresentation, GooglePresentation;
 import 'dart:io';
@@ -59,6 +60,12 @@ class TestDesktopConnection implements DesktopConnection {
   );
   String? _workspaceEpoch;
   TestDesktopConnection(this.application) : domain = application.domain {
+    registerDesktopFixtureOwner(
+      close: () {
+        if (_closing == null) close();
+      },
+      settled: () => closed,
+    );
     domain.helper.onReady = () async {
       if (!_ready.isCompleted) _ready.complete();
     };
@@ -224,12 +231,27 @@ class TestDesktopConnection implements DesktopConnection {
     final applicationClosing = application.close();
     domain.close();
     _closing = () async {
-      await _changes?.cancel();
-      await applicationClosing;
-      await domain.helper.close();
-      await _initializing?.then<void>((_) {}, onError: (Object _) {});
-      domain.store.close();
-      await _events.close();
+      Object? failure;
+      StackTrace? trace;
+      Future<void> attempt(Future<void> Function() action) async {
+        try {
+          await action();
+        } catch (error, stack) {
+          failure ??= error;
+          trace ??= stack;
+        }
+      }
+
+      await attempt(() async => _changes?.cancel());
+      await attempt(() => applicationClosing);
+      await attempt(domain.drain);
+      await attempt(domain.helper.close);
+      await attempt(
+        () async => _initializing?.then<void>((_) {}, onError: (Object _) {}),
+      );
+      await attempt(() async => domain.store.close());
+      await attempt(_events.close);
+      if (failure != null) Error.throwWithStackTrace(failure!, trace!);
     }();
   }
 }

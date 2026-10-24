@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import '../test_support/core_fixture.dart';
@@ -12,7 +13,7 @@ import 'meeting_setup_test.dart' show OfflineHelper;
 void main() {
   testWidgets(
     'Live Q&A shows meeting-owned automatic answers, preserves Markdown copy, retries and settings',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       tester.view.physicalSize = const Size(1280, 850);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
@@ -146,6 +147,6 @@ void main() {
         );
         directory.deleteSync(recursive: true);
       }
-    },
+    }),
   );
 }

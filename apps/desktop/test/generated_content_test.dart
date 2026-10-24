@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
@@ -33,7 +34,7 @@ void main() {
 
   testWidgets(
     'renders headings, inline styles, lists and tables at narrow widths',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final fonts = FontLoader('GoogleSans')
         ..addFont(rootBundle.load('assets/fonts/GoogleSans-Regular.ttf'));
       await fonts.load();
@@ -102,12 +103,12 @@ void main() {
           image.dispose();
         });
       }
-    },
+    }),
   );
 
   testWidgets(
     'images remain local placeholders and only web links open on a tap',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final opened = <Uri>[];
       await tester.pumpWidget(
         MaterialApp(
@@ -138,12 +139,12 @@ void main() {
       await tester.tap(find.text('Safe link', findRichText: true));
       await tester.pumpAndSettle();
       expect(opened, [Uri.parse('https://example.com/notes')]);
-    },
+    }),
   );
 
   testWidgets(
     'meeting summary displays edits, copies exact Markdown and preserves originals',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       tester.view.physicalSize = const Size(1280, 850);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
@@ -233,6 +234,6 @@ void main() {
         );
         directory.deleteSync(recursive: true);
       }
-    },
+    }),
   );
 }

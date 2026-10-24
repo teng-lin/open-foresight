@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'package:open_foresight/shell/workspace_tab.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -10,7 +11,7 @@ import 'pump_until.dart';
 void main() {
   testWidgets(
     'source edits persist a revision, retain identity, index and survive service rejection',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(tester);
       final id = f.store.importText(
         'Editable source',
@@ -49,11 +50,11 @@ void main() {
       expect(find.byType(AlertDialog), findsNothing);
       await source.source({'id': 'already-deleted'});
       expect(find.byType(AlertDialog), findsNothing);
-    },
+    }),
   );
   testWidgets(
     'file and reviewed folder pickers import selections while cancellation is a no-op',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(tester);
       final source = f.shell.sourceFeature;
       const channel = MethodChannel('plugins.flutter.io/file_selector');
@@ -136,34 +137,35 @@ void main() {
       await dialog;
       expect(f.connection.calls.last.$1, Operation.sourcesImportUrl);
       expect(f.connection.calls.last.$2['url'], 'http://127.0.0.1/fixture');
-    },
+    }),
   );
-  testWidgets('editable notes create, reopen and update through the service', (
-    tester,
-  ) async {
-    final f = await ControllerFixture.mount(tester);
-    f.shell.update(() => f.shell.navigate(WorkspaceTab.notes));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('New note'));
-    await tester.pumpAndSettle();
-    final fields = find.byType(TextField);
-    await tester.enterText(fields.at(0), 'Saved note');
-    await tester.enterText(fields.at(1), 'First body');
-    await tester.tap(find.text('Save note'));
-    await tester.pumpAndSettle();
-    final id = f.shell.sourceFeature.noteId as int;
-    expect(f.store.noteBody(id), 'First body');
-    await tester.tap(find.text('New note'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Saved note'));
-    await tester.pumpAndSettle();
-    expect(
-      tester.widget<TextField>(fields.at(1)).controller!.text,
-      'First body',
-    );
-    await tester.enterText(fields.at(1), 'Revised body');
-    await tester.tap(find.text('Save note'));
-    await tester.pumpAndSettle();
-    expect(f.store.noteBody(id), 'Revised body');
-  });
+  testWidgets(
+    'editable notes create, reopen and update through the service',
+    (tester) async => withDesktopFixtures(tester, () async {
+      final f = await ControllerFixture.mount(tester);
+      f.shell.update(() => f.shell.navigate(WorkspaceTab.notes));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('New note'));
+      await tester.pumpAndSettle();
+      final fields = find.byType(TextField);
+      await tester.enterText(fields.at(0), 'Saved note');
+      await tester.enterText(fields.at(1), 'First body');
+      await tester.tap(find.text('Save note'));
+      await tester.pumpAndSettle();
+      final id = f.shell.sourceFeature.noteId as int;
+      expect(f.store.noteBody(id), 'First body');
+      await tester.tap(find.text('New note'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Saved note'));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<TextField>(fields.at(1)).controller!.text,
+        'First body',
+      );
+      await tester.enterText(fields.at(1), 'Revised body');
+      await tester.tap(find.text('Save note'));
+      await tester.pumpAndSettle();
+      expect(f.store.noteBody(id), 'Revised body');
+    }),
+  );
 }

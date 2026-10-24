@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import '../test_support/core_fixture.dart';
 import 'dart:async';
 import 'dart:io';
@@ -36,7 +37,7 @@ void main() {
 
   testWidgets(
     'successful startup transfers connection and command ownership to workspace',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final connected = connection();
       var attempts = 0;
       await tester.binding.setSurfaceSize(const Size(1400, 1000));
@@ -76,11 +77,11 @@ void main() {
       await tester.pumpWidget(const SizedBox());
       await pumpUntil(tester, () => connected.closes == 1);
       expect(find.byType(Workspace), findsNothing);
-    },
+    }),
   );
   testWidgets(
     'late connection is released if startup unmounts before connecting',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final connected = connection();
       final ready = Completer<ControllerConnection>();
       var connecting = false;
@@ -111,11 +112,11 @@ void main() {
       );
       await tester.runAsync(() => rebound!.close());
       expect(tester.takeException(), isNull);
-    },
+    }),
   );
   testWidgets(
     'stop-only launch without an owner exits without connecting or retaining commands',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       var exits = 0;
       await tester.runAsync(
         () => tester.pumpWidget(
@@ -134,6 +135,6 @@ void main() {
       await pumpUntil(tester, () => exits == 1);
       expect(File('${profile.runtime}/commands.sock').existsSync(), false);
       await tester.pumpWidget(const SizedBox());
-    },
+    }),
   );
 }

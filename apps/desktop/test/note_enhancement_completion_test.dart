@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'dart:async';
 import '../test_support/core_fixture.dart';
 import 'package:fake_async/fake_async.dart';
@@ -14,7 +15,7 @@ import 'note_enhancement_stream_test.dart' show WidgetNoteGenerator;
 void main() {
   testWidgets(
     'completed enhancement replaces the visible draft without navigation',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final root = createTestTempDirectorySync('enhance-complete-');
       final time = FakeAsync();
       final store = Store('${root.path}/application.db');
@@ -98,7 +99,7 @@ void main() {
         await helper.close();
         root.deleteSync(recursive: true);
       }
-    },
+    }),
   );
 }
 

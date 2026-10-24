@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
@@ -28,230 +29,241 @@ class BrowsingStore extends Store {
 }
 
 void main() {
-  testWidgets('discovery ignores nonlocal persisted file URIs', (tester) async {
-    final root = shortTestTempRoot.createTempSync('uri-discovery-');
-    addTearDown(() => root.deleteSync(recursive: true));
-    File('${root.path}/available.txt').writeAsStringSync('Available document');
-    final store = Store('${root.path}/app.db');
-    store.importText(
-      'Remote file',
-      'text',
-      'text/plain',
-      'fixture',
-      sourceUri: 'file://external.example/document.txt',
-    );
-    store.importText(
-      'Imported file',
-      'text',
-      'text/plain',
-      'fixture',
-      sourceUri: Uri.file('${root.path}/already-imported.txt').toString(),
-    );
-    File(
-      '${root.path}/already-imported.txt',
-    ).writeAsStringSync('Imported document');
-    final helper = OfflineHelper('${root.path}/socket', '${root.path}/helper');
-    try {
-      await tester.pumpWidget(
-        Foresight(
-          TestDesktopConnection(Application(Domain(store, helper))),
-          deviceLoader: () async => [],
-        ),
-      );
-      await tester.pumpAndSettle();
-      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
-      final pending = state.sourceFeature.findFilesOnComputer(
-        roots: <String>[root.path],
-      );
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
-      expect(find.text('Find files on this computer'), findsOneWidget);
-      expect(tester.takeException(), isNull);
-      await tester.tap(find.text('Cancel'));
-      await tester.pumpAndSettle();
-      await pending;
-    } finally {
-      await tester.pumpWidget(const SizedBox.shrink());
-      await helper.close();
-    }
-  });
-
-  testWidgets('large source browsing avoids bodies during scrolling and progress', (
-    tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(1280, 900));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final tmp = createTestTempDirectorySync('source-browse-');
-    addTearDown(() {
-      if (tmp.existsSync()) tmp.deleteSync(recursive: true);
-    });
-    final path = '${tmp.path}/app.db';
-    final store = BrowsingStore(path);
-    final text = 'needle ${'word ' * 8000}';
-    final ids = <String>[];
-    store.db.execute('BEGIN');
-    for (var i = 0; i < 847; i++) {
-      ids.add(
-        store.importText(
-          'Source ${i.toString().padLeft(4, '0')}',
-          text,
-          'text/plain',
-          'fixture',
-        ),
-      );
-    }
-    store.db.execute('COMMIT');
-    final helper = OfflineHelper('${tmp.path}/socket', '${tmp.path}/helper');
-    try {
-      await tester.pumpWidget(
-        Foresight(
-          TestDesktopConnection(Application(Domain(store, helper))),
-          deviceLoader: () async => [],
-        ),
-      );
-      await tester.tap(find.text('Sources'));
-      await tester.pumpAndSettle();
-      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
-      Future<void> waitForSearch(int count) async {
-        final deadline = DateTime.now().add(const Duration(seconds: 5));
-        while (state.sourceFeature.sourceSearchMatches.length != count &&
-            DateTime.now().isBefore(deadline)) {
-          await tester.runAsync(
-            () => Future<void>.delayed(const Duration(milliseconds: 10)),
-          );
-          await tester.pump(const Duration(milliseconds: 100));
-        }
-        expect(
-          state.sourceFeature.sourceSearchMatches.length,
-          count,
-          reason:
-              'Background full-body search must finish and reflect committed edits',
-        );
-        await tester.pumpAndSettle();
-      }
-
-      final before = store.bodyReads;
-      final metadataBefore = store.metadataReads;
-      final timer = Stopwatch()..start();
-      for (var i = 0; i < 20; i++) {
-        helper.changed?.call();
-        await tester.pump();
-      }
-      final list = find.byType(ListView).last;
-      final scrollable = find
-          .descendant(of: list, matching: find.byType(Scrollable))
-          .first;
-      await tester.scrollUntilVisible(
-        find.text('Source 0846'),
-        1800,
-        scrollable: scrollable,
-        maxScrolls: 100,
-      );
-      final browseMs = timer.elapsedMilliseconds;
-      expect(
-        store.bodyReads,
-        before,
-        reason: 'Scroll and helper progress must not reload document bodies',
-      );
-      expect(before, 0, reason: 'Normal source entry uses only metadata');
-      expect(
-        store.metadataReads,
-        metadataBefore,
-        reason:
-            'Unchanged helper progress and scrolling reuse the metadata snapshot',
-      );
-      expect(find.text('Source 0846'), findsOneWidget);
-      await tester.ensureVisible(find.byType(TextField));
-      await tester.enterText(find.byType(TextField), 'needle');
-      await tester.pumpAndSettle();
-      await waitForSearch(847);
-      expect(
-        store.bodyReads,
-        0,
-        reason: 'Body searches run on a separate reader isolate',
-      );
-      final cachedMatches = state.sourceFeature.sourceSearchMatches;
-      for (var i = 0; i < 20; i++) {
-        helper.changed?.call();
-        await tester.pump();
-      }
-      expect(
-        store.bodyReads,
-        0,
-        reason: 'Unchanged searches reuse matching IDs without UI body reads',
-      );
-      expect(
-        identical(state.sourceFeature.sourceSearchMatches, cachedMatches),
-        isTrue,
-      );
+  testWidgets(
+    'discovery ignores nonlocal persisted file URIs',
+    (tester) async => withDesktopFixtures(tester, () async {
+      final root = shortTestTempRoot.createTempSync('uri-discovery-');
+      addTearDown(() => root.deleteSync(recursive: true));
+      File(
+        '${root.path}/available.txt',
+      ).writeAsStringSync('Available document');
+      final store = Store('${root.path}/app.db');
       store.importText(
-        'Source 0000',
-        'Edited full body',
+        'Remote file',
+        'text',
         'text/plain',
         'fixture',
-        id: ids.first,
+        sourceUri: 'file://external.example/document.txt',
       );
-      helper.changed?.call();
-      await tester.pumpAndSettle();
-      await waitForSearch(846);
-      expect(find.text('846 of 847 shown'), findsOneWidget);
-      final external = sqlite3.open(path);
-      external.execute('UPDATE sources SET content=? WHERE id=?', [
-        'External edit',
-        ids[1],
-      ]);
-      external.dispose();
-      helper.changed?.call();
-      await tester.pumpAndSettle();
-      await waitForSearch(845);
-      expect(find.text('845 of 847 shown'), findsOneWidget);
-      store.db.execute('BEGIN');
-      store.db.execute('UPDATE sources SET title=? WHERE id=?', [
-        'Temporary title',
-        ids.first,
-      ]);
-      expect(
-        store.sourceSummaries.any((s) => s['title'] == 'Temporary title'),
-        true,
+      store.importText(
+        'Imported file',
+        'text',
+        'text/plain',
+        'fixture',
+        sourceUri: Uri.file('${root.path}/already-imported.txt').toString(),
       );
-      store.db.execute('ROLLBACK');
-      expect(
-        store.sourceSummaries.any((s) => s['title'] == 'Temporary title'),
-        false,
+      File(
+        '${root.path}/already-imported.txt',
+      ).writeAsStringSync('Imported document');
+      final helper = OfflineHelper(
+        '${root.path}/socket',
+        '${root.path}/helper',
       );
-      await tester.ensureVisible(find.text('Clear filters'));
-      await tester.tap(find.text('Clear filters'));
-      await tester.pumpAndSettle();
-      tester.state<ScrollableState>(scrollable).position.jumpTo(0);
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Source 0000'));
-      await tester.pumpAndSettle();
-      expect(
-        find.text('Edited full body'),
-        findsOneWidget,
-        reason: 'Opening a metadata row loads its current complete source',
-      );
-      expect(tester.takeException(), isNull);
-      final report = Platform.environment['FORESIGHT_BROWSE_REPORT'];
-      if (report != null)
-        File(report).writeAsStringSync(
-          jsonEncode({
-            'sources': 847,
-            'fixture_content_characters': 847 * text.length,
-            'debug_test_progress_and_scroll_ms': browseMs,
-            'full_body_reads_for_browsing_and_20_progress_updates': before,
-            'unchanged_search_reused': true,
-            'own_and_external_edits_invalidate_search': true,
-            'last_source_reachable': true,
-            'selected_source_body_loaded_on_demand': true,
-            'scope':
-                'Synthetic Flutter widget regression; not native release frame timing',
-          }),
+      try {
+        await tester.pumpWidget(
+          Foresight(
+            TestDesktopConnection(Application(Domain(store, helper))),
+            deviceLoader: () async => [],
+          ),
         );
-    } finally {
-      await tester.pumpWidget(const SizedBox.shrink());
-      await helper.close();
-      tmp.deleteSync(recursive: true);
-    }
-  });
+        await tester.pumpAndSettle();
+        final state =
+            tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
+        final pending = state.sourceFeature.findFilesOnComputer(
+          roots: <String>[root.path],
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(find.text('Find files on this computer'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+        await tester.tap(find.text('Cancel'));
+        await tester.pumpAndSettle();
+        await pending;
+      } finally {
+        await tester.pumpWidget(const SizedBox.shrink());
+        await helper.close();
+      }
+    }),
+  );
+
+  testWidgets(
+    'large source browsing avoids bodies during scrolling and progress',
+    (tester) async => withDesktopFixtures(tester, () async {
+      await tester.binding.setSurfaceSize(const Size(1280, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final tmp = createTestTempDirectorySync('source-browse-');
+      addTearDown(() {
+        if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+      });
+      final path = '${tmp.path}/app.db';
+      final store = BrowsingStore(path);
+      final text = 'needle ${'word ' * 8000}';
+      final ids = <String>[];
+      store.db.execute('BEGIN');
+      for (var i = 0; i < 847; i++) {
+        ids.add(
+          store.importText(
+            'Source ${i.toString().padLeft(4, '0')}',
+            text,
+            'text/plain',
+            'fixture',
+          ),
+        );
+      }
+      store.db.execute('COMMIT');
+      final helper = OfflineHelper('${tmp.path}/socket', '${tmp.path}/helper');
+      try {
+        await tester.pumpWidget(
+          Foresight(
+            TestDesktopConnection(Application(Domain(store, helper))),
+            deviceLoader: () async => [],
+          ),
+        );
+        await tester.tap(find.text('Sources'));
+        await tester.pumpAndSettle();
+        final state =
+            tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
+        Future<void> waitForSearch(int count) async {
+          final deadline = DateTime.now().add(const Duration(seconds: 5));
+          while (state.sourceFeature.sourceSearchMatches.length != count &&
+              DateTime.now().isBefore(deadline)) {
+            await tester.runAsync(
+              () => Future<void>.delayed(const Duration(milliseconds: 10)),
+            );
+            await tester.pump(const Duration(milliseconds: 100));
+          }
+          expect(
+            state.sourceFeature.sourceSearchMatches.length,
+            count,
+            reason:
+                'Background full-body search must finish and reflect committed edits',
+          );
+          await tester.pumpAndSettle();
+        }
+
+        final before = store.bodyReads;
+        final metadataBefore = store.metadataReads;
+        final timer = Stopwatch()..start();
+        for (var i = 0; i < 20; i++) {
+          helper.changed?.call();
+          await tester.pump();
+        }
+        final list = find.byType(ListView).last;
+        final scrollable = find
+            .descendant(of: list, matching: find.byType(Scrollable))
+            .first;
+        await tester.scrollUntilVisible(
+          find.text('Source 0846'),
+          1800,
+          scrollable: scrollable,
+          maxScrolls: 100,
+        );
+        final browseMs = timer.elapsedMilliseconds;
+        expect(
+          store.bodyReads,
+          before,
+          reason: 'Scroll and helper progress must not reload document bodies',
+        );
+        expect(before, 0, reason: 'Normal source entry uses only metadata');
+        expect(
+          store.metadataReads,
+          metadataBefore,
+          reason:
+              'Unchanged helper progress and scrolling reuse the metadata snapshot',
+        );
+        expect(find.text('Source 0846'), findsOneWidget);
+        await tester.ensureVisible(find.byType(TextField));
+        await tester.enterText(find.byType(TextField), 'needle');
+        await tester.pumpAndSettle();
+        await waitForSearch(847);
+        expect(
+          store.bodyReads,
+          0,
+          reason: 'Body searches run on a separate reader isolate',
+        );
+        final cachedMatches = state.sourceFeature.sourceSearchMatches;
+        for (var i = 0; i < 20; i++) {
+          helper.changed?.call();
+          await tester.pump();
+        }
+        expect(
+          store.bodyReads,
+          0,
+          reason: 'Unchanged searches reuse matching IDs without UI body reads',
+        );
+        expect(
+          identical(state.sourceFeature.sourceSearchMatches, cachedMatches),
+          isTrue,
+        );
+        store.importText(
+          'Source 0000',
+          'Edited full body',
+          'text/plain',
+          'fixture',
+          id: ids.first,
+        );
+        helper.changed?.call();
+        await tester.pumpAndSettle();
+        await waitForSearch(846);
+        expect(find.text('846 of 847 shown'), findsOneWidget);
+        final external = sqlite3.open(path);
+        external.execute('UPDATE sources SET content=? WHERE id=?', [
+          'External edit',
+          ids[1],
+        ]);
+        external.dispose();
+        helper.changed?.call();
+        await tester.pumpAndSettle();
+        await waitForSearch(845);
+        expect(find.text('845 of 847 shown'), findsOneWidget);
+        store.db.execute('BEGIN');
+        store.db.execute('UPDATE sources SET title=? WHERE id=?', [
+          'Temporary title',
+          ids.first,
+        ]);
+        expect(
+          store.sourceSummaries.any((s) => s['title'] == 'Temporary title'),
+          true,
+        );
+        store.db.execute('ROLLBACK');
+        expect(
+          store.sourceSummaries.any((s) => s['title'] == 'Temporary title'),
+          false,
+        );
+        await tester.ensureVisible(find.text('Clear filters'));
+        await tester.tap(find.text('Clear filters'));
+        await tester.pumpAndSettle();
+        tester.state<ScrollableState>(scrollable).position.jumpTo(0);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Source 0000'));
+        await tester.pumpAndSettle();
+        expect(
+          find.text('Edited full body'),
+          findsOneWidget,
+          reason: 'Opening a metadata row loads its current complete source',
+        );
+        expect(tester.takeException(), isNull);
+        final report = Platform.environment['FORESIGHT_BROWSE_REPORT'];
+        if (report != null)
+          File(report).writeAsStringSync(
+            jsonEncode({
+              'sources': 847,
+              'fixture_content_characters': 847 * text.length,
+              'debug_test_progress_and_scroll_ms': browseMs,
+              'full_body_reads_for_browsing_and_20_progress_updates': before,
+              'unchanged_search_reused': true,
+              'own_and_external_edits_invalidate_search': true,
+              'last_source_reachable': true,
+              'selected_source_body_loaded_on_demand': true,
+              'scope':
+                  'Synthetic Flutter widget regression; not native release frame timing',
+            }),
+          );
+      } finally {
+        await tester.pumpWidget(const SizedBox.shrink());
+        await helper.close();
+        tmp.deleteSync(recursive: true);
+      }
+    }),
+  );
 }

@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import '../test_support/core_fixture.dart';
 
@@ -36,7 +37,7 @@ class NotesRuntime extends NativeRuntime {
 void main() {
   testWidgets(
     'meeting workspace preserves notes and offers functional assistant panels',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       await (FontLoader(
         'GoogleSans',
       )..addFont(rootBundle.load('assets/fonts/GoogleSans-Medium.ttf'))).load();
@@ -173,12 +174,12 @@ void main() {
       );
       reopened.close();
       directory.deleteSync(recursive: true);
-    },
+    }),
   );
 
   testWidgets(
     'transcription workspace adapts to narrow windows and matches wide reference structure',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final fonts = FontLoader('GoogleSans')
         ..addFont(rootBundle.load('assets/fonts/GoogleSans-Regular.ttf'));
       await fonts.load();
@@ -238,12 +239,12 @@ void main() {
       }
       await tester.pumpWidget(const SizedBox.shrink());
       directory.deleteSync(recursive: true);
-    },
+    }),
   );
 
   testWidgets(
     'opening a hidden assistant enlarges the window and retains the selected panel',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       tester.view.physicalSize = const Size(800, 700);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
@@ -328,13 +329,13 @@ void main() {
         await tester.pumpWidget(const SizedBox.shrink());
         root.deleteSync(recursive: true);
       }
-    },
+    }),
   );
 
   for (final denied in [false, true]) {
     testWidgets(
       'assistant can still open when window resizing is ${denied ? 'rejected' : 'ignored'}',
-      (tester) async {
+      (tester) async => withDesktopFixtures(tester, () async {
         tester.view.physicalSize = const Size(640, 700);
         tester.view.devicePixelRatio = 1;
         addTearDown(tester.view.resetPhysicalSize);
@@ -413,7 +414,7 @@ void main() {
           await tester.pumpWidget(const SizedBox.shrink());
           root.deleteSync(recursive: true);
         }
-      },
+      }),
     );
   }
 }

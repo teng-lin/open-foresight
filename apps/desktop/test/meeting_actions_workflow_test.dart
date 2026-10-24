@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -6,61 +7,62 @@ import 'package:foresight_core/remote.dart';
 import 'controller_fixture.dart';
 
 void main() {
-  testWidgets('enhanced notes can be copied, hidden, restored and edited', (
-    tester,
-  ) async {
-    final f = await ControllerFixture.mount(tester);
-    final id = f.store.meeting('Enhanced notes fixture');
-    f.store.saveMeetingNotes(id, 'Original notes');
-    f.store.artifact(
-      id,
-      'enhanced_notes',
-      'Enhanced fixture content',
-      'fixture',
-    );
-    String? copied;
-    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-      SystemChannels.platform,
-      (call) async {
-        if (call.method == 'Clipboard.setData')
-          copied = (call.arguments as Map)['text'] as String;
-        return null;
-      },
-    );
-    addTearDown(
-      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+  testWidgets(
+    'enhanced notes can be copied, hidden, restored and edited',
+    (tester) async => withDesktopFixtures(tester, () async {
+      final f = await ControllerFixture.mount(tester);
+      final id = f.store.meeting('Enhanced notes fixture');
+      f.store.saveMeetingNotes(id, 'Original notes');
+      f.store.artifact(
+        id,
+        'enhanced_notes',
+        'Enhanced fixture content',
+        'fixture',
+      );
+      String? copied;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
         SystemChannels.platform,
-        null,
-      ),
-    );
-    f.shell.update(() => f.shell.meetingFeature.meetingId = id);
-    await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Copy enhanced notes'));
-    await tester.pump();
-    expect(copied, 'Enhanced fixture content');
-    await tester.tap(find.byTooltip('Hide enhanced notes'));
-    await tester.pumpAndSettle();
-    expect(find.byTooltip('Copy enhanced notes'), findsNothing);
-    await tester.tap(find.byTooltip('Show enhanced notes'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Edit enhanced notes'));
-    await tester.pumpAndSettle();
-    await tester.enterText(
-      find.descendant(
-        of: find.byType(AlertDialog),
-        matching: find.byType(TextField),
-      ),
-      'User corrected enhancement',
-    );
-    await tester.tap(find.text('Save edit'));
-    await tester.pumpAndSettle();
-    expect(f.store.meetingEnhancedNotes(id), 'User corrected enhancement');
-    expect(f.store.meetingNoteRows(id).single['last_manual_edit'], isNotNull);
-  });
+        (call) async {
+          if (call.method == 'Clipboard.setData')
+            copied = (call.arguments as Map)['text'] as String;
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
+      f.shell.update(() => f.shell.meetingFeature.meetingId = id);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Copy enhanced notes'));
+      await tester.pump();
+      expect(copied, 'Enhanced fixture content');
+      await tester.tap(find.byTooltip('Hide enhanced notes'));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Copy enhanced notes'), findsNothing);
+      await tester.tap(find.byTooltip('Show enhanced notes'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Edit enhanced notes'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.byType(TextField),
+        ),
+        'User corrected enhancement',
+      );
+      await tester.tap(find.text('Save edit'));
+      await tester.pumpAndSettle();
+      expect(f.store.meetingEnhancedNotes(id), 'User corrected enhancement');
+      expect(f.store.meetingNoteRows(id).single['last_manual_edit'], isNotNull);
+    }),
+  );
   for (final preview in [false, true]) {
     testWidgets(
       '${preview ? 'preview menu' : 'workspace toolbar'} applies all note formats and persists style',
-      (tester) async {
+      (tester) async => withDesktopFixtures(tester, () async {
         final f = await ControllerFixture.mount(tester);
         final id = f.store.meeting('Toolbar formatting');
         f.store.saveMeetingNotes(id, 'Selected words');
@@ -111,12 +113,12 @@ void main() {
         await tester.tap(find.text('Concise').last);
         await tester.pumpAndSettle();
         expect(f.store.preference('noteStyle'), 'Concise');
-      },
+      }),
     );
   }
   testWidgets(
     'meeting note formatting preserves selection and saves before enhancement with retry',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(tester);
       final id = f.store.meeting('Formatting fixture');
       f.store.saveMeetingNotes(id, 'Hello world');
@@ -164,11 +166,11 @@ void main() {
         contains('Hello **world**'),
       );
       await tester.pumpAndSettle();
-    },
+    }),
   );
   testWidgets(
     'echo cancellation status distinguishes pending, paused, fallback and active capture',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(tester);
       final meeting = f.shell.meetingFeature;
       final cases = [
@@ -209,11 +211,11 @@ void main() {
         expect(meeting.echoCancellationDescription, contains(text));
       }
       f.connection.captureState = {};
-    },
+    }),
   );
   testWidgets(
     'transcript import cancellation and selected text use the owning meeting',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(tester);
       final id = f.store.meeting('Imported transcript');
       final meeting = f.shell.meetingFeature;
@@ -246,11 +248,11 @@ void main() {
         // The meeting ID belongs to the workspace the picker opened in.
         'workspace_epoch': f.store.workspaceEpoch,
       });
-    },
+    }),
   );
   testWidgets(
     'editing generated artifacts preserves user text and supports cancellation',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(tester);
       final id = f.store.meeting('Artifact fixture');
       f.store.artifact(id, 'summary', 'Generated summary', 'fixture');
@@ -287,6 +289,6 @@ void main() {
         ]).single['edited'],
         'User summary',
       );
-    },
+    }),
   );
 }

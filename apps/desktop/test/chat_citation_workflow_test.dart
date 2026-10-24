@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'package:foresight_core/desktop.dart' show Citation;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -7,7 +8,7 @@ import 'controller_fixture.dart';
 void main() {
   testWidgets(
     'opening a local citation leaves its source edit action available',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(tester);
       final id = f.store.importText(
         'Cited source',
@@ -34,6 +35,6 @@ void main() {
       await tester.pumpAndSettle();
       expect(f.store.sourceById(id).single['revision'], 1);
       expect(tester.takeException(), isNull);
-    },
+    }),
   );
 }

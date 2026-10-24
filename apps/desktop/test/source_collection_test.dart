@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
@@ -11,7 +12,7 @@ import 'meeting_setup_test.dart' show OfflineHelper;
 void main() {
   testWidgets(
     '847 sources remain reachable in list and grid with type filters',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       await tester.binding.setSurfaceSize(const Size(1280, 900));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       final tmp = createTestTempDirectorySync('source-collection-');
@@ -131,6 +132,6 @@ void main() {
         await helper.close();
         tmp.deleteSync(recursive: true);
       }
-    },
+    }),
   );
 }

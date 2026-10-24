@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'package:open_foresight/shell/workspace_tab.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -8,7 +9,7 @@ import 'controller_fixture.dart';
 void main() {
   testWidgets(
     'capture elapsed fallback distinguishes missing time from an explicit zero',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(tester);
       final feature = f.shell.meetingFeature;
       final began = DateTime.now().subtract(const Duration(seconds: 10));
@@ -35,12 +36,12 @@ void main() {
       feature.syncCapture();
       expect(feature.recording, isNull);
       expect(feature.recordingElapsed, Duration.zero);
-    },
+    }),
   );
 
   testWidgets(
     'missing note preview falls back to accepted notes while explicit empty preview stays empty',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(tester);
       final id = f.store.meeting('Typed notes');
       f.store.artifact(id, 'enhanced_notes', 'Accepted notes', 'fixture');
@@ -82,6 +83,6 @@ void main() {
         'Current preview',
       );
       await tester.pumpWidget(const SizedBox());
-    },
+    }),
   );
 }

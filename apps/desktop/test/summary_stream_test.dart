@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -41,7 +42,7 @@ class SummaryWidgetRuntime extends NativeRuntime {
 void main() {
   testWidgets(
     'summary progress and streamed preview cancel back to accepted history',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       tester.view.physicalSize = const Size(1280, 850);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
@@ -112,6 +113,6 @@ void main() {
       expect(store.meetingArtifacts(id, 'summary'), hasLength(1));
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
-    },
+    }),
   );
 }

@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -136,100 +137,102 @@ void main() {
     );
   });
 
-  testWidgets('default device discovery uses the injected process runner', (
-    tester,
-  ) async {
-    final root = createTestTempDirectorySync('default-devices-');
-    final connection = ControllerConnection(
-      Application(
-        Domain(
-          Store('${root.path}/app.db'),
-          OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+  testWidgets(
+    'default device discovery uses the injected process runner',
+    (tester) async => withDesktopFixtures(tester, () async {
+      final root = createTestTempDirectorySync('default-devices-');
+      final connection = ControllerConnection(
+        Application(
+          Domain(
+            Store('${root.path}/app.db'),
+            OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+          ),
         ),
-      ),
-    );
-    final calls = <String>[];
-    await tester.binding.setSurfaceSize(const Size(1400, 1000));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    await tester.pumpWidget(
-      Foresight(
-        connection,
-        environment: DesktopEnvironment(
-          run: (executable, arguments) async {
-            calls.add(executable);
-            return ProcessResult(1, 0, '[]', '');
-          },
+      );
+      final calls = <String>[];
+      await tester.binding.setSurfaceSize(const Size(1400, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        Foresight(
+          connection,
+          environment: DesktopEnvironment(
+            run: (executable, arguments) async {
+              calls.add(executable);
+              return ProcessResult(1, 0, '[]', '');
+            },
+          ),
         ),
-      ),
-    );
-    await tester.pumpAndSettle();
-    if (!Platform.isMacOS) expect(calls, ['pw-dump']);
-    expect(tester.takeException(), isNull);
-    await tester.pumpWidget(const SizedBox());
-    await tester.pumpAndSettle();
-  });
-
-  testWidgets('Finder account home supplies the default discovery folders', (
-    tester,
-  ) async {
-    final root = createTestTempDirectorySync('finder-discovery-');
-    final folders = [
-      for (final name in ['Documents', 'Downloads', 'Desktop'])
-        (Directory('${root.path}/$name')..createSync()).path,
-    ];
-    final resolvedEnvironment = DesktopEnvironment.production(
-      variables: const {},
-      macOS: true,
-      runSync: (executable, _) => ProcessResult(
-        1,
-        0,
-        executable == '/usr/bin/id'
-            ? 'fixture\n'
-            : 'NFSHomeDirectory: ${root.path}\n',
-        '',
-      ),
-    );
-    final environment = DesktopEnvironment(
-      homeDirectory: resolvedEnvironment.homeDirectory,
-    );
-    final connection = ControllerConnection(
-      Application(
-        Domain(
-          Store('${root.path}/app.db'),
-          OfflineHelper('${root.path}/socket', '${root.path}/helper'),
-        ),
-      ),
-    );
-    await tester.binding.setSurfaceSize(const Size(1400, 1000));
-    addTearDown(() async {
+      );
+      await tester.pumpAndSettle();
+      if (!Platform.isMacOS) expect(calls, ['pw-dump']);
+      expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       await tester.pumpAndSettle();
-      await tester.binding.setSurfaceSize(null);
-    });
-    await tester.pumpWidget(
-      Foresight(
-        connection,
-        environment: environment,
-        deviceLoader: () async => [],
-      ),
-    );
-    await tester.pumpAndSettle();
-    final shell = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
-    final discovery = shell.sourceFeature.findFilesOnComputer();
-    // Selecting real folders starts asynchronous filesystem scanning. Inspect
-    // the selected roots without waiting on its animated progress indicator.
-    await tester.pump();
-    final sheet = find.byType(FileDiscoverySheet);
-    expect(tester.widget<FileDiscoverySheet>(sheet).initialFolders, folders);
-    Navigator.of(tester.element(sheet)).pop();
-    await tester.pumpAndSettle();
-    await discovery;
-    expect(tester.takeException(), isNull);
-  });
+    }),
+  );
+
+  testWidgets(
+    'Finder account home supplies the default discovery folders',
+    (tester) async => withDesktopFixtures(tester, () async {
+      final root = createTestTempDirectorySync('finder-discovery-');
+      final folders = [
+        for (final name in ['Documents', 'Downloads', 'Desktop'])
+          (Directory('${root.path}/$name')..createSync()).path,
+      ];
+      final resolvedEnvironment = DesktopEnvironment.production(
+        variables: const {},
+        macOS: true,
+        runSync: (executable, _) => ProcessResult(
+          1,
+          0,
+          executable == '/usr/bin/id'
+              ? 'fixture\n'
+              : 'NFSHomeDirectory: ${root.path}\n',
+          '',
+        ),
+      );
+      final environment = DesktopEnvironment(
+        homeDirectory: resolvedEnvironment.homeDirectory,
+      );
+      final connection = ControllerConnection(
+        Application(
+          Domain(
+            Store('${root.path}/app.db'),
+            OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+          ),
+        ),
+      );
+      await tester.binding.setSurfaceSize(const Size(1400, 1000));
+      addTearDown(() async {
+        await tester.pumpWidget(const SizedBox());
+        await tester.pumpAndSettle();
+        await tester.binding.setSurfaceSize(null);
+      });
+      await tester.pumpWidget(
+        Foresight(
+          connection,
+          environment: environment,
+          deviceLoader: () async => [],
+        ),
+      );
+      await tester.pumpAndSettle();
+      final shell = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
+      final discovery = shell.sourceFeature.findFilesOnComputer();
+      // Selecting real folders starts asynchronous filesystem scanning. Inspect
+      // the selected roots without waiting on its animated progress indicator.
+      await tester.pump();
+      final sheet = find.byType(FileDiscoverySheet);
+      expect(tester.widget<FileDiscoverySheet>(sheet).initialFolders, folders);
+      Navigator.of(tester.element(sheet)).pop();
+      await tester.pumpAndSettle();
+      await discovery;
+      expect(tester.takeException(), isNull);
+    }),
+  );
 
   testWidgets(
     'injected Hyprland activates and installs only through the fake host',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final root = createTestTempDirectorySync('desktop-env-');
       final config = Directory('${root.path}/config')..createSync();
       final data = Directory('${root.path}/data')..createSync();
@@ -307,6 +310,6 @@ void main() {
       ]);
       expect(outside.readAsStringSync(), 'Preserve this');
       expect(data.listSync(), isEmpty);
-    },
+    }),
   );
 }

@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import '../test_support/core_fixture.dart';
@@ -50,7 +51,7 @@ class WidgetNoteGenerator extends NativeRuntime {
 void main() {
   testWidgets(
     'local editor streams content and cancel restores the exact previous notes',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final directory = createTestTempDirectorySync('note-stream-widget-');
       addTearDown(() => directory.deleteSync(recursive: true));
       final time = FakeAsync();
@@ -183,6 +184,6 @@ void main() {
       await tester.runAsync(() => generator.events.close());
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump();
-    },
+    }),
   );
 }

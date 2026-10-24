@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
@@ -59,7 +60,7 @@ void main() {
   for (final rpc in [false, true]) {
     testWidgets(
       'Granola return paste hides codes, permits retry and completes the pending login (${rpc ? 'RPC' : 'local'})',
-      (tester) async {
+      (tester) async => withDesktopFixtures(tester, () async {
         final root = createTestTempDirectorySync('granola-return-ui-');
         final auth = PendingGoogleAuth(Directory('${root.path}/google'))
           ..inviteBrowser = true;
@@ -141,13 +142,13 @@ void main() {
         expect(outcome, isNotNull);
         expect(outcome!.error, null);
         expect(find.byType(GoogleSignInDialog), findsNothing);
-      },
+      }),
     );
   }
 
   testWidgets(
     'Google sign-in can be cancelled and retried from every entry point',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       var activations = 0;
       const windowChannel = MethodChannel('foresight/window');
       tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
@@ -268,53 +269,54 @@ void main() {
         await helper.close();
         root.deleteSync(recursive: true);
       }
-    },
+    }),
   );
 
-  testWidgets('browser failure closes sign-in with its actual error', (
-    tester,
-  ) async {
-    final root = createTestTempDirectorySync('google-browser-error-');
-    addTearDown(() {
-      if (root.existsSync()) root.deleteSync(recursive: true);
-    });
-    final auth = PendingGoogleAuth(root)..inviteBrowser = true;
-    GoogleSignInOutcome? outcome;
-    try {
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Builder(
-            builder: (context) => TextButton(
-              onPressed: () async =>
-                  outcome = await showDialog<GoogleSignInOutcome>(
-                    context: context,
-                    builder: (_) => GoogleSignInDialog(
-                      auth: auth,
-                      openBrowser: (_) async =>
-                          throw StateError('Browser unavailable'),
+  testWidgets(
+    'browser failure closes sign-in with its actual error',
+    (tester) async => withDesktopFixtures(tester, () async {
+      final root = createTestTempDirectorySync('google-browser-error-');
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
+      final auth = PendingGoogleAuth(root)..inviteBrowser = true;
+      GoogleSignInOutcome? outcome;
+      try {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Builder(
+              builder: (context) => TextButton(
+                onPressed: () async =>
+                    outcome = await showDialog<GoogleSignInOutcome>(
+                      context: context,
+                      builder: (_) => GoogleSignInDialog(
+                        auth: auth,
+                        openBrowser: (_) async =>
+                            throw StateError('Browser unavailable'),
+                      ),
                     ),
-                  ),
-              child: const Text('Connect'),
+                child: const Text('Connect'),
+              ),
             ),
           ),
-        ),
-      );
-      await tester.tap(find.text('Connect'));
-      await tester.pump();
-      await tester.pumpAndSettle();
-      expect(outcome!.cancelled, false);
-      expect(outcome!.error.toString(), contains('Browser unavailable'));
-      expect(find.byType(GoogleSignInDialog), findsNothing);
-      expect(tester.takeException(), isNull);
-    } finally {
-      await tester.pumpWidget(const SizedBox.shrink());
-      await auth.close();
-      root.deleteSync(recursive: true);
-    }
-  });
+        );
+        await tester.tap(find.text('Connect'));
+        await tester.pump();
+        await tester.pumpAndSettle();
+        expect(outcome!.cancelled, false);
+        expect(outcome!.error.toString(), contains('Browser unavailable'));
+        expect(find.byType(GoogleSignInDialog), findsNothing);
+        expect(tester.takeException(), isNull);
+      } finally {
+        await tester.pumpWidget(const SizedBox.shrink());
+        await auth.close();
+        root.deleteSync(recursive: true);
+      }
+    }),
+  );
   testWidgets(
     'successful browser consent closes the progress dialog in a short window',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       tester.view.physicalSize = const Size(640, 400);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
@@ -379,6 +381,6 @@ void main() {
         await auth.close();
         root.deleteSync(recursive: true);
       }
-    },
+    }),
   );
 }

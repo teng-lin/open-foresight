@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
@@ -25,7 +26,7 @@ class BodyReadCountingStore extends Store {
 void main() {
   testWidgets(
     'visible Stats caches background word aggregates across service events',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       tester.view.physicalSize = const Size(1440, 1000);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
@@ -81,6 +82,6 @@ void main() {
       expect(store.outputBodyReads, 0);
       await tester.pumpWidget(const SizedBox.shrink());
       temporary.deleteSync(recursive: true);
-    },
+    }),
   );
 }
