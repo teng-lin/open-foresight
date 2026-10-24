@@ -147,6 +147,8 @@ class Recording implements RecordingStatus {
   @override
   DateTime lastAudioActivity = DateTime.now();
   int _epoch = 0, _transcriptCount = 0;
+  Object? _callbackFailure;
+  StackTrace? _callbackStack;
   Recording(
     String path,
     this.state,
@@ -221,6 +223,8 @@ class Recording implements RecordingStatus {
     _epoch++;
     _transcriptCount = 0;
     lastError = '';
+    _callbackFailure = null;
+    _callbackStack = null;
     lastAudioActivity = DateTime.now();
     sampleCounts.clear();
     peakVolumes.clear();
@@ -257,7 +261,11 @@ class Recording implements RecordingStatus {
       state('Listening · live transcription');
       timer = Timer.periodic(const Duration(milliseconds: 20), (_) => drain());
     } catch (_) {
-      dispose();
+      try {
+        dispose();
+      } catch (_) {
+        // Preserve startup's failure after attempting every owned resource.
+      }
       rethrow;
     }
   }
@@ -323,11 +331,16 @@ class Recording implements RecordingStatus {
         captures.add(_startCapture(channel));
       }
     } catch (_) {
-      for (final capture in captures) {
-        _nativeFsCaptureStop(capture);
+      try {
+        _stopCaptures();
+      } catch (_) {
+        // Cleanup cannot replace the failed route's original error.
       }
-      captures.clear();
-      state('Resume failed; transcription remains paused');
+      try {
+        state('Resume failed; transcription remains paused');
+      } catch (_) {
+        // Keep the route failure if its presentation callback also fails.
+      }
       rethrow;
     }
     paused = false;
@@ -337,14 +350,53 @@ class Recording implements RecordingStatus {
   }
 
   void _finishCapture() {
-    for (final capture in captures) {
-      _nativeFsCaptureFinish(capture);
+    Object? failure;
+    StackTrace? stack;
+    try {
+      for (final capture in captures) {
+        _nativeFsCaptureFinish(capture);
+      }
+      drain(flushAll: true);
+    } catch (error, trace) {
+      failure = error;
+      stack = trace;
     }
-    drain(flushAll: true);
-    for (final capture in captures) {
-      _nativeFsCaptureStop(capture);
+    try {
+      _stopCaptures();
+    } catch (error, trace) {
+      failure ??= error;
+      stack ??= trace;
     }
+    if (failure != null) Error.throwWithStackTrace(failure, stack!);
+  }
+
+  void _stopCaptures() {
+    // Detach before cleanup so a failing observer cannot release a handle twice.
+    final owned = captures.toList();
     captures.clear();
+    Object? failure;
+    StackTrace? stack;
+    for (final capture in owned) {
+      try {
+        _nativeFsCaptureStop(capture);
+      } catch (error, trace) {
+        failure ??= error;
+        stack ??= trace;
+      }
+    }
+    if (failure != null) Error.throwWithStackTrace(failure, stack!);
+  }
+
+  void _rememberCallbackFailure(Object error, StackTrace stack) {
+    _callbackFailure ??= error;
+    _callbackStack ??= stack;
+    if (lastError.isEmpty) lastError = 'Recording callback failed';
+    timer?.cancel();
+    try {
+      _stopCaptures();
+    } catch (_) {
+      // Keep the original callback failure after attempting every capture.
+    }
   }
 
   void drain({bool flushAll = false}) {
@@ -465,6 +517,8 @@ class Recording implements RecordingStatus {
         _lastLevels = now;
         levels?.call();
       }
+    } catch (error, stack) {
+      _rememberCallbackFailure(error, stack);
     } finally {
       polling = false;
     }
@@ -610,17 +664,23 @@ class Recording implements RecordingStatus {
             break;
           }
         }
-      } catch (error) {
+      } catch (error, stack) {
         if (epoch == _epoch) {
           lastError = error.toString();
-          state('Live transcription failed: $lastError');
-          if (!segment.provisional) {
-            interruption?.call({
-              'reason': 'speech_recognition_error',
-              'message': lastError,
-              'discarded_bytes': segment.pcm.length,
-              'source': channel == 0 ? 'microphone' : 'playback',
-            });
+          try {
+            state('Live transcription failed: $lastError');
+            if (!segment.provisional) {
+              interruption?.call({
+                'reason': 'speech_recognition_error',
+                'message': lastError,
+                'discarded_bytes': segment.pcm.length,
+                'source': channel == 0 ? 'microphone' : 'playback',
+              });
+            }
+          } catch (_) {
+            // Reporting must not replace the producer's original failure or
+            // leave acquisition running after its observer stopped working.
+            _rememberCallbackFailure(error, stack);
           }
         }
       } finally {
@@ -640,17 +700,23 @@ class Recording implements RecordingStatus {
     if (finishing) {
       throw RpcError(RpcErrorCode.busy, 'Transcription is already in progress');
     }
+    await _stop();
+  }
+
+  Future<void> _stop() async {
     finishing = true;
     final epoch = _epoch;
     timer?.cancel();
-    // Stop callbacks first while retaining queued PCM, then consume the tail.
-    // Destroying handles before this drain loses the last captured audio.
-    _finishCapture();
-    for (var channel = 0; channel < _buffers.length; channel++) {
-      _flush(channel);
-    }
-    state('Finalizing live transcript');
+    Object? failure;
+    StackTrace? failureStack;
     try {
+      // All acquisition, drain and observer calls belong inside the cleanup
+      // boundary, including failures before the first await.
+      _finishCapture();
+      for (var channel = 0; channel < _buffers.length; channel++) {
+        _flush(channel);
+      }
+      state('Finalizing live transcript');
       final deadline = DateTime.now().add(stopTimeout);
       while (_workers.isNotEmpty && epoch == _epoch) {
         final remaining = deadline.difference(DateTime.now());
@@ -662,15 +728,19 @@ class Recording implements RecordingStatus {
             );
           }
           await Future.wait(_workers.values.toList()).timeout(remaining);
-        } on TimeoutException {
+        } on TimeoutException catch (error, stack) {
           lastError =
               'Speech finalization timed out; committed transcript retained';
-          interruption?.call({
-            'reason': 'speech_stop_timeout',
-            'discarded_bytes': 0,
-            'source': 'speech',
-          });
-          state(lastError);
+          try {
+            interruption?.call({
+              'reason': 'speech_stop_timeout',
+              'discarded_bytes': 0,
+              'source': 'speech',
+            });
+            state(lastError);
+          } catch (_) {
+            _rememberCallbackFailure(error, stack);
+          }
           break;
         }
         await Future<void>.delayed(Duration.zero);
@@ -678,16 +748,38 @@ class Recording implements RecordingStatus {
       if (epoch != _epoch) {
         throw RpcError(RpcErrorCode.cancelled, 'Recording cancelled');
       }
+      if (_callbackFailure != null) {
+        Error.throwWithStackTrace(_callbackFailure!, _callbackStack!);
+      }
       if (lastError.isNotEmpty) throw StateError(lastError);
       state(
         _transcriptCount == 0
             ? 'No speech detected. Check microphone mute and playback.'
             : 'Transcript saved',
       );
+    } catch (error, stack) {
+      failure = error;
+      failureStack = stack;
     } finally {
-      if (epoch == _epoch) dispose();
-      finishing = false;
+      final producers = _workers.values.toList();
+      try {
+        if (epoch == _epoch) dispose();
+      } catch (error, stack) {
+        failure ??= error;
+        failureStack ??= stack;
+      }
+      try {
+        // dispose invalidates their epoch and releases native handles first.
+        // Retain actual producer completion rather than just clearing the map.
+        await Future.wait(producers);
+      } catch (error, stack) {
+        failure ??= error;
+        failureStack ??= stack;
+      } finally {
+        finishing = false;
+      }
     }
+    if (failure != null) Error.throwWithStackTrace(failure, failureStack!);
   }
 
   @override
@@ -695,12 +787,20 @@ class Recording implements RecordingStatus {
     _epoch++;
     paused = false;
     timer?.cancel();
-    for (final capture in captures) {
-      _nativeFsCaptureStop(capture);
+    Object? failure;
+    StackTrace? stack;
+    void release(void Function() operation) {
+      try {
+        operation();
+      } catch (error, trace) {
+        failure ??= error;
+        stack ??= trace;
+      }
     }
-    captures.clear();
+
+    release(_stopCaptures);
     for (final speech in {...speeches, ..._idleSpeeches.values}) {
-      _releaseSpeech(speech);
+      release(() => _releaseSpeech(speech));
     }
     _workers.clear();
     for (final queue in _queues) {
@@ -709,5 +809,6 @@ class Recording implements RecordingStatus {
     for (final buffer in _buffers) {
       buffer.clear();
     }
+    if (failure != null) Error.throwWithStackTrace(failure!, stack!);
   }
 }

@@ -32,6 +32,8 @@ final class MeetingIndexer {
   Store get store => domain.store;
   final _meetingIndexes = <_MeetingIndexKey, Future<void>>{};
 
+  Future<void> scheduleFinalIndex(int id) => indexMeeting(id);
+
   Future<void> indexMeeting(int id, {bool Function()? current}) async {
     queries.requireMeeting(id);
     final text = meetings
