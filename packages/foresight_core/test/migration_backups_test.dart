@@ -225,6 +225,37 @@ void main() {
   );
 
   test(
+    'Store startup under real file-size limit preserves the old profile',
+    () async {
+      final source = historical(path);
+      source.execute('UPDATE notes SET body=?', [
+        'constrained filesystem fixture ' * 8192,
+      ]);
+      source.dispose();
+      final result = await Process.run(Platform.resolvedExecutable, [
+        'run',
+        'test/fixtures/migration_backup_limit.dart',
+        path,
+        'store',
+      ]);
+      expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+      expect(result.stdout, contains('store_startup_refused'));
+      final db = openApplicationDatabase(path);
+      try {
+        expect(db.select('PRAGMA user_version').single.values.single, 19);
+        expect(
+          (db.select('SELECT body FROM notes').single['body'] as String).length,
+          greaterThan(8192),
+        );
+        expect(db.select('PRAGMA integrity_check').single.values.single, 'ok');
+      } finally {
+        db.dispose();
+      }
+      expect(MigrationBackups(path).snapshots(supportedVersion: 19), isEmpty);
+    },
+  );
+
+  test(
     'retention keeps two completed snapshots and expires after seven days',
     () {
       final db = historical(path);
