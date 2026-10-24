@@ -125,6 +125,13 @@
       "symbols": [
         "rows"
       ]
+    },
+    "20": {
+      "sha256": "3574cbb8bdc6435529aaaf5219a00a370285b65df9734dcc5a5bfd8ecc26de11",
+      "symbols": [
+        "_boundContentHistory",
+        "rows"
+      ]
     }
   },
   "fixtures": {

@@ -12,6 +12,8 @@ const workspaceContentTables = [
   'meeting_answers',
   'meeting_note_events',
   'meeting_notes',
+  'meeting_index_jobs',
+  'meeting_index_state',
   'meeting_summary_checkpoints',
   'meeting_tasks',
   'document_summary_cache',

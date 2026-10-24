@@ -95,6 +95,8 @@ class ApplicationMigrations {
             'ALTER TABLE meetings ADD COLUMN title_manually_edited INTEGER NOT NULL DEFAULT 0',
           );
         }
+      case 20:
+        _boundContentHistory();
       default:
         throw StateError('Missing application database migration $version');
     }
@@ -194,6 +196,153 @@ class ApplicationMigrations {
     // Source deletion is soft; history must obey the same erasure boundary.
     db.execute(
       "CREATE TRIGGER sources_erase_deleted_revisions AFTER UPDATE OF deleted ON sources WHEN NEW.deleted=1 BEGIN DELETE FROM content_revisions WHERE entity='sources' AND entity_id=NEW.id; END",
+    );
+  }
+
+  // Version 20 is independent of the frozen version-18 trigger definitions.
+  void _boundContentHistory() {
+    if (!rows(
+      'PRAGMA table_info(sources)',
+    ).any((row) => row['name'] == 'generated')) {
+      db.execute(
+        'ALTER TABLE sources ADD COLUMN generated INTEGER NOT NULL DEFAULT 0',
+      );
+    }
+    db.execute(
+      "UPDATE sources SET generated=1 WHERE locally_edited=0 AND EXISTS (SELECT 1 FROM meetings WHERE sources.id='meeting-'||meetings.id AND sources.provenance='meeting:'||meetings.id)",
+    );
+    if (!rows(
+      'PRAGMA table_info(meeting_notes)',
+    ).any((row) => row['name'] == 'enhanced_generated')) {
+      db.execute(
+        'ALTER TABLE meeting_notes ADD COLUMN enhanced_generated INTEGER NOT NULL DEFAULT 1',
+      );
+    }
+    // Ambiguous historical ownership is retained conservatively. A later
+    // generated write explicitly marks its draft; titles never classify content.
+    db.execute(
+      'UPDATE meeting_notes SET enhanced_generated=0 WHERE last_manual_edit IS NOT NULL AND (last_enhanced IS NULL OR last_manual_edit>=last_enhanced)',
+    );
+    db.execute(
+      'CREATE TABLE IF NOT EXISTS meeting_index_jobs(meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,workspace_epoch TEXT NOT NULL,revision INTEGER NOT NULL,requested INTEGER NOT NULL)',
+    );
+    db.execute(
+      'CREATE TABLE IF NOT EXISTS meeting_index_state(meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,workspace_epoch TEXT NOT NULL,revision INTEGER NOT NULL)',
+    );
+    db.execute(
+      'CREATE INDEX IF NOT EXISTS content_revisions_created ON content_revisions(created)',
+    );
+    const entities = {
+      'notes': ['id', 'title', 'body', 'revision', 'timestamp'],
+      'meeting_notes': [
+        'meeting_id',
+        'body',
+        'revision',
+        'enhanced_body',
+        'timestamp',
+        'last_enhanced',
+        'last_manual_edit',
+      ],
+      'artifacts': [
+        'id',
+        'meeting_id',
+        'kind',
+        'generated',
+        'edited',
+        'input_revision',
+        'model',
+        'prompt_version',
+        'created',
+        'manifest',
+      ],
+      'meeting_tasks': [
+        'id',
+        'meeting_id',
+        'task_key',
+        'task',
+        'owner',
+        'due',
+        'status',
+        'evidence',
+        'input_revision',
+        'stale',
+        'manual',
+      ],
+      'sources': [
+        'id',
+        'title',
+        'content',
+        'mime',
+        'revision',
+        'state',
+        'error',
+        'deleted',
+        'provenance',
+        'locally_edited',
+      ],
+    };
+    // This inventory is checked against ContentHistory.entities in tests.
+    for (final entity in entities.entries) {
+      final table = entity.key, id = entity.value.first;
+      final snapshot = entity.value
+          .map(
+            (column) => column == 'enhanced_body'
+                ? "'$column',CASE WHEN OLD.enhanced_generated=0 THEN OLD.enhanced_body ELSE NULL END"
+                : "'$column',OLD.$column",
+          )
+          .join(',');
+      const content = {
+        'notes': ['title', 'body'],
+        'artifacts': ['generated', 'edited'],
+        'meeting_tasks': [
+          'task',
+          'owner',
+          'due',
+          'status',
+          'evidence',
+          'manual',
+        ],
+        'sources': ['title', 'content', 'mime', 'provenance'],
+      };
+      final changed = table == 'meeting_notes'
+          ? 'OLD.body IS NOT NEW.body OR (OLD.enhanced_generated=0 AND OLD.enhanced_body IS NOT NEW.enhanced_body)'
+          : content[table]!
+                .map((column) => 'OLD.$column IS NOT NEW.$column')
+                .join(' OR ');
+      final retained = table == 'sources'
+          ? 'OLD.deleted=0 AND OLD.generated=0 AND ($changed)'
+          : changed;
+      db.execute('DROP TRIGGER ${table}_retain_revision');
+      db.execute(
+        'CREATE TRIGGER ${table}_retain_revision BEFORE UPDATE ON $table WHEN $retained BEGIN '
+        "INSERT INTO content_revisions(entity,entity_id,snapshot,created) VALUES('$table',CAST(OLD.$id AS TEXT),json_object($snapshot),CAST(strftime('%s','now') AS INTEGER)*1000); END",
+      );
+      db.execute('DROP TRIGGER ${table}_erase_revisions');
+      db.execute(
+        'CREATE TRIGGER ${table}_erase_revisions AFTER DELETE ON $table BEGIN '
+        "DELETE FROM content_revisions WHERE entity='$table' AND entity_id=CAST(OLD.$id AS TEXT); "
+        "INSERT OR IGNORE INTO preferences(key,value) VALUES('internal.privacyMaintenancePending','1'); END",
+      );
+    }
+    db.execute('DROP TRIGGER sources_erase_deleted_revisions');
+    db.execute(
+      "CREATE TRIGGER sources_erase_deleted_revisions AFTER UPDATE OF deleted ON sources WHEN NEW.deleted=1 BEGIN DELETE FROM content_revisions WHERE entity='sources' AND entity_id=NEW.id; INSERT OR IGNORE INTO preferences(key,value) VALUES('internal.privacyMaintenancePending','1'); END",
+    );
+    // Inspect each historical snapshot's ownership, not the current row's: a
+    // source that was later generated may still have genuine manual revisions.
+    db.execute(
+      "DELETE FROM content_revisions WHERE entity='sources' AND json_valid(snapshot) AND COALESCE(json_extract(snapshot,'\$.locally_edited'),0)=0 AND EXISTS (SELECT 1 FROM meetings WHERE json_extract(snapshot,'\$.id')='meeting-'||meetings.id AND json_extract(snapshot,'\$.provenance')='meeting:'||meetings.id)",
+    );
+    db.execute(
+      "UPDATE content_revisions SET snapshot=json_set(snapshot,'\$.enhanced_body',NULL) WHERE entity='meeting_notes' AND json_valid(snapshot) AND (json_extract(snapshot,'\$.last_manual_edit') IS NULL OR json_extract(snapshot,'\$.last_enhanced')>json_extract(snapshot,'\$.last_manual_edit'))",
+    );
+    // A single migration scan bounds old history. Runtime pruning uses indexed
+    // entity keys and at most 21 rows, never a repeated database-wide scan.
+    db.execute(
+      "DELETE FROM content_revisions WHERE id IN (SELECT id FROM (SELECT id,created,row_number() OVER (PARTITION BY entity,entity_id ORDER BY id DESC) AS rank,sum(length(CAST(snapshot AS BLOB))) OVER (PARTITION BY entity,entity_id ORDER BY id DESC) AS bytes FROM content_revisions) WHERE rank>20 OR bytes>33554432 OR created<CAST(strftime('%s','now') AS INTEGER)*1000-7776000000)",
+    );
+    db.execute(
+      "CREATE TRIGGER IF NOT EXISTS content_revisions_bound AFTER INSERT ON content_revisions BEGIN DELETE FROM content_revisions WHERE entity=NEW.entity AND entity_id=NEW.entity_id AND id NOT IN (SELECT id FROM (SELECT id,sum(length(CAST(snapshot AS BLOB))) OVER (ORDER BY id DESC) AS bytes FROM (SELECT id,snapshot FROM content_revisions WHERE entity=NEW.entity AND entity_id=NEW.entity_id AND created>=CAST(strftime('%s','now') AS INTEGER)*1000-7776000000 ORDER BY id DESC LIMIT 20)) WHERE bytes<=33554432); END",
     );
   }
 

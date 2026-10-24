@@ -68,3 +68,23 @@ upstream.Sqlite3 _loadSqlite() {
   }
   return api;
 }
+
+/// A short lock wait applies equally to writable and read-only connections.
+/// The application owns retries; a busy database must not stall capture behind
+/// SQLite's default or an unbounded retry loop.
+const applicationSqliteBusyTimeout = Duration(milliseconds: 50);
+upstream.Database openApplicationDatabase(
+  String path, {
+  upstream.OpenMode mode = upstream.OpenMode.readWriteCreate,
+}) {
+  final db = sqlite3.open(path, mode: mode);
+  try {
+    db.execute(
+      'PRAGMA busy_timeout=${applicationSqliteBusyTimeout.inMilliseconds}',
+    );
+    return db;
+  } catch (_) {
+    db.dispose();
+    rethrow;
+  }
+}

@@ -95,7 +95,10 @@ void main() {
     }
     final reopened = Store(path);
     addTearDown(reopened.close);
-    expect(reopened.rows('PRAGMA user_version').single.values.single, 19);
+    expect(
+      reopened.rows('PRAGMA user_version').single.values.single,
+      Store.schemaVersion,
+    );
   });
 
   test('v15 migrates legacy action aliases without losing manual edits', () {
