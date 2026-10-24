@@ -39,8 +39,49 @@ void main() {
       }
     }
     expect(visited, contains(endsWith('/src/remote_domain.dart')));
-    expect(visited, contains(endsWith('/src/application_service.dart')));
+    expect(visited, isNot(contains(endsWith('/src/application_service.dart'))));
+    expect(visited, isNot(contains(endsWith('/src/google_auth.dart'))));
+    expect(visited, isNot(contains(endsWith('/src/model_setup.dart'))));
     expect(violations, isEmpty);
+  });
+
+  test('presentation values have no service or mutation import closure', () {
+    final pending = [
+      for (final name in [
+        'output_calendar.dart',
+        'granola_return_failure.dart',
+        'graph_view_data.dart',
+        'model_setup_status.dart',
+        'speech_model_catalog.dart',
+        'dedicated_query_terms.dart',
+      ])
+        File('${package.path}/lib/src/$name'),
+    ];
+    final visited = <String>{};
+    while (pending.isNotEmpty) {
+      final file = pending.removeLast();
+      if (!visited.add(file.absolute.path)) continue;
+      final unit = parseString(content: file.readAsStringSync()).unit;
+      for (final directive in unit.directives.whereType<UriBasedDirective>()) {
+        final uri = directive.uri.stringValue ?? '';
+        if (!uri.contains(':')) {
+          pending.add(File.fromUri(file.uri.resolve(uri)));
+        }
+      }
+    }
+    for (final name in [
+      'store.dart',
+      'native.dart',
+      'google_auth.dart',
+      'model_setup.dart',
+      'application.dart',
+      'application_service.dart',
+      'domain.dart',
+      'speech_models.dart',
+      'dedicated_query_acquisition.dart',
+    ]) {
+      expect(visited, isNot(contains(endsWith('/src/$name'))), reason: name);
+    }
   });
 
   test('persistence uses shared filesystem and read primitives', () {

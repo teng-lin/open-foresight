@@ -5,18 +5,7 @@ import 'gemma_download.dart';
 import 'store.dart';
 import 'runtime_execution_policy.dart';
 
-// Official whisper.cpp artifact metadata, verified against the Hugging Face
-// repository API on 2026-10-15. All choices are multilingual (not .en models).
-final speechModels = [
-  for (final filename in [
-    'ggml-tiny.bin',
-    'ggml-base.bin',
-    'ggml-small.bin',
-    'ggml-medium.bin',
-    'ggml-large-v3-turbo.bin',
-  ])
-    modelFromPin(filename),
-];
+export 'speech_model_catalog.dart';
 
 /// Validates that the selected runner can actually load and decode the model.
 /// Uses generated silence, never the microphone. The caller owns cancellation

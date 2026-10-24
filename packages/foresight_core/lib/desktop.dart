@@ -30,8 +30,8 @@ export 'src/gemma_download.dart'
         verifyModelFile,
         availableModelDiskBytes,
         physicalMemoryGb;
-export 'src/speech_models.dart' show speechModels;
-export 'src/google_auth.dart' show GranolaReturnFailure;
+export 'src/speech_model_catalog.dart' show speechModels;
+export 'src/granola_return_failure.dart';
 export 'src/desktop_google_sources.dart';
 export 'src/desktop_runtime_settings.dart';
 export 'src/source_type.dart' show SourceType, sourceType;
@@ -41,22 +41,22 @@ export 'src/graph_clusters.dart' show GraphCluster;
 export 'src/graph_layout.dart';
 export 'src/force_layout.dart';
 export 'src/label_propagation.dart';
-export 'src/graph_persistence.dart'
+export 'src/graph_view_data.dart'
     show
         StoredGraphLayout,
         graphLayoutAlgorithmVersion,
         graphDocumentSet,
         graphSceneSources;
-export 'src/model_setup.dart'
+export 'src/model_setup_status.dart'
     show
         preparedNeedsModel,
         preparedSpeechSetupProblem,
         preparedDedicatedQuerySetupProblem,
         dedicatedQueryModelDigest;
-export 'src/dedicated_query_acquisition.dart'
+export 'src/dedicated_query_terms.dart'
     show dedicatedQueryTermsKey, dedicatedQueryTermsUri;
 export 'src/meeting_speakers.dart' show MeetingSpeaker;
-export 'src/store.dart' show outputWeekStart;
+export 'src/output_calendar.dart';
 export 'src/platform_services.dart'
     show
         openPlatformUri,

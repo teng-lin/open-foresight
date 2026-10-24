@@ -15,7 +15,9 @@ import 'sqlite_store_reader.dart';
 import 'store_reader.dart';
 import 'persistence/read_schema_guard.dart';
 import 'profile_paths.dart';
-import 'service.dart';
+import 'service_client.dart';
+import 'service_startup.dart';
+import 'service_ownership.dart';
 import 'service_socket.dart' show probeSocketPath;
 
 /// Whether a failed request never took effect, so it may be sent once more

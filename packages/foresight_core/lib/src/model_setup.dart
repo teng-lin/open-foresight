@@ -1,10 +1,11 @@
+import 'model_setup_status.dart';
+export 'model_setup_status.dart';
 import 'rpc_error.dart';
 import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
 import 'store.dart';
 import 'persistence/domain_queries.dart';
-import 'read_models.dart';
 import 'model_asset_lifecycle.dart';
 import 'model_acquisition.dart' show ForesightSharedConfig;
 import 'native.dart';
@@ -127,10 +128,6 @@ Future<bool> discoverDedicatedQueryModel(
     await catalog.close();
   }
 }
-
-const dedicatedQueryModelDigest =
-    '889306301a8817c22de9631087896780762ce7985b3012e42debfc239a62193f';
-const dedicatedQueryModelBytes = 179437568;
 
 /// Import an already-decrypted authenticated asset through existing model setup.
 /// This is not the original authenticated remote download/decryption pipeline.
@@ -282,40 +279,9 @@ Future<String> _prepareDedicatedQuery(
 }
 
 String? dedicatedQuerySetupProblem(Store store) =>
-    _dedicatedQuerySetupProblem(store.model(dedicatedQueryModelKind));
-
-/// Validate a registration prepared with an asynchronous model read.
-String? preparedDedicatedQuerySetupProblem(ModelRegistration? model) =>
-    _dedicatedQuerySetupProblem(model?.toRow());
-String? _dedicatedQuerySetupProblem(Map<String, Object?>? model) {
-  if (model == null) {
-    return 'Import the supported dedicated question model to enable automatic questions.';
-  }
-  final asset = File(model['path'] as String);
-  final encrypted = model['backend'] == dedicatedEncryptedQueryBackend;
-  if ((!encrypted && model['backend'] != dedicatedQueryBackend) ||
-      (!encrypted && model['digest'] != dedicatedQueryModelDigest) ||
-      !asset.existsSync() ||
-      asset.lengthSync() != dedicatedQueryModelBytes + (encrypted ? 33 : 0)) {
-    return 'The imported dedicated question model is missing or does not match the supported asset.';
-  }
-  final python = File(model['runtime'] as String);
-  final worker = runtimeConfiguration['FORESIGHT_QUERY_WORKER'];
-  final crypto = runtimeConfiguration['FORESIGHT_MODEL_CRYPTO'];
-  if (encrypted &&
-      (crypto == null ||
-          !File(crypto).existsSync() ||
-          (File(crypto).statSync().mode & 0x49) == 0)) {
-    return 'The bundled model encryption helper is unavailable.';
-  }
-  if (!python.existsSync() ||
-      (python.statSync().mode & 0x49) == 0 ||
-      worker == null ||
-      !File(worker).existsSync()) {
-    return 'The dedicated question runtime is unavailable in this installation.';
-  }
-  return null;
-}
+    preparedDedicatedQuerySetupProblem(
+      store.sourceQueries.model(dedicatedQueryModelKind),
+    );
 
 /// Register an explicitly supplied, digest-identified local installation.
 /// Existing user registrations win. No network or model downloads occur here.
@@ -379,58 +345,12 @@ Future<int> registerInstalledModels(Store store, String manifestPath) async {
 }
 
 String? speechSetupProblem(Store store) =>
-    _speechSetupProblem(store.model('speech'));
-
-/// Validate a registration prepared with an asynchronous model read.
-String? preparedSpeechSetupProblem(ModelRegistration? model) =>
-    _speechSetupProblem(model?.toRow());
-String? _speechSetupProblem(Map<String, Object?>? model) {
-  if (model == null) {
-    return 'Set up a speech model and runner before recording.';
-  }
-  final asset = File(model['path'] as String);
-  final runner = File(model['runtime'] as String);
-  if (!asset.existsSync()) {
-    return 'The registered speech model file is missing.';
-  }
-  if (!runner.existsSync() || (runner.statSync().mode & 0x49) == 0) {
-    return 'The registered speech runner is missing or not executable.';
-  }
-  return null;
-}
+    preparedSpeechSetupProblem(store.sourceQueries.model('speech'));
 
 /// Registration alone is insufficient when a user has moved a model file.
 bool needsModel(Store store, String kind) {
   if (kind == dedicatedQueryModelKind) {
     return dedicatedQuerySetupProblem(store) != null;
   }
-  return _needsModel(store.model(kind), kind);
-}
-
-/// Inspect a prepared registration without issuing a synchronous store read.
-bool preparedNeedsModel(ModelRegistration? model, String kind) =>
-    kind == dedicatedQueryModelKind
-    ? preparedDedicatedQuerySetupProblem(model) != null
-    : _needsModel(model?.toRow(), kind);
-
-bool _needsModel(Map<String, Object?>? model, String kind) {
-  if (model == null) return true;
-  final path = model['path'] as String;
-  if (kind == 'embedding' &&
-      (!path.endsWith('.litertlm') ||
-          !const [
-            'litert_lm_embedding_cpu',
-            'litert_lm_embedding_gpu',
-          ].contains(model['backend']))) {
-    return true;
-  }
-  if (!File(path).existsSync()) return true;
-  if (kind == 'generation') {
-    final registered = model['runtime'] as String;
-    final runtime = File(
-      model['backend'] == 'litert_lm' ? liteRtRunner(registered) : registered,
-    );
-    return !runtime.existsSync() || (runtime.statSync().mode & 0x49) == 0;
-  }
-  return false;
+  return preparedNeedsModel(store.sourceQueries.model(kind), kind);
 }
