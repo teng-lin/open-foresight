@@ -48,3 +48,15 @@ Implementation order within the same final PR:
 The inventory does not qualify tooling runtime behavior, complete Stage E, or
 close the separate Dart/native quality requirements. Existing acceptance gates
 remain required for every implementation batch.
+
+
+The [conservative dependency graph](python-tooling-dependencies.json) additionally
+records literal alternatives within dynamic imports. It finds five possible
+strongly connected groups, including release lookup/candidates, CI handoffs,
+acceptance planning and main coordination. These are not assumed to execute at
+import time. Computed helper calls such as `_module(name)` remain unresolved and
+must be reviewed before assigning conversion batches. The first typing ratchet
+covers only the shared `tools.ci_timing` leaf, with explicit per-module strictness flags. The pinned mypy version expands the
+`strict` shorthand globally even inside an override, so the override lists its
+supported per-module flags; the global-only redundant-cast warning is unchanged. Broader
+CI typing, C901, package conversion and shared helper work remain outstanding.
