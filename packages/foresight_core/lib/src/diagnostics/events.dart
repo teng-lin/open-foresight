@@ -103,12 +103,12 @@ enum DiagnosticEvent {
   final String wire;
   final DiagnosticLevel severity;
   Set<DiagnosticField> get fields => switch (this) {
-    serviceStarting || serviceReady || serviceStopped => {
+    serviceStarting || serviceReady || serviceStopped => const {
       DiagnosticField.outcome,
       DiagnosticField.durationUs,
       DiagnosticField.count,
     },
-    rpcCompleted || rpcFailed => {
+    rpcCompleted || rpcFailed => const {
       DiagnosticField.operation,
       DiagnosticField.category,
       DiagnosticField.outcome,
@@ -116,12 +116,12 @@ enum DiagnosticEvent {
       DiagnosticField.status,
       DiagnosticField.attempt,
     },
-    invalidFrame || transportActivity => {
+    invalidFrame || transportActivity => const {
       DiagnosticField.category,
       DiagnosticField.bytes,
       DiagnosticField.count,
     },
-    helperExited || nativeWorkerFailed => {
+    helperExited || nativeWorkerFailed => const {
       DiagnosticField.category,
       DiagnosticField.outcome,
       DiagnosticField.status,
@@ -129,25 +129,25 @@ enum DiagnosticEvent {
       DiagnosticField.bytes,
       DiagnosticField.dropped,
     },
-    captureStateChanged => {
+    captureStateChanged => const {
       DiagnosticField.outcome,
       DiagnosticField.category,
       DiagnosticField.queued,
       DiagnosticField.active,
       DiagnosticField.durationUs,
     },
-    runtimeFailed => {
+    runtimeFailed => const {
       DiagnosticField.category,
       DiagnosticField.status,
       DiagnosticField.outcome,
     },
-    authChanged => {
+    authChanged => const {
       DiagnosticField.provider,
       DiagnosticField.outcome,
       DiagnosticField.category,
       DiagnosticField.durationUs,
     },
-    recordsDropped || recordRejected => {
+    recordsDropped || recordRejected => const {
       DiagnosticField.count,
       DiagnosticField.dropped,
       DiagnosticField.category,
@@ -155,7 +155,7 @@ enum DiagnosticEvent {
       DiagnosticField.firstMs,
       DiagnosticField.lastMs,
     },
-    invalidConfiguration => {},
+    invalidConfiguration => const {},
   };
 }
 
@@ -346,7 +346,7 @@ final class DiagnosticRecord {
   static bool validWire(Object? value) {
     if (value is! Map<String, dynamic> ||
         value.keys.any(
-          (key) => !{
+          (key) => !const <String>{
             'event',
             'component',
             'fields',
