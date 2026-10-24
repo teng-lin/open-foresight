@@ -226,7 +226,7 @@ class Service : public rpc::RagService::Service,
       // Darwin can return from kill before delivering the pending signal.
       // Do not race it with an ordinary exit or resume the transaction.
       for (;;)
-        pause();
+        ::pause();
     }
 #else
     (void)step;
