@@ -1,4 +1,5 @@
 #include "macos_audio.h"
+#include "owned_capture_work.h"
 #include "voice_processing.h"
 #import <AVFoundation/AVFoundation.h>
 #import <AudioToolbox/AudioToolbox.h>
@@ -76,6 +77,10 @@ AudioDeviceID resolve(const std::string &target, bool playback) {
 // Single producer / single consumer, two seconds at 192kHz. Never allocate,
 // block, or emit JSON from a realtime callback. Overflow becomes a visible gap.
 struct Ring {
+  const std::shared_ptr<foresight::CallbackFence> callbacks;
+  explicit Ring(std::shared_ptr<std::atomic<bool>> revoked = {})
+      : callbacks(
+            std::make_shared<foresight::CallbackFence>(std::move(revoked))) {}
   static constexpr size_t capacity = 384001;
   std::array<float, capacity> samples{};
   std::atomic<size_t> read{0}, write{0};
@@ -101,8 +106,33 @@ struct Ring {
     return true;
   }
 };
+template <class Fn>
+void captureCallback(const std::weak_ptr<Ring> &weak,
+                     const std::shared_ptr<foresight::CallbackFence> &callbacks,
+                     Fn run) noexcept {
+  auto lease = callbacks->enter();
+  if (!lease)
+    return;
+  auto ring = weak.lock();
+  if (!ring)
+    return;
+  @try {
+    try {
+      run(*ring);
+    } catch (...) {
+      ring->changed = true;
+    }
+  } @catch (NSException *) {
+    ring->changed = true;
+  }
+  // ring drops before lease, so retirement releases actual PCM off this thread.
+}
 struct Session {
-  std::shared_ptr<Ring> ring = std::make_shared<Ring>();
+  const std::shared_ptr<std::atomic<bool>> revoked;
+  std::shared_ptr<Ring> ring;
+  explicit Session(std::shared_ptr<std::atomic<bool>> cancellation = {})
+      : revoked(std::move(cancellation)),
+        ring(std::make_shared<Ring>(revoked)) {}
   bool discardAudio = false;
   std::atomic<bool> ready{false};
   OSStatus startStatus = noErr;
@@ -113,32 +143,96 @@ struct Session {
   AVAudioEngine *engine = nil;
   id engineObserver = nil;
   bool tapInstalled = false;
+#if FORESIGHT_ENABLE_TEST_HOOKS
+  bool failCloseForTesting = false;
+#endif
   int echoFallback = 0;
-  void resetEngine() {
-    if (engineObserver)
-      [[NSNotificationCenter defaultCenter] removeObserver:engineObserver];
-    engineObserver = nil;
-    if (engine) {
-      [engine stop];
-      if (tapInstalled)
-        [engine.inputNode removeTapOnBus:0];
-      [engine reset];
+  OSStatus stopInput() {
+    ring->callbacks->revoke();
+    OSStatus result = noErr;
+    @try {
+      if (engine)
+        [engine stop];
+    } @catch (NSException *) {
+      result = kAudioHardwareUnspecifiedError;
     }
-    tapInstalled = false;
-    engine = nil;
+    if (io) {
+      const auto status = AudioDeviceStop(aggregate, io);
+      if (status)
+        result = status;
+    }
+    ring->callbacks->join();
+    return result;
+  }
+  OSStatus resetEngine() {
+    ring->callbacks->revoke();
+    OSStatus result = noErr;
+    @try {
+      if (engineObserver) {
+        [[NSNotificationCenter defaultCenter] removeObserver:engineObserver];
+        engineObserver = nil;
+      }
+      if (engine) {
+        [engine stop];
+        if (tapInstalled) {
+          [engine.inputNode removeTapOnBus:0];
+          tapInstalled = false;
+        }
+        [engine reset];
+        engine = nil;
+      }
+    } @catch (NSException *) {
+      result = kAudioHardwareUnspecifiedError;
+    }
+    ring->callbacks->join();
+    return result;
+  }
+  bool closed() const {
+    return !engine && !engineObserver && !tapInstalled && !io && !aggregate &&
+           !tap;
+  }
+  OSStatus close() {
+#if FORESIGHT_ENABLE_TEST_HOOKS
+    if (failCloseForTesting)
+      return kAudioHardwareUnspecifiedError;
+#endif
+    stopInput();
+    resetEngine();
+    OSStatus result = noErr;
+    if (io) {
+      const auto status = AudioDeviceDestroyIOProcID(aggregate, io);
+      if (!status)
+        io = nullptr;
+      else
+        result = status;
+    }
+    if (!io && aggregate) {
+      const auto status = AudioHardwareDestroyAggregateDevice(aggregate);
+      if (!status)
+        aggregate = kAudioObjectUnknown;
+      else
+        result = status;
+    }
+    if (!aggregate && tap) {
+      const auto status = AudioHardwareDestroyProcessTap(tap);
+      if (!status)
+        tap = kAudioObjectUnknown;
+      else
+        result = status;
+    }
+    // No accepted callback still borrows the PCM ring. Late blocks own only
+    // an inert fence and weak reference, so actual PCM release stays here.
+    ring->callbacks->join();
+    std::fill(ring->samples.begin(), ring->samples.end(), 0);
+    return closed() ? noErr
+                    : (result ? result : kAudioHardwareUnspecifiedError);
   }
   ~Session() {
-    resetEngine();
-    if (io) {
-      AudioDeviceStop(aggregate, io);
-      AudioDeviceDestroyIOProcID(aggregate, io);
-    }
-    if (aggregate)
-      AudioHardwareDestroyAggregateDevice(aggregate);
-    if (tap)
-      AudioHardwareDestroyProcessTap(tap);
+    if (!closed())
+      std::terminate();
   }
 };
+
 bool supportedPcm(const AudioStreamBasicDescription &format) {
   return format.mFormatID == kAudioFormatLinearPCM && format.mBytesPerFrame &&
          !(format.mFormatFlags & kAudioFormatFlagIsBigEndian) &&
@@ -199,16 +293,6 @@ void pushMicrophoneAudio(Ring &ring, const AudioStreamBasicDescription &format,
   if (pushAudio(ring, format, data, true))
     ring.convertedBuffers.fetch_add(1, std::memory_order_relaxed);
 }
-OSStatus output(AudioDeviceID, const AudioTimeStamp *,
-                const AudioBufferList *data, const AudioTimeStamp *,
-                AudioBufferList *, const AudioTimeStamp *, void *context) {
-  auto &s = *static_cast<Session *>(context);
-  // Permission setup must not inspect, buffer, or publish private PCM.
-  if (s.discardAudio)
-    return noErr;
-  pushAudio(*s.ring, s.format, data);
-  return noErr;
-}
 OSStatus startEngine(Session &s, AudioDeviceID device, bool processed) {
   @try {
     s.engine = [[AVAudioEngine alloc] init];
@@ -254,21 +338,18 @@ OSStatus startEngine(Session &s, AudioDeviceID device, bool processed) {
     s.format = *format.streamDescription;
     if (!supportedPcm(s.format))
       return kAudioHardwareUnsupportedOperationError;
-    auto ring = s.ring;
+    std::weak_ptr<Ring> weakRing = s.ring;
+    auto callbacks = s.ring->callbacks;
     const double sampleRate = format.sampleRate;
     [node installTapOnBus:0
                bufferSize:1024
                    format:nil
                     block:^(AVAudioPCMBuffer *buffer, AVAudioTime *) {
-                      // The callback owns only the ring. Late callbacks cannot
-                      // touch a destroyed capture session; resampling, JSON,
-                      // and model work stay off this thread.
-                      const auto &actual = *buffer.format.streamDescription;
-                      // The original's converter maps the first source channel
-                      // when reducing microphone input to mono, rather than
-                      // averaging phase-opposed channels.
-                      pushMicrophoneAudio(*ring, actual, buffer.audioBufferList,
-                                          sampleRate);
+                      captureCallback(weakRing, callbacks, [&](Ring &ring) {
+                        const auto &actual = *buffer.format.streamDescription;
+                        pushMicrophoneAudio(ring, actual,
+                                            buffer.audioBufferList, sampleRate);
+                      });
                     }];
     s.tapInstalled = true;
     [s.engine prepare];
@@ -281,7 +362,9 @@ OSStatus startEngine(Session &s, AudioDeviceID device, bool processed) {
                         object:s.engine
                          queue:nil
                     usingBlock:^(NSNotification *) {
-                      ++ring->configurationChanges;
+                      captureCallback(weakRing, callbacks, [](Ring &ring) {
+                        ++ring.configurationChanges;
+                      });
                     }];
         return noErr;
       }
@@ -299,8 +382,9 @@ OSStatus start(Session &s, AudioDeviceID device, bool playback, int /*rate*/,
     const auto result = startVoiceCapture(
         echo,
         [&] {
-          s.resetEngine();
-          s.ring = std::make_shared<Ring>();
+          if (s.resetEngine())
+            throw std::runtime_error("Audio engine cleanup unconfirmed");
+          s.ring = std::make_shared<Ring>(s.revoked);
         },
         [&](bool processed) { return startEngine(s, device, processed); });
     s.echoFallback = result.fallbackReason;
@@ -340,15 +424,36 @@ OSStatus start(Session &s, AudioDeviceID device, bool playback, int /*rate*/,
                                               &s.aggregate);
   if (status)
     return status;
-  status = AudioDeviceCreateIOProcID(s.aggregate, output, &s, &s.io);
+  std::weak_ptr<Ring> weakRing = s.ring;
+  auto callbacks = s.ring->callbacks;
+  const auto format = s.format;
+  const bool discard = s.discardAudio;
+  status = AudioDeviceCreateIOProcIDWithBlock(
+      &s.io, s.aggregate, nullptr,
+      ^(const AudioTimeStamp *, const AudioBufferList *data,
+        const AudioTimeStamp *, AudioBufferList *, const AudioTimeStamp *) {
+        if (discard)
+          return; // Consent never inspects private PCM.
+        captureCallback(weakRing, callbacks,
+                        [&](Ring &ring) { pushAudio(ring, format, data); });
+      });
   return status ? status : AudioDeviceStart(s.aggregate, s.io);
 }
 struct SystemAudioRequest {
   std::atomic<bool> completed{false};
   OSStatus status = noErr; // Published by completed's release/acquire pair.
+  bool retired = false;
+  std::shared_ptr<Session>
+      session; // Retain unconfirmed cleanup; never replace it.
 };
-std::mutex systemRequestMutex;
-std::shared_ptr<SystemAudioRequest> systemRequest;
+std::mutex &systemRequestMutex() {
+  static auto *value = new std::mutex;
+  return *value;
+}
+auto &systemRequest() {
+  static auto *value = new std::shared_ptr<SystemAudioRequest>;
+  return *value;
+}
 NSString *const systemAudioSettings =
     @"x-apple.systempreferences:com.apple.preference.security?Privacy_"
     @"AudioCapture";
@@ -431,6 +536,51 @@ std::string micStatus() {
   }
 }
 } // namespace
+struct MacCaptureOwner {
+  const std::shared_ptr<std::atomic<bool>> revoked =
+      std::make_shared<std::atomic<bool>>(false);
+  foresight::CaptureStartup startup;
+  std::shared_ptr<Session> session;
+};
+template <class Start>
+void launchCaptureStartup(const std::shared_ptr<MacCaptureOwner> &owner,
+                          const std::shared_ptr<Session> &session,
+                          Start start) {
+  owner->startup.start([session, owner, start = std::move(start)] {
+    @autoreleasepool {
+      OSStatus status = kAudioHardwareUnspecifiedError;
+      @try {
+        try {
+          if (!owner->revoked->load(std::memory_order_acquire))
+            status = start(*session);
+        } catch (...) {
+        }
+      } @catch (NSException *) {
+      }
+      session->startStatus = status;
+      session->ready.store(true, std::memory_order_release);
+    }
+  });
+}
+std::shared_ptr<MacCaptureOwner> fs_macos_capture_owner() {
+  return std::make_shared<MacCaptureOwner>();
+}
+void fs_macos_capture_revoke(
+    const std::shared_ptr<MacCaptureOwner> &owner) noexcept {
+  if (owner)
+    owner->revoked->store(true, std::memory_order_release);
+}
+void fs_macos_capture_close(const std::shared_ptr<MacCaptureOwner> &owner) {
+  if (!owner)
+    return;
+  fs_macos_capture_revoke(owner);
+  owner->startup.join();
+  if (owner->session) {
+    if (owner->session->close())
+      throw std::runtime_error("Core Audio cleanup unconfirmed");
+    owner->session.reset();
+  }
+}
 std::string fs_macos_devices() {
   @autoreleasepool {
     NSMutableArray *items = [NSMutableArray array];
@@ -449,8 +599,8 @@ std::string fs_macos_capabilities() {
   @autoreleasepool {
     std::shared_ptr<SystemAudioRequest> request;
     {
-      std::lock_guard lock(systemRequestMutex);
-      request = systemRequest;
+      std::lock_guard lock(systemRequestMutex());
+      request = systemRequest();
     }
     NSMutableDictionary *result = [systemAudioState(request) mutableCopy];
     [result addEntriesFromDictionary:@{
@@ -488,10 +638,11 @@ std::string fs_macos_request_system(int timeout_ms) {
     }
     std::shared_ptr<SystemAudioRequest> request;
     {
-      std::lock_guard lock(systemRequestMutex);
-      request = systemRequest;
-      if (!request || request->completed.load(std::memory_order_acquire)) {
-        request = systemRequest = std::make_shared<SystemAudioRequest>();
+      std::lock_guard lock(systemRequestMutex());
+      request = systemRequest();
+      if (!request || (request->completed.load(std::memory_order_acquire) &&
+                       request->retired)) {
+        request = systemRequest() = std::make_shared<SystemAudioRequest>();
         // Match recording's late-completion ownership: Core Audio can wait on
         // consent; returning on timeout never destroys a session still in use.
         // Keep a single in-flight request so repeated clicks cannot create
@@ -500,25 +651,43 @@ std::string fs_macos_request_system(int timeout_ms) {
           std::thread([request] {
             @autoreleasepool {
               OSStatus status = kAudioHardwareUnspecifiedError;
-              try {
-                AudioDeviceID device = resolve("auto", true);
-                if (!device)
-                  status = kAudioHardwareBadDeviceError;
-                else {
-                  auto session = std::make_unique<Session>();
-                  session->discardAudio = true;
-                  status = start(*session, device, true, 48000);
+              @try {
+                try {
+                  AudioDeviceID device = resolve("auto", true);
+                  if (!device)
+                    status = kAudioHardwareBadDeviceError;
+                  else {
+                    request->session = std::make_shared<Session>();
+                    request->session->discardAudio = true;
+                    status = start(*request->session, device, true, 48000);
+                  }
+                } catch (...) {
                 }
-              } catch (...) {
-                // Never let thread/allocation failures terminate the service.
-              } // Stop IO and destroy the private aggregate/tap before
-                // reporting.
+              } @catch (NSException *) {
+              } @
+              try {
+                try {
+                  if (request->session) {
+                    const auto cleanup = request->session->close();
+                    if (!cleanup)
+                      request->session.reset();
+                    else
+                      status = cleanup;
+                  }
+                } catch (...) {
+                  status = kAudioHardwareUnspecifiedError;
+                }
+              } @catch (NSException *) {
+                status = kAudioHardwareUnspecifiedError;
+              }
+              request->retired = !request->session;
               request->status = status;
               request->completed.store(true, std::memory_order_release);
             }
           }).detach();
         } catch (...) {
           request->status = kAudioHardwareUnspecifiedError;
+          request->retired = true;
           request->completed.store(true, std::memory_order_release);
         }
       }
@@ -549,11 +718,13 @@ bool fs_macos_request_microphone() {
 }
 void fs_macos_capture(
     const std::string &target, bool playback, int rate,
-    std::atomic<bool> &cancel,
+    std::atomic<bool> &cancel, const std::shared_ptr<MacCaptureOwner> &owner,
     const std::function<void(const std::vector<unsigned char> &)> &pcm,
     const std::function<void(const std::string &)> &emit,
     std::atomic<bool> *echoCancellation) {
   @autoreleasepool {
+    if (!owner)
+      throw std::invalid_argument("Missing native capture owner");
     auto event = [&](NSString *type, NSString *state, NSString *message,
                      NSString *code) {
       emit(json(@{
@@ -605,21 +776,23 @@ void fs_macos_capture(
           std::this_thread::sleep_for(std::chrono::milliseconds(100));
         continue;
       }
-      auto ownedSession = std::make_shared<Session>();
-      // Core Audio can wait on a system permission dialog. Keep cancellation
-      // and service shutdown responsive; late completion owns and destroys its
-      // session.
+      owner->startup.join();
+      if (owner->session) {
+        if (owner->session->close())
+          throw std::runtime_error("Core Audio cleanup unconfirmed");
+        owner->session.reset();
+      }
+      auto ownedSession = std::make_shared<Session>(owner->revoked);
+      owner->session = ownedSession;
       const bool requested =
           !playback && echoCancellation && echoCancellation->load();
       if (requested)
         tapStartupFallback = false;
-      std::thread([ownedSession, device, playback, rate, requested] {
-        @autoreleasepool {
-          ownedSession->startStatus =
-              start(*ownedSession, device, playback, rate, requested);
-          ownedSession->ready.store(true, std::memory_order_release);
-        }
-      }).detach();
+      launchCaptureStartup(
+          owner, ownedSession,
+          [device, playback, rate, requested](Session &session) {
+            return start(session, device, playback, rate, requested);
+          });
       auto deadline =
           std::chrono::steady_clock::now() + std::chrono::seconds(30);
       while (!ownedSession->ready.load(std::memory_order_acquire) && !cancel &&
@@ -696,10 +869,9 @@ void fs_macos_capture(
       uint64_t configurationChanges = 0;
       while (true) {
         if (cancel) {
-          if (session.engine)
-            [session.engine stop];
-          if (session.io)
-            AudioDeviceStop(session.aggregate, session.io);
+          fs_macos_capture_revoke(owner);
+          session
+              .stopInput(); // Join admitted callbacks before final PCM drain.
         }
         float value;
         while (session.ring->pop(value)) {

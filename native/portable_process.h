@@ -22,12 +22,18 @@ namespace foresight {
 // macOS has no pipe2. Serialize our descriptor creation and launches; Mac
 // posix_spawn also uses CLOEXEC_DEFAULT so concurrent launches cannot inherit
 // descriptors during the pipe/fcntl window.
-inline std::mutex launch_mutex;
+// Actors with retained-unconfirmed ownership can remain live at OS process
+// cleanup. Initialize inside admission boundaries, never destroy their shared
+// launch lock from static/DSO finalization while those actors can still use it.
+inline std::mutex &launch_mutex_for_process() {
+  static auto *value = new std::mutex;
+  return *value;
+}
 // Configuration is immutable once the first native handle starts. The seal is
 // permanent: a later handle may still have runtime-owned background threads.
 inline bool runtime_environment_sealed = false;
 inline void seal_runtime_environment() {
-  std::lock_guard lock(launch_mutex);
+  std::lock_guard lock(launch_mutex_for_process());
   runtime_environment_sealed = true;
 }
 inline void configure_spawn_signals(posix_spawnattr_t *attr) {

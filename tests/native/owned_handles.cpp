@@ -1,19 +1,47 @@
+#define FORESIGHT_ENABLE_TEST_HOOKS 1
 #include "../../native/foresight_native.cpp"
 #include <filesystem>
+#include <future>
 #include <iostream>
 #include <stdexcept>
-
+// Force one Engine address to be reused while its old ID/token is still live.
+// Other allocations remain ordinary; no production allocator hook is added.
+std::atomic<void *> capture_engine_free{nullptr}, reusable_engine{nullptr};
+std::atomic<bool> hold_engine_delete{false};
+void *operator new(std::size_t size) {
+  if (size == sizeof(Engine))
+    if (auto *value = reusable_engine.exchange(nullptr))
+      return value;
+  if (auto *value = std::malloc(size ? size : 1))
+    return value;
+  throw std::bad_alloc{};
+}
+void operator delete(void *value) noexcept {
+  if (!value)
+    return;
+  auto *expected = value;
+  if (capture_engine_free.compare_exchange_strong(expected, nullptr)) {
+    reusable_engine = value;
+    while (hold_engine_delete)
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    return;
+  }
+  std::free(value);
+}
+void operator delete(void *value, std::size_t) noexcept {
+  ::operator delete(value);
+}
+using namespace std::chrono_literals;
 void check(bool value, const char *message) {
   if (!value)
     throw std::runtime_error(message);
 }
 template <class Predicate> void until(Predicate predicate) {
-  const auto deadline =
-      std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  const auto deadline = std::chrono::steady_clock::now() + 5s;
   while (!predicate()) {
     check(std::chrono::steady_clock::now() < deadline,
           "bounded owner settlement");
-    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    std::this_thread::sleep_for(2ms);
   }
 }
 struct HeldWorker {
@@ -33,8 +61,7 @@ struct HeldWorker {
   }
   void ready() {
     std::unique_lock lock(gate->mutex);
-    check(gate->changed.wait_for(lock, std::chrono::seconds(2),
-                                 [&] { return gate->entered; }),
+    check(gate->changed.wait_for(lock, 2s, [&] { return gate->entered; }),
           "worker entered");
   }
   void release() {
@@ -46,185 +73,522 @@ struct HeldWorker {
     release();
   }
 };
-
-void generation(const char *executable) {
+std::shared_ptr<NativeControl> control(uint64_t id) {
+  auto &registry = native_handles();
+  std::lock_guard lock(registry.mutex);
+  return registry.owners.at(id);
+}
+void release_owner(uint64_t id, uint64_t token) {
+  until([&] { return fs_operation_status(token) == 1; });
+  check(fs_operation_release(token) == -1,
+        "retire acknowledgement belongs to owner");
+  check(fs_owner_release(id) == 0 && fs_operation_status(token) == -1,
+        "owner release acknowledges completion metadata exactly once");
+}
+void legacy_failure(const char *executable) {
   auto *engine = fs_engine_create(executable, "/dev/null");
-  check(engine, "engine created");
-  auto *conversation =
-      static_cast<Conversation *>(fs_conversation_create(engine));
-  check(conversation, "conversation created");
-  auto lifetime = conversation->poll_lifetime;
+  check(engine && !native_handles().process_lifetime,
+        "legacy-only admission has no asynchronous owners");
+  auto owner = native_handles().handles.at(engine);
+  owner->fail_cleanup_for_testing = true;
+  check(fs_engine_destroy(engine) == -1 && owner->object &&
+            native_handles().process_lifetime && !fs_engine_state(engine),
+        "legacy cleanup exception returns sentinel and retains unconfirmed "
+        "authority");
+  owner->fail_cleanup_for_testing = false;
+  check(fs_engine_destroy(engine) == 0 && !owner->object,
+        "serialized legacy retry completes original cleanup");
+  engine = fs_engine_create(executable, "/dev/null");
+  auto *conversation = fs_conversation_create(engine);
+  owner = native_handles().handles.at(conversation);
+  owner->fail_cleanup_for_testing = true;
+  check(fs_conversation_destroy(conversation, 1) == -1 &&
+            fs_engine_destroy(engine) == -1,
+        "failed child cleanup preserves legacy engine reference refusal");
+  owner->fail_cleanup_for_testing = false;
+  check(fs_conversation_destroy(conversation, 1) == 0 &&
+            fs_engine_destroy(engine) == 0,
+        "legacy child retry actually releases parent reference");
+}
+void generation(const char *executable) {
+  auto engine = fs_owned_engine_create(executable, "/dev/null", 0, 0);
+  auto conversation = fs_owned_conversation_create(engine);
+  check(engine && conversation, "owned generation created");
+  auto child_control = control(conversation);
+  auto *child = static_cast<Conversation *>(child_control->object.get());
+  auto lifetime = child->poll_lifetime;
   HeldWorker held;
-  conversation->active = true;
-  conversation->thread = held.start();
+  child->active = true;
+  child->thread = held.start();
   held.ready();
-  std::thread poll([&] { fs_string_free(fs_event_poll(conversation, 60000)); });
+  std::atomic<bool> polled{false};
+  poll_wait_boundary.pause = true;
+  poll_wait_boundary.entered = false;
+  poll_wait_boundary.release = false;
+  std::thread poll([&] {
+    fs_string_free(fs_owned_event_poll(conversation, 60000));
+    polled = true;
+  });
   foresight::ScopeExit cleanup([&] {
-    held.release();
-    // Revoke/wake even on an earlier assertion failure.
+    poll_wait_boundary.pause = false;
+    poll_wait_boundary.release = true;
     fs_engine_retire(engine);
-    if (poll.joinable())
+    if (poll.joinable()) {
+      {
+        std::lock_guard lock(child->mu);
+        child->cv.notify_all();
+      }
       poll.join();
-  });
-  until([&] {
-    if (lifetime->gate.try_lock()) {
-      lifetime->gate.unlock();
-      return false;
     }
-    return true;
+    held.release();
   });
+  until([&] { return poll_wait_boundary.entered.load(); });
   const auto start = std::chrono::steady_clock::now();
-  const auto engine_token = fs_engine_retire(engine);
-  const auto child_token = fs_conversation_retire(conversation);
-  check(engine_token && child_token, "native tokens returned");
-  check(std::chrono::steady_clock::now() - start <
-            std::chrono::milliseconds(100),
-        "retirement request must not join held worker/poll");
-  check(fs_engine_retire(engine) == engine_token &&
+  const auto parent = fs_engine_retire(engine),
+             child_token = fs_conversation_retire(conversation);
+  check(parent && child_token &&
+            std::chrono::steady_clock::now() - start < 100ms,
+        "retire revokes without joining held worker inline");
+  check(fs_engine_retire(engine) == parent &&
             fs_conversation_retire(conversation) == child_token,
-        "repeated close joins one identity");
-  check(fs_conversation_create(engine) == nullptr, "parent admission revoked");
-  check(fs_generation_cancel(conversation) == -1, "child admission revoked");
-  check(fs_event_poll(conversation, 0) == nullptr, "late poll rejected");
-  check(fs_operation_status(child_token) == 0 &&
-            fs_operation_status(engine_token) == 0 &&
-            fs_operation_release(child_token) == -1,
-        "held destruction cannot publish or release completion");
+        "repeat retire recovers native identity");
+  check(!fs_owned_conversation_create(engine) &&
+            fs_owned_generation_cancel(conversation) == -1 &&
+            fs_owned_event_poll(conversation, 0) == nullptr,
+        "late admission rejected");
+  // The revocation notification was delivered before the waiter actually
+  // waits. Only independent bounded rechecks can settle this owned poll.
+  poll_wait_boundary.release = true;
+  const auto poll_deadline = std::chrono::steady_clock::now() + 1s;
+  while (!polled && std::chrono::steady_clock::now() < poll_deadline)
+    std::this_thread::sleep_for(2ms);
+  check(polled,
+        "lost notification cannot strand owned poll behind its own cleanup");
+  check(
+      fs_operation_status(parent) == 0 && fs_operation_status(child_token) == 0,
+      "poll wakes before physical held worker exit; completion stays pending");
   held.release();
   poll.join();
-  until([&] { return fs_operation_status(engine_token) == 1; });
-  check(fs_operation_status(child_token) == 1, "child cleanup precedes parent");
-  // No caller retained a pointer-bearing work packet or worker acknowledgement.
-  check(fs_operation_release(child_token) == 0 &&
-            fs_operation_release(engine_token) == 0 &&
-            fs_operation_status(child_token) == -1,
-        "late token observation and exact release");
+  until([&] { return fs_operation_status(parent) == 1; });
+  check(!child_control->object && !child_control->parent &&
+            !control(engine)->object,
+        "completed metadata retains no physical authority");
+  check(fs_conversation_retire(conversation) == child_token,
+        "lost completion recovered after destruction");
+  release_owner(conversation, child_token);
+  release_owner(engine, parent);
+  // Repeated stale IDs can never address a later owner, irrespective of address
+  // reuse.
+  auto next = fs_owned_engine_create(executable, "/dev/null", 0, 0);
+  auto *next_state = fs_owned_engine_state(next);
+  check(next > engine && !fs_engine_retire(engine) && next_state,
+        "stale owner ID never aliases new object");
+  fs_string_free(next_state);
+  release_owner(next, fs_engine_retire(next));
 }
-void media() {
-  auto speech = std::make_unique<Speech>();
-  HeldWorker speech_worker;
-  speech->thread = speech_worker.start();
-  speech_worker.ready();
-  auto *speech_handle = publish_native(std::move(speech), NativeKind::speech);
-  const auto speech_token = fs_speech_retire(speech_handle);
-  check(speech_token && fs_operation_status(speech_token) == 0,
-        "speech retirement retains held worker");
-  speech_worker.release();
-  until([&] { return fs_operation_status(speech_token) == 1; });
-  check(fs_operation_release(speech_token) == 0, "speech completion released");
-
-  auto capture = std::make_unique<Capture>();
-  HeldWorker capture_worker;
-  capture->thread = capture_worker.start();
-  capture_worker.ready();
-  capture->emit("final-pcm");
-  auto *capture_handle =
-      publish_native(std::move(capture), NativeKind::capture);
-  const auto finish_token = fs_capture_finish_async(capture_handle);
-  check(finish_token && fs_operation_status(finish_token) == 0,
-        "capture finish retains held callback");
-  capture_worker.release();
-  until([&] { return fs_operation_status(finish_token) == 1; });
-  auto *frame = fs_event_poll(capture_handle, 0);
-  check(frame && std::string(frame) == "final-pcm",
-        "finished capture retains final PCM");
-  fs_string_free(frame);
-  const auto retire_token = fs_capture_retire(capture_handle);
-  check(retire_token && fs_event_poll(capture_handle, 0) == nullptr,
-        "capture retirement revokes polling");
-  until([&] { return fs_operation_status(retire_token) == 1; });
-  check(fs_operation_release(finish_token) == 0 &&
-            fs_operation_release(retire_token) == 0,
-        "capture finish and actual destruction are separate");
-}
-void speech_exit() {
-  auto speech = std::make_unique<Speech>();
+void independent_speech(const char *executable) {
+  const auto speech = fs_owned_speech_create(executable, "/dev/null");
+  check(speech && fs_owned_speech_finish(speech, "accepted") == 0,
+        "real exported speech finish accepted");
+  auto owner = control(speech);
+  auto &worker = *static_cast<Speech *>(owner->object.get());
+  until([&] { return !worker.active; });
+  worker.join();
+  // Hold the accepted request's post-done physical thread boundary. The real
+  // exported finish prepared its immutable join node; the fixture never does.
   HeldWorker held;
-  speech->thread = held.start();
+  worker.thread = held.start();
   held.ready();
-  auto *handle = publish_native(std::move(speech), NativeKind::speech);
-  {
-    NativeUse use(handle, NativeKind::speech);
-    check(bool(use) && prepare_native_speech_join(use.control),
-          "speech join prepared");
-  }
-  static_cast<Speech *>(handle)->emit("done-before-thread-exit");
-  fs_string_free(fs_event_poll(handle, 0));
-  const auto start = std::chrono::steady_clock::now();
-  const auto joined = fs_speech_join_async(handle);
-  check(joined && std::chrono::steady_clock::now() - start <
-                      std::chrono::milliseconds(100),
-        "speech join request must not block the caller");
+  const auto accepted = owner->finish;
+  int16_t pcm[] = {1, 2};
+  check(fs_owned_speech_push(speech, pcm, 2, 16000) == -1 &&
+            fs_owned_speech_finish(speech, "before-join") == -1 &&
+            owner->finish == accepted,
+        "idle accepted join blocks reuse without replacing token");
+  struct QueueGate {
+    std::atomic<bool> entered{false}, release{false};
+  };
+  auto queue = std::make_shared<QueueGate>();
+  foresight::ScopeExit release_queue([&] { queue->release = true; });
+  auto &operations = native_handles().operations;
+  auto blocker = operations.create(
+      [](NativeOperation &op) {
+        auto &gate = *static_cast<QueueGate *>(op.context);
+        gate.entered = true;
+        while (!gate.release)
+          std::this_thread::sleep_for(1ms);
+        return NativeOperation::Result::succeeded;
+      },
+      queue.get(), owner->group);
+  check(operations.submit(blocker, queue), "hold exact owner queue");
+  until([&] { return queue->entered.load(); });
+  const auto joined = fs_speech_join_async(speech);
+  check(operations.find(joined)->state == NativeOperation::State::queued &&
+            fs_owned_speech_finish(speech, "queued-join") == -1 &&
+            owner->finish == accepted,
+        "queued join refuses reuse without changing accepted token");
+  queue->release = true;
+  until([&] { return operations.status(blocker->token) == 1; });
+  check(operations.release(blocker->token), "fixture queue owner released");
   until([&] {
-    const auto operation = native_handles().operations.find(joined);
-    return operation->state.load() == NativeOperation::State::running ||
-           operation->terminal();
+    return operations.find(joined)->state == NativeOperation::State::running;
   });
-  check(fs_operation_status(joined) == 0, "done receipt is not worker exit");
-  const auto retired = fs_speech_retire(handle);
-  check(retired && fs_operation_status(retired) == 0,
-        "speech handle remains owned through actual worker exit");
+  check(fs_owned_speech_finish(speech, "during-join") == -1 &&
+            owner->finish == accepted,
+        "running join refuses finish and preserves exact generation");
+  auto *legacy = fs_engine_create(executable, "/dev/null");
+  auto closed =
+      std::async(std::launch::async, [&] { return fs_engine_destroy(legacy); });
+  check(closed.wait_for(1s) == std::future_status::ready && closed.get() == 0,
+        "held async join never blocks legacy local close");
+  uint64_t capture_id;
+  void *capture;
+  {
+    NativeCreation owned;
+    capture = publish_native(std::make_unique<Capture>(), NativeKind::capture);
+    capture_id = native_identity(capture);
+  }
+  auto *legacy_capture =
+      publish_native(std::make_unique<Capture>(), NativeKind::capture);
+  auto capture_closed =
+      std::async(std::launch::async, [&] { fs_capture_stop(legacy_capture); });
+  const bool closed_promptly =
+      capture_closed.wait_for(1s) == std::future_status::ready;
+  if (!closed_promptly)
+    held.release();
+  check(closed_promptly, "held speech join cannot block legacy capture stop");
+  capture_closed.get();
+  auto finished = fs_capture_finish_async(capture_id);
+  until([&] { return fs_operation_status(finished) == 1; });
+  check(fs_operation_status(joined) == 0,
+        "independent capture finishes while speech remains held");
+  fs_capture_stop(
+      capture); // legacy mixed call must not consume an owned token.
+  check(fs_operation_status(finished) == 1 &&
+            fs_operation_release(finished) == 0,
+        "legacy raw call cannot acknowledge owned completion");
+  release_owner(capture_id, fs_capture_retire(capture_id));
   held.release();
+  until([&] { return fs_operation_status(joined) == 1; });
+  check(fs_operation_release(joined) == 0 &&
+            fs_owned_speech_push(speech, pcm, 2, 16000) == 0,
+        "actual join permits reuse even after token acknowledgement");
+  check(fs_owned_speech_finish(speech, "next-generation") == 0 &&
+            owner->finish != accepted,
+        "next generation owns a new join token");
+  const auto next_join = fs_speech_join_async(speech);
+  until([&] { return fs_operation_status(next_join) == 1; });
+  check(fs_operation_release(next_join) == 0,
+        "next request joined independently");
+  release_owner(speech, fs_speech_retire(speech));
+}
+std::atomic<bool> fail_child{false};
+NativeOperation::Result child_fault(NativeOperation &op) {
+  if (fail_child)
+    throw std::runtime_error("fixture child cleanup failed");
+  return native_retire(op);
+}
+void child_failure(const char *executable) {
+  auto engine = fs_owned_engine_create(executable, "/dev/null", 0, 0);
+  auto child = fs_owned_conversation_create(engine);
+  auto parent_control = control(engine), child_control = control(child);
+  std::weak_ptr<void> physical_engine = parent_control->object;
+  auto &operations = native_handles().operations;
+  check(operations.discard(operations.find(child_control->retire)),
+        "replace unpublished fault node");
+  auto replacement = operations.create(child_fault, child_control.get(),
+                                       child_control->group, child);
+  replacement->releases_group = true;
+  child_control->retire = replacement->token;
+  fail_child = true;
+  auto retired = fs_engine_retire(engine);
+  until([&] { return fs_operation_status(retired) != 0; });
+  check(fs_operation_status(retired) == 3 &&
+            fs_operation_status(child_control->retire) == 3 &&
+            !physical_engine.expired() && child_control->object &&
+            fs_owner_release(engine) == -1 &&
+            fs_operation_release(retired) == -1,
+        "unconfirmed child retains actual engine and observable authority");
+  auto *legacy = fs_engine_create(executable, "/dev/null");
+  check(legacy && fs_engine_destroy(legacy) == 0,
+        "unconfirmed async exception cannot hang legacy destruction");
+  fail_child = false;
+  check(fs_engine_retire(engine) == retired,
+        "explicit retry reuses cleanup identity");
   until([&] { return fs_operation_status(retired) == 1; });
-  check(fs_operation_status(joined) == 1,
-        "join completion precedes destruction");
-  check(fs_operation_release(joined) == 0 && fs_operation_release(retired) == 0,
-        "speech join and destruction acknowledge independently");
+  check(physical_engine.expired() && !child_control->object &&
+            !child_control->parent,
+        "retry actually destroys child before parent and drops authority");
+  release_owner(child, child_control->retire);
+  release_owner(engine, retired);
+}
+void owned_rollback(const char *executable) {
+  auto speech = fs_owned_speech_create(executable, "/dev/null");
+  check(speech, "owned rollback speech admitted");
+  setenv("FORESIGHT_TEST_THREAD_FAILURE", "speech", 1);
+  check(fs_owned_speech_finish(speech, "rollback") == -1 &&
+            control(speech)->speech_joined &&
+            fs_owned_event_poll(speech, 0) == nullptr,
+        "failed thread restores admission and queue event");
+  unsetenv("FORESIGHT_TEST_THREAD_FAILURE");
+  check(fs_owned_speech_finish(speech, "retry") == 0,
+        "failed request can be retried");
+  release_owner(speech, fs_speech_retire(speech));
+  auto handles = native_handles().handles.size(),
+       owners = native_handles().owners.size(), polls = poll_registry().size();
+  setenv("FORESIGHT_TEST_THREAD_FAILURE", "capture", 1);
+  check(!fs_owned_capture_start("auto", 0, 16000, 0) &&
+            native_handles().handles.size() == handles &&
+            native_handles().owners.size() == owners &&
+            poll_registry().size() == polls,
+        "owned capture thread failure releases every unpublished authority");
+  unsetenv("FORESIGHT_TEST_THREAD_FAILURE");
+}
+void bounds(const char *executable) {
+  std::vector<uint64_t> owners;
+  for (size_t n = 0; n < foresight::OwnedOperations::max_owner_groups; ++n) {
+    auto id = fs_owned_engine_create(executable, "/dev/null", 0, 0);
+    check(id, "32 independent live owner groups admitted");
+    owners.push_back(id);
+  }
+  const auto handles = native_handles().handles.size(),
+             polls = poll_registry().size();
+  check(!fs_owned_capture_start("auto", 0, 16000, 0) &&
+            native_handles().handles.size() == handles &&
+            poll_registry().size() == polls,
+        "33rd live owner refuses before physical capture and rolls back all "
+        "metadata");
+  auto *legacy = fs_engine_create(executable, "/dev/null");
+  check(legacy && fs_engine_destroy(legacy) == 0,
+        "owner bound cannot poison legacy admission");
+  for (auto id : owners)
+    release_owner(id, fs_engine_retire(id));
+  auto &operations = native_handles().operations;
+  std::vector<uint64_t> abandoned;
+  for (size_t n = 0; n < 4096; ++n) {
+    auto op = operations.create(
+        [](NativeOperation &) { return NativeOperation::Result::succeeded; },
+        nullptr);
+    check(operations.submit(op, nullptr),
+          "fill retained async record capacity");
+    abandoned.push_back(op->token);
+  }
+  check(!fs_owned_engine_create(executable, "/dev/null", 0, 0),
+        "4096 unacknowledged records refuse new owned admission");
+  legacy = fs_engine_create(executable, "/dev/null");
+  auto *speech = fs_speech_create(executable, "/dev/null");
+  check(legacy && speech && fs_speech_finish(speech, "legacy-capacity") == 0,
+        "retained async capacity does not change legacy create/finish");
+  fs_speech_destroy(speech);
+  check(fs_engine_destroy(legacy) == 0, "legacy cleanup remains local");
+  for (auto token : abandoned) {
+    until([&] { return operations.status(token) == 1; });
+    check(operations.release(token), "release bounded control metadata");
+  }
+}
+void reused_address(const char *executable) {
+  auto first = fs_owned_engine_create(executable, "/dev/null", 0, 0);
+  auto *address = control(first)->object.get();
+  capture_engine_free = address;
+  hold_engine_delete = true;
+  foresight::ScopeExit release_delete([&] { hold_engine_delete = false; });
+  auto retired = fs_engine_retire(first);
+  until([&] { return reusable_engine == address; });
+  check(fs_operation_status(retired) == 0 &&
+            fs_engine_retire(first) == retired && fs_owner_release(first) == -1,
+        "retry remains coalesced during actual destruction");
+  auto second = fs_owned_engine_create(executable, "/dev/null", 0, 0);
+  auto *early_state = fs_owned_engine_state(second);
+  check(early_state,
+        "new raw admission survives reuse before old destructor returns");
+  fs_string_free(early_state);
+  hold_engine_delete = false;
+  until([&] { return fs_operation_status(retired) == 1; });
+  check(control(second)->object.get() == address && second != first,
+        "resource address actually reused while old owner metadata survives");
+  check(fs_engine_retire(first) == retired,
+        "lost token retry resolves old completion at reused address");
+  auto *state = fs_owned_engine_state(second);
+  check(state && !control(second)->closing,
+        "old ID retry cannot revoke new owner");
+  fs_string_free(state);
+  release_owner(first, retired);
+  check(!fs_engine_retire(first), "released stale identity remains unknown");
+  release_owner(second, fs_engine_retire(second));
+}
+void capture_tail() {
+  uint64_t id = 0;
+  {
+    NativeCreation owned;
+    id = native_identity(
+        publish_native(std::make_unique<Capture>(), NativeKind::capture));
+  }
+  auto *capture = static_cast<Capture *>(control(id)->object.get());
+  HeldWorker held;
+  capture->thread = held.start();
+  held.ready();
+  capture->emit("final-pcm");
+  auto finished = fs_capture_finish_async(id);
+  check(finished && fs_operation_status(finished) == 0,
+        "capture finish joins held callback");
+  held.release();
+  until([&] { return fs_operation_status(finished) == 1; });
+  auto *frame = fs_owned_event_poll(id, 0);
+  check(frame && std::string(frame) == "final-pcm",
+        "physical finish retains final PCM for drain");
+  fs_string_free(frame);
+  auto retired = fs_capture_retire(id);
+  check(!fs_owned_event_poll(id, 0),
+        "retirement separately revokes final queue");
+  check(fs_operation_release(finished) == 0,
+        "finish result independent from retire acknowledgement");
+  release_owner(id, retired);
+}
+void shared_model_handoff(const char *executable) {
+  setenv("FORESIGHT_WHISPER_WORKER", executable, 1);
+  foresight::ScopeExit clear_override(
+      [&] { unsetenv("FORESIGHT_WHISPER_WORKER"); });
+  const auto first = fs_owned_speech_create(executable, "/dev/null");
+  check(first, "persistent speech owner admitted");
+  auto &speech = *static_cast<Speech *>(control(first)->object.get());
+  auto *model = speech.worker_engine.get();
+  std::weak_ptr<SpeechEngine> physical_model = speech.worker_engine;
+  check(model, "shared speech model owned");
+  model->engine.persistent = std::make_unique<PersistentGeneration>();
+  HeldWorker held;
+  model->engine.persistent->thread = held.start();
+  held.ready();
+  auto retired = fs_speech_retire(first);
+  until([&] {
+    std::lock_guard lock(speech_engines_mutex());
+    return model->retiring;
+  });
+  const auto second = fs_owned_speech_create(executable, "/dev/null");
+  check(second && static_cast<Speech *>(control(second)->object.get())
+                          ->worker_engine.get() != model,
+        "new admission never borrows a model whose final owner is retiring");
+  release_owner(second, fs_speech_retire(second));
+  check(fs_operation_status(retired) == 0 && !physical_model.expired(),
+        "old model remains held until actual last physical worker join");
+  held.release();
+  release_owner(first, retired);
+  check(physical_model.expired(),
+        "last owner completion retains no shared model authority");
+}
+void independent_acknowledgements() {
+  uint64_t capture;
+  {
+    NativeCreation owned;
+    capture = native_identity(
+        publish_native(std::make_unique<Capture>(), NativeKind::capture));
+  }
+  const auto finish = fs_capture_finish_async(capture),
+             retired = fs_capture_retire(capture);
+  until([&] { return fs_operation_status(retired) == 1; });
+  check(
+      fs_owner_release(capture) == 0 && fs_operation_status(finish) == 1,
+      "owner retirement acknowledgement cannot erase finish subscriber result");
+  check(fs_operation_release(finish) == 0,
+        "late finish subscriber acknowledges its own result");
 }
 void held_api(const char *executable) {
-  auto *engine = fs_engine_create(executable, "/dev/null");
-  check(engine, "leased engine created");
-  uint64_t token = 0;
+  auto engine = fs_owned_engine_create(executable, "/dev/null", 0, 0);
+  uint64_t retired;
   {
-    NativeUse held(engine, NativeKind::engine);
-    check(bool(held), "actual API lease admitted");
-    token = fs_engine_retire(engine);
-    check(token && fs_operation_status(token) == 0,
-          "retirement cannot destroy an admitted API call");
-    check(fs_engine_state(engine) == nullptr, "later API lease refused");
+    NativeOwnerUse call(engine, NativeKind::engine);
+    check(bool(call), "actual owned API lease acquired");
+    retired = fs_engine_retire(engine);
+    check(retired && fs_operation_status(retired) == 0 &&
+              !fs_owned_engine_state(engine),
+          "close revokes new calls and retains admitted API lease");
   }
-  until([&] { return fs_operation_status(token) == 1; });
-  check(fs_operation_release(token) == 0, "API lease settlement joined");
+  release_owner(engine, retired);
+}
+void probes(const char *executable) {
+  auto engine = fs_owned_engine_create(executable, "/dev/null", 1, 0);
+  const auto first = fs_engine_probe_async(engine);
+  until([&] { return fs_operation_status(first) == 1; });
+  auto second = fs_engine_probe_async(engine);
+  check(second && second != first, "completed probe starts actual fresh work");
+  until([&] { return fs_operation_status(second) == 1; });
+  check(fs_operation_release(first) == 0 && fs_operation_release(second) == 0,
+        "probe results acknowledge independently");
+  release_owner(engine, fs_engine_retire(engine));
+  const char *root = std::getenv("FORESIGHT_TEST_TEMP_ROOT");
+  check(root, "private root required");
+  auto marker = std::filesystem::path(root) /
+                ("owned-probe-v2-" + std::to_string(getpid()));
+  foresight::ScopeExit cleanup([&] {
+    unsetenv("FORESIGHT_OWNED_PROBE_MARKER");
+    std::filesystem::remove(marker);
+  });
+  setenv("FORESIGHT_OWNED_PROBE_MARKER", marker.c_str(), 1);
+  engine = fs_owned_engine_create(executable, "/dev/null", 1, 0);
+  auto probe = fs_engine_probe_async(engine);
+  until([&] { return std::filesystem::exists(marker); });
+  check(fs_engine_probe_async(engine) == probe,
+        "pending probe coalesces exact work");
+  pid_t child = -1;
+  std::ifstream(marker) >> child;
+  check(child > 0, "real held probe process admitted");
+  auto other = fs_owned_engine_create(executable, "/dev/null", 0, 0);
+  release_owner(other, fs_engine_retire(other));
+  check(fs_operation_status(probe) == 0,
+        "unrelated cleanup completes while probe stays held");
+  auto retired = fs_engine_retire(engine);
+  until([&] { return fs_operation_status(retired) == 1; });
+  check(fs_operation_status(probe) == 2 && kill(child, 0) == -1 &&
+            errno == ESRCH,
+        "probe cancellation after closed stdout settles and actually reaps "
+        "child");
+  check(fs_operation_release(probe) == 0,
+        "probe result retains independent acknowledgement");
+  release_owner(engine, retired);
 }
 int main(int argc, char **argv) {
   const int supervised = foresight::supervise_worker(argc, argv);
   if (supervised >= 0)
     return supervised;
-  if (argc > 1 && std::string(argv[1]) == "--model") {
-    std::ofstream(std::getenv("FORESIGHT_OWNED_PROBE_MARKER"))
-        << getpid() << std::endl;
-    close(STDOUT_FILENO);
-    for (;;)
-      pause();
+  if (argc > 1) {
+    if (const char *marker = std::getenv("FORESIGHT_OWNED_PROBE_MARKER");
+        marker && std::string(argv[1]) == "--model") {
+      std::ofstream(marker) << getpid() << std::endl;
+      close(STDOUT_FILENO);
+      for (;;)
+        pause();
+    }
+    return 0; // deterministic process fixture only, no model claim.
   }
   setenv("FORESIGHT_HELPER", argv[0], 1);
   try {
-    check(fs_abi_version() == 1 && fs_lifetime_version() == 1,
-          "separate ABI negotiation");
+    check(fs_abi_version() == 1 && fs_lifetime_version() == 2,
+          "separate owned v2 capability");
+    std::cerr << "CASE legacy_failure\n";
+    legacy_failure(argv[0]);
+    std::cerr << "CASE generation\n";
     generation(argv[0]);
-    media();
-    speech_exit();
+    std::cerr << "CASE independent_speech\n";
+    independent_speech(argv[0]);
+    std::cerr << "CASE child_failure\n";
+    child_failure(argv[0]);
+    std::cerr << "CASE probes\n";
+    probes(argv[0]);
+    std::cerr << "CASE reused_address\n";
+    reused_address(argv[0]);
+    std::cerr << "CASE capture_tail\n";
+    capture_tail();
+    std::cerr << "CASE shared_model_handoff\n";
+    shared_model_handoff(argv[0]);
+    std::cerr << "CASE independent_acknowledgements\n";
+    independent_acknowledgements();
+    std::cerr << "CASE held_api\n";
     held_api(argv[0]);
-    const char *scratch = std::getenv("FORESIGHT_TEST_TEMP_ROOT");
-    check(scratch, "private fixture root required");
-    const auto marker = std::filesystem::path(scratch) /
-                        ("owned-probe-" + std::to_string(getpid()));
-    foresight::ScopeExit cleanup([&] { std::filesystem::remove(marker); });
-    setenv("FORESIGHT_OWNED_PROBE_MARKER", marker.c_str(), 1);
-    auto *engine = fs_engine_create_backend(argv[0], "/dev/null", 1);
-    check(engine, "probe engine created");
-    const auto probe = fs_engine_probe_async(engine);
-    until([&] { return std::filesystem::exists(marker); });
-    pid_t child = -1;
-    std::ifstream(marker) >> child;
-    check(child > 0, "actual probe child admitted");
-    const auto retire = fs_engine_retire(engine);
-    until([&] { return fs_operation_status(retire) == 1; });
-    check(fs_operation_status(probe) == 2, "cancelled native probe settles");
-    check(kill(child, 0) == -1 && errno == ESRCH,
-          "probe child actually reaped");
-    check(fs_operation_release(probe) == 0 && fs_operation_release(retire) == 0,
-          "probe ownership independent of initiating acknowledgement");
+    std::cerr << "CASE owned_rollback\n";
+    owned_rollback(argv[0]);
+    std::cerr << "CASE bounds\n";
+    bounds(argv[0]);
+    check(native_handles().handles.empty() && native_handles().owners.empty(),
+          "all physical and metadata owners released");
     return 0;
   } catch (const std::exception &error) {
     std::cerr << error.what() << '\n';

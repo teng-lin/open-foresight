@@ -138,11 +138,12 @@ int main() {
     require(isolated.submit(unexpected, held_resource), "exception submit");
     held_resource.reset();
     eventually([&] {
-      return unexpected->boundary_failed.load(std::memory_order_acquire);
+      return unexpected->boundary_failed.load(std::memory_order_acquire) &&
+             isolated.status(unexpected->token) == 3;
     });
     fail_allocations.store(false);
     reporter.busy.clear(std::memory_order_release);
-    require(isolated.status(unexpected->token) == 0 &&
+    require(isolated.status(unexpected->token) == 3 &&
                 !isolated.release(unexpected->token) &&
                 !unconfirmed.destroyed.load(std::memory_order_acquire),
             "secondary exception falsely acknowledged cleanup");

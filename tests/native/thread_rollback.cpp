@@ -43,16 +43,13 @@ int main(int argc, char **argv) {
   unsetenv("FORESIGHT_TEST_THREAD_FAILURE");
   if (fs_speech_finish(speech_handle, "speech-retry") != 0)
     return 14;
-  const auto speech_join = fs_speech_join_async(speech_handle);
-  if (!speech_join)
-    return 15;
-  await_native_operation(speech_join);
+  speech.join(); // Legacy pointer ABI retains local synchronous lifecycle.
   if (speech.thread.joinable())
     return 16;
-  const auto handles = poll_registry.size();
+  const auto handles = poll_registry().size();
   setenv("FORESIGHT_TEST_THREAD_FAILURE", "capture", 1);
   if (fs_capture_start_with_options("auto", 0, 16000, 0) ||
-      poll_registry.size() != handles)
+      poll_registry().size() != handles)
     return 5;
   unsetenv("FORESIGHT_TEST_THREAD_FAILURE");
   fs_speech_destroy(speech_handle);

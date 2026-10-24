@@ -158,7 +158,7 @@ struct Model {
     const std::string worker = configured                     ? configured
                                : fs::exists(installed_worker) ? installed_worker
                                                               : build_worker;
-    std::unique_lock launch(foresight::launch_mutex);
+    std::unique_lock launch(foresight::launch_mutex_for_process());
 
     int in[2], out[2];
     if (foresight::cloexec_pipe(in))

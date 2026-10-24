@@ -11,6 +11,7 @@
 #ifdef __APPLE__
 #include "macos_audio.h"
 #include <libproc.h>
+#include <mach-o/dyld.h>
 #include <sys/sysctl.h>
 #endif
 #include <algorithm>
@@ -22,6 +23,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <dlfcn.h>
+#ifndef __APPLE__
+#include <link.h>
+#endif
 #include <fcntl.h>
 #include <fstream>
 #include <functional>
@@ -55,8 +60,21 @@ struct PollLifetime {
   std::shared_mutex gate;
   std::atomic<bool> closed{false};
 };
-std::mutex poll_registry_mutex;
-std::unordered_map<void *, std::shared_ptr<PollLifetime>> poll_registry;
+std::mutex &poll_registry_mutex() {
+  static auto *value = new std::mutex;
+  return *value;
+}
+auto &poll_registry() {
+  static auto *value =
+      new std::unordered_map<void *, std::shared_ptr<PollLifetime>>;
+  return *value;
+}
+#if FORESIGHT_ENABLE_TEST_HOOKS
+struct PollWaitBoundary {
+  std::atomic<bool> pause{false}, entered{false}, release{false};
+};
+PollWaitBoundary poll_wait_boundary;
+#endif
 struct Events {
   const std::shared_ptr<PollLifetime> poll_lifetime =
       std::make_shared<PollLifetime>();
@@ -64,12 +82,12 @@ struct Events {
   std::condition_variable cv;
   std::deque<std::string> events;
   Events() {
-    std::lock_guard lock(poll_registry_mutex);
-    poll_registry[this] = poll_lifetime;
+    std::lock_guard lock(poll_registry_mutex());
+    poll_registry()[this] = poll_lifetime;
   }
   virtual ~Events() {
-    std::lock_guard lock(poll_registry_mutex);
-    poll_registry.erase(this);
+    std::lock_guard lock(poll_registry_mutex());
+    poll_registry().erase(this);
   }
   void emit(std::string s) {
     std::lock_guard lock(mu);
@@ -81,8 +99,8 @@ struct Events {
 // existing blocking polls, then join them before any derived fields are freed.
 void revoke_events(Events *events) {
   {
-    std::lock_guard lock(poll_registry_mutex);
-    poll_registry.erase(events);
+    std::lock_guard lock(poll_registry_mutex());
+    poll_registry().erase(events);
   }
   events->poll_lifetime->closed = true;
   events->cv.notify_all();
@@ -120,9 +138,11 @@ struct Worker : Events {
     if (thread.joinable())
       thread.join();
   }
-  ~Worker() {
-    stop();
-    join();
+  ~Worker() noexcept {
+    // Mandatory joins belong to observable cleanup before resource reset.
+    // Never hide a throwing/blocking join inside an implicit destructor.
+    if (thread.joinable())
+      std::terminate();
   }
 };
 template <class Fn>
@@ -197,7 +217,7 @@ int run(Worker &w, std::vector<std::string> args,
     return -capture_pipe.error;
   if (raw_capture)
     args.back() = capture_pipe.path;
-  std::unique_lock launch(foresight::launch_mutex);
+  std::unique_lock launch(foresight::launch_mutex_for_process());
   int pipes[2];
   if (foresight::cloexec_pipe(pipes) < 0)
     return -1;
@@ -427,6 +447,7 @@ struct Engine {
 };
 struct Conversation : Worker {
   Engine *engine;
+  std::shared_ptr<Engine> engine_owner;
   std::set<std::string> requests;
   std::string request;
   uint64_t sequence = 0;
@@ -445,14 +466,22 @@ void failure(Worker &w, const std::string &id, uint64_t &seq,
 }
 #include "persistent_generation.h"
 Engine::~Engine() {
-  shutdown_persistent(*this);
+  if (persistent)
+    std::terminate();
 }
 struct SpeechEngine {
+  bool retiring = false;
   Engine engine;
   std::timed_mutex mutex;
 };
-std::mutex speech_engines_mutex;
-std::map<std::string, std::weak_ptr<SpeechEngine>> speech_engines;
+std::mutex &speech_engines_mutex() {
+  static auto *value = new std::mutex;
+  return *value;
+}
+auto &speech_engines() {
+  static auto *value = new std::map<std::string, std::weak_ptr<SpeechEngine>>;
+  return *value;
+}
 struct Speech : Worker {
   std::shared_ptr<SpeechEngine> worker_engine;
   std::string runtime, model;
@@ -492,6 +521,9 @@ std::string base64(const std::vector<unsigned char> &in) {
   return out;
 }
 struct Capture : Worker {
+#ifdef __APPLE__
+  std::shared_ptr<MacCaptureOwner> macos;
+#endif
   std::string target, runtime;
   bool playback = false;
   std::atomic<bool> echoCancellation{false};
@@ -623,36 +655,36 @@ int probe_engine(Engine &e, const std::atomic<bool> *closing) {
 } // namespace
 extern "C" {
 int fs_lifetime_version() {
-  return 1;
+  return 2;
 }
-uint64_t fs_engine_probe_async(void *h) {
+uint64_t fs_engine_probe_async(uint64_t h) {
   return foresight::ffi_barrier(
       [&] { return request_native_work(h, NativeKind::engine, true); },
       uint64_t{0});
 }
-uint64_t fs_speech_join_async(void *h) {
+uint64_t fs_speech_join_async(uint64_t h) {
   return foresight::ffi_barrier(
       [&] { return request_native_work(h, NativeKind::speech, false); },
       uint64_t{0});
 }
-uint64_t fs_capture_finish_async(void *h) {
+uint64_t fs_capture_finish_async(uint64_t h) {
   return foresight::ffi_barrier(
       [&] { return request_native_work(h, NativeKind::capture, false); },
       uint64_t{0});
 }
-uint64_t fs_engine_retire(void *h) {
+uint64_t fs_engine_retire(uint64_t h) {
   return foresight::ffi_barrier(
       [&] { return retire_native(h, NativeKind::engine); }, uint64_t{0});
 }
-uint64_t fs_conversation_retire(void *h) {
+uint64_t fs_conversation_retire(uint64_t h) {
   return foresight::ffi_barrier(
       [&] { return retire_native(h, NativeKind::conversation); }, uint64_t{0});
 }
-uint64_t fs_speech_retire(void *h) {
+uint64_t fs_speech_retire(uint64_t h) {
   return foresight::ffi_barrier(
       [&] { return retire_native(h, NativeKind::speech); }, uint64_t{0});
 }
-uint64_t fs_capture_retire(void *h) {
+uint64_t fs_capture_retire(uint64_t h) {
   return foresight::ffi_barrier(
       [&] { return retire_native(h, NativeKind::capture); }, uint64_t{0});
 }
@@ -664,6 +696,7 @@ int fs_operation_release(uint64_t token) {
   return foresight::ffi_barrier(
       [&] { return native_handles().operations.release(token) ? 0 : -1; }, -1);
 }
+#include "owned_exports.h"
 int fs_abi_version() {
   return foresight::ffi_barrier([&]() -> int { return 1; }, 1);
 }
@@ -682,6 +715,8 @@ char *fs_audio_request_system(int32_t timeout_ms) {
   return foresight::ffi_barrier(
       [&]() -> char * {
 #ifdef __APPLE__
+        if (!pin_native_mapping())
+          return nullptr;
         return owned(fs_macos_request_system(timeout_ms));
 #else
         (void)timeout_ms;
@@ -698,6 +733,8 @@ int fs_audio_request_microphone() {
   return foresight::ffi_barrier(
       [&]() -> int {
 #ifdef __APPLE__
+        if (!pin_native_mapping())
+          return -1;
         return fs_macos_request_microphone() ? 0 : 1;
 #else
         return 0;
@@ -713,11 +750,20 @@ char *fs_event_poll(void *h, int timeout) {
       [&]() -> char * {
         if (!h)
           return nullptr;
+        {
+          auto &registry = native_handles();
+          std::lock_guard lock(registry.mutex);
+          const auto found = registry.handles.find(h);
+          if (found == registry.handles.end() ||
+              (found->second->identity &&
+               owned_native_bridge != found->second.get()))
+            return nullptr;
+        }
         std::shared_ptr<PollLifetime> lifetime;
         {
-          std::lock_guard registry(poll_registry_mutex);
-          const auto found = poll_registry.find(h);
-          if (found == poll_registry.end())
+          std::lock_guard registry(poll_registry_mutex());
+          const auto found = poll_registry().find(h);
+          if (found == poll_registry().end())
             return nullptr;
           lifetime = found->second;
         }
@@ -726,9 +772,22 @@ char *fs_event_poll(void *h, int timeout) {
           return nullptr;
         auto &e = *static_cast<Events *>(h);
         std::unique_lock lock(e.mu);
-        e.cv.wait_for(lock,
-                      std::chrono::milliseconds(std::clamp(timeout, 0, 60000)),
-                      [&] { return lifetime->closed || !e.events.empty(); });
+        const auto deadline =
+            std::chrono::steady_clock::now() +
+            std::chrono::milliseconds(std::clamp(timeout, 0, 60000));
+        while (!lifetime->closed && e.events.empty() &&
+               std::chrono::steady_clock::now() < deadline) {
+#if FORESIGHT_ENABLE_TEST_HOOKS
+          if (poll_wait_boundary.pause.exchange(false)) {
+            poll_wait_boundary.entered = true;
+            while (!poll_wait_boundary.release)
+              std::this_thread::sleep_for(std::chrono::milliseconds(1));
+          }
+#endif
+          e.cv.wait_until(
+              lock, std::min(deadline, std::chrono::steady_clock::now() +
+                                           std::chrono::milliseconds(20)));
+        }
         if (lifetime->closed)
           return nullptr;
         if (e.events.empty()) {
@@ -836,6 +895,8 @@ int fs_engine_destroy(void *h) {
       [&] {
         if (!h)
           return 0;
+        if (legacy_closing(h, NativeKind::engine))
+          return retire_legacy(h, NativeKind::engine) ? 0 : -1;
         {
           NativeUse use(h, NativeKind::engine);
           if (!use)
@@ -845,11 +906,7 @@ int fs_engine_destroy(void *h) {
           if (engine.refs || engine.busy)
             return -1;
         }
-        const auto token = retire_native(h, NativeKind::engine);
-        if (!token)
-          return -1;
-        await_native_operation(token);
-        return 0;
+        return retire_legacy(h, NativeKind::engine) ? 0 : -1;
       },
       -1);
 }
@@ -1246,6 +1303,8 @@ int fs_conversation_destroy(void *h, int drain) {
       [&] {
         if (!h)
           return 0;
+        if (legacy_closing(h, NativeKind::conversation))
+          return retire_legacy(h, NativeKind::conversation) ? 0 : -1;
         {
           NativeUse use(h, NativeKind::conversation);
           if (!use)
@@ -1255,11 +1314,7 @@ int fs_conversation_destroy(void *h, int drain) {
           if (conversation.active && !drain)
             return -1;
         }
-        const auto token = retire_native(h, NativeKind::conversation);
-        if (!token)
-          return -1;
-        await_native_operation(token);
-        return 0;
+        return retire_legacy(h, NativeKind::conversation) ? 0 : -1;
       },
       -1);
 }
@@ -1275,39 +1330,53 @@ void *fs_speech_create(const char *runtime, const char *model) {
         auto s = std::make_unique<Speech>();
         s->runtime = runtime;
         s->model = model;
-        // Bundles install the speech server beside the diagnostic CLI. Explicit
-        // worker overrides are also supported for external runtime
-        // installations.
+        // Prepare all metadata before acquiring an existing physical shared
+        // model lease. After assignment below, only nonthrowing publication
+        // remains, so allocation rollback cannot become the last model closer
+        // on the FFI caller's thread.
         auto server = std::filesystem::path(runtime).parent_path() /
                       "foresight-whisper-worker";
         if (const char *configured = std::getenv("FORESIGHT_WHISPER_WORKER");
             configured && *configured)
           server = configured;
-        if (access(server.c_str(), X_OK) == 0) {
-          const char *backend = std::getenv("FORESIGHT_WHISPER_BACKEND");
-          const char *device = std::getenv("FORESIGHT_WHISPER_DEVICE");
-          const auto key = quote(server.string()) + quote(model) +
-                           quote(backend ? backend : "") +
-                           quote(device ? device : "");
-          std::lock_guard lock(speech_engines_mutex);
-          for (auto i = speech_engines.begin(); i != speech_engines.end();) {
-            if (i->second.expired())
-              i = speech_engines.erase(i);
+        const bool persistent = access(server.c_str(), X_OK) == 0;
+        const char *backend = std::getenv("FORESIGHT_WHISPER_BACKEND");
+        const char *device = std::getenv("FORESIGHT_WHISPER_DEVICE");
+        const auto key = persistent ? quote(server.string()) + quote(model) +
+                                          quote(backend ? backend : "") +
+                                          quote(device ? device : "")
+                                    : std::string{};
+        auto *published = publish_native(std::move(s), NativeKind::speech);
+        if (!published)
+          return nullptr;
+        foresight::ScopeExit rollback(
+            [&] { rollback_unpublished_native(published); });
+        if (persistent) {
+          std::lock_guard lock(speech_engines_mutex());
+          for (auto it = speech_engines().begin();
+               it != speech_engines().end();)
+            if (it->second.expired())
+              it = speech_engines().erase(it);
             else
-              ++i;
-          }
-          s->worker_engine = speech_engines[key].lock();
-          if (!s->worker_engine) {
-            s->worker_engine = std::make_shared<SpeechEngine>();
-            auto &engine = s->worker_engine->engine;
+              ++it;
+          auto &entry = speech_engines()[key]; // last fallible map insertion
+          auto shared = entry.lock();
+          if (shared && shared->retiring)
+            shared.reset();
+          if (!shared) {
+            shared = std::make_shared<SpeechEngine>();
+            auto &engine = shared->engine;
             engine.runtime = server.string();
             engine.model = model;
             engine.backend = 2;
             engine.cpu_fallback = backend && std::string(backend) == "cpu";
-            speech_engines[key] = s->worker_engine;
           }
+          // No allocation or physical-model destruction after this transfer.
+          entry = shared;
+          published->worker_engine = std::move(shared);
         }
-        return publish_native(std::move(s), NativeKind::speech);
+        rollback.release();
+        return published;
       },
       static_cast<void *>(nullptr));
 }
@@ -1321,7 +1390,7 @@ int fs_speech_push(void *h, const int16_t *samples, size_t count, int rate) {
           return -1;
         auto &s = *static_cast<Speech *>(h);
         std::lock_guard life(s.life);
-        if (s.active)
+        if (s.active || !speech_request_available(use.control))
           return -1;
         if (s.input_rate && s.input_rate != rate)
           return -1;
@@ -1355,7 +1424,7 @@ int fs_speech_finish(void *h, const char *id) {
           return -1;
         auto &s = *static_cast<Speech *>(h);
         std::lock_guard life(s.life);
-        if (s.active)
+        if (s.active || !speech_request_available(use.control))
           return -1;
         s.join();
         auto previous_pending = s.pending;
@@ -1371,6 +1440,7 @@ int fs_speech_finish(void *h, const char *id) {
             if (auto operation =
                     native_handles().operations.find(use.control->finish))
               native_handles().operations.discard(operation);
+            use.control->speech_joined = true;
           }
           if (samples) {
             s.samples = std::move(*samples);
@@ -1560,7 +1630,7 @@ int fs_speech_cancel(void *h) {
 void fs_speech_destroy(void *h) {
   foresight::ffi_barrier_void([&] {
     if (h)
-      await_native_operation(retire_native(h, NativeKind::speech));
+      retire_legacy(h, NativeKind::speech);
   });
 }
 void *fs_capture_start(const char *target, int playback, int rate) {
@@ -1618,6 +1688,21 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate,
           return nullptr;
         }
         c->rate = rate;
+#ifdef __APPLE__
+        if (c->runtime.empty()) {
+          if (!pin_native_mapping())
+            return nullptr;
+          native_handles().process_lifetime = true;
+          c->macos = fs_macos_capture_owner();
+        }
+#endif
+        c = publish_native(std::move(owned_capture), NativeKind::capture);
+        if (!c)
+          return nullptr;
+        // Admission, shared ownership and all registry allocations precede any
+        // physical capture. Thread creation failure rolls back this owner.
+        foresight::ScopeExit rollback_capture(
+            [&] { rollback_unpublished_native(c); });
         c->active = true;
         c->thread = start_worker_thread("capture", [c] {
           foresight::guarded_worker(
@@ -1625,7 +1710,7 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate,
 #ifdef __APPLE__
                 if (c->runtime.empty()) {
                   fs_macos_capture(
-                      c->target, c->playback, c->rate, c->cancel,
+                      c->target, c->playback, c->rate, c->cancel, c->macos,
                       [c](const auto &bytes) { audio_frame(*c, bytes); },
                       [c](const auto &event) { c->emit(event); },
                       &c->echoCancellation);
@@ -1731,21 +1816,33 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate,
               },
               [c] { c->active = false; });
         });
-        return publish_native(std::move(owned_capture), NativeKind::capture);
+        rollback_capture.release();
+        return c;
       },
       static_cast<void *>(nullptr));
 }
 void fs_capture_finish(void *h) {
   foresight::ffi_barrier_void([&] {
-    if (h)
-      await_native_operation(
-          request_native_work(h, NativeKind::capture, false));
+    if (h) {
+      NativeUse use(h, NativeKind::capture);
+      if (use) {
+        auto &capture = *static_cast<Capture *>(h);
+        capture.stop();
+#ifdef __APPLE__
+        fs_macos_capture_revoke(capture.macos);
+#endif
+        capture.join();
+#ifdef __APPLE__
+        fs_macos_capture_close(capture.macos);
+#endif
+      }
+    }
   });
 }
 void fs_capture_stop(void *h) {
   foresight::ffi_barrier_void([&] {
     if (h)
-      await_native_operation(retire_native(h, NativeKind::capture));
+      retire_legacy(h, NativeKind::capture);
   });
 }
 double fs_pcm_rms(const int16_t *samples, size_t n) {
@@ -1903,7 +2000,7 @@ extern "C" int fs_set_runtime_environment(const char *key, const char *value) {
             "PYTHONPYCACHEPREFIX",       "LD_LIBRARY_PATH"};
         if (!allowed.count(key))
           return -1;
-        std::lock_guard lock(foresight::launch_mutex);
+        std::lock_guard lock(foresight::launch_mutex_for_process());
         if (foresight::runtime_environment_sealed) {
           // Fresh Dart isolates may replay the same resolved runtime map. Keep
           // the sealed process environment immutable while accepting that exact

@@ -17,31 +17,64 @@ extern "C" {
  * All status codes: 0 success, -1 invalid/busy/unavailable. No
  * fake inference. */
 int fs_abi_version(void);
-/* Separately negotiated additive ABI v1 capability. All requests below return
- * a monotonic token, or 0 if unavailable/invalid. They revoke admission without
- * joining workers on the calling thread. Completion belongs to this original
- * native mapping and survives caller/isolate acknowledgement loss. Never pass
- * a retired object address again; retain and poll its token instead. Engine
- * retirement also cancels/retires every owned conversation. */
-int fs_lifetime_version(void); /* currently 1 */
-uint64_t fs_engine_probe_async(void *engine);
-uint64_t fs_engine_retire(void *engine);
-uint64_t fs_conversation_retire(void *conversation);
-uint64_t fs_speech_retire(void *speech);
-/* Join the accepted speech request's actual worker exit without canceling it.
- * A done event alone does not prove exit. Await this token before reusing the
- * handle for another push/finish, or retire the handle instead. */
-uint64_t fs_speech_join_async(void *speech);
-/* Stop/join capture but retain its final PCM queue for polling. */
-uint64_t fs_capture_finish_async(void *capture);
-uint64_t fs_capture_retire(void *capture);
-/* 0 pending, 1 success, 2 known failure with completed ownership cleanup,
- * -1 unknown/released. Successful retirement means actual destruction/reap.
- * Release returns 0 only for a completed token; pending tokens retain
- * ownership. Probe/finish tokens retain the original handle until separate
- * retirement. */
+/* Optional lifetime v2. Published base ABI v1 above is unchanged. New owned
+ * handles are positive, monotonic 63-bit IDs, never resource addresses. Only
+ * this native mapping resolves an ID. A retired ID cannot alias a new owner.
+ * All owned creation is refused before physical work at 32 live execution
+ * groups or 4096 retained operation records. Idle groups retain no resource.
+ * Callers must serialize ordinary calls on one owner; retire may overlap them
+ * and atomically revokes admission. It never waits for physical cleanup inline.
+ * Legacy pointer entrypoints cannot operate on these owners or acknowledge
+ * their tokens. Legacy creation/cleanup consumes no async capacity.
+ * Engine retire also revokes and joins all owned children. Successful retire
+ * means actual callback/poll/worker/child reap and resource destruction. */
+int fs_lifetime_version(void); /* currently 2 */
+uint64_t fs_owned_engine_create(const char *runtime, const char *model,
+                                int backend, int model_type);
+uint64_t fs_owned_conversation_create(uint64_t engine);
+uint64_t fs_owned_speech_create(const char *runtime, const char *model);
+uint64_t fs_owned_capture_start(const char *target, int playback, int rate,
+                                int echo);
+char *fs_owned_engine_state(uint64_t owner);
+char *fs_owned_event_poll(uint64_t owner, int timeout_ms);
+int fs_owned_generate_options(uint64_t owner, const char *id,
+                              const char *prompt, const char *schema,
+                              int max_output_tokens);
+int fs_owned_generate_tools(uint64_t owner, const char *id, const char *prompt,
+                            const char *tools, int max_output_tokens);
+int fs_owned_generation_tool_reply(uint64_t owner, const char *id,
+                                   const char *message);
+int fs_owned_generation_cancel(uint64_t owner);
+int fs_owned_speech_push(uint64_t owner, const int16_t *samples, size_t count,
+                         int rate);
+int fs_owned_speech_finish(uint64_t owner, const char *id);
+int fs_owned_speech_cancel(uint64_t owner);
+int fs_owned_capture_set_echo_cancellation(uint64_t owner, int enabled);
+/* Requests return a monotonic completion token, or0 on refusal. Repeated retire
+ * by owner ID recovers the same token even after actual destruction. A probe
+ * after completion starts fresh work. Speech reuse is refused natively until
+ * the exact accepted request has actually joined. Capture finish retains final
+ * queued PCM; separate retire destroys it. */
+uint64_t fs_engine_probe_async(uint64_t owner);
+uint64_t fs_engine_retire(uint64_t owner);
+uint64_t fs_conversation_retire(uint64_t owner);
+uint64_t fs_speech_retire(uint64_t owner);
+uint64_t fs_speech_join_async(uint64_t owner);
+uint64_t fs_capture_finish_async(uint64_t owner);
+uint64_t fs_capture_retire(uint64_t owner);
+/* 0 pending,1 success,2 known failure,3 cleanup unconfirmed/ownership retained,
+ * -1 unknown/released. Unexpected cleanup failure publishes3 without releasing
+ * resource authority. Retire may be explicitly retried by the same owner ID;
+ * it reuses its idempotent cleanup state/token. Never hot-loop retries.
+ * Probe/join/finish release is independent from owner retirement. */
 int fs_operation_status(uint64_t token);
 int fs_operation_release(uint64_t token);
+/* Only confirmed successful retirement permits owner release. This acknowledges
+ * its retirement metadata; other issued results keep independent
+ * acknowledgements. Generic token release cannot consume retirement. Lost
+ * release acknowledgement never authorizes pointer retry or false success.
+ */
+int fs_owner_release(uint64_t owner);
 /* Before the first handle is created only (permanently sealed thereafter);
  * 0 success, -1 sealed/unsupported key/invalid value. Hosts must also avoid
  * external setenv/unsetenv while any native/runtime threads exist. */
