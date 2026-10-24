@@ -605,3 +605,16 @@ architecture, remaining tooling and installed-package acceptance are still
 in progress; none is closed by these local integrations. Hosted Debian smoke
 also failed desktop process identity; its full job output is retained for
 reproduction rather than weakening the owned-process check.
+
+The next already-started tooling batch `3cfaa374` is also locally integrated:
+profile migration uses normal package imports for the documented module command
+and sibling imports for direct-script compatibility, including Git-free exports
+without a package initializer. Its two real subprocess regressions supply
+conflicting ambient modules and verify schema, digest, user text, model and
+attachment bytes, path rewrites and retained backup contents. Migration/rollback
+and credential sourcing behavior are unchanged. Native-peer and Claude review
+converged; Linux focused checks passed **40 tests / 11 subtests**, and its full
+coverage run passed **5,612 / 31 skipped**, **95.85%** against 95%. The same focused
+**40 tests / 11 subtests**, zero skips, passed on HanSolo with an exact-lock
+development environment. Evidence: `/var/tmp/of-profile-import`. This is one
+inventory-derived entrypoint batch, not completion of all Stage E imports.
