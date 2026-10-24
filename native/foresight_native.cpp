@@ -1361,6 +1361,8 @@ int fs_speech_finish(void *h, const char *id) {
     const auto previous_rate = s.input_rate;
     std::shared_ptr<std::vector<int16_t>> samples;
     bool finalized_tail = false;
+    bool queued_published = false;
+    std::string queued_event;
     foresight::ScopeExit rollback([&] {
       s.active = false;
       if (samples) {
@@ -1371,6 +1373,11 @@ int fs_speech_finish(void *h, const char *id) {
       s.pending = std::move(previous_pending);
       s.phase = previous_phase;
       s.input_rate = previous_rate;
+      if (queued_published) {
+        std::lock_guard lock(s.mu);
+        if (!s.events.empty() && s.events.back() == queued_event)
+          s.events.pop_back();
+      }
     });
     s.cancel = false;
     s.active = true;
@@ -1383,13 +1390,16 @@ int fs_speech_finish(void *h, const char *id) {
     s.pending.clear();
     s.phase = 0;
     s.input_rate = 0;
+    // Publish queue admission synchronously, before the worker can be delayed
+    // by scheduling. A refused thread launch rolls this frame back as well.
+    queued_event = event("state", request, 0, ",\"phase\":\"speech_queued\"");
+    s.emit(queued_event);
+    queued_published = true;
     s.thread = start_worker_thread("speech", [&s, request, samples] {
       bool settled = false;
-      uint64_t seq = 0;
+      uint64_t seq = 1;
       foresight::guarded_worker(
           [&] {
-            s.emit(
-                event("state", request, seq++, ",\"phase\":\"speech_queued\""));
             if (const auto blocked = linux_speech_cpu_block()) {
               failure(s, request, seq, "speech_runtime_failure", *blocked);
               s.emit(event("done", request, seq++, ",\"status\":\"failed\""));

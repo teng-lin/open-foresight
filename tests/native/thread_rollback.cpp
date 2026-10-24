@@ -33,6 +33,7 @@ int main(int argc, char **argv) {
   speech.samples = {1, 2, 3};
   setenv("FORESIGHT_TEST_THREAD_FAILURE", "speech", 1);
   if (fs_speech_finish(&speech, "speech") != -1 || speech.active ||
+      !speech.events.empty() ||
       speech.samples != std::vector<int16_t>({1, 2, 3}))
     return 4;
   unsetenv("FORESIGHT_TEST_THREAD_FAILURE");
