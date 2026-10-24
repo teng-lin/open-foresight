@@ -4,9 +4,11 @@ import 'package:test_api/scaffolding.dart' show addTearDown;
 
 /// Unix socket tests need a short path on macOS. The override lets concurrent
 /// local suites choose a short disposable filesystem without sharing /tmp quota.
+/// Defaults use physical, disk-backed paths: macOS /tmp is a symlink, which
+/// descriptor-anchored backup operations deliberately refuse to traverse.
 Directory get shortTestTempRoot => Directory(
   Platform.environment['FORESIGHT_TEST_TEMP_ROOT'] ??
-      (Platform.isMacOS ? '/tmp' : Directory.systemTemp.path),
+      (Platform.isMacOS ? '/private/var/tmp' : '/var/tmp'),
 );
 
 /// Allocate a disposable directory and remove it after the current test or
