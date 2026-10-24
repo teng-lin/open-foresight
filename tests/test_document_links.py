@@ -4,6 +4,9 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+import yaml
+
 from tools import check_document_links as checker
 
 
@@ -107,3 +110,58 @@ def test_git_free_cli_from_unrelated_cwd_fails_then_passes(tmp_path):
                             text=True, timeout=10)
     assert passed.returncode == 0, passed.stdout + passed.stderr
     assert "Checked 1 local links; 0 problems" in passed.stdout
+
+
+@pytest.mark.parametrize("target,reason", [
+    ("file.py#L3", None),
+    ("file.py#L3-L9", None),
+    ("file.py#L0", "unsupported file fragment"),
+    ("file.py#l3", "unsupported file fragment"),
+    ("file.py#foo", "unsupported file fragment"),
+    ("/sub/a.md#heading", None),
+    ("sub#heading", None),
+])
+def test_repository_paths_and_historical_source_fragments(tmp_path, target, reason):
+    (tmp_path / "file.py").write_text("# source\n" * 10)
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "a.md").write_text("# Heading\n")
+    (sub / "README.md").write_text("# Heading\n")
+    (tmp_path / "README.md").write_text(f"[destination]({target})\n")
+    count, problems = checker.check(tmp_path)
+    assert count == 1
+    if reason is None:
+        assert problems == []
+    else:
+        assert len(problems) == 1 and problems[0].endswith(reason)
+
+
+def test_named_anchor_boolean_html_attributes_and_invalid_destination(tmp_path):
+    (tmp_path / "README.md").write_text(
+        '<a name="named"></a><a href></a>\n\n'
+        '[named](#named)\n\n<a href="http://[bad">bad URL</a>\n'
+    )
+    count, problems = checker.check(tmp_path)
+    assert count == 1
+    assert problems == ["README.md:5: 'http://[bad': invalid destination"]
+
+
+def test_missing_cli_root_is_failure_instead_of_empty_success(tmp_path):
+    result = subprocess.run(
+        [sys.executable, str(Path(checker.__file__)), "--root", str(tmp_path / "absent")],
+        cwd=tmp_path, capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "must be an existing directory" in result.stderr
+    assert "0 problems" not in result.stdout
+
+
+def test_quality_checks_links_after_installing_hash_locked_dependencies():
+    root = Path(__file__).resolve().parents[1]
+    workflow = yaml.safe_load((root / ".github/workflows/quality.yml").read_text())
+    steps = workflow["jobs"]["python"]["steps"]
+    commands = [step.get("run", "") for step in steps]
+    install = commands.index("python -m pip install --require-hashes -r requirements-dev.lock")
+    links = commands.index("python -m tools.check_document_links")
+    assert install < links
+    assert "if" not in steps[links]

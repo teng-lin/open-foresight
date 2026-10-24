@@ -351,7 +351,7 @@ Release builds bundle their Google application registration: choose a Drive impo
 
 After signing in, the sidebar shows your Google account photo or initial. Click it to switch between saved accounts, add another account, or sign out of an individual account. Every account shares the same local knowledge base; switching or signing out keeps imported sources, notes, meetings, and answers. Drive and Calendar operations use the selected account.
 
-Distributors supply the Desktop OAuth JSON through the `FORESIGHT_GOOGLE_CLIENT_JSON` repository secret or `--google-client /path/to/google-client.json` to either packager. Release workflows require it. Developer builds supply their client through the same build configuration; there is no client-JSON import in Settings. Packaging does not inspect other applications or copy account tokens. Keep OAuth configuration and tokens out of Git.
+Distributors supply the Desktop OAuth JSON through the `FORESIGHT_GOOGLE_CLIENT_JSON` repository secret or `--google-client /path/to/google-client.json` to either packager. Release workflows require it. For unpackaged developer runs, set `FORESIGHT_GOOGLE_CLIENT=/path/to/google-client.json`; an existing profile `google-client.json` takes precedence. Settings has no client-JSON import. Packaging does not inspect other applications or copy account tokens. Keep OAuth configuration and tokens out of Git.
 
 ## Verification
 
