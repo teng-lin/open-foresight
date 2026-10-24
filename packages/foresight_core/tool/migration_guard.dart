@@ -60,6 +60,7 @@ const migrationClosures = <int, List<String>>{
   18: ['_createContentHistory'],
   19: ['rows'],
   20: ['_boundContentHistory', 'rows'],
+  21: ['_routeBackupErasure'],
   17: [
     '_canonicalizeLabels',
     'rows',

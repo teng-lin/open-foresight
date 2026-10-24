@@ -132,6 +132,12 @@
         "_boundContentHistory",
         "rows"
       ]
+    },
+    "21": {
+      "sha256": "2462b86511450e125a79f6c3a00b11985db1443f478e34a61a12d30e7eadabee",
+      "symbols": [
+        "_routeBackupErasure"
+      ]
     }
   },
   "fixtures": {

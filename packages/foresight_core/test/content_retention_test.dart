@@ -206,6 +206,69 @@ void main() {
   );
 
   test(
+    'unclassified updates preserve generated ownership until an explicit manual edit',
+    () {
+      final meeting = store.meeting('Sticky generated source');
+      final id = 'meeting-$meeting';
+      store.importText(
+        'Transcript',
+        'first',
+        'text/plain',
+        'meeting:$meeting',
+        id: id,
+        generated: true,
+      );
+      store.importText(
+        'Transcript',
+        'unclassified update',
+        'text/plain',
+        'meeting:$meeting',
+        id: id,
+      );
+      store.importText(
+        'Transcript',
+        'another update',
+        'text/plain',
+        'meeting:$meeting',
+        id: id,
+      );
+      expect(
+        store.rows('SELECT generated FROM sources WHERE id=?', [
+          id,
+        ]).single['generated'],
+        1,
+      );
+      expect(store.contentHistory.revisions('sources', id), isEmpty);
+      store.importText(
+        'Edited',
+        'manual first',
+        'text/plain',
+        'meeting:$meeting',
+        id: id,
+        locallyEdited: true,
+      );
+      store.importText(
+        'Edited',
+        'manual second',
+        'text/plain',
+        'meeting:$meeting',
+        id: id,
+        locallyEdited: true,
+      );
+      expect(
+        store.rows('SELECT generated FROM sources WHERE id=?', [
+          id,
+        ]).single['generated'],
+        0,
+      );
+      expect(
+        store.contentHistory.revisions('sources', id).single['snapshot'],
+        containsPair('content', 'manual first'),
+      );
+    },
+  );
+
+  test(
     'v19 upgrade prunes generated snapshots while retaining manual history and current content',
     () {
       store.close();
