@@ -324,6 +324,26 @@ void main() {
   );
 
   test(
+    'unconfigured helper retains pending work for model-ready source replay',
+    () async {
+      append('ready after model configuration');
+      await app.indexMeeting(meeting);
+      peer.cursors.clear();
+      peer.pieces.clear();
+      helper.snapshot!.pipeline = 'unconfigured';
+      await app.indexMeeting(meeting);
+      expect(store.rows('SELECT * FROM meeting_index_jobs'), hasLength(1));
+      expect(store.sourceQueries.source(getId())!.state, 'pending');
+      helper.snapshot!.pipeline = 'ready';
+      await domain.indexPendingSources();
+      expect(peer.pieces[getId()], hasLength(1));
+      expect(store.rows('SELECT * FROM meeting_index_jobs'), isEmpty);
+      expect(store.sourceQueries.source(getId())!.state, 'indexed');
+      expect(app.meetingIndexWork['transcript_rows_read'], 1);
+    },
+  );
+
+  test(
     'close cancels owned RPC while preserving durable intent and joins settlement',
     () async {
       final entered = Completer<void>(), finishPeer = Completer<void>();
@@ -441,11 +461,12 @@ void main() {
         );
         for (final path in [store.path, '${store.path}-wal']) {
           final file = File(path);
-          if (file.existsSync())
+          if (file.existsSync()) {
             expect(
               latin1.decode(file.readAsBytesSync()),
               isNot(contains(canary)),
             );
+          }
         }
       },
     );

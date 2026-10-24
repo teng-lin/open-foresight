@@ -186,6 +186,10 @@ final class MeetingIndexer {
       }
       if (domain.helper.snapshot?.pipeline == 'unconfigured' &&
           store.sourceQueries.model('embedding') == null) {
+        // Model registration resumes pending sources. Keep even a previously
+        // indexed source visible to that path if independent helper state is
+        // currently unavailable; the durable intent remains authoritative.
+        store.state(projection.sourceId(id), 'pending');
         return; // Retain durable pending intent until actual model readiness.
       }
       final token = _model();

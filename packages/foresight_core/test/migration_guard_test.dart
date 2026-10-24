@@ -74,6 +74,23 @@ void main() {
     );
     expect(Directory('${temp.path}/.git').existsSync(), isFalse);
   });
+  test('documented new helper hashes its executable SQL body', () {
+    expect(module, contains('/// Ordered22:'));
+    change(
+      'pending_changes INTEGER NOT NULL DEFAULT 0',
+      'pending_changes INTEGER NOT NULL DEFAULT 1',
+    );
+    expect(
+      () => check(),
+      throwsA(
+        isA<StateError>().having(
+          (error) => error.message,
+          'reason',
+          contains('committed migration 22'),
+        ),
+      ),
+    );
+  });
   test(
     'actual main unrelated Store movement retains frozen origin provenance',
     () {

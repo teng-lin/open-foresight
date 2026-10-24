@@ -78,7 +78,14 @@ String digest(List<int> bytes) => sha256.convert(bytes).toString();
 
 List<String> canonicalTokens(AstNode node, {bool frozen = false}) {
   final result = <String>[];
-  Token? token = node.beginToken;
+  // Documentation comments have their own token chain. Starting there can
+  // hash only the comment and omit the entire executable definition. Preserve
+  // metadata annotations, but start after comments on annotated declarations.
+  Token? token = node is AnnotatedNode
+      ? (node.metadata.isEmpty
+            ? node.firstTokenAfterCommentAndMetadata
+            : node.metadata.first.beginToken)
+      : node.beginToken;
   while (token != null &&
       !token.isEof &&
       token.offset <= node.endToken.offset) {
