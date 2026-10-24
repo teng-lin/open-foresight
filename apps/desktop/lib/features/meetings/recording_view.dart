@@ -1,22 +1,34 @@
-part of 'meetings_controller.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import '../../presentation/workspace_presentation.dart';
+import 'capture_waveform.dart';
 
-extension _RecordingView on MeetingsController {
-  Widget _recordingHeader() {
-    final elapsed =
-        recordingElapsed +
-        (recording!.paused
-            ? Duration.zero
-            : DateTime.now().difference(recordingElapsedAt));
-    final clock =
-        '${elapsed.inMinutes.toString().padLeft(2, '0')}:${(elapsed.inSeconds % 60).toString().padLeft(2, '0')}';
+/// Recording presentation receives values and callbacks; capture ownership stays
+/// with the controller and application service.
+class RecordingHeader extends StatelessWidget {
+  final String clock;
+  final bool paused;
+  final ValueListenable<List<double>> captureVolumes;
+  final List<double>? fallbackVolumes;
+  final VoidCallback onToggleWorkspace, onOpenWorkspace;
+  final VoidCallback? onPauseResume, onStop;
+  const RecordingHeader({
+    super.key,
+    required this.clock,
+    required this.paused,
+    required this.captureVolumes,
+    this.fallbackVolumes,
+    required this.onToggleWorkspace,
+    required this.onOpenWorkspace,
+    this.onPauseResume,
+    this.onStop,
+  });
+
+  @override
+  Widget build(BuildContext context) {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onDoubleTap: () => update(() {
-        _navigation.navigate(WorkspaceTab.meetings);
-        meetingId = recordingMeeting;
-        meetingSidecarVisible = true;
-        meetingImmersive = !meetingImmersive;
-      }),
+      onDoubleTap: onToggleWorkspace,
       child: Container(
         key: const ValueKey('recording-pill'),
         width: MediaQuery.sizeOf(context).width > 1100 ? 400 : 310,
@@ -41,37 +53,21 @@ extension _RecordingView on MeetingsController {
               child: SizedBox(
                 height: 30,
                 child: ValueListenableBuilder<List<double>>(
-                  valueListenable: _host.captureVolumes,
+                  valueListenable: captureVolumes,
                   builder: (context, volumes, child) => CustomPaint(
                     key: const ValueKey('capture-waveform'),
-                    painter: CaptureWaveform(
-                      d is CaptureLevelEvents
-                          ? volumes
-                          : recording!.currentVolumes,
-                    ),
+                    painter: CaptureWaveform(fallbackVolumes ?? volumes),
                   ),
                 ),
               ),
             ),
             IconButton(
-              tooltip: recording!.paused
-                  ? 'Resume transcribing'
-                  : 'Pause transcribing',
+              tooltip: paused ? 'Resume transcribing' : 'Pause transcribing',
               constraints: const BoxConstraints.tightFor(width: 36, height: 36),
               padding: const EdgeInsets.all(6),
-              onPressed: _operations.busy || recording!.finishing
-                  ? null
-                  : () => _operations.run(() async {
-                      await d.command(
-                        recording!.paused
-                            ? Operation.meetingsResume
-                            : Operation.meetingsPause,
-                        {'id': recordingMeeting},
-                      );
-                      if (mounted) update(syncCapture);
-                    }),
+              onPressed: onPauseResume,
               icon: Icon(
-                recording!.paused ? Icons.play_arrow : Icons.pause,
+                paused ? Icons.play_arrow : Icons.pause,
                 color: workspaceInk,
                 size: 23,
               ),
@@ -80,9 +76,7 @@ extension _RecordingView on MeetingsController {
               tooltip: 'Stop transcribing',
               constraints: const BoxConstraints.tightFor(width: 36, height: 36),
               padding: const EdgeInsets.all(6),
-              onPressed: recording!.finishing
-                  ? null
-                  : () => _operations.run(stopRecording),
+              onPressed: onStop,
               icon: const Icon(
                 Icons.stop_circle_outlined,
                 color: workspaceInk,
@@ -93,11 +87,7 @@ extension _RecordingView on MeetingsController {
               tooltip: 'Open transcription workspace',
               constraints: const BoxConstraints.tightFor(width: 36, height: 36),
               padding: const EdgeInsets.all(6),
-              onPressed: () => update(() {
-                _navigation.navigate(WorkspaceTab.meetings);
-                meetingId = recordingMeeting;
-                meetingSidecarVisible = true;
-              }),
+              onPressed: onOpenWorkspace,
               icon: const Icon(Icons.fullscreen, color: workspaceInk, size: 23),
             ),
           ],

@@ -1,3 +1,4 @@
+import 'source_tiles.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -25,7 +26,6 @@ part 'source_actions.dart';
 part 'note_widgets.dart';
 part 'source_labels.dart';
 part 'source_collection.dart';
-part 'source_tiles.dart';
 part 'graph_layout_owner.dart';
 part 'graph_interaction.dart';
 part 'graph_widgets.dart';
@@ -452,16 +452,56 @@ class SourcesController implements SourceCommands {
 
   Widget sources() => _featureSources();
 
-  String sourceTimeLabel(Object? stamp) => _featureSourceTimeLabel(stamp);
+  String sourceTimeLabel(Object? stamp) =>
+      stamp == null || stamp == 0 ? '--' : timeLabel(stamp);
 
   Widget sourceCells(SourceSummary? source, {String? originalMime}) =>
-      _featureSourceCells(source, originalMime: originalMime);
+      SourceCells(
+        source: source,
+        icon: source == null
+            ? null
+            : sourceIcon(source, originalMime: originalMime),
+        color: source == null
+            ? null
+            : sourceColor(typedSourceType(source, originalMime: originalMime)),
+        imported: source == null ? '' : sourceTimeLabel(source.imported),
+        changed: source == null ? '' : sourceTimeLabel(source.changed),
+        labels: source == null ? '' : sourceLabels(source).join(', '),
+        ascending: ascending,
+        onSort: () => update(() => ascending = !ascending),
+        onEditLabels: source == null || _operations.busy
+            ? null
+            : () => editLabels(source),
+        onIndex: source == null || _operations.busy
+            ? null
+            : () => _operations.run(() => d.index(source.id)),
+        onDelete: source == null || _operations.busy
+            ? null
+            : () => _operations.run(() => d.delete(source.id)),
+      );
 
-  Widget sourceTile(SourceSummary source, {String? originalMime}) =>
-      _featureSourceTile(source, originalMime: originalMime);
+  Widget sourceTile(SourceSummary source, {String? originalMime}) => gridView
+      ? sourceCardTile(source, originalMime: originalMime)
+      : SourceRow(
+          source: source,
+          cells: sourceCells(source, originalMime: originalMime),
+          onOpen: () => showSource(source.id),
+        );
 
-  Widget sourceCardTile(SourceSummary s, {String? originalMime}) =>
-      _featureSourceCardTile(s, originalMime: originalMime);
+  Widget sourceCardTile(SourceSummary s, {String? originalMime}) => SourceCard(
+    s: s,
+    icon: sourceIcon(s, originalMime: originalMime),
+    color: sourceColor(typedSourceType(s, originalMime: originalMime)),
+    labels: sourceLabels(s).join(', '),
+    onOpen: () => showSource(s.id),
+    onEditLabels: _operations.busy ? null : () => editLabels(s),
+    onIndex: _operations.busy
+        ? null
+        : () => _operations.run(() => d.index(s.id)),
+    onDelete: _operations.busy
+        ? null
+        : () => _operations.run(() => d.delete(s.id)),
+  );
 
   void scheduleGraphLayout(List<SourceSummary> all) =>
       _featureScheduleGraphLayout(all);

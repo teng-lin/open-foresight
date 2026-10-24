@@ -1,10 +1,31 @@
-part of 'sources_controller.dart';
+import 'package:flutter/material.dart';
+import 'package:foresight_core/desktop.dart';
+import '../../desktop_visuals.dart';
 
-extension _SourceTiles on SourcesController {
-  String _featureSourceTimeLabel(Object? stamp) =>
-      stamp == null || stamp == 0 ? '--' : timeLabel(stamp);
-
-  Widget _featureSourceCells(SourceSummary? source, {String? originalMime}) {
+class SourceCells extends StatelessWidget {
+  final SourceSummary? source;
+  final IconData? icon;
+  final Color? color;
+  final String imported, changed, labels;
+  final bool ascending;
+  final VoidCallback? onSort, onEditLabels, onIndex, onDelete;
+  const SourceCells({
+    super.key,
+    this.source,
+    this.icon,
+    this.color,
+    this.imported = '',
+    this.changed = '',
+    this.labels = '',
+    required this.ascending,
+    this.onSort,
+    this.onEditLabels,
+    this.onIndex,
+    this.onDelete,
+  });
+  @override
+  Widget build(BuildContext context) {
+    final source = this.source;
     final header = source == null;
     final wide = MediaQuery.sizeOf(context).width > 950;
     final textStyle = TextStyle(
@@ -26,20 +47,14 @@ extension _SourceTiles on SourcesController {
               ? null
               : Align(
                   alignment: Alignment.centerLeft,
-                  child: Icon(
-                    sourceIcon(source, originalMime: originalMime),
-                    size: 20,
-                    color: sourceColor(
-                      typedSourceType(source, originalMime: originalMime),
-                    ),
-                  ),
+                  child: Icon(icon, size: 20, color: color),
                 ),
         ),
         Expanded(
           flex: 2,
           child: header
               ? InkWell(
-                  onTap: () => update(() => ascending = !ascending),
+                  onTap: onSort,
                   child: cell(ascending ? 'Name ↑' : 'Name ↓'),
                 )
               : Padding(
@@ -50,13 +65,13 @@ extension _SourceTiles on SourcesController {
         if (wide) ...[
           Expanded(
             child: cell(
-              header ? 'Imported' : sourceTimeLabel(source.imported),
+              header ? 'Imported' : imported,
               color: const Color(0xff999999),
             ),
           ),
           Expanded(
             child: cell(
-              header ? 'Last changed' : sourceTimeLabel(source.changed),
+              header ? 'Last changed' : changed,
               color: const Color(0xff999999),
             ),
           ),
@@ -66,12 +81,10 @@ extension _SourceTiles on SourcesController {
               ? cell('Labels')
               : Row(
                   children: [
-                    Expanded(child: cell(sourceLabels(source).join(', '))),
+                    Expanded(child: cell(labels)),
                     IconButton(
                       tooltip: 'Edit labels',
-                      onPressed: _operations.busy
-                          ? null
-                          : () => editLabels(source),
+                      onPressed: onEditLabels,
                       visualDensity: VisualDensity.compact,
                       icon: const Icon(Icons.label_outline, size: 16),
                     ),
@@ -88,9 +101,7 @@ extension _SourceTiles on SourcesController {
                       width: 36,
                       child: IconButton(
                         tooltip: 'Index / retry',
-                        onPressed: _operations.busy
-                            ? null
-                            : () => _operations.run(() => d.index(source.id)),
+                        onPressed: onIndex,
                         visualDensity: VisualDensity.compact,
                         icon: const Icon(Icons.refresh, size: 20),
                       ),
@@ -99,9 +110,7 @@ extension _SourceTiles on SourcesController {
                       width: 36,
                       child: IconButton(
                         tooltip: 'Delete source',
-                        onPressed: _operations.busy
-                            ? null
-                            : () => _operations.run(() => d.delete(source.id)),
+                        onPressed: onDelete,
                         visualDensity: VisualDensity.compact,
                         icon: const Icon(Icons.delete_outline, size: 20),
                       ),
@@ -112,20 +121,31 @@ extension _SourceTiles on SourcesController {
       ],
     );
   }
+}
 
-  Widget _featureSourceTile(SourceSummary source, {String? originalMime}) {
-    if (gridView) return sourceCardTile(source, originalMime: originalMime);
+class SourceRow extends StatelessWidget {
+  final SourceSummary source;
+  final Widget cells;
+  final VoidCallback onOpen;
+  const SourceRow({
+    super.key,
+    required this.source,
+    required this.cells,
+    required this.onOpen,
+  });
+  @override
+  Widget build(BuildContext context) {
     final showState = source.state != 'indexed' || source.error != '';
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        onTap: () => showSource(source.id),
+        onTap: onOpen,
         child: Padding(
           padding: DesktopVisuals.sourceRowPadding,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              sourceCells(source, originalMime: originalMime),
+              cells,
               if (showState)
                 Padding(
                   padding: const EdgeInsets.only(left: 40),
@@ -139,15 +159,29 @@ extension _SourceTiles on SourcesController {
       ),
     );
   }
+}
 
-  Widget _featureSourceCardTile(
-    SourceSummary s, {
-    String? originalMime,
-  }) => ListTile(
-    leading: Icon(
-      sourceIcon(s, originalMime: originalMime),
-      color: sourceColor(typedSourceType(s, originalMime: originalMime)),
-    ),
+class SourceCard extends StatelessWidget {
+  final SourceSummary s;
+  final IconData icon;
+  final Color color;
+  final String labels;
+  final VoidCallback onOpen;
+  final VoidCallback? onEditLabels, onIndex, onDelete;
+  const SourceCard({
+    super.key,
+    required this.s,
+    required this.icon,
+    required this.color,
+    required this.labels,
+    required this.onOpen,
+    this.onEditLabels,
+    this.onIndex,
+    this.onDelete,
+  });
+  @override
+  Widget build(BuildContext context) => ListTile(
+    leading: Icon(icon, color: color),
     title: Row(
       children: [
         Expanded(
@@ -157,29 +191,25 @@ extension _SourceTiles on SourcesController {
       ],
     ),
     subtitle: Text(
-      '${s.state}${sourceLabels(s).isEmpty ? '' : ' · ${sourceLabels(s).join(', ')}'}${s.error == '' ? '' : ' · ${s.error}'}',
+      '${s.state}${labels.isEmpty ? '' : ' · $labels'}${s.error == '' ? '' : ' · ${s.error}'}',
     ),
-    onTap: () => showSource(s.id),
+    onTap: onOpen,
     trailing: Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         IconButton(
           tooltip: 'Edit labels',
-          onPressed: _operations.busy ? null : () => editLabels(s),
+          onPressed: onEditLabels,
           icon: const Icon(Icons.label_outline, size: 18),
         ),
         IconButton(
           tooltip: 'Index / retry',
-          onPressed: _operations.busy
-              ? null
-              : () => _operations.run(() => d.index(s.id)),
+          onPressed: onIndex,
           icon: const Icon(Icons.refresh, size: 20),
         ),
         IconButton(
           tooltip: 'Delete source',
-          onPressed: _operations.busy
-              ? null
-              : () => _operations.run(() => d.delete(s.id)),
+          onPressed: onDelete,
           icon: const Icon(Icons.delete_outline, size: 20),
         ),
       ],

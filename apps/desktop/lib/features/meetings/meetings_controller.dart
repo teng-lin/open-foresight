@@ -1,3 +1,4 @@
+import 'recording_view.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -13,7 +14,6 @@ import '../../presentation/workspace_presentation.dart';
 import '../../service_edit_dialog.dart';
 import '../../shell/ports.dart';
 import '../../shell/workspace_tab.dart';
-import 'capture_waveform.dart';
 import 'meeting_export.dart';
 import 'meeting_note_state.dart';
 import 'meeting_visuals.dart';
@@ -24,7 +24,6 @@ part 'workspace_view.dart';
 part 'notes_view.dart';
 part 'assistant_views.dart';
 part 'summary_view.dart';
-part 'recording_view.dart';
 part 'ai_views.dart';
 
 const _meetingAssistantMinWidth = 760.0;
@@ -296,7 +295,48 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
 
   Widget immersiveMeetingWorkspace() => _immersiveMeetingWorkspace();
 
-  Widget recordingHeader() => _recordingHeader();
+  Widget recordingHeader() {
+    final elapsed =
+        recordingElapsed +
+        (recording!.paused
+            ? Duration.zero
+            : DateTime.now().difference(recordingElapsedAt));
+    final clock =
+        '${elapsed.inMinutes.toString().padLeft(2, '0')}:${(elapsed.inSeconds % 60).toString().padLeft(2, '0')}';
+    return RecordingHeader(
+      clock: clock,
+      paused: recording!.paused,
+      captureVolumes: _host.captureVolumes,
+      fallbackVolumes: d is CaptureLevelEvents
+          ? null
+          : recording!.currentVolumes,
+      onToggleWorkspace: () => update(() {
+        _navigation.navigate(WorkspaceTab.meetings);
+        meetingId = recordingMeeting;
+        meetingSidecarVisible = true;
+        meetingImmersive = !meetingImmersive;
+      }),
+      onOpenWorkspace: () => update(() {
+        _navigation.navigate(WorkspaceTab.meetings);
+        meetingId = recordingMeeting;
+        meetingSidecarVisible = true;
+      }),
+      onPauseResume: _operations.busy || recording!.finishing
+          ? null
+          : () => _operations.run(() async {
+              await d.command(
+                recording!.paused
+                    ? Operation.meetingsResume
+                    : Operation.meetingsPause,
+                {'id': recordingMeeting},
+              );
+              if (mounted) update(syncCapture);
+            }),
+      onStop: recording!.finishing
+          ? null
+          : () => _operations.run(stopRecording),
+    );
+  }
 
   Widget meetings() => MeetingStyleScope(
     child: meetingId == null ? meetingCollection() : meetingWorkspace(),
