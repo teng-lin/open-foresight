@@ -4,7 +4,7 @@ import 'read_coordinator.dart';
 import 'rpc_error.dart';
 import 'sqlite_read_session.dart';
 import 'sqlite_read_worker.dart';
-import 'store.dart';
+import 'persistence/sqlite_snapshot_source.dart';
 import 'store_reader.dart';
 
 int _readerOwner = 0;
@@ -37,7 +37,7 @@ final class SqliteStoreReader implements StoreReader {
   /// projections run on the same core-owned read worker as desktop reads.
   /// Closing this reader never closes the service's writer connection.
   factory SqliteStoreReader.service(
-    Store writer, {
+    SqliteSnapshotSource writer, {
     required String profile,
     required String connection,
   }) => SqliteStoreReader.borrow(
@@ -49,7 +49,7 @@ final class SqliteStoreReader implements StoreReader {
 
   /// Internal tests can hold actual SQLite snapshots without an isolate gate.
   SqliteStoreReader.borrow(
-    Store store, {
+    SqliteSnapshotSource store, {
     required ReadWorker worker,
     String profile = 'fixture-profile',
     String connection = 'fixture-connection',

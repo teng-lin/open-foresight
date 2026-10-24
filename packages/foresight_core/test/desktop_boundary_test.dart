@@ -7,6 +7,43 @@ import 'package:test/test.dart';
 
 import 'support/boundary_analysis.dart';
 
+Iterable<String> dependencyUris(CompilationUnit unit) sync* {
+  for (final directive in unit.directives.whereType<UriBasedDirective>()) {
+    yield directive.uri.stringValue ?? '';
+    if (directive is ImportDirective) {
+      for (final configuration in directive.configurations) {
+        yield configuration.uri.stringValue ?? '';
+      }
+    } else if (directive is ExportDirective) {
+      for (final configuration in directive.configurations) {
+        yield configuration.uri.stringValue ?? '';
+      }
+    }
+  }
+}
+
+Set<String> importClosure(Directory package, List<File> pending) {
+  final visited = <String>{};
+  while (pending.isNotEmpty) {
+    final file = pending.removeLast();
+    if (!visited.add(file.absolute.path)) continue;
+    final unit = parseString(
+      content: file.readAsStringSync(),
+      path: file.path,
+    ).unit;
+    for (final uri in dependencyUris(unit)) {
+      if (uri.startsWith('package:foresight_core/')) {
+        pending.add(
+          File('${package.path}/lib/${uri.split('/').skip(1).join('/')}'),
+        );
+      } else if (!uri.contains(':')) {
+        pending.add(File.fromUri(file.uri.resolve(uri)));
+      }
+    }
+  }
+  return visited;
+}
+
 void main() {
   final package = Directory.current.absolute;
   final desktop = Directory('${package.path}/../../apps/desktop/lib');
@@ -25,8 +62,7 @@ void main() {
         content: file.readAsStringSync(),
         path: file.path,
       ).unit;
-      for (final directive in unit.directives.whereType<UriBasedDirective>()) {
-        final uri = directive.uri.stringValue ?? '';
+      for (final uri in dependencyUris(unit)) {
         if (uri.startsWith('package:mcp_dart/')) {
           violations.add('${file.path}: $uri');
         } else if (uri.startsWith('package:foresight_core/')) {
@@ -43,6 +79,48 @@ void main() {
     expect(visited, isNot(contains(endsWith('/src/google_auth.dart'))));
     expect(visited, isNot(contains(endsWith('/src/model_setup.dart'))));
     expect(violations, isEmpty);
+  });
+
+  test('desktop and MCP closures exclude authority and mutation modules', () {
+    for (final entry in [
+      'lib/desktop.dart',
+      'lib/desktop_bootstrap.dart',
+      'bin/mcp.dart',
+    ]) {
+      final visited = importClosure(package, [File('${package.path}/$entry')]);
+      for (final name in [
+        'store.dart',
+        'native.dart',
+        'recording.dart',
+        'domain.dart',
+        'application.dart',
+        'application_service.dart',
+        'service_frontend.dart',
+        'google_auth.dart',
+        'google_connections.dart',
+        'model_setup.dart',
+        'persistence/source_store.dart',
+        'persistence/meeting_store.dart',
+        'persistence/model_store.dart',
+        'persistence/label_store.dart',
+        'persistence/schema_migrations.dart',
+        'persistence/conversation_queries.dart',
+      ]) {
+        expect(
+          visited,
+          isNot(contains(endsWith('/src/$name'))),
+          reason: '$entry: $name',
+        );
+      }
+      if (entry == 'lib/desktop_bootstrap.dart') {
+        expect(
+          visited,
+          contains(endsWith('/src/persistence/sqlite_snapshot_source.dart')),
+          reason:
+              'Desktop keeps the deliberately read-only SQLite snapshot path',
+        );
+      }
+    }
   });
 
   test('presentation values have no service or mutation import closure', () {
@@ -62,8 +140,7 @@ void main() {
       final file = pending.removeLast();
       if (!visited.add(file.absolute.path)) continue;
       final unit = parseString(content: file.readAsStringSync()).unit;
-      for (final directive in unit.directives.whereType<UriBasedDirective>()) {
-        final uri = directive.uri.stringValue ?? '';
+      for (final uri in dependencyUris(unit)) {
         if (!uri.contains(':')) {
           pending.add(File.fromUri(file.uri.resolve(uri)));
         }
@@ -105,8 +182,7 @@ void main() {
         content: file.readAsStringSync(),
         path: file.path,
       ).unit;
-      for (final directive in unit.directives.whereType<UriBasedDirective>()) {
-        final uri = directive.uri.stringValue ?? '';
+      for (final uri in dependencyUris(unit)) {
         if (uri.startsWith('package:foresight_core/')) {
           final valid =
               uri == 'package:foresight_core/desktop.dart' ||

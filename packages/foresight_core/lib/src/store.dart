@@ -1,3 +1,5 @@
+import 'persistence/application_schema.dart';
+import 'persistence/sqlite_snapshot_source.dart';
 import 'label_organization.dart';
 import 'read_models.dart';
 import 'persistence/label_organization_store.dart';
@@ -26,10 +28,12 @@ import 'dart:math' show Random;
 import 'persistence/sqlite_runtime.dart';
 
 /// Linux application schema, independently versioned from helper databases.
-class Store {
+class Store implements SqliteSnapshotSource {
+  @override
   final Database db;
+  @override
   final String path;
-  static const schemaVersion = 22;
+  static const schemaVersion = applicationSchemaVersion;
   ContentHistory get contentHistory =>
       ContentHistory(db, supportedVersion: schemaVersion);
 
@@ -345,6 +349,7 @@ class Store {
   // Browsing needs metadata, not every document body. Load content only for
   // search, graph embeddings, or the selected source detail.
   int _transactionReads = 0;
+  @override
   String get dataRevision {
     // Never reuse an uncommitted snapshot after rollback or across transactions.
     if (!db.autocommit) return 'transaction:${++_transactionReads}';
@@ -569,6 +574,7 @@ class Store {
   void saveMeetingEnhancedDraft(int meeting, String body) =>
       meetingStore.saveMeetingEnhancedDraft(meeting, body);
 
+  @override
   String preference(String key, [String fallback = '']) =>
       sourceQueries.preference(key, fallback);
   void setPreference(String key, String value) => db.execute(
