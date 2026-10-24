@@ -221,8 +221,12 @@ class Service : public rpc::RagService::Service,
       // Model abrupt process death at the transaction boundary. Sanitizers
       // intercept _exit and can run shutdown checks on deliberately unjoined
       // server threads; SIGKILL must bypass orderly process teardown.
-      kill(getpid(), SIGKILL);
-      _exit(86);
+      if (kill(getpid(), SIGKILL) != 0)
+        _exit(86);
+      // Darwin can return from kill before delivering the pending signal.
+      // Do not race it with an ordinary exit or resume the transaction.
+      for (;;)
+        pause();
     }
 #else
     (void)step;
