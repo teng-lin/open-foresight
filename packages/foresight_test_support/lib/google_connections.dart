@@ -267,9 +267,7 @@ class GoogleFixture {
   Future<void> close() => server.close(force: true);
 }
 
-class AdapterDomain extends Domain {
-  final indexed = <String>[];
-  AdapterDomain(super.store, super.helper, {super.createTimer, super.clock});
+mixin TranscriptIndexAdapter on Domain {
   bool get useProductionTranscriptIndex => false;
   final transcriptCursors = <String, transcript.TranscriptCursor>{};
   @override
@@ -287,6 +285,7 @@ class AdapterDomain extends Domain {
     if (useProductionTranscriptIndex) {
       return super.applyTranscriptDelta(delta, current: current);
     }
+    if (current != null && !current()) throw operationCancelled();
     await index(delta.documentId, current: current);
     if (current != null && !current()) throw operationCancelled();
     transcriptCursors[delta.documentId] = transcript.TranscriptCursor(
@@ -302,7 +301,11 @@ class AdapterDomain extends Domain {
       revision: delta.revision,
     );
   }
+}
 
+class AdapterDomain extends Domain with TranscriptIndexAdapter {
+  final indexed = <String>[];
+  AdapterDomain(super.store, super.helper, {super.createTimer, super.clock});
   @override
   Future<void> index(String id, {bool Function()? current}) async {
     indexed.add(id);

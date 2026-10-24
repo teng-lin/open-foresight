@@ -512,6 +512,13 @@ void main() {
       expect(connection.commandEntered, isFalse);
       expect(runtime.entered.isCompleted, isFalse);
       expect(tester.takeException(), isNull);
+      // Store owns a retention timer. Close the fixture inside the test body
+      // before Flutter verifies that the disposed tree has no pending timers.
+      await tester.pumpWidget(const SizedBox.shrink());
+      connection.close();
+      var ownerClosed = false;
+      unawaited(connection.closed.then<void>((_) => ownerClosed = true));
+      await _pumpUiUntil(tester, () => ownerClosed);
     });
   }
   for (final kind in ['summary', 'actions', 'preparation']) {
