@@ -616,9 +616,56 @@ final class _WriterProducer {
   bool active = true;
 }
 
-final class _RateBucket {
-  _RateBucket(this.window);
-  int window, count = 0, suppressed = 0, first = 0, last = 0;
+// Dense closed-schema state: no per-key objects, allocation or eviction. Summary
+// coordinates already saturate at the public numeric bound; windows remain 64-bit.
+final class _RateState {
+  _RateState._(this.offsets, this.windows, this.values);
+  factory _RateState() {
+    final offsets = Uint16List(DiagnosticEvent.values.length + 1);
+    for (final event in DiagnosticEvent.values) {
+      offsets[event.index + 1] =
+          offsets[event.index] +
+          (event.fields.contains(DiagnosticField.category)
+              ? DiagnosticCategory.values.length
+              : 1);
+    }
+    final keys = offsets.last;
+    // Include conservative typed-array/object headers in the control envelope.
+    if (offsets.lengthInBytes + keys * 24 + 256 > 4096) {
+      throw StateError('Diagnostic rate metadata exceeds its fixed budget');
+    }
+    return _RateState._(offsets, Uint64List(keys), Uint32List(keys * 4));
+  }
+  final Uint16List offsets;
+  final Uint64List windows;
+  final Uint32List values;
+
+  int key(DiagnosticEvent event, DiagnosticCategory category) =>
+      offsets[event.index] +
+      (offsets[event.index + 1] - offsets[event.index] == 1
+          ? 0
+          : category.index);
+  bool admit(DiagnosticEvent event, DiagnosticCategory category, int now) {
+    final index = key(event, category), at = index * 4, window = now ~/ 1000;
+    if (windows[index] != window) {
+      windows[index] = window;
+      values[at] = 0;
+    }
+    values[at] = _sum(values[at], 1);
+    if (values[at] <= 8) return true;
+    final bounded = now.clamp(0, _maximumCounter);
+    if (values[at + 1] == 0) values[at + 2] = bounded;
+    values[at + 3] = bounded;
+    values[at + 1] = _sum(values[at + 1], 1);
+    return false;
+  }
+
+  bool get pending {
+    for (var at = 1; at < values.length; at += 4) {
+      if (values[at] != 0) return true;
+    }
+    return false;
+  }
 }
 
 final class _QueuedRecord {
@@ -675,10 +722,7 @@ final class _Writer {
   final exitedTickets = <int>{};
   final records = <_QueuedRecord>[];
   final started = Stopwatch()..start();
-  final rate = List<_RateBucket?>.filled(
-    DiagnosticEvent.values.length * DiagnosticCategory.values.length,
-    null,
-  );
+  final rate = _RateState();
   int pendingDrops = 0, pendingRejected = 0, firstDrop = 0, lastDrop = 0;
   Timer? timer, ownershipCloseDeadline;
   DiagnosticSink? storage;
@@ -839,20 +883,7 @@ final class _Writer {
             )
             .firstOrNull ??
         DiagnosticCategory.unknown;
-    final key = event.index * DiagnosticCategory.values.length + category.index;
-    final now = started.elapsedMilliseconds;
-    final bucket = rate[key] ??= _RateBucket(now ~/ 1000);
-    final window = now ~/ 1000;
-    if (bucket.window != window) {
-      bucket.window = window;
-      bucket.count = 0;
-    }
-    bucket.count = _sum(bucket.count, 1);
-    if (bucket.count <= 8) return true;
-    if (bucket.suppressed == 0) bucket.first = now;
-    bucket.last = now;
-    bucket.suppressed = _sum(bucket.suppressed, 1);
-    return false;
+    return rate.admit(event, category, started.elapsedMilliseconds);
   }
 
   void _producerCounters(int drops, int rejects) {
@@ -868,8 +899,7 @@ final class _Writer {
 
   bool get _hasSummaries =>
       configuration.permits(DiagnosticLevel.warn) &&
-      (pendingDrops + pendingRejected > 0 ||
-          rate.whereType<_RateBucket>().any((bucket) => bucket.suppressed > 0));
+      (pendingDrops + pendingRejected > 0 || rate.pending);
 
   Iterable<_QueuedRecord> _summaries() sync* {
     if (!configuration.permits(DiagnosticLevel.warn)) return;
@@ -916,20 +946,24 @@ final class _Writer {
       );
       pendingRejected = 0;
     }
-    for (var key = 0; key < rate.length; key++) {
-      final bucket = rate[key];
-      if (bucket == null || bucket.suppressed == 0) continue;
-      yield summary(
-        DiagnosticEvent.recordsDropped,
-        bucket.suppressed,
-        bucket.first,
-        bucket.last,
-        original:
-            DiagnosticEvent.values[key ~/ DiagnosticCategory.values.length],
-        category:
-            DiagnosticCategory.values[key % DiagnosticCategory.values.length],
-      );
-      bucket.suppressed = 0;
+    for (final event in DiagnosticEvent.values) {
+      final count = rate.offsets[event.index + 1] - rate.offsets[event.index];
+      for (var category = 0; category < count; category++) {
+        final at = (rate.offsets[event.index] + category) * 4;
+        final suppressed = rate.values[at + 1];
+        if (suppressed == 0) continue;
+        yield summary(
+          DiagnosticEvent.recordsDropped,
+          suppressed,
+          rate.values[at + 2],
+          rate.values[at + 3],
+          original: event,
+          category: count == 1
+              ? DiagnosticCategory.unknown
+              : DiagnosticCategory.values[category],
+        );
+        rate.values[at + 1] = 0;
+      }
     }
   }
 
