@@ -92,6 +92,7 @@ void main() {
         'store.dart',
         'native.dart',
         'recording.dart',
+        'audio_devices.dart',
         'domain.dart',
         'application.dart',
         'application_service.dart',

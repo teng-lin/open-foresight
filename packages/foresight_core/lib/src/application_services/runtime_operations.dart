@@ -1,6 +1,6 @@
 import 'dart:io';
 import '../answer_contract.dart' show answerValidationFailures;
-import '../audio_devices.dart';
+import 'audio_operations.dart';
 import '../domain.dart';
 import '../operation_registry.dart';
 import '../operation_requests.dart';
@@ -91,18 +91,7 @@ final class RuntimeOperations {
       Operation.notificationsRequestPermission,
       (request, {current}) => notificationCapabilities(requestPermission: true),
     ),
-    TypedOperationHandler<AudioCapabilitiesRequest>(
-      Operation.audioCapabilities,
-      (request, {current}) => audioCapabilities(),
-    ),
-    TypedOperationHandler<AudioRequestSystemRequest>(
-      Operation.audioRequestSystem,
-      (request, {current}) => requestSystemAudioPermission(),
-    ),
-    TypedOperationHandler<AudioRequestMicrophoneRequest>(
-      Operation.audioRequestMicrophone,
-      (request, {current}) => requestMicrophonePermission(),
-    ),
+    ...AudioOperations().handlers,
     TypedOperationHandler<StatusRequest>(
       Operation.status,
       (request, {current}) => status(),

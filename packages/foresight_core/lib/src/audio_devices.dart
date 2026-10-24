@@ -1,15 +1,11 @@
+import 'audio_device.dart';
+export 'audio_device.dart';
 import 'dart:ffi';
 import 'dart:isolate';
 import 'package:ffi/ffi.dart';
 import 'platform_services.dart';
 import 'dart:convert';
 import 'dart:io';
-
-class AudioDevice {
-  final String name, label;
-  final bool playback;
-  AudioDevice(this.name, this.label, this.playback);
-}
 
 Future<List<AudioDevice>> audioDevices({
   bool? macOS,

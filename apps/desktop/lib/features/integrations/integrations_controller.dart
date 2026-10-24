@@ -160,6 +160,7 @@ class IntegrationsController implements IntegrationsPort {
 
   @override
   String audioDeviceState = '';
+  int _audioDeviceRequest = 0;
 
   AudioAccessPresentation captureCapabilities =
       AudioAccessPresentation.fromWire(const {});
@@ -509,17 +510,20 @@ class IntegrationsController implements IntegrationsPort {
 
   @override
   Future<void> refreshAudioDevices() async {
+    final identity = FeatureRequestIdentity.capture(d);
+    final request = ++_audioDeviceRequest;
+    bool current() =>
+        identity.isCurrent(d, alive: mounted) && request == _audioDeviceRequest;
     try {
       final devices =
-          await (_host.deviceLoader?.call() ??
-              audioDevices(runProcess: environment.run));
-      if (mounted)
+          await (_host.deviceLoader?.call() ?? d.discoverAudioDevices());
+      if (current())
         setState(() {
           availableAudioDevices = devices;
           audioDeviceState = '';
         });
     } catch (error) {
-      if (mounted) setState(() => audioDeviceState = error.toString());
+      if (current()) setState(() => audioDeviceState = error.toString());
     }
   }
 

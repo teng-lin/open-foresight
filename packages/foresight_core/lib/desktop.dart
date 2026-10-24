@@ -13,7 +13,8 @@ export 'src/read_coordinator.dart' show ReadQuery, ReadResult, ReadFreshness;
 export 'src/operations.dart' show Operation;
 export 'src/pending_request_key.dart';
 export 'src/rpc_error.dart' show RpcError, RpcErrorCode, RpcErrorReason;
-export 'src/audio_devices.dart' show AudioDevice, audioDevices;
+export 'src/audio_device.dart';
+export 'src/desktop_audio.dart';
 export 'src/file_discovery.dart'
     show DiscoveredLocalFile, LocalFileScan, LocalFileDiscovery;
 export 'src/gemma_download.dart'

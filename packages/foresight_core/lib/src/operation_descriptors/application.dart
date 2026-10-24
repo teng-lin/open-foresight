@@ -49,7 +49,9 @@ const audioCapabilitiesDescriptor = OperationDescriptor(
   stampsAgentActivity: true,
   leaseBusy: true,
   createsLease: true,
-  arguments: OperationArgumentSchema([]),
+  arguments: OperationArgumentSchema([
+    ArgumentField('enumerate_devices', ArgumentKind.trueSwitch),
+  ]),
 );
 
 const audioRequestSystemDescriptor = OperationDescriptor(
