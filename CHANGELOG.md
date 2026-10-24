@@ -23,6 +23,9 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Fixed
 
+- Update meeting transcript search incrementally and recover saved indexing work
+  after restart. Preserve manual edits and deletion while indexing waits for a
+  model to become ready.
 - Check direct Google client setup before signing out Granola accounts when switching providers.
 - Show separate Google and Granola connection choices, with explicit provider switching and account sign-out confirmation. Recover direct Google sign-in after failed Granola attempts and preserve Google client setup across provider changes and restarts.
 - Use Granola’s macOS client profile for authorization and calendar API calls on Linux.

@@ -6,11 +6,35 @@ import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
 import 'package:foresight_core/src/generated/transcript_index.pb.dart' as wire;
+import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart' as rag;
+import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_test_support/poll.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_test_support/transcript_index_service.dart';
 import 'package:grpc/grpc.dart';
 import 'package:test/test.dart';
+
+class ProjectionRag extends rag.RagServiceBase {
+  int deletions = 0;
+  @override
+  Future<rag.IndexResponse> indexDocument(
+    ServiceCall call,
+    rag.IndexRequest request,
+  ) async => throw GrpcError.unimplemented(
+    'Manual indexing unavailable in this fixture',
+  );
+  @override
+  Future<rag.DeleteResponse> deleteDocument(
+    ServiceCall call,
+    rag.DeleteRequest request,
+  ) async {
+    deletions++;
+    return rag.DeleteResponse(success: true);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
 
 void main() {
   late Directory root;
@@ -20,6 +44,7 @@ void main() {
   late Application app;
   late Server server;
   late ControlledTranscriptIndex peer;
+  late ProjectionRag ragPeer;
   late int meeting;
   late String socket;
   String getId() => 'meeting-$meeting';
@@ -56,7 +81,8 @@ void main() {
     root = createTestTempDirectorySync('projection-');
     socket = '${root.path}/peer.sock';
     peer = ControlledTranscriptIndex();
-    server = Server.create(services: [peer]);
+    ragPeer = ProjectionRag();
+    server = Server.create(services: [peer, ragPeer]);
     await server.serve(
       address: InternetAddress(socket, type: InternetAddressType.unix),
       port: 0,
@@ -305,6 +331,134 @@ void main() {
         ]).single['deleted'],
         1,
       );
+    },
+  );
+
+  test(
+    'cancellation keeps durable source work pending rather than failed',
+    () async {
+      append('retry after cancellation');
+      peer.beforeApply = (call, request) async =>
+          throw GrpcError.cancelled('Controlled peer cancellation');
+      await expectLater(app.indexMeeting(meeting), throwsA(isA<GrpcError>()));
+      expect(store.sourceQueries.source(getId())!.state, 'pending');
+      expect(store.rows('SELECT * FROM meeting_index_jobs'), hasLength(1));
+    },
+  );
+
+  test(
+    'tombstone cancellation never overwrites deletion state with failed',
+    () async {
+      final entered = Completer<void>(), release = Completer<void>();
+      addTearDown(() {
+        if (!release.isCompleted) release.complete();
+      });
+      peer.beforeApply = (call, request) async {
+        entered.complete();
+        await release.future;
+      };
+      append('deleted during indexing');
+      final work = app.indexMeeting(meeting);
+      final cancelled = expectLater(
+        work,
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+        ),
+      );
+      await entered.future;
+      store.db.execute('CREATE TEMP TABLE tombstone_states(state TEXT)');
+      store.db.execute(
+        "CREATE TEMP TRIGGER audit_tombstone_state AFTER UPDATE OF state ON sources WHEN NEW.id='${getId()}' BEGIN INSERT INTO tombstone_states VALUES(NEW.state); END",
+      );
+      final deletion = domain.delete(getId());
+      await cancelled;
+      expect(
+        store.rows("SELECT * FROM tombstone_states WHERE state='failed'"),
+        isEmpty,
+      );
+      release.complete();
+      await deletion;
+      expect(
+        store
+            .rows('SELECT state FROM tombstone_states')
+            .map((row) => row['state']),
+        ['deleting', 'deleted'],
+      );
+      expect(
+        store.sourceQueries.source(getId(), includeDeleted: true)!.state,
+        'deleted',
+      );
+      expect(ragPeer.deletions, 1);
+      await domain.reconcile();
+      expect(ragPeer.deletions, 1);
+    },
+  );
+
+  test(
+    'saved delta requires matching workspace epoch before cursor reuse',
+    () async {
+      append('first segment');
+      await app.indexMeeting(meeting);
+      append('second segment');
+      peer.beforeApply = (call, request) async =>
+          throw GrpcError.unavailable('Controlled pre-commit failure');
+      await expectLater(app.indexMeeting(meeting), throwsA(isA<GrpcError>()));
+      expect(store.rows('SELECT * FROM meeting_index_batches'), hasLength(1));
+      peer.beforeApply = null;
+      peer.cursors[getId()]!.workspaceEpoch = 'independently-restored-epoch';
+      final before = peer.requests.length;
+      await app.indexMeeting(meeting);
+      expect(peer.requests.skip(before), hasLength(1));
+      expect(peer.requests.last.reset, true);
+      expect(peer.cursors[getId()]!.workspaceEpoch, store.workspaceEpoch);
+      expect(
+        indexedText(),
+        allOf(contains('first segment'), contains('second segment')),
+      );
+      expect(store.rows('SELECT * FROM meeting_index_jobs'), isEmpty);
+    },
+  );
+
+  test(
+    'ABORTED cursor race reconciles with a bounded current-data reset',
+    () async {
+      append('current authoritative segment');
+      var raced = false;
+      peer.beforeApply = (call, request) async {
+        if (!raced) {
+          raced = true;
+          peer.cursors[getId()] = wire.TranscriptCursor(
+            exists: true,
+            workspaceEpoch: store.workspaceEpoch,
+            revision: request.expectedRevision + 7,
+          );
+        }
+      };
+      await app.indexMeeting(meeting);
+      expect(peer.requests, hasLength(2));
+      expect(peer.requests.last.reset, true);
+      expect(peer.requests.last.expectedRevision.toInt(), 7);
+      expect(indexedText(), contains('current authoritative segment'));
+      expect(store.sourceQueries.source(getId())!.state, 'indexed');
+    },
+  );
+
+  test(
+    'repeated ABORTED cursor races stop after three reconciliation attempts',
+    () async {
+      append('retained after repeated cursor races');
+      peer.beforeApply = (call, request) async =>
+          throw GrpcError.aborted('Controlled persistent cursor race');
+      await expectLater(
+        app.indexMeeting(meeting),
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.busy),
+        ),
+      );
+      expect(peer.requests, hasLength(4));
+      expect(store.rows('SELECT * FROM meeting_index_jobs'), hasLength(1));
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(peer.requests, hasLength(4));
     },
   );
 

@@ -162,6 +162,53 @@ void main() {
     expect(reader.sources.single['revision'], 1);
     expect(reader.sources.single['state'], 'indexed');
   });
+  test(
+    'coalesced capture maps an older stored source before producer completion',
+    () async {
+      final legacy = store.meeting('Historical source');
+      final id = 'meeting-$legacy';
+      store.importText(
+        'Historical transcript',
+        'committed stored transcript',
+        'text/plain',
+        'meeting:$legacy',
+        id: id,
+        generated: true,
+      );
+      final first = app.indexMeeting(legacy);
+      await service.entered.future;
+      expect(store.rows('SELECT * FROM meeting_transcript_sources'), isEmpty);
+      store.transcript(
+        legacy,
+        'new coalesced capture',
+        true,
+        0,
+        10,
+        'microphone',
+      );
+      final second = app.indexMeeting(legacy);
+      service.release.complete();
+      await Future.wait([first, second]);
+      expect(incremental.requests, hasLength(1));
+      expect(incremental.requests.single.documentId, id);
+      expect(
+        incremental.requests.single.upserts.single.text,
+        contains('new coalesced capture'),
+      );
+      expect(
+        reader.sourceQueries.source(id)!.content,
+        contains('new coalesced capture'),
+      );
+      expect(reader.sourceQueries.source(id)!.state, 'indexed');
+      expect(reader.sourceQueries.source(id)!.revision, 2);
+      expect(
+        store.rows('SELECT * FROM meeting_index_jobs WHERE meeting_id=?', [
+          legacy,
+        ]),
+        isEmpty,
+      );
+    },
+  );
   for (final change in <String, void Function(control.State)>{
     'helper instance': (state) => state.instanceId = 'replacement-owner',
     'active generation': (state) => state.activeGeneration += 1,

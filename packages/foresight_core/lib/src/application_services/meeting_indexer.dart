@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:grpc/grpc.dart' show GrpcError, StatusCode;
 
 import '../domain.dart';
 import '../cancellation.dart';
@@ -97,14 +98,20 @@ final class MeetingIndexer {
         },
         onError: (Object error, StackTrace stack) {
           try {
+            final source = projection.source(run.meeting);
             if (!domain.closed &&
                 store.workspaceEpoch == run.epoch &&
                 domain.workspaceGeneration == run.workspace &&
-                projection.source(run.meeting)?.generated == true) {
+                source?.generated == true &&
+                source?.deleted != true) {
+              final pending =
+                  _closed ||
+                  (error is RpcError && error.code == RpcErrorCode.cancelled) ||
+                  (error is GrpcError && error.code == StatusCode.cancelled);
               store.state(
                 projection.sourceId(run.meeting),
-                _closed ? 'pending' : 'failed',
-                _closed
+                pending ? 'pending' : 'failed',
+                pending
                     ? ''
                     : 'Transcript indexing could not complete; saved for retry.',
               );
@@ -164,10 +171,11 @@ final class MeetingIndexer {
     final id = run.meeting;
     projection.ensureSource(id, run.epoch);
     projection.expire(id);
-    var modelRestarts = 0;
+    var modelRestarts = 0, cursorConflicts = 0;
     while (_active(run)) {
       await domain.waitForSourceWork(current: () => _active(run));
       if (!_active(run)) throw operationCancelled();
+      projection.ensureSource(id, run.epoch);
       final revision = projection.revision(id)!;
       final source = projection.source(id)!;
       if (!source.generated || !projection.mapped(id)) {
@@ -178,7 +186,15 @@ final class MeetingIndexer {
           );
         }
         if (!_active(run)) throw operationCancelled();
-        if (projection.source(id)?.state != 'indexed') continue;
+        // Capture can arrive while an old unmapped source is being indexed.
+        // Re-admit its authoritative projection before completing coalesced work.
+        projection.ensureSource(id, run.epoch);
+        final latest = projection.source(id)!;
+        if (latest.generated && projection.mapped(id)) continue;
+        // Pending is a normal result before model readiness. Returning retains
+        // durable intent; a microtask retry here would starve the event loop.
+        if (latest.state != 'indexed') return;
+        if (projection.revision(id) != revision) continue;
         jobs.complete(
           MeetingIndexIntent(meeting: id, epoch: run.epoch, revision: revision),
         );
@@ -201,9 +217,9 @@ final class MeetingIndexer {
       var batch = projection.pending(id, run.epoch);
       if (projection.hasPending(id) && batch == null) projection.reset(id);
       if (batch != null &&
-          !((cursor.revision == batch.request.expectedRevision) ||
-              (cursor.exists &&
-                  cursor.workspaceEpoch == run.epoch &&
+          !(cursor.exists &&
+              cursor.workspaceEpoch == run.epoch &&
+              (cursor.revision == batch.request.expectedRevision ||
                   cursor.revision == batch.request.revision))) {
         projection.reset(id);
         batch = null;
@@ -251,6 +267,20 @@ final class MeetingIndexer {
           throw StateError('Helper acknowledged a different transcript cursor');
         }
         projection.acknowledge(id, run.epoch, batch);
+      } on GrpcError catch (error) {
+        if (error.code == StatusCode.aborted && _generated(run)) {
+          if (++cursorConflicts > 3) {
+            throw RpcError(
+              RpcErrorCode.busy,
+              'Transcript cursor changed repeatedly; saved for retry',
+            );
+          }
+          // A concurrent/replaced helper invalidated the cursor after our read.
+          // Reconcile from its next cursor with a bounded current-data reset.
+          projection.reset(id);
+          continue;
+        }
+        rethrow;
       } on RpcError catch (error) {
         if (error.code == RpcErrorCode.cancelled &&
             _active(run) &&

@@ -106,6 +106,18 @@ final class MeetingTranscriptProjection {
         'INSERT OR IGNORE INTO meeting_transcript_sources VALUES(?,?)',
         [sourceId(meeting), meeting],
       );
+      if (store.db.updatedRows != 0 && existing != null) {
+        // A historical stored body just changed to authoritative row projection.
+        // Revisions/citations must become pending before any helper RPC can ack.
+        store.db.execute(
+          "UPDATE sources SET revision=revision+1,state='pending',error='' WHERE id=? AND generated=1 AND deleted=0",
+          [sourceId(meeting)],
+        );
+        store.db.execute(
+          'UPDATE source_details SET changed=? WHERE source_id=?',
+          [DateTime.now().millisecondsSinceEpoch, sourceId(meeting)],
+        );
+      }
       // One-time conversion of an older generated full-body source. Its visible
       // content is already provided by source_contents, not this storage cell.
       store.db.execute(

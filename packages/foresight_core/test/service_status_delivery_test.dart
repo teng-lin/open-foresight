@@ -528,7 +528,7 @@ void main() {
       // Keeping this inventory exact makes a new table require revision evidence.
       final inserts = <String, String>{
         'content_revisions':
-            "INSERT INTO content_revisions(entity,entity_id,snapshot,created) VALUES('notes','1','{}',1)",
+            "INSERT INTO content_revisions(entity,entity_id,snapshot,created) VALUES('notes','1','{}',${DateTime.now().millisecondsSinceEpoch})",
         'sources':
             "INSERT INTO sources(id,title,content,mime,revision,state,provenance) VALUES('s','Source','Body','text/plain',1,'imported','fixture')",
         'source_details':
@@ -540,6 +540,18 @@ void main() {
             "INSERT INTO models(kind,path,digest,runtime) VALUES('embedding','/fixture','digest','/fixture')",
         'meetings':
             "INSERT INTO meetings(id,title,state) VALUES(1,'Meeting','completed')",
+        'meeting_index_jobs':
+            "INSERT INTO meeting_index_jobs(meeting_id,workspace_epoch,revision,requested) VALUES(1,'fixture',0,1)",
+        'meeting_index_state':
+            "INSERT INTO meeting_index_state(meeting_id,workspace_epoch,revision) VALUES(1,'fixture',0)",
+        'meeting_transcript_sources':
+            "INSERT INTO meeting_transcript_sources(source_id,meeting_id) VALUES('s',1)",
+        'meeting_index_progress':
+            "INSERT INTO meeting_index_progress(meeting_id,workspace_epoch) VALUES(1,'fixture')",
+        // The journal admits missing rows (including deleted rows). Insert
+        // before the transcript trigger so this table has its own INSERT proof.
+        'meeting_transcript_changes':
+            'INSERT INTO meeting_transcript_changes(meeting_id,transcript_id,changed) VALUES(1,1,1)',
         'transcript':
             "INSERT INTO transcript(id,meeting_id,text,final,start_ms,end_ms,source) VALUES(1,1,'Transcript',1,0,1,'fixture')",
         'artifacts':
@@ -586,6 +598,12 @@ void main() {
             "INSERT INTO meeting_tasks(id,meeting_id,task_key,task,status,evidence,input_revision) VALUES(1,1,'task','Task','open','[]',0)",
         'document_summary_cache':
             "INSERT INTO document_summary_cache(cache_key,source_id,source_revision,body,identity) VALUES('cache','s',1,'Body','identity')",
+        'meeting_index_segments':
+            "INSERT INTO meeting_index_segments(id,meeting_id,transcript_id,channel,ordinal,text,digest) VALUES(1,1,1,0,0,'Piece','digest')",
+        'meeting_index_deletes':
+            'INSERT INTO meeting_index_deletes(meeting_id,segment_id,channel,created) VALUES(1,2,0,1)',
+        'meeting_index_batches':
+            "INSERT INTO meeting_index_batches(meeting_id,workspace_epoch,metadata,created) VALUES(1,'fixture','{}',1)",
       };
       final tables = store
           .rows(
@@ -601,6 +619,11 @@ void main() {
         store.db.execute('BEGIN IMMEDIATE');
         store.db.execute(entry.value);
         store.db.execute('COMMIT');
+        expect(
+          store.rows('SELECT 1 FROM "${entry.key}" LIMIT 1'),
+          isNotEmpty,
+          reason: '${entry.key}: committed row must exist',
+        );
         final after = store.dataRevision;
         expect(after, isNot(before), reason: '${entry.key}: service writer');
         service.application.changed();
@@ -614,6 +637,11 @@ void main() {
                 as String;
         otherWriter.db.execute('BEGIN IMMEDIATE');
         otherWriter.db.execute('UPDATE "${entry.key}" SET "$column"="$column"');
+        expect(
+          otherWriter.db.updatedRows,
+          greaterThan(0),
+          reason: '${entry.key}: other writer must update an actual row',
+        );
         otherWriter.db.execute('COMMIT');
         final external = store.dataRevision;
         expect(external, isNot(after), reason: '${entry.key}: external writer');

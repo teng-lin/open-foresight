@@ -48,6 +48,13 @@ pieces without rereading already projected transcript bodies. Workspace epochs
 and producer generation checks prevent old acknowledgements from updating a
 cleared/reused workspace. Manual source ownership and tombstones remain decisive.
 
+Manual and historical stored sources that remain pending before model readiness
+retain their intent and release the producer. Readiness/resume signals admit a
+later retry. Saved batches require the matching helper workspace epoch; cursor
+conflicts trigger at most three reconciliation retries before leaving durable
+work for a later owner. A producer rechecks projection ownership after waits so
+coalesced capture is included before completion.
+
 `meeting_incremental_projection_test.dart` instruments actual application row-body
 reads, piece writes and canonical request serialization for fixed 64/128-append
 workloads; each ratio must be at most 2.5. It also exercises durable uncertain
