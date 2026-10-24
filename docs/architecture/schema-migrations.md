@@ -122,7 +122,7 @@ failure rolls back all members and a later start retries. Already-current member
 are not reconverted. Recurring revision/generation pruning remains runtime policy
 after migration. No index reset or silent rebuild is introduced.
 
-`tools/migrate_profile.py` qualifies application/helper versions before opening
+`python3.13 -m tools.migrate_profile` (from the repository root) qualifies application/helper versions before opening
 live writable connections or rewriting settings, and preserves every version.
 Native tests exercise real hot attached transactions immediately before and after
 superjournal deletion, hidden future page-1 states, WAL-only future versions,

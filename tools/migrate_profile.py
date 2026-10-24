@@ -9,7 +9,6 @@ data and belong outside the source tree.
 from contextlib import closing
 import argparse
 import fcntl
-import importlib
 import os
 from pathlib import Path
 import shutil
@@ -17,12 +16,16 @@ import sqlite3
 import subprocess
 import sys
 
-try:
-    preflight = importlib.import_module("tools.sqlite_preflight")
-except ModuleNotFoundError as error:
-    if error.name != "tools":
-        raise
-    preflight = importlib.import_module("sqlite_preflight")
+if __package__:
+    from . import sqlite_preflight as _package_preflight
+
+    preflight = _package_preflight
+else:
+    # External direct-script callers resolve the sibling from this script's directory.
+    import sqlite_preflight as _direct_preflight
+
+    preflight = _direct_preflight
+
 
 
 def check_open_profile(source):

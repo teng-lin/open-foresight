@@ -112,3 +112,23 @@ selects the export root explicitly; direct mode runs from an unrelated directory
 neither receives `PYTHONPATH`. Historical baseline/selector fixtures remain
 historical data, and imported callers retain the same module API. This is the
 first entrypoint batch, not completed import cleanup or full Stage E acceptance.
+
+
+The next entrypoint batch converts the legacy profile mover to normal imports.
+Package mode uses its sibling through a relative import; standalone mode uses
+the script directory's sibling without importing an ambient `tools` package.
+The public `preflight` module reference remains available for existing callers.
+The profile migration suite now imports the canonical package module rather
+than creating another module instance through a filename spec. This removes
+three inventoried dynamic-load sites without adding a `sys.path` mutation.
+
+The README's primary command is `python3.13 -m tools.migrate_profile`, explicitly
+from the repository root. `tools/run_desktop.sh` still names the source file in
+a comment; that is a source reference, not an executable caller. The historical
+selector fixture remains historical data. The other test consumer already uses
+a package import. Real SQLite CLI cases cover both module and standalone modes
+from Git-free exports with deliberately conflicting ambient module names; they
+check backup/schema/digest preservation, intended path updates, copied model and
+attachment bytes, and unchanged user-authored text. The migration schema ceiling,
+SQL, ownership cleanup and credential behavior are unchanged. Offline restore
+activation remains a separate unfinished requirement.
