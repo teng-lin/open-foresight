@@ -55,7 +55,8 @@ outcomes, restart, restored/missing cursors, edits/deletes, source history,
 read-only reads, bounded compaction, expiry and cancellation. The native helper
 CTest independently measures actual tokenizer, embedding, content and immutable
 snapshot construction work. `meeting_incremental_native_test.dart` connects the
-real application producer to `FORESIGHT_HELPER`, including parent citations,
+real application producer to explicit `FORESIGHT_TEST_HELPER`, including parent citations,
 edits/deletes, process restart, independent helper-state loss and erasure. Its
-model is explicitly deterministic test machinery; these checks do not qualify
+model is explicitly deterministic test machinery, separate from the production
+`FORESIGHT_HELPER` qualification; these checks do not qualify
 production models or physical capture behavior.

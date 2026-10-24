@@ -12,7 +12,7 @@ import 'package:grpc/grpc.dart';
 import 'package:test/test.dart';
 
 void main() {
-  final executable = Platform.environment['FORESIGHT_HELPER'];
+  final executable = Platform.environment['FORESIGHT_TEST_HELPER'];
   test(
     'application incremental producer survives real helper restart/reset and publishes parent citations',
     () async {
@@ -170,7 +170,7 @@ void main() {
       expect(await search(id), isEmpty);
     },
     skip: executable == null || executable.isEmpty
-        ? 'Requires FORESIGHT_HELPER from a freshly built repository-root native build'
+        ? 'Requires FORESIGHT_TEST_HELPER from a freshly built repository-root test-helper target'
         : false,
   );
 }
