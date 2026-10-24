@@ -12,6 +12,9 @@ remain in git history. Current AI workflow research is linked below.
 
 ## Architecture and platforms
 
+- [Repository remediation and unified logging implementation plan](plans/2026-10-24-repository-remediation-plan.md)
+- [Combined remediation execution](plans/2026-10-24-repository-remediation-execution.md)
+
 - [Schema migrations](architecture/schema-migrations.md)
 - [Meeting Summary](architecture/meeting-summary.md)
 - [Credentials at rest](architecture/credentials-at-rest.md)
