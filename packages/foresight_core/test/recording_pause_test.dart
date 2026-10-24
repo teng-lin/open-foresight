@@ -5,6 +5,7 @@ import 'package:foresight_core/src/application.dart';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:async';
 import 'package:clock/clock.dart';
 import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
@@ -59,6 +60,10 @@ void main() {
         Void Function(Pointer<Void>, Int32),
         void Function(Pointer<Void>, int)
       >('fixture_admit_speech')(handle, complete ? 1 : 0);
+  int admissionsPolled() =>
+      fixture.lookupFunction<Int32 Function(), int Function()>(
+        'fixture_speech_admissions_polled',
+      )();
   Future<void> until(bool Function() ready) async {
     final elapsed = Stopwatch()..start();
     while (!ready()) {
@@ -341,13 +346,17 @@ void main() {
       queueSpeech(true);
       addTearDown(() => queueSpeech(false));
       final gaps = <Map<String, dynamic>>[];
+      final interrupted = Completer<bool>();
       final recording = Recording(
         library,
         (_) {},
         (_, __, ___, ____) {},
-        speechTimeout: const Duration(milliseconds: 100),
-        speechQueueTimeout: const Duration(seconds: 2),
-        interruption: gaps.add,
+        speechTimeout: const Duration(milliseconds: 600),
+        speechQueueTimeout: const Duration(seconds: 5),
+        interruption: (gap) {
+          gaps.add(gap);
+          if (!interrupted.isCompleted) interrupted.complete(true);
+        },
       );
       addTearDown(recording.dispose);
       recording.start('/usr/bin/true', model, playback: false);
@@ -356,13 +365,45 @@ void main() {
       await until(() => recording.speeches.isNotEmpty);
       final handle = recording.speeches.single;
       // Remain queued longer than the execution allowance, then start execution.
-      await Future<void>.delayed(const Duration(milliseconds: 150));
+      await Future<void>.delayed(const Duration(milliseconds: 900));
       expect(gaps, isEmpty);
+      final beforeAdmission = admissionsPolled();
+      expect(recording.speeches, contains(handle));
       admitSpeech(handle, complete: false);
-      await Future<void>.delayed(const Duration(milliseconds: 40));
+      // Observe actual poll consumption, rather than merely placing a frame in
+      // the fixture queue, before starting the repeated-admission window.
+      await until(
+        () => admissionsPolled() > beforeAdmission || gaps.isNotEmpty,
+      );
       expect(gaps, isEmpty);
-      admitSpeech(handle, complete: false);
-      await until(() => gaps.isNotEmpty);
+      final renewals = Timer.periodic(const Duration(milliseconds: 50), (_) {
+        // Timeout can release the pointer between timer callbacks. Only the
+        // current Recording owner may submit another fixture event.
+        if (recording.speeches.contains(handle)) {
+          admitSpeech(handle, complete: false);
+        }
+      });
+      // Five execution budgets: resetting the clock on each admission must fail
+      // while renewals still run, rather than time out after they have stopped.
+      final renewalWindow = Timer(const Duration(seconds: 3), () {
+        if (!interrupted.isCompleted) interrupted.complete(false);
+      });
+      try {
+        expect(
+          await interrupted.future,
+          true,
+          reason: 'Execution must time out while repeated admissions continue',
+        );
+        expect(renewals.isActive, true);
+        expect(
+          admissionsPolled() - beforeAdmission,
+          greaterThanOrEqualTo(3),
+          reason: 'Repeated admission frames must actually reach the consumer',
+        );
+      } finally {
+        renewals.cancel();
+        renewalWindow.cancel();
+      }
       expect(gaps.single['message'], contains('Speech worker timed out'));
       expect(gaps.single['message'], isNot(contains('queue admission')));
       expect(recording.speeches, isEmpty);

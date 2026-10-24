@@ -17,6 +17,7 @@ static std::string speech_event;
 static bool hold_speech = false;
 static bool queue_speech = false;
 static int speech_creations = 0;
+static int speech_admissions_polled = 0;
 static std::string speech_runtime;
 extern "C" {
 const char *fixture_speech_runtime() {
@@ -24,6 +25,9 @@ const char *fixture_speech_runtime() {
 }
 int fixture_speech_creations() {
   return speech_creations;
+}
+int fixture_speech_admissions_polled() {
+  return speech_admissions_polled;
 }
 void fixture_hold_speech(int hold) {
   hold_speech = hold != 0;
@@ -124,6 +128,9 @@ char *fs_event_poll(void *pointer, int) {
     return nullptr;
   auto event = handle->events.front();
   handle->events.pop_front();
+  if (handle->speech &&
+      event == "{\"type\":\"state\",\"phase\":\"speech_running\"}")
+    ++speech_admissions_polled;
   return strdup(event.c_str());
 }
 void fs_string_free(char *text) {
