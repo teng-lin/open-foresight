@@ -550,3 +550,58 @@ fixtures, retaining transaction/replay checks and sanitizer log gates. Native
 and Claude review converged; fresh Linux failed-first helper tests **2/2** and
 full CTest **32/32** passed. Mac, matched application and hosted sanitizer
 qualification remain before integration/acceptance.
+
+### Reviewed follow-up integration before the next draft push
+
+The corrected abrupt-crash unit is `1140ddc3`, locally merged as `2ced21ca`.
+Both native-peer and whole-candidate Claude review converged. A successful
+self-SIGKILL waits in `::pause()` until delivery; an actual kill failure keeps
+the strict failing exit-86 fallback. Mac caught the earlier kill/exit delivery
+race; the next candidate caught a C++ name-shadowing compile error. Those failed
+outputs remain. Final failed-first helper cases passed **2/2** on each platform,
+then full fresh root native CTest **32/32 Linux** and **35/35 Mac**, zero skips.
+Mac core **2,269 / 14 skipped / 95.31%** and desktop **569 / 13 skipped / 93.61%**
+passed. Linux desktop passed **567 / 17 skipped / 93.72%**; its core run had
+three old cold-source-child watchdog failures, and compiled service retained
+the already identified immediate-search failure. These are failed results,
+subsequently addressed by the separate search/fixture unit below. Evidence:
+`/var/tmp/of-helper-crash114`, including prior attempts retained separately.
+
+`753a53c5`, locally merged as `fe89c8d0`, fixes the shared test helper's unset
+default to physical `/private/var/tmp` on Mac and `/var/tmp` on Linux. Explicit
+overrides, private per-test allocation and cleanup are unchanged. Hosted Mac
+had **64 core and two desktop failures** from traversing the `/tmp` symlink
+during descriptor-anchored backup operations. Actual Mac old-default controls
+failed; the new default passed **20 core and seven desktop cases**, zero skips,
+with the override deliberately unset. Analysis, formatting and independent
+native-peer review passed. Evidence: `/var/tmp/of-temp-default753`; final
+combined default-path coverage remains required.
+
+Ordered search commits `7e0fd1f8` and `763e78d2` were locally merged as
+`d88b65ae` after whole-candidate native/root and repeat Claude review converged.
+Search borrows a bounded snapshot of active stopped index producers, with a
+five-second readiness deadline; Stop stays independent. A captured failure
+refuses that call, while later searches over ordinary indexed sources remain
+available. Inactive durable backlog filters out before the SQL limit. Three
+new availability controls fail against the prior reviewed candidate. The old
+readiness child now compiles outside its unchanged 12-second operation watchdog;
+kill/reap bounds, markers and counters remain intact. The new controlled search
+test observes producer settlement before its original reply envelope, without
+renewing the production deadline.
+
+Final search-unit qualification passed Linux core **2,288 / 17 skipped / 95.06%**,
+desktop **567 / 17 skipped / 93.72%**, and fresh compiled service/MCP plus both
+isolated-display native UI cases **34/34**, zero skips. The original immediate
+Stop-to-search assertion is unchanged. Mac core passed **2,289 / 14 skipped /
+95.35%**, desktop **569 / 13 skipped / 93.61%**. Focused cases passed **24/24** on
+both platforms. This explicitly reused qualified root-47 native products after
+checking 108 native/protocol/generator inputs; it is not a fresh search-native
+build. Earlier timing/path failures and negative-control output remain in
+`/var/tmp/of-search-763/qualification/handoff.md` and adjacent evidence.
+
+The next combined-head Linux/Mac matrix will verify these integrated changes
+together. Logging worker/adoption, native lifecycle, broader client/service
+architecture, remaining tooling and installed-package acceptance are still
+in progress; none is closed by these local integrations. Hosted Debian smoke
+also failed desktop process identity; its full job output is retained for
+reproduction rather than weakening the owned-process check.
