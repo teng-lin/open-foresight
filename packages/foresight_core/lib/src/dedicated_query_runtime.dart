@@ -1,12 +1,10 @@
+export 'model_identity.dart'
+    show dedicatedQueryModelKind, dedicatedQueryBackend, portableQueryBackend;
 import 'rpc_error.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'runtime_execution_policy.dart';
-
-const dedicatedQueryModelKind = 'query-detection';
-const dedicatedQueryBackend = 'legacy_query_cpu';
-const portableQueryBackend = 'raw_query_jsonl_v1';
 
 abstract interface class QueryCompletionRuntime {
   Future<String> complete(String prompt, String requestId);

@@ -11,7 +11,6 @@ import 'model_acquisition.dart' show ForesightSharedConfig;
 import 'native.dart';
 import 'platform_services.dart';
 import 'dedicated_query_runtime.dart';
-import 'encrypted_query_runtime.dart';
 import 'model_vault.dart';
 import 'package:crypto/crypto.dart';
 

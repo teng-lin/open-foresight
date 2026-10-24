@@ -6,3 +6,8 @@ int referenceGenerationModelType(String digest) =>
 
 const referenceManagedModelTypes = {1, 2, 3, 4, 14, 15, 16, 17};
 const referenceInferenceModelOrder = [16, 15, 14, 12, 8, 9];
+
+const dedicatedQueryModelKind = 'query-detection';
+const dedicatedQueryBackend = 'legacy_query_cpu';
+const portableQueryBackend = 'raw_query_jsonl_v1';
+const dedicatedEncryptedQueryBackend = 'legacy_query_cpu_encrypted';

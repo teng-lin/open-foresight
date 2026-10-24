@@ -1,3 +1,4 @@
+import 'model_runtime_paths.dart';
 import 'rpc_error.dart';
 import 'desktop_connection.dart';
 import 'dart:async';
@@ -12,8 +13,10 @@ import 'runtime_execution_policy.dart';
 
 /// Packaged installations always use their bundled native worker, including
 /// profiles that still contain the former Python runner path.
-String liteRtRunner(String registered) =>
-    runtimeConfiguration['FORESIGHT_LITERT_RUNNER'] ?? registered;
+String liteRtRunner(String registered) => resolveLiteRtRunner(
+  registered,
+  runtimeConfiguration['FORESIGHT_LITERT_RUNNER'],
+);
 
 typedef CreateNative = Pointer<Void> Function(Pointer<Utf8>, Pointer<Utf8>);
 typedef CreateDart = Pointer<Void> Function(Pointer<Utf8>, Pointer<Utf8>);

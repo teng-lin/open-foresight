@@ -1,3 +1,5 @@
+import 'model_identity.dart';
+import 'model_runtime_paths.dart';
 import 'dart:io';
 
 import 'platform_services.dart';
@@ -15,8 +17,8 @@ String? _dedicatedQuerySetupProblem(Map<String, Object?>? model) {
     return 'Import the supported dedicated question model to enable automatic questions.';
   }
   final asset = File(model['path'] as String);
-  final encrypted = model['backend'] == 'legacy_query_cpu_encrypted';
-  if ((!encrypted && model['backend'] != 'legacy_query_cpu') ||
+  final encrypted = model['backend'] == dedicatedEncryptedQueryBackend;
+  if ((!encrypted && model['backend'] != dedicatedQueryBackend) ||
       (!encrypted && model['digest'] != dedicatedQueryModelDigest) ||
       !asset.existsSync() ||
       asset.lengthSync() != dedicatedQueryModelBytes + (encrypted ? 33 : 0)) {
@@ -60,7 +62,7 @@ String? _speechSetupProblem(Map<String, Object?>? model) {
 
 /// Inspect a prepared registration without issuing a synchronous store read.
 bool preparedNeedsModel(ModelRegistration? model, String kind) =>
-    kind == 'query-detection'
+    kind == dedicatedQueryModelKind
     ? preparedDedicatedQuerySetupProblem(model) != null
     : _needsModel(model?.toRow(), kind);
 
@@ -80,7 +82,10 @@ bool _needsModel(Map<String, Object?>? model, String kind) {
     final registered = model['runtime'] as String;
     final runtime = File(
       model['backend'] == 'litert_lm'
-          ? (runtimeConfiguration['FORESIGHT_LITERT_RUNNER'] ?? registered)
+          ? resolveLiteRtRunner(
+              registered,
+              runtimeConfiguration['FORESIGHT_LITERT_RUNNER'],
+            )
           : registered,
     );
     return !runtime.existsSync() || (runtime.statSync().mode & 0x49) == 0;
