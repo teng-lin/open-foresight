@@ -3,6 +3,7 @@ import '../test_support/reader_admissions.dart';
 import 'store_reader_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
+import 'dart:ffi' show Pointer, Void;
 import 'package:foresight_core/remote.dart' show CaptureLevelEvents;
 import 'desktop_connection_fixture.dart';
 import '../test_support/core_fixture.dart';
@@ -15,6 +16,8 @@ import 'package:open_foresight/main.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 class _Recording implements Recording {
+  @override
+  final captures = <Pointer<Void>>[];
   @override
   bool paused = false;
   @override
