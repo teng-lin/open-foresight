@@ -20,11 +20,15 @@ import 'google_maintenance.dart';
 /// Source import, revision admission and organization share the existing domain
 /// queue. Import policy is injected by composition, never discovered globally.
 final class SourceOperations {
-  SourceOperations({required this.domain, required this.accounts})
-    : queries = SourceAdmissionQueries(domain.store);
+  SourceOperations({
+    required this.domain,
+    required this.accounts,
+    this.awaitSearchReadiness,
+  }) : queries = SourceAdmissionQueries(domain.store);
   final SourceOperationsPort domain;
   final GoogleMaintenance accounts;
   final SourceAdmissionQueries queries;
+  final Future<void> Function({bool Function()? current})? awaitSearchReadiness;
   ImportPolicy? importPolicy;
   Store get store => domain.store;
 
@@ -93,6 +97,10 @@ final class SourceOperations {
     SourcesSearchRequest request, {
     bool Function()? current,
   }) async {
+    await awaitSearchReadiness?.call(current: current);
+    if (!(current?.call() ?? true)) {
+      throw RpcError(RpcErrorCode.cancelled, 'Search cancelled');
+    }
     final allowed = {
       for (final source in queries.summaries)
         if (source.state == 'indexed') source.id: source.revision,

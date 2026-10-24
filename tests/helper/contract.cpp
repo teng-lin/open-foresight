@@ -487,7 +487,7 @@ int main(int argc, char **argv) {
       int result;
       waitpid(pid, &result, 0);
       pid = -1;
-      REQUIRE(WIFEXITED(result) && WEXITSTATUS(result) == 86);
+      REQUIRE(WIFSIGNALED(result) && WTERMSIG(result) == SIGKILL);
       std::filesystem::remove(dir + "/.crash-at");
       stub = start();
       REQUIRE(call(model, configured,

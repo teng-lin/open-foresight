@@ -208,6 +208,7 @@ class Application implements ModelGate, GenerationReservationGate {
     meetings: _meetings,
     capture: _capture,
     changed: changed,
+    stateChanges: changes.stream,
   );
   late final RecordingController _recordingController = RecordingController(
     domain: domain,
@@ -246,6 +247,7 @@ class Application implements ModelGate, GenerationReservationGate {
   late final SourceOperations _sources = SourceOperations(
     domain: domain,
     accounts: _googleMaintenance,
+    awaitSearchReadiness: _meetingIndexer.awaitStoppedIndexes,
   );
   late final WorkspaceAdmin _workspace = WorkspaceAdmin(
     domain: domain,
