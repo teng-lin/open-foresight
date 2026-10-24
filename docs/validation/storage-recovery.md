@@ -34,8 +34,10 @@ respectively, using descriptor-anchored operations. Symlinks, hardlinks, foreign
 owners, unsafe permissions and unexpected entries cause refusal rather than
 permission repair or traversal. Complete snapshots have an atomically published
 manifest containing schema, source file identity, creation time and checksum.
-Restore candidates must pass checksum, source identity, schema and SQLite
-integrity checks. Partial files are never candidates. At most two completed
+A scoped SQLite VFS maps only the already-open snapshot and private rollback
+journal descriptors; SQLite never reopens their names. This also avoids Darwin
+Unix-VFS creation flags that cannot open `/dev/fd` targets. Restore candidates
+must pass checksum, source identity, schema and SQLite integrity checks. Partial files are never candidates. At most two completed
 pre-upgrade snapshots are retained for seven days, with opportunistic cleanup
 at startup and while the application runs. A newly completed backup remains
 retained even if the clock moves backwards.
@@ -57,6 +59,6 @@ profile opens before completing recovery. A SQLite snapshot alone does not
 provide binary/helper-model rollback.
 
 Linux descriptor-backed snapshot and failure fixtures exercise the production
-Store path. Darwin syscall layout, `/dev/fd` behavior, owned SQLite runtime and
+Store path. Darwin syscall layout, the descriptor-backed SQLite VFS, owned runtime and
 actual offline activation require their own Mac qualification. Source review or
 a Linux test pass does not qualify those paths.
