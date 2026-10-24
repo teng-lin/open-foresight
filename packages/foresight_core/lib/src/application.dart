@@ -277,7 +277,7 @@ class Application implements ModelGate, GenerationReservationGate {
     changed: changed,
   );
   late final WorkspaceOperations _workspaceOperations = WorkspaceOperations(
-    domain: domain,
+    store: store,
     proactive: proactive,
     recording: _recordingController,
     notes: _notes,

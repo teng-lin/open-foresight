@@ -1,4 +1,4 @@
-import '../domain.dart';
+import 'service_workspace_ports.dart';
 import '../meeting_speakers.dart';
 import '../operation_registry.dart';
 import '../operation_requests.dart';
@@ -27,7 +27,7 @@ final class MeetingOperations {
     required this.runtime,
     required this.changed,
   }) : queries = MeetingOperationsQueries(domain.store);
-  final Domain domain;
+  final MeetingMutationPort domain;
   final ProactiveQuestions proactive;
   final NoteEnhancementCoordinator notes;
   final SummaryCoordinator summary;

@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
-import '../domain.dart';
+import 'service_workspace_ports.dart';
 import '../persistence/application_queries.dart';
 import '../proactive_questions.dart';
 import '../rpc_error.dart';
@@ -21,7 +21,7 @@ final class WorkspaceAdmin {
     required this.accounts,
   });
 
-  final Domain domain;
+  final WorkspaceResetPort domain;
   final WorkspacePersistence persistence;
   final ProactiveQuestions proactive;
   final WorkspaceAccountCleanup accounts;

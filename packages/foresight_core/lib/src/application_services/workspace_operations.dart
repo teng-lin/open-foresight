@@ -1,5 +1,4 @@
 import 'dart:io';
-import '../domain.dart';
 import '../operation_registry.dart';
 import '../operation_requests.dart';
 import '../operations.dart';
@@ -16,7 +15,7 @@ import 'workspace_admin.dart';
 
 final class WorkspaceOperations {
   WorkspaceOperations({
-    required this.domain,
+    required this.store,
     required this.proactive,
     required this.recording,
     required this.notes,
@@ -24,8 +23,8 @@ final class WorkspaceOperations {
     required this.workflow,
     required this.workspace,
     required this.accounts,
-  }) : queries = WorkspaceOperationsQueries(domain.store);
-  final Domain domain;
+  }) : queries = WorkspaceOperationsQueries(store);
+  final Store store;
   final ProactiveQuestions proactive;
   final RecordingController recording;
   final NoteEnhancementCoordinator notes;
@@ -35,13 +34,11 @@ final class WorkspaceOperations {
   final GoogleMaintenance accounts;
   final WorkspaceOperationsQueries queries;
 
-  Object? saveNote(NotesSaveRequest request) => domain.store
+  Object? saveNote(NotesSaveRequest request) => store
       .writeOnce(
         request.context.idempotencyKey,
         request.operation.wire,
-        () => {
-          'id': domain.store.saveNote(request.id, request.title, request.body),
-        },
+        () => {'id': store.saveNote(request.id, request.title, request.body)},
         arguments: request.context.idempotencyKey == null
             ? ''
             : request.context.rawArgumentsDigest,
@@ -61,7 +58,7 @@ final class WorkspaceOperations {
       }
       recording.recording?.setEchoCancellation(enabled);
     }
-    domain.store.setPreference(request.key, request.value);
+    store.setPreference(request.key, request.value);
     if (request.key == 'proactiveAnswers') proactive.wake();
   }
 

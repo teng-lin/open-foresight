@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../agent_access.dart';
-import '../domain.dart';
+import 'service_workspace_ports.dart';
 import '../generated/rag_service.pb.dart';
 import '../graph_labels.dart';
 import '../graph_persistence.dart';
@@ -22,7 +22,7 @@ import 'google_maintenance.dart';
 final class SourceOperations {
   SourceOperations({required this.domain, required this.accounts})
     : queries = SourceAdmissionQueries(domain.store);
-  final Domain domain;
+  final SourceOperationsPort domain;
   final GoogleMaintenance accounts;
   final SourceAdmissionQueries queries;
   ImportPolicy? importPolicy;

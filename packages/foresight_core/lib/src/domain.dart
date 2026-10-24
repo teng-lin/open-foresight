@@ -1,3 +1,4 @@
+import 'application_services/service_workspace_ports.dart';
 import 'cancellation.dart';
 export 'cancellation.dart' show CancellationWatch;
 import 'text_budget.dart' show boundUtf8;
@@ -30,11 +31,19 @@ typedef GenerationRuntimeDiscovery =
       bool Function()? current,
     });
 
-class Domain {
+class Domain
+    implements
+        SourceOperationsPort,
+        GoogleWorkspacePort,
+        MeetingMutationPort,
+        WorkspaceResetPort {
+  @override
   final Store store;
+  @override
   final Helper helper;
   late final _queries = DomainQueries(store);
   NativeRuntime? generator;
+  @override
   final Clock clock;
   final Timer Function(Duration, void Function()) createTimer;
   final GenerationRuntimeDiscovery _discoverGeneration;
@@ -80,10 +89,13 @@ class Domain {
   }
 
   bool _closed = false;
+  @override
   bool get closed => _closed;
   int _workspaceGeneration = 0;
+  @override
   int get workspaceGeneration => _workspaceGeneration;
 
+  @override
   void checkWorkspace(int generation) {
     _checkOpen();
     if (generation != _workspaceGeneration) {
@@ -95,6 +107,7 @@ class Domain {
   }
 
   /// Invalidate work before deleting local data.
+  @override
   void invalidateWorkspace() {
     _workspaceGeneration++;
     checkCancellations();
@@ -117,6 +130,7 @@ class Domain {
     }
   }
 
+  @override
   Future<T> awaitCurrent<T>(Future<T> shared, bool Function()? current) async {
     if (current == null) return shared;
     shared.ignore();
@@ -164,18 +178,22 @@ class Domain {
     }
   });
 
+  @override
   void cleanupClearedSources(List<String> sourceIds) {
     unawaited(retryPendingHelperDeletes().catchError((Object _) {}));
   }
 
   bool _sourcesPaused = false;
+  @override
   bool get sourcesPaused => _sourcesPaused;
   Completer<void>? _sourceWorkResumed;
+  @override
   void pauseSources() {
     _checkOpen();
     _sourcesPaused = true;
   }
 
+  @override
   void resumeSources() {
     _checkOpen();
     _sourcesPaused = false;
@@ -188,6 +206,7 @@ class Domain {
     signal?.complete();
   }
 
+  @override
   Future<void> waitForSourceWork({bool Function()? current}) async {
     void check() {
       _checkOpen();
@@ -246,6 +265,7 @@ class Domain {
     return task;
   }
 
+  @override
   Future<Map<String, List<double>>> graphEmbeddings(
     List<Map<String, Object?>> sources,
   ) async {
@@ -395,6 +415,7 @@ class Domain {
     }
   }
 
+  @override
   Future<void> index(String id, {bool Function()? current}) async {
     _checkOpen();
     checkCancellations();
@@ -484,6 +505,7 @@ class Domain {
     }
   }
 
+  @override
   Future<void> delete(String id) {
     _checkOpen();
     store.tombstone(id);
