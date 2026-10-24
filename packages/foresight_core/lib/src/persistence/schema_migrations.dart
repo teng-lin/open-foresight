@@ -176,6 +176,8 @@ class ApplicationMigrations {
    ON CONFLICT(meeting_id,transcript_id) DO UPDATE SET version=version+1,projected=0,changed=excluded.changed;
    UPDATE sources SET revision=revision+1,state='pending',error='' WHERE generated=1 AND deleted=0 AND
    id IN(SELECT source_id FROM meeting_transcript_sources WHERE meeting_id=NEW.meeting_id);
+   UPDATE source_details SET changed=CAST((julianday('now')-2440587.5)*86400000 AS INTEGER) WHERE source_id IN
+    (SELECT m.source_id FROM meeting_transcript_sources m JOIN sources s ON s.id=m.source_id WHERE m.meeting_id=NEW.meeting_id AND s.generated=1 AND s.deleted=0);
   END;
   CREATE TRIGGER meeting_transcript_update AFTER UPDATE OF text,final,source,start_ms,end_ms ON transcript
    WHEN OLD.text IS NOT NEW.text OR OLD.final IS NOT NEW.final OR OLD.source IS NOT NEW.source OR
@@ -186,6 +188,9 @@ class ApplicationMigrations {
    UPDATE meetings SET revision=revision+1 WHERE id=NEW.meeting_id;
    UPDATE sources SET revision=revision+1,state='pending',error='' WHERE generated=1 AND deleted=0 AND
    id IN(SELECT source_id FROM meeting_transcript_sources WHERE meeting_id=NEW.meeting_id);
+   UPDATE source_details SET changed=CAST((julianday('now')-2440587.5)*86400000 AS INTEGER) WHERE source_id IN
+    (SELECT m.source_id FROM meeting_transcript_sources m JOIN sources s ON s.id=m.source_id WHERE m.meeting_id=NEW.meeting_id AND s.generated=1 AND s.deleted=0);
+   INSERT OR IGNORE INTO preferences(key,value) VALUES('internal.backupErasurePending','1');
   END;
   CREATE TRIGGER meeting_transcript_delete BEFORE DELETE ON transcript
    WHEN EXISTS(SELECT 1 FROM meeting_transcript_sources WHERE meeting_id=OLD.meeting_id) BEGIN
@@ -194,6 +199,11 @@ class ApplicationMigrations {
    UPDATE meetings SET revision=revision+1 WHERE id=OLD.meeting_id;
    UPDATE sources SET revision=revision+1,state='pending',error='' WHERE generated=1 AND deleted=0 AND
    id IN(SELECT source_id FROM meeting_transcript_sources WHERE meeting_id=OLD.meeting_id);
+   UPDATE source_details SET changed=CAST((julianday('now')-2440587.5)*86400000 AS INTEGER) WHERE source_id IN
+    (SELECT m.source_id FROM meeting_transcript_sources m JOIN sources s ON s.id=m.source_id WHERE m.meeting_id=OLD.meeting_id AND s.generated=1 AND s.deleted=0);
+  END;
+  CREATE TRIGGER meeting_transcript_erase AFTER DELETE ON transcript BEGIN
+   INSERT OR IGNORE INTO preferences(key,value) VALUES('internal.backupErasurePending','1');
   END;
   CREATE TRIGGER meeting_source_retired AFTER UPDATE OF deleted,generated ON sources
    WHEN NEW.deleted!=0 OR (OLD.generated=1 AND NEW.generated=0) BEGIN

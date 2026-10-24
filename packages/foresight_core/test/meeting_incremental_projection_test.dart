@@ -79,6 +79,13 @@ void main() {
         append('segment ${i.toString().padLeft(3, '0')} ${'speech ' * 16}');
         await app.indexMeeting(meeting);
         expect(store.sourceQueries.summaries().single.state, 'indexed');
+        if (i == 0) store.db.execute('UPDATE source_details SET changed=1');
+        if (i == 1) {
+          expect(
+            store.rows('SELECT changed FROM source_details').single['changed'],
+            greaterThan(1),
+          );
+        }
         if (i == 63) at64 = {...app.meetingIndexWork};
       }
       final at128 = app.meetingIndexWork;
@@ -386,6 +393,60 @@ void main() {
         expect(indexedText(), contains('current private payload'));
         expect(store.rows('SELECT * FROM meeting_index_batches'), isEmpty);
         expect(app.meetingIndexWork['transcript_rows_read'], 1);
+      },
+    );
+  }
+
+  for (final erase in ['edit', 'delete']) {
+    test(
+      'transcript $erase erases managed snapshots and old cache/WAL bytes',
+      () async {
+        const canary = 'removed-transcript-privacy-canary-4f687';
+        final id = append(canary);
+        await app.indexMeeting(meeting);
+        final snapshot = store.migrationBackups.create(
+          store.db,
+          Store.schemaVersion,
+        );
+        final copy = File(
+          '${store.migrationBackups.directoryPath}/${snapshot.name}',
+        );
+        expect(latin1.decode(copy.readAsBytesSync()), contains(canary));
+        if (erase == 'edit') {
+          store.db.execute('UPDATE transcript SET text=? WHERE id=?', [
+            'current replacement',
+            id,
+          ]);
+        } else {
+          store.db.execute('DELETE FROM transcript WHERE id=?', [id]);
+        }
+        expect(store.preference('internal.backupErasurePending'), '1');
+        expect(
+          store.rows(
+            "SELECT * FROM meeting_index_segments WHERE text LIKE '%$canary%'",
+          ),
+          isEmpty,
+        );
+        await app.indexMeeting(meeting);
+        await eventually(
+          () => !store.privacyMaintenancePending,
+          timeout: const Duration(seconds: 8),
+        );
+        expect(copy.existsSync(), false);
+        expect(
+          store.migrationBackups.snapshots(
+            supportedVersion: Store.schemaVersion,
+          ),
+          isEmpty,
+        );
+        for (final path in [store.path, '${store.path}-wal']) {
+          final file = File(path);
+          if (file.existsSync())
+            expect(
+              latin1.decode(file.readAsBytesSync()),
+              isNot(contains(canary)),
+            );
+        }
       },
     );
   }

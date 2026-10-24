@@ -56,6 +56,7 @@ void preIncrementalIndexFixture(Database db) {
     'meeting_transcript_insert',
     'meeting_transcript_update',
     'meeting_transcript_delete',
+    'meeting_transcript_erase',
     'meeting_source_retired',
   ]) {
     db.execute('DROP TRIGGER IF EXISTS $trigger');

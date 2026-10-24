@@ -326,7 +326,7 @@ class ApplicationService {
       sweepStaleSpeechAudio(profile.data);
       store = Store('${profile.data}/application.db');
       await store.verifyRegisteredModels(rejectInvalidRegistrations: true);
-      final interrupted = store.meetingStore.interruptActiveCaptures();
+      store.meetingStore.interruptActiveCaptures();
       helper = Helper(
         '${profile.runtime}/helper.sock',
         '${profile.data}/helper',
@@ -389,7 +389,6 @@ class ApplicationService {
       helper.onReady = () async {
         await domain.resume();
         await application.recoverMeetingIndexes();
-        interrupted.clear();
       };
       service._ready = helper.start().catchError((Object e) {
         stderr.writeln('Helper startup: $e');
