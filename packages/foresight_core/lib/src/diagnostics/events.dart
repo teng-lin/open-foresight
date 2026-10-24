@@ -191,36 +191,68 @@ final class SafeDiagnosticStack {
   SafeDiagnosticStack._(this.frames, this.fingerprint);
   final List<List<int>> frames;
   final String fingerprint;
+
+  /// Compatibility for raw caught/VM stacks. Dart exposes their frames only
+  /// through arbitrary toString(), so they cannot be safely projected within
+  /// the logger's encoding budget. Retain category, omit optional frames.
   factory SafeDiagnosticStack.encode(
     StackTrace stack,
     DiagnosticCategory category,
+  ) => SafeDiagnosticStack.fromRegisteredLocations(const [], category);
+
+  /// A representation already bounded by its independent trusted source. Never
+  /// obtain this text by moving a raw StackTrace.toString() to a logging caller.
+  /// Oversized input is omitted before regex/substring/UTF8 materialization.
+  static const maximumInputCharacters = 1024;
+  factory SafeDiagnosticStack.fromBoundedText(
+    String text,
+    DiagnosticCategory category,
   ) {
-    final frames = <List<int>>[];
-    // A caller-created stack is untrusted too: exact path registry membership
-    // precedes numeric projection. Only eight frames and64KiB are inspected.
-    String raw;
-    try {
-      raw = stack.toString();
-    } catch (_) {
-      raw = '';
+    if (text.length > maximumInputCharacters) {
+      return SafeDiagnosticStack.fromRegisteredLocations(const [], category);
     }
-    final bounded = raw.length > 65536 ? raw.substring(0, 65536) : raw;
+    final frames = <List<int>>[];
     final matches = RegExp(
       r'\(package:foresight_core/([^():]+\.dart):([0-9]{1,7}):([0-9]{1,5})\)',
-    ).allMatches(bounded);
+    ).allMatches(text);
     for (final match in matches) {
       final index = diagnosticCodeLocations.indexOf(match[1]!);
       if (index < 0) continue;
       frames.add([index, int.parse(match[2]!), int.parse(match[3]!)]);
       if (frames.length == 8) break;
     }
+    return SafeDiagnosticStack.fromRegisteredLocations(frames, category);
+  }
+
+  /// Numeric frames already supplied by a bounded trusted producer. Indices are
+  /// this build's generated code registry, not arbitrary caller fingerprints.
+  factory SafeDiagnosticStack.fromRegisteredLocations(
+    List<List<int>> locations,
+    DiagnosticCategory category,
+  ) {
+    final frames = <List<int>>[];
+    if (locations.length <= 8) {
+      for (final frame in locations) {
+        if (frame.length != 3 ||
+            frame[0] < 0 ||
+            frame[0] >= diagnosticCodeLocations.length ||
+            frame[1] < 0 ||
+            frame[1] > 9999999 ||
+            frame[2] < 0 ||
+            frame[2] > 99999) {
+          continue;
+        }
+        frames.add(List<int>.unmodifiable(frame));
+      }
+    }
     return SafeDiagnosticStack._(
-      List.unmodifiable(frames.map(List<int>.unmodifiable)),
+      List.unmodifiable(frames),
       sha256
           .convert(utf8.encode(jsonEncode([category.index, frames])))
           .toString(),
     );
   }
+
   Map<String, Object> toWire() => {
     'frames': frames,
     'fingerprint': fingerprint,

@@ -110,9 +110,16 @@ category and projected numeric frames; it is not a stable cross-build incident
 identifier. Unknown paths, function names and exception messages are absent.
 The events suite executes the catalog generator's `--check` mode; adding/removing
 production paths or operations requires regenerating and committing both catalogs.
-Current lazy projection defers work until producer credit admission, but does
-not alone prove the proposed scratch bound: StackTrace.toString materialization
-and parser temporaries remain explicit worker-accounting qualification work.
+Production logging never invokes arbitrary StackTrace.toString. Raw caught/VM
+stacks are omitted; the compatibility encoder returns an empty safe projection
+without inspecting that object. Dedicated encoders accept already bounded text
+(up to 1,024 UTF16 code units from an independent trusted source) or at most
+eight registered numeric locations. They omit oversized/unregistered input and
+compute the fingerprint themselves. Do not move raw stack conversion upstream
+solely for logging, or label an emit/catch-site location as an exception stack.
+Existing fatal/presentation handlers retain their own policy. Real high-water
+measurement still must include bounded parser/hash/JSON temporaries; lazy
+stackBuilder and the input cap alone are not full combined-accounting proof.
 
 ## Syscall and descriptor contract
 

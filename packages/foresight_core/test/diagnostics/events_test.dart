@@ -27,16 +27,71 @@ void main() {
       }
     },
   );
-  test('stack formatting failure yields safe empty projection', () {
+  test('raw hostile stack is omitted without formatting', () {
+    final hostile = _ThrowingStack();
     final stack = SafeDiagnosticStack.encode(
-      _ThrowingStack(),
+      hostile,
       DiagnosticCategory.internal,
     );
     expect(stack.frames, isEmpty);
+    expect(hostile.called, isFalse);
     expect(jsonEncode(stack.toWire()), isNot(contains('private stack canary')));
     expect(DiagnosticOperation.parse('private payload canary'), isNull);
   });
 
+  test(
+    'bounded stack inputs reject oversized text and unregistered numeric frames',
+    () {
+      final code = diagnosticCodeLocations.indexOf('src/store.dart');
+      final valid = SafeDiagnosticStack.fromRegisteredLocations([
+        [code, 42, 3],
+      ], DiagnosticCategory.internal);
+      expect(valid.frames, [
+        [code, 42, 3],
+      ]);
+      expect(
+        DiagnosticRecord.validWire(
+          DiagnosticRecord(
+            DiagnosticEvent.runtimeFailed,
+            DiagnosticComponent.service,
+            fields: {DiagnosticField.category: DiagnosticCategory.internal},
+            stack: valid,
+          ).toWire(),
+        ),
+        isTrue,
+      );
+      final oversized = SafeDiagnosticStack.fromBoundedText(
+        'x' * (SafeDiagnosticStack.maximumInputCharacters + 1),
+        DiagnosticCategory.internal,
+      );
+      expect(oversized.frames, isEmpty);
+      final invalid = SafeDiagnosticStack.fromRegisteredLocations([
+        [-1, 1, 1],
+        [diagnosticCodeLocations.length, 1, 1],
+        [code, -1, 1],
+        [code, 10000000, 1],
+        [code, 1, 100000],
+        [code, 1],
+      ], DiagnosticCategory.internal);
+      expect(invalid.frames, isEmpty);
+      expect(
+        SafeDiagnosticStack.fromRegisteredLocations(
+          List.generate(9, (_) => [code, 1, 1]),
+          DiagnosticCategory.internal,
+        ).frames,
+        isEmpty,
+      );
+      expect(
+        SafeDiagnosticStack.encode(
+          StackTrace.fromString(
+            '#0 secret (package:foresight_core/src/store.dart:42:3)',
+          ),
+          DiagnosticCategory.internal,
+        ).frames,
+        isEmpty,
+      );
+    },
+  );
   test(
     'configuration resolves explicit off invalid and transport-only legacy precedence',
     () {
@@ -111,10 +166,8 @@ void main() {
     expect(DiagnosticRecord.validWire(wire), isFalse);
   });
   test('stack encoder omits messages symbols and every unregistered path', () {
-    final stack = SafeDiagnosticStack.encode(
-      StackTrace.fromString(
-        '#0 secret.function (package:foresight_core/src/store.dart:42:3)\n#1 leak (/home/secret/user/data.dart:1:2)\n#2 forged (package:foresight_core/src/secret-canary.dart:3:4)',
-      ),
+    final stack = SafeDiagnosticStack.fromBoundedText(
+      '#0 secret.function (package:foresight_core/src/store.dart:42:3)\n#1 leak (/home/secret/user/data.dart:1:2)\n#2 forged (package:foresight_core/src/secret-canary.dart:3:4)',
       DiagnosticCategory.internal,
     );
     expect(stack.frames, [
@@ -151,6 +204,10 @@ void main() {
 }
 
 final class _ThrowingStack implements StackTrace {
+  bool called = false;
   @override
-  String toString() => throw StateError('private stack canary');
+  String toString() {
+    called = true;
+    throw StateError('private stack canary');
+  }
 }
