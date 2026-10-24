@@ -1,3 +1,4 @@
+import 'collection_view.dart';
 import 'summary_view.dart';
 import 'recording_view.dart';
 import 'dart:async';
@@ -20,7 +21,6 @@ import 'meeting_note_state.dart';
 import 'meeting_visuals.dart';
 import 'note_save_scheduler.dart';
 import 'read_model.dart';
-part 'collection_view.dart';
 part 'workspace_view.dart';
 part 'notes_view.dart';
 part 'assistant_views.dart';
@@ -294,6 +294,193 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
   Future<String> exportMeetingMarkdown() => meetingMarkdown();
 
   Widget immersiveMeetingWorkspace() => _immersiveMeetingWorkspace();
+
+  String meetingClock(int milliseconds) => meetingClockLabel(milliseconds);
+  int meetingStart(MeetingDetails meeting) => meetingStartMilliseconds(meeting);
+  int meetingEnd(MeetingDetails meeting) => meetingEndMilliseconds(meeting);
+  String meetingDay(int timestamp) => meetingDayLabel(timestamp);
+
+  Widget meetingListHeading() => heading(
+    'Meetings',
+    actions: [
+      if (!_integrations.googlePresentation.connected)
+        OutlinedButton.icon(
+          onPressed: _operations.busy
+              ? null
+              : () => _operations.run(
+                  _integrations.granolaCalendar
+                      ? _integrationCommands.connectGranolaCalendar
+                      : _integrationCommands.connectGoogle,
+                ),
+          icon: const Icon(Icons.calendar_today, size: 18),
+          label: const Text('Connect Calendar'),
+        ),
+      if (_integrations.googlePresentation.connected)
+        OutlinedButton.icon(
+          onPressed: _operations.busy || _integrations.googleSyncing
+              ? null
+              : () => _operations.run(_integrationCommands.syncCalendar),
+          icon: const Icon(Icons.calendar_today, size: 18),
+          label: Text(
+            _integrations.lastCompletedRefreshMilliseconds == 0
+                ? 'Import Calendar'
+                : 'Last imported: ${timeLabel(_integrations.lastCompletedRefreshMilliseconds)}',
+          ),
+        ),
+      OutlinedButton.icon(
+        onPressed: _operations.busy
+            ? null
+            : () => _operations.run(exportMeetings),
+        icon: const Icon(Icons.ios_share, size: 18),
+        label: const Text('Export meeting notes'),
+      ),
+      pill(
+        'New meeting',
+        _operations.busy || recording != null
+            ? null
+            : () => _operations.run(() async {
+                final epoch = d.workspaceEpoch;
+                final created =
+                    await newMeetingKey.run(
+                          {'title': '[New Meeting]'},
+                          (keyed) => d.command(Operation.meetingsCreate, {
+                            ...keyed,
+                            if (epoch != null) 'workspace_epoch': epoch,
+                          }),
+                        )
+                        as Map;
+                if (mounted && d.workspaceEpoch == epoch)
+                  update(() => meetingId = created['id'] as int);
+              }),
+        icon: Icons.add,
+      ),
+    ],
+  );
+
+  MeetingTimelineEntry _meetingEntry(MeetingCollectionEntry meeting) =>
+      MeetingTimelineEntry(
+        meeting: meeting,
+        dayLabel: meetingDay(meetingStart(meeting)),
+        attachmentCount: _reads.attachments(meeting.id).length,
+        selected: meetingPreviewId == meeting.id,
+        canRecord: !_operations.busy && recording == null && !quickStarting,
+      );
+
+  void _openMeetingPreview(int id) => update(() {
+    forgetPendingMeetingCreates();
+    meetingPreviewId = id;
+  });
+
+  Widget meetingListTile(MeetingCollectionEntry meeting) =>
+      MeetingCollectionTile(
+        entry: _meetingEntry(meeting),
+        onOpen: () => _openMeetingPreview(meeting.id),
+        onRecord: () => recordExistingMeeting(meeting.id),
+      );
+
+  Widget meetingList({bool showHeading = true}) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    return MeetingTimeline(
+      entries: _reads.meetings
+          .where(
+            (meeting) => meeting.title.toLowerCase().contains(
+              meetingQuery.toLowerCase(),
+            ),
+          )
+          .map(_meetingEntry)
+          .toList(),
+      now: now,
+      nowClock: meetingClock(now),
+      nowKey: meetingNowKey,
+      heading: showHeading ? meetingListHeading() : null,
+      search: searchBox(
+        'Search meetings',
+        (value) => meetingQuery = value,
+        controller: meetingSearchController,
+      ),
+      onOpen: _openMeetingPreview,
+      onRecord: (id) => recordExistingMeeting(id),
+      onNow: () {
+        meetingSearchController.clear();
+        update(() => meetingQuery = '');
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          final target = meetingNowKey.currentContext;
+          if (target != null) {
+            // The controller owns the scheduled scroll, including its key.
+            // ignore: discarded_futures
+            Scrollable.ensureVisible(
+              target,
+              duration: const Duration(milliseconds: 250),
+              alignment: .5,
+            );
+          }
+        });
+      },
+    );
+  }
+
+  Widget meetingCollection() {
+    final id = meetingPreviewId;
+    if (id == null) return meetingList();
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final preview = meetingPreview(id);
+        if (constraints.maxWidth < 900) return preview;
+        return Column(
+          children: [
+            meetingListHeading(),
+            Expanded(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(flex: 6, child: meetingList(showHeading: false)),
+                  const SizedBox(width: 24),
+                  Expanded(flex: 4, child: preview),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget meetingPreview(int id) {
+    final meeting = _reads.meeting(id, preview: true);
+    if (meeting == null)
+      return Center(
+        child: Text(
+          _reads.meetingLoaded(id, preview: true)
+              ? 'Meeting no longer exists.'
+              : 'Loading meeting…',
+        ),
+      );
+    final start = meetingStart(meeting), end = meetingEnd(meeting);
+    return MeetingPreviewCard(
+      title: meeting.title,
+      metadata:
+          '${meetingDay(start)} · ${meetingClock(start)} – ${meetingClock(end)}',
+      selectedTab: meetingPreviewTab,
+      onExpand: () => update(() {
+        forgetPendingMeetingCreates();
+        meetingId = id;
+      }),
+      onClose: () async {
+        try {
+          await flushMeetingNotesDraft();
+        } catch (_) {
+          return;
+        }
+        if (mounted) update(() => meetingPreviewId = null);
+      },
+      onTab: (tab) => update(() => meetingPreviewTab = tab),
+      content: switch (meetingPreviewTab) {
+        'Transcript' => meetingTranscriptPanel(id),
+        'AI summary' => meetingSummaryPanel(id),
+        _ => meetingNotesEditor(id, false, preview: true),
+      },
+    );
+  }
 
   Widget meetingSummaryPanel(int id, {bool actions = false}) {
     if (actions) return meetingActionsPanel(id);
