@@ -37,6 +37,13 @@ final class MigrationBackups {
   static const maximumSnapshots = 2;
   static const maximumRestoredCopies = 1;
   static const maximumAge = Duration(days: 7);
+  static const maximumClockSkew = Duration(minutes: 5);
+
+  bool _withinRetention(DateTime created) {
+    final age = _now().toUtc().difference(created);
+    return age <= maximumAge && age >= -maximumClockSkew;
+  }
+
   static final _namePattern = RegExp(
     r'^snapshot-[0-9]{1,16}-[a-f0-9]{32}\.db$',
   );
@@ -188,8 +195,9 @@ final class MigrationBackups {
   void _visitSnapshotMetadata(
     BackupDirectory directory,
     int supportedVersion,
-    void Function(MigrationSnapshot) visit,
-  ) {
+    void Function(MigrationSnapshot) visit, {
+    String? preserve,
+  }) {
     final sourceIdentity = _sourceIdentity();
     directory.visitEntries((name) {
       if (!_namePattern.hasMatch(name) ||
@@ -209,7 +217,7 @@ final class MigrationBackups {
         );
         // Expiry precedes source/checksum processing. A moved/replaced profile
         // or safe corrupt old copy must not make its retention immortal.
-        if (_now().toUtc().difference(created) > maximumAge) return true;
+        if (name != preserve && !_withinRetention(created)) return true;
         if (value.length != 5 ||
             value['format'] != 1 ||
             value['schema'] is! int ||
@@ -319,14 +327,18 @@ final class MigrationBackups {
         return b.created.compareTo(a.created);
       });
       if (kept.length > maximumSnapshots) kept.removeLast();
-    });
+    }, preserve: preserve);
     final keep = kept.map((snapshot) => snapshot.name).toSet();
     final restored = <({String name, int modified})>[];
     directory.visitEntries((name) {
       if (_restorePattern.hasMatch(name)) {
         final metadata = directory.metadata(name);
-        if (_now().millisecondsSinceEpoch - metadata.modifiedMillis <=
-                maximumAge.inMilliseconds ||
+        if (_withinRetention(
+              DateTime.fromMillisecondsSinceEpoch(
+                metadata.modifiedMillis,
+                isUtc: true,
+              ),
+            ) ||
             name == preserveRestore) {
           restored.add((name: name, modified: metadata.modifiedMillis));
           restored.sort(

@@ -86,6 +86,13 @@ class Store {
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' LIMIT 1",
               )
               .isNotEmpty;
+      // Establish the shared-memory WAL index under NORMAL before taking
+      // exclusive migration ownership. First WAL access under EXCLUSIVE uses
+      // a heap index whose locking mode cannot return to NORMAL until close.
+      db.execute('PRAGMA secure_delete=ON');
+      db.execute('PRAGMA locking_mode=NORMAL');
+      db.execute('PRAGMA journal_mode=WAL');
+      db.select('SELECT COUNT(*) FROM sqlite_master');
       if (migratingExisting) {
         // The service already owns the profile. Retain SQLite's exclusive lock
         // over the autocommit VACUUM INTO and following migration transaction;
@@ -93,12 +100,16 @@ class Store {
         db.execute('PRAGMA locking_mode=EXCLUSIVE');
         db.execute('BEGIN EXCLUSIVE');
         db.execute('COMMIT');
+        // Finish durable deletion debt before a fresh rollback point exists.
+        // Refuse the upgrade if readers or unsafe backup storage prevent it;
+        // retaining the intent must never erase our new snapshot on a timer.
+        if (_hasPreferencesTable() && !_completePrivacyMaintenance()) {
+          throw StateError('Privacy maintenance must finish before migration.');
+        }
         migrationBackups.create(db, originalVersion);
       }
       // Migrations populate the WAL before readers open the fresh profile.
       // Switching only after COMMIT leaves no WAL for macOS read-only clients.
-      db.execute('PRAGMA secure_delete=ON');
-      db.execute('PRAGMA journal_mode=WAL');
       db.execute('PRAGMA foreign_keys=ON');
       db.execute('BEGIN IMMEDIATE');
       try {
@@ -116,7 +127,10 @@ class Store {
         _pruneRequestKeys();
         db.execute('COMMIT');
         if (migratingExisting) {
-          db.execute('PRAGMA locking_mode=NORMAL');
+          if (db.select('PRAGMA locking_mode=NORMAL').single.values.single !=
+              'normal') {
+            throw StateError('Migration ownership could not be released.');
+          }
           db.execute('BEGIN');
           db.select('SELECT 1 FROM preferences LIMIT 1');
           db.execute('COMMIT');
@@ -185,6 +199,10 @@ class Store {
     _historyExpiry = Timer(delay, _expireHistory);
   }
 
+  bool _hasPreferencesTable() => rows(
+    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='preferences'",
+  ).isNotEmpty;
+
   bool _hasPrivacyMaintenanceMarker() => rows(
     'SELECT 1 FROM preferences WHERE key=?',
     [_privacyMaintenanceKey],
@@ -234,32 +252,10 @@ class Store {
       return;
     }
     try {
-      final compact = _hasPrivacyMaintenanceMarker();
-      if (!compact && !_hasBackupErasureMarker()) {
-        _privacyMaintenancePending = false;
+      if (!_completePrivacyMaintenance()) {
+        _schedulePrivacyMaintenance();
         return;
       }
-      // Both intents were committed with their deletion. Ordinary entity
-      // deletion erases managed backups and checkpoints old WAL frames only;
-      // whole-file VACUUM belongs solely to explicit clear/legacy full intent.
-      if (path != ':memory:') migrationBackups.erase();
-      for (final statement in [
-        'PRAGMA wal_checkpoint(TRUNCATE)',
-        if (compact) 'VACUUM',
-        if (compact) 'PRAGMA wal_checkpoint(TRUNCATE)',
-      ]) {
-        final result = db.select(statement);
-        if (statement.startsWith('PRAGMA wal_checkpoint') &&
-            result.isNotEmpty &&
-            result.first.values.first != 0) {
-          _schedulePrivacyMaintenance();
-          return;
-        }
-      }
-      db.execute('DELETE FROM preferences WHERE key IN (?,?)', [
-        _privacyMaintenanceKey,
-        _backupErasureKey,
-      ]);
       _privacyMaintenancePending = false;
       _privacyMaintenanceRetry?.cancel();
       _privacyMaintenanceRetry = null;
@@ -270,6 +266,34 @@ class Store {
       stderr.writeln('Workspace privacy maintenance deferred: $error');
       _schedulePrivacyMaintenance();
     }
+  }
+
+  /// Complete existing debt before snapshotting, or retain it in full on any
+  /// failure. This requires autocommit and may run under migration ownership.
+  bool _completePrivacyMaintenance() {
+    final compact = _hasPrivacyMaintenanceMarker();
+    if (!compact && !_hasBackupErasureMarker()) return true;
+    if (!db.autocommit) {
+      throw StateError('Privacy cleanup requires autocommit.');
+    }
+    if (path != ':memory:') migrationBackups.erase();
+    for (final statement in [
+      'PRAGMA wal_checkpoint(TRUNCATE)',
+      if (compact) 'VACUUM',
+      if (compact) 'PRAGMA wal_checkpoint(TRUNCATE)',
+    ]) {
+      final result = db.select(statement);
+      if (statement.startsWith('PRAGMA wal_checkpoint') &&
+          result.isNotEmpty &&
+          result.first.values.first != 0) {
+        return false;
+      }
+    }
+    db.execute('DELETE FROM preferences WHERE key IN (?,?)', [
+      _privacyMaintenanceKey,
+      _backupErasureKey,
+    ]);
+    return true;
   }
 
   // Even opening and closing a writable connection can checkpoint a WAL.

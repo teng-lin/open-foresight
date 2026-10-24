@@ -23,8 +23,11 @@ application retry/admission policy determines whether an operation is attempted
 again. A source import commits its content and metadata together.
 
 Before upgrading an existing profile, the service holds profile ownership and
-SQLite retains an exclusive connection lock across an autocommit `VACUUM INTO`
-snapshot and the migration transaction. A failure to acquire that lock or create
+SQLite first establishes WAL under normal locking, then retains an exclusive
+connection lock across an autocommit `VACUUM INTO` snapshot and the migration
+transaction. It returns to normal locking before readers open. Any prior durable
+privacy cleanup intent must finish before the new snapshot is created; blocked
+cleanup refuses migration and retains its intent. A failure to acquire that lock or create
 and verify the snapshot refuses migration. Existing content is not pruned to
 make room for the backup. Historical migration definitions and fixtures stay
 unchanged; new behavior is an appended version.
@@ -46,8 +49,9 @@ at startup and while the application runs. Routine pruning reads bounded
 manifest metadata; it does not hash or integrity-scan whole database files. Safe
 stale/corrupt copies are excluded by explicit inspection or restore verification
 and cannot prevent a later migration. Unsafe paths still refuse admission.
-A newly completed backup remains
-retained even if the clock moves backwards.
+Future-dated copies beyond five minutes of clock skew are excluded and pruned.
+The just-created backup is protected during admission even if the clock moves
+backwards; older future-dated copies cannot occupy retention slots indefinitely.
 
 Backups contain deleted data. Clearing the workspace or deleting a content
 entity invalidates all managed snapshots and prepared restore copies, and

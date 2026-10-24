@@ -31,6 +31,39 @@ void main() {
     path =
         '${createTestTempDirectorySync('backup-maintenance-').path}/application.db';
   });
+  test(
+    'DELETE profile migration releases ownership for child readers',
+    () async {
+      final db = _old(path, 19);
+      expect(db.select('PRAGMA journal_mode').single.values.single, 'delete');
+      db.dispose();
+      final store = Store(path);
+      addTearDown(store.close);
+      final child = await Process.run(Platform.resolvedExecutable, [
+        'run',
+        'test/fixtures/migration_reader_probe.dart',
+        path,
+      ]);
+      expect(child.exitCode, 0, reason: '${child.stdout}\n${child.stderr}');
+      expect(child.stdout, contains('reader_opened'));
+      expect(store.rows('PRAGMA locking_mode').single.values.single, 'normal');
+    },
+  );
+  test('pending erasure completes before upgrade snapshot is created', () async {
+    final db = _old(path);
+    db.execute(
+      "INSERT INTO preferences(key,value) VALUES('internal.backupErasurePending','1')",
+    );
+    db.dispose();
+    final store = Store(path);
+    addTearDown(store.close);
+    await Future<void>.delayed(const Duration(milliseconds: 1300));
+    expect(store.privacyMaintenancePending, isFalse);
+    expect(
+      store.migrationBackups.snapshots(supportedVersion: Store.schemaVersion),
+      hasLength(1),
+    );
+  });
   for (final mode in ['DELETE', 'WAL']) {
     test(
       'backup creation inspection and pruning preserve SQLite locks across processes ($mode)',
@@ -243,43 +276,8 @@ void main() {
             .contains('single-delete-canary'),
         isTrue,
       );
-      final setAuthorizer = loader.open
-          .openSqlite()
-          .lookupFunction<
-            Int32 Function(
-              Pointer<Void>,
-              Pointer<NativeFunction<_Authorizer>>,
-              Pointer<Void>,
-            ),
-            int Function(
-              Pointer<Void>,
-              Pointer<NativeFunction<_Authorizer>>,
-              Pointer<Void>,
-            )
-          >('sqlite3_set_authorizer');
-      final callback = NativeCallable<_Authorizer>.isolateLocal(
-        (
-          Pointer<Void> _,
-          int action,
-          Pointer<Utf8> a,
-          Pointer<Utf8> b,
-          Pointer<Utf8> c,
-          Pointer<Utf8> d,
-        ) => action == 24 ? 1 : 0,
-        exceptionalReturn: 1,
-      );
-      expect(
-        setAuthorizer(
-          store.db.handle.cast<Void>(),
-          callback.nativeFunction,
-          nullptr,
-        ),
-        0,
-      );
-      addTearDown(() {
-        setAuthorizer(store.db.handle.cast<Void>(), nullptr, nullptr);
-        callback.close();
-      });
+      final guard = _VacuumGuard(store.db);
+      addTearDown(guard.close);
       store.db.execute('DELETE FROM notes WHERE id=?', [note]);
       expect(store.privacyMaintenancePending, isTrue);
       await eventually(() => !store.privacyMaintenancePending);
@@ -289,8 +287,10 @@ void main() {
         Directory(store.migrationBackups.directoryPath).listSync(),
         isEmpty,
       );
+      expect(guard.attempts, 0);
       // Positive control: this authorizer really does reject SQLite's VACUUM.
       expect(() => store.db.execute('VACUUM'), throwsA(isA<SqliteException>()));
+      expect(guard.attempts, 1);
     },
   );
   test(
@@ -329,27 +329,96 @@ void main() {
     },
   );
   test(
-    'schema20 legacy privacy intent still performs full cleanup after21 upgrade',
+    'schema20 legacy privacy intent completes full cleanup before21 snapshot',
     () async {
       final db = _old(path);
+      db.execute('CREATE TABLE cleanup_probe(body BLOB)');
+      db.execute('INSERT INTO cleanup_probe VALUES(zeroblob(1048576))');
+      db.execute('DELETE FROM cleanup_probe');
+      expect(
+        db.select('PRAGMA freelist_count').single.values.single,
+        greaterThan(0),
+      );
       db.execute(
         "INSERT INTO preferences(key,value) VALUES('internal.privacyMaintenancePending','1')",
       );
       db.dispose();
       final store = Store(path);
       addTearDown(store.close);
-      final guard = _VacuumGuard(store.db);
-      addTearDown(guard.close);
-      expect(store.privacyMaintenancePending, isTrue);
+      expect(store.privacyMaintenancePending, isFalse);
+      expect(store.rows('PRAGMA freelist_count').single.values.single, 0);
       await Future<void>.delayed(const Duration(milliseconds: 1300));
-      expect(store.privacyMaintenancePending, isTrue);
-      expect(guard.attempts, greaterThan(0));
-      guard.close();
-      await eventually(() => !store.privacyMaintenancePending);
       expect(
-        store.rows('PRAGMA user_version').single.values.single,
-        Store.schemaVersion,
+        store.migrationBackups.snapshots(supportedVersion: Store.schemaVersion),
+        hasLength(1),
       );
+    },
+  );
+  test('blocked prior cleanup refuses upgrade and retains erasure intent', () {
+    final db = _old(path);
+    db.execute('PRAGMA journal_mode=WAL');
+    final reader = openApplicationDatabase(path, mode: OpenMode.readOnly);
+    reader.execute('BEGIN');
+    reader.select('SELECT COUNT(*) FROM preferences');
+    db.execute(
+      "INSERT INTO preferences(key,value) VALUES('internal.backupErasurePending','1')",
+    );
+    expect(
+      () => Store(path),
+      throwsA(anyOf(isA<StateError>(), isA<SqliteException>())),
+    );
+    expect(db.select('PRAGMA user_version').single.values.single, 20);
+    expect(
+      db.select(
+        "SELECT value FROM preferences WHERE key='internal.backupErasurePending'",
+      ),
+      isNotEmpty,
+    );
+    expect(MigrationBackups(path).exists, isFalse);
+    reader.execute('COMMIT');
+    reader.dispose();
+    db.dispose();
+    final store = Store(path);
+    addTearDown(store.close);
+    expect(store.privacyMaintenancePending, isFalse);
+    expect(
+      store.migrationBackups.snapshots(supportedVersion: Store.schemaVersion),
+      hasLength(1),
+    );
+  });
+  test(
+    'future manifests expire beyond skew while new clock-rollback backup survives admission',
+    () {
+      final db = _old(path);
+      addTearDown(db.dispose);
+      var now = DateTime.now().toUtc();
+      final backups = MigrationBackups(path, now: () => now);
+      final old = backups.create(db, 20);
+      final manifest = File('${backups.directoryPath}/${old.name}.json');
+      final value =
+          jsonDecode(manifest.readAsStringSync()) as Map<String, dynamic>;
+      value['created'] = now
+          .add(const Duration(days: 365))
+          .millisecondsSinceEpoch;
+      manifest.writeAsStringSync(jsonEncode(value));
+      backups.prune();
+      expect(Directory(backups.directoryPath).listSync(), isEmpty);
+      var calls = 0;
+      final rollback = MigrationBackups(
+        path,
+        now: () {
+          calls++;
+          return calls <= 2 ? now : now.subtract(const Duration(days: 1));
+        },
+      );
+      final fresh = rollback.create(db, 20);
+      expect(
+        File('${backups.directoryPath}/${fresh.name}').existsSync(),
+        isTrue,
+      );
+      now = now.subtract(const Duration(days: 1));
+      backups.prune();
+      expect(Directory(backups.directoryPath).listSync(), isEmpty);
     },
   );
 }
