@@ -59,6 +59,23 @@ class MeetingStore {
     return id;
   }
 
+  void renameMeeting(int id, String title) {
+    final trimmed = title.trim();
+    if (trimmed.isEmpty || trimmed.length > 500) {
+      throw RpcError(
+        RpcErrorCode.invalidArgument,
+        'Meeting name must contain 1–500 characters.',
+      );
+    }
+    db.execute(
+      'UPDATE meetings SET title=?,title_manually_edited=1 WHERE id=?',
+      [trimmed, id],
+    );
+    if (db.updatedRows != 1) {
+      throw RpcError(RpcErrorCode.notFound, 'Meeting not found: $id');
+    }
+  }
+
   /// Preserve startup's synchronous selection/update boundary before recording
   /// recovery is scheduled; no helper work or await belongs to this operation.
   List<int> interruptActiveCaptures() {

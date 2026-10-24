@@ -119,6 +119,12 @@
       "symbols": [
         "_createContentHistory"
       ]
+    },
+    "19": {
+      "sha256": "18dd455879859c8ffd2db9482029cd15eb8c5348bd82bd97371c4bcb54550d73",
+      "symbols": [
+        "rows"
+      ]
     }
   },
   "fixtures": {

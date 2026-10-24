@@ -81,6 +81,7 @@ enum Operation {
   preferencesSet('preferences.set', contracts.preferencesSetDescriptor),
   meetingsList('meetings.list', contracts.meetingsListDescriptor),
   meetingsCreate('meetings.create', contracts.meetingsCreateDescriptor),
+  meetingsRename('meetings.rename', contracts.meetingsRenameDescriptor),
   meetingsGet('meetings.get', contracts.meetingsGetDescriptor),
   meetingsRetryQuestion(
     'meetings.retry_question',

@@ -144,6 +144,50 @@ void main() {
     },
   );
 
+  test(
+    'meeting renames require agent consent and bind it to the current title',
+    () async {
+      final store = service.domain.store;
+      final id = store.meeting('Original title');
+      await expectLater(
+        agent.call('meetings.rename', {'id': id, 'title': 'Unapproved'}),
+        throwsA(code(RpcErrorCode.denied)),
+      );
+      await attach();
+      final work = agent.call('meetings.rename', {
+        'id': id,
+        'title': 'Agent title',
+      });
+      final refused = expectLater(work, throwsA(code(RpcErrorCode.cancelled)));
+      await eventually(() => approvals.isNotEmpty);
+      expect(
+        approvals.single['risk_flags'],
+        contains('Replaces existing saved content'),
+      );
+      await host.call('meetings.rename', {'id': id, 'title': 'Desktop title'});
+      await host.call('security.decide', {
+        'approval_id': approvals.single['approval_id'],
+        'allow': true,
+      });
+      await refused;
+      expect(store.meetingQueries.workspace(id)!.title, 'Desktop title');
+      approvals.clear();
+      final accepted = agent.call('meetings.rename', {
+        'id': id,
+        'title': 'Approved title',
+      });
+      await eventually(() => approvals.isNotEmpty);
+      // Recording/transcript progress does not change the approved title.
+      store.transcript(id, 'New words', true, 0, 1000, 'microphone');
+      await host.call('security.decide', {
+        'approval_id': approvals.single['approval_id'],
+        'allow': true,
+      });
+      await accepted;
+      expect(store.meetingQueries.workspace(id)!.title, 'Approved title');
+    },
+  );
+
   test('queued desktop saves preserve the newest owner write', () async {
     final store = service.domain.store;
     final id = store.saveNote(null, 'original', 'trusted');

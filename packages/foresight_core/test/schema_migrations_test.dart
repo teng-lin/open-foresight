@@ -19,6 +19,85 @@ void main() {
     addTearDown(() => directory.deleteSync(recursive: true));
   });
 
+  test(
+    'v19 preserves existing meetings and records manual title ownership',
+    () {
+      var store = Store(path);
+      final id = store.meeting('Existing meeting');
+      store.saveMeetingNotes(id, 'Existing notes');
+      store.transcript(id, 'Existing transcript', true, 0, 1000, 'microphone');
+      store.db.execute(
+        'ALTER TABLE meetings DROP COLUMN title_manually_edited',
+      );
+      store.db.execute('PRAGMA user_version=18');
+      final epoch = store.workspaceEpoch;
+      store.close();
+      store = Store(path);
+      try {
+        expect(store.workspaceEpoch, epoch);
+        expect(
+          store.rows('SELECT title,title_manually_edited FROM meetings').single,
+          {'title': 'Existing meeting', 'title_manually_edited': 0},
+        );
+        expect(store.meetingQueries.note(id)!.body, 'Existing notes');
+        expect(
+          store.meetingQueries.transcript(id).single.text,
+          'Existing transcript',
+        );
+        store.meetingStore.renameMeeting(id, 'Manual title');
+        expect(store.rows('PRAGMA foreign_key_check'), isEmpty);
+      } finally {
+        store.close();
+      }
+      store = Store(path);
+      try {
+        expect(store.meetingQueries.workspace(id)!.title, 'Manual title');
+        expect(
+          store
+              .rows('SELECT title_manually_edited FROM meetings')
+              .single
+              .values
+              .single,
+          1,
+        );
+      } finally {
+        store.close();
+      }
+    },
+  );
+
+  test('v19 DDL rolls back when startup fails before migration commit', () {
+    final store = Store(path);
+    final id = store.meeting('Retained title');
+    store.db.execute('ALTER TABLE meetings DROP COLUMN title_manually_edited');
+    store.db.execute('PRAGMA user_version=18');
+    store.db.execute(
+      "CREATE TRIGGER interrupt_rename_migration BEFORE INSERT ON preferences BEGIN SELECT RAISE(ABORT, 'interrupted migration'); END",
+    );
+    store.close();
+    expect(() => Store(path), throwsA(isA<SqliteException>()));
+    final db = sqlite3.open(path);
+    try {
+      expect(db.select('PRAGMA user_version').single.values.single, 18);
+      expect(
+        db.select('PRAGMA table_info(meetings)').map((row) => row['name']),
+        isNot(contains('title_manually_edited')),
+      );
+      expect(
+        db.select('SELECT title FROM meetings WHERE id=?', [
+          id,
+        ]).single['title'],
+        'Retained title',
+      );
+      db.execute('DROP TRIGGER interrupt_rename_migration');
+    } finally {
+      db.dispose();
+    }
+    final reopened = Store(path);
+    addTearDown(reopened.close);
+    expect(reopened.rows('PRAGMA user_version').single.values.single, 19);
+  });
+
   test('v15 migrates legacy action aliases without losing manual edits', () {
     var store = Store(path);
     final meeting = store.meeting('Legacy actions');

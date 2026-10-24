@@ -37,6 +37,31 @@ const meetingsCreateDescriptor = OperationDescriptor(
   ]),
 );
 
+const meetingsRenameDescriptor = OperationDescriptor(
+  scope: OperationScope.application,
+  readOnly: false,
+  approval: ApprovalPolicy.overwrite,
+  capability: CapabilityPolicy.ordinary,
+  requiresHelper: false,
+  modelGate: ModelGatePolicy.none,
+  notifiesChanges: true,
+  response: ResponseShape.result,
+  carriesWorkspaceEpoch: true,
+  acceptsIdempotencyKey: false,
+  stampsAgentActivity: true,
+  leaseBusy: true,
+  createsLease: true,
+  arguments: OperationArgumentSchema([
+    ArgumentField("id", ArgumentKind.integer),
+    ArgumentField(
+      "title",
+      ArgumentKind.string,
+      minimumLength: 1,
+      maximumLength: 500,
+    ),
+  ]),
+);
+
 const meetingsGetDescriptor = OperationDescriptor(
   scope: OperationScope.application,
   readOnly: true,

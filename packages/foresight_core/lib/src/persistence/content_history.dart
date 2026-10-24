@@ -61,6 +61,13 @@ final class ContentHistory {
       Map<String, Object?>.from(row),
   ];
 
+  /// Only title ownership participates in rename consent; live transcription
+  /// and capture state must not invalidate an otherwise unchanged name.
+  List<Map<String, Object?>> meetingTitle(int id) => _rows(
+    'SELECT id,title,title_manually_edited FROM meetings WHERE id=?',
+    [id],
+  );
+
   static const derivedKinds = {
     'summary',
     'actions',

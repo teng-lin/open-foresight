@@ -192,6 +192,11 @@ final class MeetingOperations {
       (request, {current}) =>
           _once(request, () => {'id': domain.store.meeting(request.title)}),
     ),
+    TypedOperationHandler<MeetingsRenameRequest>(
+      Operation.meetingsRename,
+      (request, {current}) =>
+          domain.store.meetingStore.renameMeeting(request.id, request.title),
+    ),
     TypedOperationHandler<MeetingsGetRequest>(
       Operation.meetingsGet,
       (request, {current}) => getMeeting(request.id),

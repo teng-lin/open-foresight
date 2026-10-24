@@ -130,10 +130,10 @@ class GoogleConnectionQueries {
         [meeting],
       );
     }
-    _store.db.execute('UPDATE meetings SET title=? WHERE id=?', [
-      event.title,
-      meeting,
-    ]);
+    _store.db.execute(
+      'UPDATE meetings SET title=? WHERE id=? AND title_manually_edited=0',
+      [event.title, meeting],
+    );
     _store.db.execute(
       'INSERT INTO calendar_events VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(event_key) DO UPDATE SET starts=excluded.starts,ends=excluded.ends,status=excluded.status,metadata=excluded.metadata,synced=excluded.synced',
       [

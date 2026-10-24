@@ -1,6 +1,57 @@
 part of 'meetings_controller.dart';
 
 extension _WorkspaceView on MeetingsController {
+  Future<void> _renameMeeting(
+    MeetingDetails meeting,
+    FeatureRequestIdentity identity,
+  ) async {
+    bool current() => _meetingActionCurrent(meeting.id, identity);
+    if (!current() || !_dialogs.rowsAreCurrent()) return;
+    final controller = TextEditingController(text: meeting.title);
+    try {
+      await _dialogs.showInputDialog<bool>(
+        builder: (context) => ServiceEditDialog(
+          title: 'Rename meeting',
+          controller: controller,
+          saveLabel: 'Save',
+          height: 90,
+          maxLines: 1,
+          onSave: () async {
+            if (!current()) {
+              throw StateError(
+                'The meeting view changed. Close this editor and try again.',
+              );
+            }
+            await d.commandCurrent(Operation.meetingsRename, {
+              'id': meeting.id,
+              'title': controller.text.trim(),
+              'workspace_epoch': identity.workspaceEpoch,
+            }, current);
+          },
+        ),
+      );
+    } finally {
+      controller.dispose();
+    }
+  }
+
+  Widget _meetingRenameButton(MeetingDetails meeting) {
+    final identity = _reads.presentationIdentity;
+    return IconButton(
+      tooltip: 'Rename meeting',
+      iconSize: 18,
+      padding: const EdgeInsets.all(4),
+      constraints: const BoxConstraints.tightFor(width: 32, height: 26),
+      style: IconButton.styleFrom(
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      icon: const Icon(Icons.edit_outlined),
+      onPressed: identity == null
+          ? null
+          : () => _renameMeeting(meeting, identity),
+    );
+  }
+
   Widget _immersiveMeetingWorkspace() => CallbackShortcuts(
     bindings: {
       const SingleActivator(LogicalKeyboardKey.escape): () =>
@@ -196,7 +247,14 @@ extension _WorkspaceView on MeetingsController {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(meeting.title, style: MeetingVisuals.title),
+            Row(
+              children: [
+                Flexible(
+                  child: Text(meeting.title, style: MeetingVisuals.title),
+                ),
+                _meetingRenameButton(meeting),
+              ],
+            ),
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,
