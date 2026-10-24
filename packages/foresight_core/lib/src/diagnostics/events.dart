@@ -180,9 +180,19 @@ final class DiagnosticIdentity {
     (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
   ).join();
   static DiagnosticIdentity? parse(String value) =>
-      RegExp(r'^[a-f0-9]{32}$').hasMatch(value)
-      ? DiagnosticIdentity._(value)
-      : null;
+      _lowerHex(value, 32) ? DiagnosticIdentity._(value) : null;
+}
+
+// Fixed shape checks avoid regex compilation/metadata on producer first use.
+bool _lowerHex(String value, int length) {
+  if (value.length != length) return false;
+  for (var at = 0; at < length; at++) {
+    final unit = value.codeUnitAt(at);
+    if ((unit < 0x30 || unit > 0x39) && (unit < 0x61 || unit > 0x66)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /// A stack contains registered code-location indices and bounded coordinates,
@@ -441,7 +451,7 @@ final class DiagnosticRecord {
           stack['frames'] is! List ||
           (stack['frames'] as List).length > 8 ||
           stack['fingerprint'] is! String ||
-          !RegExp(r'^[a-f0-9]{64}$').hasMatch(stack['fingerprint'] as String)) {
+          !_lowerHex(stack['fingerprint'] as String, 64)) {
         return false;
       }
       for (final frame in stack['frames'] as List) {

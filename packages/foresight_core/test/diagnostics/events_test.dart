@@ -220,6 +220,18 @@ void main() {
     final forged = jsonDecode(json) as Map<String, dynamic>;
     (forged['stack'] as Map)['fingerprint'] = '0' * 64;
     expect(DiagnosticRecord.validWire(forged), isFalse);
+    for (final invalid in [
+      'a' * 63,
+      'a' * 65,
+      'A' * 64,
+      '${'a' * 63}\n',
+      '${'a' * 64}\n',
+      'ａ' * 64,
+      '${'a' * 63}g',
+    ]) {
+      (forged['stack'] as Map)['fingerprint'] = invalid;
+      expect(DiagnosticRecord.validWire(forged), isFalse);
+    }
   });
   test(
     'diagnostic identities are random shape-bound and never business strings',
@@ -228,7 +240,21 @@ void main() {
           second = DiagnosticIdentity.random();
       expect(first.value, isNot(second.value));
       expect(DiagnosticIdentity.parse(first.value)!.value, first.value);
-      for (final value in ['meeting-1', 'request-secret', 'X' * 32, '0' * 33]) {
+      for (final value in ['0' * 32, 'abcdef0123456789' * 2]) {
+        expect(DiagnosticIdentity.parse(value)!.value, value);
+      }
+      for (final value in [
+        '',
+        'meeting-1',
+        'request-secret',
+        'X' * 32,
+        '0' * 31,
+        '0' * 33,
+        '${'a' * 31}\n',
+        '${'a' * 32}\n',
+        'ａ' * 32,
+        '0' * 31 + 'g',
+      ]) {
         expect(DiagnosticIdentity.parse(value), isNull);
       }
     },
