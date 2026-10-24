@@ -1,6 +1,8 @@
 # Desktop application
 
-Flutter desktop application; the current platform runner is Linux. See the root README for build prerequisites and model setup.
+Flutter desktop application with Linux and macOS runners. See the root README
+for build prerequisites and model setup, and the
+[macOS guide](../../docs/platforms/macos-support.md) for the Apple Silicon build.
 
 ```sh
 flutter pub get --enforce-lockfile

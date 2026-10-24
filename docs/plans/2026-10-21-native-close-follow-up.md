@@ -6,7 +6,7 @@ Warmed real-model teardown can hold that isolate for about 0.3 seconds. The
 refactor has not repaired this path and does not claim P2-4 fully resolved.
 
 This is the separately scoped follow-up required by
-[the core plan's native ownership audit](2026-10-20-core-desktop-refactor-plan.md#6c-keep-the-relay-isolate-persistence-and-address-measured-blocking-work).
+[the core plan's native ownership follow-up](2026-10-20-core-desktop-refactor-plan.md#core-follow-ups).
 The existing asynchronous 20 ms polling remains; its presence alone is not
 evidence of blocking. The observed synchronous destruction is a distinct path.
 

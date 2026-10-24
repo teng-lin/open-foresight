@@ -5,6 +5,8 @@ its approval capability. This module never reads that capability or grants OS
 permissions, and refuses all capture requests.
 """
 
+from __future__ import annotations
+
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from typing import Any, BinaryIO
