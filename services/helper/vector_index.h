@@ -49,6 +49,10 @@ struct IndexedChunk {
   std::string text, id, mime;
   std::vector<double> vector;
   bool normalized = false;
+  std::string citation_id = {};
+  const std::string &document_id() const {
+    return citation_id.empty() ? id : citation_id;
+  }
 };
 // Immutable exact metric index. Readers keep a snapshot while writers build
 // and publish the next generation. The VP tree prunes disjoint metric balls.
@@ -163,7 +167,8 @@ public:
       auto d = distance(query, chunk.vector);
       // Compute cosine explicitly to preserve zero-vector behavior.
       double score = cosine(query, chunk.vector);
-      if (score >= minimum && (allowed.empty() || allowed.count(chunk.id)) &&
+      if (score >= minimum &&
+          (allowed.empty() || allowed.count(chunk.document_id())) &&
           (!visible || visible(chunk.id))) {
         best.emplace(-score, node->chunk);
         if (best.size() > limit)

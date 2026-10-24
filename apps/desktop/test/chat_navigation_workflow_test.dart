@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'package:open_foresight/shell/workspace_tab.dart';
 import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
@@ -31,7 +32,7 @@ class StreamingChatDomain extends AnswerFixtureDomain {
 void main() {
   testWidgets(
     'drafts, saved answers and in-flight text stay in their conversation',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       tester.view.physicalSize = const Size(1280, 850);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
@@ -166,6 +167,6 @@ void main() {
         await helper.close();
         root.deleteSync(recursive: true);
       }
-    },
+    }),
   );
 }

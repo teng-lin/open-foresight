@@ -1,4 +1,5 @@
 import '../read_models.dart';
+import 'source_contents.dart';
 import '../store.dart';
 import 'read_schema_guard.dart';
 
@@ -23,12 +24,27 @@ final class SourceAdmissionQueries {
   List<SourceDocument> get documents => store.sourceQueries.sources();
   List<SourceSummary> get summaries => store.sourceQueries.summaries();
 
-  SourceDocument? active(String id) {
+  /// Resolve import identity without materializing unrelated document bodies.
+  String? importIdForUri(String uri, {bool urlOnly = false}) =>
+      _rows(
+            'SELECT sources.id FROM source_details '
+            'JOIN sources ON sources.id=source_details.source_id '
+            'WHERE source_details.source_uri=? AND sources.deleted=0 '
+            "AND (?=0 OR substr(sources.provenance,1,4)='url:' "
+            "OR instr(sources.provenance,'; url:')>0) "
+            'ORDER BY sources.title,sources.id LIMIT 1',
+            [uri, urlOnly ? 1 : 0],
+          ).firstOrNull?['id']
+          as String?;
+
+  SourceDocument? active(String id) => readSnapshot(store.db, () {
     final row = _rows('SELECT * FROM sources WHERE id=? AND deleted=0', [
       id,
     ]).firstOrNull;
-    return row == null ? null : SourceDocument.fromRow(row);
-  }
+    return row == null
+        ? null
+        : SourceDocument.fromRow(materializeSource(store.db, row));
+  }, supportedVersion: Store.schemaVersion);
 
   bool isCurrent(String id, int revision) => _rows(
     'SELECT id FROM sources WHERE id=? AND revision=? AND deleted=0',

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'source_contents.dart';
 import 'package:sqlite3/sqlite3.dart';
 import '../read_models.dart';
 import 'label_store.dart';
@@ -29,13 +30,15 @@ class SourceQueries {
       )
       .map(SourceSummary.fromRow)
       .toList();
-  List<SourceDocument> sources() => _labels
-      .sourceRows(
-        'SELECT sources.*,source_details.imported,source_details.changed,source_details.source_uri '
-        'FROM sources LEFT JOIN source_details ON sources.id=source_details.source_id WHERE deleted=0 ORDER BY title',
-      )
-      .map(SourceDocument.fromRow)
-      .toList();
+  List<SourceDocument> sources() => _read(
+    () => _labels
+        .sourceRows(
+          'SELECT sources.*,source_details.imported,source_details.changed,source_details.source_uri '
+          'FROM sources LEFT JOIN source_details ON sources.id=source_details.source_id WHERE deleted=0 ORDER BY title',
+        )
+        .map((row) => SourceDocument.fromRow(materializeSource(db, row)))
+        .toList(),
+  );
   SourceDocument? source(String id, {bool includeDeleted = false}) => _read(() {
     final row = _rows('SELECT * FROM sources WHERE id=? AND (? OR deleted=0)', [
       id,
@@ -44,7 +47,7 @@ class SourceQueries {
     return row == null
         ? null
         : SourceDocument.fromRow({
-            ...row,
+            ...materializeSource(db, row),
             'labels': jsonEncode(_labels.names(id)),
           });
   });

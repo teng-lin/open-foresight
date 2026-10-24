@@ -10,9 +10,23 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 - Rename meetings from the workspace header. Manual names persist across restarts
   and calendar refreshes.
+- Keep private pre-upgrade application database snapshots, limited to two copies
+  for seven days. Each snapshot can require space comparable to the database.
+
+### Changed
+
+- Bound retained content history to 20 revisions and 32 MiB per entity, with a
+  90-day age limit. Total history grows with the number of entities. Upgrades
+  prune excess history while preserving current content.
+- Refuse database upgrades when a verified backup cannot be created or earlier
+  privacy cleanup cannot finish. Deleting saved content invalidates managed
+  snapshots and prepared restore copies; failed cleanup remains pending.
 
 ### Fixed
 
+- Update meeting transcript search incrementally and recover saved indexing work
+  after restart. Preserve manual edits and deletion while indexing waits for a
+  model to become ready.
 - Check direct Google client setup before signing out Granola accounts when switching providers.
 - Show separate Google and Granola connection choices, with explicit provider switching and account sign-out confirmation. Recover direct Google sign-in after failed Granola attempts and preserve Google client setup across provider changes and restarts.
 - Use Granola’s macOS client profile for authorization and calendar API calls on Linux.

@@ -326,7 +326,7 @@ class ApplicationService {
       sweepStaleSpeechAudio(profile.data);
       store = Store('${profile.data}/application.db');
       await store.verifyRegisteredModels(rejectInvalidRegistrations: true);
-      final interrupted = store.meetingStore.interruptActiveCaptures();
+      store.meetingStore.interruptActiveCaptures();
       helper = Helper(
         '${profile.runtime}/helper.sock',
         '${profile.data}/helper',
@@ -388,14 +388,7 @@ class ApplicationService {
       };
       helper.onReady = () async {
         await domain.resume();
-        for (final id in interrupted.toList()) {
-          try {
-            await application.indexMeeting(id);
-            interrupted.remove(id);
-          } catch (error) {
-            stderr.writeln('Interrupted meeting indexing: $error');
-          }
-        }
+        await application.recoverMeetingIndexes();
       };
       service._ready = helper.start().catchError((Object e) {
         stderr.writeln('Helper startup: $e');
@@ -1016,6 +1009,7 @@ class ApplicationService {
       await _captureLevels?.cancel();
     });
     await attempt(domain.close);
+    await attempt(domain.drain);
     await attempt(() => domain.generator?.close());
     await attempt(domain.helper.close);
     if (serviceGatesEnabled) await serviceGate('close.helper_closed');

@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import '../test_support/reader_admissions.dart';
 import 'store_reader_fixture.dart';
 import '../test_support/core_fixture.dart';
@@ -47,133 +48,148 @@ class GraphDomain extends Domain {
 }
 
 void main() {
-  testWidgets('service-only source changes stop and restart graph motion', (
-    tester,
-  ) async {
-    tester.view.physicalSize = const Size(1440, 1000);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-    final temp = createTestTempDirectorySync('graph-service-motion-');
-    final store = Store('${temp.path}/app.db');
-    final source = store.importText('First', 'Body', 'text/plain', 'fixture:a');
-    final helper = OfflineHelper('${temp.path}/socket', '${temp.path}/helper');
-    await tester.pumpWidget(
-      Foresight(
-        TestDesktopConnection(Application(Domain(store, helper))),
-        deviceLoader: () async => [],
-      ),
-    );
-    await tester.tap(find.text('Sources'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Graph view'));
-    await tester.pump();
-    final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
-    for (
-      final elapsed = Stopwatch()..start();
-      elapsed.elapsed < const Duration(seconds: 5) &&
-          state.sourceFeature.graphOrganizing;
-    ) {
-      await tester.runAsync(() => Future<void>(() {}));
+  testWidgets(
+    'service-only source changes stop and restart graph motion',
+    (tester) async => withDesktopFixtures(tester, () async {
+      tester.view.physicalSize = const Size(1440, 1000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final temp = createTestTempDirectorySync('graph-service-motion-');
+      final store = Store('${temp.path}/app.db');
+      final source = store.importText(
+        'First',
+        'Body',
+        'text/plain',
+        'fixture:a',
+      );
+      final helper = OfflineHelper(
+        '${temp.path}/socket',
+        '${temp.path}/helper',
+      );
+      await tester.pumpWidget(
+        Foresight(
+          TestDesktopConnection(Application(Domain(store, helper))),
+          deviceLoader: () async => [],
+        ),
+      );
+      await tester.tap(find.text('Sources'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Graph view'));
       await tester.pump();
-    }
-    expect(state.sourceFeature.graphOrganizing, false);
-    expect(state.sourceFeature.graphMotionTicker.isActive, true);
-    store.tombstone(source);
-    helper.changed?.call();
-    await tester.pump(const Duration(milliseconds: 100));
-    expect(state.sourceFeature.graphMotionTicker.isActive, false);
-    store.importText('Second', 'Body', 'text/plain', 'fixture:b');
-    helper.changed?.call();
-    await tester.pump(const Duration(milliseconds: 100));
-    expect(state.sourceFeature.graphMotionTicker.isActive, true);
-    await tester.pumpWidget(const SizedBox.shrink());
-    temp.deleteSync(recursive: true);
-  });
-
-  testWidgets('steady graph animation does not reread large source bodies', (
-    tester,
-  ) async {
-    tester.view.physicalSize = const Size(1440, 1000);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-    final temp = createTestTempDirectorySync('foresight-graph-source-reads-');
-    addTearDown(() {
-      if (temp.existsSync()) temp.deleteSync(recursive: true);
-    });
-    final store = SourceReadCountingStore('${temp.path}/app.db');
-    final admissions = ReaderAdmissions();
-    fixtureReader(store, admissions: admissions);
-    final body = 'Independent source body search needle. '.padRight(
-      64 * 1024,
-      'x',
-    );
-    for (var i = 0; i < 250; i++) {
-      store.importText('Document $i', body, 'text/plain', 'fixture:$i');
-    }
-    final helper = OfflineHelper('${temp.path}/socket', '${temp.path}/helper');
-    await tester.pumpWidget(
-      Foresight(
-        TestDesktopConnection(Application(Domain(store, helper))),
-        deviceLoader: () async => [],
-      ),
-    );
-    await tester.tap(find.text('Sources'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Graph view'));
-    await tester.pump();
-    await tester.pump();
-    final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
-    final before = store.sourceReads;
-    final frameBefore = state.sourceFeature.graphMotionFrames.value;
-    final typedBeforeFrames = admissions.snapshot();
-    for (var i = 0; i < 10; i++) {
-      await tester.pump(const Duration(milliseconds: 16));
-    }
-    expect(state.sourceFeature.graphMotionFrames.value - frameBefore, 10);
-    expect(
-      admissions.snapshot(),
-      typedBeforeFrames,
-      reason: 'Graph frames admit no typed sync/read/watch/worker projections',
-    );
-    expect(
-      store.sourceReads - before,
-      0,
-      reason: 'Projection-only frames must reuse the source snapshot',
-    );
-    final helpBefore = tester.widget(find.byTooltip('Help'));
-    final bodiesBefore = store.bodyReads;
-    final revisionBefore = state.serviceUiRevision.value;
-    for (var i = 0; i < 20; i++) {
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
+      for (
+        final elapsed = Stopwatch()..start();
+        elapsed.elapsed < const Duration(seconds: 5) &&
+            state.sourceFeature.graphOrganizing;
+      ) {
+        await tester.runAsync(() => Future<void>(() {}));
+        await tester.pump();
+      }
+      expect(state.sourceFeature.graphOrganizing, false);
+      expect(state.sourceFeature.graphMotionTicker.isActive, true);
+      store.tombstone(source);
       helper.changed?.call();
-    }
-    await tester.pump(const Duration(milliseconds: 100));
-    expect(state.serviceUiRevision.value, revisionBefore + 1);
-    expect(
-      identical(tester.widget(find.byTooltip('Help')), helpBefore),
-      true,
-      reason:
-          'Service events update the active panel and header without rebuilding navigation',
-    );
-    expect(
-      store.bodyReads,
-      bodiesBefore,
-      reason: 'Service events must not load document bodies on the UI isolate',
-    );
-    await tester.tap(find.byTooltip('Pause graph animation'));
-    await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextField), 'body search needle');
-    await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('source-graph-canvas')), findsOneWidget);
-    expect(find.text('No sources match the current filters.'), findsNothing);
-    expect(tester.takeException(), isNull);
-    await tester.pumpWidget(const SizedBox.shrink());
-    temp.deleteSync(recursive: true);
-  });
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(state.sourceFeature.graphMotionTicker.isActive, false);
+      store.importText('Second', 'Body', 'text/plain', 'fixture:b');
+      helper.changed?.call();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(state.sourceFeature.graphMotionTicker.isActive, true);
+      await tester.pumpWidget(const SizedBox.shrink());
+      temp.deleteSync(recursive: true);
+    }),
+  );
+
+  testWidgets(
+    'steady graph animation does not reread large source bodies',
+    (tester) async => withDesktopFixtures(tester, () async {
+      tester.view.physicalSize = const Size(1440, 1000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final temp = createTestTempDirectorySync('foresight-graph-source-reads-');
+      addTearDown(() {
+        if (temp.existsSync()) temp.deleteSync(recursive: true);
+      });
+      final store = SourceReadCountingStore('${temp.path}/app.db');
+      final admissions = ReaderAdmissions();
+      fixtureReader(store, admissions: admissions);
+      final body = 'Independent source body search needle. '.padRight(
+        64 * 1024,
+        'x',
+      );
+      for (var i = 0; i < 250; i++) {
+        store.importText('Document $i', body, 'text/plain', 'fixture:$i');
+      }
+      final helper = OfflineHelper(
+        '${temp.path}/socket',
+        '${temp.path}/helper',
+      );
+      await tester.pumpWidget(
+        Foresight(
+          TestDesktopConnection(Application(Domain(store, helper))),
+          deviceLoader: () async => [],
+        ),
+      );
+      await tester.tap(find.text('Sources'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Graph view'));
+      await tester.pump();
+      await tester.pump();
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
+      final before = store.sourceReads;
+      final frameBefore = state.sourceFeature.graphMotionFrames.value;
+      final typedBeforeFrames = admissions.snapshot();
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      expect(state.sourceFeature.graphMotionFrames.value - frameBefore, 10);
+      expect(
+        admissions.snapshot(),
+        typedBeforeFrames,
+        reason:
+            'Graph frames admit no typed sync/read/watch/worker projections',
+      );
+      expect(
+        store.sourceReads - before,
+        0,
+        reason: 'Projection-only frames must reuse the source snapshot',
+      );
+      final helpBefore = tester.widget(find.byTooltip('Help'));
+      final bodiesBefore = store.bodyReads;
+      final revisionBefore = state.serviceUiRevision.value;
+      for (var i = 0; i < 20; i++) {
+        helper.changed?.call();
+      }
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(state.serviceUiRevision.value, revisionBefore + 1);
+      expect(
+        identical(tester.widget(find.byTooltip('Help')), helpBefore),
+        true,
+        reason:
+            'Service events update the active panel and header without rebuilding navigation',
+      );
+      expect(
+        store.bodyReads,
+        bodiesBefore,
+        reason:
+            'Service events must not load document bodies on the UI isolate',
+      );
+      await tester.tap(find.byTooltip('Pause graph animation'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'body search needle');
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('source-graph-canvas')), findsOneWidget);
+      expect(find.text('No sources match the current filters.'), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      temp.deleteSync(recursive: true);
+    }),
+  );
   testWidgets(
     'graph motion pauses, resumes without catch-up, and suspends offscreen or during drag',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       tester.view.physicalSize = const Size(1440, 1000);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
@@ -310,11 +326,11 @@ void main() {
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
       temp.deleteSync(recursive: true);
-    },
+    }),
   );
   testWidgets(
     'changed sources discard stale layout and filtering retains positions',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       tester.view.physicalSize = const Size(1440, 1000);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
@@ -562,6 +578,6 @@ void main() {
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
       temp.deleteSync(recursive: true);
-    },
+    }),
   );
 }

@@ -12,7 +12,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.mark.parametrize(
-    "directory,name", [("linux", "helper_control"), ("foresight", "web_content")]
+    "directory,name",
+    [("linux", "helper_control"), ("linux", "transcript_index"), ("foresight", "web_content")],
 )
 def test_owned_descriptor_shape(directory, name):
     with TemporaryDirectory() as temporary:

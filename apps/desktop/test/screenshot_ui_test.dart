@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'pump_until.dart';
 import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
@@ -14,52 +15,55 @@ import 'package:foresight_test_support/google_connections.dart'
     show AdapterDomain;
 
 void main() {
-  testWidgets('source pause can resume a pending import while the UI is busy', (
-    tester,
-  ) async {
-    final tmp = createTestTempDirectorySync('foresight-pause-ui-');
-    addTearDown(() {
-      if (tmp.existsSync()) tmp.deleteSync(recursive: true);
-    });
-    final folder = Directory('${tmp.path}/files')..createSync();
-    File('${folder.path}/fixture.txt').writeAsStringSync('A retained import.');
-    final store = Store('${tmp.path}/app.db');
-    final helper = OfflineHelper('${tmp.path}/socket', '${tmp.path}/helper');
-    final domain = AdapterDomain(store, helper);
-    await tester.pumpWidget(
-      Foresight(
-        TestDesktopConnection(Application(domain)),
-        deviceLoader: () async => [],
-      ),
-    );
-    await tester.tap(find.text('Sources'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Pause source imports and indexing'));
-    await tester.pumpAndSettle();
-    expect(domain.sourcesPaused, true);
-    expect(find.text('Paused'), findsOneWidget);
-    final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
-    await tester.runAsync(() async {
-      final importing = state.run(() async {
-        await state.sourceFeature.importFolderPath(folder.path);
+  testWidgets(
+    'source pause can resume a pending import while the UI is busy',
+    (tester) async => withDesktopFixtures(tester, () async {
+      final tmp = createTestTempDirectorySync('foresight-pause-ui-');
+      addTearDown(() {
+        if (tmp.existsSync()) tmp.deleteSync(recursive: true);
       });
-      expect(state.busy, true);
-      expect(store.sources, isEmpty);
-      await tester.tap(find.byTooltip('Resume source imports and indexing'));
-      await importing;
-    });
-    await tester.pumpAndSettle();
-    expect(domain.sourcesPaused, false);
-    expect(state.busy, false);
-    expect(store.sources.single['content'], 'A retained import.');
-    expect(tester.takeException(), isNull);
-    await tester.pumpWidget(const SizedBox.shrink());
-    tmp.deleteSync(recursive: true);
-  });
+      final folder = Directory('${tmp.path}/files')..createSync();
+      File(
+        '${folder.path}/fixture.txt',
+      ).writeAsStringSync('A retained import.');
+      final store = Store('${tmp.path}/app.db');
+      final helper = OfflineHelper('${tmp.path}/socket', '${tmp.path}/helper');
+      final domain = AdapterDomain(store, helper);
+      await tester.pumpWidget(
+        Foresight(
+          TestDesktopConnection(Application(domain)),
+          deviceLoader: () async => [],
+        ),
+      );
+      await tester.tap(find.text('Sources'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Pause source imports and indexing'));
+      await tester.pumpAndSettle();
+      expect(domain.sourcesPaused, true);
+      expect(find.text('Paused'), findsOneWidget);
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
+      await tester.runAsync(() async {
+        final importing = state.run(() async {
+          await state.sourceFeature.importFolderPath(folder.path);
+        });
+        expect(state.busy, true);
+        expect(store.sources, isEmpty);
+        await tester.tap(find.byTooltip('Resume source imports and indexing'));
+        await importing;
+      });
+      await tester.pumpAndSettle();
+      expect(domain.sourcesPaused, false);
+      expect(state.busy, false);
+      expect(store.sources.single['content'], 'A retained import.');
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      tmp.deleteSync(recursive: true);
+    }),
+  );
 
   testWidgets(
     'source search, label editing, graph navigation and settings persist',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final tmp = createTestTempDirectorySync('foresight-screens-');
       addTearDown(() {
         if (tmp.existsSync()) tmp.deleteSync(recursive: true);
@@ -186,12 +190,12 @@ void main() {
       reopened.close();
       await helper.close();
       tmp.deleteSync(recursive: true);
-    },
+    }),
   );
 
   testWidgets(
     'Start transcribing opens speech setup before creating a meeting; cancel preserves selection',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final tmp = createTestTempDirectorySync('foresight-quick-start-');
       addTearDown(() {
         if (tmp.existsSync()) tmp.deleteSync(recursive: true);
@@ -226,12 +230,12 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
       await helper.close();
       tmp.deleteSync(recursive: true);
-    },
+    }),
   );
 
   testWidgets(
     'Ask composer rejects blank input and submits through keyboard or send',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final tmp = createTestTempDirectorySync('foresight-composer-');
       addTearDown(() {
         if (tmp.existsSync()) tmp.deleteSync(recursive: true);
@@ -285,12 +289,12 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
       await helper.close();
       tmp.deleteSync(recursive: true);
-    },
+    }),
   );
 
   testWidgets(
     'Source table columns align and Name header sorts without losing grid access',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       tester.view.physicalSize = const Size(1440, 1000);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
@@ -375,12 +379,12 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
       await helper.close();
       tmp.deleteSync(recursive: true);
-    },
+    }),
   );
 
   testWidgets(
     'Local file import preserves file modification time and first import time',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final tmp = createTestTempDirectorySync('foresight-file-dates-');
       addTearDown(() {
         if (tmp.existsSync()) tmp.deleteSync(recursive: true);
@@ -425,43 +429,53 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
       await helper.close();
       tmp.deleteSync(recursive: true);
-    },
+    }),
   );
 
   for (final size in [const Size(800, 600), const Size(1440, 1000)]) {
-    testWidgets('all reference screens fit $size without overflow', (
-      tester,
-    ) async {
-      tester.view.physicalSize = size;
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-      final tmp = createTestTempDirectorySync('foresight-layout-');
-      addTearDown(() {
-        if (tmp.existsSync()) tmp.deleteSync(recursive: true);
-      });
-      final store = Store('${tmp.path}/app.db');
-      store.importText('Apollo', 'Plan', 'text/plain', 'fixture');
-      final helper = OfflineHelper('${tmp.path}/socket', '${tmp.path}/helper');
-      await tester.pumpWidget(
-        Foresight(
-          TestDesktopConnection(Application(Domain(store, helper))),
-          deviceLoader: () async => [],
-        ),
-      );
-      for (final name in ['Meetings', 'Ask', 'Sources', 'Stats', 'Settings']) {
-        await tester.tap(find.text(name).first);
-        await tester.pumpAndSettle();
-        expect(tester.takeException(), isNull, reason: '$name at $size');
-      }
-      await tester.pumpWidget(const SizedBox.shrink());
-      await helper.close();
-      tmp.deleteSync(recursive: true);
-    });
+    testWidgets(
+      'all reference screens fit $size without overflow',
+      (tester) async => withDesktopFixtures(tester, () async {
+        tester.view.physicalSize = size;
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final tmp = createTestTempDirectorySync('foresight-layout-');
+        addTearDown(() {
+          if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+        });
+        final store = Store('${tmp.path}/app.db');
+        store.importText('Apollo', 'Plan', 'text/plain', 'fixture');
+        final helper = OfflineHelper(
+          '${tmp.path}/socket',
+          '${tmp.path}/helper',
+        );
+        await tester.pumpWidget(
+          Foresight(
+            TestDesktopConnection(Application(Domain(store, helper))),
+            deviceLoader: () async => [],
+          ),
+        );
+        for (final name in [
+          'Meetings',
+          'Ask',
+          'Sources',
+          'Stats',
+          'Settings',
+        ]) {
+          await tester.tap(find.text(name).first);
+          await tester.pumpAndSettle();
+          expect(tester.takeException(), isNull, reason: '$name at $size');
+        }
+        await tester.pumpWidget(const SizedBox.shrink());
+        await helper.close();
+        tmp.deleteSync(recursive: true);
+      }),
+    );
   }
   testWidgets(
     'type filters combine with labels/search and survive view switches',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final root = createTestTempDirectorySync('foresight-type-filter-');
       addTearDown(() {
         if (root.existsSync()) root.deleteSync(recursive: true);
@@ -538,6 +552,6 @@ void main() {
       await tester.pumpWidget(const SizedBox());
       await helper.close();
       root.deleteSync(recursive: true);
-    },
+    }),
   );
 }

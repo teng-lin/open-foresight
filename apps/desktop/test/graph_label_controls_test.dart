@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
@@ -10,54 +11,55 @@ import 'package:open_foresight/features/sources/graph_label_controls.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 void main() {
-  testWidgets('focus loss closes the label editor and retains its draft', (
-    tester,
-  ) async {
-    final controller = TextEditingController();
-    final added = <String>[];
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: Column(
-            children: [
-              GraphLabelControls(
-                labels: const [],
-                controller: controller,
-                onAdd: (value) async => added.add(value),
-                onRemove: (_) {},
-              ),
-              const TextField(key: ValueKey('outside-label-editor')),
-            ],
+  testWidgets(
+    'focus loss closes the label editor and retains its draft',
+    (tester) async => withDesktopFixtures(tester, () async {
+      final controller = TextEditingController();
+      final added = <String>[];
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Column(
+              children: [
+                GraphLabelControls(
+                  labels: const [],
+                  controller: controller,
+                  onAdd: (value) async => added.add(value),
+                  onRemove: (_) {},
+                ),
+                const TextField(key: ValueKey('outside-label-editor')),
+              ],
+            ),
           ),
         ),
-      ),
-    );
-    await tester.tap(find.byKey(const ValueKey('inspector-add-label')));
-    await tester.pumpAndSettle();
-    await tester.enterText(
-      find.byKey(const ValueKey('inspector-label-input')),
-      'Planning draft',
-    );
-    await tester.tap(find.byKey(const ValueKey('outside-label-editor')));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('inspector-label-input')), findsNothing);
-    expect(controller.text, 'Planning draft');
-    expect(added, isEmpty);
-    await tester.tap(find.byKey(const ValueKey('inspector-add-label')));
-    await tester.pumpAndSettle();
-    expect(find.text('Planning draft'), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('inspector-cancel-label')));
-    await tester.pumpAndSettle();
-    expect(controller.text, isEmpty);
-    expect(added, isEmpty);
-    await tester.pumpWidget(const SizedBox.shrink());
-    controller.dispose();
-    expect(tester.takeException(), isNull);
-  });
+      );
+      await tester.tap(find.byKey(const ValueKey('inspector-add-label')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('inspector-label-input')),
+        'Planning draft',
+      );
+      await tester.tap(find.byKey(const ValueKey('outside-label-editor')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('inspector-label-input')), findsNothing);
+      expect(controller.text, 'Planning draft');
+      expect(added, isEmpty);
+      await tester.tap(find.byKey(const ValueKey('inspector-add-label')));
+      await tester.pumpAndSettle();
+      expect(find.text('Planning draft'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('inspector-cancel-label')));
+      await tester.pumpAndSettle();
+      expect(controller.text, isEmpty);
+      expect(added, isEmpty);
+      await tester.pumpWidget(const SizedBox.shrink());
+      controller.dispose();
+      expect(tester.takeException(), isNull);
+    }),
+  );
 
   testWidgets(
     'inspector editor cancels without writing and submits only to the selected document before propagation',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       tester.view.physicalSize = const Size(1440, 1000);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
@@ -150,6 +152,6 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
       await helper.close();
       dir.deleteSync(recursive: true);
-    },
+    }),
   );
 }

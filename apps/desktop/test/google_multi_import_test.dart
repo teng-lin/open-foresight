@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import '../test_support/core_fixture.dart';
 import 'dart:io';
 import 'package:foresight_core/remote.dart' show ConnectedSources;
@@ -89,7 +90,7 @@ void main() {
           : partial
           ? 'multi-file Drive import keeps successes and names the rejected file'
           : 'multi-file Drive import imports every selected file',
-      (tester) async {
+      (tester) async => withDesktopFixtures(tester, () async {
         tester.view.physicalSize = const Size(1280, 950);
         tester.view.devicePixelRatio = 1;
         addTearDown(tester.view.resetPhysicalSize);
@@ -182,7 +183,7 @@ void main() {
           await helper.close();
           if (root.existsSync()) root.deleteSync(recursive: true);
         }
-      },
+      }),
     );
   }
 }

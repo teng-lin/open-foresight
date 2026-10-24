@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -10,7 +11,7 @@ void main() {
   for (final boundary in ['scope', 'session', 'clear', 'dispose']) {
     testWidgets(
       'a held answer cannot publish after $boundary retires its feature identity',
-      (tester) async {
+      (tester) async => withDesktopFixtures(tester, () async {
         final f = await ControllerFixture.mount(tester);
         final id = f.store.meeting('Original meeting');
         f.shell.update(() {
@@ -82,12 +83,12 @@ void main() {
           findsNothing,
         );
         expect(tester.takeException(), isNull);
-      },
+      }),
     );
   }
   testWidgets(
     'same-conversation selected-empty scope hides earlier private history and citations',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(tester);
       final id = f.store.meeting('Scoped history');
       final document = f.store.importText(
@@ -144,6 +145,6 @@ void main() {
         f.store.rows('SELECT body FROM answers').single['body'],
         'Earlier private answer',
       );
-    },
+    }),
   );
 }

@@ -14,7 +14,7 @@ def manifest(root, value):
 
 def test_current_constants_match_one_protocol_source():
     protocol.verify_generated()
-    assert protocol.HELPER_PROTOCOL_VERSION == "1.0.3"
+    assert protocol.HELPER_PROTOCOL_VERSION == "1.1.0"
 
 
 @pytest.mark.parametrize("version", [None, 1, "1.0", "1.0.3\n"])

@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/google_connections.dart';
 import '../test_support/core_fixture.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -51,7 +52,7 @@ class _WorkflowViewRuntime extends NativeRuntime {
   bool cancel({String? requestId}) => true;
 }
 
-class _WorkflowViewDomain extends Domain {
+class _WorkflowViewDomain extends AdapterDomain {
   _WorkflowViewDomain(super.store, super.helper);
   @override
   Future<void> index(String id, {bool Function()? current}) async {

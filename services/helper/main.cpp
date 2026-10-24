@@ -5,6 +5,7 @@
 #include "rag_service.grpc.pb.h"
 #include "reconfig_wait.h"
 #include "schema_migrations.h"
+#include "transcript_index.grpc.pb.h"
 #include "vector_index.h"
 #include <algorithm>
 #include <atomic>
@@ -29,6 +30,7 @@
 using json = nlohmann::json;
 namespace rpc = foresight::helper::v1;
 namespace ctl = foresight::linux::control::v1;
+namespace transcript = foresight::transcript::v1;
 namespace fs = std::filesystem;
 using grpc::Status;
 using grpc::StatusCode;
@@ -65,7 +67,8 @@ struct Statement {
   }
 };
 class Service : public rpc::RagService::Service,
-                public ctl::HelperControl::Service {
+                public ctl::HelperControl::Service,
+                public transcript::TranscriptIndex::Service {
   struct SearchSnapshot {
     std::shared_ptr<Model> model;
     foresight::VectorIndexSnapshot index;
@@ -78,14 +81,17 @@ class Service : public rpc::RagService::Service,
   void rebuild_index() {
     std::vector<foresight::IndexedChunk> chunks;
     Statement q(
-        db, "SELECT c.text,c.document_id,c.mime,c.embedding FROM "
-            "vectors.chunks c JOIN linux.source_revisions r ON "
-            "r.id=c.document_id AND r.revision=c.revision WHERE r.tombstone=0 "
-            "AND c.generation=? ORDER BY c.document_id,c.ordinal");
+        db,
+        "SELECT "
+        "c.text,c.document_id,c.mime,c.embedding,COALESCE(t.parent_id,'') FROM "
+        "vectors.chunks c JOIN linux.source_revisions r ON "
+        "r.id=c.document_id AND r.revision=c.revision LEFT JOIN "
+        "linux.transcript_segments t ON t.id=c.document_id WHERE r.tombstone=0 "
+        "AND c.generation=? ORDER BY c.document_id,c.ordinal");
     q.num(1, state.active_generation());
     while (q.row())
-      chunks.push_back(
-          {q.str(0), q.str(1), q.str(2), foresight::read_vector(q.str(3))});
+      chunks.push_back({q.str(0), q.str(1), q.str(2),
+                        foresight::read_vector(q.str(3)), false, q.str(4)});
     std::shared_ptr<const SearchSnapshot> replacement =
         std::make_shared<SearchSnapshot>(
             model, foresight::VectorIndexSnapshot(std::move(chunks)));
@@ -216,6 +222,47 @@ class Service : public rpc::RagService::Service,
 #else
     (void)step;
 #endif
+  }
+  static void require_public_document(const std::string &id) {
+    if (id.empty() || id.size() > 4096 || id.find('\0') != std::string::npos)
+      throw std::invalid_argument("Invalid document ID");
+  }
+  std::vector<std::string> transcript_ids(const std::string &parent) {
+    Statement q(db,
+                "SELECT id FROM linux.transcript_segments WHERE parent_id=?");
+    q.text(1, parent);
+    std::vector<std::string> ids;
+    while (q.row())
+      ids.push_back(q.str(0));
+    return ids;
+  }
+  void erase_transcript(const std::string &parent) {
+    for (const auto &id : transcript_ids(parent)) {
+      for (const auto *sqltext :
+           {"DELETE FROM documents WHERE id=?",
+            "DELETE FROM vectors.chunks WHERE document_id=?",
+            "DELETE FROM linux.source_revisions WHERE id=?",
+            "DELETE FROM linux.journal WHERE document_id=?"}) {
+        Statement q(db, sqltext);
+        q.text(1, id);
+        q.row();
+      }
+    }
+    for (const auto *sqltext :
+         {"DELETE FROM linux.transcript_segments WHERE parent_id=?",
+          "DELETE FROM linux.transcript_documents WHERE document_id=?"}) {
+      Statement q(db, sqltext);
+      q.text(1, parent);
+      q.row();
+    }
+  }
+  static std::string transcript_id(const std::string &parent,
+                                   const std::string &epoch,
+                                   const transcript::TranscriptKey &key) {
+    return std::string(1, '\0') +
+           json::array({parent, epoch, static_cast<int>(key.channel()),
+                        key.segment_id()})
+               .dump();
   }
   uint64_t revision(const std::string &id) {
     Statement q(db, "SELECT revision FROM linux.source_revisions WHERE id=?");
@@ -604,8 +651,7 @@ public:
           throw std::runtime_error("Index operation cancelled");
         if (!model)
           throw std::runtime_error("Pipeline not initialized");
-        if (req->document_id().empty())
-          throw std::invalid_argument("Document ID is empty");
+        require_public_document(req->document_id());
         if (!req->image_bytes().empty() ||
             req->mime_type().starts_with("image/"))
           throw std::runtime_error(
@@ -633,9 +679,13 @@ public:
       // Allocate/build before committing. Publication after COMMIT is a
       // pointer swap, so successful writes are immediately searchable without
       // rereading unrelated SQLite rows or rebuilding the entire corpus.
-      auto replacement = stage_index({id}, std::move(indexed));
+      const auto children = transcript_ids(id);
+      std::set<std::string> replaced(children.begin(), children.end());
+      replaced.insert(id);
+      auto replacement = stage_index(std::move(replaced), std::move(indexed));
       uint64_t rev = revision(id);
       Tx tx(*this);
+      erase_transcript(id);
       {
         Statement q(db,
                     "INSERT OR REPLACE INTO documents VALUES(?,?,?,?,?,?,?)");
@@ -683,6 +733,259 @@ public:
       return app_error(r, e, context);
     }
   }
+  Status GetCursor(grpc::ServerContext *,
+                   const transcript::TranscriptCursorRequest *req,
+                   transcript::TranscriptCursor *result) override {
+    std::lock_guard lock(mu);
+    try {
+      require_public_document(req->document_id());
+      Statement q(
+          db,
+          "SELECT workspace_epoch,revision,last_segment_id,segment_count FROM "
+          "linux.transcript_documents WHERE document_id=?");
+      q.text(1, req->document_id());
+      if (q.row()) {
+        result->set_exists(true);
+        result->set_workspace_epoch(q.str(0));
+        result->set_revision(q.integer(1));
+        result->set_last_segment_id(q.integer(2));
+        result->set_segment_count(q.integer(3));
+      }
+      return Status::OK;
+    } catch (const std::invalid_argument &e) {
+      return {StatusCode::INVALID_ARGUMENT, e.what()};
+    } catch (const std::exception &e) {
+      return {StatusCode::FAILED_PRECONDITION, e.what()};
+    }
+  }
+  Status ApplyDelta(grpc::ServerContext *context,
+                    const transcript::TranscriptDelta *req,
+                    transcript::TranscriptDeltaResult *result) override {
+    ReconfigGuard guard(*this);
+    try {
+      if (auto status = guard.enter(context); !status.ok())
+        return status;
+      require_public_document(req->document_id());
+      if (req->workspace_epoch().empty() ||
+          req->workspace_epoch().size() > 128 || !req->revision() ||
+          req->revision() > INT64_MAX || req->expected_revision() > INT64_MAX ||
+          req->upserts_size() > 64 || req->deletes_size() > 64 ||
+          req->ByteSizeLong() > 1024 * 1024)
+        throw std::invalid_argument("Invalid bounded transcript delta");
+      const auto delta = req->SerializeAsString();
+      const auto &parent = req->document_id();
+      const auto &epoch = req->workspace_epoch();
+      std::shared_ptr<Model> current;
+      struct Work {
+        const transcript::TranscriptSegment *segment;
+        std::string id;
+        uint64_t revision;
+        bool changed;
+        std::vector<PreparedChunk> chunks;
+      };
+      uint64_t last_segment_id = 0, segment_count = 0;
+      std::vector<Work> work;
+      std::set<std::string> changed_ids;
+      std::set<std::string> deleted;
+      std::vector<foresight::IndexedChunk> indexed;
+      {
+        std::lock_guard lock(mu);
+        if (!model)
+          throw std::runtime_error("Pipeline not initialized");
+        if (context->IsCancelled())
+          throw std::runtime_error("Transcript indexing cancelled");
+        current = model;
+        uint64_t previous = 0;
+        std::string previous_epoch;
+        Statement q(db, "SELECT "
+                        "workspace_epoch,revision,last_delta,last_segment_id,"
+                        "segment_count FROM "
+                        "linux.transcript_documents WHERE document_id=?");
+        q.text(1, parent);
+        if (q.row()) {
+          previous_epoch = q.str(0);
+          previous = q.integer(1);
+          if (!req->reset()) {
+            last_segment_id = q.integer(3);
+            segment_count = q.integer(4);
+          }
+          if (previous == req->revision() && previous_epoch == epoch &&
+              q.str(2) == delta) {
+            result->set_revision(previous);
+            result->set_applied(false);
+            return Status::OK;
+          }
+        }
+        if (previous != req->expected_revision() ||
+            (!req->reset() && !previous_epoch.empty() &&
+             previous_epoch != epoch) ||
+            (!req->reset() && req->revision() <= previous))
+          return {StatusCode::ABORTED,
+                  "Transcript cursor changed; reconcile before retry"};
+        if (req->reset()) {
+          const auto old = transcript_ids(parent);
+          changed_ids.insert(old.begin(), old.end());
+          // Reset also replaces an older legacy full-transcript document.
+          changed_ids.insert(parent);
+        }
+        std::set<std::string> supplied;
+        auto checked_id = [&](const transcript::TranscriptKey &key) {
+          if (!transcript::TranscriptKey_Channel_IsValid(key.channel()) ||
+              !key.segment_id() || key.segment_id() > INT64_MAX)
+            throw std::invalid_argument("Invalid transcript segment key");
+          auto id = transcript_id(parent, epoch, key);
+          if (!supplied.insert(id).second)
+            throw std::invalid_argument("Duplicate transcript segment key");
+          return id;
+        };
+        for (const auto &segment : req->upserts()) {
+          if (!segment.has_key() || segment.text().empty() ||
+              segment.text().size() > 65536 ||
+              segment.end_ms() < segment.start_ms() ||
+              segment.end_ms() > INT64_MAX)
+            throw std::invalid_argument("Invalid bounded transcript segment");
+          const auto id = checked_id(segment.key());
+          Statement existing(db, "SELECT content FROM documents WHERE id=?");
+          existing.text(1, id);
+          const bool exists = existing.row();
+          const bool changed =
+              req->reset() || !exists || existing.str(0) != segment.text();
+          if (req->reset() || !exists)
+            ++segment_count;
+          last_segment_id =
+              std::max(last_segment_id, segment.key().segment_id());
+          work.push_back({&segment, id, revision(id), changed, {}});
+          if (changed)
+            changed_ids.insert(id);
+        }
+        for (const auto &key : req->deletes()) {
+          auto id = checked_id(key);
+          if (!req->reset()) {
+            Statement existing(
+                db, "SELECT 1 FROM linux.transcript_segments WHERE id=?");
+            existing.text(1, id);
+            if (existing.row()) {
+              if (!segment_count)
+                throw std::runtime_error("Invalid transcript cursor count");
+              --segment_count;
+            }
+          }
+          last_segment_id = std::max(last_segment_id, key.segment_id());
+          deleted.insert(id);
+          changed_ids.insert(std::move(id));
+        }
+      }
+      // Only bounded changed segments are tokenized/embedded. There is no
+      // parent transcript concatenation, upsert or full scan on the append
+      // path.
+      for (auto &item : work) {
+        if (!item.changed)
+          continue;
+        if (context->IsCancelled())
+          throw std::runtime_error("Transcript indexing cancelled");
+        size_t tokens = 0;
+        const auto texts =
+            current->chunks(item.segment->text(), 480, 0, &tokens);
+        result->set_tokenized_bytes(result->tokenized_bytes() +
+                                    item.segment->text().size());
+        result->set_tokenized_tokens(result->tokenized_tokens() + tokens);
+        for (const auto &text : texts) {
+          auto vector = current->embed(text);
+          result->set_embedded_bytes(result->embedded_bytes() + text.size());
+          result->set_embedded_chunks(result->embedded_chunks() + 1);
+          item.chunks.push_back({text, vector});
+          indexed.push_back(
+              {text, item.id, "text/plain", std::move(vector), false, parent});
+        }
+      }
+      std::lock_guard lock(mu);
+      if (context->IsCancelled())
+        throw std::runtime_error("Transcript indexing cancelled");
+      if (model != current)
+        throw std::runtime_error("Embedding model changed; retry");
+      auto replacement = stage_index(changed_ids, std::move(indexed));
+      result->set_snapshot_constructed_chunks(
+          changed_ids.empty() ? 0 : replacement->index.constructed_chunks());
+      Tx tx(*this);
+      if (req->reset()) {
+        erase_transcript(parent);
+        for (const auto *sqltext :
+             {"DELETE FROM documents WHERE id=?",
+              "DELETE FROM vectors.chunks WHERE document_id=?"}) {
+          Statement q(db, sqltext);
+          q.text(1, parent);
+          q.row();
+        }
+      }
+      for (const auto &id : deleted) {
+        for (const auto *sqltext :
+             {"DELETE FROM documents WHERE id=?",
+              "DELETE FROM vectors.chunks WHERE document_id=?",
+              "DELETE FROM linux.source_revisions WHERE id=?",
+              "DELETE FROM linux.transcript_segments WHERE id=?",
+              "DELETE FROM linux.journal WHERE document_id=?"}) {
+          Statement q(db, sqltext);
+          q.text(1, id);
+          q.row();
+        }
+      }
+      for (const auto &item : work) {
+        const auto &segment = *item.segment;
+        if (item.changed) {
+          Statement q(db, "INSERT OR REPLACE INTO documents "
+                          "VALUES(?,?,?,480,0,'text/plain',NULL)");
+          q.text(1, item.id);
+          q.text(2, segment.text());
+          q.text(3, "local_user");
+          q.row();
+          Statement r(
+              db,
+              "INSERT OR REPLACE INTO linux.source_revisions VALUES(?,?,0)");
+          r.text(1, item.id);
+          r.num(2, item.revision);
+          r.row();
+          Statement old(db, "DELETE FROM vectors.chunks WHERE document_id=?");
+          old.text(1, item.id);
+          old.row();
+          insert_vectors(item.chunks, item.id, item.revision,
+                         state.active_generation(), "text/plain", context);
+        }
+        Statement q(db, "INSERT OR REPLACE INTO linux.transcript_segments "
+                        "VALUES(?,?,?,?,?,?)");
+        q.text(1, item.id);
+        q.text(2, parent);
+        q.num(3, segment.key().channel());
+        q.num(4, segment.key().segment_id());
+        q.num(5, segment.start_ms());
+        q.num(6, segment.end_ms());
+        q.row();
+      }
+      Statement cursor(db, "INSERT OR REPLACE INTO linux.transcript_documents "
+                           "VALUES(?,?,?,?,?,?)");
+      cursor.text(1, parent);
+      cursor.text(2, epoch);
+      cursor.num(3, req->revision());
+      cursor.blob(4, delta);
+      cursor.num(5, last_segment_id);
+      cursor.num(6, segment_count);
+      cursor.row();
+      journal("transcript-delta", parent, req->revision());
+      crash("transcript_before_commit");
+      if (context->IsCancelled())
+        throw std::runtime_error("Transcript indexing cancelled");
+      tx.commit();
+      publish_snapshot(std::move(replacement));
+      crash("transcript_after_commit");
+      state.set_index("ready");
+      changed();
+      result->set_revision(req->revision());
+      result->set_applied(true);
+      return Status::OK;
+    } catch (const std::exception &e) {
+      std::lock_guard lock(mu);
+      return app_error(result, e, context);
+    }
+  }
   Status DeleteDocument(grpc::ServerContext *context,
                         const rpc::DeleteRequest *req,
                         rpc::DeleteResponse *r) override {
@@ -691,16 +994,21 @@ public:
       return status;
     std::lock_guard lock(mu);
     try {
-      if (req->document_id().empty())
-        throw std::invalid_argument("Document ID is empty");
+      require_public_document(req->document_id());
       Tx tx(*this);
       std::vector<std::string> ids{req->document_id()};
       if (req->document_id().starts_with("file://"))
         ids.push_back(req->document_id().substr(7));
       else
         ids.push_back("file://" + req->document_id());
-      auto replacement = stage_index({ids.begin(), ids.end()}, {});
+      std::set<std::string> replaced(ids.begin(), ids.end());
+      for (const auto &id : ids) {
+        const auto children = transcript_ids(id);
+        replaced.insert(children.begin(), children.end());
+      }
+      auto replacement = stage_index(std::move(replaced), {});
       for (auto &id : ids) {
+        erase_transcript(id);
         auto rev = revision(id);
         for (auto sqltext :
              {"DELETE FROM documents WHERE id=?",
@@ -760,7 +1068,7 @@ public:
         const auto &value = *match.chunk;
         auto *chunk = r->add_chunks();
         chunk->set_text(value.text);
-        chunk->set_document_id(value.id);
+        chunk->set_document_id(value.document_id());
         chunk->set_mime_type(value.mime);
         chunk->set_relevance_score(match.score);
       }
@@ -966,6 +1274,8 @@ int main(int argc, char **argv) {
     b.AddListeningPort("unix:" + socket, grpc::InsecureServerCredentials());
     b.RegisterService(static_cast<rpc::RagService::Service *>(&service));
     b.RegisterService(static_cast<ctl::HelperControl::Service *>(&service));
+    b.RegisterService(
+        static_cast<transcript::TranscriptIndex::Service *>(&service));
     auto server = b.BuildAndStart();
     if (!server)
       throw std::runtime_error("Cannot listen on socket");

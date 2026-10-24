@@ -125,6 +125,25 @@
       "symbols": [
         "rows"
       ]
+    },
+    "20": {
+      "sha256": "3574cbb8bdc6435529aaaf5219a00a370285b65df9734dcc5a5bfd8ecc26de11",
+      "symbols": [
+        "_boundContentHistory",
+        "rows"
+      ]
+    },
+    "21": {
+      "sha256": "2462b86511450e125a79f6c3a00b11985db1443f478e34a61a12d30e7eadabee",
+      "symbols": [
+        "_routeBackupErasure"
+      ]
+    },
+    "22": {
+      "sha256": "7ce2630264eccbe71278334147a6b541627afeae355be2e27d2952635fcad1c1",
+      "symbols": [
+        "_createMeetingIndex"
+      ]
     }
   },
   "fixtures": {

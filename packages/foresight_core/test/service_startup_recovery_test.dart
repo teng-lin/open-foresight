@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/transcript_index_service.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -86,6 +87,7 @@ void main() {
       final server = Server.create(
         services: [
           rag,
+          TranscriptIndexService(rag),
           AdoptionControl(control.State(pipeline: 'ready')),
         ],
       );

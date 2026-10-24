@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'package:open_foresight/desktop_environment.dart';
 import '../test_support/platform_fixture.dart';
 import '../test_support/core_fixture.dart';
@@ -19,7 +20,7 @@ import 'meeting_setup_test.dart' show OfflineHelper;
 void main() {
   testWidgets(
     'Settings selectors retain selection, keyboard and disabled behavior',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final root = createTestTempDirectorySync('desktop-select-');
       addTearDown(() {
         if (root.existsSync()) root.deleteSync(recursive: true);
@@ -141,79 +142,86 @@ void main() {
         await helper.close();
         root.deleteSync(recursive: true);
       }
-    },
+    }),
   );
 
-  testWidgets('Settings preserves a custom service idle period', (
-    tester,
-  ) async {
-    final root = createTestTempDirectorySync('desktop-service-idle-');
-    addTearDown(() {
-      if (root.existsSync()) root.deleteSync(recursive: true);
-    });
-    final store = Store('${root.path}/app.db');
-    store.setPreference('serviceIdleMinutes', '0.05');
-    final helper = OfflineHelper('${root.path}/socket', '${root.path}/helper');
-    try {
-      await tester.pumpWidget(
-        Foresight(
-          TestDesktopConnection(Application(Domain(store, helper))),
-          deviceLoader: () async => [],
-          environment: DesktopEnvironment(
-            capabilities: testHostPlatformCapabilities,
+  testWidgets(
+    'Settings preserves a custom service idle period',
+    (tester) async => withDesktopFixtures(tester, () async {
+      final root = createTestTempDirectorySync('desktop-service-idle-');
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
+      final store = Store('${root.path}/app.db');
+      store.setPreference('serviceIdleMinutes', '0.05');
+      final helper = OfflineHelper(
+        '${root.path}/socket',
+        '${root.path}/helper',
+      );
+      try {
+        await tester.pumpWidget(
+          Foresight(
+            TestDesktopConnection(Application(Domain(store, helper))),
+            deviceLoader: () async => [],
+            environment: DesktopEnvironment(
+              capabilities: testHostPlatformCapabilities,
+            ),
           ),
-        ),
-      );
-      await tester.tap(find.text('Settings'));
-      await tester.pumpAndSettle();
-      expect(tester.takeException(), isNull);
-      final serviceIdle = find.byKey(const Key('serviceIdleMinutes'));
-      final select = tester.widget<DesktopSettingSelect<String>>(serviceIdle);
-      expect(select.value, '0.05');
-      expect(select.items.map((item) => item.value), [
-        '0',
-        '15',
-        '30',
-        '60',
-        '120',
-        '0.05',
-      ]);
-      expect(
-        (select.items.singleWhere((item) => item.value == '0.05').child as Text)
-            .data,
-        '0.05 minutes',
-      );
-      await tester.ensureVisible(serviceIdle);
-      await tester.tap(
-        find.descendant(
-          of: serviceIdle,
-          matching: find.byType(DropdownButton<String>),
-        ),
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('0.05 minutes'), findsWidgets);
-      await tester.tap(find.text('Never').last);
-      await tester.pumpAndSettle();
-      expect(store.preference('serviceIdleMinutes'), '0');
-      final updated = tester.widget<DesktopSettingSelect<String>>(serviceIdle);
-      expect(updated.value, '0');
-      expect(updated.items.map((item) => item.value), [
-        '0',
-        '15',
-        '30',
-        '60',
-        '120',
-      ]);
-      expect(tester.takeException(), isNull);
-    } finally {
-      await tester.pumpWidget(const SizedBox.shrink());
-      await helper.close();
-    }
-  });
+        );
+        await tester.tap(find.text('Settings'));
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        final serviceIdle = find.byKey(const Key('serviceIdleMinutes'));
+        final select = tester.widget<DesktopSettingSelect<String>>(serviceIdle);
+        expect(select.value, '0.05');
+        expect(select.items.map((item) => item.value), [
+          '0',
+          '15',
+          '30',
+          '60',
+          '120',
+          '0.05',
+        ]);
+        expect(
+          (select.items.singleWhere((item) => item.value == '0.05').child
+                  as Text)
+              .data,
+          '0.05 minutes',
+        );
+        await tester.ensureVisible(serviceIdle);
+        await tester.tap(
+          find.descendant(
+            of: serviceIdle,
+            matching: find.byType(DropdownButton<String>),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('0.05 minutes'), findsWidgets);
+        await tester.tap(find.text('Never').last);
+        await tester.pumpAndSettle();
+        expect(store.preference('serviceIdleMinutes'), '0');
+        final updated = tester.widget<DesktopSettingSelect<String>>(
+          serviceIdle,
+        );
+        expect(updated.value, '0');
+        expect(updated.items.map((item) => item.value), [
+          '0',
+          '15',
+          '30',
+          '60',
+          '120',
+        ]);
+        expect(tester.takeException(), isNull);
+      } finally {
+        await tester.pumpWidget(const SizedBox.shrink());
+        await helper.close();
+      }
+    }),
+  );
 
   testWidgets(
     'desktop audit screens, menu and URL dialog fit normal and scaled narrow layouts',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final semantics = tester.ensureSemantics();
       tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
         const MethodChannel('foresight/desktop'),
@@ -408,6 +416,6 @@ void main() {
         await helper.close();
         root.deleteSync(recursive: true);
       }
-    },
+    }),
   );
 }

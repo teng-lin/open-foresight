@@ -68,3 +68,27 @@ upstream.Sqlite3 _loadSqlite() {
   }
   return api;
 }
+
+/// A short lock wait applies equally to writable and read-only connections.
+/// The application owns retries; a busy database must not stall capture behind
+/// SQLite's default or an unbounded retry loop.
+const applicationSqliteBusyTimeout = Duration(milliseconds: 50);
+upstream.Database openApplicationDatabase(
+  String path, {
+  upstream.OpenMode mode = upstream.OpenMode.readWriteCreate,
+}) {
+  // Enable URI selection for controlled ATTACH/VACUUM destinations. The main
+  // filename is always an absolute filesystem path (or :memory:), so an input
+  // beginning with file: cannot bypass profile/path qualification.
+  final filename = path == ':memory:' ? path : File(path).absolute.path;
+  final db = sqlite3.open(filename, mode: mode, uri: true);
+  try {
+    db.execute(
+      'PRAGMA busy_timeout=${applicationSqliteBusyTimeout.inMilliseconds}',
+    );
+    return db;
+  } catch (_) {
+    db.dispose();
+    rethrow;
+  }
+}

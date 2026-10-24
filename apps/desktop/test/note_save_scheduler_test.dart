@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'store_reader_fixture.dart';
 import 'package:foresight_core/desktop.dart' show MeetingArtifact;
 import 'pump_until.dart';
@@ -52,7 +53,7 @@ class _SaveClosingConnection extends TestDesktopConnection {
 void main() {
   testWidgets(
     'Workspace joins a held note save before disconnecting its connection',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final directory = createTestTempDirectorySync('note-save-disconnect-');
       final path = '${directory.path}/app.db';
       final store = Store(path);
@@ -106,7 +107,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(connection.closes, 1);
       expect(tester.takeException(), isNull);
-    },
+    }),
   );
 
   test(
@@ -174,7 +175,7 @@ void main() {
 
   testWidgets(
     'manual enhancement dialog carries keypress time and unchanged saves preserve it',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final directory = createTestTempDirectorySync('note-enhanced-edit-');
       addTearDown(() {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
@@ -243,11 +244,11 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump();
       directory.deleteSync(recursive: true);
-    },
+    }),
   );
   testWidgets(
     'explicit Live Enhance note save reports failure without an uncaught error',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final directory = createTestTempDirectorySync('note-save-explicit-');
       addTearDown(() => directory.deleteSync(recursive: true));
       final store = Store('${directory.path}/app.db');
@@ -278,12 +279,12 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
-    },
+    }),
   );
 
   testWidgets(
     'captured manual dates survive failed writes, retry and note switches',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final writes = <(int, String, int?)>[];
       var reject = true;
       final saves = NoteSaveScheduler((id, body, date) async {
@@ -303,12 +304,12 @@ void main() {
       ]);
       expect(saves.isDirty(1), isFalse);
       expect(saves.isDirty(2), isFalse);
-    },
+    }),
   );
 
   testWidgets(
     'clean editor reloads external raw changes while pending and programmatic writes stay protected',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final directory = createTestTempDirectorySync('note-clean-reload-');
       addTearDown(() {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
@@ -381,11 +382,11 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump();
       directory.deleteSync(recursive: true);
-    },
+    }),
   );
   testWidgets(
     'failed in-flight save keeps explicit navigation on the editor until retry succeeds',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final directory = createTestTempDirectorySync('note-save-navigation-');
       addTearDown(() {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
@@ -435,11 +436,11 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump();
       directory.deleteSync(recursive: true);
-    },
+    }),
   );
   testWidgets(
     'flush and close observe an in-flight failure and retain its draft for retry',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final pending = Completer<void>();
       var attempts = 0;
       final saves = NoteSaveScheduler((_, _, _) async {
@@ -458,11 +459,11 @@ void main() {
       await saves.flush();
       expect(attempts, 2);
       expect(saves.hasWork, isFalse);
-    },
+    }),
   );
   testWidgets(
     'failed drafts remain retryable and newer edits supersede failed snapshots',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final writes = <(int, String)>[];
       final failures = <Object>[];
       var reject = true;
@@ -489,11 +490,11 @@ void main() {
         writes.where((draft) => draft.$2 == 'Old failed draft'),
         hasLength(1),
       );
-    },
+    }),
   );
   testWidgets(
     'save deadline follows the latest edit and close drains snapshots in order',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final writes = <(int, String)>[];
       final first = Completer<void>();
       final saves = NoteSaveScheduler((id, body, _) async {
@@ -520,12 +521,12 @@ void main() {
       saves.schedule(3, 'after disposal');
       await tester.pump(const Duration(seconds: 2));
       expect(writes, hasLength(2));
-    },
+    }),
   );
 
   testWidgets(
     'note switch flushes captured draft before the new note deadline',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final writes = <(int, String)>[];
       final saves = NoteSaveScheduler(
         (id, body, _) async => writes.add((id, body)),
@@ -540,78 +541,80 @@ void main() {
       await tester.pump(const Duration(milliseconds: 1));
       expect(writes, [(1, 'old note draft'), (2, 'new note draft')]);
       await saves.close();
-    },
+    }),
   );
 
-  testWidgets('editor debounces edits and flushes note switch and disposal', (
-    tester,
-  ) async {
-    final directory = createTestTempDirectorySync('note-save-editor-');
-    addTearDown(() {
-      if (directory.existsSync()) directory.deleteSync(recursive: true);
-    });
-    final path = '${directory.path}/app.db';
-    final store = Store(path);
-    store.setPreference('liveEnhance', 'false');
-    final first = store.meeting('First');
-    final second = store.meeting('Second');
-    store.saveMeetingNotes(first, 'Initial');
-    final domain = Domain(
-      store,
-      OfflineHelper('${directory.path}/sock', '${directory.path}/helper'),
-    );
-    await tester.pumpWidget(
-      Foresight(
-        TestDesktopConnection(Application(domain)),
-        deviceLoader: () async => [],
-      ),
-    );
-    final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
-    state.update(() => state.meetingFeature.meetingId = first);
-    await tester.pumpAndSettle();
-    final editor = find.byKey(const ValueKey('meeting-notes-editor'));
-    await tester.enterText(editor, 'Intermediate');
-    await tester.pump(const Duration(milliseconds: 500));
-    await tester.enterText(editor, 'Latest first');
-    await tester.pump(const Duration(milliseconds: 999));
-    expect(
-      store.rows('SELECT body FROM meeting_notes WHERE meeting_id=?', [
-        first,
-      ]).single['body'],
-      'Initial',
-    );
-    await tester.pump(const Duration(milliseconds: 1));
-    await tester.pump();
-    expect(
-      store.rows('SELECT body,revision FROM meeting_notes WHERE meeting_id=?', [
-        first,
-      ]).single,
-      {'body': 'Latest first', 'revision': 2},
-    );
-    await tester.enterText(editor, 'Flushed first');
-    state.update(() => state.meetingFeature.meetingId = second);
-    await tester.pumpAndSettle();
-    expect(
-      store.rows('SELECT body FROM meeting_notes WHERE meeting_id=?', [
-        first,
-      ]).single['body'],
-      'Flushed first',
-    );
-    expect(
-      store.rows('SELECT * FROM meeting_notes WHERE meeting_id=?', [second]),
-      isEmpty,
-    );
-    await tester.enterText(editor, 'Last second keystrokes');
-    await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pump();
-    final reopened = Store(path);
-    expect(
-      reopened.rows('SELECT body FROM meeting_notes WHERE meeting_id=?', [
-        second,
-      ]).single['body'],
-      'Last second keystrokes',
-    );
-    reopened.close();
-    directory.deleteSync(recursive: true);
-  });
+  testWidgets(
+    'editor debounces edits and flushes note switch and disposal',
+    (tester) async => withDesktopFixtures(tester, () async {
+      final directory = createTestTempDirectorySync('note-save-editor-');
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
+      final path = '${directory.path}/app.db';
+      final store = Store(path);
+      store.setPreference('liveEnhance', 'false');
+      final first = store.meeting('First');
+      final second = store.meeting('Second');
+      store.saveMeetingNotes(first, 'Initial');
+      final domain = Domain(
+        store,
+        OfflineHelper('${directory.path}/sock', '${directory.path}/helper'),
+      );
+      await tester.pumpWidget(
+        Foresight(
+          TestDesktopConnection(Application(domain)),
+          deviceLoader: () async => [],
+        ),
+      );
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
+      state.update(() => state.meetingFeature.meetingId = first);
+      await tester.pumpAndSettle();
+      final editor = find.byKey(const ValueKey('meeting-notes-editor'));
+      await tester.enterText(editor, 'Intermediate');
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.enterText(editor, 'Latest first');
+      await tester.pump(const Duration(milliseconds: 999));
+      expect(
+        store.rows('SELECT body FROM meeting_notes WHERE meeting_id=?', [
+          first,
+        ]).single['body'],
+        'Initial',
+      );
+      await tester.pump(const Duration(milliseconds: 1));
+      await tester.pump();
+      expect(
+        store.rows(
+          'SELECT body,revision FROM meeting_notes WHERE meeting_id=?',
+          [first],
+        ).single,
+        {'body': 'Latest first', 'revision': 2},
+      );
+      await tester.enterText(editor, 'Flushed first');
+      state.update(() => state.meetingFeature.meetingId = second);
+      await tester.pumpAndSettle();
+      expect(
+        store.rows('SELECT body FROM meeting_notes WHERE meeting_id=?', [
+          first,
+        ]).single['body'],
+        'Flushed first',
+      );
+      expect(
+        store.rows('SELECT * FROM meeting_notes WHERE meeting_id=?', [second]),
+        isEmpty,
+      );
+      await tester.enterText(editor, 'Last second keystrokes');
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+      final reopened = Store(path);
+      expect(
+        reopened.rows('SELECT body FROM meeting_notes WHERE meeting_id=?', [
+          second,
+        ]).single['body'],
+        'Last second keystrokes',
+      );
+      reopened.close();
+      directory.deleteSync(recursive: true);
+    }),
+  );
 }

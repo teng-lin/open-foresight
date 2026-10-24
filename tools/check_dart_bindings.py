@@ -39,6 +39,7 @@ def main():
         )
         for directory, name in [
             ("linux", "helper_control"),
+            ("linux", "transcript_index"),
             ("foresight", "web_content"),
         ]:
             subprocess.run(

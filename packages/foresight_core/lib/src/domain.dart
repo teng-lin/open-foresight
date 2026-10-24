@@ -13,6 +13,7 @@ import 'model_gate.dart';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:grpc/grpc.dart';
+import 'package:grpc/service_api.dart' as grpc_api;
 import 'store.dart';
 import 'persistence/domain_queries.dart';
 import 'helper.dart';
@@ -20,6 +21,7 @@ import 'native.dart';
 import 'web_search.dart';
 import 'web_content.dart';
 import 'generated/rag_service.pbgrpc.dart';
+import 'generated/transcript_index.pbgrpc.dart' as transcript;
 
 typedef GenerationRuntimeDiscovery =
     Future<NativeRuntime?> Function(
@@ -49,6 +51,8 @@ class Domain {
        clock = clock ?? const Clock(),
        createTimer = createTimer ?? Timer.new,
        _discoverGeneration = discoverGeneration ?? discoverGenerationRuntime;
+  Future<void> Function(int, {bool Function()? current})?
+  indexMeetingTranscript;
   ModelGate modelGate;
   SearchCallbacks? _webSearch;
   WebContentService? _ownedWebContent;
@@ -205,8 +209,18 @@ class Domain {
 
   void close() {
     _closed = true;
+    indexMeetingTranscript = null;
+    checkCancellations();
     if (_ownedWebContent != null) unawaited(_ownedWebContent!.close());
     _wakeSourceWork();
+  }
+
+  /// Join owned RPC cancellation and channel teardown before the helper or
+  /// Store is released. Call [close] first to refuse later mutation admission.
+  Future<void> drain() async {
+    if (!_closed) throw StateError('Close Domain before draining its work');
+    checkCancellations();
+    await _mutationTail;
   }
 
   void _checkOpen() {
@@ -258,7 +272,137 @@ class Domain {
     return result;
   }
 
+  /// One bounded operation-owned channel under the mutation queue isolates late
+  /// frames from a canceled stream from unrelated helper/control clients. The
+  /// pinned HTTP/2 transport otherwise treats late canceled response headers as
+  /// a connection error. No request or sibling is replayed to mask that race.
+  Future<T> _ownedIndexCall<T>(
+    ResponseFuture<T> Function(grpc_api.ClientChannel) invoke, {
+    bool Function()? current,
+  }) async {
+    if (_closed || (current != null && !current())) throw operationCancelled();
+    final channel = helperChannel(helper.socket);
+    try {
+      return await _awaitIndexResponse(invoke(channel), current: current);
+    } finally {
+      try {
+        await channel.terminate();
+      } catch (_) {
+        // Transport cleanup cannot replace the original operation outcome.
+      }
+    }
+  }
+
+  /// This watch belongs to the producer, not a subscriber racing its result.
+  /// Cancel the actual gRPC request, then join its response and cancellation
+  /// before the mutation queue releases the producer's reservation.
+  Future<T> _awaitIndexResponse<T>(
+    ResponseFuture<T> request, {
+    bool Function()? current,
+  }) async {
+    final generation = workspaceGeneration;
+    bool valid() =>
+        !_closed &&
+        generation == workspaceGeneration &&
+        (current?.call() ?? true);
+    final watch = whenCancelled(valid);
+    Future<void>? cancellation;
+    watch.future
+        .then<void>(
+          (_) {},
+          onError: (Object _) {
+            cancellation = Future<void>.sync(request.cancel);
+            cancellation!.ignore();
+          },
+        )
+        .ignore();
+    try {
+      final result = await request;
+      if (!valid()) throw operationCancelled();
+      return result;
+    } catch (_) {
+      if (!valid()) throw operationCancelled();
+      rethrow;
+    } finally {
+      watch.dispose();
+      try {
+        if (cancellation != null) await cancellation;
+      } catch (_) {
+        // Preserve the response/cancellation outcome after cleanup was tried.
+      }
+    }
+  }
+
+  /// Read the helper's committed incremental cursor after any durable purge.
+  /// The cursor is advisory; ApplyDelta checks it atomically before mutation.
+  Future<transcript.TranscriptCursor> transcriptCursor(
+    String id, {
+    bool Function()? current,
+  }) => _serialize(() async {
+    if (current != null && !current()) throw operationCancelled();
+    final generation = workspaceGeneration;
+    if (_queries.helperDeletePending(id)) {
+      final deleted = await _ownedIndexCall(
+        (channel) => helperClient(channel).deleteDocument(
+          DeleteRequest(documentId: id, userId: helperUserId),
+          options: CallOptions(timeout: const Duration(seconds: 5)),
+        ),
+        current: current,
+      );
+      checkWorkspace(generation);
+      if (!deleted.success) throw StateError('Helper purge has not completed');
+      _queries.acknowledgeHelperDelete(id);
+    }
+    final result = await _ownedIndexCall(
+      (channel) => transcript.TranscriptIndexClient(channel).getCursor(
+        transcript.TranscriptCursorRequest(documentId: id),
+        options: CallOptions(timeout: const Duration(seconds: 5)),
+      ),
+      current: current,
+    );
+    checkWorkspace(generation);
+    return result;
+  });
+
+  /// Send only changed immutable transcript segments. No full source body is
+  /// read, concatenated or tokenized on this path. Cancellation retains the
+  /// mutation reservation until the actual helper RPC has settled.
+  Future<transcript.TranscriptDeltaResult> applyTranscriptDelta(
+    transcript.TranscriptDelta delta, {
+    bool Function()? current,
+  }) async {
+    final generation = workspaceGeneration;
+    while (true) {
+      await waitForSourceWork(current: current);
+      checkWorkspace(generation);
+      final result = await _serialize(() async {
+        if (sourcesPaused) return null;
+        if (current != null && !current()) throw operationCancelled();
+        if (_queries.helperDeletePending(delta.documentId)) {
+          throw operationCancelled();
+        }
+        final result = await _ownedIndexCall(
+          (channel) => transcript.TranscriptIndexClient(channel).applyDelta(
+            delta,
+            options: CallOptions(timeout: const Duration(seconds: 45)),
+          ),
+          current: current,
+        );
+        checkWorkspace(generation);
+        return result;
+      });
+      if (result != null) return result;
+    }
+  }
+
   Future<void> index(String id, {bool Function()? current}) async {
+    _checkOpen();
+    checkCancellations();
+    final route = indexMeetingTranscript;
+    if (route != null) {
+      final meeting = _queries.generatedTranscriptMeeting(id);
+      if (meeting != null) return route(meeting, current: current);
+    }
     final generation = workspaceGeneration;
     while (true) {
       // Wait outside the mutation queue so deletions can still proceed.
@@ -267,14 +411,15 @@ class Domain {
       final completed = await _serialize(() async {
         // Pause may have happened while an earlier mutation was finishing.
         if (sourcesPaused) return false;
-        await _index(id);
+        await _index(id, current: current);
         return true;
       });
       if (completed) return;
     }
   }
 
-  Future<void> _index(String id) async {
+  Future<void> _index(String id, {bool Function()? current}) async {
+    if (current != null && !current()) throw operationCancelled();
     final generation = workspaceGeneration;
     final source = _queries.activeSource(id);
     if (source == null) return;
@@ -289,9 +434,12 @@ class Domain {
     // A deterministic Calendar/meeting ID can be reused after clear. Delete the
     // old helper copy before indexing its replacement, within the mutation queue.
     if (_queries.helperDeletePending(id)) {
-      final deleted = await helper.client.deleteDocument(
-        DeleteRequest(documentId: id, userId: helperUserId),
-        options: CallOptions(timeout: const Duration(seconds: 5)),
+      final deleted = await _ownedIndexCall(
+        (channel) => helperClient(channel).deleteDocument(
+          DeleteRequest(documentId: id, userId: helperUserId),
+          options: CallOptions(timeout: const Duration(seconds: 5)),
+        ),
+        current: current,
       );
       checkWorkspace(generation);
       if (!deleted.success) throw StateError('Helper purge has not completed');
@@ -299,22 +447,29 @@ class Domain {
     }
     _queries.sourceState(id, 'indexing');
     try {
-      final r = await helper.client.indexDocument(
-        IndexRequest(
-          documentId: id,
-          content: source.content,
-          mimeType: source.mime,
-          userId: helperUserId,
-          maxTokensPerChunk: 480,
-          chunkOverlap: 5,
+      final r = await _ownedIndexCall(
+        (channel) => helperClient(channel).indexDocument(
+          IndexRequest(
+            documentId: id,
+            content: source.content,
+            mimeType: source.mime,
+            userId: helperUserId,
+            maxTokensPerChunk: 480,
+            chunkOverlap: 5,
+          ),
+          options: CallOptions(timeout: const Duration(minutes: 30)),
         ),
-        options: CallOptions(timeout: const Duration(minutes: 30)),
+        current: current,
       );
       checkWorkspace(generation);
       if (!r.success) throw StateError(r.errorMessage);
       _queries.sourceRevisionState(id, source.revision, 'indexed');
     } catch (e) {
       checkWorkspace(generation);
+      if (current != null && !current()) {
+        _queries.sourceRevisionState(id, source.revision, 'pending');
+        throw operationCancelled();
+      }
       // Cover the race before the first helper state event arrives. Other
       // preconditions and configured-model failures retain their normal errors.
       if (!_queries.hasModel('embedding') &&
@@ -332,6 +487,7 @@ class Domain {
   Future<void> delete(String id) {
     _checkOpen();
     store.tombstone(id);
+    checkCancellations();
     return _serialize(() => _delete(id));
   }
 

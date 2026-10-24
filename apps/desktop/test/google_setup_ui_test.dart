@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'package:foresight_core/desktop.dart' show GoogleAccountPresentation;
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
@@ -87,59 +88,60 @@ class ReadonlyGoogleStatusConnection extends TestDesktopConnection {
 }
 
 void main() {
-  testWidgets('failed Granola sign-in can recover through the Google button', (
-    tester,
-  ) async {
-    final root = createTestTempDirectorySync('granola-recovery-ui-');
-    final client = File('${root.path}/bundled-client.json')
-      ..writeAsStringSync(
-        jsonEncode({
-          'installed': {'client_id': 'fixture.apps.googleusercontent.com'},
-        }),
+  testWidgets(
+    'failed Granola sign-in can recover through the Google button',
+    (tester) async => withDesktopFixtures(tester, () async {
+      final root = createTestTempDirectorySync('granola-recovery-ui-');
+      final client = File('${root.path}/bundled-client.json')
+        ..writeAsStringSync(
+          jsonEncode({
+            'installed': {'client_id': 'fixture.apps.googleusercontent.com'},
+          }),
+        );
+      final auth = BundledGoogleAuth(
+        Directory('${root.path}/google'),
+        defaultClient: client,
       );
-    final auth = BundledGoogleAuth(
-      Directory('${root.path}/google'),
-      defaultClient: client,
-    );
-    final domain = BundledGoogleDomain(
-      Store('${root.path}/app.db'),
-      OfflineHelper('${root.path}/socket', '${root.path}/helper'),
-      auth,
-    );
-    await tester.pumpWidget(
-      Foresight(
-        ReadonlyGoogleStatusConnection(Application(domain, auth: auth)),
-        deviceLoader: () async => [],
-      ),
-    );
-    await tester.tap(find.text('Settings'));
-    await tester.pumpAndSettle();
-    expect(find.text('Google Drive and Calendar'), findsOneWidget);
-    expect(find.text('Calendar through Granola'), findsOneWidget);
-    final granola = find.widgetWithText(
-      OutlinedButton,
-      'Connect calendar through Granola',
-    );
-    await tester.ensureVisible(granola);
-    await tester.runAsync(() => tester.tap(granola));
-    await pumpUntil(tester, () => auth.invitations == 1);
-    await tester.pumpAndSettle();
-    expect(auth.viaGranola, true);
-    final google = find.widgetWithText(FilledButton, 'Connect Google');
-    await tester.ensureVisible(google);
-    await tester.runAsync(() => tester.tap(google));
-    await pumpUntil(tester, () => auth.invitations == 2);
-    await tester.pumpAndSettle();
-    expect(auth.invitationProviders, [true, false]);
-    expect(auth.viaGranola, false);
-    expect(auth.client!.id, 'fixture.apps.googleusercontent.com');
-    expect(tester.takeException(), isNull);
-    await tester.pumpWidget(const SizedBox());
-  });
+      final domain = BundledGoogleDomain(
+        Store('${root.path}/app.db'),
+        OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+        auth,
+      );
+      await tester.pumpWidget(
+        Foresight(
+          ReadonlyGoogleStatusConnection(Application(domain, auth: auth)),
+          deviceLoader: () async => [],
+        ),
+      );
+      await tester.tap(find.text('Settings'));
+      await tester.pumpAndSettle();
+      expect(find.text('Google Drive and Calendar'), findsOneWidget);
+      expect(find.text('Calendar through Granola'), findsOneWidget);
+      final granola = find.widgetWithText(
+        OutlinedButton,
+        'Connect calendar through Granola',
+      );
+      await tester.ensureVisible(granola);
+      await tester.runAsync(() => tester.tap(granola));
+      await pumpUntil(tester, () => auth.invitations == 1);
+      await tester.pumpAndSettle();
+      expect(auth.viaGranola, true);
+      final google = find.widgetWithText(FilledButton, 'Connect Google');
+      await tester.ensureVisible(google);
+      await tester.runAsync(() => tester.tap(google));
+      await pumpUntil(tester, () => auth.invitations == 2);
+      await tester.pumpAndSettle();
+      expect(auth.invitationProviders, [true, false]);
+      expect(auth.viaGranola, false);
+      expect(auth.client!.id, 'fixture.apps.googleusercontent.com');
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    }),
+  );
 
   testWidgets(
     'connected Granola users can cancel or confirm switching to Google',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final root = createTestTempDirectorySync('google-switch-ui-');
       final client = File('${root.path}/bundled.json')
         ..writeAsStringSync(
@@ -201,13 +203,13 @@ void main() {
       expect(auth.viaGranola, false);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
-    },
+    }),
   );
 
   for (final invalidClient in [null, '{private-client-material']) {
     testWidgets(
       'missing or invalid direct Google setup preserves connected Granola accounts ($invalidClient)',
-      (tester) async {
+      (tester) async => withDesktopFixtures(tester, () async {
         final root = createTestTempDirectorySync('granola-preflight-ui-');
         final auth = SwitchingGoogleAuth(Directory('${root.path}/google'));
         auth.saved.clear();
@@ -258,13 +260,13 @@ void main() {
         expect(workspace.error, isNot(contains('private-client-material')));
         expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox());
-      },
+      }),
     );
   }
 
   testWidgets(
     'a stale switch confirmation cannot sign out a replacement session',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final root = createTestTempDirectorySync('granola-stale-ui-');
       final auth = SwitchingGoogleAuth(Directory('${root.path}/google'));
       final domain = BundledGoogleDomain(
@@ -305,13 +307,13 @@ void main() {
       expect(connection.configuredStatusBeforeReply, false);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
-    },
+    }),
   );
 
   for (final failSignOut in [false, true]) {
     testWidgets(
       'connected Google users can cancel or confirm a Granola switch (sign-out failure: $failSignOut)',
-      (tester) async {
+      (tester) async => withDesktopFixtures(tester, () async {
         final root = createTestTempDirectorySync('granola-switch-ui-');
         final auth = SwitchingGoogleAuth(Directory('${root.path}/google'))
           ..failSignOut = failSignOut;
@@ -381,13 +383,13 @@ void main() {
         }
         expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox());
-      },
+      }),
     );
   }
 
   testWidgets(
     'Granola calendar option configures Calendar only and disables every Drive import',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final root = createTestTempDirectorySync('granola-calendar-ui-');
       final auth = BundledGoogleAuth(Directory('${root.path}/google'));
       final store = Store('${root.path}/application.db');
@@ -434,12 +436,12 @@ void main() {
         );
       }
       await tester.pumpWidget(const SizedBox());
-    },
+    }),
   );
 
   testWidgets(
     'bundled Google setup goes directly to sign-in from Settings, Calendar and every Drive import',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final root = createTestTempDirectorySync('google-bundled-ui-');
       addTearDown(() {
         if (root.existsSync()) root.deleteSync(recursive: true);
@@ -511,11 +513,11 @@ void main() {
         await helper.close();
         root.deleteSync(recursive: true);
       }
-    },
+    }),
   );
   testWidgets(
     'an unconfigured build reports missing distribution support without a JSON import flow',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final root = createTestTempDirectorySync('google-setup-ui-');
       addTearDown(() {
         if (root.existsSync()) root.deleteSync(recursive: true);
@@ -560,6 +562,6 @@ void main() {
         await tester.pumpWidget(const SizedBox.shrink());
         root.deleteSync(recursive: true);
       }
-    },
+    }),
   );
 }

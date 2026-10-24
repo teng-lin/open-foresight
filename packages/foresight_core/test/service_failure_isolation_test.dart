@@ -121,7 +121,7 @@ void main() {
       );
       expect(
         service.domain.store.sources.single['error'],
-        contains('fixture index unavailable'),
+        'Transcript indexing could not complete; saved for retry.',
       );
       await client.call('notes.save', {
         'title': 'Still available',

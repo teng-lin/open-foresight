@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/google_connections.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:foresight_test_support/test_paths.dart';
@@ -17,8 +18,7 @@ class RecoveryHelper extends Helper {
   }
 }
 
-class IndexingDomain extends Domain {
-  final indexed = <String>[];
+class IndexingDomain extends AdapterDomain {
   IndexingDomain(super.store, super.helper);
   @override
   Future<void> index(String id, {bool Function()? current}) async {
@@ -76,6 +76,7 @@ void main() {
       app.recording = FailedRecording();
       app.recordingMeeting = id;
       await app.stopRecording();
+      await app.indexMeeting(id);
       expect(domain.indexed, ['meeting-$id']);
       expect(
         store.rows('SELECT state FROM meetings WHERE id=?', [

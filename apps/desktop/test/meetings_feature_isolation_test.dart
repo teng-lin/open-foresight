@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'pump_until.dart';
 import 'dart:async';
 
@@ -185,7 +186,7 @@ class _BuildGuardReader implements StoreReader {
 void main() {
   testWidgets(
     'prepared meeting panels render without persistence and retired actions refuse',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final root = createTestTempDirectorySync('meeting-render-');
       final store = Store('${root.path}/app.db');
       final id = store.meeting('Prepared meeting');
@@ -276,13 +277,13 @@ void main() {
       expect(connection.store.buildAdmissions, 0);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
-    },
+    }),
   );
 
   for (final boundary in ['session', 'selection', 'disposal', 'read failure']) {
     testWidgets(
       'fresh speech readiness respects $boundary before prompting or recording',
-      (tester) async {
+      (tester) async => withDesktopFixtures(tester, () async {
         final root = createTestTempDirectorySync('meeting-readiness-');
         final store = Store('${root.path}/app.db');
         final connection = _SpeechConnection(
@@ -357,13 +358,13 @@ void main() {
               : isEmpty,
         );
         expect(controller.quickStarting, false);
-      },
+      }),
     );
   }
 
   testWidgets(
     'Meetings mounts with explicit ports and settles its owned draft before closing',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final root = createTestTempDirectorySync('meetings-feature-');
       final store = Store('${root.path}/app.db');
       final id = store.meeting('Standalone meeting');
@@ -445,6 +446,6 @@ void main() {
       await pumpUntilCompleted(tester, connection.closed);
       await tester.pumpWidget(const SizedBox());
       await tester.pumpAndSettle();
-    },
+    }),
   );
 }

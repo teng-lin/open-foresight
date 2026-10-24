@@ -1,8 +1,10 @@
+import 'desktop_fixture_owner.dart';
 import 'package:open_foresight/features/meetings/capture_waveform.dart';
 import '../test_support/reader_admissions.dart';
 import 'store_reader_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
+import 'dart:ffi' show Pointer, Void;
 import 'package:foresight_core/remote.dart' show CaptureLevelEvents;
 import 'desktop_connection_fixture.dart';
 import '../test_support/core_fixture.dart';
@@ -15,6 +17,8 @@ import 'package:open_foresight/main.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 class _Recording implements Recording {
+  @override
+  final captures = <Pointer<Void>>[];
   @override
   bool paused = false;
   @override
@@ -70,7 +74,7 @@ class _LevelConnection extends TestDesktopConnection
 void main() {
   testWidgets(
     'audio levels repaint the waveform without rebuilding the recording header',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final directory = createTestTempDirectorySync('recording-levels-');
       final store = Store('${directory.path}/app.db');
       final domain = Domain(
@@ -129,11 +133,11 @@ void main() {
         store.close();
         directory.deleteSync(recursive: true);
       }
-    },
+    }),
   );
   testWidgets(
     'recording pill pauses/resumes through service and immersive view exits without stopping',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       tester.view.physicalSize = const Size(1280, 850);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
@@ -235,6 +239,6 @@ void main() {
         await tester.pumpWidget(const SizedBox.shrink());
         directory.deleteSync(recursive: true);
       }
-    },
+    }),
   );
 }

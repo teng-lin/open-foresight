@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/desktop.dart';
@@ -43,7 +44,7 @@ void main() {
   ]) {
     testWidgets(
       'typed Settings diagnostics retain ${state == null ? 'absent defaults' : 'nondefault and unknown fields'}',
-      (tester) async {
+      (tester) async => withDesktopFixtures(tester, () async {
         final root = createTestTempDirectorySync('settings-status-');
         final store = Store('${root.path}/app.db');
         final connection = _DiagnosticConnection(
@@ -95,7 +96,7 @@ void main() {
         await tester.tap(find.widgetWithText(TextButton, 'Close'));
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
-      },
+      }),
     );
   }
 }

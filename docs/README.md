@@ -36,6 +36,7 @@ remain in git history. Current AI workflow research is linked below.
 
 ## Validation and release
 
+- [Application storage retention and recovery](validation/storage-recovery.md)
 - [Explicit integration gates](validation/integration-gates.md)
 - [Published installer acceptance](validation/release-acceptance.md)
 - [Release preparation and recovery](../RELEASING.md)

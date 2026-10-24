@@ -1,3 +1,7 @@
+import 'package:foresight_core/src/generated/transcript_index.pb.dart'
+    as transcript;
+import 'package:foresight_test_support/transcript_index_service.dart';
+import 'package:foresight_test_support/google_connections.dart';
 import 'package:foresight_test_support/native_fixture.dart';
 import 'package:foresight_test_support/poll.dart';
 import 'package:foresight_test_support/test_paths.dart';
@@ -15,11 +19,27 @@ import 'package:foresight_core/src/application.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
 
-class _Domain extends Domain {
+class _Domain extends AdapterDomain {
   _Domain(super.store, super.helper, this.detector);
   final QueryCompletionRuntime detector;
   Completer<void>? indexGate, indexEntered, indexParked;
   bool productionIndex = false;
+  @override
+  bool get useProductionTranscriptIndex => productionIndex;
+  @override
+  Future<transcript.TranscriptDeltaResult> applyTranscriptDelta(
+    transcript.TranscriptDelta delta, {
+    bool Function()? current,
+  }) async {
+    if (productionIndex) {
+      if (indexEntered != null && !indexEntered!.isCompleted) {
+        indexEntered!.complete();
+      }
+      await indexGate?.future;
+    }
+    return super.applyTranscriptDelta(delta, current: current);
+  }
+
   @override
   Future<void> index(String id, {bool Function()? current}) async {
     if (indexEntered != null && !indexEntered!.isCompleted) {
@@ -139,7 +159,7 @@ void main() {
     store = Store('${directory.path}/app.db');
     final socket = '${directory.path}/helper.sock';
     rag = _Rag(store);
-    server = Server.create(services: [rag]);
+    server = Server.create(services: [rag, TranscriptIndexService(rag)]);
     await server.serve(
       address: InternetAddress(socket, type: InternetAddressType.unix),
       port: 0,
@@ -310,9 +330,12 @@ void main() {
       );
       expect(domain.indexGate!.isCompleted, false);
       expect(app.proactiveWork, 0);
-      expect(app.backgroundBusy, false);
+      expect(app.backgroundBusy, true);
+      expect(store.rows('SELECT * FROM meeting_index_jobs'), hasLength(1));
       domain.indexGate!.complete();
-      await Future<void>.delayed(Duration.zero);
+      await app.indexMeeting(id);
+      expect(app.backgroundBusy, false);
+      expect(store.rows('SELECT * FROM meeting_index_jobs'), isEmpty);
       expect(store.rows('SELECT * FROM answers'), isEmpty);
     },
   );
@@ -409,7 +432,7 @@ void main() {
   }
 
   test(
-    'cancelled proactive preparation leaves a real paused shared index durable and not busy',
+    'cancelled proactive preparation leaves a real paused shared producer owned until resume',
     () async {
       final id = store.meeting('Paused preparation');
       final queue = app.proactive;
@@ -438,12 +461,16 @@ void main() {
       expect(queue.running, false);
       expect(app.proactiveWork, 0);
       expect(domain.mutating, 0);
-      expect(app.backgroundBusy, false);
-      expect(store.sources.single['state'], 'pending');
-      expect(domain.cancellationWatchCount, 0);
+      expect(app.backgroundBusy, true);
+      expect(store.rows('SELECT * FROM meeting_index_jobs'), hasLength(1));
+      expect(store.sources.single['state'], 'indexing');
+      expect(domain.cancellationWatchCount, greaterThan(0));
       domain.resumeSources();
-      await eventually(() => store.sources.single['state'] == 'indexed');
+      await app.indexMeeting(id);
+      expect(store.sources.single['state'], 'indexed');
+      expect(domain.cancellationWatchCount, 0);
       expect(app.backgroundBusy, false);
+      expect(store.rows('SELECT * FROM answers'), isEmpty);
     },
   );
 

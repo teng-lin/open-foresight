@@ -1,4 +1,5 @@
 import '../store.dart';
+import 'source_contents.dart';
 import '../read_models.dart';
 import '../answer_retrieval.dart';
 import '../reference_chat_history.dart';
@@ -106,9 +107,17 @@ class ConversationQueries {
     Map<String, Object?> revisions,
     List<Map<String, Object?>> semantic,
   ) {
-    final sources = _rows(
-      "SELECT id,title,content,revision FROM sources WHERE deleted=0 AND state='indexed'",
-    ).where((row) => revisions[row['id']] == row['revision']).toList();
+    final sources = readSnapshot(
+      _store.db,
+      () =>
+          _rows(
+                "SELECT id,title,content,revision,generated FROM sources WHERE deleted=0 AND state='indexed'",
+              )
+              .where((row) => revisions[row['id']] == row['revision'])
+              .map((row) => materializeSource(_store.db, row))
+              .toList(),
+      supportedVersion: Store.schemaVersion,
+    );
     return rankAnswerPassages(question, sources, semantic);
   }
 

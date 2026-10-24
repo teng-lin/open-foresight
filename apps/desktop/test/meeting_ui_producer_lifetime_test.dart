@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/google_connections.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -111,7 +112,7 @@ class _HeldUiProducer extends NativeRuntime {
   void close() {}
 }
 
-class _UiDomain extends Domain {
+class _UiDomain extends AdapterDomain {
   _UiDomain(super.store, super.helper);
   @override
   Future<void> index(String id, {bool Function()? current}) async {
@@ -511,6 +512,13 @@ void main() {
       expect(connection.commandEntered, isFalse);
       expect(runtime.entered.isCompleted, isFalse);
       expect(tester.takeException(), isNull);
+      // Store owns a retention timer. Close the fixture inside the test body
+      // before Flutter verifies that the disposed tree has no pending timers.
+      await tester.pumpWidget(const SizedBox.shrink());
+      connection.close();
+      var ownerClosed = false;
+      unawaited(connection.closed.then<void>((_) => ownerClosed = true));
+      await _pumpUiUntil(tester, () => ownerClosed);
     });
   }
   for (final kind in ['summary', 'actions', 'preparation']) {

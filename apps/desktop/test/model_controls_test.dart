@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'pump_until.dart';
 import 'package:open_foresight/shell/workspace_tab.dart';
 import 'dart:io';
@@ -12,7 +13,7 @@ import 'controller_fixture.dart';
 void main() {
   testWidgets(
     'model setup routes service commands and ignores cancelled embedding adoption',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(tester);
       final settings = f.shell.settingsFeature;
       final setup = settings.gemmaSetup(firstRun: true) as GemmaSetupDialog;
@@ -66,11 +67,11 @@ void main() {
       speech.installed();
       expect(settings.modelState, contains('automatic language detection'));
       await tester.pumpAndSettle();
-    },
+    }),
   );
   testWidgets(
     'known and custom model names are shown without reading model bytes',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(tester);
       final settings = f.shell.settingsFeature;
       expect(settings.speechModelName(), 'Select a transcription model');
@@ -118,11 +119,11 @@ void main() {
         );
       }
       expect(settings.helperEmbeddingHealthy, false);
-    },
+    }),
   );
   testWidgets(
     'local model form registers each model kind and retains failed input for retry',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(tester);
       final settings = f.shell.settingsFeature;
       f.shell.update(() => f.shell.navigate(WorkspaceTab.models));
@@ -205,11 +206,11 @@ void main() {
       await tester.tap(find.text('Cancel download'));
       await tester.pumpAndSettle();
       expect(f.shell.error, contains('cancel failed'));
-    },
+    }),
   );
   testWidgets(
     'helper monitor reload closes its dialog and requests service resume',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(tester);
       f.shell.settingsFeature.showHelperMonitor();
       await tester.pumpAndSettle();
@@ -227,6 +228,6 @@ void main() {
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
       await pending;
-    },
+    }),
   );
 }

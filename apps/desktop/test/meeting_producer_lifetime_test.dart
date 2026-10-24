@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/google_connections.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -68,7 +69,7 @@ class _HeldMeetingProducer extends NativeRuntime {
   void close() {}
 }
 
-class _IndexingFixtureDomain extends Domain {
+class _IndexingFixtureDomain extends AdapterDomain {
   _IndexingFixtureDomain(super.store, super.helper);
   @override
   Future<void> index(String id, {bool Function()? current}) async {

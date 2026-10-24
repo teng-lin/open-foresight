@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/desktop.dart';
@@ -31,7 +32,7 @@ void main() {
 
   testWidgets(
     'rename saves through the service and updates header, list, search and export',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final (f, id) = await open(tester);
       await tester.tap(find.byTooltip('Rename meeting'));
       await tester.pumpAndSettle();
@@ -78,12 +79,12 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Planning 中文'), findsNothing);
       expect(tester.takeException(), isNull);
-    },
+    }),
   );
 
   testWidgets(
     'cancel leaves the title unchanged; failed saves retain the draft for retry',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final (f, id) = await open(tester);
       await tester.tap(find.byTooltip('Rename meeting'));
       await tester.pumpAndSettle();
@@ -125,11 +126,11 @@ void main() {
         () => find.text('Retry this name').evaluate().isNotEmpty,
       );
       expect(tester.takeException(), isNull);
-    },
+    }),
   );
   testWidgets(
     'an open rename editor cannot save after client session replacement',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final (f, id) = await open(tester);
       await tester.tap(find.byTooltip('Rename meeting'));
       await tester.pumpAndSettle();
@@ -158,12 +159,12 @@ void main() {
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
-    },
+    }),
   );
 
   testWidgets(
     'a queued rename action cannot edit a reused ID after workspace clear',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final (f, id) = await open(tester);
       final rename = tester
           .widget<IconButton>(
@@ -192,6 +193,6 @@ void main() {
         isEmpty,
       );
       expect(tester.takeException(), isNull);
-    },
+    }),
   );
 }

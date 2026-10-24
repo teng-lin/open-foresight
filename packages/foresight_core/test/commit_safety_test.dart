@@ -606,7 +606,7 @@ void main() {
           import(),
           throwsRpc(
             RpcErrorCode.internal,
-            'Saved, but indexing failed: Bad state: index worker disconnected',
+            'Saved, but indexing failed: Transcript indexing could not complete; saved for retry.',
           ),
         );
         expect(sent, hasLength(2));

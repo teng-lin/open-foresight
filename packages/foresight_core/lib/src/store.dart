@@ -16,6 +16,7 @@ import 'persistence/label_store.dart';
 import 'persistence/schema_migrations.dart';
 import 'persistence/content_history.dart';
 import 'persistence/sqlite_preflight.dart';
+import 'persistence/migration_backups.dart';
 import 'rpc_error.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -28,7 +29,7 @@ import 'persistence/sqlite_runtime.dart';
 class Store {
   final Database db;
   final String path;
-  static const schemaVersion = 19;
+  static const schemaVersion = 22;
   ContentHistory get contentHistory =>
       ContentHistory(db, supportedVersion: schemaVersion);
 
@@ -40,15 +41,22 @@ class Store {
   /// twice. Keys hold digests of content, so they are kept only this long.
   static const requestKeyLifetime = Duration(hours: 24);
   static const _privacyMaintenanceKey = 'internal.privacyMaintenancePending';
+  static const _backupErasureKey = 'internal.backupErasurePending';
   Timer? _privacyMaintenanceRetry;
   var _privacyRetrySeconds = 1;
   var _privacyMaintenancePending = false;
   var _closed = false;
 
   /// Local deletion is committed even while a reader prevents WAL erasure.
-  bool get privacyMaintenancePending => _privacyMaintenancePending;
+  bool get privacyMaintenancePending =>
+      _privacyMaintenancePending || _hasAnyPrivacyMarker();
+  MigrationBackups get migrationBackups => MigrationBackups(path);
+  StreamSubscription<SqliteUpdate>? _privacyUpdates;
+  Timer? _privacyProbe;
+  Timer? _historyExpiry;
 
-  Store.readOnly(this.path) : db = sqlite3.open(path, mode: OpenMode.readOnly) {
+  Store.readOnly(this.path)
+    : db = openApplicationDatabase(path, mode: OpenMode.readOnly) {
     try {
       _checkVersion();
       _privacyMaintenancePending = readSnapshot(
@@ -57,7 +65,7 @@ class Store {
             rows(
               "SELECT 1 FROM sqlite_master WHERE type='table' AND name='preferences'",
             ).isNotEmpty &&
-            _hasPrivacyMaintenanceMarker(),
+            _hasAnyPrivacyMarker(),
         supportedVersion: schemaVersion,
       );
     } catch (_) {
@@ -69,11 +77,39 @@ class Store {
   Store(this.path) : db = _openForMigrations(path) {
     try {
       // Refuse newer profiles before even changing their journal mode.
-      _checkVersion();
+      final originalVersion = _checkVersion();
+      final migratingExisting =
+          path != ':memory:' &&
+          originalVersion < schemaVersion &&
+          db
+              .select(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' LIMIT 1",
+              )
+              .isNotEmpty;
+      // Establish the shared-memory WAL index under NORMAL before taking
+      // exclusive migration ownership. First WAL access under EXCLUSIVE uses
+      // a heap index whose locking mode cannot return to NORMAL until close.
+      db.execute('PRAGMA secure_delete=ON');
+      db.execute('PRAGMA locking_mode=NORMAL');
+      db.execute('PRAGMA journal_mode=WAL');
+      db.select('SELECT COUNT(*) FROM sqlite_master');
+      if (migratingExisting) {
+        // The service already owns the profile. Retain SQLite's exclusive lock
+        // over the autocommit VACUUM INTO and following migration transaction;
+        // another active writer makes startup fail before migration begins.
+        db.execute('PRAGMA locking_mode=EXCLUSIVE');
+        db.execute('BEGIN EXCLUSIVE');
+        db.execute('COMMIT');
+        // Finish durable deletion debt before a fresh rollback point exists.
+        // Refuse the upgrade if readers or unsafe backup storage prevent it;
+        // retaining the intent must never erase our new snapshot on a timer.
+        if (_hasPreferencesTable() && !_completePrivacyMaintenance()) {
+          throw StateError('Privacy maintenance must finish before migration.');
+        }
+        migrationBackups.create(db, originalVersion);
+      }
       // Migrations populate the WAL before readers open the fresh profile.
       // Switching only after COMMIT leaves no WAL for macOS read-only clients.
-      db.execute('PRAGMA secure_delete=ON');
-      db.execute('PRAGMA journal_mode=WAL');
       db.execute('PRAGMA foreign_keys=ON');
       db.execute('BEGIN IMMEDIATE');
       try {
@@ -90,6 +126,15 @@ class Store {
         ]);
         _pruneRequestKeys();
         db.execute('COMMIT');
+        if (migratingExisting) {
+          if (db.select('PRAGMA locking_mode=NORMAL').single.values.single !=
+              'normal') {
+            throw StateError('Migration ownership could not be released.');
+          }
+          db.execute('BEGIN');
+          db.select('SELECT 1 FROM preferences LIMIT 1');
+          db.execute('COMMIT');
+        }
       } catch (_) {
         // SQLITE_FULL/IOERR can already roll back the transaction.
         if (!db.autocommit) db.execute('ROLLBACK');
@@ -99,14 +144,76 @@ class Store {
       db.dispose();
       rethrow;
     }
-    _privacyMaintenancePending = _hasPrivacyMaintenanceMarker();
+    _privacyMaintenancePending = _hasAnyPrivacyMarker();
     if (_privacyMaintenancePending) _schedulePrivacyMaintenance();
+    // Synchronous notifications allocate only one deferred probe, regardless
+    // of row count. Never execute SQL reentrantly inside SQLite's update hook.
+    _privacyUpdates = db.updatesSync.listen((update) {
+      if (update.tableName != 'preferences' ||
+          _privacyProbe != null ||
+          _closed) {
+        return;
+      }
+      _privacyProbe = Timer(Duration.zero, _probePrivacyMaintenance);
+    });
+    _expireHistory();
   }
+
+  void _probePrivacyMaintenance() {
+    _privacyProbe = null;
+    if (_closed) return;
+    if (!db.autocommit) {
+      _privacyProbe = Timer(
+        const Duration(seconds: 1),
+        _probePrivacyMaintenance,
+      );
+      return;
+    }
+    if (_hasAnyPrivacyMarker()) {
+      _privacyMaintenancePending = true;
+      _schedulePrivacyMaintenance();
+    }
+  }
+
+  void _expireHistory() {
+    if (_closed) return;
+    // The timestamp index limits each pass. Old inactive entities need no full
+    // rescan, and reads exclude expired revisions even before this batch runs.
+    var delay = const Duration(hours: 1);
+    try {
+      db.execute(
+        'DELETE FROM content_revisions WHERE id IN (SELECT id FROM content_revisions WHERE created<? ORDER BY created LIMIT 256)',
+        [
+          DateTime.now()
+              .subtract(ContentHistory.maximumAge)
+              .millisecondsSinceEpoch,
+        ],
+      );
+      if (db.updatedRows == 256) delay = const Duration(milliseconds: 10);
+      if (path != ':memory:') migrationBackups.prune();
+    } catch (_) {
+      // Reads already exclude expired records. Retry physical retention without
+      // turning a busy/full maintenance write into application failure.
+      delay = const Duration(seconds: 30);
+    }
+    _historyExpiry = Timer(delay, _expireHistory);
+  }
+
+  bool _hasPreferencesTable() => rows(
+    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='preferences'",
+  ).isNotEmpty;
 
   bool _hasPrivacyMaintenanceMarker() => rows(
     'SELECT 1 FROM preferences WHERE key=?',
     [_privacyMaintenanceKey],
   ).isNotEmpty;
+
+  bool _hasBackupErasureMarker() => rows(
+    'SELECT 1 FROM preferences WHERE key=?',
+    [_backupErasureKey],
+  ).isNotEmpty;
+  bool _hasAnyPrivacyMarker() =>
+      _hasPrivacyMaintenanceMarker() || _hasBackupErasureMarker();
 
   /// Persist the cleanup intent in the same transaction as the content deletion.
   /// Scheduling starts only after that transaction commits, via compactAfterClear.
@@ -120,6 +227,7 @@ class Store {
   /// Erase freed pages after a committed workspace clear. Live readers can keep
   /// a checkpoint busy, so maintenance failure must not undo the local clear.
   void compactAfterClear() {
+    markPrivacyMaintenancePending();
     _privacyMaintenancePending = true;
     _privacyRetrySeconds = 1;
     _retryPrivacyMaintenance();
@@ -139,26 +247,15 @@ class Store {
 
   void _retryPrivacyMaintenance() {
     if (_closed || !_privacyMaintenancePending) return;
+    if (!db.autocommit) {
+      _schedulePrivacyMaintenance();
+      return;
+    }
     try {
-      // Only a constant marker is retained, never any cleared content. Persist
-      // it before checkpointing so a shutdown/restart cannot lose the retry.
-      markPrivacyMaintenancePending();
-      for (final statement in [
-        'PRAGMA wal_checkpoint(TRUNCATE)',
-        'VACUUM',
-        'PRAGMA wal_checkpoint(TRUNCATE)',
-      ]) {
-        final result = db.select(statement);
-        if (statement.startsWith('PRAGMA wal_checkpoint') &&
-            result.isNotEmpty &&
-            result.first.values.first != 0) {
-          _schedulePrivacyMaintenance();
-          return;
-        }
+      if (!_completePrivacyMaintenance()) {
+        _schedulePrivacyMaintenance();
+        return;
       }
-      db.execute('DELETE FROM preferences WHERE key=?', [
-        _privacyMaintenanceKey,
-      ]);
       _privacyMaintenancePending = false;
       _privacyMaintenanceRetry?.cancel();
       _privacyMaintenanceRetry = null;
@@ -169,6 +266,34 @@ class Store {
       stderr.writeln('Workspace privacy maintenance deferred: $error');
       _schedulePrivacyMaintenance();
     }
+  }
+
+  /// Complete existing debt before snapshotting, or retain it in full on any
+  /// failure. This requires autocommit and may run under migration ownership.
+  bool _completePrivacyMaintenance() {
+    final compact = _hasPrivacyMaintenanceMarker();
+    if (!compact && !_hasBackupErasureMarker()) return true;
+    if (!db.autocommit) {
+      throw StateError('Privacy cleanup requires autocommit.');
+    }
+    if (path != ':memory:') migrationBackups.erase();
+    for (final statement in [
+      'PRAGMA wal_checkpoint(TRUNCATE)',
+      if (compact) 'VACUUM',
+      if (compact) 'PRAGMA wal_checkpoint(TRUNCATE)',
+    ]) {
+      final result = db.select(statement);
+      if (statement.startsWith('PRAGMA wal_checkpoint') &&
+          result.isNotEmpty &&
+          result.first.values.first != 0) {
+        return false;
+      }
+    }
+    db.execute('DELETE FROM preferences WHERE key IN (?,?)', [
+      _privacyMaintenanceKey,
+      _backupErasureKey,
+    ]);
+    return true;
   }
 
   // Even opening and closing a writable connection can checkpoint a WAL.
@@ -185,7 +310,7 @@ class Store {
       preflight.qualify();
       preflight.verifyUnchanged();
     }
-    return sqlite3.open(path);
+    return openApplicationDatabase(path);
   }
 
   int _checkVersion() => _supportedVersion(db);
@@ -253,6 +378,7 @@ class Store {
     int? modifiedAtMs,
     String? sourceUri,
     bool locallyEdited = false,
+    bool generated = false,
   }) => _sourceStore.importText(
     title,
     text,
@@ -262,10 +388,17 @@ class Store {
     modifiedAtMs: modifiedAtMs,
     sourceUri: sourceUri,
     locallyEdited: locallyEdited,
+    generated: generated,
   );
   void state(String id, String state, [String error = '']) =>
       _sourceStore.state(id, state, error);
-  void tombstone(String id) => _sourceStore.tombstone(id);
+  void tombstone(String id) {
+    _sourceStore.tombstone(id);
+    if (db.autocommit && _hasAnyPrivacyMarker()) {
+      _privacyMaintenancePending = true;
+      _schedulePrivacyMaintenance();
+    }
+  }
 
   void answer(
     String question,
@@ -593,9 +726,13 @@ class Store {
   List<Map<String, Object?>> registeredSpeech() =>
       rows("SELECT digest FROM models WHERE kind='speech'");
   void close() {
+    if (_closed) return;
     _closed = true;
     _privacyMaintenanceRetry?.cancel();
     _privacyMaintenanceRetry = null;
+    _privacyProbe?.cancel();
+    _historyExpiry?.cancel();
+    unawaited(_privacyUpdates?.cancel());
     db.dispose();
   }
 }

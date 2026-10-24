@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'package:open_foresight/shell/workspace_tab.dart';
 import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
@@ -12,7 +13,7 @@ import 'meeting_setup_test.dart' show OfflineHelper;
 void main() {
   testWidgets(
     'meeting Chat saves separate conversation histories through the service operation',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       tester.view.physicalSize = const Size(1280, 850);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
@@ -113,6 +114,6 @@ void main() {
         await tester.pumpWidget(const SizedBox.shrink());
         directory.deleteSync(recursive: true);
       }
-    },
+    }),
   );
 }

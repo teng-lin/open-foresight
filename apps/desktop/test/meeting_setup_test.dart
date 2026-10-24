@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'pump_until.dart';
 import 'package:open_foresight/shell/workspace_tab.dart';
 import '../test_support/core_fixture.dart';
@@ -25,42 +26,43 @@ class OfflineHelper extends Helper {
 }
 
 void main() {
-  testWidgets('summary labels artifacts from older meeting revisions', (
-    tester,
-  ) async {
-    tester.view.physicalSize = const Size(1600, 900);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-    final root = createTestTempDirectorySync('stale-summary-ui-');
-    final store = Store('${root.path}/application.db');
-    final id = store.meeting('Meeting');
-    store.artifact(id, 'summary', 'Earlier summary', 'fixture');
-    store.transcript(id, 'New transcript', true, 0, 100, 'imported');
-    final helper = OfflineHelper('${root.path}/sock', '${root.path}/helper');
-    await tester.pumpWidget(
-      Foresight(
-        TestDesktopConnection(Application(Domain(store, helper))),
-        deviceLoader: () async => [],
-      ),
-    );
-    await tester.pumpAndSettle();
-    final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
-    state.update(() {
-      state.navigate(WorkspaceTab.meetings);
-      state.meetingFeature.meetingId = id;
-      state.meetingFeature.meetingPanel = 'Summary';
-    });
-    await tester.pumpAndSettle();
-    expect(find.text('Out of date — regenerate'), findsOneWidget);
-    await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pumpAndSettle();
-    if (root.existsSync()) root.deleteSync(recursive: true);
-  });
+  testWidgets(
+    'summary labels artifacts from older meeting revisions',
+    (tester) async => withDesktopFixtures(tester, () async {
+      tester.view.physicalSize = const Size(1600, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final root = createTestTempDirectorySync('stale-summary-ui-');
+      final store = Store('${root.path}/application.db');
+      final id = store.meeting('Meeting');
+      store.artifact(id, 'summary', 'Earlier summary', 'fixture');
+      store.transcript(id, 'New transcript', true, 0, 100, 'imported');
+      final helper = OfflineHelper('${root.path}/sock', '${root.path}/helper');
+      await tester.pumpWidget(
+        Foresight(
+          TestDesktopConnection(Application(Domain(store, helper))),
+          deviceLoader: () async => [],
+        ),
+      );
+      await tester.pumpAndSettle();
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
+      state.update(() {
+        state.navigate(WorkspaceTab.meetings);
+        state.meetingFeature.meetingId = id;
+        state.meetingFeature.meetingPanel = 'Summary';
+      });
+      await tester.pumpAndSettle();
+      expect(find.text('Out of date — regenerate'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+      if (root.existsSync()) root.deleteSync(recursive: true);
+    }),
+  );
 
   testWidgets(
     'meeting workflow opens summary and targets its scoped chat input',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       tester.view.physicalSize = const Size(1280, 720);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
@@ -148,12 +150,12 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
       await helper.close();
       directory.deleteSync(recursive: true);
-    },
+    }),
   );
 
   testWidgets(
     'meeting recording requires setup and opens speech setup instead of throwing',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final directory = createTestTempDirectorySync('meeting-setup-');
       addTearDown(() {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
@@ -194,7 +196,7 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
       await helper.close();
       directory.deleteSync(recursive: true);
-    },
+    }),
   );
 
   test(

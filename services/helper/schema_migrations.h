@@ -64,49 +64,86 @@ inline void migrate_helpers(sqlite3 *db) {
       execute(db, "COMMIT");
       return;
     }
-    if (main == 0)
-      execute(
-          db,
-          "CREATE TABLE IF NOT EXISTS documents(id TEXT PRIMARY KEY,content "
-          "TEXT,userId TEXT,maxTokensPerChunk INTEGER,chunkOverlap "
-          "INTEGER,mimeType TEXT,imageBytes BLOB); CREATE TABLE IF NOT EXISTS "
-          "settings(key TEXT PRIMARY KEY,value TEXT)");
-    if (linux == 0)
-      execute(
-          db,
-          "CREATE TABLE IF NOT EXISTS linux.source_revisions(id TEXT PRIMARY "
-          "KEY,revision INTEGER NOT NULL,tombstone INTEGER NOT NULL); CREATE "
-          "TABLE IF NOT EXISTS linux.journal(sequence INTEGER PRIMARY "
-          "KEY,operation TEXT,document_id TEXT,revision INTEGER,generation "
-          "INTEGER,status TEXT)");
-    if (vectors == 0) {
-      execute(
-          db,
-          "CREATE TABLE IF NOT EXISTS vectors.chunks(generation "
-          "INTEGER,document_id TEXT,revision INTEGER,ordinal INTEGER,text "
-          "TEXT,mime TEXT,embedding BLOB,PRIMARY "
-          "KEY(generation,document_id,revision,ordinal)); CREATE TABLE IF NOT "
-          "EXISTS vectors.generations(id INTEGER PRIMARY KEY,model_digest "
-          "TEXT,status TEXT)");
-      MigrationStatement rows(db, "SELECT rowid,embedding FROM vectors.chunks "
-                                  "WHERE typeof(embedding)='text'");
-      while (rows.row()) {
-        const auto *text = sqlite3_column_text(rows.get(), 1);
-        const int length = sqlite3_column_bytes(rows.get(), 1);
-        const auto bytes =
-            foresight::vector_blob(nlohmann::json::parse(text, text + length)
-                                       .get<std::vector<double>>());
-        MigrationStatement update(
-            db, "UPDATE vectors.chunks SET embedding=? WHERE rowid=?");
-        sqlite3_bind_blob(update.get(), 1, bytes.data(), bytes.size(),
-                          SQLITE_TRANSIENT);
-        sqlite3_bind_int64(update.get(), 2,
-                           sqlite3_column_int64(rows.get(), 0));
-        update.row();
+    if (main < 1 || linux < 1 || vectors < 1) {
+      if (main == 0)
+        execute(
+            db,
+            "CREATE TABLE IF NOT EXISTS documents(id TEXT PRIMARY KEY,content "
+            "TEXT,userId TEXT,maxTokensPerChunk INTEGER,chunkOverlap "
+            "INTEGER,mimeType TEXT,imageBytes BLOB); CREATE TABLE IF NOT "
+            "EXISTS "
+            "settings(key TEXT PRIMARY KEY,value TEXT)");
+      if (linux == 0)
+        execute(
+            db,
+            "CREATE TABLE IF NOT EXISTS linux.source_revisions(id TEXT PRIMARY "
+            "KEY,revision INTEGER NOT NULL,tombstone INTEGER NOT NULL); CREATE "
+            "TABLE IF NOT EXISTS linux.journal(sequence INTEGER PRIMARY "
+            "KEY,operation TEXT,document_id TEXT,revision INTEGER,generation "
+            "INTEGER,status TEXT)");
+      if (vectors == 0) {
+        execute(
+            db,
+            "CREATE TABLE IF NOT EXISTS vectors.chunks(generation "
+            "INTEGER,document_id TEXT,revision INTEGER,ordinal INTEGER,text "
+            "TEXT,mime TEXT,embedding BLOB,PRIMARY "
+            "KEY(generation,document_id,revision,ordinal)); CREATE TABLE IF "
+            "NOT "
+            "EXISTS vectors.generations(id INTEGER PRIMARY KEY,model_digest "
+            "TEXT,status TEXT)");
+        MigrationStatement rows(db,
+                                "SELECT rowid,embedding FROM vectors.chunks "
+                                "WHERE typeof(embedding)='text'");
+        while (rows.row()) {
+          const auto *text = sqlite3_column_text(rows.get(), 1);
+          const int length = sqlite3_column_bytes(rows.get(), 1);
+          const auto bytes =
+              foresight::vector_blob(nlohmann::json::parse(text, text + length)
+                                         .get<std::vector<double>>());
+          MigrationStatement update(
+              db, "UPDATE vectors.chunks SET embedding=? WHERE rowid=?");
+          sqlite3_bind_blob(update.get(), 1, bytes.data(), bytes.size(),
+                            SQLITE_TRANSIENT);
+          sqlite3_bind_int64(update.get(), 2,
+                             sqlite3_column_int64(rows.get(), 0));
+          update.row();
+        }
       }
+      execute(db, "PRAGMA main.user_version=1; PRAGMA linux.user_version=1; "
+                  "PRAGMA vectors.user_version=1");
     }
-    execute(db, "PRAGMA main.user_version=1; PRAGMA linux.user_version=1; "
-                "PRAGMA vectors.user_version=1");
+    if (linux < 2) {
+      execute(db,
+              "CREATE TABLE linux.transcript_documents(document_id TEXT "
+              "PRIMARY KEY,"
+              "workspace_epoch TEXT NOT NULL,revision INTEGER NOT "
+              "NULL,last_delta BLOB NOT NULL,last_segment_id INTEGER NOT NULL,"
+              "segment_count INTEGER NOT NULL);"
+              "CREATE TABLE linux.transcript_segments(id TEXT PRIMARY "
+              "KEY,parent_id TEXT NOT NULL,"
+              "channel INTEGER NOT NULL,segment_id INTEGER NOT NULL,start_ms "
+              "INTEGER NOT NULL,"
+              "end_ms INTEGER NOT NULL,UNIQUE(parent_id,channel,segment_id));"
+              "CREATE INDEX linux.transcript_parent ON "
+              "transcript_segments(parent_id)");
+    }
+    // Losing authoritative derived metadata must invalidate the old cursor;
+    // the application then replays its committed segments into a fresh index.
+    if (main == 0 && linux > 0)
+      execute(db, "DELETE FROM linux.transcript_documents; DELETE FROM "
+                  "linux.transcript_segments");
+    if (linux == 0 && (main >= 2 || vectors >= 2)) {
+      // The parent/citation mapping is derived but essential. Never expose
+      // orphan internal IDs after losing that member. Preserve legacy document
+      // bodies and force a fresh vector generation before readiness.
+      execute(db,
+              "DELETE FROM vectors.chunks WHERE substr(CAST(document_id AS "
+              "BLOB),1,1)=X'00';"
+              "DELETE FROM documents WHERE substr(CAST(id AS BLOB),1,1)=X'00';"
+              "DELETE FROM settings WHERE key='index_model_identity'");
+    }
+    execute(db, "PRAGMA main.user_version=2; PRAGMA linux.user_version=2; "
+                "PRAGMA vectors.user_version=2");
     execute(db, "COMMIT");
   } catch (...) {
     if (!sqlite3_get_autocommit(db))

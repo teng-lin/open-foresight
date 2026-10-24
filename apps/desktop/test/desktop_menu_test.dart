@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'package:open_foresight/desktop_environment.dart';
 import '../test_support/platform_fixture.dart';
 import 'package:open_foresight/shell/workspace_tab.dart';
@@ -59,7 +60,7 @@ void main() {
 
   testWidgets(
     'menu routes to workspace pages and uses recording consent',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final root = createTestTempDirectorySync('of-menu-');
       addTearDown(() => root.deleteSync(recursive: true));
       final store = Store('${root.path}/app.db');
@@ -108,7 +109,7 @@ void main() {
       await tester.pumpAndSettle();
       await starting;
       await tester.pumpWidget(const SizedBox());
-    },
+    }),
     skip: !Platform.isMacOS,
   );
 }

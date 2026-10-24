@@ -6,6 +6,7 @@ import 'package:foresight_core/src/application.dart';
 import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
 import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
 import 'package:foresight_test_support/test_paths.dart';
+import 'package:foresight_test_support/transcript_index_service.dart';
 import 'package:grpc/grpc.dart';
 import 'package:test/test.dart';
 
@@ -42,13 +43,28 @@ void main() {
   late Application app;
   late Server server;
   late MeetingIndexService service;
+  late ControlledTranscriptIndex incremental;
   late int meeting;
   setUp(() async {
     root = createTestTempDirectorySync('meeting-index-');
     store = Store('${root.path}/app.db');
     reader = Store.readOnly(store.path);
     service = MeetingIndexService();
-    server = Server.create(services: [service]);
+    incremental = ControlledTranscriptIndex()
+      ..beforeApply = (call, request) async {
+        service.requests.add(
+          IndexRequest(
+            documentId: request.documentId,
+            content: request.upserts.map((piece) => piece.text).join('\n'),
+          ),
+        );
+        if (!service.entered.isCompleted) service.entered.complete();
+        await service.release.future;
+        if (service.reject) {
+          throw GrpcError.unavailable('fixture index failure');
+        }
+      };
+    server = Server.create(services: [service, incremental]);
     final socket = '${root.path}/helper.sock';
     await server.serve(
       address: InternetAddress(socket, type: InternetAddressType.unix),
@@ -83,7 +99,6 @@ void main() {
       root.deleteSync(recursive: true);
     });
   });
-  Future<void> drainMutations() => domain.delete('queue-barrier');
   test(
     'paused live and stop requests share one index and publish to read-only clients',
     () async {
@@ -95,7 +110,7 @@ void main() {
       await service.entered.future.timeout(const Duration(seconds: 5));
       expect(reader.sources.single['state'], 'indexing');
       service.release.complete();
-      await drainMutations();
+      await app.indexMeeting(meeting);
       expect(service.requests, hasLength(1));
       expect(reader.sources.single['state'], 'indexed');
       expect(reader.sources.single['revision'], 1);
@@ -103,8 +118,14 @@ void main() {
       expect(service.requests, hasLength(1));
       // A later explicit retry must not reuse an already completed future.
       store.state('meeting-$meeting', 'pending');
+      final cursorReads = incremental.cursorReads;
       await app.indexMeeting(meeting);
-      expect(service.requests, hasLength(2));
+      expect(incremental.cursorReads, greaterThan(cursorReads));
+      expect(
+        service.requests,
+        hasLength(1),
+        reason: 'Confirmed incremental state needs no duplicate embedding',
+      );
       expect(reader.sources.single['state'], 'indexed');
     },
   );
@@ -130,6 +151,41 @@ void main() {
       expect(reader.sources.single['state'], 'indexed');
     },
   );
+  test('readiness during held recovery schedules one follow-up pass', () async {
+    var attempts = 0;
+    incremental.beforeApply = (call, request) async {
+      attempts++;
+      if (attempts == 1) {
+        service.entered.complete();
+        await service.release.future;
+        throw const GrpcError.unavailable('Old helper stopped during recovery');
+      }
+    };
+    final recovering = app.recoverMeetingIndexes();
+    await service.entered.future.timeout(const Duration(seconds: 5));
+    await app.recoverMeetingIndexes();
+    expect(attempts, 1);
+    service.release.complete();
+    await recovering.timeout(const Duration(seconds: 5));
+    expect(attempts, 2);
+    expect(reader.sources.single['state'], 'indexed');
+    expect(store.rows('SELECT * FROM meeting_index_jobs'), isEmpty);
+    expect(app.backgroundBusy, false);
+  });
+
+  test('model readiness retries a failed generated durable job', () async {
+    service.reject = true;
+    service.release.complete();
+    await expectLater(app.indexMeeting(meeting), throwsA(isA<GrpcError>()));
+    expect(reader.sources.single['state'], 'failed');
+    expect(store.rows('SELECT * FROM meeting_index_jobs'), hasLength(1));
+    service.reject = false;
+    await domain.indexPendingSources();
+    expect(service.requests, hasLength(2));
+    expect(reader.sources.single['state'], 'indexed');
+    expect(store.rows('SELECT * FROM meeting_index_jobs'), isEmpty);
+  });
+
   test('failed work is evicted so a real retry reaches the helper', () async {
     service.reject = true;
     service.release.complete();
@@ -141,6 +197,53 @@ void main() {
     expect(reader.sources.single['revision'], 1);
     expect(reader.sources.single['state'], 'indexed');
   });
+  test(
+    'coalesced capture maps an older stored source before producer completion',
+    () async {
+      final legacy = store.meeting('Historical source');
+      final id = 'meeting-$legacy';
+      store.importText(
+        'Historical transcript',
+        'committed stored transcript',
+        'text/plain',
+        'meeting:$legacy',
+        id: id,
+        generated: true,
+      );
+      final first = app.indexMeeting(legacy);
+      await service.entered.future;
+      expect(store.rows('SELECT * FROM meeting_transcript_sources'), isEmpty);
+      store.transcript(
+        legacy,
+        'new coalesced capture',
+        true,
+        0,
+        10,
+        'microphone',
+      );
+      final second = app.indexMeeting(legacy);
+      service.release.complete();
+      await Future.wait([first, second]);
+      expect(incremental.requests, hasLength(1));
+      expect(incremental.requests.single.documentId, id);
+      expect(
+        incremental.requests.single.upserts.single.text,
+        contains('new coalesced capture'),
+      );
+      expect(
+        reader.sourceQueries.source(id)!.content,
+        contains('new coalesced capture'),
+      );
+      expect(reader.sourceQueries.source(id)!.state, 'indexed');
+      expect(reader.sourceQueries.source(id)!.revision, 2);
+      expect(
+        store.rows('SELECT * FROM meeting_index_jobs WHERE meeting_id=?', [
+          legacy,
+        ]),
+        isEmpty,
+      );
+    },
+  );
   for (final change in <String, void Function(control.State)>{
     'helper instance': (state) => state.instanceId = 'replacement-owner',
     'active generation': (state) => state.activeGeneration += 1,

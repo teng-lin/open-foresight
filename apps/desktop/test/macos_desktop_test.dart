@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'package:open_foresight/desktop_environment.dart';
 import '../test_support/platform_fixture.dart';
 import 'package:open_foresight/shell/workspace_tab.dart';
@@ -145,7 +146,7 @@ void main() {
 
   testWidgets(
     'Mac audio setup requests service permission only after explicit action and displays denial',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final tmp = createTestTempDirectorySync('foresight-mac-permissions-');
       final store = Store('${tmp.path}/app.db');
       final domain = PermissionDomain(
@@ -200,7 +201,7 @@ void main() {
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
       tmp.deleteSync(recursive: true);
-    },
+    }),
     skip: !Platform.isMacOS,
   );
 }

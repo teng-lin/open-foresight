@@ -1,0 +1,259 @@
+{
+  "name": "transcript_index.proto",
+  "package": "foresight.transcript.v1",
+  "message_type": [
+    {
+      "name": "TranscriptKey",
+      "field": [
+        {
+          "name": "channel",
+          "number": 1,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_ENUM",
+          "type_name": ".foresight.transcript.v1.TranscriptKey.Channel",
+          "json_name": "channel"
+        },
+        {
+          "name": "segment_id",
+          "number": 2,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_UINT64",
+          "json_name": "segmentId"
+        }
+      ],
+      "enum_type": [
+        {
+          "name": "Channel",
+          "value": [
+            {
+              "name": "MICROPHONE",
+              "number": 0
+            },
+            {
+              "name": "PLAYBACK",
+              "number": 1
+            },
+            {
+              "name": "IMPORTED",
+              "number": 2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "TranscriptSegment",
+      "field": [
+        {
+          "name": "key",
+          "number": 1,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_MESSAGE",
+          "type_name": ".foresight.transcript.v1.TranscriptKey",
+          "json_name": "key"
+        },
+        {
+          "name": "text",
+          "number": 2,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_STRING",
+          "json_name": "text"
+        },
+        {
+          "name": "start_ms",
+          "number": 3,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_UINT64",
+          "json_name": "startMs"
+        },
+        {
+          "name": "end_ms",
+          "number": 4,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_UINT64",
+          "json_name": "endMs"
+        }
+      ]
+    },
+    {
+      "name": "TranscriptCursorRequest",
+      "field": [
+        {
+          "name": "document_id",
+          "number": 1,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_STRING",
+          "json_name": "documentId"
+        }
+      ]
+    },
+    {
+      "name": "TranscriptCursor",
+      "field": [
+        {
+          "name": "exists",
+          "number": 1,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_BOOL",
+          "json_name": "exists"
+        },
+        {
+          "name": "workspace_epoch",
+          "number": 2,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_STRING",
+          "json_name": "workspaceEpoch"
+        },
+        {
+          "name": "revision",
+          "number": 3,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_UINT64",
+          "json_name": "revision"
+        },
+        {
+          "name": "last_segment_id",
+          "number": 4,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_UINT64",
+          "json_name": "lastSegmentId"
+        },
+        {
+          "name": "segment_count",
+          "number": 5,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_UINT64",
+          "json_name": "segmentCount"
+        }
+      ]
+    },
+    {
+      "name": "TranscriptDelta",
+      "field": [
+        {
+          "name": "document_id",
+          "number": 1,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_STRING",
+          "json_name": "documentId"
+        },
+        {
+          "name": "workspace_epoch",
+          "number": 2,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_STRING",
+          "json_name": "workspaceEpoch"
+        },
+        {
+          "name": "expected_revision",
+          "number": 3,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_UINT64",
+          "json_name": "expectedRevision"
+        },
+        {
+          "name": "revision",
+          "number": 4,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_UINT64",
+          "json_name": "revision"
+        },
+        {
+          "name": "upserts",
+          "number": 5,
+          "label": "LABEL_REPEATED",
+          "type": "TYPE_MESSAGE",
+          "type_name": ".foresight.transcript.v1.TranscriptSegment",
+          "json_name": "upserts"
+        },
+        {
+          "name": "deletes",
+          "number": 6,
+          "label": "LABEL_REPEATED",
+          "type": "TYPE_MESSAGE",
+          "type_name": ".foresight.transcript.v1.TranscriptKey",
+          "json_name": "deletes"
+        },
+        {
+          "name": "reset",
+          "number": 7,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_BOOL",
+          "json_name": "reset"
+        }
+      ]
+    },
+    {
+      "name": "TranscriptDeltaResult",
+      "field": [
+        {
+          "name": "revision",
+          "number": 1,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_UINT64",
+          "json_name": "revision"
+        },
+        {
+          "name": "applied",
+          "number": 2,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_BOOL",
+          "json_name": "applied"
+        },
+        {
+          "name": "tokenized_bytes",
+          "number": 3,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_UINT64",
+          "json_name": "tokenizedBytes"
+        },
+        {
+          "name": "tokenized_tokens",
+          "number": 4,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_UINT64",
+          "json_name": "tokenizedTokens"
+        },
+        {
+          "name": "embedded_bytes",
+          "number": 5,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_UINT64",
+          "json_name": "embeddedBytes"
+        },
+        {
+          "name": "embedded_chunks",
+          "number": 6,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_UINT64",
+          "json_name": "embeddedChunks"
+        },
+        {
+          "name": "snapshot_constructed_chunks",
+          "number": 7,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_UINT64",
+          "json_name": "snapshotConstructedChunks"
+        }
+      ]
+    }
+  ],
+  "service": [
+    {
+      "name": "TranscriptIndex",
+      "method": [
+        {
+          "name": "GetCursor",
+          "input_type": ".foresight.transcript.v1.TranscriptCursorRequest",
+          "output_type": ".foresight.transcript.v1.TranscriptCursor"
+        },
+        {
+          "name": "ApplyDelta",
+          "input_type": ".foresight.transcript.v1.TranscriptDelta",
+          "output_type": ".foresight.transcript.v1.TranscriptDeltaResult"
+        }
+      ]
+    }
+  ],
+  "syntax": "proto3"
+}
