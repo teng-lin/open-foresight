@@ -261,11 +261,12 @@ void main() {
       backups.create(db, 19);
       now = now.subtract(const Duration(days: 1));
       final current = backups.create(db, 19);
-      expect(backups.snapshots(supportedVersion: 19), hasLength(2));
-      expect(
-        backups.snapshots(supportedVersion: 19).map((s) => s.name),
-        contains(current.name),
-      );
+      // Earlier copies are now beyond the permitted future-clock skew. The
+      // just-created rollback point must survive and remain the sole candidate.
+      expect(backups.snapshots(supportedVersion: 19).map((s) => s.name), [
+        current.name,
+      ]);
+      expect(Directory(backups.directoryPath).listSync(), hasLength(2));
     },
   );
 

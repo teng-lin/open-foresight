@@ -4,10 +4,28 @@ import 'dart:ffi';
 import 'dart:io';
 
 import 'package:ffi/ffi.dart';
+import 'package:foresight_core/src/persistence/migration_backups.dart';
+import 'package:foresight_core/src/persistence/sqlite_preflight.dart';
 import 'package:foresight_core/src/store.dart';
 import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
 
 void main(List<String> arguments) {
+  // Qualify and initialize WAL before imposing the payload fault. WAL's fixed
+  //32KiB index and preflight's full private copy also exceed8KiB: letting either
+  // fail first would no longer test the actual VACUUM boundary. Hold the same
+  // exclusive/autocommit ownership used by Store throughout backup creation.
+  SqlitePreflight(
+    arguments.single,
+    supportedVersion: Store.schemaVersion,
+  ).qualify();
+  final source = openApplicationDatabase(arguments.single);
+  final schema =
+      source.select('PRAGMA user_version').single.values.single as int;
+  source.execute('PRAGMA journal_mode=WAL');
+  source.select('SELECT COUNT(*) FROM sqlite_master');
+  source.execute('PRAGMA locking_mode=EXCLUSIVE');
+  source.execute('BEGIN EXCLUSIVE');
+  source.execute('COMMIT');
   final libc = DynamicLibrary.process();
   final limit = calloc<Uint64>(2);
   try {
@@ -34,7 +52,7 @@ void main(List<String> arguments) {
     calloc.free(limit);
   }
   try {
-    Store(arguments.single).close();
+    MigrationBackups(arguments.single).create(source, schema);
     stderr.writeln('Migration unexpectedly passed its file-size limit');
     exitCode = 1;
   } on SqliteException catch (error) {
@@ -47,5 +65,7 @@ void main(List<String> arguments) {
   } catch (error, stack) {
     stderr.writeln('$error\n$stack');
     exitCode = 1;
+  } finally {
+    source.dispose();
   }
 }
