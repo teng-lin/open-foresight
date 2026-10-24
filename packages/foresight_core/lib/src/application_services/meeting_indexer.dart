@@ -28,6 +28,7 @@ final class MeetingIndexer {
     required this.meetings,
     required this.capture,
     required this.changed,
+    this.stateChanges,
   }) : queries = CaptureQueries(domain.store, meetings),
        jobs = MeetingIndexJobs.forStore(domain.store),
        projection = MeetingTranscriptProjection(domain.store);
@@ -38,6 +39,8 @@ final class MeetingIndexer {
   final MeetingIndexJobs jobs;
   final MeetingTranscriptProjection projection;
   final void Function() changed;
+  final Stream<void>? stateChanges;
+  int _searchWaiters = 0;
   Store get store => domain.store;
   final _runs = <int, _MeetingIndexRun>{};
   final _allRuns = <_MeetingIndexRun>{};
@@ -45,6 +48,103 @@ final class MeetingIndexer {
   Future<void>? _closing;
   bool get busy => _allRuns.isNotEmpty || _recovering;
   Map<String, int> get workMetrics => projection.metrics.snapshot;
+
+  static const searchReadinessTimeout = Duration(seconds: 5);
+  static const _maximumSearchTargets = 64, _maximumSearchWaiters = 64;
+  bool get _searchPaused =>
+      domain.sourcesPaused ||
+      domain.helper.snapshot?.pipeline == 'unconfigured';
+  RpcError _searchBusy() => RpcError(
+    RpcErrorCode.busy,
+    'Transcript indexing is still in progress; retry search shortly.',
+  );
+
+  /// Search borrows a fixed snapshot of accepted stopped work. It never starts,
+  /// cancels or upgrades a producer, and never holds the Domain mutation queue.
+  Future<void> awaitStoppedIndexes({bool Function()? current}) async {
+    if (_searchPaused) return;
+    final workspace = domain.workspaceGeneration;
+    final epoch = store.workspaceEpoch;
+    final clock = Stopwatch()..start();
+    bool owned() =>
+        !_closed &&
+        !domain.closed &&
+        workspace == domain.workspaceGeneration &&
+        epoch == store.workspaceEpoch &&
+        (current?.call() ?? true);
+    if (!owned()) throw operationCancelled();
+    final snapshot = jobs.stoppedSearchSnapshot(
+      limit: _maximumSearchTargets,
+      captureMeeting: capture.active ? capture.meeting : null,
+    );
+    if (snapshot.isEmpty) return;
+    if (snapshot.length > _maximumSearchTargets ||
+        _searchWaiters >= _maximumSearchWaiters) {
+      throw _searchBusy();
+    }
+    final pending = {for (final target in snapshot) target.meeting: target};
+    _searchWaiters++;
+    var wake = Completer<void>();
+    void signal() {
+      if (!wake.isCompleted) wake.complete();
+    }
+
+    StreamSubscription<void>? subscription;
+    Timer? monitor;
+    try {
+      subscription = stateChanges?.listen((_) => signal());
+      // Covers direct state transitions/caller cancellation even if no
+      // application event is emitted. Only fixed-snapshot metadata is read.
+      monitor = Timer.periodic(
+        const Duration(milliseconds: 20),
+        (_) => signal(),
+      );
+      while (true) {
+        if (!owned()) throw operationCancelled();
+        if (_searchPaused) return;
+        if (clock.elapsed >= searchReadinessTimeout) throw _searchBusy();
+        final observed = jobs.searchReadiness(pending.keys, epoch);
+        for (final target in pending.values.toList(growable: false)) {
+          final state = observed[target.meeting];
+          if (state == null ||
+              state.sourceDeleted ||
+              (state.sourceExists && !state.sourceGenerated) ||
+              (capture.active && capture.meeting == target.meeting) ||
+              const {
+                'recording',
+                'transcribing',
+                'paused',
+              }.contains(state.state)) {
+            pending.remove(target.meeting);
+            continue;
+          }
+          if (state.revision != target.revision) throw _searchBusy();
+          if (state.sourceIndexed &&
+              state.pendingRevision == null &&
+              (state.indexedRevision ?? -1) >= target.revision) {
+            pending.remove(target.meeting);
+            continue;
+          }
+          // Durable backlog, failed or already-settled pending work must not
+          // masquerade as successful empty results, nor become a hot retry.
+          final run = _runs[target.meeting];
+          if (run == null || run.epoch != epoch || run.workspace != workspace) {
+            throw _searchBusy();
+          }
+        }
+        if (pending.isEmpty) return;
+        await domain.awaitCurrent(wake.future, owned);
+        wake = Completer<void>();
+      }
+    } finally {
+      try {
+        monitor?.cancel();
+        await subscription?.cancel();
+      } finally {
+        _searchWaiters--;
+      }
+    }
+  }
 
   Future<void> scheduleFinalIndex(int id) => _request(id);
   Future<void> indexMeeting(int id, {bool Function()? current}) async {

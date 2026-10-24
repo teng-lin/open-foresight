@@ -24,6 +24,9 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Fixed
 
+- Let search wait briefly for already-stopped meeting transcripts to finish
+  indexing. Stop remains independent of the helper; paused or unconfigured
+  indexing keeps previously indexed documents available.
 - Update meeting transcript search incrementally and recover saved indexing work
   after restart. Preserve manual edits and deletion while indexing waits for a
   model to become ready.

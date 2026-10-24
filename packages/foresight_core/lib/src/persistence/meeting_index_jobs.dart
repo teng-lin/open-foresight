@@ -17,6 +17,24 @@ final class MeetingIndexIntent {
   final int revision;
 }
 
+/// Read-only state for a captured search barrier; no transcript/source bodies.
+final class MeetingIndexReadiness {
+  const MeetingIndexReadiness({
+    required this.revision,
+    required this.state,
+    required this.sourceExists,
+    required this.sourceGenerated,
+    required this.sourceDeleted,
+    required this.sourceIndexed,
+    required this.indexedRevision,
+    required this.pendingRevision,
+  });
+  final int revision;
+  final String state;
+  final bool sourceExists, sourceGenerated, sourceDeleted, sourceIndexed;
+  final int? indexedRevision, pendingRevision;
+}
+
 final class MeetingIndexJobs {
   MeetingIndexJobs(this.db, {required this.workspaceEpoch});
 
@@ -109,6 +127,65 @@ final class MeetingIndexJobs {
           revision: row['revision'] as int,
         ),
     ];
+  }
+
+  /// Return one extra row to let the caller refuse an oversized barrier rather
+  /// than silently omitting accepted work. Query only already-admitted jobs.
+  List<MeetingIndexIntent> stoppedSearchSnapshot({
+    int limit = 64,
+    int? captureMeeting,
+  }) {
+    if (limit < 1 || limit > 64) throw ArgumentError.value(limit, 'limit');
+    final epoch = workspaceEpoch();
+    return [
+      for (final row in db.select(
+        'SELECT j.meeting_id,j.workspace_epoch,j.revision FROM meeting_index_jobs j '
+        'JOIN meetings m ON m.id=j.meeting_id '
+        "LEFT JOIN sources s ON s.id='meeting-'||m.id "
+        'WHERE j.workspace_epoch=? '
+        "AND m.state NOT IN ('recording','transcribing','paused') "
+        '${captureMeeting == null ? '' : 'AND m.id!=? '}'
+        'AND EXISTS(SELECT 1 FROM transcript t WHERE t.meeting_id=m.id AND t.final=1) '
+        'AND (s.id IS NULL OR (s.deleted=0 AND s.generated=1 AND s.locally_edited=0)) '
+        'ORDER BY j.meeting_id LIMIT ?',
+        [epoch, if (captureMeeting != null) captureMeeting, limit + 1],
+      ))
+        MeetingIndexIntent(
+          meeting: row['meeting_id'] as int,
+          epoch: row['workspace_epoch'] as String,
+          revision: row['revision'] as int,
+        ),
+    ];
+  }
+
+  Map<int, MeetingIndexReadiness> searchReadiness(
+    Iterable<int> meetings,
+    String epoch,
+  ) {
+    final ids = meetings.toList(growable: false);
+    if (ids.isEmpty) return const {};
+    if (ids.length > 64) throw ArgumentError.value(ids.length, 'meetings');
+    return {
+      for (final row in db.select(
+        'SELECT m.id,m.revision,m.state,s.id AS source_id,s.generated,s.locally_edited,s.deleted,s.state AS source_state,completed.revision AS indexed_revision,pending.revision AS pending_revision '
+        'FROM meetings m '
+        "LEFT JOIN sources s ON s.id='meeting-'||m.id "
+        'LEFT JOIN meeting_index_state completed ON completed.meeting_id=m.id AND completed.workspace_epoch=? '
+        'LEFT JOIN meeting_index_jobs pending ON pending.meeting_id=m.id AND pending.workspace_epoch=? '
+        'WHERE m.id IN (${List.filled(ids.length, '?').join(',')})',
+        [epoch, epoch, ...ids],
+      ))
+        row['id'] as int: MeetingIndexReadiness(
+          revision: row['revision'] as int,
+          state: row['state'] as String,
+          sourceExists: row['source_id'] != null,
+          sourceGenerated: row['generated'] == 1 && row['locally_edited'] == 0,
+          sourceDeleted: row['deleted'] != null && row['deleted'] != 0,
+          sourceIndexed: row['source_state'] == 'indexed',
+          indexedRevision: row['indexed_revision'] as int?,
+          pendingRevision: row['pending_revision'] as int?,
+        ),
+    };
   }
 
   void complete(MeetingIndexIntent intent) {
