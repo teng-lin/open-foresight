@@ -130,12 +130,18 @@ final class MeetingIndexJobs {
   }
 
   /// Return one extra row to let the caller refuse an oversized barrier rather
-  /// than silently omitting accepted work. Query only already-admitted jobs.
+  /// than silently omitting accepted work. Filter active owners before LIMIT.
   List<MeetingIndexIntent> stoppedSearchSnapshot({
+    required Iterable<int> activeMeetings,
     int limit = 64,
     int? captureMeeting,
   }) {
     if (limit < 1 || limit > 64) throw ArgumentError.value(limit, 'limit');
+    final active = activeMeetings.toList(growable: false);
+    if (active.isEmpty) return const [];
+    if (active.length > 64) {
+      throw ArgumentError.value(active.length, 'activeMeetings');
+    }
     final epoch = workspaceEpoch();
     return [
       for (final row in db.select(
@@ -143,12 +149,18 @@ final class MeetingIndexJobs {
         'JOIN meetings m ON m.id=j.meeting_id '
         "LEFT JOIN sources s ON s.id='meeting-'||m.id "
         'WHERE j.workspace_epoch=? '
+        'AND j.meeting_id IN (${List.filled(active.length, '?').join(',')}) '
         "AND m.state NOT IN ('recording','transcribing','paused') "
         '${captureMeeting == null ? '' : 'AND m.id!=? '}'
         'AND EXISTS(SELECT 1 FROM transcript t WHERE t.meeting_id=m.id AND t.final=1) '
         'AND (s.id IS NULL OR (s.deleted=0 AND s.generated=1 AND s.locally_edited=0)) '
         'ORDER BY j.meeting_id LIMIT ?',
-        [epoch, if (captureMeeting != null) captureMeeting, limit + 1],
+        [
+          epoch,
+          ...active,
+          if (captureMeeting != null) captureMeeting,
+          limit + 1,
+        ],
       ))
         MeetingIndexIntent(
           meeting: row['meeting_id'] as int,

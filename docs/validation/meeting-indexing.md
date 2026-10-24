@@ -69,13 +69,17 @@ model is explicitly deterministic test machinery, separate from the production
 production models or physical capture behavior.
 
 
-Search after Stop captures at most 64 already-accepted, stopped transcript jobs
+Search after Stop captures at most 64 already-accepted, actively owned stopped transcript jobs
 and waits at most five seconds for their current workspace/revision to become
 indexed and their verification job to retire. It reads only metadata, never
 joins the Domain mutation queue, and owns no producer. Caller cancellation and
 workspace clear dispose the waiter; deletion/manual replacement/live capture
-retire the affected target. A newer still-stopped revision, failed/unstarted
-backlog or deadline returns a typed busy refusal with retry guidance. Later jobs
+retire the affected target. A newer still-stopped revision, captured producer failure or deadline returns a
+typed busy refusal with retry guidance for that call. Subsequent searches omit
+failed or unstarted durable backlog and can return ordinary indexed documents.
+Active IDs are filtered before the SQL limit, so stale backlog cannot hide an
+active producer. Active helper verification deliberately waits for the current
+helper cursor even when an older indexed flag remains. Later jobs
 never extend the snapshot. Paused or explicitly unconfigured indexing adds no
 wait. The normal indexed-source allowlist and post-retrieval revision checks
 remain authoritative. Stop still commits and releases capture independently of

@@ -200,7 +200,16 @@ void main() {
       await eventually(() => domain.cancellationWatchCount > baseline);
       expect(retrieval.requests, isEmpty);
       expect(release[id(meeting)]!.isCompleted, false);
+      // Await actual producer settlement before measuring the reply envelope.
+      // The original Search is already running with its production five-second
+      // deadline; neither settlement observation nor this reply wait renews it.
+      result.ignore();
       finish(meeting);
+      await eventually(
+        () =>
+            store.rows('SELECT * FROM meeting_index_jobs').isEmpty &&
+            store.sourceQueries.source(id(meeting))?.state == 'indexed',
+      );
       final rows = await result.timeout(const Duration(seconds: 2)) as List;
       expect(rows.single['id'], id(meeting));
       expect(rows.single['text'], contains('Mira sends the draft.'));
@@ -448,8 +457,9 @@ void main() {
     },
   );
   test(
-    'actual producer failure stays durable and cannot become an empty success',
+    'captured producer failure refuses this call but later ordinary search remains available',
     () async {
+      ordinary();
       final work = hold(meeting);
       await started(meeting);
       reject = true;
@@ -463,6 +473,11 @@ void main() {
       await work.catchError((Object _) {});
       expect(store.rows('SELECT * FROM meeting_index_jobs'), hasLength(1));
       expect(retrieval.requests, isEmpty);
+      final calls = peer.requests.length;
+      final later = await search() as List;
+      expect(later.single['id'], 'ordinary');
+      expect(peer.requests, hasLength(calls));
+      expect(store.rows('SELECT * FROM meeting_index_jobs'), hasLength(1));
     },
   );
   test(
@@ -512,31 +527,38 @@ void main() {
     },
   );
   test(
-    'unstarted durable backlog refuses without a hot retry or false empty success',
+    'unstarted durable backlog preserves ordinary results without a hot retry',
     () async {
+      ordinary();
       MeetingIndexJobs.forStore(store).request(meeting);
-      await expectLater(
-        search(),
-        throwsA(busy()),
-      ).timeout(const Duration(seconds: 1));
+      final rows = await search().timeout(const Duration(seconds: 1)) as List;
+      expect(rows.single['id'], 'ordinary');
       expect(peer.requests, isEmpty);
-      expect(retrieval.requests, isEmpty);
+      expect(retrieval.requests, hasLength(1));
       expect(store.rows('SELECT * FROM meeting_index_jobs'), hasLength(1));
     },
   );
   test(
-    'snapshot overflow refuses instead of silently truncating accepted stopped work',
+    'stale backlog cannot hide an active stopped producer behind the snapshot limit',
     () async {
       final jobs = MeetingIndexJobs.forStore(store)..request(meeting);
       for (var n = 0; n < 64; n++) {
         jobs.request(stoppedMeeting('Backlog $n'));
       }
-      await expectLater(
-        search(),
-        throwsA(busy()),
-      ).timeout(const Duration(seconds: 1));
-      expect(store.rows('SELECT * FROM meeting_index_jobs'), hasLength(65));
+      final active = stoppedMeeting('Accepted final transcript');
+      final work = hold(active);
+      await started(active);
+      final baseline = domain.cancellationWatchCount;
+      final result = search();
+      result.ignore();
+      await eventually(() => domain.cancellationWatchCount > baseline);
       expect(retrieval.requests, isEmpty);
+      expect(store.rows('SELECT * FROM meeting_index_jobs'), hasLength(66));
+      finish(active);
+      await work;
+      final rows = await result.timeout(const Duration(seconds: 2)) as List;
+      expect(rows.single['id'], id(active));
+      expect(store.rows('SELECT * FROM meeting_index_jobs'), hasLength(65));
     },
   );
 }

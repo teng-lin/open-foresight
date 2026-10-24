@@ -15,6 +15,9 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Changed
 
+- Search waits only for actively owned stopped-transcript indexing; saved failed
+  backlog no longer blocks later searches of other indexed documents.
+
 - Bound retained content history to 20 revisions and 32 MiB per entity, with a
   90-day age limit. Total history grows with the number of entities. Upgrades
   prune excess history while preserving current content.

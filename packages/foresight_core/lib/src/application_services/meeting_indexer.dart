@@ -17,6 +17,7 @@ final class _MeetingIndexRun {
   final int meeting, workspace;
   final String epoch;
   final done = Completer<void>();
+  bool failed = false;
 }
 
 /// One producer per meeting owns durable work independently of its subscribers.
@@ -73,7 +74,12 @@ final class MeetingIndexer {
         epoch == store.workspaceEpoch &&
         (current?.call() ?? true);
     if (!owned()) throw operationCancelled();
+    final accepted = {
+      for (final run in _runs.values)
+        if (run.epoch == epoch && run.workspace == workspace) run.meeting: run,
+    };
     final snapshot = jobs.stoppedSearchSnapshot(
+      activeMeetings: accepted.keys,
       limit: _maximumSearchTargets,
       captureMeeting: capture.active ? capture.meeting : null,
     );
@@ -118,17 +124,19 @@ final class MeetingIndexer {
             pending.remove(target.meeting);
             continue;
           }
-          if (state.revision != target.revision) throw _searchBusy();
+          if (state.revision != target.revision ||
+              accepted[target.meeting]!.failed) {
+            throw _searchBusy();
+          }
           if (state.sourceIndexed &&
               state.pendingRevision == null &&
               (state.indexedRevision ?? -1) >= target.revision) {
             pending.remove(target.meeting);
             continue;
           }
-          // Durable backlog, failed or already-settled pending work must not
-          // masquerade as successful empty results, nor become a hot retry.
-          final run = _runs[target.meeting];
-          if (run == null || run.epoch != epoch || run.workspace != workspace) {
+          // A captured producer must settle this call, while later searches
+          // omit durable backlog that has no active owner.
+          if (!identical(_runs[target.meeting], accepted[target.meeting])) {
             throw _searchBusy();
           }
         }
@@ -228,6 +236,7 @@ final class MeetingIndexer {
   }
 
   void _settle(_MeetingIndexRun run, [Object? error, StackTrace? stack]) {
+    run.failed = error != null;
     if (identical(_runs[run.meeting], run)) _runs.remove(run.meeting);
     _allRuns.remove(run);
     changed();
