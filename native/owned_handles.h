@@ -269,7 +269,7 @@ NativeOperation::Result cleanup_native(NativeControl &control) {
       if (engine.refs)
         return NativeOperation::Result::unsettled;
     }
-    shutdown_persistent(engine, false);
+    shutdown_persistent(engine);
   } else if (control.object) {
     auto *object = control.object.get();
     auto &worker = *static_cast<Worker *>(
@@ -312,7 +312,7 @@ NativeOperation::Result cleanup_native(NativeControl &control) {
         }
       }
       if (last) {
-        shutdown_persistent(speech.worker_engine->engine, false);
+        shutdown_persistent(speech.worker_engine->engine);
         speech.worker_engine.reset();
       }
     }

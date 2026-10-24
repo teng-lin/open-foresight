@@ -289,8 +289,9 @@ int main() {
     discarded->discardAudio = true;
     auto *privateAudio =
         reinterpret_cast<const AudioBufferList *>(uintptr_t(1));
-    REQUIRE(output(0, nullptr, privateAudio, nullptr, nullptr, nullptr,
-                   discarded.get()) == noErr);
+    REQUIRE(captureSystemAudio(discarded->ring, discarded->ring->callbacks,
+                               discarded->format, discarded->discardAudio,
+                               privateAudio) == noErr);
     REQUIRE(!discarded->ring->pop(sample));
 
     REQUIRE([systemAudioState(nullptr)[@"system_audio"] isEqual:@"unknown"]);
@@ -323,16 +324,18 @@ int main() {
     REQUIRE(capabilities.find("permission_verified") != std::string::npos);
     // Discovery does not create taps or launch permission requests.
     {
-      std::lock_guard lock(systemRequestMutex);
-      REQUIRE(!systemRequest);
+      std::lock_guard lock(systemRequestMutex());
+      REQUIRE(!systemRequest());
     }
     REQUIRE(before ==
             micStatus()); // Discovery must never request microphone access.
     std::atomic<bool> cancel{true};
     unsigned frames = 0;
+    auto owner = fs_macos_capture_owner();
     fs_macos_capture(
-        "missing-device", false, 48000, cancel, [&](const auto &) { ++frames; },
-        [](const auto &) {});
+        "missing-device", false, 48000, cancel, owner,
+        [&](const auto &) { ++frames; }, [](const auto &) {});
+    fs_macos_capture_close(owner);
     REQUIRE(frames == 0);
     std::cout
         << "macOS audio buffer, discovery and cancellation contracts passed\n";

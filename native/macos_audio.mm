@@ -293,6 +293,16 @@ void pushMicrophoneAudio(Ring &ring, const AudioStreamBasicDescription &format,
   if (pushAudio(ring, format, data, true))
     ring.convertedBuffers.fetch_add(1, std::memory_order_relaxed);
 }
+OSStatus
+captureSystemAudio(const std::weak_ptr<Ring> &ring,
+                   const std::shared_ptr<foresight::CallbackFence> &callbacks,
+                   const AudioStreamBasicDescription &format, bool discard,
+                   const AudioBufferList *data) noexcept {
+  if (!discard)
+    captureCallback(ring, callbacks,
+                    [&](Ring &pcm) { pushAudio(pcm, format, data); });
+  return noErr;
+}
 OSStatus startEngine(Session &s, AudioDeviceID device, bool processed) {
   @try {
     s.engine = [[AVAudioEngine alloc] init];
@@ -432,10 +442,7 @@ OSStatus start(Session &s, AudioDeviceID device, bool playback, int /*rate*/,
       &s.io, s.aggregate, nullptr,
       ^(const AudioTimeStamp *, const AudioBufferList *data,
         const AudioTimeStamp *, AudioBufferList *, const AudioTimeStamp *) {
-        if (discard)
-          return; // Consent never inspects private PCM.
-        captureCallback(weakRing, callbacks,
-                        [&](Ring &ring) { pushAudio(ring, format, data); });
+        captureSystemAudio(weakRing, callbacks, format, discard, data);
       });
   return status ? status : AudioDeviceStart(s.aggregate, s.io);
 }
