@@ -33,7 +33,258 @@ Uint8List _record([int count = 1]) => Uint8List.fromList(
   ),
 );
 
+void _seedSlot(
+  String profile,
+  int index, {
+  required int opened,
+  bool error = true,
+  int order = 0,
+  int failed = 0,
+}) {
+  final directory = BackupDirectory('$profile/logs/slot-$index');
+  final file = directory.openOrCreate('manifest.json');
+  file.truncate();
+  file.writeOnce(
+    Uint8List.fromList(
+      utf8.encode(
+        jsonEncode({
+          'schema': 1,
+          'session': DiagnosticIdentity.random().value,
+          'pid': 1,
+          'role': DiagnosticRole.service.name,
+          'opened': opened,
+          'has_error': error,
+          'failure_order': order,
+          'failed': failed,
+        }),
+      ),
+    ),
+  );
+  file.close();
+  directory.close();
+}
+
 void main() {
+  test(
+    'real admission and classification contention retain bytes and health',
+    () {
+      final profile = _profile();
+      final storage = DiagnosticStorage.admit(
+        profile,
+        DiagnosticIdentity.random(),
+        DiagnosticRole.desktop,
+      )!;
+      addTearDown(storage.close);
+      final manifest = File('$profile/logs/slot-${storage.slot}/manifest.json');
+      final before = manifest.readAsBytesSync();
+      final root = BackupDirectory('$profile/logs');
+      final admission = root.open('admission.lock');
+      try {
+        expect(admission.tryExclusiveLease(), isTrue);
+        expect(
+          DiagnosticStorage.admit(
+            profile,
+            DiagnosticIdentity.random(),
+            DiagnosticRole.desktop,
+          ),
+          isNull,
+        );
+        expect(storage.classify(DiagnosticRole.desktop, error: true), isFalse);
+        expect(storage.failed, isFalse);
+        expect(manifest.readAsBytesSync(), before);
+      } finally {
+        admission.close();
+        root.close();
+      }
+      expect(storage.classify(DiagnosticRole.desktop, error: true), isTrue);
+    },
+  );
+  test(
+    'retention rank precedes reserved preference and newest failure survives rollback',
+    () {
+      final now = DateTime.utc(2026, 10, 24);
+      for (final scenario in [
+        'empty',
+        'expired',
+        'healthy',
+        'reserved',
+        'protected',
+        'rollback',
+      ]) {
+        final profile = _profile();
+        DiagnosticStorage.admit(
+          profile,
+          DiagnosticIdentity.random(),
+          DiagnosticRole.service,
+        )!.close();
+        for (var i = 0; i < 10; i++) {
+          _seedSlot(profile, i, opened: now.millisecondsSinceEpoch - 1000);
+        }
+        if (scenario == 'empty' || scenario == 'reserved') {
+          File('$profile/logs/slot-5/manifest.json').deleteSync();
+        }
+        if (scenario == 'reserved') {
+          File('$profile/logs/slot-0/manifest.json').deleteSync();
+        }
+        if (scenario == 'expired') {
+          _seedSlot(
+            profile,
+            5,
+            opened: now
+                .subtract(const Duration(days: 8))
+                .millisecondsSinceEpoch,
+          );
+        }
+        if (scenario == 'healthy') {
+          _seedSlot(
+            profile,
+            5,
+            opened: now.millisecondsSinceEpoch - 1000,
+            error: false,
+          );
+        }
+        if (scenario == 'protected' || scenario == 'rollback') {
+          _seedSlot(
+            profile,
+            0,
+            opened: now
+                .subtract(const Duration(days: 8))
+                .millisecondsSinceEpoch,
+            order: 1,
+            failed: now.millisecondsSinceEpoch,
+          );
+        }
+        final selected = DiagnosticStorage.admit(
+          profile,
+          DiagnosticIdentity.random(),
+          DiagnosticRole.service,
+          clock: () => scenario == 'rollback'
+              ? now.subtract(const Duration(days: 1))
+              : now,
+        )!;
+        try {
+          expect(
+            selected.slot,
+            scenario == 'reserved'
+                ? 0
+                : scenario == 'protected' || scenario == 'rollback'
+                ? 1
+                : 5,
+            reason: scenario,
+          );
+        } finally {
+          selected.close();
+        }
+      }
+    },
+  );
+  test(
+    'orphan manifest.next is reclaimable but orphan payload stays occupied',
+    () {
+      for (final payload in [false, true]) {
+        final profile = _profile();
+        final first = DiagnosticStorage.admit(
+          profile,
+          DiagnosticIdentity.random(),
+          DiagnosticRole.desktop,
+        )!;
+        final slot = first.slot;
+        first.close();
+        File('$profile/logs/slot-$slot/manifest.json').deleteSync();
+        final dir = BackupDirectory('$profile/logs/slot-$slot');
+        final orphan = dir.open('manifest.next', create: true);
+        orphan.writeOnce(Uint8List.fromList(utf8.encode('{partial')));
+        orphan.close();
+        if (payload) {
+          final segment = dir.open('0.jsonl', create: true);
+          segment.writeOnce(_record());
+          segment.close();
+        }
+        dir.close();
+        final recovered = DiagnosticStorage.admit(
+          profile,
+          DiagnosticIdentity.random(),
+          DiagnosticRole.desktop,
+          ownedSlots: {
+            for (var i = 0; i < 10; i++)
+              if (i != slot) i,
+          },
+        );
+        if (payload) {
+          expect(recovered, isNull);
+          expect(
+            File('$profile/logs/slot-$slot/0.jsonl').readAsBytesSync(),
+            _record(),
+          );
+        } else {
+          expect(recovered?.slot, slot);
+          expect(
+            File('$profile/logs/slot-$slot/manifest.next').existsSync(),
+            isFalse,
+          );
+          recovered?.close();
+        }
+      }
+    },
+  );
+  test('manifest records explicit application PID and rejects invalid PID', () {
+    final profile = _profile();
+    final applicationPid = pid + 100000;
+    final storage = DiagnosticStorage.admit(
+      profile,
+      DiagnosticIdentity.random(),
+      DiagnosticRole.desktop,
+      applicationPid: applicationPid,
+    )!;
+    final value =
+        jsonDecode(
+              File(
+                '$profile/logs/slot-${storage.slot}/manifest.json',
+              ).readAsStringSync(),
+            )
+            as Map;
+    expect(value['pid'], applicationPid);
+    storage.close();
+    expect(
+      () => DiagnosticStorage.admit(
+        profile,
+        DiagnosticIdentity.random(),
+        DiagnosticRole.desktop,
+        applicationPid: 0,
+      ),
+      throwsA(isA<DiagnosticStorageUnavailable>()),
+    );
+  });
+  test('tampered other slot cannot prevent genuine failure classification', () {
+    final profile = _profile();
+    final storage = DiagnosticStorage.admit(
+      profile,
+      DiagnosticIdentity.random(),
+      DiagnosticRole.service,
+    )!;
+    addTearDown(storage.close);
+    final other = storage.slot == 0 ? 1 : 0;
+    Directory('$profile/logs/slot-$other').deleteSync(recursive: true);
+    Link('$profile/logs/slot-$other').createSync(_profile());
+    expect(
+      storage.classify(
+        DiagnosticRole.service,
+        error: true,
+        genuineFailure: true,
+      ),
+      isTrue,
+    );
+    expect(storage.failed, isFalse);
+    final value =
+        jsonDecode(
+              File(
+                '$profile/logs/slot-${storage.slot}/manifest.json',
+              ).readAsStringSync(),
+            )
+            as Map;
+    expect(value['has_error'], isTrue);
+    expect(value['failure_order'], 1);
+  });
   test(
     'fixed storage rotates three segments with private modes and no inherited descriptors',
     () {

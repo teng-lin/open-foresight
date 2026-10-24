@@ -12,10 +12,14 @@ DiagnosticSinkFactory brokenSink(SendPort output) =>
     (String _, DiagnosticIdentity __, DiagnosticRole ___) =>
         MemorySink(output, broken: true);
 
+DiagnosticSinkFactory contendedSink(SendPort output) =>
+    (String _, DiagnosticIdentity __, DiagnosticRole ___) =>
+        MemorySink(output, contended: true);
+
 final class MemorySink implements DiagnosticSink {
-  MemorySink(this.output, {this.broken = false});
+  MemorySink(this.output, {this.broken = false, this.contended = false});
   final SendPort output;
-  final bool broken;
+  final bool broken, contended;
   @override
   int get slot => 7;
   @override
@@ -31,7 +35,7 @@ final class MemorySink implements DiagnosticSink {
       'error': error,
       'failure': genuineFailure,
     });
-    return true;
+    return !contended;
   }
 
   @override

@@ -1047,11 +1047,19 @@ final class _Writer {
       if (storage != null) {
         if (!storage!.classify(
           role,
-          error: hadPriority || _hasSummaries,
+          error: hadPriority,
           genuineFailure: hadFailure,
         )) {
-          if (!storage!.failed && !closing) {
-            _health();
+          if (!storage!.failed) {
+            if (closing) {
+              // Admission contention is not a broken file sink. Do not append
+              // unclassified failure data or hold the final phase indefinitely.
+              reason = DiagnosticHealthReason.storageUnavailable;
+              _discard();
+              _finish();
+            } else {
+              _health();
+            }
             return;
           }
           reason = DiagnosticHealthReason.sinkFailed;

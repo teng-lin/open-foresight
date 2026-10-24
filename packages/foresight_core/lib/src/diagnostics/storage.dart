@@ -203,9 +203,16 @@ final class DiagnosticStorage implements DiagnosticSink {
     DiagnosticIdentity session,
     DiagnosticRole role, {
     DateTime Function()? clock,
+    int? applicationPid,
     Set<int> ownedSlots = const {},
   }) {
     if (role == DiagnosticRole.transient) return null;
+    final logicalPid = applicationPid ?? pid;
+    if (logicalPid <= 0) {
+      throw const DiagnosticStorageUnavailable(
+        DiagnosticHealthReason.storageUnavailable,
+      );
+    }
     final now = clock ?? DateTime.now;
     BackupDirectory? root;
     BackupFile? admission;
@@ -262,7 +269,7 @@ final class DiagnosticStorage implements DiagnosticSink {
           // Explicit shared registry plus this conservative same-process guard
           // prevents probing our own active lease from a second isolate.
           if (ownedSlots.contains(index) ||
-              manifest?.pid == pid ||
+              manifest?.pid == logicalPid ||
               !_eligible(index, role)) {
             continue;
           }
@@ -272,11 +279,14 @@ final class DiagnosticStorage implements DiagnosticSink {
             continue;
           }
           final lease = directory.openOrCreate('lease');
-          if (lease.size != 0 || !lease.tryExclusiveLease()) {
-            lease.close();
-            continue;
+          var retained = false;
+          try {
+            if (lease.size != 0 || !lease.tryExclusiveLease()) continue;
+            inactive.add(_InactiveSlot(index, directory, lease, manifest));
+            retained = true;
+          } finally {
+            if (!retained) lease.close();
           }
-          inactive.add(_InactiveSlot(index, directory, lease, manifest));
         }
         inactive.sort((a, b) {
           int rank(_InactiveSlot value) => value.manifest == null
@@ -303,12 +313,21 @@ final class DiagnosticStorage implements DiagnosticSink {
         chosen = inactive.first;
         final selected = chosen;
         _validateSlot(selected.directory);
-        for (final name in selected.directory.entries()) {
-          if (name != 'lease') selected.directory.remove(name);
+        // Keep valid classification until all payload is removed. If cleanup
+        // stops midway the next admission still sees an occupied valid session.
+        for (final name in ['0.jsonl', '1.jsonl', '2.jsonl', 'manifest.next']) {
+          if (selected.directory.containsEntry(name)) {
+            selected.directory.remove(name);
+          }
+        }
+        selected.directory.sync();
+        if (selected.directory.containsEntry('manifest.json')) {
+          selected.directory.remove('manifest.json');
+          selected.directory.sync();
         }
         final manifest = _Manifest(
           session: session.value,
-          pid: pid,
+          pid: logicalPid,
           role: role,
           opened: now().toUtc().millisecondsSinceEpoch,
         );
@@ -390,7 +409,7 @@ final class DiagnosticStorage implements DiagnosticSink {
       }
     }
     if (!entries.contains('manifest.json') &&
-        entries.any((name) => name != 'lease')) {
+        entries.any((name) => name != 'lease' && name != 'manifest.next')) {
       throw const DiagnosticStorageUnavailable(
         DiagnosticHealthReason.storageUnavailable,
       );
@@ -459,18 +478,19 @@ final class DiagnosticStorage implements DiagnosticSink {
           _manifest.failureOrder == 0) {
         var maximum = 0;
         for (var i = 0; i < slotCount; i++) {
-          final directory = _root.child('slot-$i', create: false);
+          BackupDirectory? directory;
           try {
-            try {
-              final manifest = _readManifest(directory);
-              if (manifest != null && manifest.failureOrder > maximum) {
-                maximum = manifest.failureOrder;
-              }
-            } catch (_) {
-              /* Preserve corrupt occupied slots. */
+            directory = _root.child('slot-$i', create: false);
+            _validateSlot(directory);
+            final manifest = _readManifest(directory);
+            if (manifest != null && manifest.failureOrder > maximum) {
+              maximum = manifest.failureOrder;
             }
+          } catch (_) {
+            // A missing/tampered other slot stays occupied. It must not prevent
+            // classification of this independently held, validated slot.
           } finally {
-            directory.close();
+            directory?.close();
           }
         }
         if (maximum == 0x7fffffff) {

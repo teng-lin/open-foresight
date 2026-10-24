@@ -10,6 +10,64 @@ import 'test_sinks.dart';
 void main() {
   tearDown(LoggingSession.resetForTesting);
   test(
+    'classify contention at close is unavailable rather than sink failure',
+    () async {
+      final capture = SinkCapture();
+      addTearDown(capture.dispose);
+      final session = await LoggingSession.startForTesting(
+        configuration: const DiagnosticConfiguration(),
+        profilePath: 'selected-private-profile',
+        role: DiagnosticRole.desktop,
+        sinkFactory: contendedSink(capture.port.sendPort),
+      );
+      session.producer.emit(
+        DiagnosticEvent.runtimeFailed,
+        DiagnosticComponent.service,
+      );
+      final result = await session.close();
+      expect(result.writerExited, isTrue);
+      expect(result.flushed, isFalse);
+      expect(session.health.reason, DiagnosticHealthReason.storageUnavailable);
+      await capture.closed.future;
+      expect(capture.records, isEmpty);
+    },
+  );
+  test('healthy drop summaries do not mark genuine retained error', () async {
+    final capture = SinkCapture();
+    addTearDown(capture.dispose);
+    final session = await LoggingSession.startForTesting(
+      configuration: const DiagnosticConfiguration(),
+      profilePath: 'selected-private-profile',
+      role: DiagnosticRole.desktop,
+      sinkFactory: memorySink(capture.port.sendPort),
+    );
+    for (var i = 0; i < 100; i++) {
+      session.producer.emit(
+        DiagnosticEvent.serviceStarting,
+        DiagnosticComponent.service,
+      );
+    }
+    session.producer.close();
+    await session.close();
+    await capture.closed.future;
+    expect(
+      capture.records.any(
+        (record) => record['event'] == DiagnosticEvent.recordsDropped.wire,
+      ),
+      isTrue,
+    );
+    final classifications = capture.messages.whereType<Map>().where(
+      (value) => value.containsKey('classified'),
+    );
+    expect(classifications, isNotEmpty);
+    expect(
+      classifications.every(
+        (value) => value['error'] == false && value['failure'] == false,
+      ),
+      isTrue,
+    );
+  });
+  test(
     'active tracks registration and retirement without saturation',
     () async {
       final session = await LoggingSession.startForTesting(
