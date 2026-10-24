@@ -1,5 +1,4 @@
 from contextlib import closing
-import importlib.util
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -8,11 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-spec = importlib.util.spec_from_file_location(
-    "migration", Path(__file__).parents[1] / "tools/migrate_profile.py"
-)
-migration = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(migration)
+from tools import migrate_profile as migration
 
 
 class ProfileMigrationTest(unittest.TestCase):

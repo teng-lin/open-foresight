@@ -320,10 +320,10 @@ To build reproducible distro packages inside containers, see [Linux packaging](d
 
 The profile is stored in `$XDG_DATA_HOME/open-foresight`, which is normally `~/.local/share/open-foresight`. Its sockets are in `$XDG_RUNTIME_DIR/open-foresight/<profile>`, where `<profile>` is 12 hexadecimal digits derived from the profile path, so each profile has its own. Set both `FORESIGHT_DATA` and `FORESIGHT_RUNTIME` to use an isolated profile. Legacy profiles are never selected automatically.
 
-To migrate a profile from the earlier `foresight-linux-desktop` build, stop its app and helper, then run:
+To migrate a profile from the earlier `foresight-linux-desktop` build, stop its app and helper, then run from this repository root:
 
 ```sh
-python3 tools/migrate_profile.py ~/.local/share/foresight-linux-desktop \
+python3.13 -m tools.migrate_profile ~/.local/share/foresight-linux-desktop \
   ~/.local/share/open-foresight --backup ~/.local/state/open-foresight/profile-backup \
   --old-bundle /path/to/old/dist/foresight \
   --new-bundle "$PWD/dist/open-foresight" --copy-external-models
