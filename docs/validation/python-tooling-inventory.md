@@ -70,7 +70,8 @@ CI typing, C901, package conversion and shared helper work remain outstanding.
 Before adding a real `tools/__init__.py`, include package initialization in the
 producer-control review. The current
 [SDK producer control list](../../tools/sdk_producer_trust.py) enumerates tool
-modules but has no initializer entry: today `tools` is a namespace package.
+modules and previously had no initializer entry: at the starting baseline,
+`tools` was a namespace package.
 Adding an initializer creates a new execution dependency for existing imports.
 Its bytes and mode therefore need control-closure coverage, with an explicit
 policy for historical producers that had no initializer. Existing SDK reuse must
@@ -86,3 +87,28 @@ module-invocation conversion must update workflow commands and their exact
 transport contract together, preserve the direct-script external interface, and
 prove Git-free/unrelated-cwd behavior. These caller dispositions are preparation,
 not a completed conversion batch.
+
+
+The first package batch introduces the initializer and binds it into SDK producer
+controls, together with the actual `ci_registry.py` executable used by the
+converted producer steps. Historical namespace-source absence remains readable as absence; it is
+never replaced with an invented empty blob. A namespace producer does not match
+a consumer with any present initializer, even an empty one. Present initializers
+retain Git object/checksum, regular-file, byte and mode checks. Existing reviewed
+source-approval and exact-artifact qualification paths remain required; a control
+mismatch does not authorize rebuilding a compatible SDK. The final owner review
+must cover this control-set change.
+
+Primary registry inspection now uses `python -m tools.ci_registry` in all eight
+workflow steps, each with an explicit source-root working directory. Their frozen
+transport snippets and initializer path filters change together. The contract
+retains the two exact historical direct-script snippets so the trusted recipe
+reader can still verify old source without changing compiler identities; the
+current-workflow regression requires all eight migrated module calls. The module has
+only standard-library imports, so its external direct-script interface remains
+available without a wrapper. Real subprocess fixtures exercise found, missing,
+required-missing and denied results from a Git-free leaf export: module mode
+selects the export root explicitly; direct mode runs from an unrelated directory;
+neither receives `PYTHONPATH`. Historical baseline/selector fixtures remain
+historical data, and imported callers retain the same module API. This is the
+first entrypoint batch, not completed import cleanup or full Stage E acceptance.
