@@ -1,3 +1,4 @@
+import 'source_collection.dart';
 import 'graph_widgets.dart';
 import 'note_widgets.dart';
 import 'source_tiles.dart';
@@ -21,16 +22,11 @@ import '../../shell/workspace_tab.dart';
 import 'file_discovery_sheet.dart';
 import 'graph_rendering.dart';
 import 'cluster_rendering.dart';
-import 'source_painters.dart';
 
 part 'source_actions.dart';
 part 'source_labels.dart';
-part 'source_collection.dart';
 part 'graph_layout_owner.dart';
 part 'graph_interaction.dart';
-
-const _blue = workspaceBlue;
-const _ink = workspaceInk;
 
 // Each graph.embeddings reply must fit the service's 16 MiB frame limit.
 const _graphEmbeddingBatch = 128;
@@ -970,6 +966,180 @@ class SourcesController implements SourceCommands {
       );
     },
   );
+  Map<String, String> _featureDriveSourceMimes() => _reads.originalMimes;
+
+  List<SourceSummary> _featureFilteredSources([
+    List<SourceSummary>? collection,
+    Map<String, String>? originalMimes,
+  ]) {
+    final originals = originalMimes ?? driveSourceMimes();
+    final searchMatches = sourceQuery.isEmpty
+        ? null
+        : _reads.searchMatches ??
+              {
+                for (final source in collection ?? _reads.sources)
+                  if (source.title.toLowerCase().contains(
+                    sourceQuery.toLowerCase(),
+                  ))
+                    source.id,
+              };
+    final rows = (collection ?? _reads.sources)
+        .where(
+          (s) =>
+              (searchMatches == null || searchMatches.contains(s.id)) &&
+              (labelFilter.isEmpty || sourceLabels(s).contains(labelFilter)) &&
+              (typeFilter == null || typeOf(s, originals) == typeFilter),
+        )
+        .toList();
+    rows.sort(
+      (a, b) =>
+          (ascending ? 1 : -1) *
+          (a.title).toLowerCase().compareTo((b.title).toLowerCase()),
+    );
+    return rows;
+  }
+
+  SourceCollectionSnapshot _collectionSnapshot() {
+    final all = _reads.sources;
+    final originals = driveSourceMimes();
+    final rows = filteredSources(all, originals);
+    final labelRecords = _reads.labels;
+    final clusters = _reads.clusters
+        .map((c) => GraphCluster(c.label, GraphPoint(c.x, c.y, 0), c.radius))
+        .toList();
+    final fallbackLabelColor = Theme.of(context).colorScheme.primary;
+    final documentLabelRecords = <String, List<DocumentLabel>>{};
+    final documentLabelColors = <String, List<Color>>{};
+    final labelColorsByName = <String, Color>{};
+    for (final record in labelRecords) {
+      documentLabelRecords.putIfAbsent(record.documentId, () => []).add(record);
+      final color = graphLabelColor(record.colorHex, fallbackLabelColor);
+      documentLabelColors.putIfAbsent(record.documentId, () => []).add(color);
+      labelColorsByName.putIfAbsent(record.name, () => color);
+    }
+    final graphRows = _graphRows;
+    final counts = <SourceType, int>{};
+    for (final source in all) {
+      final type = typeOf(source, originals);
+      counts[type] = (counts[type] ?? 0) + 1;
+    }
+    final labels = {
+      ...all.expand(sourceLabels),
+      ..._reads.clusterNames,
+      if (labelFilter.isNotEmpty) labelFilter,
+    }.toList()..sort();
+    return SourceCollectionSnapshot(
+      all: all,
+      rows: rows,
+      graphRows: graphRows,
+      originals: originals,
+      clusters: clusters,
+      documentLabelRecords: documentLabelRecords,
+      documentLabelColors: documentLabelColors,
+      labelColorsByName: labelColorsByName,
+      counts: counts,
+      labels: labels,
+    );
+  }
+
+  SourceType _featureTypeOf(
+    SourceSummary source,
+    Map<String, String> originals,
+  ) => sourceCollectionType(source, originals);
+  String _featureTypeName(SourceType type) => sourceCollectionTypeName(type);
+  IconData _featureTypeIcon(SourceType type) => sourceCollectionTypeIcon(type);
+  Color _featureSourceColor(SourceType type) => sourceCollectionColor(type);
+  IconData _featureSourceIcon(SourceSummary source, {String? originalMime}) =>
+      sourceCollectionIcon(source, originalMime: originalMime);
+  Widget _featureSources() {
+    final view = _collectionSnapshot();
+    return SourceCollectionView(
+      view: view,
+      presentation: SourceCollectionPresentation(
+        graphView: graphView,
+        gridView: gridView,
+        ascending: ascending,
+        typeFilter: typeFilter,
+        labelFilter: labelFilter,
+        sourceQuery: sourceQuery,
+        sourcesPaused: d.sourcesPaused,
+        googleConnected: integrationFeature.googlePresentation.connected,
+        googleSyncStatus: integrationFeature.googlePresentation.connected
+            ? integrationFeature.googleSyncStatus()
+            : '',
+        busy: _operations.busy,
+        driveAvailable: integrationFeature.driveAvailable,
+        deviceName: _host.environment.capabilities.deviceName,
+      ),
+      problem: _reads.problem,
+      searchController: sourceSearchController,
+      graph: AnimatedBuilder(
+        animation: Listenable.merge([graphMotionFrames, graphTransform]),
+        builder: (_, __) => sourceGraph(
+          view.graphRows,
+          graphWorldPoints,
+          view.rows,
+          view.documentLabelColors,
+          view.labelColorsByName,
+          view.documentLabelRecords,
+          view.clusters,
+        ),
+      ),
+      onTogglePause: () => update(() {
+        if (d.sourcesPaused) {
+          d.resumeSources();
+        } else {
+          d.pauseSources();
+        }
+      }),
+      onReimport: () => _operations.run(reimport),
+      onGraphView: (value) => update(() => graphView = value),
+      onSearch: (value) => update(() => sourceQuery = value),
+      onCreateLabel: createOrganizationLabel,
+      onDeleteLabel: (label) => deleteOrganizationLabel(label),
+      onLabelSelected: (label) =>
+          update(() => labelFilter = labelFilter == label ? '' : label),
+      onTypeSelected: (type) => update(
+        () => typeFilter = type == null || typeFilter == type ? null : type,
+      ),
+      onClearFilters: () => update(() {
+        sourceQuery = '';
+        sourceSearchController.clear();
+        labelFilter = '';
+        typeFilter = null;
+      }),
+      onToggleSort: () => update(() => ascending = !ascending),
+      onGridView: (grid) => update(() => gridView = grid),
+      onImport: _importCollectionChoice,
+      onOpen: showSource,
+      onEditLabels: (source) => editLabels(source),
+      onIndex: (id) => _operations.run(() => d.index(id)),
+      onDelete: (id) => _operations.run(() => d.delete(id)),
+    );
+  }
+
+  void _importCollectionChoice(String choice) => _operations.run(() async {
+    switch (choice) {
+      case 'file':
+        await import();
+      case 'folder':
+        await importFolder();
+      case 'find-files':
+        await findLocalFiles();
+      case 'url':
+        await importUrl();
+      case 'drive-file':
+        await integrationFeature.chooseDrive();
+      case 'drive-folder':
+        await integrationFeature.chooseDrive(folder: true);
+      case 'drive-year':
+        if (!integrationFeature.googlePresentation.connected)
+          await integrationFeature.connectGoogle();
+        if (mounted && integrationFeature.googlePresentation.connected) {
+          await integrationFeature.importLastYear();
+        }
+    }
+  });
 }
 
 class SourcesView extends StatelessWidget {
