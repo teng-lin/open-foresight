@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import select
 import sys
 from pathlib import Path
 import shutil
@@ -751,6 +752,9 @@ def test_real_supervisor_cleans_descendant_after_service_exits(private, ignore_t
         assert os.getsid(child) == process.pid
         assert process.poll() is None, "Supervisor must retain group ownership after service exits"
         child_handle = os.pidfd_open(child)
+        exited = select.poll()
+        exited.register(child_handle, select.POLLIN)
+        assert exited.poll(0) == [], "Descendant must still be alive before cleanup"
         if stop_supervisor:
             os.kill(process.pid, rpc.signal.SIGSTOP)
         measurement.close()
@@ -767,12 +771,15 @@ def test_real_supervisor_cleans_descendant_after_service_exits(private, ignore_t
         else:
             assert measurement.report["owned_session_cleanup"] == "supervisor verified the session empty"
             assert measurement.report["graceful_shutdown"] is True
-        # The supervisor reaps on graceful exit; after SIGKILL, init may still
-        # own a dead zombie briefly. Neither case leaves an executing child.
-        def stopped():
-            path = Path(f"/proc/{child}/stat")
-            return not path.exists() or path.read_text().rpartition(")")[2].split()[0] == "Z"
-        rpc.wait_until(stopped, timeout=5)
+        # The birth-bound pidfd becomes readable on exit, including while init
+        # still owns a zombie after SIGKILL. Reading /proc races with reaping
+        # and can observe a reused PID instead of this descendant.
+        assert any(
+            fd == child_handle and events & select.POLLIN
+            for fd, events in exited.poll(5000)
+        ), (
+            "Owned descendant must exit within five seconds"
+        )
     finally:
         if child_handle is not None:
             try:
