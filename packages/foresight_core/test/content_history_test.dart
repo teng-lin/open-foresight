@@ -128,7 +128,9 @@ void main() {
           .revisions('meeting_notes', id)
           .map((r) => r['snapshot'] as Map);
       expect(notes.any((r) => r['body'] == 'raw first'), isTrue);
-      expect(notes.any((r) => r['enhanced_body'] == 'enhanced first'), isTrue);
+      // Generated live drafts are replaceable derived output, not manual history.
+      expect(notes.any((r) => r['enhanced_body'] == 'enhanced first'), isFalse);
+      expect(store.meetingEnhancedNotes(id), 'enhanced second');
       expect(
         store.contentHistory.revisions('artifacts', artifact).first['snapshot'],
         containsPair('edited', 'edit first'),

@@ -21,6 +21,10 @@ final class ContentHistory {
         supportedVersion: supportedVersion,
       );
 
+  static const maximumRevisions = 20;
+  static const maximumBytes = 32 * 1024 * 1024;
+  static const maximumAge = Duration(days: 90);
+
   static const entities = {
     'notes',
     'meeting_notes',
@@ -33,8 +37,12 @@ final class ContentHistory {
     if (!entities.contains(entity)) throw ArgumentError.value(entity, 'entity');
     return [
       for (final row in _rows(
-        'SELECT id,snapshot,created FROM content_revisions WHERE entity=? AND entity_id=? ORDER BY id DESC',
-        [entity, '$id'],
+        'SELECT id,snapshot,created FROM content_revisions WHERE entity=? AND entity_id=? AND created>=? ORDER BY id DESC',
+        [
+          entity,
+          '$id',
+          DateTime.now().subtract(maximumAge).millisecondsSinceEpoch,
+        ],
       ))
         {
           'id': row['id'],

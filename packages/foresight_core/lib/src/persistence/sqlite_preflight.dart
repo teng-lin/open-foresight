@@ -194,7 +194,7 @@ class SqlitePreflight {
   }
 
   int _readonlyVersion(String candidate) {
-    final db = sqlite3.open(candidate, mode: OpenMode.readOnly);
+    final db = openApplicationDatabase(candidate, mode: OpenMode.readOnly);
     try {
       return db.select('PRAGMA user_version').single.values.single as int;
     } finally {

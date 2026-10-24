@@ -30,7 +30,7 @@ final class SqliteReadSession {
     } catch (_) {
       // Store's established startup refusal is StateError. Classify a newer
       // schema into the reader's typed terminal failure without parsing text.
-      final db = sqlite3.open(path, mode: OpenMode.readOnly);
+      final db = openApplicationDatabase(path, mode: OpenMode.readOnly);
       try {
         readSnapshot(db, () {}, supportedVersion: Store.schemaVersion);
       } finally {
