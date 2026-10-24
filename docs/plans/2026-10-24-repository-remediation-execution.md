@@ -26,12 +26,13 @@ decision, not a passed implementation check.
 
 | Unit | Ownership | Integration prerequisites | Status |
 | --- | --- | --- | --- |
-| A1 | Recording start/stop/error-path cleanup, persistence retry and indexing ownership: F1/F6, persistence part of F9 | Baseline; coordinate final indexing contract with A3/A4 | Committed locally as `65bfb275`; dependent A4 scheduling and qualification remain |
-| A2 | RPC duplicate ownership, model acquisition deadlines, capture temp root and install-lock interoperability: F5/F7/F8 | Baseline; owns relevant native FIFO/lock surfaces | Committed locally as `9e4bdaaa`; legacy upgrade guard follow-up in progress |
-| A3 | Application backup/restore/erasure, history retention and SQLite transactional/busy-timeout fixes: F2/F20, part of F23 | Baseline; coordinate generated transcript handling with A4 | Local commits `065690b3` and Darwin fix `99f3224c`; focused Linux/Mac checks passed; independent review requires locking, pruning, publication and maintenance fixes |
-| A4 | Incremental helper indexing and remaining speech/drain performance: F3, remaining F9 | Coordinate A1/A2 ownership; helper schema/protocol compatibility | Native/protocol unit `9681e096` committed; application integration in progress in separate worktree |
-| A5 | F9 metadata-only import identity and bounded asynchronous directory enumeration | A4 application migration supplies the URI index; independent code review and platform checks | Local commit `bb7666f0`; focused checks passed; review pending |
-| B | Complete logging steps 0–4 and safe RPC errors, including nonthrowing reporter before new exports | Integrate after A runtime changes; independent foundation may develop earlier | Foundation in progress in separate worktree |
+| A1 | Recording start/stop/error-path cleanup, persistence retry and indexing ownership: F1/F6, persistence part of F9 | Baseline; coordinate final indexing contract with A3/A4 | Local head `727a9251`; A4 supplies durable final scheduling; combined qualification remains |
+| A2 | RPC duplicate ownership, model acquisition deadlines, capture temp root and install-lock interoperability: F5/F7/F8 | Baseline; owns relevant native FIFO/lock surfaces | Baseline `9e4bdaaa`; guard units `8d5a4cb5` and `843b2bdf`; first Arch activation and broader NSS policy remain open |
+| A3 | Application backup/restore/erasure, history retention and SQLite transactional/busy-timeout fixes: F2/F20, part of F23 | Baseline; coordinate generated transcript handling with A4 | Local head `91e92b96`; review fixes implemented; final repeat review and latest Mac cases pending |
+| A4 | Incremental helper indexing and remaining speech/drain performance: F3, remaining F9 | Coordinate A1/A2 ownership; helper schema/protocol compatibility | Native/protocol `9681e096`; consumer head `bf7a6cd3`; app head `6a77627d` includes review repairs; canonical combined qualification underway |
+| A5 | F9 metadata-only import identity and bounded asynchronous directory enumeration | A4 application migration supplies the URI index; independent code review and platform checks | `bb7666f0`; focused Linux/Mac checks passed and scoped Claude review converged; final indexed production measurement remains |
+| A6 | F9 speech queue/execution budgets and owned worker lifecycle | A2/A1 runtime; compatible lifecycle consumers | Head `849c4f26`; Linux/Mac native suites passed; scoped native-agent review converged; latest Dart oracle needs Mac qualification |
+| B | Complete logging steps 0–4 and safe RPC errors, including nonthrowing reporter before new exports | Integrate after A runtime changes; independent foundation may develop earlier | Foundation `439af36b` under independent reviews; B2 Dart adoption and safe RPC errors in progress; native adoption remains |
 | C | Ownership, compile boundaries, service operations and local security | A/B contracts | Pending |
 | D/E | Verification/release/dependencies/docs and Python tooling quality | Independent files may progress alongside runtime; final consumers integrate together | Baseline verification underway; native relay measurement correction under local review |
 | F | Final distribution trust, update notice and recovery | D's controls and actual external identities/acceptance | Pending prerequisites |
@@ -193,3 +194,78 @@ asynchronous directory/stat operations. The production URI index is pending in
 A4 migration 22; indexed production performance is not yet accepted. Evidence:
 `/var/tmp/of-a5-import/`. Independent Claude review is running; no integration,
 compiled boundary, real-capture or final coverage result is implied.
+
+### Checkpoint at 2026-10-24 17:10 UTC
+
+This checkpoint supersedes the progress descriptions above; earlier failures and
+their evidence remain part of the record. Integration is still documentation
+only at `98f92135`. No implementation has been pushed and no GitHub PR opened.
+
+- A3 now ends at `91e92b96`. Review repairs removed the extra live-database
+  descriptor, replaced hard-link publication with atomic no-replace rename,
+  bounded pruning/restore maintenance, separated privacy debt in migration 21,
+  corrected the DELETE-to-WAL transition and performed old privacy cleanup before
+  taking a new migration snapshot. The latest focused Linux suite passed
+  **149/149**, zero skips. Exact `4e2213ed` passed **147/147** on both Linux and
+  HanSolo; the latest two added cases still need Mac execution. A fourth
+  independent Claude review is running. Evidence:
+  `/var/tmp/of-a3/review-3/`, `/private/var/tmp/of-rem-a3-final-1024/`.
+  Preparing a restore copy is implemented; the offline activation CLI and final
+  binary/schema compatibility workflow are still pending. Current source-body
+  retention and filesystem freeblocks are not claimed to be physically scrubbed.
+- A4 app head `6a77627d` includes the reviewed A3, import and transport follow-ups.
+  The first independent review found a producer readiness hot loop, cancellation
+  state loss, stale workspace-epoch retry and missed coalesced capture mapping.
+  Repairs passed **206/206** coherent focused cases, **4/4** readiness subprocess
+  checks and **1/1** actual host test-helper regression, zero skips. Analysis,
+  formatting and the 21-version migration-prefix guard passed. The host helper
+  bytes match qualified `9681e096`, but host system libraries differ from the
+  qualified SDK: this is functional evidence, not canonical Linux acceptance.
+  Repeat review and canonical Linux/Mac combined-source checks remain.
+  Evidence: `/var/tmp/of-a4a/review-followup-handoff.md`.
+- The previous Mac consumer run at `bf7a6cd3` reached **2,162 core passes,
+  14 skips and one teardown failure**. D2 `45bd2f96` fixes owned helper transport
+  settlement while preserving upstream behavior for generic TLS/proxy connectors.
+  Its focused Linux suite passed **49/49**, and scoped native-agent review
+  converged. The failed Mac run did not qualify coverage or desktop completion;
+  those gates must run on the combined repaired source. Evidence:
+  `/var/tmp/of-d2-status/fallback-review/`.
+- A5 `bb7666f0` passed **49/49** focused cases on Linux and HanSolo, zero skips;
+  scoped Claude review converged. This does not close all F9 measurements or
+  establish the deferred compiled-boundary/real-capture gates.
+- A6 adds distinct speech queue and execution deadlines. Production head
+  `fe46fc34` passed full root native CTest **32/32 on Linux** and **35/35 on
+  HanSolo**, zero skips. Final test-only head `849c4f26` strengthens the repeated
+  running-phase deadline oracle with a failing mutation control; focused Dart
+  **37/37** passed and scoped native-agent review converged. Latest Mac Dart
+  execution and final compiled-boundary acceptance remain. Evidence:
+  `/var/tmp/of-a6-speech/oracle-review/`.
+- A2's upgrade-lease guard and separate Arch preactivation artifact are committed
+  as `8d5a4cb5` and `843b2bdf`. The actual 83-case package-manager matrix has
+  **74 passes and nine negative failures**, zero skips; all **22 preactivated
+  Arch cases pass**. Eight unprotected first transitions and same-transaction
+  hook activation remain failing evidence. Pacman ignores `.INSTALL`
+  `pre_upgrade` refusal; protection requires a previously installed
+  PreTransaction/AbortOnFail hook. Files-only NSS restrictions also leave common
+  NSS configurations unresolved. F8 is open; these results must not be reported
+  as universal installed-upgrade safety. Evidence:
+  `/var/tmp/of-a2-guard/unit-report.md`.
+- B1 `439af36b` implements bounded diagnostic storage, producer/session ownership,
+  catalogs and the nonthrowing native reporter foundation. Its focused
+  persistence/diagnostics suite passed **174/174**, zero skips. Exact-source
+  fresh native builds passed root CTest **31/31 on Linux** and **34/34 on
+  HanSolo**, zero skips. With the fresh Linux native library loaded, compiled
+  process diagnostics passed **6/6**. The full diagnostics run as root exposed
+  a permissions-fixture mismatch; its failed output is retained. The same failed
+  case then passed **1/1** as UID 1000, followed by all **27/27** diagnostics,
+  zero skips, with the fresh native library still configured. Ordinary-user
+  evidence is under `/var/tmp/of-b1/native-loaded-user/`. Independent native-agent and Claude
+  reviews are running. This is the foundation: the 133-site adoption inventory,
+  safe RPC errors, native diagnostics integration and final acceptance are not
+  yet delivered. B2 implementation is underway in a separate worktree.
+
+Stages C, D/E and F remain substantially incomplete. The final combined-source
+native/core/desktop/coverage, compiled service/MCP, isolated-display, security,
+sanitizer, release/installed and owner-review gates remain required. Real models,
+physical audio/GPU, signing/notarization and external platform settings have not
+been qualified by these focused results.
