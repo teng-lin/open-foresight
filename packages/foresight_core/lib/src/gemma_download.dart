@@ -1,64 +1,13 @@
-import 'model_pins.dart';
+import 'model_catalog.dart';
+import 'model_download_contract.dart';
+import 'model_cache.dart';
+export 'model_catalog.dart';
+export 'model_download_contract.dart';
+export 'model_cache.dart';
 import 'platform_services.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
-import 'package:crypto/crypto.dart';
-
-class GemmaModel {
-  final String name, repository, revision, filename, digest;
-  final int bytes, minimumMemoryGb;
-  const GemmaModel(
-    this.name,
-    this.repository,
-    this.revision,
-    this.filename,
-    this.digest,
-    this.bytes,
-    this.minimumMemoryGb,
-  );
-  Uri get url =>
-      Uri.https('huggingface.co', '/$repository/resolve/$revision/$filename');
-  String get directory =>
-      '${filename.replaceAll('.litertlm', '')}-${digest.substring(0, 12)}';
-}
-
-typedef LocalModelFinder =
-    Future<File?> Function(
-      GemmaModel model,
-      Directory root, {
-      Map<String, Object?>? registration,
-    });
-
-/// Every availability decision authenticates bytes, including equal-size files.
-Future<bool> verifyModelFile(File file, String digest, int bytes) async {
-  try {
-    if (FileSystemEntity.typeSync(file.path, followLinks: false) !=
-            FileSystemEntityType.file ||
-        file.lengthSync() != bytes) {
-      return false;
-    }
-    return (await sha256.bind(file.openRead()).first).toString() == digest;
-  } on FileSystemException {
-    return false;
-  }
-}
-
-Future<File?> localModelFile(
-  GemmaModel model,
-  Directory root, {
-  Map<String, Object?>? registration,
-}) async {
-  final candidates = [
-    if (registration?['digest'] == model.digest)
-      File(registration!['path'] as String),
-    File('${root.path}/${model.directory}/${model.filename}'),
-  ];
-  for (final file in candidates) {
-    if (await verifyModelFile(file, model.digest, model.bytes)) return file;
-  }
-  return null;
-}
 
 /// Available bytes on the filesystem that owns the model cache. Unknown space
 /// is an error so an unbounded multi-GB download cannot start accidentally.
@@ -76,46 +25,10 @@ Future<int> availableModelDiskBytes(Directory directory) async {
   return blocks * 1024;
 }
 
-// Pinned public artifact metadata, independently verified 2026-10-13. These
-// are not assumed identical to Foresight's encrypted Mac service artifacts.
-GemmaModel modelFromPin(String filename) {
-  final pin = modelPin(filename);
-  return GemmaModel(
-    pin['name'] as String,
-    pin['repository'] as String,
-    pin['revision'] as String,
-    pin['filename'] as String,
-    pin['sha256'] as String,
-    pin['bytes'] as int,
-    pin['minimumMemoryGb'] as int,
-  );
-}
-
-final gemmaModels = [
-  modelFromPin('gemma-4-12B-it.litertlm'),
-  modelFromPin('gemma-4-E4B-it.litertlm'),
-  modelFromPin('gemma-4-E2B-it.litertlm'),
-];
-
-final embeddingGemmaModel = modelFromPin('embeddinggemma-2-740m.litertlm');
-
-enum ModelDownloadPhase {
-  checkingCache,
-  verifyingCache,
-  downloading,
-  verifyingDownload,
-}
-
-class ModelDownloadCancelled implements Exception {
-  const ModelDownloadCancelled();
-  @override
-  String toString() => 'Model download cancelled';
-}
-
 /// Persistent range parts survive connection errors and cancellation. Only
 /// authenticated bytes replace a managed-cache file; registered external files
 /// remain untouched. A cache lock prevents concurrent writers sharing staging.
-class GemmaDownload {
+class GemmaDownload implements ModelDownloader {
   static final _activePaths = <String>{};
   final HttpClient Function() createClient;
   final Future<int> Function(Directory) availableBytes;
@@ -131,6 +44,7 @@ class GemmaDownload {
     this.rangeThreshold = 64 * 1024 * 1024,
   }) : createClient = createClient ?? (() => HttpClient()),
        availableBytes = availableBytes ?? availableModelDiskBytes;
+  @override
   void cancel() {
     _cancelled = true;
     _client?.close(force: true);
@@ -140,6 +54,7 @@ class GemmaDownload {
     if (_cancelled) throw const ModelDownloadCancelled();
   }
 
+  @override
   Future<File> download(
     GemmaModel model,
     Directory root, {
