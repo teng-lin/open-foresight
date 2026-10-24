@@ -506,3 +506,47 @@ for those deferrals. They are unfinished follow-ups, not completed findings.
 Existing safety/privacy/tests/trust protections and owner review remain required.
 Prepare one draft from reviewed integration, then stabilize accepted runtime and
 logging work in that same PR. Do not expand unrelated cleanup before the draft.
+
+### Draft PR checkpoint and first follow-up fixes
+
+The single [draft PR #180](https://github.com/teng-lin/open-foresight/pull/180)
+is open from `codex/repository-remediation`, initially at `47dbb0d5`. The draft
+lists unfinished logging/native integration, failures and owner review; it is
+not merge-ready. Earlier entries describe their historical checkpoints.
+
+At that frozen source, fresh root Linux native CTest passed **32/32**, zero
+skips. Its matched library/helpers passed core **2,268 / 17 skipped**, **95.02%**
+coverage and desktop **567 / 17 skipped**, **93.72%**, both above 90%. The compiled
+service/MCP and isolated-display suite had **33 passed / one failed / zero skips**:
+immediate search after stopping capture missed the pending final index. A
+separate search-readiness fix is in progress; Stop must not wait for the helper.
+Ruff, mypy (168 files), timeout guard, format/analysis and actionlint with the
+hosted ShellCheck version passed. Python had **5,609 passed / 31 skipped / one
+failed**, from a procfs observation racing with descendant reaping.
+
+The same frozen source was freshly built on HanSolo: **35/35 CTests**, zero
+skips; core **2,269 / 14 skipped**, **95.31%** report-only coverage; desktop
+**569 / 13 skipped**, **93.61%** report-only coverage. This is macOS 26.6/SDK 27
+with deployment target 15.0, not macOS 15 runtime, device/TCC, GPU or real-model
+acceptance. Linux evidence is `/var/tmp/of-draft47`; Mac evidence was retained
+there under `mac` and remotely at `/private/var/tmp/of-rem-draft47`.
+
+The reviewed test-only follow-up `ca8df0f1`, locally merged as `3284cd96`, uses
+the already acquired descendant pidfd to assert alive-before and exited-after
+cleanup, preserving the five-second bound and every supervisor/session oracle.
+Its focused module passed **155/155**, zero skips; full Python then passed
+**5,610 / 31 skipped**. An initial exact poll-mask assertion rejected the valid
+POLLIN|POLLHUP result; that failed output was retained before correcting the
+readability bit test. Evidence: `/var/tmp/of-draft47/rpc-observation*` and
+`/var/tmp/of-rpc-fixed-full`.
+
+Hosted CI's first native-stage failure was repeated GitHub API HTTP 503 during
+producer qualification, not permission to bypass artifact trust. Its TSan job
+also found an exit-time gRPC thread leak in an intentionally crashed helper;
+the existing probation policy allowed the workflow conclusion to remain green.
+This individual failure remains tracked. The isolated `49ba48c6` correction
+uses actual self-SIGKILL and strict signal-status assertions for abrupt-crash
+fixtures, retaining transaction/replay checks and sanitizer log gates. Native
+and Claude review converged; fresh Linux failed-first helper tests **2/2** and
+full CTest **32/32** passed. Mac, matched application and hosted sanitizer
+qualification remain before integration/acceptance.
