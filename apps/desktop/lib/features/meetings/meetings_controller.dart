@@ -1,3 +1,4 @@
+import 'summary_view.dart';
 import 'recording_view.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -23,7 +24,6 @@ part 'collection_view.dart';
 part 'workspace_view.dart';
 part 'notes_view.dart';
 part 'assistant_views.dart';
-part 'summary_view.dart';
 part 'ai_views.dart';
 
 const _meetingAssistantMinWidth = 760.0;
@@ -294,6 +294,48 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
   Future<String> exportMeetingMarkdown() => meetingMarkdown();
 
   Widget immersiveMeetingWorkspace() => _immersiveMeetingWorkspace();
+
+  Widget meetingSummaryPanel(int id, {bool actions = false}) {
+    if (actions) return meetingActionsPanel(id);
+    final identity = _reads.presentationIdentity;
+    final fromPreview = meetingId == null;
+    final summary = d.capturePresentation.summary(id);
+    final active = summary?.active == true;
+    return MeetingSummaryPanel(
+      versions: _reads.artifacts(id, 'summary'),
+      summary: summary,
+      revision: _reads.revision(id) ?? 0,
+      fontSize: _chat.answerFontSize,
+      openLink: _host.environment.openUri,
+      onGenerate:
+          identity == null ||
+              active ||
+              _operations.busy ||
+              _chat.asking ||
+              meetingEnhancing
+          ? null
+          : () => _runMeetingAction(
+              id,
+              identity,
+              (current) => generateMeeting(
+                'summary',
+                id: id,
+                workspaceEpoch: identity.workspaceEpoch,
+                current: current,
+              ),
+              preview: fromPreview,
+            ),
+      onCancel: () => unawaited(
+        d
+            .command(Operation.meetingsCancelSummary, {'id': id})
+            .catchError(_operations.reportAsyncError),
+      ),
+      onEdit: (artifact) => unawaited(
+        editArtifact(artifact).catchError(_operations.reportAsyncError),
+      ),
+      onCopy: (body) => Clipboard.setData(ClipboardData(text: body)),
+    );
+  }
 
   Widget recordingHeader() {
     final elapsed =

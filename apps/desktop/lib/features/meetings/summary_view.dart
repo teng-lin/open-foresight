@@ -1,15 +1,35 @@
-part of 'meetings_controller.dart';
+import 'package:flutter/material.dart';
+import 'package:foresight_core/desktop.dart';
+import '../../generated_content.dart';
 
-extension _SummaryView on MeetingsController {
-  Widget meetingSummaryPanel(int id, {bool actions = false}) {
-    if (actions) return meetingActionsPanel(id);
-    final identity = _reads.presentationIdentity;
-    final fromPreview = meetingId == null;
-    final kind = actions ? 'actions' : 'summary';
-    final title = actions ? 'Action items' : 'Summary';
-    final versions = _reads.artifacts(id, kind);
+/// A presentation snapshot and callbacks, independent of meeting state owners.
+class MeetingSummaryPanel extends StatelessWidget {
+  final List<MeetingArtifact> versions;
+  final MeetingRunPresentation? summary;
+  final int revision;
+  final double fontSize;
+  final Future<void> Function(Uri) openLink;
+  final VoidCallback? onGenerate;
+  final VoidCallback onCancel;
+  final ValueChanged<MeetingArtifact> onEdit;
+  final ValueChanged<String> onCopy;
+  MeetingSummaryPanel({
+    super.key,
+    required List<MeetingArtifact> versions,
+    required this.summary,
+    required this.revision,
+    required this.fontSize,
+    required this.openLink,
+    this.onGenerate,
+    required this.onCancel,
+    required this.onEdit,
+    required this.onCopy,
+  }) : versions = List.unmodifiable(versions);
+
+  @override
+  Widget build(BuildContext context) {
+    const title = 'Summary';
     final artifact = versions.firstOrNull;
-    final summary = actions ? null : d.capturePresentation.summary(id);
     final active = summary?.active == true;
     final preview = summary?.preview ?? '';
     final manifest = artifact?.manifest;
@@ -17,10 +37,7 @@ extension _SummaryView on MeetingsController {
     return Column(
       children: [
         _meetingSummaryHeading(
-          id,
-          identity,
-          fromPreview: fromPreview,
-          kind: kind,
+          context,
           title: title,
           active: active,
           artifact: artifact,
@@ -49,8 +66,8 @@ extension _SummaryView on MeetingsController {
                   padding: const EdgeInsets.all(20),
                   child: GeneratedContent(
                     preview,
-                    openLink: _host.environment.openUri,
-                    fontSize: _chat.answerFontSize,
+                    openLink: openLink,
+                    fontSize: fontSize,
                   ),
                 )
               : artifact == null
@@ -72,7 +89,7 @@ extension _SummaryView on MeetingsController {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (artifact.inputRevision < (_reads.revision(id) ?? 0))
+                      if (artifact.inputRevision < revision)
                         const Text('Out of date — regenerate'),
                       if (clipped)
                         const Text(
@@ -80,8 +97,8 @@ extension _SummaryView on MeetingsController {
                         ),
                       GeneratedContent(
                         artifact.body,
-                        openLink: _host.environment.openUri,
-                        fontSize: _chat.answerFontSize,
+                        openLink: openLink,
+                        fontSize: fontSize,
                       ),
                       if (versions.length > 1)
                         ExpansionTile(
@@ -91,15 +108,11 @@ extension _SummaryView on MeetingsController {
                               ListTile(
                                 title: GeneratedContent(
                                   previous.body,
-                                  openLink: _host.environment.openUri,
+                                  openLink: openLink,
                                 ),
                                 trailing: IconButton(
                                   tooltip: 'Edit previous version',
-                                  onPressed: () => unawaited(
-                                    editArtifact(
-                                      previous,
-                                    ).catchError(_operations.reportAsyncError),
-                                  ),
+                                  onPressed: () => onEdit(previous),
                                   icon: const Icon(Icons.edit_outlined),
                                 ),
                               ),
@@ -114,10 +127,7 @@ extension _SummaryView on MeetingsController {
   }
 
   Widget _meetingSummaryHeading(
-    int id,
-    FeatureRequestIdentity? identity, {
-    required bool fromPreview,
-    required String kind,
+    BuildContext context, {
     required String title,
     required bool active,
     MeetingArtifact? artifact,
@@ -130,53 +140,25 @@ extension _SummaryView on MeetingsController {
         ),
         IconButton(
           tooltip: 'Generate $title',
-          onPressed:
-              identity == null ||
-                  active ||
-                  _operations.busy ||
-                  _chat.asking ||
-                  meetingEnhancing
-              ? null
-              : () => _runMeetingAction(
-                  id,
-                  identity,
-                  (current) => generateMeeting(
-                    kind,
-                    id: id,
-                    workspaceEpoch: identity.workspaceEpoch,
-                    current: current,
-                  ),
-                  preview: fromPreview,
-                ),
+          onPressed: onGenerate,
           icon: const Icon(Icons.auto_awesome),
         ),
         if (active)
           IconButton(
             tooltip: 'Cancel summary',
-            onPressed: () => unawaited(
-              d
-                  .command(Operation.meetingsCancelSummary, {'id': id})
-                  .catchError(_operations.reportAsyncError),
-            ),
+            onPressed: onCancel,
             icon: const Icon(Icons.stop_circle_outlined),
           ),
         if (artifact != null)
           IconButton(
             tooltip: 'Copy $title',
-            onPressed: () =>
-                Clipboard.setData(ClipboardData(text: artifact.body)),
+            onPressed: () => onCopy(artifact.body),
             icon: const Icon(Icons.copy_outlined),
           ),
         if (artifact != null)
           IconButton(
             tooltip: 'Edit $title',
-            onPressed: active
-                ? null
-                : () => unawaited(
-                    editArtifact(
-                      artifact,
-                    ).catchError(_operations.reportAsyncError),
-                  ),
+            onPressed: active ? null : () => onEdit(artifact),
             icon: const Icon(Icons.edit_outlined),
           ),
       ],
