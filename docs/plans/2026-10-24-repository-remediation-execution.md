@@ -399,3 +399,32 @@ producer-lifetime exhaustion. The author is verifying these against pinned
 sources and revising the design; broad storage-worker implementation remains
 pending. Earlier native convergence is not substituted for resolving the new
 findings. No push or hosted PR has occurred.
+
+
+### Profile migration connection ownership repaired
+
+Reviewed unit `278c8f10` is integrated locally. Five production SQLite transaction
+contexts now commit/roll back and then close explicitly, before backup/recovery
+copies. Two regressions retain actual connections to prevent GC from masking
+ownership, verify SQL rejects use after close, and assert closure when profile
+copies occur on success/failure. The original production source fails both;
+repaired bytes were restored exactly. Existing fixture contexts now close too;
+SQL, schema ceilings, credential handling and profile transformations are unchanged.
+
+Focused Linux and HanSolo runs each passed **32 tests and 11 subtests**, zero
+skips, with warnings treated as errors. Ruff, mypy (167 files) and timeout checks
+passed; both independent native-agent and Claude reviews converged. The complete
+Linux Python coverage run at the frozen unit passed **5,590 tests / 31 skips**,
+**95.82%** against the 95% floor. Warnings fell from 187 to 52; the remaining
+warnings are retained and are not suppressed or treated as resolved. This is not
+a full Mac Python-suite or completed offline restore-activation claim.
+Evidence: `/var/tmp/of-profile-ownership/`, source archive/hash, both negative
+controls under `/var/tmp/of-int-a4/migration-ownership-*`, and Mac export
+`/private/var/tmp/of-rem-profile-278c8f10`. Existing Mac dependencies were reused
+only after exact lock equality, without claiming a fresh dependency installation.
+
+The full run precedes the documentation-only initializer-trust prerequisite note
+`543ae3fa`. Its local links passed separately. The initializer/import conversion
+itself remains pending: a real initializer must enter SDK producer-control closure
+with an explicit historical-absence policy before introducing that new execution
+dependency. No hosted PR, push, final owner approval or main merge has occurred.
