@@ -35,6 +35,7 @@ final class MigrationBackups {
   final String databasePath;
   final DateTime Function() _now;
   static const maximumSnapshots = 2;
+  static const maximumRestoredCopies = 1;
   static const maximumAge = Duration(days: 7);
   static final _namePattern = RegExp(
     r'^snapshot-[0-9]{1,16}-[a-f0-9]{32}\.db$',
@@ -78,11 +79,11 @@ final class MigrationBackups {
     BackupFile? output, journal;
     var published = false;
     try {
-      // Opening the already-existing source without following links also rejects
-      // device/hardlinked/public files before any backup operation begins.
-      final original = parent.open(p.basename(databasePath), private: false);
-      final sourceIdentity = original.identity;
-      original.close();
+      // Metadata lookup must not open/close the live database: POSIX close on
+      // a second FD would silently release SQLite's process-associated locks.
+      final sourceIdentity = parent
+          .metadata(p.basename(databasePath), private: false)
+          .identity;
       output = directory.open(temporary, create: true);
       journal = directory.open('$name.json.partial', create: true);
       final destination = SnapshotVfs(output, writable: true, journal: journal);
@@ -124,6 +125,12 @@ final class MigrationBackups {
       }
       directory.publish('$name.json.partial', '$name.json');
       directory.verifyAnchor();
+      if (parent.metadata(p.basename(databasePath), private: false).identity !=
+          sourceIdentity) {
+        throw StateError(
+          'Application database changed during migration backup.',
+        );
+      }
       // Do not evict an existing good backup until its replacement is complete.
       _prune(directory, preserve: name);
       return snapshot;
@@ -155,71 +162,107 @@ final class MigrationBackups {
     }
   }
 
-  List<MigrationSnapshot> _snapshots(
-    BackupDirectory directory, {
-    required int supportedVersion,
-  }) {
-    final entries = directory.entries();
-    _validateEntries(entries);
+  String _sourceIdentity() {
     final parent = BackupDirectory(
       p.dirname(p.absolute(databasePath)),
       create: false,
       private: false,
     );
-    late final String sourceIdentity;
     try {
-      final source = parent.open(p.basename(databasePath), private: false);
-      try {
-        sourceIdentity = source.identity;
-      } finally {
-        source.close();
-      }
+      return parent.metadata(p.basename(databasePath), private: false).identity;
     } finally {
       parent.close();
     }
-    final result = <MigrationSnapshot>[];
-    for (final name in entries.where(_namePattern.hasMatch)) {
-      if (!entries.contains('$name.json')) continue;
-      final manifest = directory.open('$name.json');
-      late final MigrationSnapshot snapshot;
+  }
+
+  void _validateDirectory(BackupDirectory directory) {
+    directory.visitEntries((name) {
+      _validateEntries([name]);
+      // Reject unsafe paths before opening any manifest/snapshot. Safe corrupt
+      // payloads are non-candidates; links/foreign/public/special files refuse.
+      directory.metadata(name);
+      return true;
+    });
+  }
+
+  void _visitSnapshotMetadata(
+    BackupDirectory directory,
+    int supportedVersion,
+    void Function(MigrationSnapshot) visit,
+  ) {
+    final sourceIdentity = _sourceIdentity();
+    directory.visitEntries((name) {
+      if (!_namePattern.hasMatch(name) ||
+          !directory.containsEntry('$name.json')) {
+        return true;
+      }
+      final metadata = directory.metadata('$name.json');
+      if (metadata.size > 4096) return true;
+      final file = directory.open('$name.json');
+      MigrationSnapshot? snapshot;
       try {
-        final value = jsonDecode(utf8.decode(manifest.readSmall(4096)));
-        if (value is! Map ||
+        final value = jsonDecode(utf8.decode(file.readSmall(4096)));
+        if (value is! Map || value['created'] is! int) return true;
+        final created = DateTime.fromMillisecondsSinceEpoch(
+          value['created'] as int,
+          isUtc: true,
+        );
+        // Expiry precedes source/checksum processing. A moved/replaced profile
+        // or safe corrupt old copy must not make its retention immortal.
+        if (_now().toUtc().difference(created) > maximumAge) return true;
+        if (value.length != 5 ||
             value['format'] != 1 ||
             value['schema'] is! int ||
-            value['created'] is! int ||
-            value['source'] is! String ||
+            (value['schema'] as int) < 0 ||
+            (value['schema'] as int) > supportedVersion ||
             value['source'] != sourceIdentity ||
             value['sha256'] is! String ||
             !RegExp(r'^[a-f0-9]{64}$').hasMatch(value['sha256'] as String)) {
-          throw StateError('Invalid migration backup manifest.');
+          return true;
         }
         snapshot = MigrationSnapshot(
           name: name,
           schema: value['schema'] as int,
-          created: DateTime.fromMillisecondsSinceEpoch(
-            value['created'] as int,
-            isUtc: true,
-          ),
+          created: created,
           sha256: value['sha256'] as String,
-          sourceIdentity: value['source'] as String,
+          sourceIdentity: sourceIdentity,
         );
-      } finally {
-        manifest.close();
-      }
-      if (snapshot.schema < 0 || snapshot.schema > supportedVersion) continue;
-      if (_now().toUtc().difference(snapshot.created) > maximumAge) continue;
-      final file = directory.open(name);
-      try {
-        if (file.digest() != snapshot.sha256) {
-          throw StateError('Migration backup checksum verification failed.');
-        }
-        _verifyDatabase(file, snapshot.schema);
+      } on FormatException {
+        return true;
+      } on RangeError {
+        return true;
       } finally {
         file.close();
       }
-      result.add(snapshot);
-    }
+      visit(snapshot);
+      return true;
+    });
+  }
+
+  List<MigrationSnapshot> _snapshots(
+    BackupDirectory directory, {
+    required int supportedVersion,
+  }) {
+    _validateDirectory(directory);
+    final result = <MigrationSnapshot>[];
+    _visitSnapshotMetadata(directory, supportedVersion, (snapshot) {
+      // Listing is explicit inspection. Periodic/admission pruning below never
+      // hashes or integrity-scans payloads. A requested restore verifies again.
+      final file = directory.open(snapshot.name);
+      try {
+        try {
+          if (file.digest() != snapshot.sha256) return;
+          _verifyDatabase(file, snapshot.schema);
+          result.add(snapshot);
+        } on SqliteException {
+          return;
+        } on StateError {
+          return;
+        }
+      } finally {
+        file.close();
+      }
+    });
     result.sort((a, b) => b.created.compareTo(a.created));
     return result;
   }
@@ -261,21 +304,59 @@ final class MigrationBackups {
     }
   }
 
-  void _prune(BackupDirectory directory, {String? preserve}) {
-    final entries = directory.entries();
-    _validateEntries(entries);
-    final available = _snapshots(directory, supportedVersion: 0x7fffffff);
-    final ordered = [
-      ...available.where((snapshot) => snapshot.name == preserve),
-      ...available.where((snapshot) => snapshot.name != preserve),
-    ];
-    final keep = ordered.take(maximumSnapshots).map((s) => s.name).toSet();
-    for (final entry in entries) {
-      // Restored copies are user-chosen rollback data, but remain covered by
-      // privacy erasure. Do not discard a prepared restore during admission.
-      if (_restorePattern.hasMatch(entry)) continue;
-      if (!keep.contains(entry) && !keep.any((name) => entry == '$name.json')) {
-        directory.remove(entry);
+  void _prune(
+    BackupDirectory directory, {
+    String? preserve,
+    String? preserveRestore,
+  }) {
+    _validateDirectory(directory);
+    final kept = <MigrationSnapshot>[];
+    _visitSnapshotMetadata(directory, 0x7fffffff, (snapshot) {
+      kept.add(snapshot);
+      kept.sort((a, b) {
+        if (a.name == preserve) return -1;
+        if (b.name == preserve) return 1;
+        return b.created.compareTo(a.created);
+      });
+      if (kept.length > maximumSnapshots) kept.removeLast();
+    });
+    final keep = kept.map((snapshot) => snapshot.name).toSet();
+    final restored = <({String name, int modified})>[];
+    directory.visitEntries((name) {
+      if (_restorePattern.hasMatch(name)) {
+        final metadata = directory.metadata(name);
+        if (_now().millisecondsSinceEpoch - metadata.modifiedMillis <=
+                maximumAge.inMilliseconds ||
+            name == preserveRestore) {
+          restored.add((name: name, modified: metadata.modifiedMillis));
+          restored.sort(
+            (a, b) => a.name == preserveRestore
+                ? -1
+                : b.name == preserveRestore
+                ? 1
+                : b.modified.compareTo(a.modified),
+          );
+          if (restored.length > maximumRestoredCopies) restored.removeLast();
+        }
+      }
+      return true;
+    });
+    final keepRestored = restored.map((entry) => entry.name).toSet();
+    // Unlink in fixed batches; old versions could accumulate >256 prepared
+    // copies. Memory use and descriptor count must not scale with that debt.
+    while (true) {
+      final remove = <String>[];
+      directory.visitEntries((name) {
+        if (!keep.contains(name) &&
+            !keep.any((snapshot) => name == '$snapshot.json') &&
+            !keepRestored.contains(name)) {
+          remove.add(name);
+        }
+        return remove.length < 128;
+      });
+      if (remove.isEmpty) break;
+      for (final name in remove) {
+        directory.remove(name);
       }
     }
     directory.sync();
@@ -298,10 +379,12 @@ final class MigrationBackups {
     }
     final directory = _directory();
     try {
-      final snapshot = _snapshots(
-        directory,
-        supportedVersion: supportedVersion,
-      ).where((s) => s.name == name).firstOrNull;
+      _validateDirectory(directory);
+      MigrationSnapshot? selected;
+      _visitSnapshotMetadata(directory, supportedVersion, (snapshot) {
+        if (snapshot.name == name) selected = snapshot;
+      });
+      final snapshot = selected;
       if (snapshot == null) {
         throw StateError(
           'No verified schema-compatible migration snapshot is available.',
@@ -312,6 +395,10 @@ final class MigrationBackups {
       final source = directory.open(name);
       BackupFile? destination;
       try {
+        if (source.digest() != snapshot.sha256) {
+          throw StateError('Migration backup checksum verification failed.');
+        }
+        _verifyDatabase(source, snapshot.schema);
         destination = directory.open(temporary, create: true);
         source.copyTo(destination);
         if (destination.digest() != snapshot.sha256) {
@@ -331,6 +418,7 @@ final class MigrationBackups {
         destination?.close();
       }
       directory.publish(temporary, restored);
+      _prune(directory, preserveRestore: restored);
       return p.join(directory.path, restored);
     } finally {
       directory.close();
@@ -355,13 +443,13 @@ final class MigrationBackups {
     if (!exists) return;
     final directory = _directory();
     try {
-      final entries = directory.entries();
-      _validateEntries(entries);
-      for (final entry in entries) {
-        directory.remove(entry);
-      }
-      if (directory.entries().isNotEmpty) {
-        throw StateError('Migration backup cleanup remains pending.');
+      _validateDirectory(directory);
+      while (true) {
+        final entries = directory.entries(allowTruncated: true);
+        if (entries.isEmpty) break;
+        for (final entry in entries) {
+          directory.remove(entry);
+        }
       }
       directory.sync();
       directory.verifyAnchor();

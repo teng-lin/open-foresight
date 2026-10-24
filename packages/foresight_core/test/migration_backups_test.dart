@@ -41,7 +41,10 @@ void main() {
         .single;
     expect(snapshot.schema, 19);
     expect(store.notes().single['body'], 'Backup private content');
-    expect(store.rows('PRAGMA user_version').single.values.single, 20);
+    expect(
+      store.rows('PRAGMA user_version').single.values.single,
+      Store.schemaVersion,
+    );
     expect(FileStat.statSync(backups.directoryPath).mode & 0x1ff, 0x1c0);
     for (final file in Directory(backups.directoryPath).listSync()) {
       expect(file.statSync().mode & 0x1ff, 0x180);
@@ -82,7 +85,10 @@ void main() {
       reader.dispose();
     }
     expect(store.notes().single['body'], 'Backup private content');
-    expect(store.rows('PRAGMA user_version').single.values.single, 20);
+    expect(
+      store.rows('PRAGMA user_version').single.values.single,
+      Store.schemaVersion,
+    );
   });
 
   test(
@@ -153,7 +159,10 @@ void main() {
       }
       final retried = Store(path);
       addTearDown(retried.close);
-      expect(retried.rows('PRAGMA user_version').single.values.single, 20);
+      expect(
+        retried.rows('PRAGMA user_version').single.values.single,
+        Store.schemaVersion,
+      );
     },
   );
 
@@ -280,7 +289,7 @@ void main() {
       final handle = file.openSync(mode: FileMode.append);
       handle.writeByteSync(42);
       handle.closeSync();
-      expect(() => backups.snapshots(supportedVersion: 19), throwsStateError);
+      expect(backups.snapshots(supportedVersion: 19), isEmpty);
       expect(
         () => backups.restoreCopy(
           snapshot.name,
@@ -361,8 +370,8 @@ void main() {
     File(path).renameSync(displaced);
     historical(path).dispose();
     expect(
-      () => MigrationBackups(path).snapshots(supportedVersion: 20),
-      throwsStateError,
+      MigrationBackups(path).snapshots(supportedVersion: Store.schemaVersion),
+      isEmpty,
     );
     final reader = openApplicationDatabase(path);
     try {

@@ -62,11 +62,17 @@ final _unlink = _libc
       Int32 Function(Int32, Pointer<Utf8>, Int32),
       int Function(int, Pointer<Utf8>, int)
     >('unlinkat');
-final _link = _libc
+final _renameNoReplace = _libc
     .lookupFunction<
-      Int32 Function(Int32, Pointer<Utf8>, Int32, Pointer<Utf8>, Int32),
+      Int32 Function(Int32, Pointer<Utf8>, Int32, Pointer<Utf8>, Uint32),
       int Function(int, Pointer<Utf8>, int, Pointer<Utf8>, int)
-    >('linkat');
+    >(Platform.isMacOS ? 'renameatx_np' : 'renameat2');
+final _fstatat = Platform.isMacOS
+    ? _libc.lookupFunction<
+        Int32 Function(Int32, Pointer<Utf8>, Pointer<Uint8>, Int32),
+        int Function(int, Pointer<Utf8>, Pointer<Uint8>, int)
+      >('fstatat')
+    : null;
 final _uid = _libc.lookupFunction<Uint32 Function(), int Function()>('geteuid');
 final _statx = Platform.isLinux
     ? _libc.lookupFunction<
@@ -119,33 +125,55 @@ T _name<T>(String name, T Function(Pointer<Utf8>) use) {
   }
 }
 
-({String identity, int mode, int uid, int links, int size}) _metadata(int fd) {
+typedef ScopedFileMetadata = ({
+  String identity,
+  int mode,
+  int uid,
+  int links,
+  int size,
+  int modifiedMillis,
+});
+
+ScopedFileMetadata _decodeMetadata(Pointer<Uint8> buffer) {
+  if (Platform.isLinux) {
+    final b = ByteData.sublistView(buffer.asTypedList(256));
+    if (b.getUint32(0, Endian.host) & 0x35f != 0x35f) _refuse();
+    return (
+      identity:
+          '${b.getUint32(136, Endian.host)}:${b.getUint32(140, Endian.host)}:${b.getUint64(32, Endian.host)}',
+      mode: b.getUint16(28, Endian.host),
+      uid: b.getUint32(20, Endian.host),
+      links: b.getUint32(16, Endian.host),
+      size: b.getUint64(40, Endian.host),
+      modifiedMillis:
+          b.getInt64(112, Endian.host) * 1000 +
+          b.getUint32(120, Endian.host) ~/ 1000000,
+    );
+  }
+  final b = ByteData.sublistView(buffer.asTypedList(144));
+  return (
+    identity: '${b.getUint32(0, Endian.host)}:${b.getUint64(8, Endian.host)}',
+    mode: b.getUint16(4, Endian.host),
+    uid: b.getUint32(16, Endian.host),
+    links: b.getUint16(6, Endian.host),
+    size: b.getInt64(96, Endian.host),
+    modifiedMillis:
+        b.getInt64(48, Endian.host) * 1000 +
+        b.getInt64(56, Endian.host) ~/ 1000000,
+  );
+}
+
+ScopedFileMetadata _metadata(int fd) {
   final buffer = calloc<Uint8>(256);
   try {
     if (Platform.isLinux) {
       if (_name('', (name) => _statx!(fd, name, 0x1000, 0x7ff, buffer)) != 0) {
         _refuse();
       }
-      final b = ByteData.sublistView(buffer.asTypedList(256));
-      if (b.getUint32(0, Endian.host) & 0x31f != 0x31f) _refuse();
-      return (
-        identity:
-            '${b.getUint32(136, Endian.host)}:${b.getUint32(140, Endian.host)}:${b.getUint64(32, Endian.host)}',
-        mode: b.getUint16(28, Endian.host),
-        uid: b.getUint32(20, Endian.host),
-        links: b.getUint32(16, Endian.host),
-        size: b.getUint64(40, Endian.host),
-      );
+    } else if (!Platform.isMacOS || _fstat!(fd, buffer) != 0) {
+      _refuse();
     }
-    if (!Platform.isMacOS || _fstat!(fd, buffer) != 0) _refuse();
-    final b = ByteData.sublistView(buffer.asTypedList(144));
-    return (
-      identity: '${b.getUint32(0, Endian.host)}:${b.getUint64(8, Endian.host)}',
-      mode: b.getUint16(4, Endian.host),
-      uid: b.getUint32(16, Endian.host),
-      links: b.getUint16(6, Endian.host),
-      size: b.getInt64(96, Endian.host),
-    );
+    return _decodeMetadata(buffer);
   } finally {
     calloc.free(buffer);
   }
@@ -234,7 +262,37 @@ final class BackupDirectory {
     }
   }
 
-  List<String> entries() {
+  /// No database descriptor is opened or closed here: closing a second FD on
+  /// SQLite's live file would release this process's POSIX database locks.
+  ScopedFileMetadata metadata(String name, {bool private = true}) {
+    if (_closed || p.basename(name) != name || name == '.' || name == '..') {
+      _refuse();
+    }
+    final buffer = calloc<Uint8>(256);
+    try {
+      final result = _name(
+        name,
+        (path) => Platform.isLinux
+            ? _statx!(_fd, path, 0x100, 0x7ff, buffer)
+            : _fstatat!(_fd, path, buffer, 0x20),
+      );
+      if (result != 0) _refuse();
+      final info = _decodeMetadata(buffer);
+      if (info.mode & 0xf000 != 0x8000 ||
+          info.uid != _uid() ||
+          info.links != 1 ||
+          private && info.mode & 0x3f != 0) {
+        _refuse();
+      }
+      return info;
+    } finally {
+      calloc.free(buffer);
+    }
+  }
+
+  /// Callback iteration keeps memory bounded even for legacy directories with
+  /// many owned copies. Returning false stops iteration and closes its FD.
+  void visitEntries(bool Function(String name) visit) {
     final duplicate = _name(
       '.',
       (name) => _openAt(_fd, name, _directory | _noFollow | _cloexec, 0),
@@ -246,7 +304,6 @@ final class BackupDirectory {
       _refuse();
     }
     try {
-      final result = <String>[];
       while (true) {
         _errno().value = 0;
         final entry = _readdir(directory);
@@ -259,36 +316,70 @@ final class BackupDirectory {
         while (length <= 255 && entry[offset + length] != 0) {
           length++;
         }
-        if (length > 255 || result.length >= 256) _refuse();
+        if (length > 255) _refuse();
         final name = (entry + offset).cast<Utf8>().toDartString(length: length);
-        if (name != '.' && name != '..') result.add(name);
+        if (name != '.' && name != '..' && !visit(name)) break;
       }
-      return result;
     } finally {
       _closedir(directory);
     }
   }
 
+  List<String> entries({bool allowTruncated = false}) {
+    final result = <String>[];
+    visitEntries((name) {
+      if (result.length == 256) {
+        if (!allowTruncated) _refuse();
+        return false;
+      }
+      result.add(name);
+      return true;
+    });
+    return result;
+  }
+
+  bool containsEntry(String expected) {
+    var found = false;
+    visitEntries((name) {
+      if (name == expected) {
+        found = true;
+        return false;
+      }
+      return true;
+    });
+    return found;
+  }
+
   void publish(String temporary, String complete) {
+    if ([
+      temporary,
+      complete,
+    ].any((name) => p.basename(name) != name || name == '.' || name == '..')) {
+      _refuse();
+    }
     verifyAnchor();
+    final source = metadata(temporary);
+    // One atomic no-replace rename has no crash window with a second hardlink.
+    // Linux renameat2(RENAME_NOREPLACE=1), Darwin renameatx_np(RENAME_EXCL=4).
     if (_name(
           temporary,
-          (from) => _name(complete, (to) => _link(_fd, from, _fd, to, 0)),
+          (from) => _name(
+            complete,
+            (to) =>
+                _renameNoReplace(_fd, from, _fd, to, Platform.isMacOS ? 4 : 1),
+          ),
         ) !=
         0) {
       _refuse();
     }
-    // linkat publishes without replacing an existing name. The temporary now
-    // has our intentional second link, so unlink it directly instead of using
-    // the ordinary single-link admission check.
-    if (_name(temporary, (name) => _unlink(_fd, name, 0)) != 0) _refuse();
+    if (metadata(complete).identity != source.identity) _refuse();
     sync();
+    verifyAnchor();
   }
 
   void remove(String name) {
     // Validate immediately before unlink; unlinkat never follows the entry.
-    final file = open(name);
-    file.close();
+    metadata(name);
     if (_name(name, (name) => _unlink(_fd, name, 0)) != 0) _refuse();
   }
 

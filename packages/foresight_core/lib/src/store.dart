@@ -29,7 +29,7 @@ import 'persistence/sqlite_runtime.dart';
 class Store {
   final Database db;
   final String path;
-  static const schemaVersion = 20;
+  static const schemaVersion = 21;
   ContentHistory get contentHistory =>
       ContentHistory(db, supportedVersion: schemaVersion);
 
@@ -41,6 +41,7 @@ class Store {
   /// twice. Keys hold digests of content, so they are kept only this long.
   static const requestKeyLifetime = Duration(hours: 24);
   static const _privacyMaintenanceKey = 'internal.privacyMaintenancePending';
+  static const _backupErasureKey = 'internal.backupErasurePending';
   Timer? _privacyMaintenanceRetry;
   var _privacyRetrySeconds = 1;
   var _privacyMaintenancePending = false;
@@ -48,7 +49,7 @@ class Store {
 
   /// Local deletion is committed even while a reader prevents WAL erasure.
   bool get privacyMaintenancePending =>
-      _privacyMaintenancePending || _hasPrivacyMaintenanceMarker();
+      _privacyMaintenancePending || _hasAnyPrivacyMarker();
   MigrationBackups get migrationBackups => MigrationBackups(path);
   StreamSubscription<SqliteUpdate>? _privacyUpdates;
   Timer? _privacyProbe;
@@ -64,7 +65,7 @@ class Store {
             rows(
               "SELECT 1 FROM sqlite_master WHERE type='table' AND name='preferences'",
             ).isNotEmpty &&
-            _hasPrivacyMaintenanceMarker(),
+            _hasAnyPrivacyMarker(),
         supportedVersion: schemaVersion,
       );
     } catch (_) {
@@ -129,7 +130,7 @@ class Store {
       db.dispose();
       rethrow;
     }
-    _privacyMaintenancePending = _hasPrivacyMaintenanceMarker();
+    _privacyMaintenancePending = _hasAnyPrivacyMarker();
     if (_privacyMaintenancePending) _schedulePrivacyMaintenance();
     // Synchronous notifications allocate only one deferred probe, regardless
     // of row count. Never execute SQL reentrantly inside SQLite's update hook.
@@ -154,7 +155,7 @@ class Store {
       );
       return;
     }
-    if (_hasPrivacyMaintenanceMarker()) {
+    if (_hasAnyPrivacyMarker()) {
       _privacyMaintenancePending = true;
       _schedulePrivacyMaintenance();
     }
@@ -189,6 +190,13 @@ class Store {
     [_privacyMaintenanceKey],
   ).isNotEmpty;
 
+  bool _hasBackupErasureMarker() => rows(
+    'SELECT 1 FROM preferences WHERE key=?',
+    [_backupErasureKey],
+  ).isNotEmpty;
+  bool _hasAnyPrivacyMarker() =>
+      _hasPrivacyMaintenanceMarker() || _hasBackupErasureMarker();
+
   /// Persist the cleanup intent in the same transaction as the content deletion.
   /// Scheduling starts only after that transaction commits, via compactAfterClear.
   void markPrivacyMaintenancePending() {
@@ -201,6 +209,7 @@ class Store {
   /// Erase freed pages after a committed workspace clear. Live readers can keep
   /// a checkpoint busy, so maintenance failure must not undo the local clear.
   void compactAfterClear() {
+    markPrivacyMaintenancePending();
     _privacyMaintenancePending = true;
     _privacyRetrySeconds = 1;
     _retryPrivacyMaintenance();
@@ -220,15 +229,24 @@ class Store {
 
   void _retryPrivacyMaintenance() {
     if (_closed || !_privacyMaintenancePending) return;
+    if (!db.autocommit) {
+      _schedulePrivacyMaintenance();
+      return;
+    }
     try {
-      // Only a constant marker is retained, never any cleared content. Persist
-      // it before checkpointing so a shutdown/restart cannot lose the retry.
-      markPrivacyMaintenancePending();
+      final compact = _hasPrivacyMaintenanceMarker();
+      if (!compact && !_hasBackupErasureMarker()) {
+        _privacyMaintenancePending = false;
+        return;
+      }
+      // Both intents were committed with their deletion. Ordinary entity
+      // deletion erases managed backups and checkpoints old WAL frames only;
+      // whole-file VACUUM belongs solely to explicit clear/legacy full intent.
       if (path != ':memory:') migrationBackups.erase();
       for (final statement in [
         'PRAGMA wal_checkpoint(TRUNCATE)',
-        'VACUUM',
-        'PRAGMA wal_checkpoint(TRUNCATE)',
+        if (compact) 'VACUUM',
+        if (compact) 'PRAGMA wal_checkpoint(TRUNCATE)',
       ]) {
         final result = db.select(statement);
         if (statement.startsWith('PRAGMA wal_checkpoint') &&
@@ -238,8 +256,9 @@ class Store {
           return;
         }
       }
-      db.execute('DELETE FROM preferences WHERE key=?', [
+      db.execute('DELETE FROM preferences WHERE key IN (?,?)', [
         _privacyMaintenanceKey,
+        _backupErasureKey,
       ]);
       _privacyMaintenancePending = false;
       _privacyMaintenanceRetry?.cancel();
@@ -351,7 +370,10 @@ class Store {
       _sourceStore.state(id, state, error);
   void tombstone(String id) {
     _sourceStore.tombstone(id);
-    if (db.autocommit && _hasPrivacyMaintenanceMarker()) compactAfterClear();
+    if (db.autocommit && _hasAnyPrivacyMarker()) {
+      _privacyMaintenancePending = true;
+      _schedulePrivacyMaintenance();
+    }
   }
 
   void answer(

@@ -53,7 +53,7 @@ class SourceStore {
     db.execute('SAVEPOINT import_source');
     try {
       db.execute(
-        'INSERT INTO sources(id,title,content,mime,revision,state,provenance,locally_edited,generated) VALUES(?,?,?,?,1,\'pending\',?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,content=excluded.content,mime=excluded.mime,revision=sources.revision+1,state=\'pending\',error=\'\',deleted=0,provenance=excluded.provenance,locally_edited=excluded.locally_edited,generated=excluded.generated',
+        'INSERT INTO sources(id,title,content,mime,revision,state,provenance,locally_edited,generated) VALUES(?,?,?,?,1,\'pending\',?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,content=excluded.content,mime=excluded.mime,revision=sources.revision+1,state=\'pending\',error=\'\',deleted=0,provenance=excluded.provenance,locally_edited=excluded.locally_edited,generated=CASE WHEN excluded.locally_edited=1 THEN 0 ELSE MAX(sources.generated,excluded.generated) END',
         [
           id,
           title,

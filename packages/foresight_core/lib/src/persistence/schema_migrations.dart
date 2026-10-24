@@ -97,6 +97,8 @@ class ApplicationMigrations {
         }
       case 20:
         _boundContentHistory();
+      case 21:
+        _routeBackupErasure();
       default:
         throw StateError('Missing application database migration $version');
     }
@@ -343,6 +345,31 @@ class ApplicationMigrations {
     );
     db.execute(
       "CREATE TRIGGER IF NOT EXISTS content_revisions_bound AFTER INSERT ON content_revisions BEGIN DELETE FROM content_revisions WHERE entity=NEW.entity AND entity_id=NEW.entity_id AND id NOT IN (SELECT id FROM (SELECT id,sum(length(CAST(snapshot AS BLOB))) OVER (ORDER BY id DESC) AS bytes FROM (SELECT id,snapshot FROM content_revisions WHERE entity=NEW.entity AND entity_id=NEW.entity_id AND created>=CAST(strftime('%s','now') AS INTEGER)*1000-7776000000 ORDER BY id DESC LIMIT 20)) WHERE bytes<=33554432); END",
+    );
+  }
+
+  // Version 21 separates ordinary logical deletion from full-clear compaction.
+  // Existing legacy privacy markers retain their full-cleanup meaning.
+  void _routeBackupErasure() {
+    const entities = {
+      'notes': 'id',
+      'meeting_notes': 'meeting_id',
+      'artifacts': 'id',
+      'meeting_tasks': 'id',
+      'sources': 'id',
+    };
+    for (final entity in entities.entries) {
+      final table = entity.key, id = entity.value;
+      db.execute('DROP TRIGGER ${table}_erase_revisions');
+      db.execute(
+        'CREATE TRIGGER ${table}_erase_revisions AFTER DELETE ON $table BEGIN '
+        "DELETE FROM content_revisions WHERE entity='$table' AND entity_id=CAST(OLD.$id AS TEXT); "
+        "INSERT OR IGNORE INTO preferences(key,value) VALUES('internal.backupErasurePending','1'); END",
+      );
+    }
+    db.execute('DROP TRIGGER sources_erase_deleted_revisions');
+    db.execute(
+      "CREATE TRIGGER sources_erase_deleted_revisions AFTER UPDATE OF deleted ON sources WHEN NEW.deleted=1 BEGIN DELETE FROM content_revisions WHERE entity='sources' AND entity_id=NEW.id; INSERT OR IGNORE INTO preferences(key,value) VALUES('internal.backupErasurePending','1'); END",
     );
   }
 
