@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:foresight_core/desktop.dart';
 
 import '../../shell/ports.dart' show FeatureHost;
+import '../../feature_request_identity.dart';
 import 'google_sign_in_dialog.dart';
 
 Future<bool> selectGoogleProvider(
@@ -10,9 +11,11 @@ Future<bool> selectGoogleProvider(
   required bool throughGranola,
 }) async {
   final connection = host.connection;
+  final identity = FeatureRequestIdentity.capture(connection);
+  bool current() => identity.isCurrent(host.connection, alive: host.mounted);
   final googleAuth = connection.googleAuth;
   final granolaCalendar = connection.googlePresentation.provider == 'granola';
-  if (granolaCalendar == throughGranola) return true;
+  if (granolaCalendar == throughGranola) return current();
   final accounts = googleAuth.accounts;
   if (accounts.isNotEmpty) {
     final switchProvider = await showDialog<bool>(
@@ -40,17 +43,18 @@ Future<bool> selectGoogleProvider(
         ],
       ),
     );
-    if (switchProvider != true || !host.mounted) return false;
+    if (switchProvider != true || !current()) return false;
     for (final account in accounts) {
       await googleAuth.signOutAccount(account.id);
-      if (!host.mounted) return false;
+      if (!current()) return false;
     }
   }
   // The service publishes provider status before returning the reply.
-  await connection.command(Operation.googleConfigure, {
+  if (!current()) return false;
+  await connection.commandCurrent(Operation.googleConfigure, {
     'provider': throughGranola ? 'granola' : 'google',
-  });
-  if (!host.mounted) return false;
+  }, current);
+  if (!current()) return false;
   return true;
 }
 
