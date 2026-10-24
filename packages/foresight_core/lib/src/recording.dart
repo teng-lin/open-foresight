@@ -82,7 +82,7 @@ class Recording implements RecordingStatus {
       >('fs_speech_finish');
 
   final DynamicLibrary lib;
-  final Duration speechTimeout, stopTimeout;
+  final Duration speechTimeout, speechQueueTimeout, stopTimeout;
   final void Function(String) state;
   final void Function(String, int, int, String) transcript;
   final void Function(String, int, int, String)? provisional;
@@ -157,6 +157,7 @@ class Recording implements RecordingStatus {
     this.interruption,
     this.levels,
     this.speechTimeout = const Duration(seconds: 60),
+    this.speechQueueTimeout = const Duration(seconds: 60),
     this.stopTimeout = const Duration(seconds: 90),
   }) : lib = DynamicLibrary.open(path);
 
@@ -620,12 +621,33 @@ class Recording implements RecordingStatus {
           calloc.free(request);
         }
         String? failure;
-        final deadline = DateTime.now().add(speechTimeout);
+        final elapsed = Stopwatch()..start();
+        // Older native fixtures do not announce admission; preserve their
+        // execution timeout. The current native owner announces queued/running
+        // phases, so time behind a sibling cannot consume execution credit.
+        var limit = speechTimeout;
+        var queued = false;
+        var admitted = false;
         while (epoch == _epoch) {
-          if (DateTime.now().isAfter(deadline)) {
-            throw TimeoutException('Speech worker timed out', speechTimeout);
+          if (elapsed.elapsed >= limit) {
+            throw TimeoutException(
+              queued && !admitted
+                  ? 'Speech worker queue admission timed out'
+                  : 'Speech worker timed out',
+              limit,
+            );
           }
           final event = poll(handle);
+          if (event?['type'] == 'state') {
+            if (event?['phase'] == 'speech_queued' && !queued && !admitted) {
+              queued = true;
+              limit = speechQueueTimeout;
+            } else if (event?['phase'] == 'speech_running' && !admitted) {
+              admitted = true;
+              elapsed.reset();
+              limit = speechTimeout;
+            }
+          }
           if (event == null) {
             await Future<void>.delayed(const Duration(milliseconds: 20));
             continue;

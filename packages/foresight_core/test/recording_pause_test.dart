@@ -50,6 +50,25 @@ void main() {
       fixture.lookupFunction<Void Function(Int32), void Function(int)>(
         'fixture_hold_speech',
       )(hold ? 1 : 0);
+  void queueSpeech(bool queued) =>
+      fixture.lookupFunction<Void Function(Int32), void Function(int)>(
+        'fixture_queue_speech',
+      )(queued ? 1 : 0);
+  void admitSpeech(Pointer<Void> handle, {bool complete = true}) =>
+      fixture.lookupFunction<
+        Void Function(Pointer<Void>, Int32),
+        void Function(Pointer<Void>, int)
+      >('fixture_admit_speech')(handle, complete ? 1 : 0);
+  Future<void> until(bool Function() ready) async {
+    final elapsed = Stopwatch()..start();
+    while (!ready()) {
+      if (elapsed.elapsed > const Duration(seconds: 3)) {
+        throw TestFailure('Speech fixture condition did not settle');
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+  }
+
   int emit(int channel, int marker, {int count = 2000}) {
     final bytes = ByteData(count * 2);
     for (var i = 0; i < count; i++) {
@@ -241,6 +260,113 @@ void main() {
         holdSpeech(false);
         recording.dispose();
       }
+    },
+  );
+
+  test(
+    'queued channels retain full execution credit after worker admission',
+    () async {
+      fail(-1);
+      holdSpeech(false);
+      queueSpeech(true);
+      addTearDown(() => queueSpeech(false));
+      final rows = <String>[];
+      final gaps = <Map<String, dynamic>>[];
+      final recording = Recording(
+        library,
+        (_) {},
+        (text, _, __, source) => rows.add('$source:$text'),
+        speechTimeout: const Duration(milliseconds: 40),
+        speechQueueTimeout: const Duration(seconds: 2),
+        interruption: gaps.add,
+      );
+      addTearDown(recording.dispose);
+      recording.start('/usr/bin/true', model);
+      emit(0, 111, count: 20000);
+      emit(1, 222, count: 20000);
+      recording.drain();
+      await until(() => recording.speeches.length == 2 || gaps.isNotEmpty);
+      final handles = recording.speeches.toList();
+      expect(handles, hasLength(2));
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      expect(
+        gaps,
+        isEmpty,
+        reason: 'Queue time cannot consume execution credit',
+      );
+      expect(rows, isEmpty);
+      admitSpeech(handles[0]);
+      await until(() => rows.isNotEmpty || gaps.isNotEmpty);
+      expect(gaps, isEmpty);
+      admitSpeech(handles[1]);
+      await until(() => rows.length == 2 || gaps.isNotEmpty);
+      expect(
+        rows,
+        unorderedEquals(['microphone:marker_111', 'playback:marker_222']),
+      );
+      expect(gaps, isEmpty);
+      await recording.stop();
+    },
+  );
+
+  test('queue admission has a finite independent deadline', () async {
+    fail(-1);
+    holdSpeech(false);
+    queueSpeech(true);
+    addTearDown(() => queueSpeech(false));
+    final gaps = <Map<String, dynamic>>[];
+    final recording = Recording(
+      library,
+      (_) {},
+      (_, __, ___, ____) {},
+      speechTimeout: const Duration(seconds: 2),
+      speechQueueTimeout: const Duration(milliseconds: 40),
+      interruption: gaps.add,
+    );
+    addTearDown(recording.dispose);
+    recording.start('/usr/bin/true', model, playback: false);
+    emit(0, 333, count: 20000);
+    recording.drain();
+    await until(() => gaps.isNotEmpty);
+    expect(gaps.single['message'], contains('queue admission timed out'));
+    expect(recording.speeches, isEmpty);
+    await expectLater(recording.stop(), throwsStateError);
+  });
+
+  test(
+    'execution remains finite and repeated admission cannot renew its credit',
+    () async {
+      fail(-1);
+      holdSpeech(false);
+      queueSpeech(true);
+      addTearDown(() => queueSpeech(false));
+      final gaps = <Map<String, dynamic>>[];
+      final recording = Recording(
+        library,
+        (_) {},
+        (_, __, ___, ____) {},
+        speechTimeout: const Duration(milliseconds: 100),
+        speechQueueTimeout: const Duration(seconds: 2),
+        interruption: gaps.add,
+      );
+      addTearDown(recording.dispose);
+      recording.start('/usr/bin/true', model, playback: false);
+      emit(0, 444, count: 20000);
+      recording.drain();
+      await until(() => recording.speeches.isNotEmpty);
+      final handle = recording.speeches.single;
+      // Remain queued longer than the execution allowance, then start execution.
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      expect(gaps, isEmpty);
+      admitSpeech(handle, complete: false);
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+      expect(gaps, isEmpty);
+      admitSpeech(handle, complete: false);
+      await until(() => gaps.isNotEmpty);
+      expect(gaps.single['message'], contains('Speech worker timed out'));
+      expect(gaps.single['message'], isNot(contains('queue admission')));
+      expect(recording.speeches, isEmpty);
+      await expectLater(recording.stop(), throwsStateError);
     },
   );
 

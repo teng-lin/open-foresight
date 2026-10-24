@@ -67,6 +67,10 @@ int fs_conversation_destroy(void *conversation, int cancel_and_drain);
 void *fs_speech_create(const char *runtime_executable, const char *model_path);
 int fs_speech_push(void *speech, const int16_t *samples, size_t count,
                    int sample_rate);
+// State events announce phase=speech_queued before admission and
+// phase=speech_running once this request owns its speech worker. A queued
+// cancellation never stops a sibling's active request. Existing event consumers
+// can ignore these metadata-only state events; no ABI signature changes.
 int fs_speech_finish(void *speech, const char *request_id);
 int fs_speech_cancel(void *speech);
 void fs_speech_destroy(void *speech);

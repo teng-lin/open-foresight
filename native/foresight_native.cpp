@@ -1385,9 +1385,11 @@ int fs_speech_finish(void *h, const char *id) {
     s.input_rate = 0;
     s.thread = start_worker_thread("speech", [&s, request, samples] {
       bool settled = false;
+      uint64_t seq = 0;
       foresight::guarded_worker(
           [&] {
-            uint64_t seq = 0;
+            s.emit(
+                event("state", request, seq++, ",\"phase\":\"speech_queued\""));
             if (const auto blocked = linux_speech_cpu_block()) {
               failure(s, request, seq, "speech_runtime_failure", *blocked);
               s.emit(event("done", request, seq++, ",\"status\":\"failed\""));
@@ -1422,6 +1424,14 @@ int fs_speech_finish(void *h, const char *id) {
                 }
                 return result;
               };
+              bool admitted = false;
+              auto admission = [&] {
+                if (!admitted) {
+                  s.emit(event("state", request, seq++,
+                               ",\"phase\":\"speech_running\""));
+                  admitted = true;
+                }
+              };
               auto recognize = [&](bool cpu_only) {
                 if (s.worker_engine) {
                   std::unique_lock lock(s.worker_engine->mutex,
@@ -1432,6 +1442,7 @@ int fs_speech_finish(void *h, const char *id) {
                   }
                   if (s.cancel)
                     return -1;
+                  admission();
                   auto &engine = s.worker_engine->engine;
                   if (cpu_only && !engine.cpu_fallback) {
                     shutdown_persistent(engine, false);
@@ -1452,6 +1463,9 @@ int fs_speech_finish(void *h, const char *id) {
                       });
                   return result == 0 && received && !invalid ? 0 : 1;
                 }
+                if (s.cancel)
+                  return -1;
+                admission();
                 return run(
                     s, arguments(cpu_only),
                     [&](const char *p, size_t n) { transcript.append(p, n); });
@@ -1489,7 +1503,6 @@ int fs_speech_finish(void *h, const char *id) {
           [&](const std::string &message) {
             if (settled)
               return;
-            uint64_t seq = 0;
             failure(s, request, seq, "speech_runtime_failure", message);
             s.emit(
                 event("done", request, seq, ",\"status\":" + quote("failed")));

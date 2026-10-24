@@ -11,6 +11,22 @@ import pytest
 LIBRARY = os.environ.get("FORESIGHT_NATIVE_LIBRARY")
 
 
+def events_until_done(library, speech, timeout=10):
+    events = []
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        pointer = library.fs_event_poll(speech, 100)
+        if not pointer:
+            continue
+        try:
+            events.append(json.loads(ctypes.string_at(pointer)))
+        finally:
+            library.fs_string_free(pointer)
+        if events[-1]["type"] == "done":
+            return events
+    raise AssertionError(f"Speech request did not settle: {events}")
+
+
 @pytest.mark.skipif(not LIBRARY, reason="Build native and set FORESIGHT_NATIVE_LIBRARY")
 @pytest.mark.parametrize(
     "frames",
@@ -93,6 +109,10 @@ for line in sys.stdin:
             assert [
                 event["text"] for event in events if event["type"] == "transcript"
             ] == (["segment λ\ncontinued"] if valid else [])
+            assert [event["phase"] for event in events if "phase" in event] == [
+                "speech_queued", "speech_running",
+            ]
+            assert [event["sequence"] for event in events] == list(range(len(events)))
         if valid:
             # A cancelled segment waiting behind another channel must not join
             # that channel's active inference before it can settle cancellation.
@@ -108,21 +128,24 @@ for line in sys.stdin:
             assert library.fs_speech_finish(other, b"queued-channel") == 0
             began = time.monotonic()
             assert library.fs_speech_cancel(other) == 0
-            pointer = library.fs_event_poll(other, 1000)
-            assert pointer
-            cancelled = json.loads(ctypes.string_at(pointer))
-            library.fs_string_free(pointer)
-            assert cancelled["type"] == "done" and cancelled["status"] == "cancelled"
+            queued_events = events_until_done(library, other, timeout=1)
+            assert queued_events[-1]["status"] == "cancelled", queued_events
+            assert [event["phase"] for event in queued_events if "phase" in event] == [
+                "speech_queued",
+            ], "Cancelled queued request must not claim worker admission"
             assert time.monotonic() - began < 1
-            assert not library.fs_event_poll(speech, 0), (
-                "Active channel was cancelled by another segment"
-            )
+            active_events = []
+            while pointer := library.fs_event_poll(speech, 0):
+                try:
+                    active_events.append(json.loads(ctypes.string_at(pointer)))
+                finally:
+                    library.fs_string_free(pointer)
+            assert [event.get("phase") for event in active_events] == [
+                "speech_queued", "speech_running",
+            ], "Active sibling must retain ownership without a terminal event"
             assert library.fs_speech_cancel(speech) == 0
-            pointer = library.fs_event_poll(speech, 1000)
-            assert pointer
-            cancelled = json.loads(ctypes.string_at(pointer))
-            library.fs_string_free(pointer)
-            assert cancelled["type"] == "done" and cancelled["status"] == "cancelled"
+            active_terminal = events_until_done(library, speech, timeout=1)
+            assert active_terminal[-1]["status"] == "cancelled", active_terminal
         assert len(Path(str(worker) + ".starts").read_text().splitlines()) == 1
     finally:
         library.fs_speech_destroy(speech)
@@ -229,6 +252,9 @@ else:
                 break
         assert events and events[-1]["type"] == "done", events
         assert events[-1]["status"] == ("cancelled" if cancel else "completed")
+        assert [event["phase"] for event in events if "phase" in event] == [
+            "speech_queued", "speech_running",
+        ], "CPU fallback must not grant a second execution deadline"
         transcripts = [e["text"] for e in events if e["type"] == "transcript"]
         assert transcripts == ([] if cancel else ["CPU transcript only"])
         retries = [

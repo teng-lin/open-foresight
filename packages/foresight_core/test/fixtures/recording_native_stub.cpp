@@ -15,6 +15,7 @@ static Handle *channels[2] = {};
 static int fail_channel = -1;
 static std::string speech_event;
 static bool hold_speech = false;
+static bool queue_speech = false;
 static int speech_creations = 0;
 static std::string speech_runtime;
 extern "C" {
@@ -26,6 +27,18 @@ int fixture_speech_creations() {
 }
 void fixture_hold_speech(int hold) {
   hold_speech = hold != 0;
+}
+void fixture_queue_speech(int queued) {
+  queue_speech = queued != 0;
+}
+void fixture_admit_speech(void *pointer, int complete) {
+  auto *handle = static_cast<Handle *>(pointer);
+  handle->events.push_back("{\"type\":\"state\",\"phase\":\"speech_running\"}");
+  if (complete) {
+    handle->events.push_back("{\"type\":\"transcript\",\"text\":\"marker_" +
+                             std::to_string(handle->marker) + "\"}");
+    handle->events.push_back("{\"type\":\"done\",\"status\":\"completed\"}");
+  }
 }
 void fixture_speech_event(const char *event) {
   speech_event = event;
@@ -91,6 +104,11 @@ int fs_speech_push(void *pointer, const int16_t *samples, size_t count, int) {
 }
 int fs_speech_finish(void *pointer, const char *) {
   auto *handle = static_cast<Handle *>(pointer);
+  if (queue_speech) {
+    handle->events.push_back(
+        "{\"type\":\"state\",\"phase\":\"speech_queued\"}");
+    return 0;
+  }
   handle->events.push_back(speech_event.empty()
                                ? "{\"type\":\"transcript\",\"text\":\"marker_" +
                                      std::to_string(handle->marker) + "\"}"
