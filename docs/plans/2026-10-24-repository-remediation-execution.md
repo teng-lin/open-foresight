@@ -496,3 +496,13 @@ candidates and Mac probe. B2's first full core and desktop adoption runs failed;
 semantic, CLI, fixture/real-flock and privacy repairs continue with failed output
 retained. No hosted PR or push has occurred; the final combined-source and
 remaining boundary/security/distribution gates are still open.
+
+
+### User scope amendment: earlier draft PR and deferred security additions
+
+The user requested deferral of broader security work and an earlier PR. The
+[delivery scope amendment](2026-10-24-remediation-delivery-scope.md) is authoritative
+for those deferrals. They are unfinished follow-ups, not completed findings.
+Existing safety/privacy/tests/trust protections and owner review remain required.
+Prepare one draft from reviewed integration, then stabilize accepted runtime and
+logging work in that same PR. Do not expand unrelated cleanup before the draft.
