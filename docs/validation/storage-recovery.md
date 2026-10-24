@@ -2,7 +2,8 @@
 
 Application schema 20 introduced bounded history; schema 21 separates ordinary
 backup erasure from full workspace-clear compaction. The application keeps up to 20 previous revisions per entity, with a
-32 MiB aggregate UTF-8 snapshot budget and a 90-day age limit. Current content
+32 MiB aggregate UTF-8 snapshot budget per entity and a 90-day age limit. Total
+history grows with the number of entities; this is not a profile-wide byte cap. Current content
 is preserved even when a previous revision cannot fit. An absent revision is
 unavailable for restore; it is not an empty version of the current document.
 The policy covers notes, meeting notes, artifacts, meeting tasks and sources.

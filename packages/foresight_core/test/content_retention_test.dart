@@ -148,6 +148,35 @@ void main() {
     },
   );
 
+  test('byte allowance is independent per entity rather than profile-wide', () {
+    final body = 'x' * (9 * 1024 * 1024);
+    final ids = [
+      store.saveNote(null, 'First', body),
+      store.saveNote(null, 'Second', body),
+    ];
+    for (final id in ids) {
+      store.saveNote(id, 'Changed', body);
+      store.saveNote(id, 'Current', 'current content');
+      expect(store.contentHistory.revisions('notes', id), hasLength(2));
+      final bytes =
+          store.rows(
+                "SELECT SUM(length(CAST(snapshot AS BLOB))) AS bytes FROM content_revisions WHERE entity='notes' AND entity_id=?",
+                ['$id'],
+              ).single['bytes']
+              as int;
+      expect(bytes, lessThanOrEqualTo(ContentHistory.maximumBytes));
+      expect(store.noteBody(id), 'current content');
+    }
+    final total =
+        store
+                .rows(
+                  'SELECT SUM(length(CAST(snapshot AS BLOB))) AS bytes FROM content_revisions',
+                )
+                .single['bytes']
+            as int;
+    expect(total, greaterThan(ContentHistory.maximumBytes));
+  });
+
   test(
     'long generated transcripts and live drafts retain no repeated payload',
     () {

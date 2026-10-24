@@ -15,8 +15,9 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Changed
 
-- Bound retained content history to 20 revisions per entity, 32 MiB in total and
-  90 days. Upgrades prune excess history while preserving current content.
+- Bound retained content history to 20 revisions and 32 MiB per entity, with a
+  90-day age limit. Total history grows with the number of entities. Upgrades
+  prune excess history while preserving current content.
 - Refuse database upgrades when a verified backup cannot be created or earlier
   privacy cleanup cannot finish. Deleting saved content invalidates managed
   snapshots and prepared restore copies; failed cleanup remains pending.
