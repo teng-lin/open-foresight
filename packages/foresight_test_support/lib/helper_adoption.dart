@@ -1,13 +1,15 @@
 import 'dart:async';
 import 'package:grpc/grpc.dart';
 // ignore: implementation_imports
+import 'package:foresight_core/src/helper_protocol_version.dart';
+// ignore: implementation_imports
 import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
 // ignore: implementation_imports
 import 'package:foresight_core/src/generated/helper_control.pbgrpc.dart'
     as control;
 
 class AdoptionRag extends RagServiceBase {
-  String version = '1.0.3';
+  String version = helperProtocolVersion;
   @override
   Future<PingResponse> ping(ServiceCall call, PingRequest request) async =>
       PingResponse(success: true, version: version);

@@ -7,6 +7,7 @@ import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
 class DelayedIndexService extends RagServiceBase {
   final started = Completer<void>(), release = Completer<void>();
   int calls = 0;
+  ServiceCall? indexCall;
   final configurations = <UpdateModelPathsRequest>[];
   @override
   Future<UpdateModelPathsResponse> updateModelPaths(
@@ -23,6 +24,7 @@ class DelayedIndexService extends RagServiceBase {
     IndexRequest request,
   ) async {
     calls++;
+    indexCall = call;
     if (!started.isCompleted) started.complete();
     await release.future;
     return IndexResponse(success: true);

@@ -811,7 +811,7 @@ void main() {
     },
   );
   test(
-    'desktop departure waits for its cancelled leased import indexing drain',
+    'desktop departure cancels and joins leased import indexing before idle exit',
     () async {
       final rag = DelayedIndexService();
       final server = Server.create(services: [rag]);
@@ -838,20 +838,32 @@ void main() {
       await d.close();
       await disconnected;
       await departed();
+      await eventually(
+        () =>
+            rag.indexCall?.isCanceled == true &&
+            service.dispatchedCount == 0 &&
+            service.domain.mutating == 0,
+      );
       expect(service.desktopShutdownScheduled, true);
-      expect(service.dispatchedCount, 1);
+      expect(service.domain.store.sources.single['state'], 'pending');
+      // Actual request cancellation and transport cleanup retire the lease.
+      // The native helper need not send an acknowledgement to a dead client.
+      expect(rag.release.isCompleted, false);
       now = now.add(const Duration(seconds: 1));
       await lifetime();
-      expect(service.domain.mutating, 1);
-      expect(service.domain.store.sources.single['state'], 'indexing');
-      interleaveStatusTimer();
-      expectPeriodicLifetimeCheck();
-      rag.release.complete();
       await exited();
+      expect(rag.release.isCompleted, false);
       final store = Store('${profile.data}/application.db');
       try {
         expect(store.sources.single['id'], id);
-        expect(store.sources.single['state'], 'indexed');
+        expect(store.sources.single['state'], 'pending');
+        rag.release.complete();
+        await Future<void>.delayed(Duration.zero);
+        expect(
+          store.sources.single['state'],
+          'pending',
+          reason: 'A canceled RPC cannot publish a late acknowledgement',
+        );
         expect(store.sources.single['content'], 'Committed desktop content');
       } finally {
         store.close();
