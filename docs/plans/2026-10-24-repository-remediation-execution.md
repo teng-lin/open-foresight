@@ -428,3 +428,71 @@ The full run precedes the documentation-only initializer-trust prerequisite note
 itself remains pending: a real initializer must enter SDK producer-control closure
 with an explicit historical-absence policy before introducing that new execution
 dependency. No hosted PR, push, final owner approval or main merge has occurred.
+
+
+### First package/entrypoint batch integrated
+
+Merge `1c45995b` integrates `908aac5d` and its documentation/test-only follow-up
+`d8fa2ffd`. `tools` is now a real package, and all eight registry workflow calls
+use `python -m tools.ci_registry` from an explicit workspace directory. Both
+initializer path filters and the exact transport contract change together; the
+two historical direct-script snippets remain readable by the current trusted
+recipe parser. A regression proves unchanged compiler identities for all seven
+SDK components. The standalone direct-script interface remains functional from
+an unrelated directory, including an export without an initializer.
+
+SDK producer controls now include the initializer and registry executable.
+Historical initializer absence remains absence, never an invented blob or
+approval for a present consumer file. Present controls retain verified Git bytes,
+modes and regular-file requirements. Three deliberate control omissions/bypasses
+failed their regressions, then source was restored exactly. The workflow guards,
+permissions, publishing authority and compiler/SDK versions are unchanged.
+**Final owner review remains required** for these trust/control/workflow changes;
+independent agent/Claude convergence is not owner approval.
+
+The frozen `908aac5d` complete Linux coverage run passed **5,610 tests / 31 skips**,
+**95.83%** against the 95% floor, with 52 retained warnings. A complete Git-free
+export passed **3,013 tests / one Docker-opt-in skip / 297 subtests** in each of
+unrelated PR, main and explicitly unset-ref environments; module origins were
+asserted inside that export. Actionlint **1.7.7** with ShellCheck **0.9.0** on PATH,
+ruff, mypy (168 files), timeout and link checks passed. Native-agent and Claude
+reviews converged. The follow-up changes only historical wording and strengthens
+the standalone fixture; all nine affected cases passed. Exact `d8fa2ffd` passed
+**286 tests / 97 subtests**, zero skips, on HanSolo, plus ruff, mypy (168 files),
+timeout and link checks. Evidence: `/var/tmp/of-e-package/`, including source hashes,
+negative controls, ref metadata, original failed legacy-contract regression,
+full reports, follow-up equivalence and Mac logs. This is the first package batch;
+other primary entrypoints, dynamic/path imports and quality work remain open.
+
+### Native qualification correction and unresolved review findings
+
+Fresh native checkpoint `8fe08fcd` passed root CTest **36/36 Linux and 39/39 Mac**,
+zero skips. The team discovered that the inherited Linux `/opt/dev-python` was
+actually Python **3.12.3**. Earlier Linux native results remain evidence of their
+executed C++/fixture paths, not qualification of the supported Python3.13 tooling
+path. The same fresh `8fe08fcd` build was reconfigured using read-only pinned
+Python **3.13.17** and site packages, then passed all **36** root CTests again.
+Library and both helper hashes were verified unchanged, not described as a
+second fresh compilation. Details: `/var/tmp/of-c1-8fe-native/linux/`, including
+`python-toolchain-correction.json` and both retained runs. Mac used pinned Python
+3.13. HanSolo currently runs **macOS26.6 with SDK27**; these results do not prove
+runtime acceptance on the minimum macOS15 host, which remains required.
+
+Claude native review found real shared-executor head-of-line blocking, speech
+join/reuse, parent/child cleanup and retained-unconfirmed-state issues. The author
+reproduced three counterexamples against immutable `8fe08fcd`, including legacy
+admission failure from abandoned async records. Lifetime-v2 corrections are in
+progress; neither `8fe08fcd` nor the WIP is accepted as complete C1.
+
+B1 worker draft4 failed independent native and Claude review. Pinned Dart macOS
+pipe creation added unaccounted inherited control endpoints; a failed factory
+could withhold the process handle before the child watchdog. That expanded
+residual was rejected. Native-owned spawn/atomic shared bootstrap and exact
+Darwin reaper ownership are being evaluated before another freeze, with no broad
+worker implementation yet. A portable probe demonstrated VM reaping interference
+and successful-child quiescence on Linux and HanSolo; it does not prove failed
+starts or PID-reuse safety. Evidence: `/var/tmp/of-b1-fix/`, including the discarded
+candidates and Mac probe. B2's first full core and desktop adoption runs failed;
+semantic, CLI, fixture/real-flock and privacy repairs continue with failed output
+retained. No hosted PR or push has occurred; the final combined-source and
+remaining boundary/security/distribution gates are still open.
