@@ -21,9 +21,16 @@ class GoogleConfigureRequest extends OperationRequest {
     final values = Operation.googleConfigure.descriptor.arguments.decode(
       context.rawArguments,
     );
-    if (values.value<String?>('provider') != 'granola' &&
-        values.value<String?>('path') == null) {
-      invalidArgument('path', 'is required unless provider is granola');
+    final provider = values.value<String?>('provider');
+    final path = values.value<String?>('path');
+    if (provider != null && provider != 'google' && provider != 'granola') {
+      invalidArgument('provider', 'must be google or granola');
+    }
+    if (provider == null && path == null) {
+      invalidArgument('path', 'is required unless provider is specified');
+    }
+    if (provider != null && path != null) {
+      invalidArgument('path', 'cannot be combined with provider');
     }
     return GoogleConfigureRequest._(
       context,

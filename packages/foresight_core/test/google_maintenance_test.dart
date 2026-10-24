@@ -76,6 +76,24 @@ void main() {
     return handler.invoke(decodeOperationRequest(operation, args));
   }
 
+  test(
+    'provider selection round trips through typed service commands',
+    () async {
+      final granola =
+          await invoke(Operation.googleConfigure, {'provider': 'granola'})
+              as Map;
+      expect(granola['provider'], 'granola');
+      expect(granola['driveAvailable'], false);
+      final google =
+          await invoke(Operation.googleConfigure, {'provider': 'google'})
+              as Map;
+      expect(google['provider'], 'google');
+      expect(google['configured'], true);
+      expect(google['driveAvailable'], true);
+      expect(auth.client!.id, 'fixture.apps.googleusercontent.com');
+    },
+  );
+
   test('status is a pure read before explicit initialization', () async {
     final revision = store.dataRevision;
     expect(maintenance.state['connected'], isFalse);

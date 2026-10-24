@@ -419,6 +419,25 @@ void main() {
         isNull,
       );
       expect(
+        (decodeOperationRequest(Operation.googleConfigure, {
+                  'provider': 'google',
+                })
+                as GoogleConfigureRequest)
+            .path,
+        isNull,
+      );
+      for (final args in [
+        {'provider': 'unknown'},
+        {'provider': 'unknown', 'path': 'credentials'},
+        {'provider': 'google', 'path': 'credentials'},
+        {'provider': 'granola', 'path': 'credentials'},
+      ]) {
+        expect(
+          () => decodeOperationRequest(Operation.googleConfigure, args),
+          throwsA(invalid),
+        );
+      }
+      expect(
         () => decodeOperationRequest(Operation.modelsRegister, {
           'kind': 'query-detection',
           'path': 'model',

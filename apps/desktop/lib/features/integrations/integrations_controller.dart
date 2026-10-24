@@ -24,7 +24,7 @@ import 'audio_access.dart';
 import 'desktop_settings.dart';
 import 'global_shortcuts.dart';
 import 'google_picker.dart';
-import 'google_sign_in_dialog.dart';
+import 'google_provider_connection.dart';
 import 'hypr_shortcuts.dart';
 import 'ports.dart';
 import 'preferences.dart';
@@ -189,10 +189,10 @@ class IntegrationsController implements IntegrationsPort {
 
   @override
   Future<void> connectGranolaCalendar() async {
-    // The service flushes the provider status before the configure reply.
-    // The connection owns that snapshot; features only read its typed value.
-    await d.command(Operation.googleConfigure, {'provider': 'granola'});
-    await connectGoogle();
+    if (!await selectGoogleProvider(_host, throughGranola: true) || !mounted)
+      return;
+    setState(() => googleState = '');
+    await _signInGoogle();
   }
 
   Future<void> completeCalendarSignIn(String url) async {
@@ -525,29 +525,17 @@ class IntegrationsController implements IntegrationsPort {
 
   @override
   Future<void> connectGoogle({bool addAccount = false}) async {
-    if (!googleAuth.configured) {
-      throw StateError(
-        'Google sign-in is unavailable in this build. Install a distribution with Google sign-in included.',
-      );
-    }
-    final outcome = await showDialog<GoogleSignInOutcome>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => GoogleSignInDialog(
-        auth: googleAuth,
-        openBrowser: environment.openUri,
-        returnToApp: () => activateWindow(null),
-        addAccount: addAccount,
-        calendarThroughGranola: granolaCalendar,
-        completeSignIn: granolaCalendar
-            ? (url) async {
-                await d.command(Operation.googleCompleteSignIn, {
-                  'url': url,
-                  'manual': true,
-                });
-              }
-            : null,
-      ),
+    if (!await selectGoogleProvider(_host, throughGranola: false) || !mounted)
+      return;
+    setState(() => googleState = '');
+    await _signInGoogle(addAccount: addAccount);
+  }
+
+  Future<void> _signInGoogle({bool addAccount = false}) async {
+    final outcome = await signInGoogleProvider(
+      _host,
+      () => activateWindow(null),
+      addAccount: addAccount,
     );
     if (!mounted) return;
     if (outcome == null || outcome.cancelled) {
@@ -575,7 +563,7 @@ class IntegrationsController implements IntegrationsPort {
   }
 
   @override
-  Future<void> addGoogleAccount() => connectGoogle(addAccount: true);
+  Future<void> addGoogleAccount() => _signInGoogle(addAccount: true);
 
   @override
   Future<void> switchGoogleAccount(String id) async {

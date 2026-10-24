@@ -56,6 +56,8 @@ class GranolaFixture {
           }
           expect(body['code'], 'one-time-code');
           expect(body['isDev'], false);
+          expect(body['platform'], 'macOS');
+          expect(request.headers.value('X-Granola-Platform'), 'macOS');
           if (expectedAuthContext != null) {
             expect(body['authContext'], expectedAuthContext);
           }
@@ -144,6 +146,7 @@ class GranolaFixture {
     authorization = uri;
     expect(uri.queryParameters['provider'], 'google');
     expect(uri.queryParameters['dev'], 'false');
+    expect(uri.queryParameters['platform'], 'macOS');
     expect(uri.queryParameters['version'], '7.663.2');
     expect(uri.queryParameters['code_challenge']!.length, 43);
     expect(uri.queryParameters.containsKey('client_secret'), false);

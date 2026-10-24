@@ -1,5 +1,8 @@
 part of 'google_auth.dart';
 
+// Use Granola's macOS client profile consistently, including on Linux hosts.
+const _granolaPlatform = 'macOS';
+
 /// Fixed production service; injectable only by callers constructing an auth
 /// instance (tests). No credentials or private WorkOS project keys are needed.
 class GranolaEndpoints {
@@ -46,6 +49,10 @@ extension _GranolaAuthorization on GoogleAuth {
       throw StateError(
         'Sign out of saved accounts before changing connection providers.',
       );
+    }
+    // Keep direct OAuth recoverable, including custom clients and restarts.
+    if (!_viaGranola && client != null) {
+      await _save('google-client.json', client!.toJson());
     }
     await _save('client.json', {'provider': 'granola'});
     _viaGranola = true;
@@ -302,7 +309,7 @@ extension _GranolaAuthorization on GoogleAuth {
               queryParameters: {
                 'provider': 'google',
                 'dev': 'false',
-                'platform': Platform.isMacOS ? 'macOS' : 'linux',
+                'platform': _granolaPlatform,
                 'version': '7.663.2',
                 'intent': 'download',
                 'sign_in_click_id': clickId,
@@ -324,7 +331,7 @@ extension _GranolaAuthorization on GoogleAuth {
           'code': params['code'],
           'codeVerifier': verifier,
           'isDev': false,
-          'platform': Platform.isMacOS ? 'macOS' : 'linux',
+          'platform': _granolaPlatform,
           'signInClickId': clickId,
           'sso': false,
           'ssoCode': '',

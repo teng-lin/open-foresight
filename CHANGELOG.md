@@ -13,6 +13,9 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Fixed
 
+- Show separate Google and Granola connection choices, with explicit provider switching and account sign-out confirmation. Recover direct Google sign-in after failed Granola attempts and preserve Google client setup across provider changes and restarts.
+- Use Granola’s macOS client profile for authorization and calendar API calls on Linux.
+
 - Enforce owner capabilities before service dispatch and refuse installer shutdown while a desktop is attached.
 - Require visible desktop approval before agents replace saved notes, meeting tasks or artifacts, and retain previous content atomically for recovery. Deletion and workspace clear erase retained revisions.
 - Keep native worker pipes separate from closed standard input, output or error descriptors.

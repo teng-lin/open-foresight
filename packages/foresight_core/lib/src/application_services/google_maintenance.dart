@@ -216,6 +216,8 @@ final class GoogleMaintenance implements WorkspaceAccountCleanup {
     }) async {
       if (request.provider == 'granola') {
         await auth.configureGranola();
+      } else if (request.provider == 'google') {
+        await auth.configureGoogle();
       } else {
         await auth.configure(File(request.path!));
       }

@@ -75,6 +75,7 @@ class GoogleAuth implements GoogleAccount {
   final Directory directory;
   final GoogleEndpoints endpoints;
   final GranolaEndpoints granolaEndpoints;
+  final File? _defaultClient;
   bool _viaGranola = false;
   String? _granolaNonce;
   String? _granolaSignInClickId;
@@ -139,7 +140,12 @@ class GoogleAuth implements GoogleAccount {
     HttpClient? http,
     File? defaultClient,
     SecretStore? secretStore,
-  }) : endpoints = endpoints ?? GoogleEndpoints(),
+  }) : _defaultClient =
+           defaultClient ??
+           (runtimeConfiguration['FORESIGHT_GOOGLE_CLIENT'] == null
+               ? null
+               : File(runtimeConfiguration['FORESIGHT_GOOGLE_CLIENT']!)),
+       endpoints = endpoints ?? GoogleEndpoints(),
        granolaEndpoints = granolaEndpoints ?? GranolaEndpoints(),
        http = http ?? HttpClient(),
        secretStore = secretStore ?? PlatformSecretStore() {
@@ -154,11 +160,7 @@ class GoogleAuth implements GoogleAccount {
             ? GoogleClient('granola', '')
             : GoogleClient.parse(configuration);
       } else {
-        final bundled =
-            defaultClient ??
-            (runtimeConfiguration['FORESIGHT_GOOGLE_CLIENT'] == null
-                ? null
-                : File(runtimeConfiguration['FORESIGHT_GOOGLE_CLIENT']!));
+        final bundled = _defaultClient;
         if (bundled?.existsSync() == true) {
           client = GoogleClient.parse(
             jsonDecode(bundled!.readAsStringSync()) as Map<String, dynamic>,
@@ -438,6 +440,27 @@ class GoogleAuth implements GoogleAccount {
   Future<void> addAccount(Future<void> Function(Uri) openBrowser) =>
       _authorize(openBrowser, allowConnected: true);
 
+  /// Select direct OAuth using the previous or bundled Google client.
+  Future<void> configureGoogle() async {
+    if (!_viaGranola && configured) return;
+    if (_closed || _disconnecting || _forgetting != null || signingIn) {
+      throw StateError('Finish the current Google connection operation first.');
+    }
+    if (accounts.isNotEmpty) {
+      throw StateError(
+        'Sign out of saved accounts before changing connection providers.',
+      );
+    }
+    final saved = File('${directory.path}/google-client.json');
+    final source = saved.existsSync() ? saved : _defaultClient;
+    if (source == null || !source.existsSync()) {
+      throw StateError(
+        'Google sign-in is unavailable in this build. Install a distribution with Google sign-in included.',
+      );
+    }
+    await configure(source);
+  }
+
   @override
   Future<void> configure(File file) async {
     if (_disconnecting || _forgetting != null) {
@@ -477,10 +500,7 @@ class GoogleAuth implements GoogleAccount {
         'OpenForesight/GranolaCalendar',
       );
       request.headers.set('X-Client-Version', '7.663.2');
-      request.headers.set(
-        'X-Granola-Platform',
-        Platform.isMacOS ? 'macOS' : 'linux',
-      );
+      request.headers.set('X-Granola-Platform', _granolaPlatform);
     }
     if (bearer != null) {
       request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $bearer');
