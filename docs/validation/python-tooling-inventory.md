@@ -70,7 +70,8 @@ CI typing, C901, package conversion and shared helper work remain outstanding.
 Before adding a real `tools/__init__.py`, include package initialization in the
 producer-control review. The current
 [SDK producer control list](../../tools/sdk_producer_trust.py) enumerates tool
-modules but has no initializer entry: today `tools` is a namespace package.
+modules and previously had no initializer entry: at the starting baseline,
+`tools` was a namespace package.
 Adding an initializer creates a new execution dependency for existing imports.
 Its bytes and mode therefore need control-closure coverage, with an explicit
 policy for historical producers that had no initializer. Existing SDK reuse must

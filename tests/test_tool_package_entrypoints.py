@@ -1,4 +1,4 @@
-"""Module entrypoints and direct-script adapters share the real CLI contract."""
+"""Module entrypoints and direct scripts share the real CLI contract."""
 
 import json
 import os
@@ -19,7 +19,8 @@ def test_registry_entrypoint_in_git_free_export(tmp_path, mode, outcome):
     export = tmp_path / "source"
     tools = export / "tools"
     tools.mkdir(parents=True)
-    for name in ("__init__.py", "ci_registry.py"):
+    names = ("__init__.py", "ci_registry.py") if mode == "module" else ("ci_registry.py",)
+    for name in names:
         shutil.copy2(ROOT / "tools" / name, tools / name)
     unrelated = tmp_path / "unrelated"
     unrelated.mkdir()
