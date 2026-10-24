@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 
 import 'backup_files.dart';
 import 'sqlite_runtime.dart';
+import 'snapshot_vfs.dart';
 
 /// A candidate exists only after its bounded manifest was atomically published.
 /// Its hash, schema, source identity and SQLite integrity are rechecked at use.
@@ -74,7 +75,7 @@ final class MigrationBackups {
     }
     final name = 'snapshot-${_now().millisecondsSinceEpoch}-${_nonce()}.db';
     final temporary = '$name.partial';
-    BackupFile? output;
+    BackupFile? output, journal;
     var published = false;
     try {
       // Opening the already-existing source without following links also rejects
@@ -83,7 +84,14 @@ final class MigrationBackups {
       final sourceIdentity = original.identity;
       original.close();
       output = directory.open(temporary, create: true);
-      source.execute('VACUUM INTO ?', [output.descriptorPath]);
+      journal = directory.open('$name.json.partial', create: true);
+      final destination = SnapshotVfs(output, writable: true, journal: journal);
+      destination.registered(
+        () => source.execute('VACUUM INTO ?', [destination.uri]),
+      );
+      journal.close();
+      journal = null;
+      directory.remove('$name.json.partial');
       output.sync();
       _verifyDatabase(output, schema);
       final snapshot = MigrationSnapshot(
@@ -121,6 +129,10 @@ final class MigrationBackups {
       return snapshot;
     } catch (_) {
       output?.close();
+      journal?.close();
+      try {
+        directory.remove('$name.json.partial');
+      } catch (_) {}
       // An unpublished/partial file can never be offered as a restore candidate.
       // Keep it if cleanup fails; the next successful admission removes it.
       try {
@@ -213,20 +225,27 @@ final class MigrationBackups {
   }
 
   static void _verifyDatabase(BackupFile file, int schema) {
-    final db = openApplicationDatabase(
-      file.descriptorPath,
-      mode: OpenMode.readOnly,
-    );
-    try {
-      if (db.select('PRAGMA user_version').single.values.single != schema ||
-          db.select('PRAGMA integrity_check').single.values.single != 'ok') {
-        throw StateError(
-          'Migration backup integrity or schema verification failed.',
+    final vfs = SnapshotVfs(file, writable: false);
+    vfs.registered(() {
+      final db = sqlite3.open(
+        '/snapshot',
+        vfs: vfs.name,
+        mode: OpenMode.readOnly,
+      );
+      try {
+        db.execute(
+          'PRAGMA busy_timeout=${applicationSqliteBusyTimeout.inMilliseconds}',
         );
+        if (db.select('PRAGMA user_version').single.values.single != schema ||
+            db.select('PRAGMA integrity_check').single.values.single != 'ok') {
+          throw StateError(
+            'Migration backup integrity or schema verification failed.',
+          );
+        }
+      } finally {
+        db.dispose();
       }
-    } finally {
-      db.dispose();
-    }
+    });
   }
 
   static void _validateEntries(List<String> entries) {

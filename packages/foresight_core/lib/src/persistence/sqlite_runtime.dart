@@ -77,7 +77,11 @@ upstream.Database openApplicationDatabase(
   String path, {
   upstream.OpenMode mode = upstream.OpenMode.readWriteCreate,
 }) {
-  final db = sqlite3.open(path, mode: mode);
+  // Enable URI selection for controlled ATTACH/VACUUM destinations. The main
+  // filename is always an absolute filesystem path (or :memory:), so an input
+  // beginning with file: cannot bypass profile/path qualification.
+  final filename = path == ':memory:' ? path : File(path).absolute.path;
+  final db = sqlite3.open(filename, mode: mode, uri: true);
   try {
     db.execute(
       'PRAGMA busy_timeout=${applicationSqliteBusyTimeout.inMilliseconds}',

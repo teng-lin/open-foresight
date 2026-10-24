@@ -43,6 +43,20 @@ final _write = _libc
       IntPtr Function(Int32, Pointer<Uint8>, IntPtr),
       int Function(int, Pointer<Uint8>, int)
     >('write');
+final _pread = _libc
+    .lookupFunction<
+      IntPtr Function(Int32, Pointer<Uint8>, IntPtr, Int64),
+      int Function(int, Pointer<Uint8>, int, int)
+    >('pread');
+final _pwrite = _libc
+    .lookupFunction<
+      IntPtr Function(Int32, Pointer<Uint8>, IntPtr, Int64),
+      int Function(int, Pointer<Uint8>, int, int)
+    >('pwrite');
+final _ftruncate = _libc
+    .lookupFunction<Int32 Function(Int32, Int64), int Function(int, int)>(
+      'ftruncate',
+    );
 final _unlink = _libc
     .lookupFunction<
       Int32 Function(Int32, Pointer<Utf8>, Int32),
@@ -295,6 +309,57 @@ final class BackupFile {
   final int _fd;
   final String identity;
   bool _closed = false;
+
+  /// Positional I/O for the snapshot-only SQLite VFS. These operations never
+  /// reopen a pathname or transfer descriptor destruction to SQLite.
+  int readAt(Uint8List destination, int offset) {
+    if (_closed || offset < 0 || destination.length > 1024 * 1024) _refuse();
+    final buffer = calloc<Uint8>(destination.length);
+    try {
+      var read = 0;
+      while (read < destination.length) {
+        final count = _pread(
+          _fd,
+          buffer + read,
+          destination.length - read,
+          offset + read,
+        );
+        if (count < 0) _refuse();
+        if (count == 0) break;
+        read += count;
+      }
+      destination.setRange(0, read, buffer.asTypedList(read));
+      return read;
+    } finally {
+      calloc.free(buffer);
+    }
+  }
+
+  void writeAt(Uint8List bytes, int offset) {
+    if (_closed || offset < 0 || bytes.length > 1024 * 1024) _refuse();
+    final buffer = calloc<Uint8>(bytes.length);
+    try {
+      buffer.asTypedList(bytes.length).setAll(0, bytes);
+      var written = 0;
+      while (written < bytes.length) {
+        final count = _pwrite(
+          _fd,
+          buffer + written,
+          bytes.length - written,
+          offset + written,
+        );
+        if (count <= 0) _refuse();
+        written += count;
+      }
+    } finally {
+      calloc.free(buffer);
+    }
+  }
+
+  void truncateTo(int size) {
+    if (_closed || size < 0 || _ftruncate(_fd, size) != 0) _refuse();
+  }
+
   String get descriptorPath =>
       Platform.isLinux ? '/proc/self/fd/$_fd' : '/dev/fd/$_fd';
   int get size => _metadata(_fd).size;
