@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'package:grpc/grpc.dart';
 // ignore: implementation_imports
+import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
+// ignore: implementation_imports
 import 'package:foresight_core/src/generated/transcript_index.pbgrpc.dart'
     as wire;
 
@@ -103,6 +105,68 @@ class ControlledTranscriptIndex extends wire.TranscriptIndexServiceBase {
       applied: true,
       embeddedBytes: zero + bytesEmbedded,
       embeddedChunks: zero + chunksEmbedded,
+    );
+  }
+}
+
+/// Adapter for consumers whose held/error oracle lives on IndexDocument. Real
+/// helper tests qualify incremental publication and bounded-work behavior.
+class TranscriptIndexService extends wire.TranscriptIndexServiceBase {
+  TranscriptIndexService(this.rag);
+  final RagServiceBase rag;
+  final _cursors = <String, wire.TranscriptCursor>{};
+  final _segments = <String, Map<String, wire.TranscriptSegment>>{};
+
+  @override
+  Future<wire.TranscriptCursor> getCursor(
+    ServiceCall call,
+    wire.TranscriptCursorRequest request,
+  ) async => _cursors[request.documentId] ?? wire.TranscriptCursor();
+
+  @override
+  Future<wire.TranscriptDeltaResult> applyDelta(
+    ServiceCall call,
+    wire.TranscriptDelta request,
+  ) async {
+    final previous = _cursors[request.documentId];
+    if (!request.reset &&
+        (previous?.revision != request.expectedRevision ||
+            previous?.workspaceEpoch != request.workspaceEpoch)) {
+      throw const GrpcError.aborted('Fixture transcript cursor changed');
+    }
+    final segments = <String, wire.TranscriptSegment>{
+      if (!request.reset) ...?_segments[request.documentId],
+    };
+    String key(wire.TranscriptKey key) =>
+        '${key.channel.value}:${key.segmentId}';
+    for (final removed in request.deletes) {
+      segments.remove(key(removed));
+    }
+    for (final segment in request.upserts) {
+      segments[key(segment.key)] = segment;
+    }
+    final ordered = segments.values.toList()
+      ..sort((a, b) => a.key.segmentId.compareTo(b.key.segmentId));
+    final result = await rag.indexDocument(
+      call,
+      IndexRequest(
+        documentId: request.documentId,
+        content: ordered.map((segment) => segment.text).join('\n'),
+      ),
+    );
+    if (!result.success) throw GrpcError.internal(result.errorMessage);
+    // Preserve the same held ServiceCall and observe cancellation before ack.
+    if (call.isCanceled) throw const GrpcError.cancelled();
+    _segments[request.documentId] = segments;
+    _cursors[request.documentId] = wire.TranscriptCursor(
+      exists: true,
+      workspaceEpoch: request.workspaceEpoch,
+      revision: request.revision,
+      lastSegmentId: ordered.isEmpty ? null : ordered.last.key.segmentId,
+    );
+    return wire.TranscriptDeltaResult(
+      applied: true,
+      revision: request.revision,
     );
   }
 }

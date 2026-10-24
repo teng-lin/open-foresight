@@ -170,6 +170,7 @@ void main() {
       );
       expect(app.captureState['active'], isFalse);
       expect(app.provisionalTranscript, isEmpty);
+      await app.indexMeeting(meeting);
       expect(domain.indexed, isNotEmpty);
     },
   );

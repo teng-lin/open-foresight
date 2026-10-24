@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:grpc/grpc.dart';
@@ -41,7 +42,101 @@ class HeldStopRecording extends TestRecording {
   }
 }
 
+class CloseQueueService extends DelayedIndexService {
+  int deletions = 0;
+  @override
+  Future<DeleteResponse> deleteDocument(
+    ServiceCall call,
+    DeleteRequest request,
+  ) async {
+    deletions++;
+    return DeleteResponse(success: true);
+  }
+}
+
 void main() {
+  test(
+    'close refuses queued deletes before RPC and joins held index cancellation',
+    () async {
+      final temporary = createTestTempDirectorySync('closed-queue-');
+      final peer = CloseQueueService();
+      final server = Server.create(services: [peer]);
+      final socket = '${temporary.path}/h.sock';
+      await server.serve(
+        address: InternetAddress(socket, type: InternetAddressType.unix),
+        port: 0,
+      );
+      final helper = Helper(
+        socket,
+        '${temporary.path}/helper',
+        manageProcess: false,
+      );
+      final store = Store('${temporary.path}/app.db');
+      final domain = Domain(store, helper);
+      addTearDown(() async {
+        if (!peer.release.isCompleted) peer.release.complete();
+        domain.close();
+        await domain.drain();
+        await helper.close();
+        await server.shutdown();
+        store.close();
+        temporary.deleteSync(recursive: true);
+      });
+      final first = store.importText(
+        'Held index',
+        'body',
+        'text/plain',
+        'fixture',
+      );
+      final deleted = store.importText(
+        'Queued delete',
+        'body',
+        'text/plain',
+        'fixture',
+      );
+      store.db.execute('INSERT INTO pending_helper_deletes VALUES(?,?)', [
+        'older-purge',
+        1,
+      ]);
+      final indexing = expectLater(
+        domain.index(first),
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+        ),
+      );
+      await peer.started.future.timeout(const Duration(seconds: 5));
+      final deletion = expectLater(
+        domain.delete(deleted),
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+        ),
+      );
+      final retry = expectLater(
+        domain.retryPendingHelperDeletes(),
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+        ),
+      );
+      domain.close();
+      await domain.drain().timeout(const Duration(seconds: 5));
+      await Future.wait([indexing, deletion, retry]);
+      expect(peer.calls, 1);
+      expect(peer.deletions, 0);
+      expect(
+        store.sourceById(deleted, includeDeleted: true).single['deleted'],
+        1,
+      );
+      expect(
+        store.rows('SELECT * FROM pending_helper_deletes WHERE document_id=?', [
+          'older-purge',
+        ]),
+        hasLength(1),
+      );
+      expect(domain.mutating, 0);
+      expect(domain.cancellationWatchCount, 0);
+    },
+  );
+
   test(
     'cancelled parked index settles and leaves durable pending source',
     () async {

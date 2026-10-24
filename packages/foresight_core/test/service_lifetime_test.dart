@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/transcript_index_service.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'dart:io';
@@ -774,7 +775,9 @@ void main() {
     'desktop departure waits for an executing serialized mutation',
     () async {
       final rag = DelayedIndexService();
-      final server = Server.create(services: [rag]);
+      final server = Server.create(
+        services: [rag, TranscriptIndexService(rag)],
+      );
       await server.serve(
         address: InternetAddress(
           service.domain.helper.socket,
@@ -814,7 +817,9 @@ void main() {
     'desktop departure cancels and joins leased import indexing before idle exit',
     () async {
       final rag = DelayedIndexService();
-      final server = Server.create(services: [rag]);
+      final server = Server.create(
+        services: [rag, TranscriptIndexService(rag)],
+      );
       await server.serve(
         address: InternetAddress(
           service.domain.helper.socket,
@@ -1071,7 +1076,9 @@ void main() {
     'unleased model configuration holds idle exit until the helper operation settles',
     () async {
       final rag = ResumeRag();
-      final server = Server.create(services: [rag]);
+      final server = Server.create(
+        services: [rag, TranscriptIndexService(rag)],
+      );
       await server.serve(
         address: InternetAddress(
           service.domain.helper.socket,
@@ -1102,7 +1109,9 @@ void main() {
     'unleased note enhancement and its transcript drain hold idle exit',
     () async {
       final rag = EmbeddingService()..embeddingGate = Completer<void>();
-      final server = Server.create(services: [rag]);
+      final server = Server.create(
+        services: [rag, TranscriptIndexService(rag)],
+      );
       await server.serve(
         address: InternetAddress(
           service.domain.helper.socket,
@@ -1143,7 +1152,9 @@ void main() {
     'cancelled proactive retrieval drains without waiting for its server response',
     () async {
       final rag = ProactiveRag()..release.complete();
-      final server = Server.create(services: [rag]);
+      final server = Server.create(
+        services: [rag, TranscriptIndexService(rag)],
+      );
       await server.serve(
         address: InternetAddress(
           service.domain.helper.socket,
@@ -1194,7 +1205,9 @@ void main() {
     'cancelled proactive generation stays busy until native cleanup settles',
     () async {
       final rag = StreamRag()..release.complete();
-      final server = Server.create(services: [rag]);
+      final server = Server.create(
+        services: [rag, TranscriptIndexService(rag)],
+      );
       await server.serve(
         address: InternetAddress(
           service.domain.helper.socket,
@@ -1269,7 +1282,9 @@ void main() {
     'unleased meeting indexing holds idle exit only while its helper mutation executes',
     () async {
       final rag = DelayedIndexService();
-      final server = Server.create(services: [rag]);
+      final server = Server.create(
+        services: [rag, TranscriptIndexService(rag)],
+      );
       await server.serve(
         address: InternetAddress(
           service.domain.helper.socket,
@@ -1319,7 +1334,9 @@ void main() {
       'streamed answer $mode stays dispatched until its cleanup settles',
       () async {
         final rag = StreamRag()..release.complete();
-        final server = Server.create(services: [rag]);
+        final server = Server.create(
+          services: [rag, TranscriptIndexService(rag)],
+        );
         await server.serve(
           address: InternetAddress(
             service.domain.helper.socket,
@@ -1466,7 +1483,9 @@ void main() {
     'orphaned live transcript embedding alone refuses idle shutdown until settled',
     () async {
       final rag = EmbeddingService()..embeddingGate = Completer<void>();
-      final server = Server.create(services: [rag]);
+      final server = Server.create(
+        services: [rag, TranscriptIndexService(rag)],
+      );
       await server.serve(
         address: InternetAddress(
           service.domain.helper.socket,
@@ -1489,6 +1508,10 @@ void main() {
         'text': 'Captured evidence',
       });
       await rag.embeddingEntered.future;
+      service.domain.resumeSources();
+      await service.application.indexMeeting(id);
+      expect(service.domain.store.sources.single['state'], 'indexed');
+      expect(service.domain.mutating, 0);
       service.application.recording = null;
       service.application.recordingMeeting = null;
       recording.dispose();
@@ -1505,7 +1528,9 @@ void main() {
     'a notes edit schedules its production 30 second enhancement timer without busy work until it fires',
     () async {
       final rag = EmbeddingService()..embeddingGate = Completer<void>();
-      final server = Server.create(services: [rag]);
+      final server = Server.create(
+        services: [rag, TranscriptIndexService(rag)],
+      );
       await server.serve(
         address: InternetAddress(
           service.domain.helper.socket,
@@ -1554,7 +1579,9 @@ void main() {
     'workspace clear leaves an orphaned enhancement producer busy until embedding settles',
     () async {
       final rag = EmbeddingService()..embeddingGate = Completer<void>();
-      final server = Server.create(services: [rag]);
+      final server = Server.create(
+        services: [rag, TranscriptIndexService(rag)],
+      );
       await server.serve(
         address: InternetAddress(
           service.domain.helper.socket,

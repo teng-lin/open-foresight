@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/google_connections.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_test_support/native_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
@@ -7,7 +8,6 @@ import 'package:foresight_core/src/application.dart';
 import 'dart:async';
 import 'dart:io';
 
-import 'package:foresight_core/src/domain.dart';
 import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
 import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
 import 'package:foresight_core/src/helper.dart';
@@ -25,6 +25,12 @@ class EmbeddingService extends RagServiceBase {
   int modelUpdates = 0;
   int vectorSpace = 1;
   int embeddingFailuresRemaining = 0;
+
+  @override
+  Future<IndexResponse> indexDocument(
+    ServiceCall call,
+    IndexRequest request,
+  ) async => IndexResponse(success: true);
 
   @override
   Future<ComputeEmbeddingResponse> computeEmbedding(
@@ -112,7 +118,7 @@ class ChainRuntime extends PromptRuntime {
   }
 }
 
-class TranscriptDomain extends Domain {
+class TranscriptDomain extends AdapterDomain {
   TranscriptDomain(super.store, super.helper, {super.createTimer});
 
   @override

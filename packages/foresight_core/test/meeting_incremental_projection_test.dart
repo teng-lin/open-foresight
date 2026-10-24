@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/persistence/meeting_transcript_projection.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -96,6 +97,35 @@ void main() {
       await server.shutdown();
     });
   });
+
+  test(
+    'row made interim before projection retires its empty journal without a helper mutation',
+    () async {
+      append('Initial indexed evidence');
+      await app.indexMeeting(meeting);
+      final requests = peer.requests.length;
+      final removed = append('Removed before indexing');
+      store.db.execute('UPDATE transcript SET final=0 WHERE id=?', [removed]);
+      final projection = MeetingTranscriptProjection(store);
+      final cursor = peer.cursors[getId()]!;
+      // Check synchronously before entering the producer: a regressed journal
+      // cleanup fails this assertion instead of starving the runner's watchdog.
+      expect(
+        projection.prepare(
+          meeting,
+          store.workspaceEpoch,
+          cursor.revision.toInt(),
+        ),
+        isNull,
+      );
+      expect(projection.unfinished(meeting), false);
+      await app.indexMeeting(meeting).timeout(const Duration(seconds: 5));
+      expect(peer.requests, hasLength(requests));
+      expect(indexedText(), contains('Initial indexed evidence'));
+      expect(indexedText(), isNot(contains('Removed before indexing')));
+      expect(store.rows('SELECT * FROM meeting_index_jobs'), isEmpty);
+    },
+  );
 
   test(
     'producer append work and serialization scale linearly without source history',

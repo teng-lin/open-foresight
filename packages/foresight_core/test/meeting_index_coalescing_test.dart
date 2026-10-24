@@ -151,6 +151,41 @@ void main() {
       expect(reader.sources.single['state'], 'indexed');
     },
   );
+  test('readiness during held recovery schedules one follow-up pass', () async {
+    var attempts = 0;
+    incremental.beforeApply = (call, request) async {
+      attempts++;
+      if (attempts == 1) {
+        service.entered.complete();
+        await service.release.future;
+        throw const GrpcError.unavailable('Old helper stopped during recovery');
+      }
+    };
+    final recovering = app.recoverMeetingIndexes();
+    await service.entered.future.timeout(const Duration(seconds: 5));
+    await app.recoverMeetingIndexes();
+    expect(attempts, 1);
+    service.release.complete();
+    await recovering.timeout(const Duration(seconds: 5));
+    expect(attempts, 2);
+    expect(reader.sources.single['state'], 'indexed');
+    expect(store.rows('SELECT * FROM meeting_index_jobs'), isEmpty);
+    expect(app.backgroundBusy, false);
+  });
+
+  test('model readiness retries a failed generated durable job', () async {
+    service.reject = true;
+    service.release.complete();
+    await expectLater(app.indexMeeting(meeting), throwsA(isA<GrpcError>()));
+    expect(reader.sources.single['state'], 'failed');
+    expect(store.rows('SELECT * FROM meeting_index_jobs'), hasLength(1));
+    service.reject = false;
+    await domain.indexPendingSources();
+    expect(service.requests, hasLength(2));
+    expect(reader.sources.single['state'], 'indexed');
+    expect(store.rows('SELECT * FROM meeting_index_jobs'), isEmpty);
+  });
+
   test('failed work is evicted so a real retry reaches the helper', () async {
     service.reject = true;
     service.release.complete();

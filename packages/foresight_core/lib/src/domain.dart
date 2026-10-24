@@ -400,13 +400,8 @@ class Domain {
     checkCancellations();
     final route = indexMeetingTranscript;
     if (route != null) {
-      final mapping = store.rows(
-        'SELECT m.meeting_id FROM meeting_transcript_sources m JOIN sources s ON s.id=m.source_id WHERE s.id=? AND s.generated=1 AND s.deleted=0',
-        [id],
-      );
-      if (mapping.isNotEmpty) {
-        return route(mapping.single['meeting_id'] as int, current: current);
-      }
+      final meeting = _queries.generatedTranscriptMeeting(id);
+      if (meeting != null) return route(meeting, current: current);
     }
     final generation = workspaceGeneration;
     while (true) {

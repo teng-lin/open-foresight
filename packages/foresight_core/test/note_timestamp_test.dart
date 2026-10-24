@@ -58,6 +58,7 @@ void main() {
         'last_enhanced': null,
         'last_manual_edit': null,
         'enhanced_body': null,
+        'enhanced_generated': 1,
       });
       store.close();
       store = Store(path);

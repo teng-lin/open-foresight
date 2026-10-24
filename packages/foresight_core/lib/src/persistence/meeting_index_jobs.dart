@@ -1,6 +1,7 @@
 import 'package:sqlite3/sqlite3.dart';
 
 import '../rpc_error.dart';
+import '../store.dart';
 
 /// Durable intent contains identities/revisions only; transcript rows remain
 /// the authoritative content. An acknowledgement cannot retire newer work.
@@ -18,6 +19,9 @@ final class MeetingIndexIntent {
 
 final class MeetingIndexJobs {
   MeetingIndexJobs(this.db, {required this.workspaceEpoch});
+
+  factory MeetingIndexJobs.forStore(Store store) =>
+      MeetingIndexJobs(store.db, workspaceEpoch: () => store.workspaceEpoch);
 
   final Database db;
   final String Function() workspaceEpoch;

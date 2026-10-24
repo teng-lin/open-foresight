@@ -29,10 +29,7 @@ final class MeetingIndexer {
     required this.capture,
     required this.changed,
   }) : queries = CaptureQueries(domain.store, meetings),
-       jobs = MeetingIndexJobs(
-         domain.store.db,
-         workspaceEpoch: () => domain.store.workspaceEpoch,
-       ),
+       jobs = MeetingIndexJobs.forStore(domain.store),
        projection = MeetingTranscriptProjection(domain.store);
   final Domain domain;
   final MeetingQueries meetings;
@@ -44,7 +41,7 @@ final class MeetingIndexer {
   Store get store => domain.store;
   final _runs = <int, _MeetingIndexRun>{};
   final _allRuns = <_MeetingIndexRun>{};
-  bool _closed = false, _recovering = false;
+  bool _closed = false, _recovering = false, _recoverAgain = false;
   Future<void>? _closing;
   bool get busy => _allRuns.isNotEmpty || _recovering;
   Map<String, int> get workMetrics => projection.metrics.snapshot;
@@ -294,34 +291,41 @@ final class MeetingIndexer {
   }
 
   Future<void> recover() async {
-    if (_closed || _recovering) return;
+    if (_closed) return;
+    if (_recovering) {
+      _recoverAgain = true;
+      return;
+    }
     _recovering = true;
     changed();
     try {
-      var after = 0;
-      while (!_closed) {
-        // A helper database can be independently restored/removed. Verify its
-        // cursor even when the app's previous successful revision is current;
-        // unchanged cursors cause no transcript body reads or embeddings.
-        final pending = jobs.recover(
-          limit: 32,
-          afterMeeting: after,
-          verifyCompleted: true,
-        );
-        if (pending.isEmpty) break;
-        after = pending
-            .map((item) => item.meeting)
-            .reduce((a, b) => a > b ? a : b);
-        await Future.wait(
-          pending.map((intent) async {
-            try {
-              await _request(intent.meeting);
-            } catch (_) {
-              /* Durable intent remains; no hot retry or false ack. */
-            }
-          }),
-        );
-      }
+      do {
+        _recoverAgain = false;
+        var after = 0;
+        while (!_closed) {
+          // A helper database can be independently restored/removed. Verify its
+          // cursor even when the app's previous successful revision is current;
+          // unchanged cursors cause no transcript body reads or embeddings.
+          final pending = jobs.recover(
+            limit: 32,
+            afterMeeting: after,
+            verifyCompleted: true,
+          );
+          if (pending.isEmpty) break;
+          after = pending
+              .map((item) => item.meeting)
+              .reduce((a, b) => a > b ? a : b);
+          await Future.wait(
+            pending.map((intent) async {
+              try {
+                await _request(intent.meeting);
+              } catch (_) {
+                /* Durable intent remains; no hot retry or false ack. */
+              }
+            }),
+          );
+        }
+      } while (_recoverAgain && !_closed);
     } finally {
       _recovering = false;
       changed();

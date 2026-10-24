@@ -366,6 +366,9 @@ final class MeetingTranscriptProjection {
       }
       seedMissing(meeting);
       project(meeting);
+      // A row can become interim before its first projection. There is then no
+      // helper mutation to acknowledge, but its projected journal must retire.
+      _retireProjectedChanges(meeting);
       final request = wire.TranscriptDelta(
         documentId: sourceId(meeting),
         workspaceEpoch: epoch,
@@ -436,6 +439,13 @@ final class MeetingTranscriptProjection {
     });
   }
 
+  void _retireProjectedChanges(int meeting) {
+    store.db.execute(
+      'DELETE FROM meeting_transcript_changes WHERE meeting_id=? AND projected=1 AND NOT EXISTS(SELECT 1 FROM meeting_index_segments p WHERE p.transcript_id=meeting_transcript_changes.transcript_id AND p.acknowledged=0)',
+      [meeting],
+    );
+  }
+
   void acknowledge(int meeting, String epoch, TranscriptBatch batch) {
     if (store.workspaceEpoch != epoch) return;
     store.workflowTransaction(() {
@@ -451,10 +461,7 @@ final class MeetingTranscriptProjection {
           [meeting, key['id']],
         );
       }
-      store.db.execute(
-        'DELETE FROM meeting_transcript_changes WHERE meeting_id=? AND projected=1 AND NOT EXISTS(SELECT 1 FROM meeting_index_segments p WHERE p.transcript_id=meeting_transcript_changes.transcript_id AND p.acknowledged=0)',
-        [meeting],
-      );
+      _retireProjectedChanges(meeting);
       store.db.execute(
         'DELETE FROM meeting_index_batches WHERE meeting_id=? AND workspace_epoch=?',
         [meeting, epoch],

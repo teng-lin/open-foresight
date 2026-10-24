@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/google_connections.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -111,7 +112,7 @@ class _HeldUiProducer extends NativeRuntime {
   void close() {}
 }
 
-class _UiDomain extends Domain {
+class _UiDomain extends AdapterDomain {
   _UiDomain(super.store, super.helper);
   @override
   Future<void> index(String id, {bool Function()? current}) async {

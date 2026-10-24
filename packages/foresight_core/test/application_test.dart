@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/google_connections.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
@@ -6,8 +7,7 @@ import 'package:test/test.dart';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/application.dart';
 
-class TestDomain extends Domain {
-  final indexed = <String>[];
+class TestDomain extends AdapterDomain {
   TestDomain(super.store, super.helper);
   @override
   Future<void> index(String id, {bool Function()? current}) async {
