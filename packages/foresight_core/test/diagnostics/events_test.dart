@@ -1,10 +1,32 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:foresight_core/src/diagnostics/code_locations.g.dart';
 import 'package:foresight_core/src/diagnostics/events.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test(
+    'generated diagnostic catalogs match the current operation and source inventory',
+    () async {
+      final child = await Process.start(Platform.resolvedExecutable, [
+        'tool/generate_diagnostics_catalog.dart',
+        '--check',
+      ]);
+      final output = child.stdout.transform(utf8.decoder).join();
+      final errors = child.stderr.transform(utf8.decoder).join();
+      int? status;
+      try {
+        status = await child.exitCode.timeout(const Duration(seconds: 15));
+        expect(status, 0, reason: '${await output}${await errors}');
+      } finally {
+        if (status == null) {
+          child.kill(ProcessSignal.sigkill);
+          await child.exitCode.timeout(const Duration(seconds: 2));
+        }
+      }
+    },
+  );
   test('stack formatting failure yields safe empty projection', () {
     final stack = SafeDiagnosticStack.encode(
       _ThrowingStack(),

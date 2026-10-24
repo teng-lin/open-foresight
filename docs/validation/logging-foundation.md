@@ -1,5 +1,12 @@
 # Diagnostic foundation and qualification
 
+The original in-process storage checkpoint is not acceptance: a rejected log
+hardlink can release the application's POSIX database/ownership locks. The
+[storage-worker amendment](logging-storage-worker-design.md) defines the reviewed
+replacement and its remaining process/accounting/platform gates. Until that
+implementation and its evidence land, the accounting and storage observations
+below describe the earlier checkpoint, not a qualified application sink.
+
 The foundation owns no application, database, native runtime or profile lifecycle.
 One entrypoint owns `LoggingSession`, keeps it across startup retries, and passes
 reserved producer bootstraps to worker isolates. Workers cannot close the session
@@ -32,7 +39,7 @@ metadata and one sequential writer summary. VM heap/RSS also includes unrelated
 allocator/runtime overhead; the accounting bound is not a claim about total RSS.
 No event sends before obtaining credits. Exhaustion saturates local counters;
 next grants, admitted records and completion return counters without per-drop
-message streams. The writer has a fixed 64-key event/category rate table,
+message streams. The writer has a fixed indexed slot for every closed event/category key,
 retaining suppressed counts and monotonic first/last milliseconds. Summaries
 contain registered event names only and do not recursively enqueue themselves.
 
@@ -69,6 +76,43 @@ mutex waits. Reporting, caller-buffer retrieval, legacy string retrieval and
 worker callbacks cannot throw out of the failure boundary, including sustained
 allocation and reporter failures. Legacy ABI error text remains an operation
 result; B3 must never turn it into arbitrary persistent diagnostic text.
+
+## Event interpretation
+
+The writer supplies schema, UTC timestamp, monotonic sequence, severity, build
+version/revision, random session, logical application PID and producer identity.
+Optional connection/job identities are random diagnostic tokens, never business
+IDs. Numeric status, counts and durations do not grant application authority.
+
+| Event | Meaning |
+| --- | --- |
+| service.starting / service.ready / service.stopped | Service lifecycle outcome; starting does not imply application-lock acquisition. |
+| rpc.completed / rpc.failed | Registered operation outcome, optional safe category/status/duration; never request or response content. |
+| transport.invalid_frame / transport.activity | Rejected framing or explicitly enabled trace metadata; never frame bytes. |
+| helper.exited / native.worker_failed | Parent-observed child/worker outcome with numeric status/signal and closed category. |
+| capture.state_changed | Closed capture state/count/duration, without device names, audio or transcript. |
+| runtime.failed | Closed failure category/status, without exception text. |
+| auth.changed | Closed provider/outcome/category, without account, URL, token or credential. |
+| logging.records_dropped / logging.record_rejected | Saturating loss/rejection summary, optionally identifying one registered original event/category; it does not classify a healthy session as a genuine application failure. |
+| logging.invalid_configuration | Explicit invalid log-level selection; the invalid value is omitted. |
+
+For example, an RPC completion carries fields such as
+`{"operation":"status","durationUs":17,"outcome":"completed"}`. A drop
+summary carries a numeric count and optional registered event/category and
+first/last monotonic milliseconds. These examples are field fragments, not full
+persisted records or permission to add arbitrary JSON fields.
+
+Stack frames contain generated code-location indices and numeric line/column
+coordinates, at most eight. Indices and fingerprints are scoped to the recorded
+build/revision: adding a source file can change an index, so compare/decode only
+with that exact build's generated catalog. The fingerprint hashes the closed
+category and projected numeric frames; it is not a stable cross-build incident
+identifier. Unknown paths, function names and exception messages are absent.
+The events suite executes the catalog generator's `--check` mode; adding/removing
+production paths or operations requires regenerating and committing both catalogs.
+Current lazy projection defers work until producer credit admission, but does
+not alone prove the proposed scratch bound: StackTrace.toString materialization
+and parser temporaries remain explicit worker-accounting qualification work.
 
 ## Syscall and descriptor contract
 
