@@ -295,3 +295,52 @@ exports; its second independent Claude review is pending. B2 adoption continues
 in its separate worktree and will consume the repaired foundation. Stage D's
 first documentation/link-check unit is now under local implementation; none of
 these activities closes the remaining stages or final integration gates.
+
+
+### Local integration and qualification checkpoint
+
+The integration branch now includes D1 relay measurement fixes (`39267326`),
+Linux-only host guards (`ca1529e9`), the reviewed documentation/link unit
+(`9bcb796a`), and the persistence/indexing unit (merge of `ca385df0`). No hosted
+PR or push has occurred; one final PR remains the delivery target.
+
+- Exact `9bcb796a` passed the full Python suite: **5,587 passed, 31 skipped,
+  1,396 subtests passed**, four warnings, exit zero. This precedes the indexing
+  merge and does not qualify the new combined source. Evidence:
+  `/var/tmp/of-int-d/python-full.log` and `python-full.exit`.
+- A4 final Claude round four returned **CONVERGED**, following independent
+  consumer review. Core at `ee3a7541`: Linux **2,265 passed / 19 skipped**,
+  **94.99%** coverage; Mac **2,269 / 14**, **95.31%**. Final desktop at
+  `ca385df0`: Linux **567 / 17**, **93.72%**; Mac **569 / 13**, **93.62%**.
+  Linux gates were 90%; Mac desktop was report-only. The final changes were
+  desktop fixtures only; 1,401 other Git entries match the core-qualified tree.
+  Native inputs were explicitly reused from qualified `9681e096`, not rebuilt
+  for that fixture change. Actual skip reasons, failure history and identity
+  proofs remain in `/var/tmp/of-a4a/canonical-handoff.md` and its qualification
+  directories. Compiled service/MCP, complete desktop integration, physical
+  audio and real-model acceptance remain open.
+- Exact A3 `d395e99b` passed **150/150**, zero skips, on HanSolo; its fifth
+  Claude review converged. Offline restore activation remains pending.
+- D-docs final review converged. Its offline link checker checks 314 Markdown
+  files. Hash-pinned parser dependencies change the SDK input identity and need
+  final pipeline requalification. Combined `9bcb796a` passed actual Mac default
+  mypy (167 files), subprocess-timeout checks and three unsupported-host guards.
+  This is not a full Mac Python-suite claim.
+- B1 original foundation remains unaccepted. Repairs through `b93c64af` address
+  producer bounds, reporter settlement, retention, filesystem checks and stack
+  privacy. Actual original SQLite/POSIX alias-lock loss was reproduced; safe
+  storage therefore requires an owned OS child. Frozen design draft three
+  SHA-256 `b7fac942b6b94361448aec1cc2c41b23ec04643580bd3f300c0418a88efbb0b6`
+  has converged in both native reviews; Claude round three is running.
+  Stable per-UID production staging roots independent of TMPDIR still require
+  explicit document incorporation. Worker implementation and accounting proofs
+  remain open. B2 broad logging adoption continues separately.
+- The coherent native prerequisite `af7cc18d` passed fresh root CTest **33/33
+  Linux and 36/36 Mac**, zero skips. New C1 native checkpoint `a9b36f3f` passed
+  fresh Linux root CTest **36/36**, zero skips; its matching HanSolo build is
+  running under PID 92475. C1 Dart ownership integration remains underway.
+
+These are local unit qualifications. Final merged-source gates, remaining C/D/E/F
+requirements, upgrade safety and owner-controlled signing/settings acceptance
+remain incomplete. Evidence is retained under `/var/tmp`; no skipped or reused
+path is represented as fresh acceptance.
