@@ -1,3 +1,4 @@
+import 'graph_widgets.dart';
 import 'note_widgets.dart';
 import 'source_tiles.dart';
 import 'dart:async';
@@ -18,7 +19,6 @@ import '../../presentation/workspace_presentation.dart';
 import '../../shell/ports.dart';
 import '../../shell/workspace_tab.dart';
 import 'file_discovery_sheet.dart';
-import 'graph_label_controls.dart';
 import 'graph_rendering.dart';
 import 'cluster_rendering.dart';
 import 'source_painters.dart';
@@ -28,7 +28,6 @@ part 'source_labels.dart';
 part 'source_collection.dart';
 part 'graph_layout_owner.dart';
 part 'graph_interaction.dart';
-part 'graph_widgets.dart';
 
 const _blue = workspaceBlue;
 const _ink = workspaceInk;
@@ -806,6 +805,171 @@ class SourcesController implements SourceCommands {
       _noteBodyNeedsReview = false;
     });
   }
+
+  Widget _featureGraphInspector(
+    SourceSummary selected,
+    List<SourceSummary> rows,
+    List<GraphEdge> edges,
+    List<DocumentLabel> labels,
+  ) => GraphInspector(
+    selected: selected,
+    rows: rows,
+    edges: edges,
+    labels: labels,
+    labelInput: graphLabelInput,
+    enabled: !_operations.busy,
+    relatedLoading: graphRelatedLoading,
+    relatedError: graphRelatedError.isNotEmpty,
+    openLink: _host.sourceLinkOpener,
+    onSelect: selectGraphDocument,
+    onAddLabel: (value) =>
+        _operations.run(() => addSelectedGraphLabel(selected.id, value)),
+    onRemoveLabel: (name) => removeSelectedGraphLabel(selected.id, name),
+  );
+
+  Color _featureFallbackGraphLabelColor() =>
+      Theme.of(context).colorScheme.primary;
+
+  GraphViewSnapshot _projectGraph(
+    List<SourceSummary> rows,
+    Map<String, GraphPoint> worldPoints,
+    List<SourceSummary> matches,
+    Map<String, List<Color>> documentLabelColors,
+    Map<String, Color> labelColorsByName,
+    Map<String, List<DocumentLabel>> documentLabelRecords,
+    List<GraphCluster> clusters,
+    BoxConstraints constraints,
+  ) {
+    final size = Size(constraints.maxWidth, constraints.maxHeight);
+    if (graphViewportSize != size) {
+      graphViewportSize = size;
+      scheduleGraphFit();
+    }
+    final rotated = rows.map((row) {
+      final id = row.id;
+      return rotateGraphPoint(
+        worldPoints[id] ?? const GraphPoint(0, 0, 0),
+        yaw: graphYaw,
+        pitch: graphPitch,
+      );
+    }).toList();
+    final positions = rotated
+        .map(
+          (point) => Offset(
+            graphSceneOrigin + point.x * graphPaintPerspective(point.z),
+            graphSceneOrigin + point.y * graphPaintPerspective(point.z),
+          ),
+        )
+        .toList();
+    final paintOrder = List.generate(rows.length, (i) => i)
+      ..sort((a, b) => rotated[b].z.compareTo(rotated[a].z));
+    final zoom = graphTransform.value.getMaxScaleOnAxis();
+    final selected = rows
+        .where((row) => row.id == graphSelectedDocument)
+        .firstOrNull;
+    final selectedId = selected?.id;
+    final selectionEdges = selectedId == null
+        ? <GraphEdge>[]
+        : graphSelectionEdges;
+    final connected = <String>{
+      if (selectedId != null) selectedId,
+      for (final edge in selectionEdges) ...[edge.source, edge.target],
+    };
+    final matchingIds = matches.map((row) => row.id).toSet();
+    final dimmed = <String>{
+      for (final row in rows)
+        if (labelFilter.isNotEmpty
+            ? !sourceLabels(row).contains(labelFilter)
+            : selectedId != null
+            ? !connected.contains(row.id)
+            : !matchingIds.contains(row.id))
+          row.id,
+    };
+    final painters = [
+      for (var i = 0; i < rows.length; i++)
+        GraphNodePainter(
+          depth: rotated[i].z,
+          zoom: zoom,
+          labelColors: documentLabelColors[rows[i].id] ?? const [],
+          matchColor: labelFilter.isEmpty
+              ? Colors.white
+              : labelColorsByName[labelFilter] ?? fallbackGraphLabelColor(),
+          title: rows[i].title,
+          fontFamily: Theme.of(context).textTheme.bodyMedium?.fontFamily,
+          textDirection: Directionality.of(context),
+          selected: selectedId == rows[i].id,
+          dimmed: dimmed.contains(rows[i].id),
+          activeMatch:
+              (sourceQuery.isNotEmpty || labelFilter.isNotEmpty) &&
+              !dimmed.contains(rows[i].id),
+        ),
+    ];
+    return GraphViewSnapshot(
+      size: size,
+      rows: rows,
+      worldPoints: worldPoints,
+      documentLabelRecords: documentLabelRecords,
+      clusters: clusters,
+      rotated: rotated,
+      positions: positions,
+      paintOrder: paintOrder,
+      zoom: zoom,
+      selected: selected,
+      selectionEdges: selectionEdges,
+      painters: painters,
+    );
+  }
+
+  Widget _featureSourceGraph(
+    List<SourceSummary> rows,
+    Map<String, GraphPoint> worldPoints,
+    List<SourceSummary> matches,
+    Map<String, List<Color>> documentLabelColors,
+    Map<String, Color> labelColorsByName,
+    Map<String, List<DocumentLabel>> documentLabelRecords,
+    List<GraphCluster> clusters,
+  ) => LayoutBuilder(
+    builder: (_, constraints) {
+      final view = _projectGraph(
+        rows,
+        worldPoints,
+        matches,
+        documentLabelColors,
+        labelColorsByName,
+        documentLabelRecords,
+        clusters,
+        constraints,
+      );
+      final selected = view.selected;
+      return SourceGraphScene(
+        view: view,
+        transform: graphTransform,
+        yaw: graphYaw,
+        pitch: graphPitch,
+        labelFilter: labelFilter,
+        panEnabled: graphMousePointer == null,
+        animationPaused: graphAnimationPaused,
+        organizing: graphOrganizing,
+        layoutError: graphLayoutError,
+        inspector: selected == null
+            ? null
+            : graphInspector(
+                selected,
+                view.rows,
+                view.selectionEdges,
+                view.documentLabelRecords[selected.id] ?? const [],
+              ),
+        onSelect: selectGraphDocument,
+        onPointerDown: startGraphPointer,
+        onPointerMove: moveGraphPointer,
+        onPointerEnd: endGraphPointer,
+        onZoom: zoomGraph,
+        onFit: fitGraph,
+        onToggleAnimation: () =>
+            update(() => graphAnimationPaused = !graphAnimationPaused),
+      );
+    },
+  );
 }
 
 class SourcesView extends StatelessWidget {
