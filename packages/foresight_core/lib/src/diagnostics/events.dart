@@ -212,16 +212,59 @@ final class SafeDiagnosticStack {
       return SafeDiagnosticStack.fromRegisteredLocations(const [], category);
     }
     final frames = <List<int>>[];
-    final matches = RegExp(
-      r'\(package:foresight_core/([^():]+\.dart):([0-9]{1,7}):([0-9]{1,5})\)',
-    ).allMatches(text);
-    for (final match in matches) {
-      final index = diagnosticCodeLocations.indexOf(match[1]!);
+    const prefix = '(package:foresight_core/';
+    var cursor = 0;
+    while (frames.length < 8) {
+      final marker = text.indexOf(prefix, cursor);
+      if (marker < 0) break;
+      final pathStart = marker + prefix.length;
+      cursor = pathStart;
+      var index = -1, pathEnd = 0;
+      for (
+        var candidate = 0;
+        candidate < diagnosticCodeLocations.length;
+        candidate++
+      ) {
+        final path = diagnosticCodeLocations[candidate];
+        final end = pathStart + path.length;
+        if (end < text.length &&
+            text.codeUnitAt(end) == 58 &&
+            text.startsWith(path, pathStart)) {
+          index = candidate;
+          pathEnd = end;
+          break;
+        }
+      }
       if (index < 0) continue;
-      frames.add([index, int.parse(match[2]!), int.parse(match[3]!)]);
-      if (frames.length == 8) break;
+      final line = _coordinate(text, pathEnd + 1, 7, 58);
+      if (line == null) continue;
+      final column = _coordinate(text, line.$2, 5, 41);
+      if (column == null) continue;
+      frames.add([index, line.$1, column.$1]);
+      cursor = column.$2;
     }
     return SafeDiagnosticStack.fromRegisteredLocations(frames, category);
+  }
+
+  static (int, int)? _coordinate(
+    String text,
+    int start,
+    int digits,
+    int separator,
+  ) {
+    var value = 0, cursor = start;
+    while (cursor < text.length && cursor - start < digits) {
+      final character = text.codeUnitAt(cursor);
+      if (character < 48 || character > 57) break;
+      value = value * 10 + character - 48;
+      cursor++;
+    }
+    if (cursor == start ||
+        cursor >= text.length ||
+        text.codeUnitAt(cursor) != separator) {
+      return null;
+    }
+    return (value, cursor + 1);
   }
 
   /// Numeric frames already supplied by a bounded trusted producer. Indices are

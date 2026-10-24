@@ -165,6 +165,38 @@ void main() {
     final wire = record.toWire()!..['body'] = 'CANARY';
     expect(DiagnosticRecord.validWire(wire), isFalse);
   });
+  test(
+    'bounded stack scanner rejects prefixes and malformed coordinates without losing later frames',
+    () {
+      final projection = SafeDiagnosticStack.fromBoundedText(
+        '(package:foresight_core/src/store.dart.evil:1:1)\n'
+        '(package:foresight_core/src/store.dart:99999999:1)\n'
+        '(package:foresight_core/src/store.dart:1:999999)\n'
+        '(package:foresight_core/src/store.dart::1)\n'
+        '(package:foresight_core/src/store.dart:1:-1)\n'
+        '(package:foresight_core/src/store.dart:1234567:12345)',
+        DiagnosticCategory.internal,
+      );
+      expect(projection.frames, [
+        [diagnosticCodeLocations.indexOf('src/store.dart'), 1234567, 12345],
+      ]);
+      final unknown = '(package:foresight_core/unknown.dart:1:1)\n';
+      final bounded =
+          unknown *
+          (SafeDiagnosticStack.maximumInputCharacters ~/ unknown.length);
+      expect(
+        bounded.length,
+        lessThanOrEqualTo(SafeDiagnosticStack.maximumInputCharacters),
+      );
+      expect(
+        SafeDiagnosticStack.fromBoundedText(
+          bounded,
+          DiagnosticCategory.internal,
+        ).frames,
+        isEmpty,
+      );
+    },
+  );
   test('stack encoder omits messages symbols and every unregistered path', () {
     final stack = SafeDiagnosticStack.fromBoundedText(
       '#0 secret.function (package:foresight_core/src/store.dart:42:3)\n#1 leak (/home/secret/user/data.dart:1:2)\n#2 forged (package:foresight_core/src/secret-canary.dart:3:4)',
