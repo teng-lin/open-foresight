@@ -43,7 +43,7 @@ class RpmScriptletsTest(unittest.TestCase):
         identity = hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:24]
         directory = root_path / f"of-install-{os.getuid()}-{identity}"
         directory.mkdir(mode=0o700)
-        for section, following in (("pre", "preun"), ("preun", "prep")):
+        for section, following in (("pre", "preun"), ("preun", "posttrans")):
             script = expanded.split(f"%{section}\n", 1)[1].split(f"%{following}\n", 1)[
                 0
             ]

@@ -7,10 +7,12 @@ import 'package:foresight_core/src/generated/web_content.pbgrpc.dart';
 import 'package:foresight_core/src/model_acquisition.dart';
 import 'package:grpc/grpc.dart';
 import 'package:test/test.dart';
+import 'package:foresight_test_support/poll.dart';
 
 class ConfigFixture extends ForesightServiceBase {
   GetSharedConfigRequest? request;
   String? key;
+  ServiceCall? call;
   Completer<ForesightSharedConfig>? pending;
   Completer<void>? started;
   @override
@@ -19,6 +21,7 @@ class ConfigFixture extends ForesightServiceBase {
     GetSharedConfigRequest request,
   ) async {
     this.request = request;
+    this.call = call;
     key = call.clientMetadata?['x-goog-api-key'];
     if (pending != null) {
       started?.complete();
@@ -46,6 +49,8 @@ class ConfigFixture extends ForesightServiceBase {
 
 class FailingUriClient implements HttpClient {
   var attempts = 0;
+  @override
+  set connectionTimeout(Duration? value) {}
   @override
   Future<HttpClientRequest> getUrl(Uri url) async {
     attempts++;
@@ -88,6 +93,43 @@ class TrackedChannel extends ClientChannel {
 }
 
 void main() {
+  test('metadata deadline cancels a stalled live RPC', () async {
+    final fixture = ConfigFixture()
+      ..pending = Completer()
+      ..started = Completer();
+    final server = Server.create(services: [fixture]);
+    await server.serve(address: InternetAddress.loopbackIPv4, port: 0);
+    final channel = TrackedChannel(server.port!);
+    final service = ModelConfigService(
+      apiKey: 'fixture',
+      channel: channel,
+      timeout: const Duration(milliseconds: 200),
+    );
+    addTearDown(() async {
+      await service.close();
+      await channel.shutdown();
+      await server.shutdown();
+    });
+    final failure = expectLater(
+      service.fetch(appVersion: '1.0.0'),
+      throwsA(
+        anyOf(
+          isA<ModelTransportException>(),
+          isA<GrpcError>().having(
+            (e) => e.code,
+            'code',
+            StatusCode.deadlineExceeded,
+          ),
+        ),
+      ),
+    );
+    await fixture.started!.future;
+    await failure.timeout(const Duration(seconds: 3));
+    // This is the server's live call, not only a timed-out client Future.
+    await eventually(() => fixture.call!.isCanceled);
+    expect(channel.shutdowns, 0);
+  });
+
   test(
     'metadata close cancels its active RPC without closing an injected channel',
     () async {

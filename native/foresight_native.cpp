@@ -1,4 +1,5 @@
 #include "foresight_native.h"
+#include "capture_pcm_pipe.h"
 #include "exception_barrier.h"
 #include "json_string.h"
 #include "one_shot_launch.h"
@@ -168,40 +169,7 @@ struct ProbeDeadline {
     finish();
   }
 };
-// pw-record's stdout contains unconnected/error diagnostics even without -v.
-// A private raw FIFO gives libsndfile a separate PCM destination. Keep one
-// nonblocking writer open here so a slow child open cannot look like EOF.
-struct CapturePcmPipe {
-  std::string directory, path;
-  int fd = -1, error = 0;
-  explicit CapturePcmPipe(bool enabled) {
-    if (!enabled)
-      return;
-    char pattern[] = "/tmp/foresight-capture-XXXXXX";
-    const char *created = mkdtemp(pattern);
-    if (!created) {
-      error = errno;
-      return;
-    }
-    directory = created;
-    path = directory + "/audio.raw";
-    if (mkfifo(path.c_str(), 0600) < 0) {
-      error = errno;
-      return;
-    }
-    fd = open(path.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC);
-    if (fd < 0)
-      error = errno;
-  }
-  ~CapturePcmPipe() {
-    if (fd >= 0)
-      close(fd);
-    if (!path.empty())
-      unlink(path.c_str());
-    if (!directory.empty())
-      rmdir(directory.c_str());
-  }
-};
+using foresight::CapturePcmPipe;
 // posix_spawn avoids unsafe post-fork work inside a multi-threaded Flutter
 // host.
 int run(Worker &w, std::vector<std::string> args,

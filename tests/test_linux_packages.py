@@ -264,7 +264,8 @@ class LinuxPackagesTest(unittest.TestCase):
             self.assertIn("upgrade_lock_decision", script)
             self.assertIn("F_SETLK", script)
             self.assertNotIn("flock -n", script)
-            self.assertIn("refuse_upgrade_if_recording /opt/open-foresight", script)
+            self.assertIn("prepare_installation_change /opt/open-foresight", script)
+            self.assertIn('refuse_upgrade_if_recording "$1"', script)
         self.assertIn("upgrade|remove", prerm)
         self.assertIn("upgrade|install", preinst)
         self.assertIn("%pre\n", spec)
@@ -420,7 +421,8 @@ class LinuxDependencyCollectionTest(unittest.TestCase):
                 "-Wl,-rpath-link," + str(sdk),
             )
             worker = build / "services/inference/foresight-model"
-            compile(r'''
+            compile(
+                r"""
 #include <stdio.h>
 #include <stdlib.h>
 int main(void) {
@@ -434,7 +436,9 @@ int main(void) {
   }
   return 0;
 }
-''', worker)
+""",
+                worker,
+            )
             for name in ("application/foresight-service", "application/foresight-mcp"):
                 target = build / name
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -499,12 +503,17 @@ int main(void) {
                 package.main()
             manifest = json.loads((output / "manifest.json").read_text())
             launcher_environment = {
-                key: value for key, value in os.environ.items()
+                key: value
+                for key, value in os.environ.items()
                 if not key.startswith("FORESIGHT_") and key != "LD_LIBRARY_PATH"
             }
             launched = subprocess.run(
-                [str(output / "open-foresight-service")], env=launcher_environment,
-                check=True, capture_output=True, text=True, timeout=30,
+                [str(output / "open-foresight-service")],
+                env=launcher_environment,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
             selected = dict(line.split("=", 1) for line in launched.stdout.splitlines())
             resources = output / "share/open-foresight"
@@ -515,7 +524,10 @@ int main(void) {
                 elif key in {"FORESIGHT_RUNTIME_REVISION", "FORESIGHT_LITERT_BACKEND"}:
                     self.assertEqual(value, configuration[key])
                 else:
-                    self.assertEqual(Path(value).resolve(), (resources / configuration[key]).resolve())
+                    self.assertEqual(
+                        Path(value).resolve(),
+                        (resources / configuration[key]).resolve(),
+                    )
             self.assertTrue(
                 {"libgrpc_fixture.so", "libupb_fixture.so"}
                 <= set(manifest["bundled_libraries"])
@@ -911,3 +923,57 @@ def _assert_native_package_notice(tmp_path, kind, tool):
         command = ["bsdtar", "-tf", str(output)]
     listing = subprocess.check_output(command, text=True, timeout=60)
     assert "usr/share/doc/open-foresight/notices/nlohmann-json-LICENSE.MIT" in listing
+
+
+def test_new_nss_home_lock_blocks_package_change_and_maintenance_spans_hooks(tmp_path):
+    import fcntl
+    import pwd
+
+    root = tmp_path / "installation"
+    root.mkdir()
+    identity = hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:24]
+    account_home = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+    directory = account_home / ".cache/open-foresight/install-locks" / identity
+    directory.mkdir(parents=True, mode=0o700)
+    try:
+        lock = directory / "lock"
+        descriptor = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            command = packages.upgrade_helper() + '\nprepare_installation_change "$1"\n'
+            refused = subprocess.run(
+                ["sh", "-c", command, "fixture", str(root)],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            assert refused.returncode == 1, refused.stderr
+            assert "holds the install lock" in refused.stderr
+            marker = root / ".installation-maintenance"
+            assert not marker.exists(), (
+                "failed admission must remove its newly owned marker"
+            )
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            allowed = subprocess.run(
+                ["sh", "-c", command, "fixture", str(root)],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            assert allowed.returncode == 0, allowed.stderr
+            assert marker.is_file() and marker.stat().st_mode & 0o777 == 0o600
+            finalizer = packages.deb_postinst().replace(
+                "/opt/open-foresight", str(root)
+            )
+            completed = subprocess.run(
+                ["sh", "-c", finalizer, "postinst", "configure"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            assert completed.returncode == 0, completed.stderr
+            assert not marker.exists()
+        finally:
+            os.close(descriptor)
+    finally:
+        shutil.rmtree(directory)

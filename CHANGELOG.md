@@ -27,6 +27,10 @@ Notable changes to Open Foresight are recorded here. Versions follow
 - Update meeting transcript search incrementally and recover saved indexing work
   after restart. Preserve manual edits and deletion while indexing waits for a
   model to become ready.
+- Reject duplicate active service request IDs and keep cancelled request cleanup from releasing a replacement call.
+- Bound question-model metadata and download phases, retries and cancellation. Use an owned transport subprocess because the pinned Dart runtime can retain stalled TLS sockets after socket or isolate cancellation.
+- Keep capture FIFOs in validated temporary storage and protect new installation locks in the OS account's cache directory. New Linux package hooks keep launch maintenance active until installation completes; upgrades still check the released lock path.
+
 - Check direct Google client setup before signing out Granola accounts when switching providers.
 - Show separate Google and Granola connection choices, with explicit provider switching and account sign-out confirmation. Recover direct Google sign-in after failed Granola attempts and preserve Google client setup across provider changes and restarts.
 - Use Granola’s macOS client profile for authorization and calendar API calls on Linux.

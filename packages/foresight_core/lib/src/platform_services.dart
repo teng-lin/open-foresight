@@ -1,4 +1,6 @@
 import 'profile_paths.dart';
+import 'installation_lock.dart';
+export 'installation_lock.dart' show InstallationLock;
 import 'package:crypto/crypto.dart';
 import 'dart:ffi';
 import 'package:ffi/ffi.dart';
@@ -594,39 +596,38 @@ Future<Map<String, dynamic>> notificationCapabilities({
 /// profiles, including clients launched during the installer's final app swap.
 String installationLockPath(String appRoot) {
   final canonical = canonicalProfilePath(appRoot);
-  final result = Process.runSync('/usr/bin/id', ['-u']);
-  final uid = result.stdout.toString().trim();
-  if (result.exitCode != 0 || int.tryParse(uid) == null) {
-    throw StateError('Cannot determine installation lock owner');
-  }
   final identity = sha256
       .convert(utf8.encode(canonical))
       .toString()
       .substring(0, 24);
-  return '/tmp/of-install-$uid-$identity/lock';
+  final home = installationLockHome();
+  final cache = Platform.isMacOS
+      ? '$home/Library/Caches/io.openforesight.App'
+      : '$home/.cache/open-foresight';
+  return '$cache/install-locks/$identity/lock';
 }
 
-RandomAccessFile? acquireInstallationLock() {
+InstallationLock? acquireInstallationLock() {
   final root = runtimeConfiguration['FORESIGHT_INSTALL_ROOT'];
   if (root == null) return null;
-  final path = installationLockPath(root);
-  privateDirectory(File(path).parent.path);
-  if (FileSystemEntity.typeSync(path, followLinks: false) ==
-      FileSystemEntityType.link) {
-    throw StateError('Installation lock must not be a symbolic link');
-  }
-  final lock = File(path).openSync(mode: FileMode.append);
-  try {
-    if (Process.runSync('/bin/chmod', ['600', path]).exitCode != 0) {
-      throw StateError('Cannot protect installation lock');
-    }
-    try {
-      lock.lockSync(FileLock.shared);
-    } on FileSystemException {
+  void refuseMaintenance() {
+    if (FileSystemEntity.typeSync(
+          '${canonicalProfilePath(root)}/.installation-maintenance',
+          followLinks: false,
+        ) !=
+        FileSystemEntityType.notFound) {
       throw StateError(
-        'An Open Foresight update is in progress. Retry launching after installation finishes.',
+        'An Open Foresight update is in progress or was interrupted. Complete installation before launching.',
       );
     }
+  }
+
+  refuseMaintenance();
+  final lock = InstallationLock.acquire(installationLockPath(root));
+  try {
+    // The installer publishes its marker before probing locks. This recheck
+    // closes the gap if it publishes between our initial check and acquisition.
+    refuseMaintenance();
     return lock;
   } catch (_) {
     lock.closeSync();

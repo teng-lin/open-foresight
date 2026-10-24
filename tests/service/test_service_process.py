@@ -2236,3 +2236,80 @@ def assert_two_live_profiles_keep_notes_private(
                     process.wait(timeout=5)
         for log in logs:
             log.close()
+
+
+@pytest.mark.parametrize("mode", ["download", "invalid", "oversized"])
+def test_internal_model_transport_has_bounded_frames_and_no_profile_authority(
+    tmp_path, mode
+):
+    import http.server
+
+    assert SERVICE.is_file(), "Build the current service executable first"
+    requests = []
+
+    class Media(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append((self.path, self.headers.get("Range")))
+            self.send_response(206)
+            self.send_header("Content-Length", "4")
+            self.end_headers()
+            self.wfile.write(b"\x00\x01\x02\xff")
+
+        def log_message(self, *_args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Media)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    canary = "private-transport-credential-canary"
+    config = {
+        "kind": mode,
+        "apiKey": canary,
+        "origin": f"http://127.0.0.1:{server.server_port}",
+        "blobId": "fixture",
+        "size": 4,
+        "parallelCount": 1,
+        "attempts": 1,
+        "delays": [],
+        "connect": 1_000_000,
+        "headers": 1_000_000,
+        "bodyIdle": 1_000_000,
+        "attempt": 2_000_000,
+        "total": 3_000_000,
+    }
+    payload = json.dumps(config).encode() if mode != "oversized" else b"x" * 16385
+    try:
+        result = subprocess.run(
+            [str(SERVICE), "--model-transport-worker"],
+            input=payload,
+            cwd=tmp_path,
+            env={"FORESIGHT_NATIVE": "/missing/native/library"},
+            capture_output=True,
+            timeout=10,
+        )
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        assert result.stderr == b"", result.stderr
+        header, data = result.stdout.split(b"\n", 1)
+        assert len(header) <= 1024
+        if mode == "download":
+            assert json.loads(header) == {"ok": True, "size": 4}
+            assert data == b"\x00\x01\x02\xff"
+            assert requests == [
+                (
+                    f"/v1/medias/foresight/fixture:download?alt=media&key={canary}",
+                    "bytes=0-3",
+                )
+            ]
+        else:
+            assert json.loads(header) == {"ok": False, "kind": "transport"}
+            assert data == b""
+            assert requests == []
+        assert canary.encode() not in result.stdout + result.stderr
+        assert list(tmp_path.iterdir()) == [], (
+            "transport mode must not initialize a profile/runtime/log"
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+        assert not thread.is_alive()

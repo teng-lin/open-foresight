@@ -11,6 +11,8 @@ import sys
 import tempfile
 import time
 import unittest
+
+import pytest
 from unittest.mock import Mock, patch
 from types import SimpleNamespace
 
@@ -393,7 +395,7 @@ except Deferred:
 
     def test_lock_rejects_symlink_and_public_mode(self):
         path = installer.installation_lock_path(self.destination)
-        path.parent.mkdir(mode=0o700)
+        path.parent.mkdir(mode=0o700, parents=True)
         other = self.root / "unrelated"
         other.write_text("preserve")
         path.symlink_to(other)
@@ -995,3 +997,36 @@ class CompiledMacComponentTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_new_installer_preserves_released_service_lock_refusal(tmp_path):
+    app = tmp_path / "Legacy.app"
+    app.mkdir()
+    legacy = installer.legacy_installation_lock_path(app)
+    legacy.parent.mkdir(mode=0o700)
+    fd = os.open(legacy, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        # Hold the released protocol in another process: POSIX record locks in
+        # this process would not conflict with our own installer descriptors.
+        code = "import fcntl,sys; f=open(sys.argv[1],'a+'); fcntl.lockf(f,fcntl.LOCK_SH); print('held',flush=True); sys.stdin.readline()"
+        process = subprocess.Popen(
+            [sys.executable, "-u", "-c", code, str(legacy)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            assert process.stdout.readline().strip() == "held"
+            with pytest.raises(installer.Deferred, match="legacy"):
+                with installer.installation_lock(app):
+                    raise AssertionError(
+                        "installer acquired a live legacy service lock"
+                    )
+        finally:
+            output, errors = process.communicate("release\n", timeout=10)
+            assert process.returncode == 0, (output, errors)
+    finally:
+        os.close(fd)
+        shutil.rmtree(legacy.parent)
+        shutil.rmtree(installer.installation_lock_path(app).parent, ignore_errors=True)

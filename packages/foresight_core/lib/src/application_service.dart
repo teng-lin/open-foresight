@@ -45,7 +45,7 @@ class ApplicationService {
   final ServiceSocketBinding _binding;
   final String path;
   final RandomAccessFile lock;
-  final RandomAccessFile? installationLock;
+  final InstallationLock? installationLock;
   final _clients = <Socket>{};
   final bool _internalWorker;
   final DesktopPeerVerifier _verifyDesktopPeer;
@@ -54,6 +54,7 @@ class ApplicationService {
     (client, id) => _cancel(client, id),
   );
   final _subscriptions = <Socket, Map<int, StreamSubscription<Object?>>>{};
+  final _controlCalls = <Socket, Map<int, Object>>{};
   StreamSubscription<void>? _changes;
   StreamSubscription<void>? _captureLevels;
   Timer? _heartbeat;
@@ -281,7 +282,7 @@ class ApplicationService {
 
   static Future<ApplicationService> _start(
     ProfilePaths profile,
-    RandomAccessFile? installationLock, {
+    InstallationLock? installationLock, {
     SearchCallbacks? webSearch,
     bool internalWorker = false,
     Clock? clock,
@@ -486,6 +487,7 @@ class ApplicationService {
     unawaited(client.done.catchError((Object _) {}));
     _clients.add(client);
     _subscriptions[client] = {};
+    _controlCalls[client] = {};
     _leases[client] = {};
     var bytes = 0;
     client
@@ -499,6 +501,9 @@ class ApplicationService {
         .transform(const LineSplitter())
         .listen(
           (line) {
+            // A decoder may already hold additional frames when a preceding
+            // duplicate closes this connection. None may acquire a new owner.
+            if (!_clients.contains(client)) return;
             bytes = 0;
             int? responseId;
             try {
@@ -525,6 +530,17 @@ class ApplicationService {
                 return;
               }
               responseId = request['id'] is int ? request['id'] as int : null;
+              // Check the wire id before operation/argument decoding too:
+              // a malformed duplicate must not terminate the original call.
+              if (responseId != null &&
+                  (_leases[client]?.containsKey(responseId) == true ||
+                      _subscriptions[client]?.containsKey(responseId) == true ||
+                      _controlCalls[client]?.containsKey(responseId) == true)) {
+                // No independent reply identity exists for the duplicate.
+                // Retire the connection instead of sending an ambiguous done.
+                _disconnect(client);
+                return;
+              }
               final envelope = ServiceCallEnvelope.decode(request);
               final id = envelope.id;
               if (_closing) {
@@ -592,15 +608,9 @@ class ApplicationService {
                 lastDesktopDeparture = null;
                 _exitIfIdle();
               }
-              if (typed is ServiceStopIfIdleRequest) {
-                unawaited(
-                  _serviceHandlers
-                      .registry(ServiceRequestContext(client, id))
-                      .dispatch(typed),
-                );
-                return;
-              }
-              if ((_subscriptions[client]?.length ?? 0) >= 32) {
+              if ((_subscriptions[client]?.length ?? 0) +
+                      (_controlCalls[client]?.length ?? 0) >=
+                  32) {
                 _messages.send(client, {
                   'id': id,
                   'error': RpcError(
@@ -609,6 +619,21 @@ class ApplicationService {
                   ).toJson(),
                   'done': true,
                 });
+                return;
+              }
+              if (typed is ServiceStopIfIdleRequest) {
+                final owner = Object();
+                _controlCalls[client]![id] = owner;
+                unawaited(
+                  _serviceHandlers
+                      .registry(ServiceRequestContext(client, id))
+                      .dispatch(typed)
+                      .whenComplete(() {
+                        if (identical(_controlCalls[client]?[id], owner)) {
+                          _controlCalls[client]?.remove(id);
+                        }
+                      }),
+                );
                 return;
               }
               _admitRequest(client, id, typed);
@@ -636,6 +661,7 @@ class ApplicationService {
       );
     }
     _clients.remove(client);
+    _controlCalls.remove(client);
     _verifiedDesktopClients.remove(client);
     for (final id in _leases[client]?.keys.toList() ?? <int>[]) {
       _cancel(client, id, reevaluate: false);
@@ -706,10 +732,27 @@ class ApplicationService {
         );
       }),
     ).asyncExpand((_) => _results(client, typed, lease));
+    bool ownsRequest() => identical(_leases[client]?[id], lease);
+    void releaseRequest() {
+      if (ownsRequest()) {
+        _subscriptions[client]?.remove(id);
+        _leases[client]?.remove(id);
+      }
+      if (lease.streamed) _settle(lease);
+      _exitIfIdle();
+    }
+
     _subscriptions[client]![id] = results.listen(
-      (value) =>
-          _messages.send(client, {'id': id, 'result': value, 'done': false}),
+      (value) {
+        if (ownsRequest()) {
+          _messages.send(client, {'id': id, 'result': value, 'done': false});
+        }
+      },
       onError: (Object e, StackTrace stack) {
+        if (!ownsRequest()) {
+          releaseRequest();
+          return;
+        }
         if (typed.operation.descriptor.scope == OperationScope.service &&
             typed.operation.notifiesChanges) {
           _flushBroadcast();
@@ -719,21 +762,19 @@ class ApplicationService {
           'error': requestFailure(e, stack).toJson(),
           'done': true,
         });
-        _subscriptions[client]?.remove(id);
-        _leases[client]?.remove(id);
-        if (lease.streamed) _settle(lease);
-        _exitIfIdle();
+        releaseRequest();
       },
       onDone: () {
+        if (!ownsRequest()) {
+          releaseRequest();
+          return;
+        }
         if (typed.operation.descriptor.scope == OperationScope.service &&
             typed.operation.notifiesChanges) {
           _flushBroadcast();
         }
         _messages.send(client, {'id': id, 'done': true});
-        _subscriptions[client]?.remove(id);
-        _leases[client]?.remove(id);
-        if (lease.streamed) _settle(lease);
-        _exitIfIdle();
+        releaseRequest();
       },
       cancelOnError: true,
     );

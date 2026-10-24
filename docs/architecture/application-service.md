@@ -368,13 +368,47 @@ Python bytecode caches default to `<profile>/cache/litert` and
 Packaged runtimes also set `FORESIGHT_INSTALL_ROOT` to the canonical outer `.app`
 and `FORESIGHT_RUNTIME_REVISION` to their build revision. Before loading native
 code, opening the database, or starting workers, the service takes a shared,
-nonblocking POSIX lock at
-`/tmp/of-install-<uid>-<sha256(canonical app path) first 24 hex digits>/lock`.
-The private directory is 0700 and the lock is 0600. The descriptor remains open
-for the service lifetime. The installer takes the exclusive version of that
-same lock after explicitly stopping services and holds it through revalidation
-and replacement. A service launched during replacement fails with an actionable
-update-in-progress message before it opens profile state or native components.
+nonblocking `flock` lease under the OS account's home (resolved independently of
+`HOME`/XDG profile overrides):
+
+- Linux: `~/.cache/open-foresight/install-locks/<installation hash>/lock`.
+- macOS: `~/Library/Caches/io.openforesight.App/install-locks/<installation hash>/lock`.
+
+The installation hash is the first 24 hexadecimal SHA-256 digits of the canonical
+installed application path. New directories are private at creation and the
+regular lock file is 0600, single-linked and opened without following symlinks.
+The descriptor remains open for the service lifetime. On macOS, the installer
+holds the exclusive new lock and a compatibility lock at the released
+`/tmp/of-install-<uid>-<hash>/lock` path throughout staging and replacement.
+Linux package hooks inspect both the released path and every NSS account's new
+fixed cache path; they never use the root process's HOME/XDG values to discover
+another user's service.
+
+New Linux package hooks publish `.installation-maintenance` in the installation
+root before checking locks. New services check it before and after lock
+acquisition. Package completion removes it; interrupted installation keeps new
+services refused until an explicit successful installation retry. A failed
+preflight removes only the marker it just created. No package hook signals or
+stops a live service.
+
+The released Linux binary ignores the new maintenance marker: a legacy service
+that starts after preflight can still race package replacement. Existing legacy
+locks remain an upgrade refusal, but this does not close that concurrent-launch
+lane. Qualification of that transition remains open; stop released clients before
+upgrading and do not present lock probing as proof of old/new launch exclusion.
+Older installer versions do not discover the new lock path, so close all clients
+before any deliberate downgrade using an older installer.
+
+Question-model metadata and downloads run in an internal transport-only service
+subprocess. The parent owns cancellation, finite operation budgets and actual
+reaping. Credentials and URLs travel through bounded stdin, never argv or
+stderr; framed stdout carries only progress and transport results. This mode
+resolves no profile or application ownership and loads no application native
+library. It exists because the pinned Dart runtime can leave stalled TLS sockets
+alive after `HttpClient`/isolate cancellation. A connect timeout retires the whole
+transport process before retrying; successful partial-body resume stays within
+that worker. Previous model registration changes only after authentication and
+readiness succeed.
 
 Status includes additive `application_api_version` (currently 1),
 `installation_root`, `runtime_revision`, and `lifetime` fields. Clients carrying a
