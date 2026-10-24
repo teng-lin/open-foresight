@@ -329,9 +329,10 @@ class DesktopHostPeer(Peer):
             raise
 
     def _executed_image(self, declared: dict[str, Any]) -> dict[str, Any]:
-        # A procfs sample immediately after spawn can still observe the parent's
-        # image. Bound that transition and require the declared native bytes
-        # before using the relay; reject any other executable immediately.
+        # Bound qualification while the sampled bytes match the invoking parent.
+        # Require the declared native bytes before using the relay, and reject
+        # every unrelated image immediately; this does not establish the cause
+        # of a mismatched initial procfs observation.
         parent = file_identity(Path(f"/proc/{os.getpid()}/exe"))
         deadline = time.monotonic() + min(self.timeout, 1.0)
         while True:
@@ -539,6 +540,8 @@ def environment(args: argparse.Namespace, run: Path) -> dict[str, str]:
 
 
 def host_state() -> dict[str, Any]:
+    if sys.platform != "linux":
+        raise RuntimeError("Native process measurement requires Linux")
     def read(path: str) -> str | None:
         file = Path(path)
         return file.read_text() if file.is_file() else None
@@ -587,6 +590,8 @@ def signal_session_members(session: int, kind: int, *,
     Open the pidfd before checking SID: if a numeric PID is recycled during the
     check, sending through the fd can only reach the original (now dead) task.
     """
+    if sys.platform != "linux":
+        raise RuntimeError("Native process measurement requires Linux")
     for member in session_members(session):
         try:
             descriptor = os.pidfd_open(member)
@@ -774,6 +779,8 @@ class RuntimeInventory:
                 stream.close()
 
     def capture(self, session: int, condition: str) -> None:
+        if sys.platform != "linux":
+            raise RuntimeError("Native process measurement requires Linux")
         self.seed(self.report.get("inputs", {}))
         started = time.perf_counter_ns()
         snapshot: dict[str, Any] = {"condition": condition, "session": session,
