@@ -43,7 +43,9 @@ Implementation order within the same final PR:
    covered by the existing integrity matrix and owner review requirements.
 4. Introduce only demonstrated shared helpers, actionable smoke diagnostics and
    registry-derived operation counts. Add per-module typing/complexity ratchets
-   after the import topology is coherent; disclose remaining debt.
+   after the import topology is coherent. A standard-library-only leaf may start
+   its own module ratchet earlier because it has no local dependency edges;
+   caller typing still waits for normal package imports. Disclose remaining debt.
 
 The inventory does not qualify tooling runtime behavior, complete Stage E, or
 close the separate Dart/native quality requirements. Existing acceptance gates
@@ -56,7 +58,10 @@ strongly connected groups, including release lookup/candidates, CI handoffs,
 acceptance planning and main coordination. These are not assumed to execute at
 import time. Computed helper calls such as `_module(name)` remain unresolved and
 must be reviewed before assigning conversion batches. The first typing ratchet
-covers only the shared `tools.ci_timing` leaf, with explicit per-module strictness flags. The pinned mypy version expands the
-`strict` shorthand globally even inside an override, so the override lists its
-supported per-module flags; the global-only redundant-cast warning is unchanged. Broader
+covers only the shared `tools.ci_timing` leaf, with explicit per-module
+strictness flags. The pinned mypy version expands the `strict` shorthand globally
+even inside an override, so the override lists its supported per-module flags;
+the global-only redundant-cast and unused-config warnings are unchanged. Existing
+dynamic import callers remain untyped at this boundary; the new annotation does
+not enforce their argument types until package conversion. Broader
 CI typing, C901, package conversion and shared helper work remain outstanding.
