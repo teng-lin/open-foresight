@@ -23,7 +23,8 @@ Map<String, dynamic> minimal(Operation operation) {
   for (final field in operation.descriptor.arguments.fields) {
     if (!field.required) continue;
     result[field.name] = switch (field.kind) {
-      ArgumentKind.string => field.choices?.first ?? 'value',
+      ArgumentKind.string =>
+        field.choices?.first ?? ('v' * (field.minimumLength ?? 5)),
       ArgumentKind.integer => field.minimum ?? 1,
       ArgumentKind.dateTime => '2026-10-21T12:00:00Z',
       ArgumentKind.strings => ['source'],
@@ -36,6 +37,9 @@ Map<String, dynamic> minimal(Operation operation) {
     };
   }
   if (operation == Operation.googleConfigure) result['path'] = 'credentials';
+  if (operation == Operation.modelsDownloadAsset) {
+    result['requestId'] = 'asset-fixture';
+  }
   return result;
 }
 
@@ -70,7 +74,29 @@ void main() {
       'idempotency_key': false,
       'tools': <Object?>[],
     };
-    expect(Operation.values, hasLength(85));
+    baseline['models.download_asset'] = {
+      'requires_helper': false,
+      'approval': true,
+      'approval_web_search': true,
+      'notifies_changes': true,
+      'workspace_epoch': false,
+      'idempotency_key': false,
+      'tools': <Object?>[],
+    };
+    baseline['models.inspect_asset'] = {
+      'requires_helper': false,
+      'approval': false,
+      'approval_web_search': false,
+      'notifies_changes': false,
+      'workspace_epoch': false,
+      'idempotency_key': false,
+      'tools': <Object?>[],
+    };
+    expect(
+      Operation.values.map((operation) => operation.wire).toSet(),
+      baseline.keys.toSet(),
+    );
+    expect(Operation.values, hasLength(baseline.length));
     for (final operation in Operation.values) {
       final old = baseline[operation.wire] as Map;
       final descriptor = operation.descriptor;

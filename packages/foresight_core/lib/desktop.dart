@@ -17,20 +17,12 @@ export 'src/audio_device.dart';
 export 'src/desktop_audio.dart';
 export 'src/file_discovery.dart'
     show DiscoveredLocalFile, LocalFileScan, LocalFileDiscovery;
-export 'src/gemma_download.dart'
-    show
-        GemmaModel,
-        LocalModelFinder,
-        GemmaDownload,
-        ModelDownloadPhase,
-        ModelDownloadCancelled,
-        gemmaModels,
-        embeddingGemmaModel,
-        modelFromPin,
-        localModelFile,
-        verifyModelFile,
-        availableModelDiskBytes,
-        physicalMemoryGb;
+export 'src/model_catalog.dart';
+export 'src/model_cache.dart';
+export 'src/model_download_contract.dart';
+export 'src/model_asset_status.dart';
+export 'src/desktop_model_downloads.dart';
+export 'src/model_host_info.dart';
 export 'src/speech_model_catalog.dart' show speechModels;
 export 'src/granola_return_failure.dart';
 export 'src/desktop_google_sources.dart';

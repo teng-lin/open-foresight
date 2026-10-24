@@ -1,10 +1,10 @@
+export 'model_host_info.dart';
 import 'model_catalog.dart';
 import 'model_download_contract.dart';
 import 'model_cache.dart';
 export 'model_catalog.dart';
 export 'model_download_contract.dart';
 export 'model_cache.dart';
-import 'platform_services.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
@@ -405,5 +405,3 @@ class GemmaDownload implements ModelDownloader {
     }
   }
 }
-
-int physicalMemoryGb() => systemMemoryGb();
