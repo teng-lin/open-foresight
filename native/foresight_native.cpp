@@ -1132,8 +1132,13 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
             e.state = "failed";
             e.error = "runtime_failure";
           }
+        },
+        [&] {
           c.finish_input = false;
+          c.awaiting_tool = false;
           c.active = false;
+          std::lock_guard lock(e.mu);
+          e.busy = false;
         });
   });
   rollback.release();
@@ -1516,8 +1521,8 @@ int fs_speech_finish(void *h, const char *id) {
             failure(s, request, seq, "speech_runtime_failure", message);
             s.emit(
                 event("done", request, seq, ",\"status\":" + quote("failed")));
-            s.active = false;
-          });
+          },
+          [&] { s.active = false; });
     });
     rollback.release();
     return 0;
@@ -1729,7 +1734,8 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate,
             c->emit("{\"type\":\"state\",\"channel\":\"foresight.linux/"
                     "audio_state_v1\",\"state\":\"failed\",\"message\":"
                     "\"Capture failed\"}");
-          });
+          },
+          [c] { c->active = false; });
     });
     return owned_capture.release();
 

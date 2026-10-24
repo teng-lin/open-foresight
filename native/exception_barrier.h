@@ -121,17 +121,27 @@ void report_worker_failure(const char *message, Report &report) noexcept {
   }
 }
 
-template <class Fn, class Report>
-bool guarded_worker(Fn fn, Report report) noexcept {
+// Mandatory terminal state is settled before constructing the optional legacy
+// string/report. In particular, bad_alloc must not leave an ended worker
+// active.
+template <class Fn, class Report, class Settle>
+bool guarded_worker(Fn fn, Report report, Settle settle) noexcept {
   try {
     fn();
     return true;
   } catch (const std::exception &error) {
+    ffi_barrier_void(settle);
     report_worker_failure(error.what(), report);
   } catch (...) {
+    ffi_barrier_void(settle);
     report_worker_failure("unknown C++ exception", report);
   }
   return false;
+}
+
+template <class Fn, class Report>
+bool guarded_worker(Fn fn, Report report) noexcept {
+  return guarded_worker(std::move(fn), std::move(report), [] {});
 }
 
 } // namespace foresight

@@ -61,6 +61,15 @@ int main() {
         []() -> int { throw std::runtime_error("ffi exploded"); }, -1);
     REQUIRE(status == -1);
     REQUIRE(foresight::last_barrier_error() == "ffi exploded");
+    // The original two-argument reporting pattern can swallow the allocation
+    // failure before reaching mandatory state. Retain it as a negative control.
+    bool legacy_active = true;
+    fail_allocations.store(true);
+    foresight::guarded_worker(
+        [] { throw FixedFailure{}; },
+        [&](const std::string &) { legacy_active = false; });
+    fail_allocations.store(false);
+    REQUIRE(legacy_active);
     bool escaped = false;
     fail_allocations.store(true);
     try {
@@ -72,6 +81,19 @@ int main() {
         if (foresight::guarded_worker(
                 [] { throw FixedFailure{}; },
                 [](const std::string &) { throw FixedFailure{}; }))
+          std::abort();
+        bool active = true, finished = false, notified = false;
+        int terminal_status = 0;
+        if (foresight::guarded_worker(
+                [] { throw FixedFailure{}; },
+                [](const std::string &) { throw FixedFailure{}; },
+                [&] {
+                  active = false;
+                  finished = true;
+                  terminal_status = -1;
+                  notified = true;
+                }) ||
+            active || !finished || terminal_status != -1 || !notified)
           std::abort();
         char message[128]{};
         if (!foresight::copy_barrier_error(message, sizeof(message)) ||
@@ -95,6 +117,14 @@ int main() {
                                          }));
     }
     REQUIRE(reporter_calls == 1000);
+    bool settled_before_report = false;
+    REQUIRE(!foresight::guarded_worker([] { throw FixedFailure{}; },
+                                       [&](const std::string &) {
+                                         REQUIRE(settled_before_report);
+                                         throw 43;
+                                       },
+                                       [&] { settled_before_report = true; }));
+    REQUIRE(settled_before_report);
     // A blocked reporter never blocks or throws through another C boundary.
     auto &state = foresight::barrier_error_state();
     state.busy.test_and_set();
