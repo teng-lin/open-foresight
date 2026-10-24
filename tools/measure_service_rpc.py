@@ -320,15 +320,29 @@ class DesktopHostPeer(Peer):
         self.writer = cast(BinaryIO, self.process.stdin)
         self.reader = cast(BinaryIO, self.process.stdout)
         try:
-            image = file_identity(Path(f"/proc/{self.process.pid}/exe"))
+            image = self._executed_image(identity)
             evidence["executed_image"] = image
-            if image["sha256"] != identity["sha256"]:
-                raise ValueError("Native desktop relay executed a different image")
             os.set_blocking(self.writer.fileno(), False)
             os.set_blocking(self.reader.fileno(), False)
         except BaseException:
             self.close()
             raise
+
+    def _executed_image(self, declared: dict[str, Any]) -> dict[str, Any]:
+        # A procfs sample immediately after spawn can still observe the parent's
+        # image. Bound that transition and require the declared native bytes
+        # before using the relay; reject any other executable immediately.
+        parent = file_identity(Path(f"/proc/{os.getpid()}/exe"))
+        deadline = time.monotonic() + min(self.timeout, 1.0)
+        while True:
+            image = file_identity(Path(f"/proc/{self.process.pid}/exe"))
+            if image["sha256"] == declared["sha256"]:
+                return image
+            if (image["sha256"] != parent["sha256"]
+                    or self.process.poll() is not None
+                    or time.monotonic() >= deadline):
+                raise ValueError("Native desktop relay executed a different image")
+            self.interrupted.wait(.001)
 
     def _check(self, deadline: float, method: str) -> float:
         if self.interrupted.is_set():

@@ -1221,20 +1221,70 @@ def test_native_relay_stopped_process_has_bounded_escalated_cleanup(native_relay
 def test_native_relay_constructor_failure_closes_owned_process(native_relay, relay_server, private, monkeypatch, failure):
     service = relay_server(lambda connection, stop: connection.recv(1))
     evidence = {}
+    child_samples = []
     if failure == "setup":
         monkeypatch.setattr(rpc.os, "set_blocking", lambda *args: (_ for _ in ()).throw(OSError("setup failed")))
         expected, message = OSError, "setup failed"
     else:
         original = rpc.file_identity
+        parent_path = Path(f"/proc/{os.getpid()}/exe")
+
         def identity(path):
             value = original(path)
-            if str(path).startswith("/proc/"):
+            if str(path).startswith("/proc/") and path != parent_path:
+                child_samples.append(path)
                 value["sha256"] = "different"
             return value
         monkeypatch.setattr(rpc, "file_identity", identity)
         expected, message = ValueError, "different image"
     with pytest.raises(expected, match=message):
         rpc.DesktopHostPeer(native_relay, service.path, private / "relay.log", evidence, {})
+    assert evidence["exit_code"] == 0
+    assert evidence["log"]["sha256"]
+    if failure == "image":
+        assert len(child_samples) == 1, "Unrelated image was tolerated as an exec transition"
+
+
+def test_native_relay_waits_for_parent_to_native_exec_transition(native_relay, relay_server, private, monkeypatch):
+    service = relay_server(lambda connection, stop: stop.wait(3))
+    original = rpc.file_identity
+    parent_path = Path(f"/proc/{os.getpid()}/exe")
+    parent = original(parent_path)
+    observed = []
+
+    def identity(path):
+        if str(path).startswith("/proc/") and path != parent_path:
+            observed.append(path)
+            if len(observed) <= 2:
+                return dict(parent)
+        return original(path)
+
+    monkeypatch.setattr(rpc, "file_identity", identity)
+    evidence = {}
+    peer = rpc.DesktopHostPeer(native_relay, service.path, private / "relay.log", evidence, {})
+    try:
+        assert len(observed) == 3
+        assert evidence["executed_image"]["sha256"] == original(native_relay)["sha256"]
+        assert evidence["executed_image"]["sha256"] != parent["sha256"]
+    finally:
+        peer.close()
+
+
+def test_native_relay_rejects_parent_image_that_never_executes(native_relay, relay_server, private, monkeypatch):
+    service = relay_server(lambda connection, stop: stop.wait(3))
+    original = rpc.file_identity
+    parent_path = Path(f"/proc/{os.getpid()}/exe")
+    parent = original(parent_path)
+
+    def identity(path):
+        if str(path).startswith("/proc/"):
+            return dict(parent)
+        return original(path)
+
+    monkeypatch.setattr(rpc, "file_identity", identity)
+    evidence = {}
+    with pytest.raises(ValueError, match="different image"):
+        rpc.DesktopHostPeer(native_relay, service.path, private / "relay.log", evidence, {}, timeout=.03)
     assert evidence["exit_code"] == 0
     assert evidence["log"]["sha256"]
 
