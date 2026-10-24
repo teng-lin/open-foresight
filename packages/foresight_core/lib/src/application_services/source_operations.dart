@@ -12,7 +12,7 @@ import '../operation_requests.dart';
 import '../operations.dart';
 import '../persistence/source_admission_queries.dart';
 import '../rpc_error.dart';
-import '../source_type.dart';
+import '../import_directory.dart';
 import '../store.dart';
 import '../web_import.dart';
 import 'google_maintenance.dart';
@@ -197,15 +197,13 @@ final class SourceOperations {
     }
 
     final uri = Uri.file(file.path).toString();
-    final existing = queries.documents
-        .where((s) => s.sourceUri == uri)
-        .firstOrNull;
+    final existing = queries.importIdForUri(uri);
     final id = store.importText(
       file.uri.pathSegments.last,
       text,
       path.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'text/plain',
       '$provenance; ${file.path}',
-      id: existing?.id,
+      id: existing,
       modifiedAtMs: modified,
       sourceUri: uri,
     );
@@ -232,19 +230,13 @@ final class SourceOperations {
     if (current != null && !current()) {
       throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
     }
-    final existing = queries.documents
-        .where(
-          (s) =>
-              s.sourceUri == uri.toString() &&
-              sourceType(s.toRow()) == SourceType.url,
-        )
-        .firstOrNull;
+    final existing = queries.importIdForUri(uri.toString(), urlOnly: true);
     final id = store.importText(
       uri.host + uri.path,
       text,
       'text/plain',
       'url:$uri',
-      id: existing?.id,
+      id: existing,
       sourceUri: uri.toString(),
     );
     await domain.index(id, current: indexing ?? current);
@@ -255,16 +247,13 @@ final class SourceOperations {
     final generation = domain.workspaceGeneration;
     final files = importPolicy != null
         ? (await importPolicy!.directoryFiles(path)).map(File.new).toList()
-        : Directory(path)
-              .listSync(recursive: true, followLinks: false)
-              .whereType<File>()
-              .where(
-                (file) => RegExp(
-                  r'\.(txt|md|pdf|rtf)$',
-                  caseSensitive: false,
-                ).hasMatch(file.path),
-              )
-              .toList();
+        : await enumerateImportFiles(
+            path,
+            current: () =>
+                !domain.closed &&
+                generation == domain.workspaceGeneration &&
+                (current?.call() ?? true),
+          );
     final failures = <String>[];
     for (final file in files) {
       domain.checkWorkspace(generation);
