@@ -30,7 +30,11 @@ extension _CollectionView on MeetingsController {
         OutlinedButton.icon(
           onPressed: _operations.busy
               ? null
-              : () => _operations.run(_integrationCommands.connectGoogle),
+              : () => _operations.run(
+                  _integrations.granolaCalendar
+                      ? _integrationCommands.connectGranolaCalendar
+                      : _integrationCommands.connectGoogle,
+                ),
           icon: const Icon(Icons.calendar_today, size: 18),
           label: const Text('Connect Calendar'),
         ),

@@ -35,6 +35,7 @@ const googleConfigureDescriptor = OperationDescriptor(
   arguments: OperationArgumentSchema([
     ArgumentField("provider", ArgumentKind.string, nullable: true),
     ArgumentField("path", ArgumentKind.string, nullable: true),
+    ArgumentField("checkOnly", ArgumentKind.trueSwitch),
   ]),
 );
 

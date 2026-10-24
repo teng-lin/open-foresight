@@ -366,19 +366,13 @@ extension _SettingsView on SettingsController {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            _integrations.googlePresentation.connected
-                ? 'Connected as ${_integrations.googlePresentation.email}'
-                : _integrations.granolaCalendar
-                ? 'Google Calendar through Granola'
-                : 'Google Drive and Calendar',
-            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w500),
+          const Text(
+            'Calendar and files',
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w500),
           ),
           const SizedBox(height: 8),
-          Text(
-            _integrations.granolaCalendar
-                ? 'Calendar only. Sign-in and calendar sync use Granola’s hosted service. Drive is unavailable. This experimental connection depends on Granola accepting the return to Foresight.'
-                : 'Connect to import files and upcoming meetings. Foresight requests read-only access; imported text is indexed on this computer.',
+          const Text(
+            'Choose one connection. Google connects Drive and Calendar directly; Granola connects Calendar only.',
           ),
           if (!_integrations.googlePresentation.connected &&
               !_integrations.googlePresentation.configured)
@@ -532,55 +526,29 @@ extension _SettingsView on SettingsController {
     ),
   );
 
-  Widget _connectionActions() => Wrap(
-    spacing: 8,
-    runSpacing: 8,
+  Widget _connectionActions() => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      if (!_integrations.googlePresentation.connected) ...[
-        FilledButton(
-          onPressed: _operations.busy
-              ? null
-              : () => _operations.run(_integrationCommands.connectGoogle),
-          child: const Text('Connect Google'),
-        ),
-        OutlinedButton(
-          onPressed: _operations.busy
-              ? null
-              : () => _operations.run(
-                  _integrationCommands.connectGranolaCalendar,
-                ),
-          child: const Text('Connect calendar through Granola'),
-        ),
-        TextButton(
-          onPressed: () => showDialog<void>(
-            context: context,
-            builder: (_) => AlertDialog(
-              title: Text('Google connection setup'),
-              content: SelectableText(
-                _integrations.granolaCalendar
-                    ? 'This connects to Google through Granola’s existing WorkOS project and hosted calendar API. Granola processes authorization and calendar data. Drive is unavailable. Google consent may include calendar write access, matching Granola’s initial sign-in. Disconnect removes the saved session from Foresight; manage service access in Google or Granola. If your browser opens Granola, paste the return link into the waiting Foresight sign-in dialog.'
-                    : _integrations.googlePresentation.configured
-                    ? 'Choose Connect Google, select your account in the browser, and grant Drive and Calendar read access. This app already has its application sign-in configuration.\n\nYour Google password is never entered into Foresight. After signing in, you return to the app automatically.'
-                    : 'Google sign-in is unavailable in this build. Install a distribution with Google sign-in included.\n\nSign-in opens your default browser and asks for read access. Your Google password is never entered into Foresight.',
+      const SizedBox(height: 12),
+      _providerConnection(throughGranola: false),
+      const SizedBox(height: 12),
+      _providerConnection(throughGranola: true),
+      TextButton(
+        onPressed: () => showDialog<void>(
+          context: context,
+          builder: (_) => const AlertDialog(
+            title: Text('Google connection setup'),
+            content: SingleChildScrollView(
+              child: SelectableText(
+                'Google connects directly for read-only Drive and Calendar access. Google sign-in must be included in your distribution. Your Google password is never entered into Foresight.\n\n'
+                'Granola connects Calendar only and processes authorization and calendar data. Drive is unavailable. Google consent may include calendar write access. If your browser opens Granola, paste the return link into the waiting Foresight sign-in dialog.\n\n'
+                'Only one connection provider can be used at a time. Switching signs out saved accounts in Foresight; imported documents remain on this computer. Manage service access in Google or Granola.',
               ),
             ),
           ),
-          child: const Text('Connection help'),
         ),
-      ] else ...[
-        TextButton(
-          onPressed: _operations.busy || _integrations.googleSyncing
-              ? null
-              : () => _operations.run(_integrationCommands.refreshGoogle),
-          child: const Text('Refresh Google'),
-        ),
-        TextButton(
-          onPressed: _operations.busy
-              ? null
-              : () => _operations.run(_integrationCommands.disconnectGoogle),
-          child: const Text('Disconnect Google'),
-        ),
-      ],
+        child: const Text('Connection help'),
+      ),
       if (_integrations.googlePresentation.signingIn)
         TextButton(
           onPressed: _integrationCommands.cancelGoogleSignIn,
@@ -588,6 +556,93 @@ extension _SettingsView on SettingsController {
         ),
     ],
   );
+
+  Widget _providerConnection({required bool throughGranola}) {
+    final selected = _integrations.granolaCalendar == throughGranola;
+    final connected = selected && _integrations.googlePresentation.connected;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        border: Border.all(color: Theme.of(context).dividerColor),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            throughGranola
+                ? 'Calendar through Granola'
+                : 'Google Drive and Calendar',
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            throughGranola
+                ? 'Calendar only. Granola handles sign-in and calendar data. Drive is unavailable.'
+                : 'Read-only access to Drive files and upcoming meetings. Imported text is indexed on this computer.',
+          ),
+          const SizedBox(height: 8),
+          Text(
+            connected
+                ? 'Connected as ${_integrations.googlePresentation.email}'
+                : selected && _integrations.googlePresentation.signingIn
+                ? 'Signing in…'
+                : 'Not connected',
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              if (!connected)
+                if (throughGranola)
+                  OutlinedButton(
+                    onPressed: _operations.busy
+                        ? null
+                        : () => _operations.run(
+                            _integrationCommands.connectGranolaCalendar,
+                          ),
+                    child: const Text('Connect calendar through Granola'),
+                  )
+                else
+                  FilledButton(
+                    onPressed: _operations.busy
+                        ? null
+                        : () => _operations.run(
+                            _integrationCommands.connectGoogle,
+                          ),
+                    child: const Text('Connect Google'),
+                  )
+              else ...[
+                TextButton(
+                  onPressed: _operations.busy || _integrations.googleSyncing
+                      ? null
+                      : () =>
+                            _operations.run(_integrationCommands.refreshGoogle),
+                  child: Text(
+                    throughGranola ? 'Refresh calendar' : 'Refresh Google',
+                  ),
+                ),
+                TextButton(
+                  onPressed: _operations.busy
+                      ? null
+                      : () => _operations.run(
+                          _integrationCommands.disconnectGoogle,
+                        ),
+                  child: Text(
+                    throughGranola
+                        ? 'Disconnect calendar'
+                        : 'Disconnect Google',
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class SettingsView extends StatelessWidget {

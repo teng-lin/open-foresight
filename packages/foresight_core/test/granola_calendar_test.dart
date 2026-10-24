@@ -56,6 +56,8 @@ class GranolaFixture {
           }
           expect(body['code'], 'one-time-code');
           expect(body['isDev'], false);
+          expect(body['platform'], 'macOS');
+          expect(request.headers.value('X-Granola-Platform'), 'macOS');
           if (expectedAuthContext != null) {
             expect(body['authContext'], expectedAuthContext);
           }
@@ -144,6 +146,7 @@ class GranolaFixture {
     authorization = uri;
     expect(uri.queryParameters['provider'], 'google');
     expect(uri.queryParameters['dev'], 'false');
+    expect(uri.queryParameters['platform'], 'macOS');
     expect(uri.queryParameters['version'], '7.663.2');
     expect(uri.queryParameters['code_challenge']!.length, 43);
     expect(uri.queryParameters.containsKey('client_secret'), false);
@@ -173,6 +176,43 @@ void main() {
     await fixture.close();
     if (directory.existsSync()) directory.deleteSync(recursive: true);
   });
+
+  test(
+    'direct-client preflight leaves a connected Granola session untouched',
+    () async {
+      await auth.signIn((uri) => fixture.consent(auth, uri));
+      final configuration = File('${auth.directory.path}/client.json');
+      final tokens = File('${auth.directory.path}/tokens.json');
+      final beforeConfiguration = configuration.readAsBytesSync();
+      final beforeTokens = tokens.readAsBytesSync();
+      final beforeOperations = List<String>.from(fixture.operations);
+      final savedClient = File('${auth.directory.path}/google-client.json');
+      for (final invalid in [
+        null,
+        '{private-client-material',
+        '{"installed":{}}',
+      ]) {
+        if (invalid != null) savedClient.writeAsStringSync(invalid);
+        await expectLater(
+          auth.checkGoogleClient(),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.toString(),
+              'message',
+              isNot(contains('private-client-material')),
+            ),
+          ),
+        );
+        expect(auth.connected, true);
+        expect(auth.viaGranola, true);
+        expect(auth.account, 'workos-user-1');
+        expect(auth.accounts, hasLength(1));
+        expect(configuration.readAsBytesSync(), beforeConfiguration);
+        expect(tokens.readAsBytesSync(), beforeTokens);
+        expect(fixture.operations, beforeOperations);
+      }
+    },
+  );
 
   test(
     'owns the challenge, persists an isolated app session, refreshes and blocks Drive',

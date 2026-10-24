@@ -15,6 +15,7 @@ or another feature's controller.
 | `widgets.dart` | Device controls, confirmation/input dialogs, display labels and shortcut binding |
 | `desktop_settings.dart` | Login items and application entries |
 | `global_shortcuts.dart`, `hypr_shortcuts.dart` | Shortcut registration and injected Hyprland effects |
+| `google_provider_connection.dart` | Explicit provider selection, account sign-out confirmation and service configuration |
 | `google_picker.dart`, `google_sign_in_dialog.dart` | Drive selection and route-owned sign-in |
 | `system_audio_setup_dialog.dart` | Audio access request, refresh and permission guidance |
 

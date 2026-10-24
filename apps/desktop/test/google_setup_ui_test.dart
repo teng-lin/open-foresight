@@ -1,3 +1,4 @@
+import 'package:foresight_core/desktop.dart' show GoogleAccountPresentation;
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'pump_until.dart';
@@ -13,10 +14,50 @@ import 'meeting_setup_test.dart' show OfflineHelper;
 class BundledGoogleAuth extends GoogleAuth {
   BundledGoogleAuth(super.directory, {super.defaultClient});
   int invitations = 0;
+  final invitationProviders = <bool>[];
   @override
   Future<void> signIn(Future<void> Function(Uri) openBrowser) async {
     invitations++;
+    invitationProviders.add(viaGranola);
     throw StateError('Browser sign-in cancelled');
+  }
+}
+
+class SwitchingGoogleAuth extends BundledGoogleAuth {
+  SwitchingGoogleAuth(super.directory, {super.defaultClient});
+  final saved = ['alex', 'sam'];
+  final signedOut = <String>[];
+  bool failSignOut = false;
+
+  @override
+  bool get configured => true;
+  @override
+  bool get connected => saved.isNotEmpty;
+  @override
+  String get account => saved.isEmpty ? '' : saved.first;
+  @override
+  String get email => connected ? '$account@example.test' : '';
+  @override
+  List<GoogleAccountPresentation> get accounts => [
+    for (final id in saved)
+      GoogleAccountPresentation(
+        id: id,
+        email: '$id@example.test',
+        current: id == account,
+      ),
+  ];
+
+  @override
+  Future<void> refreshProfile() async {}
+
+  @override
+  Future<Map<String, dynamic>> apiJson(Uri uri) async => {'items': []};
+
+  @override
+  Future<void> signOutAccount(String id) async {
+    if (failSignOut) throw StateError('Could not sign out');
+    signedOut.add(id);
+    saved.remove(id);
   }
 }
 
@@ -46,6 +87,304 @@ class ReadonlyGoogleStatusConnection extends TestDesktopConnection {
 }
 
 void main() {
+  testWidgets('failed Granola sign-in can recover through the Google button', (
+    tester,
+  ) async {
+    final root = createTestTempDirectorySync('granola-recovery-ui-');
+    final client = File('${root.path}/bundled-client.json')
+      ..writeAsStringSync(
+        jsonEncode({
+          'installed': {'client_id': 'fixture.apps.googleusercontent.com'},
+        }),
+      );
+    final auth = BundledGoogleAuth(
+      Directory('${root.path}/google'),
+      defaultClient: client,
+    );
+    final domain = BundledGoogleDomain(
+      Store('${root.path}/app.db'),
+      OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+      auth,
+    );
+    await tester.pumpWidget(
+      Foresight(
+        ReadonlyGoogleStatusConnection(Application(domain, auth: auth)),
+        deviceLoader: () async => [],
+      ),
+    );
+    await tester.tap(find.text('Settings'));
+    await tester.pumpAndSettle();
+    expect(find.text('Google Drive and Calendar'), findsOneWidget);
+    expect(find.text('Calendar through Granola'), findsOneWidget);
+    final granola = find.widgetWithText(
+      OutlinedButton,
+      'Connect calendar through Granola',
+    );
+    await tester.ensureVisible(granola);
+    await tester.runAsync(() => tester.tap(granola));
+    await pumpUntil(tester, () => auth.invitations == 1);
+    await tester.pumpAndSettle();
+    expect(auth.viaGranola, true);
+    final google = find.widgetWithText(FilledButton, 'Connect Google');
+    await tester.ensureVisible(google);
+    await tester.runAsync(() => tester.tap(google));
+    await pumpUntil(tester, () => auth.invitations == 2);
+    await tester.pumpAndSettle();
+    expect(auth.invitationProviders, [true, false]);
+    expect(auth.viaGranola, false);
+    expect(auth.client!.id, 'fixture.apps.googleusercontent.com');
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets(
+    'connected Granola users can cancel or confirm switching to Google',
+    (tester) async {
+      final root = createTestTempDirectorySync('google-switch-ui-');
+      final client = File('${root.path}/bundled.json')
+        ..writeAsStringSync(
+          jsonEncode({
+            'installed': {'client_id': 'fixture.apps.googleusercontent.com'},
+          }),
+        );
+      final auth = SwitchingGoogleAuth(
+        Directory('${root.path}/google'),
+        defaultClient: client,
+      );
+      auth.saved.clear();
+      await tester.runAsync(auth.configureGranola);
+      auth.saved.addAll(['alex', 'sam']);
+      final domain = BundledGoogleDomain(
+        Store('${root.path}/app.db'),
+        OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+        auth,
+      );
+      await tester.pumpWidget(
+        Foresight(
+          ReadonlyGoogleStatusConnection(Application(domain, auth: auth)),
+          deviceLoader: () async => [],
+        ),
+      );
+      await tester.tap(find.text('Settings'));
+      await tester.pumpAndSettle();
+      final google = find.widgetWithText(FilledButton, 'Connect Google');
+      expect(find.text('Disconnect calendar'), findsOneWidget);
+      expect(find.text('Connect calendar through Granola'), findsNothing);
+      await tester.ensureVisible(google);
+      await tester.runAsync(() => tester.tap(google));
+      await pumpUntil(
+        tester,
+        () => find.text('Switch connection to Google?').evaluate().isNotEmpty,
+      );
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('Switch connection to Google?'), findsOneWidget);
+      await tester.tap(find.text('Cancel'));
+      await pumpUntil(
+        tester,
+        () =>
+            !(tester.state(find.byType(Workspace)) as WorkspaceTestAccess).busy,
+      );
+      await tester.pumpAndSettle();
+      expect(auth.saved, ['alex', 'sam']);
+      expect(auth.viaGranola, true);
+      await tester.runAsync(() => tester.tap(google));
+      await pumpUntil(
+        tester,
+        () => find.text('Switch connection to Google?').evaluate().isNotEmpty,
+      );
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.runAsync(() => tester.tap(find.text('Sign out and switch')));
+      await pumpUntil(tester, () => auth.invitations == 1);
+      await tester.pumpAndSettle();
+      expect(auth.signedOut, ['alex', 'sam']);
+      expect(auth.invitationProviders, [false]);
+      expect(auth.viaGranola, false);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  for (final invalidClient in [null, '{private-client-material']) {
+    testWidgets(
+      'missing or invalid direct Google setup preserves connected Granola accounts ($invalidClient)',
+      (tester) async {
+        final root = createTestTempDirectorySync('granola-preflight-ui-');
+        final auth = SwitchingGoogleAuth(Directory('${root.path}/google'));
+        auth.saved.clear();
+        await tester.runAsync(auth.configureGranola);
+        auth.saved.addAll(['alex', 'sam']);
+        if (invalidClient != null) {
+          File(
+            '${auth.directory.path}/google-client.json',
+          ).writeAsStringSync(invalidClient);
+        }
+        final configuration = File('${auth.directory.path}/client.json');
+        final before = configuration.readAsBytesSync();
+        final domain = BundledGoogleDomain(
+          Store('${root.path}/app.db'),
+          OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+          auth,
+        );
+        await tester.pumpWidget(
+          Foresight(
+            ReadonlyGoogleStatusConnection(Application(domain, auth: auth)),
+            deviceLoader: () async => [],
+          ),
+        );
+        await tester.tap(find.text('Settings'));
+        await tester.pumpAndSettle();
+        final google = find.widgetWithText(FilledButton, 'Connect Google');
+        await tester.ensureVisible(google);
+        await tester.runAsync(() => tester.tap(google));
+        final workspace =
+            tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
+        await pumpUntil(tester, () => !workspace.busy);
+        await tester.pumpAndSettle();
+        expect(auth.saved, ['alex', 'sam']);
+        expect(auth.signedOut, isEmpty);
+        expect(auth.connected, true);
+        expect(auth.viaGranola, true);
+        expect(auth.invitations, 0);
+        expect(configuration.readAsBytesSync(), before);
+        expect(find.text('Switch connection to Google?'), findsNothing);
+        expect(
+          workspace.error,
+          contains(
+            invalidClient == null
+                ? 'Google sign-in is unavailable in this build.'
+                : 'Google client setup could not be loaded.',
+          ),
+        );
+        expect(workspace.error, isNot(contains('private-client-material')));
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
+
+  testWidgets(
+    'a stale switch confirmation cannot sign out a replacement session',
+    (tester) async {
+      final root = createTestTempDirectorySync('granola-stale-ui-');
+      final auth = SwitchingGoogleAuth(Directory('${root.path}/google'));
+      final domain = BundledGoogleDomain(
+        Store('${root.path}/app.db'),
+        OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+        auth,
+      );
+      final connection = ReadonlyGoogleStatusConnection(
+        Application(domain, auth: auth),
+      );
+      await tester.pumpWidget(
+        Foresight(connection, deviceLoader: () async => []),
+      );
+      await tester.tap(find.text('Settings'));
+      await tester.pumpAndSettle();
+      final connect = find.widgetWithText(
+        OutlinedButton,
+        'Connect calendar through Granola',
+      );
+      await tester.ensureVisible(connect);
+      await tester.runAsync(() => tester.tap(connect));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(
+        find.text('Switch calendar connection to Granola?'),
+        findsOneWidget,
+      );
+      connection.replaceClientSessionForTesting();
+      await tester.runAsync(() => tester.tap(find.text('Sign out and switch')));
+      final workspace =
+          tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
+      await pumpUntil(tester, () => !workspace.busy);
+      await tester.pumpAndSettle();
+      expect(auth.saved, ['alex', 'sam']);
+      expect(auth.signedOut, isEmpty);
+      expect(auth.viaGranola, false);
+      expect(auth.invitations, 0);
+      expect(connection.configuredStatusBeforeReply, false);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  for (final failSignOut in [false, true]) {
+    testWidgets(
+      'connected Google users can cancel or confirm a Granola switch (sign-out failure: $failSignOut)',
+      (tester) async {
+        final root = createTestTempDirectorySync('granola-switch-ui-');
+        final auth = SwitchingGoogleAuth(Directory('${root.path}/google'))
+          ..failSignOut = failSignOut;
+        final store = Store('${root.path}/application.db');
+        final helper = OfflineHelper(
+          '${root.path}/socket',
+          '${root.path}/helper',
+        );
+        final domain = BundledGoogleDomain(store, helper, auth);
+        final connection = ReadonlyGoogleStatusConnection(
+          Application(domain, auth: auth),
+        );
+        await tester.pumpWidget(
+          Foresight(connection, deviceLoader: () async => []),
+        );
+        await tester.tap(find.text('Settings'));
+        await tester.pumpAndSettle();
+        final connect = find.widgetWithText(
+          OutlinedButton,
+          'Connect calendar through Granola',
+        );
+        await tester.ensureVisible(connect);
+        await tester.runAsync(() => tester.tap(connect));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(
+          find.text('Switch calendar connection to Granola?'),
+          findsOneWidget,
+        );
+        expect(find.textContaining('stops Drive sync'), findsOneWidget);
+        await tester.tap(find.text('Cancel'));
+        await pumpUntil(
+          tester,
+          () => !(tester.state(find.byType(Workspace)) as WorkspaceTestAccess)
+              .busy,
+        );
+        await tester.pumpAndSettle();
+        expect(auth.saved, ['alex', 'sam']);
+        expect(auth.signedOut, isEmpty);
+        expect(auth.viaGranola, false);
+        expect(auth.invitations, 0);
+
+        await tester.runAsync(() => tester.tap(connect));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        await tester.runAsync(
+          () => tester.tap(find.text('Sign out and switch')),
+        );
+        final workspace =
+            tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
+        await pumpUntil(tester, () => !workspace.busy);
+        await tester.pumpAndSettle();
+        if (failSignOut) {
+          expect(auth.saved, ['alex', 'sam']);
+          expect(auth.viaGranola, false);
+          expect(auth.invitations, 0);
+          final state =
+              tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
+          expect(state.error, contains('Could not sign out'));
+        } else {
+          await pumpUntil(tester, () => auth.invitations == 1);
+          await tester.pumpAndSettle();
+          expect(auth.signedOut, ['alex', 'sam']);
+          expect(auth.saved, isEmpty);
+          expect(auth.viaGranola, true);
+          expect(connection.configuredStatusBeforeReply, true);
+        }
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
+
   testWidgets(
     'Granola calendar option configures Calendar only and disables every Drive import',
     (tester) async {

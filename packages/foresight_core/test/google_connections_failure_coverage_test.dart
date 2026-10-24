@@ -314,7 +314,7 @@ void main() {
       expect(response.status, 200);
       final request = await received.future;
       expect(request['body'], {'query': 'owned data'});
-      expect(request['platform'], Platform.isMacOS ? 'macOS' : 'linux');
+      expect(request['platform'], 'macOS');
       expect(request['client'], '7.663.2');
       expect(request['authorization'], 'Bearer local-fixture-only');
     },
