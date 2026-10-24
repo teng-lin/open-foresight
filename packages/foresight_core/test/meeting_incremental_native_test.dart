@@ -17,6 +17,12 @@ void main() {
     'application incremental producer survives real helper restart/reset and publishes parent citations',
     () async {
       final root = createTestTempDirectorySync('app-native-');
+      final permissions = await Process.run('/bin/chmod', ['700', root.path]);
+      expect(
+        permissions.exitCode,
+        0,
+        reason: '${permissions.stdout}\n${permissions.stderr}',
+      );
       final socket = '${root.path}/h.sock', storage = '${root.path}/helper';
       Store? store;
       Helper? helper;
@@ -163,6 +169,11 @@ void main() {
       await app!.recoverMeetingIndexes();
       expect(await search(id), hasLength(7));
       expect(app!.meetingIndexWork['transcript_rows_read'], 0);
+      store!.db.execute('DELETE FROM transcript WHERE meeting_id=?', [meeting]);
+      await app!.recoverMeetingIndexes();
+      expect(await search(id), isEmpty);
+      expect(store!.sourceQueries.source(id)!.content, '');
+      expect(store!.sourceQueries.source(id)!.state, 'indexed');
       await domain!.delete(id);
       expect(await search(id), isEmpty);
       await app!.recoverMeetingIndexes();

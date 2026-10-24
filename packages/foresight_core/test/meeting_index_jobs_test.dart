@@ -134,12 +134,12 @@ void main() {
   });
 
   test(
-    'startup verification includes successful generated sources for helper cursor repair',
+    'startup verification includes successful generated sources even after final row deletion',
     () {
       db.execute(
         'ALTER TABLE sources ADD COLUMN generated INTEGER NOT NULL DEFAULT 0',
       );
-      meeting(1);
+      meeting(1, transcript: false);
       db.execute("INSERT INTO sources VALUES('meeting-1','indexed',0,1)");
       jobs.complete(jobs.request(1));
       expect(jobs.recover(), isEmpty);

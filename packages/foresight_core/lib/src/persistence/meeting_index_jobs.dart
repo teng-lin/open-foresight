@@ -73,7 +73,8 @@ final class MeetingIndexJobs {
       'LEFT JOIN meeting_index_state completed ON completed.meeting_id=m.id '
       'AND completed.workspace_epoch=? '
       "LEFT JOIN sources s ON s.id='meeting-'||m.id "
-      'WHERE m.id>? AND EXISTS(SELECT 1 FROM transcript t WHERE t.meeting_id=m.id AND t.final=1) '
+      'WHERE m.id>? AND (EXISTS(SELECT 1 FROM transcript t WHERE t.meeting_id=m.id AND t.final=1) '
+      '${verifyCompleted ? 'OR s.generated=1' : ''}) '
       'AND (s.id IS NULL OR s.deleted=0) '
       'AND (completed.revision IS NULL OR completed.revision<m.revision '
       "OR s.id IS NULL OR s.state!='indexed' ${verifyCompleted ? 'OR s.generated=1' : ''}) "
