@@ -1,42 +1,14 @@
-part of 'meetings_controller.dart';
+import 'dart:math' as math;
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import '../../presentation/workspace_presentation.dart';
+import 'meeting_visuals.dart';
 
-extension _WorkspaceView on MeetingsController {
-  Future<void> _renameMeeting(
-    MeetingDetails meeting,
-    FeatureRequestIdentity identity,
-  ) async {
-    bool current() => _meetingActionCurrent(meeting.id, identity);
-    if (!current() || !_dialogs.rowsAreCurrent()) return;
-    final controller = TextEditingController(text: meeting.title);
-    try {
-      await _dialogs.showInputDialog<bool>(
-        builder: (context) => ServiceEditDialog(
-          title: 'Rename meeting',
-          controller: controller,
-          saveLabel: 'Save',
-          height: 90,
-          maxLines: 1,
-          onSave: () async {
-            if (!current()) {
-              throw StateError(
-                'The meeting view changed. Close this editor and try again.',
-              );
-            }
-            await d.commandCurrent(Operation.meetingsRename, {
-              'id': meeting.id,
-              'title': controller.text.trim(),
-              'workspace_epoch': identity.workspaceEpoch,
-            }, current);
-          },
-        ),
-      );
-    } finally {
-      controller.dispose();
-    }
-  }
-
-  Widget _meetingRenameButton(MeetingDetails meeting) {
-    final identity = _reads.presentationIdentity;
+class _MeetingRenameButton extends StatelessWidget {
+  const _MeetingRenameButton(this.onRename);
+  final VoidCallback? onRename;
+  @override
+  Widget build(BuildContext context) {
     return IconButton(
       tooltip: 'Rename meeting',
       iconSize: 18,
@@ -46,17 +18,24 @@ extension _WorkspaceView on MeetingsController {
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
       ),
       icon: const Icon(Icons.edit_outlined),
-      onPressed: identity == null
-          ? null
-          : () => _renameMeeting(meeting, identity),
+      onPressed: onRename,
     );
   }
+}
 
-  Widget _immersiveMeetingWorkspace() => CallbackShortcuts(
-    bindings: {
-      const SingleActivator(LogicalKeyboardKey.escape): () =>
-          update(() => meetingImmersive = false),
-    },
+class ImmersiveMeetingWorkspace extends StatelessWidget {
+  const ImmersiveMeetingWorkspace({
+    super.key,
+    required this.workspace,
+    this.recordingHeader,
+    required this.onExit,
+  });
+  final Widget workspace;
+  final Widget? recordingHeader;
+  final VoidCallback onExit;
+  @override
+  Widget build(BuildContext context) => CallbackShortcuts(
+    bindings: {const SingleActivator(LogicalKeyboardKey.escape): onExit},
     child: Focus(
       autofocus: true,
       child: Scaffold(
@@ -74,16 +53,16 @@ extension _WorkspaceView on MeetingsController {
                     runSpacing: 8,
                     children: [
                       TextButton.icon(
-                        onPressed: () => update(() => meetingImmersive = false),
+                        onPressed: onExit,
                         icon: const Icon(Icons.fullscreen_exit),
                         label: const Text('Exit Immersive View'),
                       ),
-                      if (recording != null) recordingHeader(),
+                      if (recordingHeader != null) recordingHeader!,
                     ],
                   ),
                 ),
                 const SizedBox(height: 12),
-                Expanded(child: MeetingStyleScope(child: meetingWorkspace())),
+                Expanded(child: MeetingStyleScope(child: workspace)),
               ],
             ),
           ),
@@ -91,41 +70,53 @@ extension _WorkspaceView on MeetingsController {
       ),
     ),
   );
+}
 
-  Widget meetingWorkspace() {
-    final id = meetingId!;
-    final meeting = _reads.meeting(id);
-    if (meeting == null)
-      return Center(
-        child: Text(
-          _reads.meetingLoaded(id)
-              ? 'Meeting no longer exists.'
-              : 'Loading meeting…',
-        ),
-      );
-    final start = (meeting.starts ?? meeting.created ?? 0);
-    final end =
-        (meeting.ends ?? start + const Duration(minutes: 30).inMilliseconds);
-    final date = DateTime.fromMillisecondsSinceEpoch(start).toLocal();
-    final dateText =
-        '${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][date.weekday - 1]}, ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][date.month - 1]} ${date.day}, ${date.year}';
+class MeetingWorkspacePanel extends StatelessWidget {
+  const MeetingWorkspacePanel({
+    super.key,
+    required this.header,
+    this.speechProblem,
+    required this.sidecarVisible,
+    required this.assistantFallback,
+    required this.sidecarWidth,
+    required this.assistantMinWidth,
+    required this.onAssistantWidth,
+    required this.onSidecarWidth,
+    required this.onSetupSpeech,
+    required this.onHideAssistant,
+    required this.onOpenAssistant,
+    required this.notesBuilder,
+    required this.assistantBuilder,
+  });
+  final Widget header;
+  final String? speechProblem;
+  final bool sidecarVisible, assistantFallback;
+  final double sidecarWidth, assistantMinWidth;
+  final ValueChanged<bool> onAssistantWidth;
+  final ValueChanged<double> onSidecarWidth;
+  final VoidCallback onSetupSpeech, onHideAssistant;
+  final ValueChanged<BuildContext> onOpenAssistant;
+  final Widget Function(bool large, Widget assistantToggle) notesBuilder;
+  final Widget Function() assistantBuilder;
+  @override
+  Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (workspaceContext, constraints) {
-        final wide = constraints.maxWidth >= _meetingAssistantMinWidth;
-        meetingAssistantWide = wide;
-        final showAssistant =
-            meetingSidecarVisible && (wide || meetingAssistantFallback);
+        final wide = constraints.maxWidth >= assistantMinWidth;
+        onAssistantWidth(wide);
+        final showAssistant = sidecarVisible && (wide || assistantFallback);
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _meetingWorkspaceHeader(meeting, dateText, start, end),
-            if (preparedSpeechSetupProblem(_reads.speech) != null)
+            header,
+            if (speechProblem != null)
               ListTile(
                 dense: true,
                 leading: const Icon(Icons.info_outline),
-                title: Text(preparedSpeechSetupProblem(_reads.speech)!),
+                title: Text(speechProblem!),
                 trailing: TextButton(
-                  onPressed: () => _settings.showModelSetup('speech'),
+                  onPressed: onSetupSpeech,
                   child: const Text('Set up speech'),
                 ),
               ),
@@ -134,16 +125,15 @@ extension _WorkspaceView on MeetingsController {
               child: LayoutBuilder(
                 builder: (_, size) {
                   final showSidecar = showAssistant && wide;
-                  final sideWidth = meetingSidecarWidth
+                  final sideWidth = sidecarWidth
                       .clamp(280.0, math.max(280.0, size.maxWidth / 2))
                       .toDouble();
                   final notesWidth = showSidecar
                       ? size.maxWidth - sideWidth - 16
                       : size.maxWidth;
-                  final editor = meetingNotesEditor(
-                    id,
+                  final editor = notesBuilder(
                     notesWidth >= 640,
-                    assistantToggle: SizedBox(
+                    SizedBox(
                       width: 40,
                       child: IconButton(
                         key: const ValueKey('meeting-assistant-toggle'),
@@ -159,13 +149,13 @@ extension _WorkspaceView on MeetingsController {
                           ),
                         ),
                         onPressed: showAssistant
-                            ? () => update(() => meetingSidecarVisible = false)
-                            : () => openMeetingAssistant(workspaceContext),
+                            ? onHideAssistant
+                            : () => onOpenAssistant(workspaceContext),
                         icon: const Icon(Icons.view_sidebar_outlined),
                       ),
                     ),
                   );
-                  if (showAssistant && !wide) return meetingAssistant(id);
+                  if (showAssistant && !wide) return assistantBuilder();
                   return Row(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
@@ -176,14 +166,13 @@ extension _WorkspaceView on MeetingsController {
                           child: GestureDetector(
                             key: const ValueKey('meeting-sidecar-resize'),
                             behavior: HitTestBehavior.opaque,
-                            onHorizontalDragUpdate: (drag) => update(
-                              () => meetingSidecarWidth =
-                                  (sideWidth - drag.delta.dx)
-                                      .clamp(
-                                        280.0,
-                                        math.max(280.0, size.maxWidth / 2),
-                                      )
-                                      .toDouble(),
+                            onHorizontalDragUpdate: (drag) => onSidecarWidth(
+                              (sideWidth - drag.delta.dx)
+                                  .clamp(
+                                    280.0,
+                                    math.max(280.0, size.maxWidth / 2),
+                                  )
+                                  .toDouble(),
                             ),
                             child: SizedBox(
                               width: 16,
@@ -200,7 +189,7 @@ extension _WorkspaceView on MeetingsController {
                             ),
                           ),
                         ),
-                        SizedBox(width: sideWidth, child: meetingAssistant(id)),
+                        SizedBox(width: sideWidth, child: assistantBuilder()),
                       ],
                     ],
                   );
@@ -212,28 +201,26 @@ extension _WorkspaceView on MeetingsController {
       },
     );
   }
+}
 
-  Widget _meetingWorkspaceHeader(
-    MeetingDetails meeting,
-    String dateText,
-    int start,
-    int end,
-  ) => Row(
+class MeetingWorkspaceHeader extends StatelessWidget {
+  const MeetingWorkspaceHeader({
+    super.key,
+    required this.title,
+    required this.dateText,
+    required this.timeText,
+    required this.onBack,
+    this.onRename,
+  });
+  final String title, dateText, timeText;
+  final VoidCallback onBack;
+  final VoidCallback? onRename;
+  @override
+  Widget build(BuildContext context) => Row(
     children: [
       IconButton.filledTonal(
         tooltip: 'All meetings',
-        onPressed: () async {
-          try {
-            await flushMeetingNotesDraft();
-          } catch (_) {
-            return;
-          }
-          if (mounted)
-            update(() {
-              meetingId = null;
-              meetingImmersive = false;
-            });
-        },
+        onPressed: onBack,
         style: IconButton.styleFrom(backgroundColor: Colors.white),
         icon: const Icon(Icons.arrow_back),
       ),
@@ -249,10 +236,8 @@ extension _WorkspaceView on MeetingsController {
           children: [
             Row(
               children: [
-                Flexible(
-                  child: Text(meeting.title, style: MeetingVisuals.title),
-                ),
-                _meetingRenameButton(meeting),
+                Flexible(child: Text(title, style: MeetingVisuals.title)),
+                _MeetingRenameButton(onRename),
               ],
             ),
             const SizedBox(height: 8),
@@ -260,9 +245,7 @@ extension _WorkspaceView on MeetingsController {
               spacing: 8,
               children: [
                 MeetingMetadataBadge(dateText),
-                MeetingMetadataBadge(
-                  '${meetingClock(start)} - ${meetingClock(end)}',
-                ),
+                MeetingMetadataBadge(timeText),
               ],
             ),
           ],

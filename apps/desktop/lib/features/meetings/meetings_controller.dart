@@ -1,3 +1,4 @@
+import 'workspace_view.dart';
 import 'collection_view.dart';
 import 'summary_view.dart';
 import 'recording_view.dart';
@@ -21,7 +22,6 @@ import 'meeting_note_state.dart';
 import 'meeting_visuals.dart';
 import 'note_save_scheduler.dart';
 import 'read_model.dart';
-part 'workspace_view.dart';
 part 'notes_view.dart';
 part 'assistant_views.dart';
 part 'ai_views.dart';
@@ -293,7 +293,100 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
 
   Future<String> exportMeetingMarkdown() => meetingMarkdown();
 
-  Widget immersiveMeetingWorkspace() => _immersiveMeetingWorkspace();
+  Widget immersiveMeetingWorkspace() => ImmersiveMeetingWorkspace(
+    workspace: meetingWorkspace(),
+    recordingHeader: recording == null ? null : recordingHeader(),
+    onExit: () => update(() => meetingImmersive = false),
+  );
+
+  Future<void> _renameMeeting(
+    MeetingDetails meeting,
+    FeatureRequestIdentity identity,
+  ) async {
+    bool current() => _meetingActionCurrent(meeting.id, identity);
+    if (!current() || !_dialogs.rowsAreCurrent()) return;
+    final controller = TextEditingController(text: meeting.title);
+    try {
+      await _dialogs.showInputDialog<bool>(
+        builder: (context) => ServiceEditDialog(
+          title: 'Rename meeting',
+          controller: controller,
+          saveLabel: 'Save',
+          height: 90,
+          maxLines: 1,
+          onSave: () async {
+            if (!current()) {
+              throw StateError(
+                'The meeting view changed. Close this editor and try again.',
+              );
+            }
+            await d.commandCurrent(Operation.meetingsRename, {
+              'id': meeting.id,
+              'title': controller.text.trim(),
+              'workspace_epoch': identity.workspaceEpoch,
+            }, current);
+          },
+        ),
+      );
+    } finally {
+      controller.dispose();
+    }
+  }
+
+  Widget meetingWorkspace() {
+    final id = meetingId!;
+    final meeting = _reads.meeting(id);
+    if (meeting == null)
+      return Center(
+        child: Text(
+          _reads.meetingLoaded(id)
+              ? 'Meeting no longer exists.'
+              : 'Loading meeting…',
+        ),
+      );
+    final start = meeting.starts ?? meeting.created ?? 0;
+    final end =
+        meeting.ends ?? start + const Duration(minutes: 30).inMilliseconds;
+    final date = DateTime.fromMillisecondsSinceEpoch(start).toLocal();
+    final dateText =
+        '${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][date.weekday - 1]}, ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][date.month - 1]} ${date.day}, ${date.year}';
+    final identity = _reads.presentationIdentity;
+    return MeetingWorkspacePanel(
+      header: MeetingWorkspaceHeader(
+        title: meeting.title,
+        dateText: dateText,
+        timeText: '${meetingClock(start)} - ${meetingClock(end)}',
+        onRename: identity == null
+            ? null
+            : () => _renameMeeting(meeting, identity),
+        onBack: () async {
+          try {
+            await flushMeetingNotesDraft();
+          } catch (_) {
+            return;
+          }
+          if (mounted)
+            update(() {
+              meetingId = null;
+              meetingImmersive = false;
+            });
+        },
+      ),
+      speechProblem: preparedSpeechSetupProblem(_reads.speech),
+      onSetupSpeech: () => _settings.showModelSetup('speech'),
+      sidecarVisible: meetingSidecarVisible,
+      assistantFallback: meetingAssistantFallback,
+      sidecarWidth: meetingSidecarWidth,
+      assistantMinWidth: _meetingAssistantMinWidth,
+      onAssistantWidth: (wide) => meetingAssistantWide = wide,
+      onSidecarWidth: (width) => update(() => meetingSidecarWidth = width),
+      onHideAssistant: () => update(() => meetingSidecarVisible = false),
+      onOpenAssistant: (context) => openMeetingAssistant(context),
+      notesBuilder: (large, toggle) =>
+          meetingNotesEditor(id, large, assistantToggle: toggle),
+      assistantBuilder: () => meetingAssistant(id),
+    );
+  }
 
   String meetingClock(int milliseconds) => meetingClockLabel(milliseconds);
   int meetingStart(MeetingDetails meeting) => meetingStartMilliseconds(meeting);
