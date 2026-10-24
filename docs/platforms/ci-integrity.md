@@ -112,3 +112,16 @@ a side effect of other work.
   application dry-run failure must keep its output and fail with an actionable
   diagnostic; it never authorizes a rebuild. Use small reproductions rather than
   recompiling real SDKs or vendor libraries.
+
+
+## Tool package initialization
+
+SDK producer controls include `tools/__init__.py` because importing a tooling
+module executes its package initializer. The registry leaf used by the producer
+workflow is also an explicit control. Historical namespace producers have no
+initializer; the immutable reader preserves that absence. Absence cannot qualify
+any present consumer initializer, even an empty file. A present initializer must
+match verified regular Git bytes and executable mode, just like other controls.
+Existing reviewed-source and exact-artifact approval rules still apply; a changed
+control set never supplies permission for a cold compilation of compatible SDK
+bytes. Review this control-set change with the package import migration.

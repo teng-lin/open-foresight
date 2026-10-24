@@ -345,3 +345,18 @@ def test_shadow_ci_image_and_runner_scripts_do_not_change_sdk_build_inputs(sourc
     ):
         (source / "tools" / name).write_text("changed application-only runner\n")
     assert identities(source) == before
+
+
+def test_legacy_registry_invocation_keeps_verified_compiler_identity(source):
+    before = identities(source)
+    path = source / artifacts.WORKFLOW
+    current = path.read_text()
+    legacy = current.replace(
+        '      working-directory: ${{ github.workspace }}\n      run: python -m tools.ci_registry',
+        '      run: python tools/ci_registry.py',
+    )
+    assert legacy != current
+    path.write_text(legacy)
+    # Historical transport remains readable under the current trusted recipe;
+    # no historical Python/workflow is executed or counted as a fresh build.
+    assert identities(source) == before

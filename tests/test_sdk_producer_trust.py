@@ -302,3 +302,67 @@ def test_waiting_producers_ignores_other_heads_without_fetching_their_recipe():
             for call in api.call_args_list
         )
         source.assert_not_called()
+
+
+def test_default_control_closure_reads_initializer_as_verified_data():
+    contents = {name: b"reviewed" for name in trust.PRODUCER_CONTROLS}
+    initializer = "tools/__init__.py"
+    contents[initializer] = b"raise RuntimeError('producer code must never execute')\n"
+    source = trust.read_producer_controls("owner/repo", HEAD, api=git_api(contents))
+    assert source[initializer] == ("100644", contents[initializer])
+    assert source["tools/ci_registry.py"] == ("100644", contents["tools/ci_registry.py"])
+
+
+def test_namespace_history_does_not_approve_a_present_initializer(tmp_path):
+    initializer = tmp_path / "tools/__init__.py"
+    initializer.parent.mkdir()
+    paths = (trust.PACKAGE_INITIALIZER,)
+    api = git_api({})
+    assert trust.read_producer_controls("owner/repo", HEAD, api=api, paths=paths) == {}
+    assert trust.producer_controls_match("owner/repo", HEAD, api=api, root=tmp_path, paths=paths)
+    initializer.write_bytes(b"")
+    assert not trust.producer_controls_match("owner/repo", HEAD, api=api, root=tmp_path, paths=paths)
+    initializer.write_bytes(b"raise RuntimeError('not approved')\n")
+    assert not trust.producer_controls_match("owner/repo", HEAD, api=api, root=tmp_path, paths=paths)
+
+
+def test_namespace_history_cannot_hide_a_dangling_initializer_symlink(tmp_path):
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    (tools / "__init__.py").symlink_to("missing")
+    assert not trust.producer_controls_match(
+        "owner/repo", HEAD, api=git_api({}), root=tmp_path,
+        paths=(trust.PACKAGE_INITIALIZER,),
+    )
+
+
+@pytest.mark.parametrize("change", ["bytes", "mode", "missing", "symlink"])
+def test_present_initializer_keeps_exact_local_byte_mode_identity(tmp_path, change):
+    initializer = tmp_path / "tools/__init__.py"
+    initializer.parent.mkdir()
+    initializer.write_bytes(b"reviewed initializer")
+    paths = (trust.PACKAGE_INITIALIZER,)
+    api = git_api({trust.PACKAGE_INITIALIZER: initializer.read_bytes()})
+    assert trust.producer_controls_match("owner/repo", HEAD, api=api, root=tmp_path, paths=paths)
+    if change == "bytes":
+        initializer.write_bytes(b"changed initializer")
+    elif change == "mode":
+        initializer.chmod(0o755)
+    elif change == "missing":
+        initializer.unlink()
+    else:
+        initializer.unlink()
+        target = tmp_path / "same-bytes.py"
+        target.write_bytes(b"reviewed initializer")
+        initializer.symlink_to(target)
+    assert not trust.producer_controls_match("owner/repo", HEAD, api=api, root=tmp_path, paths=paths)
+
+
+@pytest.mark.parametrize("options", [{"corrupt": True}, {"truncated": True}, {"mode": "120000"}])
+def test_initializer_optional_history_keeps_immutable_git_checks(options):
+    with pytest.raises(ValueError):
+        trust.read_producer_controls(
+            "owner/repo", HEAD,
+            api=git_api({trust.PACKAGE_INITIALIZER: b"reviewed"}, **options),
+            paths=(trust.PACKAGE_INITIALIZER,),
+        )
