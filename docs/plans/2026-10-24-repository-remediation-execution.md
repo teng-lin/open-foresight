@@ -269,3 +269,29 @@ native/core/desktop/coverage, compiled service/MCP, isolated-display, security,
 sanitizer, release/installed and owner-review gates remain required. Real models,
 physical audio/GPU, signing/notarization and external platform settings have not
 been qualified by these focused results.
+
+### Review follow-up after the 17:10 checkpoint
+
+A3's fourth review found only a misleading history-size claim: the frozen schema
+applies 32 MiB per entity, as the plan requires, rather than profile-wide. Commit
+`d395e99b` corrects both documents and adds a real two-note Store regression.
+The retention file passed **10/10**, zero skips, and core analysis passed. The
+fifth Claude follow-up review returned **CONVERGED**, with no denied reads;
+production code and migrations are unchanged. Latest Mac qualification remains
+pending, and the final offline restore activation workflow is still open.
+
+B1 remains **CHANGES_REQUIRED** after both independent reviews. The native-agent
+review identified a POSIX-lock loss when rejecting a hard-linked logging inode,
+producer-ticket lifetime/bounds problems and descendant filesystem qualification
+gaps. Claude identified additional rate-table saturation, startup-credit,
+retention-crash, missing ownership-decision close and admission-test gaps.
+Findings are being verified and repaired together in the B1 worktree; `439af36b`
+is not accepted on the strength of its passing focused tests. Review evidence:
+`/var/tmp/of-b1-native-architecture-review.md` and
+`/var/tmp/of-exec-1024/b1-review-1/stdout.json`.
+
+Canonical A4 combined-source Linux/Mac qualification is running in isolated
+exports; its second independent Claude review is pending. B2 adoption continues
+in its separate worktree and will consume the repaired foundation. Stage D's
+first documentation/link-check unit is now under local implementation; none of
+these activities closes the remaining stages or final integration gates.
