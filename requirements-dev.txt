@@ -10,3 +10,5 @@ PyYAML==6.0.3
 ruff==0.17.1
 mypy==2.4.0
 types-protobuf==6.32.1.20260221
+# CommonMark tokenization for offline documentation links; never fetches links.
+markdown-it-py==4.2.0

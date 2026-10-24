@@ -39,6 +39,8 @@ jobs:
       - run: ruff check .
       - run: mypy
       - run: python tools/check_subprocess_timeouts.py
+      - name: Check offline documentation links
+        run: python -m tools.check_document_links
       - name: Install pinned protobuf compiler for contract tests
         run: |
           task_protoc="$RUNNER_TEMP/quality-protoc"

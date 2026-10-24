@@ -51,7 +51,7 @@ The EventKit module explains access to calendars synchronized into macOS. It is 
 
 ## Evidence and coverage
 
-Local evidence is retained under [`.granola-analysis`](../../.granola-analysis/). That directory is ignored by Git and contains extracted application code, analysis databases, logs, and the following records:
+Local evidence is retained under `.granola-analysis` (`.granola-analysis/`). That directory is ignored by Git and contains extracted application code, analysis databases, logs, and the following records:
 
 | Record | Purpose |
 | --- | --- |

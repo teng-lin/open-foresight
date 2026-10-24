@@ -97,7 +97,7 @@ The client filters cancelled/declined events and requires timed starts, timed en
 
 The research worktree includes an opt-in **Connect calendar through Granola** action in Settings. It uses Granola's existing hosted service and WorkOS project, without an application-owned project or Google Desktop client JSON. The existing direct Google connection remains available.
 
-A fresh unauthenticated request accepted `redirect=open-foresight://login-in-progress?foresight_state=<random>` and an app challenge together. It returned HTTP 302 to WorkOS client `client_01JZJ0XBDAT8PHJWQY09Y0VD61`; the JSON state preserved the exact return URL and challenge. This corrects the earlier inference that a rejected localhost return meant every non-Granola return was blocked. **Initial acceptance does not establish that successful login returns to this URI.** See the sanitized [HTTP03 observation](../../.granola-analysis/live-foresight-return.json).
+A fresh unauthenticated request accepted `redirect=open-foresight://login-in-progress?foresight_state=<random>` and an app challenge together. It returned HTTP 302 to WorkOS client `client_01JZJ0XBDAT8PHJWQY09Y0VD61`; the JSON state preserved the exact return URL and challenge. This corrects the earlier inference that a rejected localhost return meant every non-Granola return was blocked. **Initial acceptance does not establish that successful login returns to this URI.** See the sanitized HTTP03 observation (`.granola-analysis/live-foresight-return.json`).
 
 The shipped web-shell bootstrap (`dist-app/assets/index-hW7uFomT.js`, function `S`, offset 64880) reads an `open-url` query parameter, decodes an inner URL, and dispatches the inner path as a deep-link event. Its `getPendingDeepLinkUrl` feeds the same renderer login-completion handler as Electron. This supplies the evidence for the implemented envelope receiver; the hosted server's successful construction of that envelope remains unobserved.
 
@@ -141,7 +141,7 @@ The standalone test app is `Open Foresight Calendar Test.app` in the ignored `.g
 
 The actual user return used `https://www.granola.ai/app-redirect`, with the completion code, signed `authContext`, and flow/correlation fields in its query. The initial manual implementation accepted only the native callback address, so it rejected this wrapper before any exchange. That is the confirmed cause of the reported generic rejection.
 
-The public page's JavaScript function `v` reads those fields and constructs `granola://login-complete?...`; the page then assigns that URL to `window.location.href`. Its URL without credentials was fetched for inspection. See [WEB01](../../.granola-analysis/https-return-evidence.json) for the public source URL, hash, exact excerpt, and evidence boundary.
+The public page's JavaScript function `v` reads those fields and constructs `granola://login-complete?...`; the page then assigns that URL to `window.location.href`. Its URL without credentials was fetched for inspection. See WEB01 (`.granola-analysis/https-return-evidence.json`) for the public source URL, hash, exact excerpt, and evidence boundary.
 
 Manual paste now accepts that exact HTTPS origin and `/app-redirect` route, forwards the query values to the same native-completion validator, preserves `authContext`, and exchanges the code with the active attempt's verifier. It never fetches a supplied callback URL. Other origins, userinfo, nonstandard ports, duplicate authentication parameters, mismatched attempts, missing codes and unsupported flows are rejected. A browser-added trailing slash and an encoded native callback are also supported. The UI shows only allowlisted, fixed validation reasons, so credentials and remote error bodies remain excluded.
 
@@ -163,20 +163,20 @@ All checks use Flutter 3.35.7 / Dart 3.9.2. Existing native libraries and helper
 | Existing native CTest inventory | 32 cases passed across original and corrected replay runs |
 | Analysis and builds | Dart/Flutter analysis, Swift callback type-check, plist validation, service/MCP compilation and macOS Debug application build passed |
 
-The first full core run exhausted temporary storage, and a settings fixture initially waited on real I/O from Flutter's fake async zone. Both were corrected and the affected suites rerun. Native replay corrected relocated source paths/library lookup and used matching cached binaries for the deadline case. Earlier failure logs are retained; these are not claimed as passing runs. Detailed results and reused binary checksums are in the ignored [validation record](../../.granola-analysis/validation.json) and [native reuse record](../../.granola-analysis/native-reuse-validation.json). Logs are under `/tmp/foresight-granola-*.log`.
+The first full core run exhausted temporary storage, and a settings fixture initially waited on real I/O from Flutter's fake async zone. Both were corrected and the affected suites rerun. Native replay corrected relocated source paths/library lookup and used matching cached binaries for the deadline case. Earlier failure logs are retained; these are not claimed as passing runs. Detailed results and reused binary checksums are in the ignored validation record (`.granola-analysis/validation.json`) and native reuse record (`.granola-analysis/native-reuse-validation.json`). Logs are under `/tmp/foresight-granola-*.log`.
 
 Linux native desktop/DBus checks and model-weight-dependent optional acceptance were not run on this Mac. Local mocks and the macOS desktop integration do not verify live Google Calendar contents. The subsequent real sign-in succeeded according to the user; automatic own-scheme return and independent calendar-fetch observation remain unverified.
 
-The evidence links below refer to ignored local research artifacts. Extracted proprietary code, application databases, and live authentication material are excluded from Git.
+The artifact names below identify private historical research evidence, not downloadable repository files. Extracted proprietary code, application databases, and live authentication material are excluded from Git.
 
 ## Evidence and remaining boundaries
 
 | Evidence | Local artifact |
 | --- | --- |
-| JS01–JS22 | [Integrity-verified JavaScript excerpts](../../.granola-analysis/javascript-auth-calendar-evidence.json), with member hashes and Unicode offsets |
-| HTTP01 | [Identity-only, write-linking, and original default redirect observations](../../.granola-analysis/live-auth-redirects.json) |
-| HTTP02 | [Read-linking redirect and challenge/state observations](../../.granola-analysis/live-calendar-read-redirects.json) |
-| HTTP03 | [Foresight own-scheme return with preserved state and challenge](../../.granola-analysis/live-foresight-return.json) |
+| JS01–JS22 | Integrity-verified JavaScript excerpts (`.granola-analysis/javascript-auth-calendar-evidence.json`), with member hashes and Unicode offsets |
+| HTTP01 | Identity-only, write-linking, and original default redirect observations (`.granola-analysis/live-auth-redirects.json`) |
+| HTTP02 | Read-linking redirect and challenge/state observations (`.granola-analysis/live-calendar-read-redirects.json`) |
+| HTTP03 | Foresight own-scheme return with preserved state and challenge (`.granola-analysis/live-foresight-return.json`) |
 | Prior REA application graph | `ev_e348d36bd1a3ea1396615a174375f03f39b2c3139d4e0be1cb8d60678a713cfe` |
 | Prior REA auth export trace | `ev_e90422beabd081e5c3df94497731d16a159fffb0f55fd6bfcaba8084ff0b7d65` |
 
