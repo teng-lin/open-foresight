@@ -10,6 +10,16 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 - Rename meetings from the workspace header. Manual names persist across restarts
   and calendar refreshes.
+- Keep private pre-upgrade application database snapshots, limited to two copies
+  for seven days. Each snapshot can require space comparable to the database.
+
+### Changed
+
+- Bound retained content history to 20 revisions per entity, 32 MiB in total and
+  90 days. Upgrades prune excess history while preserving current content.
+- Refuse database upgrades when a verified backup cannot be created or earlier
+  privacy cleanup cannot finish. Deleting saved content invalidates managed
+  snapshots and prepared restore copies; failed cleanup remains pending.
 
 ### Fixed
 

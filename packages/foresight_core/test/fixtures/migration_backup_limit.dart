@@ -10,7 +10,9 @@ import 'package:foresight_core/src/store.dart';
 import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
 
 void main(List<String> arguments) {
-  final storeLevel = arguments.length > 1 && arguments[1] == 'store';
+  final storeVacuum = arguments.length > 1 && arguments[1] == 'store-vacuum';
+  final storeLevel =
+      storeVacuum || (arguments.length > 1 && arguments[1] == 'store');
   Database? source;
   int? schema;
   if (!storeLevel) {
@@ -33,8 +35,9 @@ void main(List<String> arguments) {
   final libc = DynamicLibrary.process();
   final limit = calloc<Uint64>(2);
   try {
-    limit[0] = 8192;
-    limit[1] = 8192;
+    final fileLimit = storeVacuum ? 128 * 1024 : 8192;
+    limit[0] = fileLimit;
+    limit[1] = fileLimit;
     final setLimit = libc
         .lookupFunction<
           Int32 Function(Int32, Pointer<Uint64>),
@@ -65,6 +68,19 @@ void main(List<String> arguments) {
     exitCode = 1;
   } on SqliteException catch (error) {
     if (error.resultCode == 10 || error.resultCode == 13) {
+      if (storeVacuum) {
+        if (error.causingStatement != 'VACUUM INTO ?' ||
+            !Directory('${arguments.first}.backups').existsSync()) {
+          stderr.writeln(
+            'Store failed before the intended VACUUM boundary: $error',
+          );
+          exitCode = 1;
+          return;
+        }
+        stdout.writeln(
+          'store_vacuum_refused sqlite_code=${error.resultCode} limit=131072 statement=VACUUM_INTO',
+        );
+      }
       stdout.writeln(
         storeLevel ? 'store_startup_refused' : 'migration_refused',
       );

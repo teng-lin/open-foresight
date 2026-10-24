@@ -52,17 +52,82 @@ void main() {
   test('pending erasure completes before upgrade snapshot is created', () async {
     final db = _old(path);
     db.execute(
+      "INSERT INTO notes(id,title,body,revision) VALUES(1,'Saved','Retained current content',1)",
+    );
+    final backups = MigrationBackups(path);
+    final prior = backups.create(db, 20);
+    final restored = backups.restoreCopy(
+      prior.name,
+      supportedVersion: 20,
+      confirmDataLoss: true,
+    );
+    final restoredReader = openApplicationDatabase(
+      restored,
+      mode: OpenMode.readOnly,
+    );
+    try {
+      expect(
+        restoredReader.select('PRAGMA user_version').single.values.single,
+        20,
+      );
+      expect(
+        restoredReader.select('PRAGMA integrity_check').single.values.single,
+        'ok',
+      );
+      expect(
+        restoredReader.select('SELECT body FROM notes').single['body'],
+        'Retained current content',
+      );
+    } finally {
+      restoredReader.dispose();
+    }
+    final oldNames = Directory(
+      backups.directoryPath,
+    ).listSync().map((entry) => entry.path).toSet();
+    expect(oldNames, hasLength(3));
+    expect(
+      oldNames,
+      containsAll([
+        '${backups.directoryPath}/${prior.name}',
+        '${backups.directoryPath}/${prior.name}.json',
+        restored,
+      ]),
+    );
+    db.execute(
       "INSERT INTO preferences(key,value) VALUES('internal.backupErasurePending','1')",
     );
     db.dispose();
     final store = Store(path);
     addTearDown(store.close);
+    final current = store.migrationBackups
+        .snapshots(supportedVersion: Store.schemaVersion)
+        .single;
+    expect(current.schema, 20);
+    expect(current.name, isNot(prior.name));
+    void expectOnlyCurrentSnapshot() {
+      expect(store.privacyMaintenancePending, isFalse);
+      expect(store.notes().single['body'], 'Retained current content');
+      for (final name in oldNames) {
+        expect(File(name).existsSync(), false, reason: name);
+      }
+      expect(
+        Directory(backups.directoryPath).listSync().map((entry) => entry.path),
+        unorderedEquals([
+          '${backups.directoryPath}/${current.name}',
+          '${backups.directoryPath}/${current.name}.json',
+        ]),
+      );
+      expect(
+        store.migrationBackups
+            .snapshots(supportedVersion: Store.schemaVersion)
+            .map((snapshot) => snapshot.name),
+        [current.name],
+      );
+    }
+
+    expectOnlyCurrentSnapshot();
     await Future<void>.delayed(const Duration(milliseconds: 1300));
-    expect(store.privacyMaintenancePending, isFalse);
-    expect(
-      store.migrationBackups.snapshots(supportedVersion: Store.schemaVersion),
-      hasLength(1),
-    );
+    expectOnlyCurrentSnapshot();
   });
   for (final mode in ['DELETE', 'WAL']) {
     test(
@@ -354,38 +419,112 @@ void main() {
       );
     },
   );
-  test('blocked prior cleanup refuses upgrade and retains erasure intent', () {
-    final db = _old(path);
-    db.execute('PRAGMA journal_mode=WAL');
-    final reader = openApplicationDatabase(path, mode: OpenMode.readOnly);
-    reader.execute('BEGIN');
-    reader.select('SELECT COUNT(*) FROM preferences');
-    db.execute(
-      "INSERT INTO preferences(key,value) VALUES('internal.backupErasurePending','1')",
-    );
-    expect(
-      () => Store(path),
-      throwsA(anyOf(isA<StateError>(), isA<SqliteException>())),
-    );
-    expect(db.select('PRAGMA user_version').single.values.single, 20);
-    expect(
-      db.select(
-        "SELECT value FROM preferences WHERE key='internal.backupErasurePending'",
-      ),
-      isNotEmpty,
-    );
-    expect(MigrationBackups(path).exists, isFalse);
-    reader.execute('COMMIT');
-    reader.dispose();
-    db.dispose();
-    final store = Store(path);
-    addTearDown(store.close);
-    expect(store.privacyMaintenancePending, isFalse);
-    expect(
-      store.migrationBackups.snapshots(supportedVersion: Store.schemaVersion),
-      hasLength(1),
-    );
-  });
+  test(
+    'held reader refuses exclusive migration ownership and keeps cleanup intent',
+    () {
+      final db = _old(path);
+      db.execute('PRAGMA journal_mode=WAL');
+      final reader = openApplicationDatabase(path, mode: OpenMode.readOnly);
+      reader.execute('BEGIN');
+      reader.select('SELECT COUNT(*) FROM preferences');
+      db.execute(
+        "INSERT INTO preferences(key,value) VALUES('internal.backupErasurePending','1')",
+      );
+      expect(
+        () => Store(path),
+        throwsA(
+          isA<SqliteException>().having(
+            (error) => error.resultCode,
+            'SQLITE_BUSY',
+            5,
+          ),
+        ),
+      );
+      expect(db.select('PRAGMA user_version').single.values.single, 20);
+      expect(
+        db.select(
+          "SELECT value FROM preferences WHERE key='internal.backupErasurePending'",
+        ),
+        isNotEmpty,
+      );
+      expect(MigrationBackups(path).exists, isFalse);
+      reader.execute('COMMIT');
+      reader.dispose();
+      db.dispose();
+      final store = Store(path);
+      addTearDown(store.close);
+      expect(store.privacyMaintenancePending, isFalse);
+      expect(
+        store.migrationBackups.snapshots(supportedVersion: Store.schemaVersion),
+        hasLength(1),
+      );
+    },
+  );
+  test(
+    'unsafe backup entry refuses pending-erasure upgrade without altering the profile',
+    () {
+      final db = _old(path);
+      db.execute(
+        "INSERT INTO notes(id,title,body,revision) VALUES(1,'Saved','Original profile body',1)",
+      );
+      final backups = MigrationBackups(path);
+      final prior = backups.create(db, 20);
+      db.execute(
+        "INSERT INTO preferences(key,value) VALUES('internal.backupErasurePending','1')",
+      );
+      db.dispose();
+      final unrelated = File('${backups.directoryPath}/unexpected-user-file');
+      unrelated.writeAsStringSync('This unrelated file must remain untouched.');
+      final oldNames = Directory(
+        backups.directoryPath,
+      ).listSync().map((entry) => entry.path).toSet();
+      expect(
+        () => Store(path),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'refusal',
+            contains('Unexpected entry in migration backup storage'),
+          ),
+        ),
+      );
+      final reader = openApplicationDatabase(path, mode: OpenMode.readOnly);
+      try {
+        expect(reader.select('PRAGMA user_version').single.values.single, 20);
+        expect(
+          reader.select('SELECT body FROM notes').single['body'],
+          'Original profile body',
+        );
+        expect(
+          reader
+              .select(
+                "SELECT value FROM preferences WHERE key='internal.backupErasurePending'",
+              )
+              .single['value'],
+          '1',
+        );
+        expect(
+          reader.select('PRAGMA integrity_check').single.values.single,
+          'ok',
+        );
+      } finally {
+        reader.dispose();
+      }
+      expect(
+        unrelated.readAsStringSync(),
+        'This unrelated file must remain untouched.',
+      );
+      expect(File('${backups.directoryPath}/${prior.name}').existsSync(), true);
+      expect(
+        Directory(
+          backups.directoryPath,
+        ).listSync().map((entry) => entry.path).toSet(),
+        oldNames,
+        reason:
+            'Refused prior cleanup must not create a new snapshot or remove any old name',
+      );
+    },
+  );
   test(
     'future manifests expire beyond skew while new clock-rollback backup survives admission',
     () {

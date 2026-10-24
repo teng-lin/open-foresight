@@ -256,6 +256,50 @@ void main() {
   );
 
   test(
+    'Store reaches real VACUUM file-size failure after WAL admission fits',
+    () async {
+      final source = historical(path);
+      final body = 'Store VACUUM payload boundary ${'A' * (1024 * 1024)}';
+      source.execute('UPDATE notes SET body=?', [body]);
+      expect(
+        source.select('PRAGMA journal_mode').single.values.single,
+        'delete',
+      );
+      source.dispose();
+      expect(File(path).lengthSync(), greaterThan(1024 * 1024));
+      final result = await Process.run(Platform.resolvedExecutable, [
+        'run',
+        'test/fixtures/migration_backup_limit.dart',
+        path,
+        'store-vacuum',
+      ]);
+      expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+      expect(result.stdout, contains('store_vacuum_refused'));
+      print('Store quota evidence: ${result.stdout}');
+      final directory = Directory('$path.backups');
+      expect(
+        directory.existsSync(),
+        true,
+        reason: 'Store reached backup creation before the file-size failure',
+      );
+      expect(
+        directory.listSync(),
+        isEmpty,
+        reason: 'Failed VACUUM leaves no candidate, manifest or partial',
+      );
+      final db = openApplicationDatabase(path);
+      try {
+        expect(db.select('PRAGMA user_version').single.values.single, 19);
+        expect(db.select('SELECT body FROM notes').single['body'], body);
+        expect(db.select('PRAGMA integrity_check').single.values.single, 'ok');
+      } finally {
+        db.dispose();
+      }
+      expect(MigrationBackups(path).snapshots(supportedVersion: 19), isEmpty);
+    },
+  );
+
+  test(
     'retention keeps two completed snapshots and expires after seven days',
     () {
       final db = historical(path);
