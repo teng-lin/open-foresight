@@ -146,6 +146,15 @@ def test_named_anchor_boolean_html_attributes_and_invalid_destination(tmp_path):
     assert problems == ["README.md:5: 'http://[bad': invalid destination"]
 
 
+def test_root_destination_from_nested_document_uses_repository_root(tmp_path):
+    (tmp_path / "file.py").write_text("# source\n" * 3)
+    nested = tmp_path / "sub"
+    nested.mkdir()
+    (nested / "README.md").write_text("[root](/file.py#L3)\n")
+    assert not (nested / "file.py").exists()
+    assert checker.check(tmp_path) == (1, [])
+
+
 def test_missing_cli_root_is_failure_instead_of_empty_success(tmp_path):
     result = subprocess.run(
         [sys.executable, str(Path(checker.__file__)), "--root", str(tmp_path / "absent")],
@@ -159,9 +168,12 @@ def test_missing_cli_root_is_failure_instead_of_empty_success(tmp_path):
 def test_quality_checks_links_after_installing_hash_locked_dependencies():
     root = Path(__file__).resolve().parents[1]
     workflow = yaml.safe_load((root / ".github/workflows/quality.yml").read_text())
-    steps = workflow["jobs"]["python"]["steps"]
+    job = workflow["jobs"]["python"]
+    steps = job["steps"]
     commands = [step.get("run", "") for step in steps]
     install = commands.index("python -m pip install --require-hashes -r requirements-dev.lock")
     links = commands.index("python -m tools.check_document_links")
     assert install < links
     assert "if" not in steps[links]
+    assert "continue-on-error" not in steps[links]
+    assert "if" not in job
