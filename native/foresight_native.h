@@ -17,6 +17,27 @@ extern "C" {
  * All status codes: 0 success, -1 invalid/busy/unavailable. No
  * fake inference. */
 int fs_abi_version(void);
+/* Separately negotiated additive ABI v1 capability. All requests below return
+ * a monotonic token, or 0 if unavailable/invalid. They revoke admission without
+ * joining workers on the calling thread. Completion belongs to this original
+ * native mapping and survives caller/isolate acknowledgement loss. Never pass
+ * a retired object address again; retain and poll its token instead. Engine
+ * retirement also cancels/retires every owned conversation. */
+int fs_lifetime_version(void); /* currently 1 */
+uint64_t fs_engine_probe_async(void *engine);
+uint64_t fs_engine_retire(void *engine);
+uint64_t fs_conversation_retire(void *conversation);
+uint64_t fs_speech_retire(void *speech);
+/* Stop/join capture but retain its final PCM queue for polling. */
+uint64_t fs_capture_finish_async(void *capture);
+uint64_t fs_capture_retire(void *capture);
+/* 0 pending, 1 success, 2 known failure with completed ownership cleanup,
+ * -1 unknown/released. Successful retirement means actual destruction/reap.
+ * Release returns 0 only for a completed token; pending tokens retain
+ * ownership. Probe/finish tokens retain the original handle until separate
+ * retirement. */
+int fs_operation_status(uint64_t token);
+int fs_operation_release(uint64_t token);
 /* Before the first handle is created only (permanently sealed thereafter);
  * 0 success, -1 sealed/unsupported key/invalid value. Hosts must also avoid
  * external setenv/unsetenv while any native/runtime threads exist. */

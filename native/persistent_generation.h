@@ -59,10 +59,14 @@ void shutdown_persistent(Engine &engine, bool graceful = true) {
     return;
   auto &worker = *engine.persistent;
   if (graceful && !worker.ended()) {
-    worker.input_line("shutdown\n");
-    std::unique_lock lock(worker.frame_mutex);
-    worker.frames_changed.wait_for(lock, std::chrono::seconds(1),
-                                   [&] { return worker.finished; });
+    // Graceful framing is optional. Allocation/reporting failure must never
+    // bypass the mandatory stop, child reap and destruction below.
+    foresight::ffi_barrier_void([&] {
+      worker.input_line("shutdown\n");
+      std::unique_lock lock(worker.frame_mutex);
+      worker.frames_changed.wait_for(lock, std::chrono::seconds(1),
+                                     [&] { return worker.finished; });
+    });
   }
   worker.stop();
   worker.join();

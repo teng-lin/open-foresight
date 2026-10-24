@@ -43,10 +43,12 @@ private:
   // The executor publishes only after the action and retained resource/lease
   // destruction, never before a worker/isolate acknowledgement.
   void complete(bool success) noexcept {
+    // Publication itself cannot fail or depend on a secondary reporter/lock.
+    // The mutex only makes the legacy blocking wait's notification race safe.
+    state.store(success ? State::succeeded : State::failed,
+                std::memory_order_release);
     ffi_barrier_void([&] {
       std::lock_guard lock(completion_mutex_);
-      state.store(success ? State::succeeded : State::failed,
-                  std::memory_order_release);
       completion_changed_.notify_all();
     });
   }
@@ -64,6 +66,9 @@ public:
   OwnedOperations(const OwnedOperations &) = delete;
   OwnedOperations &operator=(const OwnedOperations &) = delete;
   ~OwnedOperations() noexcept {
+    shutdown();
+  }
+  void shutdown() noexcept {
     {
       std::lock_guard lock(queue_mutex_);
       stopping_ = true;
@@ -83,6 +88,12 @@ public:
         std::make_shared<OwnedOperation>(next_token_++, action, context);
     operations_.emplace(operation->token, operation);
     return operation;
+  }
+
+  std::shared_ptr<OwnedOperation> find(uint64_t token) {
+    std::lock_guard lock(registry_mutex_);
+    const auto found = operations_.find(token);
+    return found == operations_.end() ? nullptr : found->second;
   }
 
   // Cancel a never-submitted node during unpublished-resource rollback only.
