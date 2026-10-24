@@ -34,7 +34,7 @@ public:
   const Action action;
   const size_t group;
   const uint64_t owner;
-  bool releases_group = false;
+  bool releases_group = false, automatic_release = false;
   void *const context;
   std::atomic<State> state{State::idle};
   std::atomic<bool> boundary_failed{false};
@@ -224,7 +224,8 @@ public:
     return true;
   }
 
-  bool release_owner(uint64_t owner, uint64_t retirement) {
+  bool release_owner(uint64_t owner, uint64_t retirement,
+                     bool discard_results = false) {
     std::lock_guard lock(registry_mutex_);
     const auto retired = operations_.find(retirement);
     if (!owner || retired == operations_.end() ||
@@ -246,7 +247,8 @@ public:
         continue;
       }
       auto state = operation->state.load();
-      if (it->first == retirement || state == OwnedOperation::State::idle ||
+      if (discard_results || it->first == retirement ||
+          state == OwnedOperation::State::idle ||
           state == OwnedOperation::State::discarded) {
         it = operations_.erase(it);
         continue;
@@ -312,6 +314,10 @@ private:
       operation->complete(result == OwnedOperation::Result::succeeded
                               ? OwnedOperation::State::succeeded
                               : OwnedOperation::State::failed);
+      if (operation->automatic_release &&
+          result == OwnedOperation::Result::succeeded)
+        ffi_barrier_void(
+            [&] { release_owner(operation->owner, operation->token, true); });
     }
   }
 

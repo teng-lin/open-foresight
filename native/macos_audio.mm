@@ -453,6 +453,24 @@ struct SystemAudioRequest {
   std::shared_ptr<Session>
       session; // Retain unconfirmed cleanup; never replace it.
 };
+void closeSystemAudioRequest(const std::shared_ptr<SystemAudioRequest> &request,
+                             OSStatus &status) noexcept {
+  @try {
+    try {
+      if (request->session) {
+        const auto cleanup = request->session->close();
+        if (!cleanup)
+          request->session.reset();
+        else
+          status = cleanup;
+      }
+    } catch (...) {
+      status = kAudioHardwareUnspecifiedError;
+    }
+  } @catch (NSException *) {
+    status = kAudioHardwareUnspecifiedError;
+  }
+}
 std::mutex &systemRequestMutex() {
   static auto *value = new std::mutex;
   return *value;
@@ -547,27 +565,57 @@ struct MacCaptureOwner {
   const std::shared_ptr<std::atomic<bool>> revoked =
       std::make_shared<std::atomic<bool>>(false);
   foresight::CaptureStartup startup;
+  std::mutex lifecycle;
+  bool startup_pending = false;
   std::shared_ptr<Session> session;
 };
 template <class Start>
 void launchCaptureStartup(const std::shared_ptr<MacCaptureOwner> &owner,
                           const std::shared_ptr<Session> &session,
                           Start start) {
-  owner->startup.start([session, owner, start = std::move(start)] {
-    @autoreleasepool {
-      OSStatus status = kAudioHardwareUnspecifiedError;
-      @try {
-        try {
-          if (!owner->revoked->load(std::memory_order_acquire))
-            status = start(*session);
-        } catch (...) {
-        }
-      } @catch (NSException *) {
-      }
-      session->startStatus = status;
+  {
+    std::lock_guard lock(owner->lifecycle);
+    if (owner->revoked->load(std::memory_order_acquire)) {
+      session->startStatus = kAudioHardwareUnspecifiedError;
       session->ready.store(true, std::memory_order_release);
+      return;
     }
-  });
+    owner->startup_pending = true;
+  }
+  try {
+    owner->startup.start([session, owner, start = std::move(start)] {
+      @autoreleasepool {
+        OSStatus status = kAudioHardwareUnspecifiedError;
+        @try {
+          try {
+            if (!owner->revoked->load(std::memory_order_acquire))
+              status = start(*session);
+          } catch (...) {
+          }
+        } @catch (NSException *) {
+        }
+        session->startStatus = status;
+        session->ready.store(true, std::memory_order_release);
+      }
+    });
+  } catch (...) {
+    std::lock_guard lock(owner->lifecycle);
+    owner->startup_pending = false;
+    throw;
+  }
+}
+void joinCaptureStartup(const std::shared_ptr<MacCaptureOwner> &owner) {
+  owner->startup.join();
+  std::lock_guard lock(owner->lifecycle);
+  owner->startup_pending = false;
+}
+bool fs_macos_capture_close_pending(
+    const std::shared_ptr<MacCaptureOwner> &owner) {
+  if (!owner)
+    return false;
+  std::lock_guard lock(owner->lifecycle);
+  owner->revoked->store(true, std::memory_order_release);
+  return owner->startup_pending;
 }
 std::shared_ptr<MacCaptureOwner> fs_macos_capture_owner() {
   return std::make_shared<MacCaptureOwner>();
@@ -581,7 +629,7 @@ void fs_macos_capture_close(const std::shared_ptr<MacCaptureOwner> &owner) {
   if (!owner)
     return;
   fs_macos_capture_revoke(owner);
-  owner->startup.join();
+  joinCaptureStartup(owner);
   if (owner->session) {
     if (owner->session->close())
       throw std::runtime_error("Core Audio cleanup unconfirmed");
@@ -671,22 +719,8 @@ std::string fs_macos_request_system(int timeout_ms) {
                 } catch (...) {
                 }
               } @catch (NSException *) {
-              } @
-              try {
-                try {
-                  if (request->session) {
-                    const auto cleanup = request->session->close();
-                    if (!cleanup)
-                      request->session.reset();
-                    else
-                      status = cleanup;
-                  }
-                } catch (...) {
-                  status = kAudioHardwareUnspecifiedError;
-                }
-              } @catch (NSException *) {
-                status = kAudioHardwareUnspecifiedError;
               }
+              closeSystemAudioRequest(request, status);
               request->retired = !request->session;
               request->status = status;
               request->completed.store(true, std::memory_order_release);
@@ -783,7 +817,7 @@ void fs_macos_capture(
           std::this_thread::sleep_for(std::chrono::milliseconds(100));
         continue;
       }
-      owner->startup.join();
+      joinCaptureStartup(owner);
       if (owner->session) {
         if (owner->session->close())
           throw std::runtime_error("Core Audio cleanup unconfirmed");
@@ -815,6 +849,7 @@ void fs_macos_capture(
             @"capture_permission_pending");
         return;
       }
+      joinCaptureStartup(owner);
       auto &session = *ownedSession;
       OSStatus status = session.startStatus;
       if (status) {

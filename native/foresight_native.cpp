@@ -1,6 +1,7 @@
 #include "foresight_native.h"
 #include "capture_pcm_pipe.h"
 #include "exception_barrier.h"
+#include "image_pin.h"
 #include "json_string.h"
 #include "one_shot_launch.h"
 #include "owned_operations.h"
@@ -1826,6 +1827,11 @@ void fs_capture_finish(void *h) {
     if (h) {
       NativeUse use(h, NativeKind::capture);
       if (use) {
+        {
+          std::lock_guard lock(native_handles().mutex);
+          if (legacy_capture_work(use.control, false))
+            return;
+        }
         auto &capture = *static_cast<Capture *>(h);
         capture.stop();
 #ifdef __APPLE__

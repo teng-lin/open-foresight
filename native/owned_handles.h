@@ -9,7 +9,9 @@ struct NativeControl {
   std::shared_ptr<NativeControl> parent;
   std::atomic<bool> closing{false}, speech_joined{true};
   size_t users = 0, group = 0;
-  uint64_t identity = 0, retire = 0, probe = 0, finish = 0;
+  uint64_t identity = 0, operation_owner = 0, retire = 0, probe = 0, finish = 0;
+  foresight::OwnedOperations *private_operations = nullptr;
+  bool legacy_async_started = false;
   bool graph_released = false;
 #if FORESIGHT_ENABLE_TEST_HOOKS
   bool fail_cleanup_for_testing = false;
@@ -40,7 +42,12 @@ NativeHandles &native_handles() {
           auto &state = native_handles();
           // Legacy-only users can unload after local synchronous cleanup.
           // Owned groups/quarantined authority end only with OS cleanup.
-          if (!state.process_lifetime)
+          bool empty = false;
+          {
+            std::lock_guard lock(state.mutex);
+            empty = state.handles.empty() && state.owners.empty();
+          }
+          if (!state.process_lifetime && empty)
             delete &state;
         }) != 0)
       throw std::runtime_error("Native lifecycle registration failed");
@@ -54,55 +61,20 @@ NativeHandles &native_handles() {
 // resolved image must match this internal function's image. Main-executable
 // fixtures already have an irrevocable process-lifetime mapping.
 bool pin_native_mapping() {
-  static const bool pinned = [] {
-    Dl_info own{};
-    if (!dladdr(reinterpret_cast<void *>(&native_handles), &own) ||
-        !own.dli_fname)
-      return false;
-#ifdef __APPLE__
-    if (own.dli_fbase == _dyld_get_image_header(0))
-      return true;
-#else
-    struct MainImage {
-      void *address;
-      bool found = false;
-    } main{reinterpret_cast<void *>(&native_handles)};
-    dl_iterate_phdr(
-        [](dl_phdr_info *info, size_t, void *context) {
-          auto &image = *static_cast<MainImage *>(context);
-          if (info->dlpi_name && *info->dlpi_name)
-            return 0;
-          const auto address = reinterpret_cast<uintptr_t>(image.address);
-          for (size_t n = 0; n < info->dlpi_phnum; ++n) {
-            const auto &segment = info->dlpi_phdr[n];
-            if (segment.p_type == PT_LOAD &&
-                address >= info->dlpi_addr + segment.p_vaddr &&
-                address < info->dlpi_addr + segment.p_vaddr + segment.p_memsz) {
-              image.found = true;
-              return 1;
-            }
-          }
-          return 0;
-        },
-        &main);
-    if (main.found)
-      return true;
-#endif
-    void *mapping = dlopen(own.dli_fname, RTLD_NOW | RTLD_NOLOAD);
-    if (!mapping)
-      return false;
-    Dl_info resolved{};
-    void *symbol = dlsym(mapping, "fs_lifetime_version");
-    if (!symbol || !dladdr(symbol, &resolved) ||
-        resolved.dli_fbase != own.dli_fbase) {
-      dlclose(mapping);
-      return false;
-    }
-    // Deliberately retain this one exact-image loader reference for idle native
-    // executor code; completion metadata itself retains no physical resources.
-    return true;
-  }();
+  static const bool pinned = foresight::retain_native_image(
+      reinterpret_cast<const void *>(&native_handles), "fs_lifetime_version");
   return pinned;
+}
+
+#ifdef __APPLE__
+foresight::OwnedOperations &legacy_capture_operations() {
+  static auto *value = new foresight::OwnedOperations(64, false);
+  return *value;
+}
+#endif
+foresight::OwnedOperations &control_operations(const NativeControl &control) {
+  return control.private_operations ? *control.private_operations
+                                    : native_handles().operations;
 }
 thread_local bool creating_owned_native = false;
 thread_local NativeControl *owned_native_bridge = nullptr;
@@ -201,12 +173,12 @@ NativeOperation::Result native_finish(NativeOperation &operation) {
 }
 NativeOperation::Result native_speech_join(NativeOperation &operation) {
   auto &control = *static_cast<NativeControl *>(operation.context);
-  {
-    std::unique_lock lock(control.users_mutex);
-    control.users_changed.wait(lock, [&] { return control.users == 0; });
-  }
-  // Admission remains refused until the exact accepted worker has exited.
   auto &speech = *static_cast<Speech *>(control.object.get());
+  {
+    // Only finish publication needs joining here. Polls keep their separate
+    // lifetime lease and may wait for a future event without delaying exit.
+    std::lock_guard publication(speech.life);
+  }
   speech.join();
   control.speech_joined = true;
   return NativeOperation::Result::succeeded;
@@ -351,12 +323,12 @@ NativeOperation::Result cleanup_native(NativeControl &control) {
 NativeOperation::Result native_retire(NativeOperation &operation) {
   auto &control = *static_cast<NativeControl *>(operation.context);
   for (auto token : {control.probe, control.finish})
-    if (auto idle = native_handles().operations.find(token))
-      native_handles().operations.discard(idle);
+    if (auto idle = control_operations(control).find(token))
+      control_operations(control).discard(idle);
   return cleanup_native(control);
 }
 void discard_idle_operations(const std::shared_ptr<NativeControl> &control) {
-  auto &operations = native_handles().operations;
+  auto &operations = control_operations(*control);
   for (auto token : {control->retire, control->probe, control->finish})
     if (token)
       if (auto operation = operations.find(token))
@@ -372,24 +344,39 @@ T *publish_native(std::unique_ptr<T> resource, NativeKind kind,
   foresight::ScopeExit rollback([&] {
     discard_idle_operations(control);
     if (control->group)
-      registry.operations.release_group(control->group);
+      control_operations(*control).release_group(control->group);
   });
-  if (creating_owned_native) {
+  bool asynchronous = creating_owned_native;
+#ifdef __APPLE__
+  if constexpr (std::is_same_v<T, Capture>) {
+    if (!creating_owned_native && control->object &&
+        static_cast<Capture *>(control->object.get())->macos) {
+      asynchronous = true;
+      control->private_operations = &legacy_capture_operations();
+      registry.process_lifetime = true;
+    }
+  }
+#endif
+  if (asynchronous) {
     {
       std::lock_guard lock(registry.mutex);
       if (registry.next_owner > static_cast<uint64_t>(INT64_MAX))
         throw std::overflow_error("Native owner identity exhausted");
-      control->identity = registry.next_owner++;
+      control->operation_owner = registry.next_owner++;
+      if (creating_owned_native)
+        control->identity = control->operation_owner;
     }
-    control->group = registry.operations.reserve_group();
-    auto operation = registry.operations.create(
-        native_retire, control.get(), control->group, control->identity);
+    auto &operations = control_operations(*control);
+    control->group = operations.reserve_group();
+    auto operation = operations.create(
+        native_retire, control.get(), control->group, control->operation_owner);
     operation->releases_group = true;
+    operation->automatic_release = control->private_operations != nullptr;
     control->retire = operation->token;
     if (kind == NativeKind::capture)
-      control->finish = registry.operations
+      control->finish = operations
                             .create(native_finish, control.get(),
-                                    control->group, control->identity)
+                                    control->group, control->operation_owner)
                             ->token;
   }
   auto *value = static_cast<T *>(control->object.get());
@@ -430,12 +417,14 @@ void rollback_unpublished_native(void *address) {
   if (control->identity) {
     std::lock_guard lock(registry.mutex);
     registry.owners.erase(control->identity);
-    registry.operations.release_group(control->group);
+    control_operations(*control).release_group(control->group);
+  } else if (control->private_operations) {
+    control_operations(*control).release_group(control->group);
   }
 }
 // registry.mutex held; requests acquire no worker/event/process mutex.
 bool request_native_retirement(const std::shared_ptr<NativeControl> &control) {
-  auto &operations = native_handles().operations;
+  auto &operations = control_operations(*control);
   auto operation = operations.find(control->retire);
   if (!operation)
     return false;
@@ -461,7 +450,12 @@ uint64_t retire_native(uint64_t identity, NativeKind kind) {
     return 0;
   const auto control = found->second;
   const auto status = registry.operations.status(control->retire);
-  if (control->closing && status != 3)
+  auto retirement = registry.operations.find(control->retire);
+  if (!retirement)
+    return 0;
+  if (control->closing && status != 3 &&
+      retirement->state.load(std::memory_order_acquire) !=
+          NativeOperation::State::idle)
     return status >= 0 ? control->retire : 0;
   if (kind == NativeKind::engine) {
     control->closing = true;
@@ -470,6 +464,38 @@ uint64_t retire_native(uint64_t identity, NativeKind kind) {
         return 0;
   }
   return request_native_retirement(control) ? control->retire : 0;
+}
+bool legacy_capture_work(const std::shared_ptr<NativeControl> &control,
+                         bool retire) {
+#ifdef __APPLE__
+  if (!control->private_operations)
+    return false;
+  auto &capture = *static_cast<Capture *>(control->object.get());
+  capture.cancel = true;
+  const bool pending = fs_macos_capture_close_pending(capture.macos);
+  if (!pending && !control->legacy_async_started)
+    return false;
+  control->legacy_async_started = true;
+  if (retire) {
+    if (!request_native_retirement(control))
+      throw std::runtime_error("Capture cleanup unavailable");
+  } else {
+    auto &operations = control_operations(*control);
+    auto finish = operations.find(control->finish);
+    if (!finish)
+      throw std::runtime_error("Capture finish unavailable");
+    const auto state = finish->state.load(std::memory_order_acquire);
+    if ((state == NativeOperation::State::idle ||
+         state == NativeOperation::State::unconfirmed) &&
+        !operations.submit(finish, control))
+      throw std::runtime_error("Capture finish unavailable");
+  }
+  return true;
+#else
+  (void)control;
+  (void)retire;
+  return false;
+#endif
 }
 bool retire_legacy(void *handle, NativeKind kind) {
   auto &registry = native_handles();
@@ -481,6 +507,8 @@ bool retire_legacy(void *handle, NativeKind kind) {
         found->second->identity)
       return false;
     control = found->second;
+    if (kind == NativeKind::capture && legacy_capture_work(control, true))
+      return true;
     revoke_native(control);
   }
   try {
@@ -488,6 +516,10 @@ bool retire_legacy(void *handle, NativeKind kind) {
         cleanup_native(*control) == NativeOperation::Result::succeeded;
     if (!success)
       registry.process_lifetime = true;
+    if (success && control->private_operations) {
+      discard_idle_operations(control);
+      control_operations(*control).release_group(control->group);
+    }
     return success;
   } catch (...) {
     // Preserve unconfirmed ownership through OS cleanup rather than implicitly

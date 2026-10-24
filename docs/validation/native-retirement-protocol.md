@@ -5,9 +5,11 @@ consumer conversion and full application qualification are separate work.
 
 The published synchronous C ABI remains version1. Its engine/conversation
 failure sentinels, drain rules and local stop/join behavior remain available to
-serialized Python/C++ callers. These callers allocate no asynchronous completion
-records or execution groups. Abandoned asynchronous acknowledgements therefore
-cannot make a legacy create or speech finish fail at an unrelated queue limit.
+serialized Python/C++ callers. Legacy generation and speech allocate no
+asynchronous completion records or execution groups. Mac capture has a separate
+bounded pending-startup quarantine, described below. Abandoned owned API
+acknowledgements cannot consume that pool or prevent legacy generation creation
+or speech finish.
 
 The separately negotiated lifetime capability is version2. Its creation and
 operation exports use positive, monotonically increasing 63-bit **owner IDs**.
@@ -113,3 +115,28 @@ replacement. Host controls and sanitizers are supporting evidence only. Fresh
 repository-root Linux/Mac CTest, the final Dart consumers, full core/desktop
 coverage, compiled service/MCP, isolated display, real models, physical audio and
 latency lanes require their own exact-source qualification.
+
+## Legacy pending startup and lost-owner policy
+
+A Mac legacy capture reserves one of32 private quarantine groups and two private
+completion records before starting capture. This64-record pool is independent
+of the owned API's4096 records. If startup is still pending, legacy stop/finish
+revokes admission immediately and queues actual cleanup there instead of joining
+Core Audio on the caller. A subsequent stop coalesces with that same producer.
+Retirement releases its private records automatically after actual cleanup.
+Already initialized legacy capture keeps its synchronous final-PCM/drain behavior.
+The standalone probe reports failed pending cleanup and exits its dedicated
+process instead of waiting past its deadline on a permission dialog. Clients
+requiring observable physical completion use the owned v2 token API.
+
+Unacknowledged owned results and lost owner IDs are deliberately not evicted.
+The production Dart owner is the service main isolate; replacement isolates must
+not adopt that mapping after its ownership state is lost. Status3, an unknown
+completion or lost acknowledgement requires surfacing unconfirmed ownership,
+stopping new native admissions and restarting the service/application process.
+Capacity refusal must be surfaced without automatic retry loops. Normal tracked
+watchers acknowledge their own probe/join/finish results independently, even if
+their original subscriber cancels. This restart policy is a required Dart
+consumer contract; native qualification alone does not establish its adoption.
+Process exit keeps any still-live legacy registry intact for OS/ownership-pipe
+cleanup rather than destructing joinable workers from a static finalizer.

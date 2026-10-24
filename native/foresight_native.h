@@ -7,15 +7,15 @@ extern "C" {
 /* ABI v1. Handles are owned, single caller controls lifecycle. Poll may run on
  * another thread. Each poll result is owned UTF-8 JSON, release with
  * string_free. Destroy cancels, joins workers and drains queues: no callbacks
- * after release. Poll may overlap destroy: destroy wakes and joins existing
- * polls, and a poll of a retired handle returns null. The lifecycle owner must
- * prevent new calls once destroy starts and finish every non-poll call before
- * destruction. Only polling may overlap destruction; cancellation can overlap
- * worker execution, and must return before destroy starts. Other API calls on
- * one handle are serialized by the caller. Handle addresses must not be reused
- * by a stale caller after release.
- * All status codes: 0 success, -1 invalid/busy/unavailable. No
- * fake inference. */
+ * after release, except pending Mac startup as documented below. Poll may
+ * overlap destroy: destroy wakes and joins existing polls, and a poll of a
+ * retired handle returns null. The lifecycle owner must prevent new calls once
+ * destroy starts and finish every non-poll call before destruction. Only
+ * polling may overlap destruction; cancellation can overlap worker execution,
+ * and must return before destroy starts. Other API calls on one handle are
+ * serialized by the caller. Handle addresses must not be reused by a stale
+ * caller after release. All status codes: 0 success, -1
+ * invalid/busy/unavailable. No fake inference. */
 int fs_abi_version(void);
 /* Optional lifetime v2. Published base ABI v1 above is unchanged. New owned
  * handles are positive, monotonic 63-bit IDs, never resource addresses. Only
@@ -25,7 +25,8 @@ int fs_abi_version(void);
  * Callers must serialize ordinary calls on one owner; retire may overlap them
  * and atomically revokes admission. It never waits for physical cleanup inline.
  * Legacy pointer entrypoints cannot operate on these owners or acknowledge
- * their tokens. Legacy creation/cleanup consumes no async capacity.
+ * their tokens. Legacy creation/cleanup consumes no owned-API capacity.
+ * Pending Mac legacy capture uses a separate bounded quarantine (see below).
  * Engine retire also revokes and joins all owned children. Successful retire
  * means actual callback/poll/worker/child reap and resource destruction. */
 int fs_lifetime_version(void); /* currently 2 */
@@ -146,7 +147,11 @@ void *fs_capture_start_with_options(const char *target, int playback,
 // capture.
 int fs_capture_set_echo_cancellation(void *capture, int enabled);
 /* Stops callbacks and flushes final PCM events, retaining handle for polling.
- * Call fs_capture_stop after draining to release the handle. */
+ * Call fs_capture_stop after draining to release the handle. If Mac startup is
+ * still pending, finish/stop revoke admission and retain cleanup asynchronously
+ * in a separate 32-owner/64-record quarantine; they cannot confirm physical
+ * completion to legacy callers. Use lifetime v2 for observable completion.
+ * Ready captures retain synchronous final-PCM/drain and release behavior. */
 void fs_capture_finish(void *capture);
 void fs_capture_stop(void *capture);
 /* Owned JSON string, release with fs_string_free. Discovery never prompts. */

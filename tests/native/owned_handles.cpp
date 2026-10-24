@@ -85,6 +85,26 @@ void release_owner(uint64_t id, uint64_t token) {
   check(fs_owner_release(id) == 0 && fs_operation_status(token) == -1,
         "owner release acknowledges completion metadata exactly once");
 }
+void run_owner_subprocess(const char *executable, const char *mode) {
+  pid_t child = -1;
+  char *args[] = {const_cast<char *>(executable), const_cast<char *>(mode),
+                  nullptr};
+  check(posix_spawn(&child, executable, nullptr, nullptr, args, environ) == 0,
+        "legacy exit subprocess started");
+  int status = 0;
+  check(waitpid(child, &status, 0) == child && WIFEXITED(status) &&
+            WEXITSTATUS(status) == 0,
+        std::strcmp(mode, "--live-legacy-exit") == 0
+            ? "exit with a live legacy generation must not destroy joinable "
+              "workers"
+            : "retirement refusal must not advertise an idle parent token");
+}
+void live_legacy_exit(const char *executable) {
+  run_owner_subprocess(executable, "--live-legacy-exit");
+}
+void retirement_admission_failure(const char *executable) {
+  run_owner_subprocess(executable, "--retire-admission-failure");
+}
 void legacy_failure(const char *executable) {
   auto *engine = fs_engine_create(executable, "/dev/null");
   check(engine && !native_handles().process_lifetime,
@@ -322,6 +342,40 @@ void child_failure(const char *executable) {
   release_owner(child, child_control->retire);
   release_owner(engine, retired);
 }
+void speech_join_with_poll(const char *executable) {
+  auto speech = fs_owned_speech_create(executable, "/dev/null");
+  check(speech && fs_owned_speech_finish(speech, "poll-independent") == 0,
+        "speech accepted before poll");
+  auto *worker = static_cast<Speech *>(control(speech)->object.get());
+  until([&] { return !worker->active; });
+  worker->join();
+  {
+    std::lock_guard lock(worker->mu);
+    worker->events.clear();
+  }
+  auto lifetime = worker->poll_lifetime;
+  std::thread poll([&] { fs_string_free(fs_owned_event_poll(speech, 60000)); });
+  until([&] {
+    if (lifetime->gate.try_lock()) {
+      lifetime->gate.unlock();
+      return false;
+    }
+    return true;
+  });
+  auto joined = fs_speech_join_async(speech);
+  const auto deadline = std::chrono::steady_clock::now() + 1s;
+  while (fs_operation_status(joined) == 0 &&
+         std::chrono::steady_clock::now() < deadline)
+    std::this_thread::sleep_for(2ms);
+  const bool independent = fs_operation_status(joined) == 1;
+  worker->emit("release-future-event-poll");
+  poll.join();
+  until([&] { return fs_operation_status(joined) == 1; });
+  check(fs_operation_release(joined) == 0,
+        "speech poll fixture owns its result");
+  release_owner(speech, fs_speech_retire(speech));
+  check(independent, "speech join must not wait for a future event poll");
+}
 void owned_rollback(const char *executable) {
   auto speech = fs_owned_speech_create(executable, "/dev/null");
   check(speech, "owned rollback speech admitted");
@@ -549,6 +603,37 @@ int main(int argc, char **argv) {
   const int supervised = foresight::supervise_worker(argc, argv);
   if (supervised >= 0)
     return supervised;
+  if (argc == 2 && std::string(argv[1]) == "--retire-admission-failure") {
+    auto engine = fs_owned_engine_create(argv[0], "/dev/null", 0, 0);
+    auto child = fs_owned_conversation_create(engine);
+    if (!engine || !child)
+      return 2;
+    native_handles()
+        .operations.shutdown(); // Controlled producer submission refusal.
+    if (fs_engine_retire(engine) != 0 || fs_engine_retire(engine) != 0)
+      return 3;
+    return 0; // Retained owners end with this isolated process, never an idle
+              // positive token.
+  }
+  if (argc == 2 && std::string(argv[1]) == "--live-legacy-exit") {
+    setenv("FORESIGHT_HELPER", argv[0], 1);
+    auto *engine = fs_engine_create(argv[0], "/dev/null");
+    auto *conversation = fs_conversation_create(engine);
+    if (!conversation ||
+        fs_generate(conversation, "exit-generation", "fixture") != 0)
+      return 2;
+    bool done = false;
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (!done && std::chrono::steady_clock::now() < deadline) {
+      if (auto *message = fs_event_poll(conversation, 100)) {
+        done =
+            std::string(message).find("\"type\":\"done\"") != std::string::npos;
+        fs_string_free(message);
+      }
+    }
+    // Deliberately retain both legacy handles and the joinable finished thread.
+    return done ? 0 : 3;
+  }
   if (argc > 1) {
     if (const char *marker = std::getenv("FORESIGHT_OWNED_PROBE_MARKER");
         marker && std::string(argv[1]) == "--model") {
@@ -563,6 +648,10 @@ int main(int argc, char **argv) {
   try {
     check(fs_abi_version() == 1 && fs_lifetime_version() == 2,
           "separate owned v2 capability");
+    std::cerr << "CASE live_legacy_exit\n";
+    live_legacy_exit(argv[0]);
+    std::cerr << "CASE retirement_admission_failure\n";
+    retirement_admission_failure(argv[0]);
     std::cerr << "CASE legacy_failure\n";
     legacy_failure(argv[0]);
     std::cerr << "CASE generation\n";
@@ -583,6 +672,8 @@ int main(int argc, char **argv) {
     independent_acknowledgements();
     std::cerr << "CASE held_api\n";
     held_api(argv[0]);
+    std::cerr << "CASE speech_join_with_poll\n";
+    speech_join_with_poll(argv[0]);
     std::cerr << "CASE owned_rollback\n";
     owned_rollback(argv[0]);
     std::cerr << "CASE bounds\n";

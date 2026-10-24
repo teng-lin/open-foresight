@@ -49,8 +49,11 @@ int main(int argc, char **argv) {
       }
       bool cleanupConfirmed = false;
       try {
-        fs_macos_capture_close(owner);
-        cleanupConfirmed = true;
+        if (!fs_macos_capture_close_pending(owner)) {
+          fs_macos_capture_close(owner);
+          cleanupConfirmed = true;
+        } else
+          failed = true;
       } catch (...) {
         failed = true;
       }
