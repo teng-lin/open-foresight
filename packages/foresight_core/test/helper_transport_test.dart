@@ -1,5 +1,6 @@
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -87,6 +88,83 @@ class HeldCloseSocket extends ControlledSocket {
 }
 
 void main() {
+  test(
+    'standard proxy termination does not join its held CONNECT response',
+    () async {
+      final listener = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      final accepted = Completer<Socket>(), requestWritten = Completer<void>();
+      final peerEnded = Completer<void>();
+      final subscription = listener.listen((peer) {
+        accepted.complete(peer);
+        final headers = StringBuffer();
+        void ended() {
+          if (!peerEnded.isCompleted) peerEnded.complete();
+        }
+
+        peer.listen(
+          (data) {
+            if (!requestWritten.isCompleted) {
+              headers.write(ascii.decode(data));
+              if (headers.toString().contains('\r\n\r\n')) {
+                requestWritten.complete();
+              }
+            }
+          },
+          onDone: ended,
+          onError: (Object error) => ended(),
+        );
+      });
+      final channel = HelperChannel(
+        InternetAddress('/unused-helper.sock', type: InternetAddressType.unix),
+        port: 0,
+        options: ChannelOptions(
+          credentials: const ChannelCredentials.insecure(),
+          connectTimeout: const Duration(milliseconds: 100),
+          proxy: Proxy(host: '127.0.0.1', port: listener.port),
+        ),
+      );
+      final call = RagServiceClient(channel).ping(PingRequest());
+      final failed = expectLater(call, throwsA(isA<GrpcError>()));
+      Future<void>? closing;
+      Timer? closeBound;
+      try {
+        // The raw TCP connect has completed. Upstream is now waiting for proxy
+        // negotiation, which its connectTimeout does not bound.
+        await requestWritten.future.timeout(const Duration(seconds: 5));
+        await call.cancel();
+        await failed;
+        final prompt = Completer<bool>();
+        closing = channel.terminate().then((_) {
+          if (!prompt.isCompleted) prompt.complete(true);
+        });
+        closeBound = Timer(const Duration(seconds: 1), () {
+          if (!prompt.isCompleted) prompt.complete(false);
+        });
+        expect(
+          await prompt.future,
+          true,
+          reason:
+              'Non-owned proxy termination must not await a CONNECT response',
+        );
+      } finally {
+        closeBound?.cancel();
+        // Release upstream's existing handshake only for fixture cleanup. The
+        // assertion above must finish while this real peer is still withholding it.
+        final peer = await accepted.future.timeout(const Duration(seconds: 5));
+        peer.add(ascii.encode('HTTP/1.1 200 Connection established\r\n\r\n'));
+        await peer.flush();
+        await (closing ?? channel.terminate()).timeout(
+          const Duration(seconds: 5),
+        );
+        await peerEnded.future.timeout(const Duration(seconds: 5));
+        peer.destroy();
+        await peer.close();
+        await subscription.cancel();
+        await listener.close();
+      }
+    },
+  );
+
   test('termination joins a late connect and its socket closure', () async {
     final entered = Completer<void>();
     final release = Completer<Socket>();
