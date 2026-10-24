@@ -67,6 +67,9 @@ final class DiagnosticProducerBootstrap {
   DiagnosticProducer connect() => DiagnosticProducer._(this);
 }
 
+/// Closed producer-side loss causes, never arbitrary caller error text.
+enum DiagnosticDropReason { correlationCapacity }
+
 final class DiagnosticProducer {
   DiagnosticProducer._(DiagnosticProducerBootstrap bootstrap)
     : _writer = bootstrap._writer,
@@ -89,13 +92,26 @@ final class DiagnosticProducer {
   RawReceivePort? _credits;
   Timer? _registrationDeadline;
   int _bytes = 0, _records = 0, _priority = 0, _priorityCount = 0;
-  int _dropped = 0, _rejected = 0;
+  int _dropped = 0, _rejected = 0, _correlationRefused = 0;
   bool _closed = false, _accepted = false, _emitting = false;
 
   /// Registration/lifetime availability; transient credit exhaustion is separate.
   bool get active => !_closed && _accepted && configuration.enabled;
   int get dropped => _dropped;
   int get rejected => _rejected;
+  int get correlationRefused => _correlationRefused;
+
+  /// Report bounded diagnostic work refused before encoding. Counters travel
+  /// only with existing grant/record/completion messages, never per refusal.
+  void noteDropped(DiagnosticDropReason reason) {
+    if (!active) return;
+    switch (reason) {
+      case DiagnosticDropReason.correlationCapacity:
+        _correlationRefused = _sum(_correlationRefused, 1);
+    }
+    _dropped = _sum(_dropped, 1);
+  }
+
   void _receive(dynamic value) {
     if (_closed || value is! List || value.isEmpty) return;
     if (value.first == 'stop') {

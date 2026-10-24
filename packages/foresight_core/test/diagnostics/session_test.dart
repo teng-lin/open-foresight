@@ -32,6 +32,48 @@ void main() {
       expect(capture.records, isEmpty);
     },
   );
+  test(
+    'correlation refusal aggregates without records or inactive authority',
+    () async {
+      final capture = SinkCapture();
+      addTearDown(capture.dispose);
+      final session = await LoggingSession.startForTesting(
+        configuration: const DiagnosticConfiguration(),
+        profilePath: 'selected-private-profile',
+        role: DiagnosticRole.desktop,
+        sinkFactory: memorySink(capture.port.sendPort),
+      );
+      for (var i = 0; i < 10000; i++) {
+        session.producer.noteDropped(DiagnosticDropReason.correlationCapacity);
+      }
+      expect(session.producer.dropped, 10000);
+      expect(session.producer.correlationRefused, 10000);
+      expect(capture.records, isEmpty);
+      session.producer.close();
+      session.producer.noteDropped(DiagnosticDropReason.correlationCapacity);
+      expect(session.producer.correlationRefused, 10000);
+      final result = await session.close();
+      expect(result.writerExited, isTrue);
+      await capture.closed.future;
+      final summaries = capture.records.where(
+        (record) => record['event'] == DiagnosticEvent.recordsDropped.wire,
+      );
+      expect(summaries, hasLength(1));
+      expect((summaries.single['fields'] as Map)['count'], 10000);
+      expect(session.health.dropped, 10000);
+      expect(result.flushed, isTrue);
+      expect(session.health.reason, DiagnosticHealthReason.closed);
+      final off = await LoggingSession.startForTesting(
+        configuration: const DiagnosticConfiguration(
+          level: DiagnosticLevel.off,
+        ),
+      );
+      off.producer.noteDropped(DiagnosticDropReason.correlationCapacity);
+      expect(off.producer.dropped, 0);
+      expect(off.producer.correlationRefused, 0);
+      await off.close();
+    },
+  );
   test('healthy drop summaries do not mark genuine retained error', () async {
     final capture = SinkCapture();
     addTearDown(capture.dispose);
