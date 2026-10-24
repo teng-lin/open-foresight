@@ -1239,6 +1239,50 @@ def test_native_relay_constructor_failure_closes_owned_process(native_relay, rel
     assert evidence["log"]["sha256"]
 
 
+def test_native_relay_waits_for_parent_to_native_exec_transition(native_relay, relay_server, private, monkeypatch):
+    service = relay_server(lambda connection, stop: stop.wait(3))
+    original = rpc.file_identity
+    parent_path = Path(f"/proc/{os.getpid()}/exe")
+    parent = original(parent_path)
+    observed = []
+
+    def identity(path):
+        if str(path).startswith("/proc/") and path != parent_path:
+            observed.append(path)
+            if len(observed) <= 2:
+                return dict(parent)
+        return original(path)
+
+    monkeypatch.setattr(rpc, "file_identity", identity)
+    evidence = {}
+    peer = rpc.DesktopHostPeer(native_relay, service.path, private / "relay.log", evidence, {})
+    try:
+        assert len(observed) == 3
+        assert evidence["executed_image"]["sha256"] == original(native_relay)["sha256"]
+        assert evidence["executed_image"]["sha256"] != parent["sha256"]
+    finally:
+        peer.close()
+
+
+def test_native_relay_rejects_parent_image_that_never_executes(native_relay, relay_server, private, monkeypatch):
+    service = relay_server(lambda connection, stop: stop.wait(3))
+    original = rpc.file_identity
+    parent_path = Path(f"/proc/{os.getpid()}/exe")
+    parent = original(parent_path)
+
+    def identity(path):
+        if str(path).startswith("/proc/"):
+            return dict(parent)
+        return original(path)
+
+    monkeypatch.setattr(rpc, "file_identity", identity)
+    evidence = {}
+    with pytest.raises(ValueError, match="different image"):
+        rpc.DesktopHostPeer(native_relay, service.path, private / "relay.log", evidence, {}, timeout=.03)
+    assert evidence["exit_code"] == 0
+    assert evidence["log"]["sha256"]
+
+
 @pytest.mark.parametrize("name, data, mode, error", [
     ("relay", b"#!/bin/sh\n", 0o755, "native ELF"),
     ("relay", b"\x7fELF", 0o644, "native ELF"),
