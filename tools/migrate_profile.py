@@ -6,6 +6,7 @@ active meetings, symlinks, and cross-filesystem moves. Backups contain private
 data and belong outside the source tree.
 """
 
+from contextlib import closing
 import argparse
 import fcntl
 import importlib
@@ -104,14 +105,14 @@ def migrate(source, destination, backup, old_bundle, new_bundle, copy_external=F
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         check_open_profile(source)
         preflight.verify_profile_unchanged(source, originals)
-        with sqlite3.connect(source / "application.db") as db:
+        with closing(sqlite3.connect(source / "application.db")) as db, db:
             active = db.execute(
                 "SELECT count(*) FROM meetings WHERE state IN ('recording','transcribing')"
             ).fetchone()[0]
             if active:
                 raise RuntimeError("Finish the active meeting before migrating")
         for database in source.rglob("*.db"):
-            with sqlite3.connect(database) as db:
+            with closing(sqlite3.connect(database)) as db, db:
                 if db.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                     raise RuntimeError("Database integrity check failed")
                 if db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] != 0:
@@ -129,7 +130,7 @@ def migrate(source, destination, backup, old_bundle, new_bundle, copy_external=F
         ]
         source.rename(destination)
         try:
-            with sqlite3.connect(destination / "application.db") as db:
+            with closing(sqlite3.connect(destination / "application.db")) as db, db:
                 for kind, path, runtime in db.execute(
                     "SELECT kind,path,runtime FROM models"
                 ).fetchall():
@@ -172,7 +173,7 @@ def migrate(source, destination, backup, old_bundle, new_bundle, copy_external=F
                     raise RuntimeError("Migrated database integrity check failed")
             metadata = destination / "helper/agent_metadata.db"
             if metadata.exists():
-                with sqlite3.connect(metadata) as db:
+                with closing(sqlite3.connect(metadata)) as db, db:
                     for key in ("cache_dir", "embedding_model_path"):
                         row = db.execute(
                             "SELECT value FROM settings WHERE key=?", (key,)
@@ -180,9 +181,9 @@ def migrate(source, destination, backup, old_bundle, new_bundle, copy_external=F
                         if row:
                             value = replace_prefix(row[0], mappings)
                             if key == "embedding_model_path" and copy_external:
-                                with sqlite3.connect(
+                                with closing(sqlite3.connect(
                                     destination / "application.db"
-                                ) as app:
+                                )) as app, app:
                                     model = app.execute(
                                         "SELECT path FROM models WHERE kind='embedding'"
                                     ).fetchone()
