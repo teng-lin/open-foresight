@@ -426,11 +426,30 @@ void main() {
             .path,
         isNull,
       );
+      expect(
+        (decodeOperationRequest(Operation.googleConfigure, {
+                  'provider': 'google',
+                  'checkOnly': true,
+                })
+                as GoogleConfigureRequest)
+            .checkOnly,
+        isTrue,
+      );
+      expect(
+        (decodeOperationRequest(Operation.googleConfigure, {
+                  'provider': 'google',
+                })
+                as GoogleConfigureRequest)
+            .checkOnly,
+        isFalse,
+      );
       for (final args in [
         {'provider': 'unknown'},
         {'provider': 'unknown', 'path': 'credentials'},
         {'provider': 'google', 'path': 'credentials'},
         {'provider': 'granola', 'path': 'credentials'},
+        {'provider': 'granola', 'checkOnly': true},
+        {'path': 'credentials', 'checkOnly': true},
       ]) {
         expect(
           () => decodeOperationRequest(Operation.googleConfigure, args),

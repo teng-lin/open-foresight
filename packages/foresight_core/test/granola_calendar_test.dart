@@ -178,6 +178,43 @@ void main() {
   });
 
   test(
+    'direct-client preflight leaves a connected Granola session untouched',
+    () async {
+      await auth.signIn((uri) => fixture.consent(auth, uri));
+      final configuration = File('${auth.directory.path}/client.json');
+      final tokens = File('${auth.directory.path}/tokens.json');
+      final beforeConfiguration = configuration.readAsBytesSync();
+      final beforeTokens = tokens.readAsBytesSync();
+      final beforeOperations = List<String>.from(fixture.operations);
+      final savedClient = File('${auth.directory.path}/google-client.json');
+      for (final invalid in [
+        null,
+        '{private-client-material',
+        '{"installed":{}}',
+      ]) {
+        if (invalid != null) savedClient.writeAsStringSync(invalid);
+        await expectLater(
+          auth.checkGoogleClient(),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.toString(),
+              'message',
+              isNot(contains('private-client-material')),
+            ),
+          ),
+        );
+        expect(auth.connected, true);
+        expect(auth.viaGranola, true);
+        expect(auth.account, 'workos-user-1');
+        expect(auth.accounts, hasLength(1));
+        expect(configuration.readAsBytesSync(), beforeConfiguration);
+        expect(tokens.readAsBytesSync(), beforeTokens);
+        expect(fixture.operations, beforeOperations);
+      }
+    },
+  );
+
+  test(
     'owns the challenge, persists an isolated app session, refreshes and blocks Drive',
     () async {
       await auth.signIn((uri) => fixture.consent(auth, uri, twice: true));

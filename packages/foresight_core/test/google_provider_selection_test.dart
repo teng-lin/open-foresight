@@ -91,6 +91,11 @@ void main() {
         defaultClient: File('${root.path}/bundled.json'),
         secretStore: const UnavailableSecretStore(),
       );
+      final configuration = File('${directory.path}/client.json');
+      final before = configuration.readAsBytesSync();
+      await auth.checkGoogleClient();
+      expect(auth.viaGranola, true);
+      expect(configuration.readAsBytesSync(), before);
       await auth.configureGoogle();
       expect(auth.viaGranola, false);
       expect(auth.client!.id, 'bundled.apps.googleusercontent.com');

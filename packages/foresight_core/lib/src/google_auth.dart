@@ -451,6 +451,16 @@ class GoogleAuth implements GoogleAccount {
         'Sign out of saved accounts before changing connection providers.',
       );
     }
+    await _useGoogleClient(await _loadDirectGoogleClient());
+  }
+
+  /// Validate direct sign-in setup without changing the provider or accounts.
+  Future<void> checkGoogleClient() async {
+    await _loadDirectGoogleClient();
+  }
+
+  Future<GoogleClient> _loadDirectGoogleClient() async {
+    if (!_viaGranola && client != null) return client!;
     final saved = File('${directory.path}/google-client.json');
     final source = saved.existsSync() ? saved : _defaultClient;
     if (source == null || !source.existsSync()) {
@@ -458,7 +468,15 @@ class GoogleAuth implements GoogleAccount {
         'Google sign-in is unavailable in this build. Install a distribution with Google sign-in included.',
       );
     }
-    await configure(source);
+    try {
+      return GoogleClient.parse(
+        jsonDecode(await source.readAsString()) as Map<String, dynamic>,
+      );
+    } catch (_) {
+      throw StateError(
+        'Google client setup could not be loaded. Restore your Google client configuration or install a distribution with Google sign-in included.',
+      );
+    }
   }
 
   @override
@@ -474,6 +492,10 @@ class GoogleAuth implements GoogleAccount {
     final candidate = GoogleClient.parse(
       jsonDecode(await file.readAsString()) as Map<String, dynamic>,
     );
+    await _useGoogleClient(candidate);
+  }
+
+  Future<void> _useGoogleClient(GoogleClient candidate) async {
     await _save('client.json', candidate.toJson());
     client = candidate;
     _viaGranola = false;

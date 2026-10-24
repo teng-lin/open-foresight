@@ -12,9 +12,15 @@ class GoogleStatusRequest extends OperationRequest {
 }
 
 class GoogleConfigureRequest extends OperationRequest {
-  GoogleConfigureRequest._(super.context, this.provider, this.path);
+  GoogleConfigureRequest._(
+    super.context,
+    this.provider,
+    this.path,
+    this.checkOnly,
+  );
   final String? provider;
   final String? path;
+  final bool checkOnly;
   @override
   Operation get operation => Operation.googleConfigure;
   factory GoogleConfigureRequest.decode(OperationRequestContext context) {
@@ -23,6 +29,7 @@ class GoogleConfigureRequest extends OperationRequest {
     );
     final provider = values.value<String?>('provider');
     final path = values.value<String?>('path');
+    final checkOnly = values.value<bool>('checkOnly');
     if (provider != null && provider != 'google' && provider != 'granola') {
       invalidArgument('provider', 'must be google or granola');
     }
@@ -32,10 +39,14 @@ class GoogleConfigureRequest extends OperationRequest {
     if (provider != null && path != null) {
       invalidArgument('path', 'cannot be combined with provider');
     }
+    if (checkOnly && provider != 'google') {
+      invalidArgument('checkOnly', 'requires provider google');
+    }
     return GoogleConfigureRequest._(
       context,
       values.value<String?>("provider"),
       values.value<String?>("path"),
+      checkOnly,
     );
   }
 }

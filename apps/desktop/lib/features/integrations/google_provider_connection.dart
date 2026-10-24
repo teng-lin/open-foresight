@@ -16,10 +16,21 @@ Future<bool> selectGoogleProvider(
   final googleAuth = connection.googleAuth;
   final granolaCalendar = connection.googlePresentation.provider == 'granola';
   if (granolaCalendar == throughGranola) return current();
+  if (!throughGranola) {
+    if (!current()) return false;
+    // Validate the target before asking to sign out the working connection.
+    await connection.commandCurrent(Operation.googleConfigure, {
+      'provider': 'google',
+      'checkOnly': true,
+    }, current);
+    if (!current()) return false;
+  }
   final accounts = googleAuth.accounts;
   if (accounts.isNotEmpty) {
+    final context = host.context;
+    if (!context.mounted) return false;
     final switchProvider = await showDialog<bool>(
-      context: host.context,
+      context: context,
       builder: (dialogContext) => AlertDialog(
         title: Text(
           throughGranola

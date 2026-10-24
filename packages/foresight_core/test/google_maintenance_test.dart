@@ -94,6 +94,39 @@ void main() {
     },
   );
 
+  test(
+    'direct-client preflight does not select a provider or write setup',
+    () async {
+      await invoke(Operation.googleConfigure, {'provider': 'granola'});
+      final configuration = File('${auth.directory.path}/client.json');
+      final savedClient = File('${auth.directory.path}/google-client.json');
+      final before = configuration.readAsBytesSync();
+      final savedBefore = savedClient.readAsBytesSync();
+      final status = Map<String, Object?>.from(maintenance.state);
+      expect(
+        await invoke(Operation.googleConfigure, {
+          'provider': 'google',
+          'checkOnly': true,
+        }),
+        status,
+      );
+      expect(auth.viaGranola, true);
+      expect(configuration.readAsBytesSync(), before);
+      expect(savedClient.readAsBytesSync(), savedBefore);
+      savedClient.deleteSync();
+      await expectLater(
+        invoke(Operation.googleConfigure, {
+          'provider': 'google',
+          'checkOnly': true,
+        }),
+        throwsStateError,
+      );
+      expect(maintenance.state, status);
+      expect(configuration.readAsBytesSync(), before);
+      expect(changes, 0);
+    },
+  );
+
   test('status is a pure read before explicit initialization', () async {
     final revision = store.dataRevision;
     expect(maintenance.state['connected'], isFalse);

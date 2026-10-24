@@ -13,6 +13,7 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Fixed
 
+- Check direct Google client setup before signing out Granola accounts when switching providers.
 - Show separate Google and Granola connection choices, with explicit provider switching and account sign-out confirmation. Recover direct Google sign-in after failed Granola attempts and preserve Google client setup across provider changes and restarts.
 - Use Granola’s macOS client profile for authorization and calendar API calls on Linux.
 
