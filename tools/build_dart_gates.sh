@@ -30,6 +30,7 @@ case "$task_gate" in
   (
     export FORESIGHT_NATIVE_LIBRARY="$task_build/native/${task_native##*/}"
     export FORESIGHT_HELPER="$task_build/services/helper/ForesightHelper"
+    export FORESIGHT_TEST_HELPER="$task_build/services/helper/ForesightHelperTest"
     cd "$task_root/packages/foresight_core"
     task_reports="$task_root/test-results/$task_platform/core"
     mkdir -p "$task_reports"

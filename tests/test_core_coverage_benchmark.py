@@ -80,6 +80,7 @@ args = sys.argv[1:]
 with open(os.environ['COMMANDS'], 'a') as stream:
     stream.write(json.dumps({'args': args, 'tool': sys.argv[0], 'native': os.getenv('FORESIGHT_NATIVE_LIBRARY'),
                              'helper': os.getenv('FORESIGHT_HELPER'),
+                             'test_helper': os.getenv('FORESIGHT_TEST_HELPER'),
                              'sqlite': os.getenv('FORESIGHT_SQLITE_LIBRARY'),
                              'cache': os.getenv('FORESIGHT_BOUNDARY_ANALYSIS_CACHE'),
                              'cache_mode': (oct(pathlib.Path(os.environ['FORESIGHT_BOUNDARY_ANALYSIS_CACHE']).stat().st_mode & 0o777)
@@ -176,6 +177,7 @@ def test_default_runs_full_suite_once_and_keeps_native_and_hook_gates(gate, cove
     assert result.returncode == 0, result.stdout + result.stderr
     tests = [command for command in commands if command["args"][0] == "test"]
     assert len(tests) == 1
+    assert tests[0]["test_helper"] == str(gate[0] / "build/services/helper/ForesightHelperTest")
     assert not any(arg.endswith(".dart") for arg in tests[0]["args"])
     assert any(arg.startswith("--coverage=") for arg in tests[0]["args"]) == (
         coverage == "1"
