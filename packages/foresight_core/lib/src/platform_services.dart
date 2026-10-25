@@ -1,4 +1,5 @@
 import 'native_lifetime.dart';
+import 'native_diagnostics.dart';
 import 'profile_paths.dart';
 import 'installation_lock.dart';
 export 'installation_lock.dart' show InstallationLock;
@@ -499,6 +500,7 @@ const _nativeEnvironmentKeys = {
   'FORESIGHT_WHISPER_WORKER',
   'PYTHONPYCACHEPREFIX',
   'LD_LIBRARY_PATH',
+  'FORESIGHT_LOG_LEVEL',
 };
 bool _nativeEnvironmentConfigured = false;
 
@@ -510,6 +512,7 @@ void configureNativeEnvironment() {
       .where(
         (entry) =>
             _nativeEnvironmentKeys.contains(entry.key) &&
+            entry.key != 'FORESIGHT_LOG_LEVEL' &&
             entry.value.isNotEmpty,
       )
       .toList();
@@ -525,7 +528,8 @@ void configureNativeEnvironment() {
     _nativeEnvironmentConfigured = true;
     return;
   }
-  final lib = NativeLibrary(selected).library;
+  final bindings = NativeLibrary(selected);
+  final lib = bindings.library;
   // This runs after installation/profile ownership is acquired. A worker lost
   // with native work cannot be replaced in the same mapped process, even from
   // another frontend isolate. Base-only runtimes keep their optional contract.
@@ -536,20 +540,40 @@ void configureNativeEnvironment() {
           1) {
     throw StateError('Native ownership is unconfirmed; restart the service');
   }
-  if (values.isEmpty) {
+  final loggingLevel = NativeLibrary.diagnosticLevel;
+  final loggingCapable =
+      loggingLevel != null &&
+      NativeDiagnosticQueueFunctions.fromLoaded(bindings) != null;
+  if (values.isEmpty && !loggingCapable) {
     _nativeEnvironmentConfigured = true;
     return;
   }
-  final configure = lib
-      .lookupFunction<
-        Int32 Function(Pointer<Utf8>, Pointer<Utf8>),
-        int Function(Pointer<Utf8>, Pointer<Utf8>)
-      >('fs_set_runtime_environment');
+  final configure =
+      lib.providesSymbol('fs_set_runtime_environment') || values.isNotEmpty
+      ? lib.lookupFunction<
+          Int32 Function(Pointer<Utf8>, Pointer<Utf8>),
+          int Function(Pointer<Utf8>, Pointer<Utf8>)
+        >('fs_set_runtime_environment')
+      : null;
   for (final entry in values) {
     final key = entry.key.toNativeUtf8(), value = entry.value.toNativeUtf8();
     try {
-      if (configure(key, value) != 0) {
+      if (configure!(key, value) != 0) {
         throw StateError('Cannot configure native runtime ${entry.key}');
+      }
+    } finally {
+      calloc.free(key);
+      calloc.free(value);
+    }
+  }
+  if (loggingCapable) {
+    final key = 'FORESIGHT_LOG_LEVEL'.toNativeUtf8();
+    final value = loggingLevel.toNativeUtf8();
+    try {
+      if (configure == null || configure(key, value) != 0) {
+        try {
+          NativeLibrary.diagnosticConfigurationUnavailable?.call();
+        } catch (_) {}
       }
     } finally {
       calloc.free(key);

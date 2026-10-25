@@ -139,6 +139,8 @@ extension _ProducerOwnership on LoggingSession {
     final completion = owned.completion;
     if (!completion.isCompleted) completion.complete();
     _slots[slot] = null;
+    final pending = _pendingNativeCapabilities;
+    if (pending != null) _reserveNativeDrain(pending);
   }
 }
 

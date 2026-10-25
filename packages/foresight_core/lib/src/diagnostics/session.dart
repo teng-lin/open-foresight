@@ -6,6 +6,9 @@ import 'dart:typed_data';
 
 import 'package:meta/meta.dart';
 
+import '../native_diagnostics.dart';
+import '../native_lifetime.dart';
+
 import 'events.dart';
 import 'storage.dart';
 import 'storage_worker.dart';
@@ -22,6 +25,7 @@ part 'producer.dart';
 part 'producer_owner.dart';
 part 'producer_ledger.dart';
 part 'producer_budget.dart';
+part 'native_queue_adapter.dart';
 
 const _normalBytes = 4 * 1024, _priorityBytes = 8 * 1024;
 // 224 producer tickets plus32 sequential writer/internal tickets.
@@ -41,6 +45,8 @@ final class DiagnosticHealth {
   int producerRegistrationRefused = 0, quarantinedProducers = 0;
   int? slot;
   bool closed = false;
+  NativeDiagnosticHealth nativeReason = NativeDiagnosticHealth.unconfigured;
+  bool nativeDropsExact = true;
   Map<String, Object?> toJson() => {
     'reason': reason.name,
     'closed': closed,
@@ -52,6 +58,8 @@ final class DiagnosticHealth {
     'slot': slot,
     'producer_registration_refused': producerRegistrationRefused,
     'producer_quarantined': quarantinedProducers,
+    'native_reason': nativeReason.name,
+    'native_drops_exact': nativeDropsExact,
   };
 }
 
@@ -117,6 +125,7 @@ final class LoggingSession {
   static const maximumEncodingScratchBytes = 144 * 1024;
   static const maximumIpcBytes = 160 * 1024;
   static const maximumControlBytes = 16 * 1024;
+  static const maximumNativeProducerEventBytes = 256;
   static const closeDeadline = Duration(milliseconds: 500);
   final DiagnosticConfiguration configuration;
   final DiagnosticIdentity identity;
@@ -148,6 +157,8 @@ final class LoggingSession {
       _closeAcknowledged = false;
   Future<LoggingCloseResult>? _close;
   _DiagnosticCoordinator? _coordinator;
+  _OwnedProducer? _nativeDrainSlot;
+  List<int>? _pendingNativeCapabilities;
 
   static Future<LoggingSession> start({
     required DiagnosticConfiguration configuration,
@@ -252,6 +263,15 @@ final class LoggingSession {
         return;
       }
       if (value is! List || value.isEmpty) return;
+      if (value.first == 'native_reserve' && value.length == 2) {
+        currentSession?._reserveNativeDrain(value[1] as List<int>);
+        return;
+      }
+      if (value.first == 'native_health' && value.length == 3) {
+        health.nativeReason = NativeDiagnosticHealth.values[value[1] as int];
+        health.nativeDropsExact = value[2] as bool;
+        return;
+      }
       if (value.first == 'worker_probe' && value.length == 1) {
         currentSession?._coordinator?.probe();
         return;
@@ -543,6 +563,10 @@ final class LoggingSession {
   Future<LoggingCloseResult> close() => _close ??= _finishClose();
   Future<LoggingCloseResult> _finishClose() async {
     _closed = true;
+    if (_writer == DiagnosticProducer._connectionWriter) {
+      NativeLibrary.diagnosticConfigurationAccepted = false;
+    }
+    _pendingNativeCapabilities = null;
     if (!configuration.enabled) {
       health.closed = true;
       return const LoggingCloseResult(writerExited: true, flushed: true);
@@ -931,8 +955,11 @@ void _writerMain(List<Object?> arguments) {
   state.creditTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
     state.ledger.rebalance();
     state.probe();
+    if (state._nativeFinishing) state._finish();
+    state._publishNativeHealth();
   });
   state.timer = Timer.periodic(const Duration(milliseconds: 250), (_) {
+    state._nativeTick();
     state.heartbeat();
     state.flush();
   });
@@ -982,12 +1009,21 @@ final class _Writer {
       decisionReceived = false,
       hadFailure = false,
       hadPriority = false;
+  _NativeQueueAdapter? _nativeQueue;
+  bool _nativeRequested = false,
+      _nativeClosing = false,
+      _nativeFinishing = false;
+  NativeDiagnosticHealth _nativeReason = NativeDiagnosticHealth.unconfigured;
+  bool _nativeDropsExact = true;
+  bool _nativeHealthPending = false, _nativePrecisionPending = false;
 
   void handle(dynamic value) {
     if (value is! List || value.isEmpty) return;
+    if (_nativeControl(value)) return;
     if (workerControl(value)) return;
     if (ledger.handle(value)) {
       _captureLedgerHighWater();
+      if (_nativeFinishing) _finish();
       return;
     }
     switch (value.first) {
@@ -1089,6 +1125,14 @@ final class _Writer {
       case 'health_ack':
         healthPending = false;
       case 'close':
+        if (_nativeQueue != null && !_nativeClosing) {
+          _nativeTick();
+          _nativeClosing = true;
+          // Native records use this same mailbox. Admit the bounded final
+          // native batch before the close marker revokes its writer credits.
+          receive.sendPort.send(['close']);
+          return;
+        }
         closing = true;
         ledger.close();
         if (decisionExpected && !decisionReceived) {
@@ -1133,7 +1177,9 @@ final class _Writer {
 
   bool get _hasSummaries =>
       configuration.permits(DiagnosticLevel.warn) &&
-      (pendingDrops + pendingRejected > 0 || rate.pending);
+      (pendingDrops + pendingRejected > 0 ||
+          rate.pending ||
+          _nativePrecisionPending);
 
   Iterable<_QueuedRecord> _summaries() sync* {
     if (!configuration.permits(DiagnosticLevel.warn)) return;
@@ -1155,6 +1201,7 @@ final class _Writer {
             DiagnosticField.lastMs: last.clamp(0, _maximumCounter),
             if (original != null) DiagnosticField.event: original,
             if (category != null) DiagnosticField.category: category,
+            if (!_nativeDropsExact) DiagnosticField.precisionLost: true,
           },
         ).toWire()!,
       ),
@@ -1162,6 +1209,13 @@ final class _Writer {
       0,
       false,
     );
+    if (_nativePrecisionPending) {
+      _nativePrecisionPending = false;
+      if (pendingDrops == 0) {
+        final now = started.elapsedMilliseconds;
+        yield summary(DiagnosticEvent.recordsDropped, 0, now, now);
+      }
+    }
     if (pendingDrops > 0) {
       final count = pendingDrops;
       pendingDrops = 0;
@@ -1751,6 +1805,8 @@ final class _Writer {
 
   void _finish() {
     if (_finished) return;
+    if (!_finishNative()) return;
+    _publishNativeHealth();
     _finished = true;
     _captureLedgerHighWater();
     timer?.cancel();
@@ -1768,7 +1824,10 @@ final class _Writer {
     storage = null;
     owner.send([
       'closed',
-      reason == DiagnosticHealthReason.healthy,
+      reason == DiagnosticHealthReason.healthy &&
+          _nativeReason != NativeDiagnosticHealth.protocolFailed &&
+          (_nativeQueue?.pending != true ||
+              _nativeReason == NativeDiagnosticHealth.unsupported),
       admitted,
       dropped,
       rejected,

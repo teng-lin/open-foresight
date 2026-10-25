@@ -1,3 +1,4 @@
+#include <cstring>
 #if defined(FORESIGHT_FIXTURE_LEGACY)
 extern "C" int fs_abi_version() {
   return 1;
@@ -25,11 +26,27 @@ extern "C" int fs_lifetime_admission() {
 extern "C" int fs_test_pin_calls() {
   return pin_calls;
 }
+extern "C" int fs_set_runtime_environment(const char *key, const char *value) {
+  if (std::strcmp(key, "FORESIGHT_LOG_LEVEL") != 0)
+    return -1;
+  using foresight::diagnostics::Level;
+  const char *names[] = {"off", "error", "warn", "info", "debug", "trace"};
+  for (unsigned level = 0; level < 6; ++level) {
+    if (std::strcmp(value, names[level]) == 0) {
+      foresight::diagnostics::configure(static_cast<Level>(level));
+      return 0;
+    }
+  }
+  return -1;
+}
 extern "C" void fs_test_pin_result(int value) {
   pin_result = value;
 }
 extern "C" void fs_test_configure() {
   foresight::diagnostics::configure(foresight::diagnostics::Level::info);
+}
+extern "C" int fs_test_level() {
+  return static_cast<int>(queue.level.load());
 }
 extern "C" int fs_test_enqueue(int priority) {
   return priority ? foresight::diagnostics::worker_failed(10, 3, -1, 9, 12, 3)
@@ -73,5 +90,10 @@ extern "C" void fs_test_bad_sequence(int priority, int mode) {
     ring.records[(ring.head + ring.count - 1) % general_capacity].sequence =
         invalid;
   }
+}
+extern "C" void fs_test_maximum_fields() {
+  foresight::diagnostics::worker_failed(9, 7, INT32_MIN, INT32_MIN,
+                                        maximum_number, maximum_number);
+  foresight::diagnostics::capture_state(9, 7, UINT32_MAX, true, maximum_number);
 }
 #endif

@@ -12,6 +12,16 @@ int main(int argc, char **argv) {
   if (supervised >= 0)
     return supervised;
   assert(argc >= 1);
+  if (argc == 2 && std::strcmp(argv[1], "--late-logging") == 0) {
+    assert(setenv("FORESIGHT_LOG_LEVEL", "info", 1) == 0);
+    auto *engine = fs_engine_create("/fixture-runtime-never-started", argv[0]);
+    assert(engine != nullptr);
+    assert(fs_set_runtime_environment("FORESIGHT_LOG_LEVEL", "info") == -1);
+    assert(fs_engine_destroy(engine) == 0);
+    std::puts("inherited level cannot impersonate sealed native logging "
+              "configuration");
+    return 0;
+  }
   // Fixture-only executable route, installed before any native worker starts.
   // This exercises actual capture-thread lifecycle, not audio/device access.
   assert(setenv("FORESIGHT_CAPTURE_RUNTIME", "/usr/bin/false", 1) == 0);

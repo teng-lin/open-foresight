@@ -80,6 +80,7 @@ enum DiagnosticField {
   event,
   firstMs,
   lastMs,
+  precisionLost,
 }
 
 enum DiagnosticEvent {
@@ -128,6 +129,7 @@ enum DiagnosticEvent {
       DiagnosticField.signal,
       DiagnosticField.bytes,
       DiagnosticField.dropped,
+      DiagnosticField.precisionLost,
     },
     captureStateChanged => const {
       DiagnosticField.outcome,
@@ -135,6 +137,7 @@ enum DiagnosticEvent {
       DiagnosticField.queued,
       DiagnosticField.active,
       DiagnosticField.durationUs,
+      DiagnosticField.precisionLost,
     },
     runtimeFailed => const {
       DiagnosticField.category,
@@ -154,6 +157,7 @@ enum DiagnosticEvent {
       DiagnosticField.event,
       DiagnosticField.firstMs,
       DiagnosticField.lastMs,
+      DiagnosticField.precisionLost,
     },
     invalidConfiguration => const {},
   };
@@ -388,7 +392,9 @@ final class DiagnosticRecord {
       value is String && DiagnosticOutcome.values.any((v) => v.name == value),
     DiagnosticField.provider =>
       value is String && DiagnosticProvider.values.any((v) => v.name == value),
-    DiagnosticField.active || DiagnosticField.enabled => value is bool,
+    DiagnosticField.active ||
+    DiagnosticField.enabled ||
+    DiagnosticField.precisionLost => value is bool,
     DiagnosticField.status ||
     DiagnosticField.signal => value is int && _number(value),
     _ => value is int && _number(value, signed: false),

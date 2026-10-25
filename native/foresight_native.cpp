@@ -2096,17 +2096,24 @@ extern "C" int fs_set_runtime_environment(const char *key, const char *value) {
             return -1;
         }
         std::lock_guard lock(foresight::launch_mutex_for_process());
+        static bool logging_configured = false;
         if (foresight::runtime_environment_sealed) {
           // Fresh Dart isolates may replay the same resolved runtime map. Keep
           // the sealed process environment immutable while accepting that exact
           // no-op.
+          // An inherited spelling is not evidence that the native queue's
+          // level was installed before handles sealed configuration.
+          if (logging && !logging_configured)
+            return -1;
           const char *current = std::getenv(key);
           return current && std::strcmp(current, value) == 0 ? 0 : -1;
         }
         if (setenv(key, value, 1) != 0)
           return -1;
-        if (logging)
+        if (logging) {
           foresight::diagnostics::configure(level);
+          logging_configured = true;
+        }
         return 0;
       },
       -1);
