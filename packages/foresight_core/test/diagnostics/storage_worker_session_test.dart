@@ -18,6 +18,7 @@ const _build =
 final class _Sink implements DiagnosticSink {
   final records = <Map>[];
   final classifications = <DiagnosticRole>[];
+  final protections = <(bool, bool)>[];
   bool closed = false, failFirstAppend = false;
   @override
   int get slot => 4;
@@ -30,6 +31,7 @@ final class _Sink implements DiagnosticSink {
     bool genuineFailure = false,
   }) {
     classifications.add(role);
+    protections.add((error, genuineFailure));
     return true;
   }
 
@@ -48,7 +50,11 @@ final class _Sink implements DiagnosticSink {
 /// Deliberately injected protocol/ownership control, not OS/file acceptance.
 /// Root's actual child dispatch validates every schema2 payload even here.
 final class _Owner implements DiagnosticWorkerOwner {
-  _Owner(this.context, {this.holdFirstAppend = false}) {
+  _Owner(
+    this.context, {
+    this.holdFirstAppend = false,
+    this.holdFirstClassification = false,
+  }) {
     dispatch = DiagnosticStorageWorkerState.forTesting(
       parentPid: context.applicationPid,
       buildId: _build,
@@ -56,7 +62,9 @@ final class _Owner implements DiagnosticWorkerOwner {
     );
   }
   final DiagnosticStorageLaunchContext context;
-  final bool holdFirstAppend;
+  final bool holdFirstAppend, holdFirstClassification;
+  final classificationEntered = Completer<void>(),
+      classificationRelease = Completer<void>();
   final sink = _Sink();
   late final DiagnosticStorageWorkerState dispatch;
   final entered = Completer<void>(), release = Completer<void>();
@@ -82,6 +90,11 @@ final class _Owner implements DiagnosticWorkerOwner {
     if (active > maximumActive) maximumActive = active;
     try {
       final reply = dispatch.handle(request.type, request.payload);
+      if (request.type == DiagnosticWorkerFrame.classify &&
+          !classificationEntered.isCompleted) {
+        classificationEntered.complete();
+        if (holdFirstClassification) await classificationRelease.future;
+      }
       if (request.type == DiagnosticWorkerFrame.append &&
           !entered.isCompleted) {
         entered.complete();
@@ -126,6 +139,120 @@ final class _Owner implements DiagnosticWorkerOwner {
 }
 
 void main() {
+  for (final duringAppend in [false, true]) {
+    test(
+      'late ownership during ${duringAppend ? 'append' : 'classification'} survives close until its decision',
+      () async {
+        final profile = createTestTempDirectorySync('late-classify-');
+        _Owner? owner;
+        final session = await LoggingSession.startForTesting(
+          configuration: const DiagnosticConfiguration(),
+          profilePath: profile.path,
+          workerFactory: (context) => owner = _Owner(
+            context,
+            holdFirstClassification: !duringAppend,
+            holdFirstAppend: duringAppend,
+          ),
+        );
+        addTearDown(() async {
+          if (owner != null && !owner!.classificationRelease.isCompleted) {
+            owner!.classificationRelease.complete();
+          }
+          if (owner != null && !owner!.release.isCompleted) {
+            owner!.release.complete();
+          }
+          await session.close();
+        });
+        session.producer.emit(
+          DiagnosticEvent.runtimeFailed,
+          DiagnosticComponent.service,
+        );
+        await eventually(() => owner != null);
+        final entered = duringAppend
+            ? owner!.entered
+            : owner!.classificationEntered;
+        final release = duringAppend
+            ? owner!.release
+            : owner!.classificationRelease;
+        await entered.future.timeout(const Duration(seconds: 2));
+        final ownership = session.expectOwnershipDecision();
+        // A mailbox barrier proves expect_ownership was received during held RPC.
+        await session.inspectBudgetForTesting();
+        final closing = session.close();
+        var closed = false;
+        unawaited(closing.then((_) => closed = true));
+        // close posts through its existing zero-duration encoder-unwind turn.
+        // Its send must precede the classifier ACK on the same writer mailbox.
+        await Future<void>.delayed(Duration.zero);
+        release.complete();
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        ownership.report(OwnershipDecision.acquired);
+        expect(
+          closed,
+          isFalse,
+          reason: 'Close discarded the pending ownership decision',
+        );
+        final result = await closing.timeout(const Duration(seconds: 1));
+        expect(result.flushed, isTrue);
+        expect(owner!.sink.records, hasLength(1));
+        expect(owner!.sink.classifications.last, DiagnosticRole.service);
+        expect(owner!.sink.protections.last, (true, true));
+      },
+    );
+  }
+
+  test(
+    'ownership after emptying queue still protects already appended failure',
+    () async {
+      final profile = createTestTempDirectorySync('late-empty-');
+      _Owner? owner;
+      final session = await LoggingSession.startForTesting(
+        configuration: const DiagnosticConfiguration(),
+        profilePath: profile.path,
+        workerFactory: (context) => owner = _Owner(context),
+      );
+      addTearDown(session.close);
+      session.producer.emit(
+        DiagnosticEvent.runtimeFailed,
+        DiagnosticComponent.service,
+      );
+      await eventually(() => owner?.sink.records.length == 1);
+      await eventually(
+        () async =>
+            (await session.inspectBudgetForTesting()).queuedRecords == 0,
+      );
+      final ownership = session.expectOwnershipDecision();
+      await session.inspectBudgetForTesting();
+      ownership.report(OwnershipDecision.acquired);
+      await eventually(
+        () => owner!.sink.classifications.last == DiagnosticRole.service,
+      );
+      expect(owner!.sink.protections.last, (true, true));
+      expect(owner!.sink.records, hasLength(1));
+    },
+  );
+
+  test('worker request owns immutable bounded bytes', () {
+    final bytes = Uint8List.fromList([1]);
+    final request = DiagnosticWorkerRequest(
+      DiagnosticWorkerFrame.append,
+      bytes,
+    );
+    bytes[0] = 2;
+    expect(request.payload, [1]);
+    expect(() => request.payload[0] = 3, throwsUnsupportedError);
+    expect(
+      () => DiagnosticWorkerRequest(
+        DiagnosticWorkerFrame.append,
+        Uint8List(4097),
+      ),
+      throwsArgumentError,
+    );
+    expect(
+      () => DiagnosticWorkerRequest(255, Uint8List(0)),
+      throwsArgumentError,
+    );
+  });
   test(
     'off, transient, cold and no-profile paths never invoke the worker factory',
     () async {

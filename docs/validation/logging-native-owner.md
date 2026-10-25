@@ -175,3 +175,60 @@ active RPC first consumes any matching final ACK before its remaining queue can
 be disposed. A disabled APPEND ACK drops/refunds only its known failed prefix;
 newer unsent records remain bounded in memory. Initial idle-observation and
 failed-prefix controls are retained alongside the passing followups.
+
+
+The real-session fixture additionally compiles the current system-only native
+support and launcher with an explicit private fixture identity, then starts a
+fresh caller VM for each scenario. Its child is the shared storage executor,
+not a test implementation of that executor. Normal operation verifies two
+ordered schema-2 records, logical application PID/session, selected worker build
+ID, producer generation, protected service manifest and typed RETIRED response.
+Idle FORCE uses the original native context rather than a PID signal and is
+observed through the existing coalesced status edge. Final shutdown checks actual
+writer/parent ownership and observed child exit separately; Darwin need not
+claim reaping or a known exit class.
+
+The reverse-alias scenario holds a real SQLite write transaction, hardlinks its
+database to the diagnostic admission filename, and probes POSIX locks from a
+separate process before and after rejected admission. Shared-child admission
+must preserve the parent's lock. The explicit legacy same-PID test sink must
+release it, proving the fixture reaches the unsafe open/refuse/close path rather
+than refusing an earlier directory. Business database cleanup precedes logger
+close. Compiler/source/binary hashes and child output are retained in the test
+log. These are actual fixture-child/filesystem controls, not installed-command,
+package, product-image or physical resource-ceiling acceptance. SDK-container,
+Mac and complete product gates must be reported for their exact source and
+execution environment separately.
+
+Worker requests validate their closed type and byte limit before making a copy;
+the owned byte view is read-only so later caller mutation cannot change an
+in-flight command. Its regression retains the formerly mutable-view failure.
+
+Implementation clarification: the coordinator drives the bounded nonblocking
+native request/reply cells at 1 ms only while its single request/bootstrap is
+pending. The writer owns queue/credit ordering and initiates those requests;
+it runs the existing 250 ms heartbeat/flush tick and coalesced 100 ms status
+edge. This supersedes the earlier design draft's statement that the writer
+itself pumps the cells. Neither idle coordinator polling nor another keepalive
+is added. Active-pump CPU/wakeup and physical allocation measurements remain
+part of B4 acceptance; cadence alone proves no scheduler latency bound.
+
+A held CLASSIFY acknowledgement can overlap a newly expected ownership decision
+and close. After that acknowledgement, classification rechecks the pending
+decision, and deferred close retains its existing 100 ms ownership deadline.
+It cannot flush/discard the candidate failure or cancel that deadline early.
+The acquired decision promotes/protects service records before their append;
+the regression retains the premature-close failure and the corrected result.
+
+The same ownership boundary is rechecked after the final APPEND. An empty queue
+still publishes a changed service/failure classification, including when an
+ownership decision arrives after the previous flush completed. The closing and
+non-closing regressions retain both reproduced failures and assert genuine
+failure protection in addition to the service role.
+
+Reply waiting observes native process status before reading the retained page,
+then checks that same status snapshot after an incomplete read. A final RESULT
+or RETIRED published between EMPTY and a later exit observation cannot be lost.
+The deterministic FFI regression reproduces EMPTY followed by NOT_LIVE while
+RETIRED remains available for the next receive; it retains the failed close and
+the corrected flushed disposition without claiming an actual OS-child fixture.

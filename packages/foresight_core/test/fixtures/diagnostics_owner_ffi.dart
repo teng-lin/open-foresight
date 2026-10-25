@@ -50,7 +50,7 @@ Future<void> main(List<String> args) async {
   )) {
     throw StateError('No producer admission');
   }
-  if (mode == 'ack-exit') {
+  if (mode == 'ack-exit' || mode == 'ack-exit-race') {
     final appends = image.lookupFunction<Int32 Function(), int Function()>(
       'fs_diag_fixture_append_calls',
     );

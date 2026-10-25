@@ -7,7 +7,7 @@ import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
 
 void main() {
-  for (final mode in ['prepare', 'spawn', 'ack-exit']) {
+  for (final mode in ['prepare', 'spawn', 'ack-exit', 'ack-exit-race']) {
     test(
       'native owner $mode retains actual VM ownership and final ACK disposition',
       () async {
@@ -67,14 +67,14 @@ void main() {
         expect(closing['phase'], 'close');
         expect(closing['mode'], mode);
         expect(closing['writer_exited'], mode != 'prepare');
-        expect(closing['owner_settled'], mode == 'ack-exit');
-        expect(closing['requires_explicit_exit'], mode != 'ack-exit');
-        expect(closing['flushed'], mode == 'ack-exit');
+        expect(closing['owner_settled'], mode.startsWith('ack-exit'));
+        expect(closing['requires_explicit_exit'], !mode.startsWith('ack-exit'));
+        expect(closing['flushed'], mode.startsWith('ack-exit'));
         expect(
           closing['elapsed_ms'],
-          inInclusiveRange(mode == 'ack-exit' ? 0 : 300, 900),
+          inInclusiveRange(mode.startsWith('ack-exit') ? 0 : 300, 900),
         );
-        if (mode != 'ack-exit') {
+        if (!mode.startsWith('ack-exit')) {
           expect(exited, isFalse);
           expect(release.existsSync(), isFalse);
           release.writeAsStringSync('release');

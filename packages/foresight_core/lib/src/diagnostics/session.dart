@@ -1536,6 +1536,13 @@ final class _Writer {
           return;
         }
       }
+      // Ownership may change during the last APPEND, or after an earlier
+      // flush emptied the queue. Publish its protection even without new data;
+      // _classify also retains a pending decision's close deadline.
+      if (!await _classify()) {
+        _finishOrHealth();
+        return;
+      }
       _health();
       if (closing) _finish();
     } on DiagnosticWorkerFailure catch (error) {
@@ -1575,6 +1582,7 @@ final class _Writer {
       );
       if (!_accepted(reply)) return false;
       _classification = state;
+      if (decisionExpected && !decisionReceived) return false;
       // A promotion or newer failure can arrive while the old classification
       // is in flight. Publish the newest protection before any following data.
       if (_classification == (role, hadPriority || priority, hadFailure)) {
@@ -1609,6 +1617,13 @@ final class _Writer {
 
   void _finishOrHealth() {
     _disposeConfirmed();
+    if (decisionExpected && !decisionReceived) {
+      // A late ownership expectation can arrive during CLASSIFY. Its existing
+      // close deadline still owns the decision; a deferred classification is
+      // not a failed sink and cannot discard protected failure data early.
+      _health();
+      return;
+    }
     if (closing) {
       _discardUnsent();
       _finish();
