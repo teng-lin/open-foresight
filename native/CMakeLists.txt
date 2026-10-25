@@ -62,6 +62,28 @@ if(BUILD_TESTING)
   add_test(NAME diagnostic_launcher COMMAND diagnostic_launcher_test
     $<TARGET_FILE:diagnostic_launcher_fixture> $<TARGET_FILE:diagnostic_launcher_test>)
   set_tests_properties(diagnostic_launcher PROPERTIES TIMEOUT 15)
+  if(APPLE)
+    set(FS_DIAG_KERNEL_SOURCE diagnostic_kernel_darwin.c)
+  else()
+    set(FS_DIAG_KERNEL_SOURCE diagnostic_kernel_linux.c)
+  endif()
+  add_executable(diagnostic_kernel_test ${FS_DIAG_KERNEL_SOURCE}
+    diagnostic_protocol.c ../tests/native/diagnostic_kernel.c)
+  set_target_properties(diagnostic_kernel_test PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
+  target_compile_options(diagnostic_kernel_test PRIVATE -Wall -Wextra -Werror -Wpedantic)
+  target_include_directories(diagnostic_kernel_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  if(APPLE)
+    # Separate build roots cannot reclaim each other's private test objects.
+    string(SHA256 FS_DIAG_NAMESPACE_HASH "${CMAKE_CURRENT_BINARY_DIR}")
+    string(SUBSTRING "${FS_DIAG_NAMESPACE_HASH}" 0 8 FS_DIAG_NAMESPACE_HASH)
+    target_compile_definitions(diagnostic_kernel_test PRIVATE
+      FS_DIAG_TEST_CONTEXT=1
+      FS_DIAG_FIXTURE_BASE="${CMAKE_CURRENT_BINARY_DIR}/diagnostic-kernel-namespace"
+      FS_DIAG_FIXTURE_PREFIX="/oft${FS_DIAG_NAMESPACE_HASH}")
+  endif()
+  add_test(NAME diagnostic_kernel COMMAND diagnostic_kernel_test "${CMAKE_CURRENT_BINARY_DIR}")
+  set_tests_properties(diagnostic_kernel PROPERTIES TIMEOUT 20)
   add_executable(native_spawn_contract_test ../tests/native/spawn_contract.cpp)
   target_compile_features(native_spawn_contract_test PRIVATE cxx_std_20)
   target_link_libraries(native_spawn_contract_test PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
