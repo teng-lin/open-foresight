@@ -1032,7 +1032,9 @@ class _ModelTransportProcess {
     // StreamIterator cancellation wakes pending moveNext calls, including the
     // diagnostic drainer; neither owner waits for an inherited pipe's EOF.
     await Future.wait([
-      process.stdin.close(),
+      // Failed config delivery (for example EPIPE) does not make independently
+      // confirmed child exit or reader retirement unknown. Still bound closure.
+      process.stdin.close().then<void>((_) {}, onError: (Object _) {}),
       if (_output case final output?) output.cancel(),
       if (_errors case final errors?) errors.cancel(),
     ]).timeout(const Duration(seconds: 2));

@@ -387,6 +387,108 @@ void main() {
   );
 
   test(
+    'broken config pipe preserves retry admission after confirmed exit',
+    () async {
+      final root = createTestTempDirectorySync('closed-config-');
+      final worker = File('${root.path}/transport-worker');
+      final python =
+          Platform.environment['FORESIGHT_PYTHON'] ?? '/usr/bin/python3';
+      worker.writeAsStringSync('''#!$python
+import os,pathlib,time
+os.close(0)
+pathlib.Path(__file__+'.stdin-closed').write_text('closed')
+time.sleep(20)
+''');
+      final mode = await Process.run('/bin/chmod', ['700', worker.path]);
+      expect(mode.exitCode, 0, reason: '${mode.stdout}\n${mode.stderr}');
+      runtimeConfiguration.environment['FORESIGHT_SERVICE'] = worker.path;
+      final processes = <Process>[];
+      final exited = <Process>{};
+      Future<Process> startWorker(List<String> command) async {
+        final marker = File('${worker.path}.stdin-closed');
+        if (marker.existsSync()) {
+          marker.deleteSync();
+        }
+        final process = await Process.start(
+          command.first,
+          command.skip(1).toList(),
+          includeParentEnvironment: false,
+        );
+        processes.add(process);
+        process.exitCode.then((_) => exited.add(process)).ignore();
+        try {
+          await reached(File('${worker.path}.stdin-closed'));
+          return process;
+        } catch (_) {
+          if (!exited.contains(process)) {
+            process.kill(ProcessSignal.sigkill);
+          }
+          await process.exitCode.timeout(const Duration(seconds: 2));
+          rethrow;
+        }
+      }
+
+      final store = Store('${root.path}/app.db');
+      addTearDown(store.close);
+      final model = controlModel();
+      store.setPreference('modelTerms.fixture/model.revision', 'accepted');
+      final owner = ModelAssetAcquisitionCoordinator(
+        store: store,
+        changed: () {},
+        catalog: (_) => [model],
+        createDownloader: () =>
+            PublicModelFileDownloader(startWorkerForTesting: startWorker),
+        modelRoot: Directory('${root.path}/models'),
+        prepareGemma: (_) async {},
+      );
+      ModelsDownloadAssetRequest request(String id) =>
+          decodeOperationRequest(Operation.modelsDownloadAsset, {
+                'kind': 'generation',
+                'digest': model.digest,
+                'requestId': id,
+              })
+              as ModelsDownloadAssetRequest;
+      final invalid = ModelAssetFailure(
+        ModelAssetFailureCode.invalid,
+      ).toRpcError();
+      try {
+        for (final id in ['initial', 'replacement']) {
+          await expectLater(
+            owner.download(request(id)).timeout(const Duration(seconds: 5)),
+            throwsA(
+              isA<RpcError>().having(
+                (e) => e.message,
+                'ordinary model failure',
+                invalid.message,
+              ),
+            ),
+          );
+          expect(owner.restartRequired, isFalse);
+          expect(owner.busy, isFalse);
+        }
+        expect(processes, hasLength(2));
+        for (final process in processes) {
+          expect(
+            await process.exitCode.timeout(const Duration(seconds: 2)),
+            isNot(0),
+          );
+        }
+      } finally {
+        try {
+          await owner.close().timeout(const Duration(seconds: 2));
+        } finally {
+          for (final process in processes) {
+            if (!exited.contains(process)) {
+              process.kill(ProcessSignal.sigkill);
+            }
+            await process.exitCode.timeout(const Duration(seconds: 2));
+          }
+        }
+      }
+    },
+  );
+
+  test(
     'lost exit acknowledgement settles close and forbids replacement',
     () async {
       final root = createTestTempDirectorySync('exit-ack-');
