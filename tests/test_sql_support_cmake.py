@@ -193,7 +193,12 @@ def test_generic_output_override_installs_actual_target_not_old_default(
         "import sys\nsys.exit(2)\n"
     )
     selected = tmp_path / "selected-output"
-    configure(source, build, before=f'set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "{selected}")')
+    configure(
+        source,
+        build,
+        before=f'set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "{selected}")',
+        extra='file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/selected-product.txt" CONTENT "$<GENEX_EVAL:$<TARGET_PROPERTY:foresight_sql_support,FORESIGHT_SQL_SUPPORT_FILE>>")',
+    )
     suffix = "dylib" if sys.platform == "darwin" else "so"
     default = build / f"libforesight_sql_support.{suffix}"
     default.write_bytes(b"stale default bytes must never be installed")
@@ -211,5 +216,6 @@ def test_generic_output_override_installs_actual_target_not_old_default(
     assert result.returncode == 0, result.stdout + result.stderr
     actual = selected / default.name
     assert actual.is_file()
+    assert (build / "selected-product.txt").read_text() == str(actual)
     assert (destination / "lib" / default.name).read_bytes() == actual.read_bytes()
     assert (destination / "lib" / default.name).read_bytes() != default.read_bytes()

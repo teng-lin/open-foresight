@@ -83,3 +83,21 @@ def test_symlink_source_is_not_a_closed_sql_input(inputs):
     source.symlink_to(original)
     with pytest.raises(sql.SqlIdentityError, match="unsafe_sql_source_input"):
         sql.identity(root, metadata, flags)
+
+
+@pytest.mark.parametrize(
+    "mutation", ["envelope-schema", "record-schema", "pic-number", "standard-float"]
+)
+def test_record_comparison_preserves_exact_json_types(inputs, mutation):
+    root, metadata, flags = inputs
+    record = sql.identity(root, metadata, flags)
+    if mutation == "envelope-schema":
+        record["schema"] = True
+    elif mutation == "record-schema":
+        record["record"]["schema"] = True
+    elif mutation == "pic-number":
+        record["record"]["recipe"]["pic"] = 1
+    else:
+        record["record"]["recipe"]["c_standard"] = 11.0
+    with pytest.raises(sql.SqlIdentityError, match="record_mismatch"):
+        sql.verify_record(root, record)

@@ -112,7 +112,7 @@ def verify_record(root: Path, envelope: dict[str, Any]) -> str:
     """Recompute the independent source/public recipe closure without loading code."""
     record = envelope["record"]
     expected = identity(root, record["toolchain"], record["recipe"]["flags"])
-    if envelope != expected:
+    if canonical(envelope) != canonical(expected):
         raise SqlIdentityError("sql_source_record_mismatch")
     return str(expected["sql_source_id"])
 
