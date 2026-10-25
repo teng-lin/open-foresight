@@ -18,6 +18,81 @@ spec.loader.exec_module(gates)
 
 
 class ParallelBuildGatesTest(unittest.TestCase):
+    def test_denied_first_group_does_not_leave_other_owned_gates_running(self):
+        original_launch = gates.subprocess.Popen
+        original_signal = gates.os.killpg
+        owners = []
+
+        def launch(*args, **kwargs):
+            if len(owners) == 2:
+                raise OSError("Fixture launch failure")
+            owner = original_launch(*args, **kwargs)
+            owners.append(owner)
+            return owner
+
+        def send(pid, sig):
+            if pid == owners[0].pid:
+                raise PermissionError("First group denied")
+            return original_signal(pid, sig)
+
+        with tempfile.TemporaryDirectory() as directory:
+            try:
+                with (
+                    patch.object(gates.subprocess, "Popen", side_effect=launch),
+                    patch.object(gates.os, "killpg", side_effect=send),
+                ):
+                    with self.assertRaisesRegex(PermissionError, "First group denied"):
+                        gates.run_gates(
+                            [
+                                (
+                                    str(index),
+                                    [sys.executable, "-c", "import time; time.sleep(60)"],
+                                )
+                                for index in range(3)
+                            ],
+                            Path(directory),
+                        )
+                self.assertIsNone(owners[0].poll())
+                self.assertIsNotNone(owners[1].poll())
+            finally:
+                for owner in owners:
+                    if owner.poll() is None:
+                        original_signal(owner.pid, signal.SIGKILL)
+                    owner.wait(timeout=5)
+
+    def test_darwin_exited_leader_waits_for_orphan_group_to_disappear(self):
+        owner = unittest.mock.Mock(pid=10001)
+        owner.poll.return_value = 0
+        with (
+            patch.object(gates.sys, "platform", "darwin"),
+            patch.object(gates.time, "sleep"),
+            patch.object(
+                gates.os,
+                "killpg",
+                side_effect=[
+                    PermissionError("orphan zombie"),
+                    PermissionError("orphan zombie"),
+                    ProcessLookupError("group retired"),
+                ],
+            ) as send,
+        ):
+            gates.signal_owned_group(owner, signal.SIGKILL)
+        self.assertEqual(send.call_count, 3)
+
+    def test_darwin_exited_leader_permission_denial_still_fails(self):
+        owner = unittest.mock.Mock(pid=10001)
+        owner.poll.return_value = 0
+        with (
+            patch.object(gates.sys, "platform", "darwin"),
+            patch.object(gates.time, "monotonic", side_effect=[0, 0, 1]),
+            patch.object(gates.time, "sleep"),
+            patch.object(
+                gates.os, "killpg", side_effect=PermissionError("still denied")
+            ),
+        ):
+            with self.assertRaisesRegex(PermissionError, "still denied"):
+                gates.signal_owned_group(owner, signal.SIGKILL)
+
     def test_command_timings_preserve_failed_status_and_stop_following_work(self):
         helper = Path(__file__).resolve().parents[1] / "tools/ci_timing.sh"
         for code in (0, 7):
@@ -167,6 +242,7 @@ class ParallelBuildGatesTest(unittest.TestCase):
         owner.poll.return_value = None
         with tempfile.TemporaryDirectory() as directory:
             with (
+                patch.object(gates.sys, "platform", "darwin"),
                 patch.object(
                     gates.subprocess,
                     "Popen",

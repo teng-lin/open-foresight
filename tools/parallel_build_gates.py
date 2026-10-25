@@ -12,6 +12,29 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def signal_owned_group(process, sig):
+    """Require delivery or group disappearance; bound Darwin zombie retirement."""
+    deadline = time.monotonic() + 1
+    while True:
+        try:
+            os.killpg(process.pid, sig)
+            return
+        except ProcessLookupError:
+            return
+        except PermissionError:
+            # Reaping our leader does not reap orphaned descendants. Darwin can
+            # temporarily report EPERM while their zombie-only group retires.
+            # Never accept EPERM as success: retry only for an exited leader,
+            # requiring actual signal delivery or ESRCH within the deadline.
+            if (
+                sys.platform != "darwin"
+                or process.poll() is None
+                or time.monotonic() >= deadline
+            ):
+                raise
+            time.sleep(0.05)
+
+
 def run_gates(tasks, log_directory):
     """Wait for every task, failing if any fails; reap process groups on abort."""
     log_directory.mkdir(parents=True, exist_ok=True)
@@ -49,27 +72,44 @@ def run_gates(tasks, log_directory):
             if not completed:
                 # Each gate owns a new session: stop its compilers/test descendants
                 # without signalling the caller or unrelated runner processes.
+                cleanup_errors: list[OSError | subprocess.TimeoutExpired] = []
+                denied = set()
                 for _, process, _ in running:
-                    # Darwin can reject signals to a zombie-only group with EPERM.
-                    # Reap finished leaders first, but still signal their group:
-                    # a descendant may remain after its leader has exited.
-                    process.poll()
                     try:
-                        os.killpg(process.pid, signal.SIGTERM)
-                    except ProcessLookupError:
-                        pass
+                        # Still signal groups whose leaders exited: descendants
+                        # can remain, including orphan zombies on Darwin.
+                        process.poll()
+                        signal_owned_group(process, signal.SIGTERM)
+                    except OSError as error:
+                        cleanup_errors.append(error)
+                        denied.add(process.pid)
                 deadline = time.monotonic() + 5
                 while time.monotonic() < deadline and any(
-                    p.poll() is None for _, p, _ in running
+                    p.poll() is None for _, p, _ in running if p.pid not in denied
                 ):
                     time.sleep(0.05)
                 for _, process, _ in running:
-                    process.poll()
                     try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                    process.wait(timeout=3600)
+                        process.poll()
+                        signal_owned_group(process, signal.SIGKILL)
+                        denied.discard(process.pid)
+                    except OSError as error:
+                        cleanup_errors.append(error)
+                        denied.add(process.pid)
+                reap_deadline = time.monotonic() + 1
+                for _, process, _ in running:
+                    try:
+                        if process.pid in denied and process.poll() is None:
+                            continue  # Failure retained; cannot claim this join.
+                        process.wait(timeout=max(0, reap_deadline - time.monotonic()))
+                    except (OSError, subprocess.TimeoutExpired) as error:
+                        cleanup_errors.append(error)
+                if cleanup_errors:
+                    for secondary_error in cleanup_errors[1:]:
+                        cleanup_errors[0].add_note(
+                            f"Further cleanup error: {secondary_error!r}"
+                        )
+                    raise cleanup_errors[0]
         finally:
             for stream in streams:
                 stream.close()
