@@ -177,7 +177,9 @@ void main() {
     addTearDown(() async {
       await app.close();
       domain.close();
+      await domain.drain();
       runtime.close();
+      await runtime.closed;
       await domain.helper.close();
       await server.shutdown();
       store.close();
@@ -189,6 +191,15 @@ void main() {
     'missing dedicated model reports not ready without chat substitution',
     () async {
       await app.close();
+      domain.close();
+      await domain.drain();
+      await domain.helper.close();
+      runtime = _Runtime();
+      domain = _Domain(
+        store,
+        Helper('${directory.path}/helper.sock', '${directory.path}/helper'),
+        detector,
+      )..generator = runtime;
       app = Application(domain);
       try {
         final id = store.meeting('Detector unavailable');
