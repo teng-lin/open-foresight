@@ -1,4 +1,5 @@
 import 'persistence/answer_scope_queries.dart';
+import 'persistence/sqlite_statement_budget.dart';
 import 'dart:convert';
 
 import 'persistence/application_schema.dart';
@@ -21,16 +22,38 @@ final class SqliteReadSession {
   final SqliteSnapshotSource _store;
   final bool _ownsStore;
   bool _closed = false;
+  final Duration? _executionBudget;
+  final SqliteStatementBudget? _budget;
   IncompatibleReadSchema? _incompatibility;
   void Function(IncompatibleReadSchema)? onIncompatible;
 
   SqliteReadSession.borrow(SqliteSnapshotSource store)
     : _store = store,
-      _ownsStore = false;
-  SqliteReadSession.open(String path) : _store = _open(path), _ownsStore = true;
+      _ownsStore = false,
+      _executionBudget = null,
+      _budget = null;
+  factory SqliteReadSession.open(
+    String path, {
+    Duration executionBudget = const Duration(seconds: 5),
+  }) {
+    if (executionBudget <= Duration.zero ||
+        executionBudget > const Duration(seconds: 30)) {
+      throw ArgumentError.value(executionBudget, 'executionBudget');
+    }
+    final store = SqliteSnapshotDatabase.open(path);
+    try {
+      // Eager owner binding at open; no symbol resolution happens in a snapshot.
+      final budget = SqliteStatementBudget(store.db);
+      return SqliteReadSession._owned(store, executionBudget, budget);
+    } catch (_) {
+      store.close();
+      rethrow;
+    }
+  }
 
-  static SqliteSnapshotDatabase _open(String path) =>
-      SqliteSnapshotDatabase.open(path);
+  SqliteReadSession._owned(this._store, this._executionBudget, this._budget)
+    : _ownsStore = true;
+
   SourceQueries get _sources =>
       SourceQueries(_store.db, supportedVersion: applicationSchemaVersion);
   String get _epoch => _store.preference('workspaceEpoch');
@@ -84,8 +107,10 @@ final class SqliteReadSession {
 
   ReadWorkerReply query(String projection, Map<String, Object?> arguments) =>
       snapshot(() {
-        final epoch = _epoch;
-        return ReadWorkerReply(epoch, _project(projection, arguments));
+        ReadWorkerReply project() =>
+            ReadWorkerReply(_epoch, _project(projection, arguments));
+        final limit = _executionBudget;
+        return limit == null ? project() : _budget!.run(limit, project);
       });
 
   Object? _project(String projection, Map<String, Object?> args) {

@@ -1,3 +1,6 @@
+import 'package:foresight_core/src/persistence/sql_support.dart';
+import 'package:foresight_core/src/platform_services.dart';
+import 'sql_support_test_bootstrap.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
@@ -24,10 +27,20 @@ Map<String, Object?> engineIdentity() {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   test('SQLite identity is consistent in a fresh reader isolate', () async {
     final identity = engineIdentity();
     expect(identity['body'], 'committed');
-    expect(await Isolate.run(engineIdentity), identity);
+    final support = currentSqlSupportBootstrap;
+    final environment = runtimeConfiguration.environment;
+    expect(
+      await Isolate.run(() {
+        installServiceWorkerEnvironment(environment);
+        bindSqlSupportBootstrap(support);
+        return engineIdentity();
+      }),
+      identity,
+    );
     if (Platform.isMacOS) {
       expect(identity['version'], applicationSqliteVersion);
       expect(identity['source_id'], applicationSqliteSourceId);

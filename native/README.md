@@ -2,6 +2,15 @@
 
 The C ABI in `foresight_native.h` exposes owned generation, speech and capture workers. Build through the root CMake project, then run CTest for lifecycle and cancellation checks.
 
+`foresight_sql_support` is a separate system-only shared image for mandatory
+SQLite read deadlines. It does not link SQLite, models, audio, the application
+native image, or optional diagnostics. Embeddings must call the startup-only
+`initializeSqliteRuntime(supportLibrary: validatedAbsolutePath)` capability before
+any application SQLite connection or worker. It pins the originally selected
+image and validates its complete versioned code table. Read owners receive only
+that original code handoff; they cannot initialize or load a replacement image.
+See [SQL worker ownership](../docs/validation/sqlite-read-worker-budget.md).
+
 Generation supports explicit llama.cpp and LiteRT-LM workers. Local Gemma grounded requests use the versioned `x-foresight-grounded-request` schema annotation, consumed by `services/inference/main.cpp` and the citation checker in `services/inference/grounded.h`. It selects evidence units, composes text, checks source citations and numeric fidelity, and performs a separate support check. The configured context is 4096 tokens with a token-aware output reserve. Verification is fallible; failed drafts get one repair attempt followed by a labelled source fallback.
 
 Capture uses PipeWire on Linux and Core Audio on macOS; speech uses whisper.cpp on mono PCM. PipeWire FIFOs use a validated absolute `TMPDIR` (or `/var/tmp` when unset), private operation-owned directories and descriptor-anchored cleanup. Unsafe/symlinked temporary paths refuse capture instead of falling back silently. Workers own their subprocess groups, cancel them on request, and reap them before releasing resources. Model assets and executable paths must be registered explicitly. Deterministic lifecycle tests do not establish real-model quality; real-model tests are opt-in.

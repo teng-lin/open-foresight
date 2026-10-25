@@ -2,94 +2,190 @@ import 'dart:async';
 import 'dart:isolate';
 
 import 'persistence/read_schema_guard.dart';
+import 'persistence/sql_support.dart';
 import 'platform_services.dart';
 import 'read_coordinator.dart';
 import 'rpc_error.dart';
 import 'sqlite_read_session.dart';
 
+const _ownerWatchReady = 'read-worker-owner-watch-ready';
+const _ownerAttachTimeout = Duration(seconds: 5);
+
 /// Lazy, long-lived core-owned read isolate. No SQLite handle crosses ports.
-final class SqliteReadWorker implements ReadWorker {
+final class SqliteReadWorker implements ReadWorker, ReadQueueCancellation {
   final String _path;
   final Map<String, String> _environment;
-  final _pending = <int, Completer<ReadWorkerReply>>{};
-  final _exited = Completer<void>();
-  ReceivePort? _messages;
-  Future<SendPort>? _starting;
-  Completer<SendPort>? _ready;
+  final SqlSupportBootstrap _sqlSupport;
+  final Duration executionBudget;
+  final int maxQueuedReads;
+  _ReaderGeneration? _generation;
   Future<void>? _closing;
   var _closed = false, _sequence = 0;
 
-  SqliteReadWorker(String path, {Map<String, String>? environment})
-    : _path = path,
-      _environment = Map.unmodifiable(
-        environment ?? runtimeConfiguration.environment,
-      );
+  SqliteReadWorker(
+    String path, {
+    Map<String, String>? environment,
+    SqlSupportBootstrap? sqlSupport,
+    this.executionBudget = const Duration(seconds: 5),
+    this.maxQueuedReads = 16,
+  }) : _path = path,
+       _environment = Map.unmodifiable(
+         environment ?? runtimeConfiguration.environment,
+       ),
+       _sqlSupport = sqlSupport ?? currentSqlSupportBootstrap {
+    if (executionBudget <= Duration.zero ||
+        executionBudget > const Duration(seconds: 30)) {
+      throw ArgumentError.value(executionBudget, 'executionBudget');
+    }
+    if (maxQueuedReads < 1 || maxQueuedReads > 64) {
+      throw ArgumentError.value(maxQueuedReads, 'maxQueuedReads');
+    }
+  }
 
-  Future<SendPort> _start() => _starting ??= _spawn();
-
-  Future<SendPort> _spawn() async {
-    final ready = _ready = Completer<SendPort>();
-    _messages = ReceivePort()
-      ..listen((Object? message) {
-        if (message is SendPort) {
-          if (!ready.isCompleted) ready.complete(message);
-        } else if (message is _ReadResponse) {
-          final result = _pending.remove(message.id);
-          if (result == null) return;
-          if (message.error != null) {
-            result.completeError(message.error!);
-          } else {
-            result.complete(message.reply!);
-          }
-        } else if (message is _ReadStartupFailure) {
-          if (!ready.isCompleted) ready.completeError(message.error);
-        } else if (message == null) {
-          _fail(RpcError(RpcErrorCode.unavailable, 'Read worker exited'));
-          if (!_exited.isCompleted) _exited.complete();
+  _ReaderGeneration _start() {
+    final current = _generation;
+    if (current != null && !current.exited.isCompleted) return current;
+    final generation = _generation = _ReaderGeneration();
+    generation.messages.listen((Object? message) {
+      if (!identical(_generation, generation)) return;
+      if (message is SendPort) {
+        generation.port = message;
+        // Exit-listener requests are asynchronous. A following OOB ping to
+        // ourselves acknowledges their installation before SQL is admitted.
+        Isolate.current.addOnExitListener(message);
+        Isolate.current.ping(
+          generation.messages.sendPort,
+          response: _ownerWatchReady,
+          priority: Isolate.immediate,
+        );
+      } else if (message == _ownerWatchReady) {
+        generation.attached = true;
+        generation.port!.send(true);
+        _dispatch(generation);
+      } else if (message is _ReadResponse) {
+        final active = generation.active;
+        if (active == null || message.id != active.id) return;
+        generation.active = null;
+        if (message.error != null) {
+          active.result.completeError(message.error!);
         } else {
-          _fail(
-            RpcError(RpcErrorCode.unavailable, 'Read worker failed: $message'),
-          );
+          active.result.complete(message.reply!);
         }
-      });
+        _dispatch(generation);
+      } else if (message == null) {
+        _exit(generation);
+      } else {
+        // An error precedes EOF. Keep physical work reserved until actual exit.
+        generation.failure = message is _ReadStartupFailure
+            ? message.error
+            : RpcError(
+                RpcErrorCode.unavailable,
+                'Read worker failed: $message',
+              );
+      }
+    });
+    unawaited(_spawn(generation));
+    return generation;
+  }
+
+  Future<void> _spawn(_ReaderGeneration generation) async {
     try {
       await Isolate.spawn(
         _runReader,
-        (_path, _environment, _messages!.sendPort),
-        // One ordered inbox keeps the typed startup refusal ahead of exit.
-        onError: _messages!.sendPort,
-        onExit: _messages!.sendPort,
+        (
+          _path,
+          _environment,
+          generation.messages.sendPort,
+          executionBudget,
+          _sqlSupport,
+        ),
+        onError: generation.messages.sendPort,
+        onExit: generation.messages.sendPort,
       );
-    } catch (error, stack) {
-      if (!ready.isCompleted) ready.completeError(error, stack);
-      if (!_exited.isCompleted) _exited.complete();
+    } catch (error) {
+      generation.failure = error;
+      _exit(generation); // No child exists after spawn failure.
     }
-    return ready.future;
   }
 
-  void _fail(Object error) {
-    final ready = _ready;
-    if (ready != null && !ready.isCompleted) ready.completeError(error);
-    final pending = _pending.values.toList();
-    _pending.clear();
-    for (final result in pending) {
-      result.completeError(error);
+  void _exit(_ReaderGeneration generation) {
+    if (generation.exited.isCompleted) return;
+    final error =
+        generation.failure ??
+        RpcError(RpcErrorCode.unavailable, 'Read worker exited');
+    final active = generation.active;
+    generation.active = null;
+    if (active != null) active.result.completeError(error);
+    for (final pending in generation.queue) {
+      pending.result.completeError(error);
+    }
+    generation.queue.clear();
+    final port = generation.port;
+    if (port != null) Isolate.current.removeOnExitListener(port);
+    generation.messages.close();
+    generation.exited.complete();
+  }
+
+  void _dispatch(_ReaderGeneration generation) {
+    final port = generation.port;
+    if (port == null ||
+        generation.active != null ||
+        generation.failure != null) {
+      return;
+    }
+    if (_closed) {
+      port.send(null);
+      return;
+    }
+    if (!generation.attached) return;
+    if (generation.queue.isEmpty) return;
+    final next = generation.queue.removeAt(0);
+    generation.active = next;
+    try {
+      port.send((next.id, next.request));
+    } catch (error) {
+      // Serialization refusal means no command was dispatched. Do not strand
+      // this reservation or the queued reads behind an unsendable argument.
+      generation.active = null;
+      next.result.completeError(
+        RpcError(
+          RpcErrorCode.invalidArgument,
+          'Read request cannot be sent: $error',
+        ),
+      );
+      _dispatch(generation);
     }
   }
 
   @override
-  Future<ReadWorkerReply> read(ReadWorkerRequest request) async {
-    if (_closed) throw RpcError(RpcErrorCode.cancelled, 'Reader closed');
-    final port = await _start();
-    if (_closed) throw RpcError(RpcErrorCode.cancelled, 'Reader closed');
-    if (_exited.isCompleted) {
-      throw RpcError(RpcErrorCode.unavailable, 'Read worker exited');
+  Future<ReadWorkerReply> read(ReadWorkerRequest request) {
+    if (_closed) {
+      return Future.error(RpcError(RpcErrorCode.cancelled, 'Reader closed'));
     }
-    final id = ++_sequence;
-    final result = Completer<ReadWorkerReply>();
-    _pending[id] = result;
-    port.send((id, request));
-    return result.future;
+    final generation = _start();
+    if (generation.queue.length + (generation.active == null ? 0 : 1) >=
+        maxQueuedReads) {
+      return Future.error(RpcError(RpcErrorCode.busy, 'Read queue is full'));
+    }
+    final pending = _PendingRead(++_sequence, request);
+    generation.queue.add(pending);
+    _dispatch(generation);
+    return pending.result.future;
+  }
+
+  @override
+  bool cancelQueued(ReadWorkerRequest request) {
+    final generation = _generation;
+    if (generation == null) return false;
+    final index = generation.queue.indexWhere(
+      (pending) => identical(pending.request, request),
+    );
+    if (index < 0) return false;
+    final pending = generation.queue.removeAt(index);
+    pending.result.completeError(
+      RpcError(RpcErrorCode.cancelled, 'Queued read cancelled'),
+    );
+    return true;
   }
 
   @override
@@ -97,16 +193,39 @@ final class SqliteReadWorker implements ReadWorker {
 
   Future<void> _close() async {
     _closed = true;
-    if (_starting == null) return;
-    try {
-      final port = await _starting;
-      port?.send(null);
-    } catch (_) {
-      // Startup already reported its original failure to every caller.
+    final generation = _generation;
+    if (generation == null) return;
+    for (final pending in generation.queue) {
+      pending.result.completeError(
+        RpcError(RpcErrorCode.cancelled, 'Reader closed'),
+      );
     }
-    await _exited.future;
-    _messages?.close();
+    generation.queue.clear();
+    _dispatch(generation);
+    // A timeout is failure, not evidence that physical work has settled.
+    await generation.exited.future.timeout(
+      executionBudget + const Duration(seconds: 5),
+      onTimeout: () =>
+          throw RpcError(RpcErrorCode.busy, 'Read worker has not settled'),
+    );
   }
+}
+
+final class _ReaderGeneration {
+  final messages = ReceivePort();
+  final exited = Completer<void>();
+  final queue = <_PendingRead>[];
+  SendPort? port;
+  _PendingRead? active;
+  Object? failure;
+  bool attached = false;
+}
+
+final class _PendingRead {
+  final int id;
+  final ReadWorkerRequest request;
+  final result = Completer<ReadWorkerReply>();
+  _PendingRead(this.id, this.request);
 }
 
 final class _ReadResponse {
@@ -121,26 +240,49 @@ final class _ReadStartupFailure {
   const _ReadStartupFailure(this.error);
 }
 
-void _runReader((String, Map<String, String>, SendPort) startup) {
-  final (path, environment, results) = startup;
+void _runReader(
+  (String, Map<String, String>, SendPort, Duration, SqlSupportBootstrap)
+  startup,
+) {
+  final (path, environment, results, executionBudget, sqlSupport) = startup;
   // The process handoff may already have been consumed. Resolve once in the
   // owner and install exactly that map before model/runtime projections run.
   installServiceWorkerEnvironment(environment);
   SqliteReadSession session;
   try {
-    session = SqliteReadSession.open(path);
+    bindSqlSupportBootstrap(sqlSupport);
+    session = SqliteReadSession.open(path, executionBudget: executionBudget);
   } catch (error) {
     results.send(_ReadStartupFailure(_sendableFailure(error)));
     return;
   }
   final commands = ReceivePort();
+  var attached = false, closed = false;
+  late final Timer attachDeadline;
+  void close() {
+    if (closed) return;
+    closed = true;
+    attachDeadline.cancel();
+    session.close();
+    commands.close();
+  }
+
+  // If the owner dies before its exit listener can be installed, no attach
+  // arrives. Once attached, owner-exit null and ordinary close share the same
+  // ordered command inbox and cannot dispose a live native callback.
+  attachDeadline = Timer(_ownerAttachTimeout, close);
   results.send(commands.sendPort);
   commands.listen((Object? message) {
     if (message == null) {
-      session.close();
-      commands.close();
+      close();
       return;
     }
+    if (message == true) {
+      attached = true;
+      attachDeadline.cancel();
+      return;
+    }
+    if (!attached || closed) return;
     final (id, request) = message as (int, ReadWorkerRequest);
     try {
       results.send(

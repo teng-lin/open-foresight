@@ -83,6 +83,12 @@ abstract interface class ReadWorker {
   Future<void> close();
 }
 
+/// Cancellation of an undispatched owner-local reservation only. A false return
+/// must never be interpreted as interruption of a running SQLite statement.
+abstract interface class ReadQueueCancellation {
+  bool cancelQueued(ReadWorkerRequest request);
+}
+
 enum ReadFreshness { current, preview, busy, failed, cancelled }
 
 final class ReadResult<T> {
@@ -175,6 +181,7 @@ final class ReadCoordinator {
           // Leaving and revisiting the same query is a new request identity.
           created.generation++;
           created.pending = false;
+          created.cancelQueued?.call();
           scheduleMicrotask(() => _releaseUnused(created));
         },
       );
@@ -325,6 +332,7 @@ final class ReadCoordinator {
       }
       timer = _timer(deadline, () {
         expired = true;
+        entry.cancelQueued?.call();
         if (listening()) {
           entry.pending = true;
           publish(
@@ -333,14 +341,18 @@ final class ReadCoordinator {
           );
         }
       });
-      final reply = await _worker.read(
-        ReadWorkerRequest(
-          projection: entry.query.projection,
-          arguments: entry.query.argumentsForDispatch(),
-          identity: before,
-          sequence: sequence,
-        ),
+      final request = ReadWorkerRequest(
+        projection: entry.query.projection,
+        arguments: entry.query.argumentsForDispatch(),
+        identity: before,
+        sequence: sequence,
       );
+      final worker = _worker;
+      if (worker is ReadQueueCancellation) {
+        final cancellation = worker as ReadQueueCancellation;
+        entry.cancelQueued = () => cancellation.cancelQueued(request);
+      }
+      final reply = await worker.read(request);
       if (!listening() || expired) return;
       final now = identity();
       if (!before.sameOwner(now) || reply.epoch != before.epoch) {
@@ -373,6 +385,7 @@ final class ReadCoordinator {
       }
     } finally {
       timer?.cancel();
+      entry.cancelQueued = null;
     }
   }
 
@@ -410,6 +423,7 @@ final class ReadCoordinator {
     _disposed = true;
     for (final entry in _entries.values) {
       entry.pending = false;
+      entry.cancelQueued?.call();
       if (entry.events.hasListener) {
         entry.events.add(
           ReadResult<Object?>(
@@ -447,6 +461,7 @@ final class _ReadEntry {
   int generation = 0;
   Object? lastValue;
   ReadIdentity? lastIdentity;
+  void Function()? cancelQueued;
   _ReadEntry(this.query, {required void Function() onCancel})
     : events = StreamController.broadcast(sync: true, onCancel: onCancel);
 }

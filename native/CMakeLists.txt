@@ -9,6 +9,8 @@ if(APPLE)
   enable_language(OBJCXX)
 endif()
 find_package(Threads REQUIRED)
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ForesightSqlSupport.cmake")
+
 add_library(foresight_native SHARED foresight_native.cpp)
 if(DEFINED FORESIGHT_PW_RECORD_EXECUTABLE AND
    NOT IS_ABSOLUTE "${FORESIGHT_PW_RECORD_EXECUTABLE}")
