@@ -77,6 +77,7 @@ final class _Owner implements DiagnosticWorkerOwner {
   final calls = <int>[];
   int active = 0, maximumActive = 0, forceCalls = 0;
   bool childUnknown = false, parentSettled = true, throwControls = false;
+  String? initializedProfile;
   DiagnosticWorkerFailure? failAppend;
   @override
   DiagnosticWorkerSnapshot get snapshot {
@@ -95,6 +96,11 @@ final class _Owner implements DiagnosticWorkerOwner {
     active++;
     if (active > maximumActive) maximumActive = active;
     try {
+      if (request.type == DiagnosticWorkerFrame.init) {
+        initializedProfile = DiagnosticWorkerInit.decode(
+          request.payload,
+        ).profile;
+      }
       final reply = dispatch.handle(request.type, request.payload);
       if (request.type == DiagnosticWorkerFrame.classify &&
           !classificationEntered.isCompleted) {
@@ -173,6 +179,62 @@ Future<void> _lateNativeCounters(
 }
 
 void main() {
+  for (final initial in [false, true]) {
+    test(
+      'oversized profile initial=$initial permits later bounded selection',
+      () async {
+        final profile = createTestTempDirectorySync('profile-control-');
+        final oversized = '/${'x' * 8192}';
+        _Owner? owner;
+        final session = await LoggingSession.startForTesting(
+          configuration: const DiagnosticConfiguration(),
+          profilePath: initial ? oversized : null,
+          workerFactory: (context) => owner = _Owner(context),
+        );
+        addTearDown(session.close);
+        session.selectProfile(oversized);
+        session.selectProfile(profile.path);
+        expect(
+          session.producer.emit(
+            DiagnosticEvent.runtimeFailed,
+            DiagnosticComponent.logging,
+          ),
+          isTrue,
+        );
+        await eventually(() => owner?.sink.records.isNotEmpty ?? false);
+        expect(owner!.initializedProfile, profile.path);
+        expect((await session.close()).flushed, isTrue);
+      },
+    );
+  }
+
+  test('repeated session metadata controls stay bounded', () async {
+    final profile = createTestTempDirectorySync('session-controls-');
+    _Owner? owner;
+    final session = await LoggingSession.startForTesting(
+      configuration: const DiagnosticConfiguration(),
+      profilePath: profile.path,
+      workerFactory: (context) => owner = _Owner(context),
+    );
+    addTearDown(session.close);
+    final before = await session.inspectBudgetForTesting();
+    for (var i = 0; i < 1000; ++i) {
+      session.selectProfile('${profile.path}/ignored-$i');
+      session.ownershipWorkerTerminated();
+    }
+    final after = await session.inspectBudgetForTesting();
+    expect(after.sessionControlMessages - before.sessionControlMessages, 1);
+    expect(
+      session.producer.emit(
+        DiagnosticEvent.runtimeFailed,
+        DiagnosticComponent.logging,
+      ),
+      isTrue,
+    );
+    await eventually(() => owner?.sink.records.isNotEmpty ?? false);
+    expect((await session.close()).flushed, isTrue);
+  });
+
   test(
     'native health remains bounded while its coordinator cannot acknowledge',
     () async {

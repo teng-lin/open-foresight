@@ -86,6 +86,15 @@ coordinator acknowledgement, with later changes coalesced in fixed fields.
 Identical final states are not resent after intermediate drain-state changes.
 Final close may publish one additional latest state before the existing closed
 message, so final health is preserved without relying on a late acknowledgement.
+Profile selection and the worker-termination ownership fallback are one-shot
+session controls. Oversized or NUL-containing profiles are omitted before the
+writer bootstrap/message retains them; a later bounded selection can still be
+used. Canonical path validation remains in INIT. With the actual writer held in
+a controlled C++ prepare call, one thousand calls to each method originally left
+one thousand profile and ownership payloads queued. The repaired path leaves no
+profile payload when the initial profile is already selected, and one ownership
+payload. This fixture creates no OS child or production storage; it measures the
+actual writer VM mailbox while the C++ test backend holds that VM.
 The paused-coordinator qualification uses a real exec storage child and sixteen
 producer slots while ordinary credits are exhausted; the native health mailbox
 must remain bounded as the native drain continues using priority-only credit.

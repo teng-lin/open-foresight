@@ -34,6 +34,11 @@ const _normalRecords = 10, _priorityRecords = 4;
 const _maximumCounter = 0x7fffffff;
 int _sum(int a, int b) => (a + b).clamp(0, _maximumCounter);
 int _cost(int length) => length * 4 + 256;
+bool _boundedProfile(String? value) =>
+    value != null &&
+    value.length > 1 &&
+    value.length <= 4096 &&
+    !value.contains('\u0000');
 
 /// Health contains only closed reasons, bounded counters and slot number.
 final class DiagnosticHealth {
@@ -153,6 +158,8 @@ final class LoggingSession {
   @visibleForTesting
   int get retainedSlotCount => _slots.where((s) => s != null).length;
   bool _ownershipExpected = false,
+      _ownershipTerminated = false,
+      _profileSelectionSent = false,
       _closed = false,
       _flushed = false,
       _closeAcknowledged = false;
@@ -233,6 +240,9 @@ final class LoggingSession {
           .connect();
       return session;
     }
+    // Reject an oversized selection before retaining it in the writer's
+    // bootstrap. A later bounded profile may still be selected normally.
+    if (!_boundedProfile(profile)) profile = null;
     // Build identities never come through as arbitrary environment text.
     if (!RegExp(
           r'^(unknown|[0-9]+\.[0-9]+\.[0-9]+(?:[-+][a-zA-Z0-9.]{1,20})?)$',
@@ -355,6 +365,7 @@ final class LoggingSession {
         exited,
         health,
       );
+      session._profileSelectionSent = profile != null;
       if (!DiagnosticProducer._selectWriter(port)) {
         throw StateError('Diagnostic writer context is already active');
       }
@@ -526,7 +537,7 @@ final class LoggingSession {
   @visibleForTesting
   Future<DiagnosticBudgetSnapshot> inspectBudgetForTesting() async {
     if (_writer == null) {
-      return DiagnosticBudgetSnapshot._([0, 0, 0, 0, 0, 0, const [], 0]);
+      return DiagnosticBudgetSnapshot._([0, 0, 0, 0, 0, 0, const [], 0, 0]);
     }
     if (_closed) throw StateError('Diagnostic budget unavailable during close');
     final reply = ReceivePort();
@@ -541,7 +552,14 @@ final class LoggingSession {
   }
 
   void selectProfile(String canonicalProfile) {
-    if (!_closed) _writer?.send(['profile', canonicalProfile]);
+    if (_closed ||
+        _profileSelectionSent ||
+        _writer == null ||
+        !_boundedProfile(canonicalProfile)) {
+      return;
+    }
+    _profileSelectionSent = true;
+    _writer.send(['profile', canonicalProfile]);
   }
 
   DiagnosticOwnershipReporter expectOwnershipDecision() {
@@ -556,6 +574,8 @@ final class LoggingSession {
   void ownershipWorkerTerminated() {
     // Completion may follow close. This session control path remains alive
     // independently of producer ports until the external close deadline.
+    if (_ownershipTerminated) return;
+    _ownershipTerminated = true;
     _writer?.send(['ownership', OwnershipDecision.unknown.index]);
   }
 
@@ -1023,6 +1043,7 @@ final class _Writer {
   NativeDiagnosticHealth? _nativePublishedReason;
   bool? _nativePublishedDropsExact;
   int _nativeHealthMessages = 0;
+  int _sessionControlMessages = 0;
 
   void handle(dynamic value) {
     if (value is! List || value.isEmpty) return;
@@ -1059,6 +1080,7 @@ final class _Writer {
                 ],
           ],
           _nativeHealthMessages,
+          _sessionControlMessages,
         ]);
       case 'record':
         if (closing) return;
@@ -1116,10 +1138,13 @@ final class _Writer {
         if (severity == DiagnosticLevel.error) scheduleMicrotask(flush);
       // Keep session-owned ownership metadata even after producer completion.
       case 'profile':
-        profile ??= value[1] as String;
+        _sessionControlMessages = _sum(_sessionControlMessages, 1);
+        final selected = value[1] as String;
+        if (_boundedProfile(selected)) profile ??= selected;
       case 'expect_ownership':
         if (!decisionReceived) decisionExpected = true;
       case 'ownership':
+        _sessionControlMessages = _sum(_sessionControlMessages, 1);
         if (!decisionReceived) {
           ownershipCloseDeadline?.cancel();
           ownershipCloseDeadline = null;

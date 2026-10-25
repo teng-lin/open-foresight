@@ -26,6 +26,7 @@ final class DiagnosticProducerBudget {
 final class DiagnosticBudgetSnapshot {
   DiagnosticBudgetSnapshot._(List value)
     : nativeHealthMessages = value[7] as int,
+      sessionControlMessages = value[8] as int,
       normalBytes = value[0] as int,
       priorityBytes = value[1] as int,
       normalRecords = value[2] as int,
@@ -36,6 +37,7 @@ final class DiagnosticBudgetSnapshot {
         (value[6] as List).map((p) => DiagnosticProducerBudget._(p as List)),
       );
   final int nativeHealthMessages;
+  final int sessionControlMessages;
   final int normalBytes,
       priorityBytes,
       normalRecords,
