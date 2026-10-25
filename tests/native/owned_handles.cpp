@@ -757,12 +757,12 @@ int main(int argc, char **argv) {
     live_legacy_exit(argv[0]);
     std::cerr << "CASE held_legacy_finalization\n";
     held_legacy_finalization(argv[0]);
-    std::cerr << "CASE owned_finalization\n";
-    owned_finalization(argv[0]);
     std::cerr << "CASE retirement_admission_failure\n";
     retirement_admission_failure(argv[0]);
     std::cerr << "CASE legacy_failure\n";
     legacy_failure(argv[0]);
+    std::cerr << "CASE owned_finalization\n";
+    owned_finalization(argv[0]);
     std::cerr << "CASE generation\n";
     generation(argv[0]);
     std::cerr << "CASE independent_speech\n";
