@@ -2,6 +2,7 @@
 
 import copy
 import hashlib
+import io
 import json
 from pathlib import Path
 import subprocess
@@ -11,6 +12,7 @@ import tarfile
 import pytest
 
 from tools import ci_acceptance_plan as acceptance
+from tools import evidence_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -38,12 +40,14 @@ def summary():
 
 def test_frozen_original_api_pages_jobs_attempts_ranges_and_logs_are_complete():
     baseline, _ = acceptance.failure_baseline()
-    archive = ROOT / "tests/fixtures" / baseline["evidence_archive"]["path"]
+    # Provisioned out of tree by `python -m tools.evidence_fixture`; a missing
+    # or tampered asset fails here with that command rather than skipping.
+    raw = evidence_fixture.verified_bytes()
     assert (
-        hashlib.sha256(archive.read_bytes()).hexdigest()
+        hashlib.sha256(raw).hexdigest()
         == baseline["evidence_archive"]["sha256"]
     )
-    with tarfile.open(archive) as stream:
+    with tarfile.open(fileobj=io.BytesIO(raw)) as stream:
         members = {
             member.name: stream.extractfile(member).read()
             for member in stream.getmembers()
