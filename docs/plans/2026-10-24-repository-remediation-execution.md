@@ -1016,9 +1016,12 @@ aggregate physical memory and bounded producer capability/health controls;
 Step-4 support UI/docs; restore race repairs, shipping bootstrap and Mac cases;
 current configuration-port injection; correct-toolchain Python import/caller
 qualification; pin/builder/ICU/reproducibility qualification and owner-reviewed
-workflow wiring; final first-run review/freshness/Mac cases; actual Keychain
-execution (currently Security -25308, user interaction disallowed); and the
+workflow wiring; final first-run review/freshness/Mac cases; and the
 complete frozen-source matrix, CI/reviews and verified merge. The synthetic
 first-run journey is not real-model, GPU, physical-audio, minimum-Mac-runtime or
 final signed-installer acceptance. The scope amendment's deferred security work
 remains deferred; existing gates and owner-review requirements remain intact.
+
+The user subsequently deferred isolated Keychain execution as recorded in the
+delivery scope amendment. Its Security -25308 failure remains failed evidence;
+it is no longer a merge blocker and no further Keychain run is required here.
