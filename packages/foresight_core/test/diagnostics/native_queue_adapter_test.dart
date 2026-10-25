@@ -44,6 +44,46 @@ Future<void> _oldImageProducer(
 
 void main() {
   test(
+    'rejected native batches report unquantified loss without exposing a prefix',
+    () async {
+      final capture = SinkCapture();
+      addTearDown(capture.dispose);
+      final session = await LoggingSession.startForTesting(
+        configuration: const DiagnosticConfiguration(),
+        profilePath: 'selected-private-profile',
+        sinkFactory: memorySink(capture.port.sendPort),
+      );
+      addTearDown(session.close);
+      final runtime = await runtimeImage();
+      expect(emitter(runtime)(0), 1);
+      runtime.lib.lookupFunction<Void Function(), void Function()>(
+        'fs_test_malformed',
+      )();
+      await eventually(
+        () =>
+            session.health.nativeReason ==
+            NativeDiagnosticHealth.protocolFailed,
+      );
+      expect(session.health.nativeDropsExact, isFalse);
+      await eventually(
+        () => capture.records.any(
+          (r) =>
+              r['event'] == 'logging.records_dropped' &&
+              (r['fields'] as Map)['precisionLost'] == true,
+        ),
+      );
+      expect(
+        capture.records.where((r) => r['event'] == 'capture.state_changed'),
+        isEmpty,
+      );
+      final summary = capture.records.singleWhere(
+        (r) => r['event'] == 'logging.records_dropped',
+      );
+      expect((summary['fields'] as Map)['count'], 0);
+      expect((await session.close()).flushed, isFalse);
+    },
+  );
+  test(
     'an old library in another VM cannot disable a working native consumer',
     () async {
       final capture = SinkCapture();

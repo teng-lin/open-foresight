@@ -29,7 +29,8 @@ The adapter adds no timer: it uses the writer's existing drain and credit ticks.
 Native numeric counters wider than the schema's existing INT31 range are
 clamped. An unrepresentable signed field is omitted. The genuine event remains
 and carries `precisionLost: true`; health and a bounded summary also report
-approximation. Gate contention never invents an exact drop count. Off logging
+approximation. Gate contention never invents an exact drop count. A rejected native batch also
+marks loss inexact because its drain already consumed traffic and counters. Off logging
 creates neither a queue consumer nor a native producer slot.
 
 Close stops native polling before producer-credit revocation. The last native

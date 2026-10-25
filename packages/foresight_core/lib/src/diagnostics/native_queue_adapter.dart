@@ -224,7 +224,12 @@ final class _NativeQueueAdapter {
               ? NativeDiagnosticHealth.protocolFailed
               : NativeDiagnosticHealth.unsettled,
         );
-        if (current.invalid) disabled = true;
+        if (current.invalid) {
+          disabled = true;
+          // The rejected drain already consumed a batch and reset its native
+          // counters. Its missing traffic can no longer be counted exactly.
+          writer._nativePrecisionLost();
+        }
         return;
       }
       writer._producerCounters(
