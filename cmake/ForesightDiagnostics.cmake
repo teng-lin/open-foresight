@@ -343,6 +343,7 @@ add_custom_target(foresight_diagnostic_identity_check
     "-DDIAGNOSTIC_VERSION=${CMAKE_C_COMPILER_VERSION}"
     "-DDIAGNOSTIC_SDK=${CMAKE_OSX_SYSROOT}"
     "-DDIAGNOSTIC_EXPECTED=${_diag_actual_fingerprint}"
+    "-DDIAGNOSTIC_INVALIDATE_BEFORE_BUILD=TRUE"
     "-DDIAGNOSTIC_STATE=${CMAKE_CURRENT_BINARY_DIR}/diagnostic-products.json"
     -P "${_diag_root}/cmake/VerifyDiagnosticToolchain.cmake"
   VERBATIM)

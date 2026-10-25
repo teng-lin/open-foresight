@@ -3,7 +3,9 @@
 cmake_minimum_required(VERSION 3.20)
 # Every attempted build starts unavailable, including a later compile/link
 # failure. Only the aggregate's verification of both real products publishes.
-file(WRITE "${DIAGNOSTIC_STATE}" "{\"schema\":1,\"available\":false}\n")
+if(DIAGNOSTIC_INVALIDATE_BEFORE_BUILD)
+  file(WRITE "${DIAGNOSTIC_STATE}" "{\"schema\":1,\"available\":false}\n")
+endif()
 set(_sdk_arguments)
 if(IS_ABSOLUTE "${DIAGNOSTIC_SDK}")
   list(APPEND _sdk_arguments --sdk-root "${DIAGNOSTIC_SDK}")

@@ -3,11 +3,14 @@
 import json
 from pathlib import Path
 import shutil
+import subprocess
+import sys
 
 import pytest
 
 from tools import diagnostic_build_identity as identity
 from tools import diagnostic_product_receipt as products
+from tools import sql_support_identity as sql_identity
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -23,7 +26,10 @@ def built(tmp_path):
         target = root / name
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / name, target)
-    toolchain_record = {"fixture": "synthetic metadata, not attestation"}
+    toolchain_record = {
+        "target": "linux-x86_64",
+        "fixture": "synthetic metadata, not attestation",
+    }
     fingerprint = products._digest(
         json.dumps(toolchain_record, sort_keys=True, separators=(",", ":")).encode()
     )
@@ -45,15 +51,30 @@ def built(tmp_path):
             }
         )
     )
+    sql = sql_identity.identity(
+        root,
+        {"record": toolchain_record, "fingerprint": fingerprint},
+        ["-std=c11", "-O2"],
+    )
+    (build / "diagnostic-sql-inputs.json").write_text(json.dumps(sql))
     for name in (
         "libforesight_sql_support.so",
         "libforesight_diagnostic_support.so",
         "foresight-diagnostic-launcher",
     ):
         path = build / name
-        marker = b"" if "sql_support" in name else (
-            b"\0FORESIGHT_DIAGNOSTIC_NATIVE_ID:v1:"
-            + native["native_id"].encode("ascii") + b":end\0"
+        marker = (
+            (
+                b"\0FORESIGHT_SQL_SUPPORT_SOURCE_ID:v1:"
+                + sql["sql_source_id"].encode()
+                + b":end\0"
+            )
+            if "sql_support" in name
+            else (
+                b"\0FORESIGHT_DIAGNOSTIC_NATIVE_ID:v1:"
+                + native["native_id"].encode("ascii")
+                + b":end\0"
+            )
         )
         path.write_bytes(b"synthetic fixture bytes: " + name.encode() + marker)
         path.chmod(0o755)
@@ -78,11 +99,61 @@ def test_finished_bytes_receipt_and_exact_verification(built):
         identity.Contract(root).worker_identity(receipt["native_id"], "aot")
 
 
+def test_isolated_cli_uses_its_own_package_independently_of_working_directory(
+    built, tmp_path
+):
+    root, build = built
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            str(ROOT / "tools/diagnostic_product_receipt.py"),
+            "--root",
+            str(root),
+            "--build",
+            str(build),
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert products.verify(root, build)["sql_source_id"]
+
+
+@pytest.mark.parametrize("alteration", ["missing", "duplicate", "stale"])
+def test_embedded_sql_identity_must_match_current_independent_source_record(
+    built, alteration
+):
+    root, build = built
+    path = build / "libforesight_sql_support.so"
+    sql_id = json.loads((build / "diagnostic-sql-inputs.json").read_text())[
+        "sql_source_id"
+    ]
+    marker = b"\0FORESIGHT_SQL_SUPPORT_SOURCE_ID:v1:" + sql_id.encode() + b":end\0"
+    data = path.read_bytes()
+    if alteration == "missing":
+        data = data.replace(marker, b"")
+    elif alteration == "duplicate":
+        data += marker
+    else:
+        data = data.replace(marker, marker.replace(sql_id.encode(), b"0" * 64))
+    path.write_bytes(data)
+    with pytest.raises(
+        products.ProductError, match="product_embedded_identity_mismatch"
+    ):
+        products.write(root, build)
+
+
 @pytest.mark.parametrize("alteration", ["missing", "duplicate", "stale"])
 def test_embedded_native_identity_must_match_exactly_once(built, alteration):
     root, build = built
     path = build / "foresight-diagnostic-launcher"
-    native_id = json.loads((build / "diagnostic-products.json").read_text())["native_id"]
+    native_id = json.loads((build / "diagnostic-products.json").read_text())[
+        "native_id"
+    ]
     marker = b"\0FORESIGHT_DIAGNOSTIC_NATIVE_ID:v1:" + native_id.encode() + b":end\0"
     data = path.read_bytes()
     if alteration == "missing":
@@ -92,7 +163,9 @@ def test_embedded_native_identity_must_match_exactly_once(built, alteration):
     else:
         data = data.replace(marker, marker.replace(native_id.encode(), b"0" * 64))
     path.write_bytes(data)
-    with pytest.raises(products.ProductError, match="product_embedded_identity_mismatch"):
+    with pytest.raises(
+        products.ProductError, match="product_embedded_identity_mismatch"
+    ):
         products.write(root, build)
 
 
@@ -122,7 +195,7 @@ def test_sql_source_changes_refuse_receipt(built, name):
     products.write(root, build)
     with (root / name).open("a") as stream:
         stream.write("\n/* changed source */\n")
-    with pytest.raises(products.ProductError, match="receipt_mismatch"):
+    with pytest.raises(ValueError, match="sql_source_record_mismatch"):
         products.verify(root, build)
 
 

@@ -14,17 +14,18 @@ import stat
 import sys
 from typing import Any
 
-try:
-    from diagnostic_build_identity import Compiler, Contract, IdentityError, _read
-except ModuleNotFoundError:
-    from tools.diagnostic_build_identity import Compiler, Contract, IdentityError, _read
+if __package__ in {None, ""}:
+    # CMake invokes -I: select only this script's checked-in package root,
+    # independently of cwd, PYTHONPATH and the ambient executable search path.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from tools.diagnostic_build_identity import Compiler, Contract, IdentityError, _read
+from tools.sql_support_identity import (
+    INPUTS as SQL_INPUTS,
+    verify_record as verify_sql_record,
+)
 
 RECEIPT = "runtime-support-build.json"
-SQL_INPUTS = (
-    "native/sql_support.c",
-    "native/sql_support.h",
-    "cmake/ForesightSqlSupport.cmake",
-)
 
 
 class ProductError(ValueError):
@@ -149,12 +150,27 @@ def collect(root: Path, build: Path) -> dict[str, Any]:
     ):
         raise ProductError("toolchain_metadata_mismatch")
     suffix = {"linux-x86_64": "so", "darwin-arm64": "dylib"}[record["target"]]
+    sql = _json(build, "diagnostic-sql-inputs.json")
+    sql_id = verify_sql_record(root, sql)
+    if (
+        sql["record"]["target"] != record["target"]
+        or sql["record"]["toolchain"] != toolchain
+    ):
+        raise ProductError("sql_product_toolchain_mismatch")
     artifacts = {
         name: _artifact(
-            build, name,
-            None if "sql_support" in name else (
+            build,
+            name,
+            (
+                b"\0FORESIGHT_SQL_SUPPORT_SOURCE_ID:v1:"
+                + sql_id.encode("ascii")
+                + b":end\0"
+            )
+            if "sql_support" in name
+            else (
                 b"\0FORESIGHT_DIAGNOSTIC_NATIVE_ID:v1:"
-                + native["native_id"].encode("ascii") + b":end\0"
+                + native["native_id"].encode("ascii")
+                + b":end\0"
             ),
         )
         for name in (
@@ -168,6 +184,8 @@ def collect(root: Path, build: Path) -> dict[str, Any]:
         "kind": "runtime-support-build",
         "native_id": native["native_id"],
         "target": record["target"],
+        "sql_source_id": sql_id,
+        "sql_inputs_sha256": _digest(_read(build, "diagnostic-sql-inputs.json")),
         "native_inputs_sha256": _digest(_read(build, "diagnostic-native-inputs.json")),
         "toolchain_metadata_sha256": _digest(
             _read(build, "diagnostic-toolchain-metadata.json")
