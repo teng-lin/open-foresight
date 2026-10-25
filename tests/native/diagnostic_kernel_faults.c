@@ -217,8 +217,7 @@ static int prepare_fixture(const char *root_name, const char *name) {
     struct stat metadata;
     CHECK(fstat(object, &metadata) == 0 && (metadata.st_mode & S_IFMT) == 0);
     CHECK(metadata.st_uid == geteuid() && metadata.st_nlink == 0);
-    CHECK((metadata.st_mode & 07777) == 0600 ||
-          (metadata.st_mode & 07777) == 0400);
+    CHECK((metadata.st_mode & 07777) == 0600);
     CHECK(metadata.st_size == 0 || metadata.st_size == FS_DIAG_PAGE_BYTES);
   } else {
     CHECK(errno == ENOENT);
