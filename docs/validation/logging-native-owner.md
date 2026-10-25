@@ -225,3 +225,10 @@ still publishes a changed service/failure classification, including when an
 ownership decision arrives after the previous flush completed. The closing and
 non-closing regressions retain both reproduced failures and assert genuine
 failure protection in addition to the service role.
+
+Reply waiting observes native process status before reading the retained page,
+then checks that same status snapshot after an incomplete read. A final RESULT
+or RETIRED published between EMPTY and a later exit observation cannot be lost.
+The deterministic FFI regression reproduces EMPTY followed by NOT_LIVE while
+RETIRED remains available for the next receive; it retains the failed close and
+the corrected flushed disposition without claiming an actual OS-child fixture.

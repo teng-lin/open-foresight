@@ -11,6 +11,7 @@
 namespace {
 std::atomic<int> state{1}, spawn_calls{0}, append_calls{0};
 int reply_type = 1;
+bool delayed_retire = false;
 uint64_t reply_id = 0;
 std::string root, mode;
 void hold() {
@@ -91,24 +92,30 @@ int fs_diag_child_finish(uint64_t, int) {
 }
 int fs_diag_support_send(uint64_t, uint8_t type, uint64_t id, uint32_t,
                          const uint8_t *, uint32_t) {
-  if (mode != "ack-exit")
+  if (mode != "ack-exit" && mode != "ack-exit-race")
     return -1;
   reply_type = type == 8 ? 9 : 3;
   reply_id = id;
   if (type == 6)
     ++append_calls;
-  if (type == 8)
+  if (type == 8 && mode == "ack-exit")
     state.fetch_or(16); // Final RETIRED is published before observed exit.
   return 2;
 }
 int fs_diag_support_receive(uint64_t, uint8_t *bytes, uint32_t,
                             uint32_t *copied, uint8_t *type, uint64_t *id,
                             uint32_t *total) {
-  if (mode != "ack-exit")
+  if (mode != "ack-exit" && mode != "ack-exit-race")
     return -1;
   *copied = *total = 0;
   if (!reply_type)
     return 0;
+  if (reply_type == 9 && mode == "ack-exit-race" && !delayed_retire) {
+    delayed_retire = true;
+    // Emulate publication+exit after an EMPTY receive, before the next poll.
+    state.fetch_or(16);
+    return 0;
+  }
   *type = static_cast<uint8_t>(reply_type);
   *id = reply_id;
   if (reply_type == 3 || reply_type == 9) {

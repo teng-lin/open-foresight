@@ -324,8 +324,8 @@ final class NativeDiagnosticWorkerOwner implements DiagnosticWorkerOwner {
     }
   }
 
-  void _check(Stopwatch clock) {
-    _poll();
+  void _check(Stopwatch clock, {bool poll = true}) {
+    if (poll) _poll();
     if ((_status & DiagnosticNativeFunctions.failed) != 0) {
       throw const DiagnosticWorkerFailure(
         DiagnosticHealthReason.storageWorkerUnknown,
@@ -400,6 +400,10 @@ final class NativeDiagnosticWorkerOwner implements DiagnosticWorkerOwner {
       await Future<void>.delayed(const Duration(milliseconds: 1));
     } while (true);
     while (true) {
+      // Observe exit before reading the retained page. A child may publish its
+      // final ACK and exit at any point, including just after an EMPTY read.
+      // The health check below must use this snapshot without polling again.
+      _poll();
       // A final matching ACK can remain published after the child exits.
       // Consume that authoritative disposition before treating exit as an
       // unknown reply; the native mapping is retained for this process.
@@ -439,7 +443,7 @@ final class NativeDiagnosticWorkerOwner implements DiagnosticWorkerOwner {
         _nextRequest++;
         return reply;
       }
-      _check(clock);
+      _check(clock, poll: false);
       await Future<void>.delayed(const Duration(milliseconds: 1));
     }
   }
