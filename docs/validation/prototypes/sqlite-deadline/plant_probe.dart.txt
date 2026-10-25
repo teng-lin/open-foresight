@@ -1,0 +1,36 @@
+import 'dart:io';
+import 'dart:convert';
+import 'package:foresight_core/src/store.dart';
+
+void main(List<String> args) {
+  final file = File(args.single);
+  if (!file.isAbsolute ||
+      file.existsSync() ||
+      (file.parent.statSync().mode & 0x3f) != 0) {
+    throw ArgumentError('Use a new database in a private fixture directory');
+  }
+  final store = Store(file.path);
+  try {
+    print(
+      jsonEncode(
+        store.db
+            .select(
+              'SELECT sqlite_version() AS version, sqlite_source_id() AS source_id',
+            )
+            .single,
+      ),
+    );
+    store.setPreference('slow', 'fixture');
+    store.db.execute('ALTER TABLE preferences RENAME TO fixture_preferences');
+    store.db.execute('''
+CREATE VIEW preferences AS
+SELECT key, CASE WHEN key='slow' THEN (
+  WITH RECURSIVE counter(x) AS (
+    VALUES(0) UNION ALL SELECT x+1 FROM counter WHERE x<1000000000
+  ) SELECT CAST(sum(x) AS TEXT) FROM counter
+) ELSE value END AS value FROM fixture_preferences
+''');
+  } finally {
+    store.close();
+  }
+}

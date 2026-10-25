@@ -5,11 +5,23 @@ import 'dart:io';
 import 'package:mcp_dart/mcp_dart.dart';
 import 'package:foresight_core/service_client.dart';
 import 'package:foresight_core/src/version.dart';
+import 'package:foresight_core/src/diagnostic_bootstrap.dart';
+import 'package:foresight_core/src/diagnostics/startup.dart';
+import 'package:foresight_core/src/diagnostics/session.dart';
 
-Future<void> main() async {
+Future<void> main(List<String> arguments) async {
+  if (arguments.isNotEmpty) {
+    exitCode = 64;
+    return;
+  }
   ServiceConnection? client;
+  LoggingSession? diagnostics;
   try {
-    client = ServiceConnection(ProfilePaths.resolve(Platform.environment));
+    final runtime = ApplicationRuntimeBootstrap.prepare(DiagnosticHost.mcp);
+    diagnostics = await runtime.startDiagnostics();
+    final profile = ProfilePaths.resolve(Platform.environment);
+    diagnostics.selectProfile(profile.data);
+    client = ServiceConnection(profile);
     await client.connect();
     final connection = client;
     final server = McpServer(
@@ -183,10 +195,12 @@ Future<void> main() async {
     };
     await server.connect(transport);
     await done.future;
-    await connection.close();
   } catch (error, stack) {
     stderr.writeln('$error\n$stack');
-    await client?.close();
     exitCode = 1;
+  } finally {
+    await client?.close();
+    final result = await diagnostics?.close();
+    if (result?.requiresExplicitExit == true) exit(exitCode);
   }
 }

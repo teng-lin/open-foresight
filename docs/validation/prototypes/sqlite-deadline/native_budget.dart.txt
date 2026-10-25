@@ -1,0 +1,95 @@
+import 'dart:ffi';
+import '../rpc_error.dart';
+import 'sqlite_runtime.dart';
+
+typedef _Progress = Int Function(Pointer<Void>);
+typedef _InstallNative =
+    Void Function(
+      Pointer<Void>,
+      Int,
+      Pointer<NativeFunction<_Progress>>,
+      Pointer<Void>,
+    );
+typedef _BeginNative =
+    Uint64 Function(
+      Pointer<Void>,
+      Pointer<NativeFunction<_InstallNative>>,
+      Int64,
+    );
+typedef _Begin =
+    int Function(Pointer<Void>, Pointer<NativeFunction<_InstallNative>>, int);
+typedef _EndNative = Int Function(Uint64);
+typedef _End = int Function(int);
+_NativeDeadline? _support;
+void initializeSqlDeadlineSupport() => _support ??= _NativeDeadline();
+
+final class _NativeDeadline {
+  final _Begin begin;
+  final _End end;
+  _NativeDeadline()
+    : begin = DynamicLibrary.process().lookupFunction<_BeginNative, _Begin>(
+        'of_sql_deadline_begin',
+      ),
+      end = DynamicLibrary.process().lookupFunction<_EndNative, _End>(
+        'of_sql_deadline_end',
+      ) {
+    final initialize = DynamicLibrary.process()
+        .lookupFunction<Int Function(), int Function()>(
+          'of_sql_deadline_initialize',
+        );
+    if (initialize() != 1)
+      throw StateError('Early native SQL deadline initialization failed');
+  }
+}
+
+final class SqliteStatementBudget {
+  final Database _database;
+  final Pointer<NativeFunction<_InstallNative>> _install;
+  final _NativeDeadline _native;
+  bool _running = false;
+  SqliteStatementBudget(this._database)
+    : _install = applicationSqliteLibrary
+          .lookup<NativeFunction<_InstallNative>>('sqlite3_progress_handler'),
+      _native =
+          _support ??
+          (throw StateError(
+            'Deadline support must be initialized before any database',
+          ));
+  T run<T>(Duration limit, T Function() read) {
+    if (_running) throw StateError('Nested SQLite statement budget');
+    if (limit <= Duration.zero || limit > const Duration(seconds: 30))
+      throw ArgumentError.value(limit);
+    final lease = _native.begin(
+      _database.handle.cast<Void>(),
+      _install,
+      limit.inMicroseconds * 1000,
+    );
+    if (lease == 0)
+      throw RpcError(RpcErrorCode.busy, 'Native SQL deadline pool exhausted');
+    _running = true;
+    Object? error;
+    StackTrace? stack;
+    T? result;
+    int expired;
+    try {
+      try {
+        result = read();
+        if (result is Future)
+          throw ArgumentError('Budget requires synchronous work');
+      } catch (failure, trace) {
+        error = failure;
+        stack = trace;
+      }
+    } finally {
+      expired = _native.end(lease);
+      _running = false;
+    }
+    if (expired < 0) throw StateError('Native SQL deadline lease invalid');
+    if (error != null) {
+      if (error is SqliteException && expired == 1)
+        throw RpcError(RpcErrorCode.busy, 'Read execution budget exhausted');
+      Error.throwWithStackTrace(error, stack!);
+    }
+    return result as T;
+  }
+}

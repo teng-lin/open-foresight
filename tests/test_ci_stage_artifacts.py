@@ -335,6 +335,16 @@ def test_native_runtime_payload_omits_compilers_and_retains_products_and_notices
             "build/macos/libforesight_sqlite3.dylib",
             "build/macos/foresight-sqlite3.json",
         ]
+    products += [
+        "build/native/libforesight_sql_support.so",
+        "build/native/libforesight_sql_support.dylib",
+        "build/native/libforesight_diagnostic_support.so",
+        "build/native/libforesight_diagnostic_support.dylib",
+        "build/native/foresight-diagnostic-launcher",
+        "build/native/diagnostic-native-inputs.json",
+        "build/native/diagnostic-toolchain-metadata.json",
+        "build/native/diagnostic-products.json",
+    ]
     excluded = [
         "build/_deps/compiler/big.o",
         "build/native/CMakeFiles/native.o",

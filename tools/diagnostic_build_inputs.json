@@ -1,0 +1,198 @@
+{
+  "schema": 1,
+  "scope": "components",
+  "native": {
+    "root": "native",
+    "prefix": "diagnostic_",
+    "inputs": [
+      {
+        "path": "native/diagnostic_endpoint.c",
+        "targets": [
+          "linux-x86_64",
+          "darwin-arm64"
+        ]
+      },
+      {
+        "path": "native/diagnostic_endpoint.h",
+        "targets": [
+          "linux-x86_64",
+          "darwin-arm64"
+        ]
+      },
+      {
+        "path": "native/diagnostic_inherited.c",
+        "targets": [
+          "linux-x86_64",
+          "darwin-arm64"
+        ]
+      },
+      {
+        "path": "native/diagnostic_inherited.h",
+        "targets": [
+          "linux-x86_64",
+          "darwin-arm64"
+        ]
+      },
+      {
+        "path": "native/diagnostic_kernel.h",
+        "targets": [
+          "linux-x86_64",
+          "darwin-arm64"
+        ]
+      },
+      {
+        "path": "native/diagnostic_kernel_darwin.c",
+        "targets": [
+          "darwin-arm64"
+        ]
+      },
+      {
+        "path": "native/diagnostic_kernel_linux.c",
+        "targets": [
+          "linux-x86_64"
+        ]
+      },
+      {
+        "path": "native/diagnostic_launcher.c",
+        "targets": [
+          "linux-x86_64",
+          "darwin-arm64"
+        ]
+      },
+      {
+        "path": "native/diagnostic_protocol.c",
+        "targets": [
+          "linux-x86_64",
+          "darwin-arm64"
+        ]
+      },
+      {
+        "path": "native/diagnostic_protocol.h",
+        "targets": [
+          "linux-x86_64",
+          "darwin-arm64"
+        ]
+      },
+      {
+        "path": "native/diagnostic_support.c",
+        "targets": [
+          "linux-x86_64",
+          "darwin-arm64"
+        ]
+      },
+      {
+        "path": "native/diagnostic_support.h",
+        "targets": [
+          "linux-x86_64",
+          "darwin-arm64"
+        ]
+      }
+    ],
+    "targets": {
+      "linux-x86_64": {
+        "compiler": [
+          "clang",
+          "gcc"
+        ],
+        "floor": "glibc-2.39-linux-x86_64"
+      },
+      "darwin-arm64": {
+        "compiler": [
+          "apple-clang"
+        ],
+        "floor": "macos-15.0-arm64"
+      }
+    },
+    "flags": [
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-Wpedantic",
+      "-O0",
+      "-O2",
+      "-O3",
+      "-g",
+      "-DNDEBUG",
+      "-fPIC",
+      "-fvisibility=hidden",
+      "-pthread",
+      "-shared",
+      "-mmacosx-version-min=15.0"
+    ]
+  },
+  "worker": {
+    "status": "pending",
+    "required": [
+      "native/diagnostic_support.c",
+      "native/diagnostic_support.h",
+      "packages/foresight_core/lib/src/diagnostics/storage_worker.dart",
+      "packages/foresight_core/lib/src/diagnostics/storage_worker_native.dart",
+      "packages/foresight_core/lib/src/diagnostics/storage_worker_protocol.dart",
+      "packages/foresight_core/lib/src/diagnostics/storage_worker_dispatch.dart",
+      "packages/foresight_core/bin/diagnostic_storage_worker.dart"
+    ],
+    "roots": [
+      "packages/foresight_core/lib/src/diagnostics",
+      "packages/foresight_core/lib/src/persistence/backup_files.dart",
+      "packages/foresight_core/pubspec.yaml",
+      "packages/foresight_core/pubspec.lock",
+      "native/diagnostic_support.c",
+      "native/diagnostic_support.h",
+      "packages/foresight_core/bin/diagnostic_storage_worker.dart"
+    ],
+    "inputs": [
+      "native/diagnostic_support.c",
+      "native/diagnostic_support.h",
+      "packages/foresight_core/bin/diagnostic_storage_worker.dart",
+      "packages/foresight_core/lib/src/diagnostics/bounded_json.dart",
+      "packages/foresight_core/lib/src/diagnostics/code_locations.g.dart",
+      "packages/foresight_core/lib/src/diagnostics/configuration.dart",
+      "packages/foresight_core/lib/src/diagnostics/events.dart",
+      "packages/foresight_core/lib/src/diagnostics/operations.g.dart",
+      "packages/foresight_core/lib/src/diagnostics/producer.dart",
+      "packages/foresight_core/lib/src/diagnostics/producer_budget.dart",
+      "packages/foresight_core/lib/src/diagnostics/producer_ledger.dart",
+      "packages/foresight_core/lib/src/diagnostics/producer_owner.dart",
+      "packages/foresight_core/lib/src/diagnostics/session.dart",
+      "packages/foresight_core/lib/src/diagnostics/storage.dart",
+      "packages/foresight_core/lib/src/diagnostics/storage_worker.dart",
+      "packages/foresight_core/lib/src/diagnostics/storage_worker_dispatch.dart",
+      "packages/foresight_core/lib/src/diagnostics/storage_worker_native.dart",
+      "packages/foresight_core/lib/src/diagnostics/storage_worker_protocol.dart",
+      "packages/foresight_core/lib/src/persistence/backup_files.dart",
+      "packages/foresight_core/pubspec.lock",
+      "packages/foresight_core/pubspec.yaml"
+    ],
+    "exceptions": {},
+    "catalog": [
+      "packages/foresight_core/lib/src/diagnostics/code_locations.g.dart",
+      "packages/foresight_core/lib/src/diagnostics/operations.g.dart"
+    ],
+    "sdk": {
+      "dart": "3.9.2",
+      "flutter": "3.35.7",
+      "revision": "a29e08c72e2ce21813c1edf50cbcdfcac7a7acdd",
+      "compiler_sha256": null,
+      "toolchain_sha256": null,
+      "flutter_commit": "adc901062556672b4138e18a4dc62a4be8f4b3c2"
+    },
+    "options": {
+      "record_schema": 2
+    },
+    "external_imports": [
+      "dart:async",
+      "dart:collection",
+      "dart:convert",
+      "dart:ffi",
+      "dart:io",
+      "dart:isolate",
+      "dart:math",
+      "dart:typed_data",
+      "package:crypto/crypto.dart",
+      "package:ffi/ffi.dart",
+      "package:meta/meta.dart",
+      "package:path/path.dart"
+    ]
+  }
+}

@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -36,6 +37,7 @@ final class GatedWorker implements ReadWorker {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Store writer;
   late String path;
   setUp(() {

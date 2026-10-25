@@ -1,0 +1,680 @@
+{
+  "baseline": "d100ecb7 with A3 followups through423; re-inventory integrated A1/A2/A4/A6 before final acceptance",
+  "scope": [
+    "packages/foresight_core/lib",
+    "packages/foresight_core/bin",
+    "apps/desktop/lib",
+    "apps/desktop/linux/runner",
+    "apps/desktop/macos/Runner",
+    "native",
+    "services"
+  ],
+  "rule": "All matched owners reviewed by category in logging-foundation.md; line numbers identify this frozen foundation baseline, not a final residual-site waiver",
+  "sites": [
+    {
+      "path": "packages/foresight_core/lib/src/application_service.dart",
+      "line": 127,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/application_service.dart",
+      "line": 396,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/application_service.dart",
+      "line": 401,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/application_service.dart",
+      "line": 641,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/application_service.dart",
+      "line": 955,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/application_services/google_maintenance.dart",
+      "line": 97,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/application_services/google_maintenance.dart",
+      "line": 107,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/application_services/google_maintenance.dart",
+      "line": 139,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/application_services/google_maintenance.dart",
+      "line": 185,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/application_services/meeting_workflow_coordinator.dart",
+      "line": 331,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/application_services/note_enhancement_coordinator.dart",
+      "line": 236,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/application_services/note_enhancement_coordinator.dart",
+      "line": 602,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/application_services/note_enhancement_coordinator.dart",
+      "line": 650,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/application_services/summary_coordinator.dart",
+      "line": 275,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/audio_devices.dart",
+      "line": 31,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/audio_devices.dart",
+      "line": 33,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/audio_devices.dart",
+      "line": 50,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/dedicated_query_runtime.dart",
+      "line": 116,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/dedicated_query_runtime.dart",
+      "line": 160,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/document_parser.dart",
+      "line": 55,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/document_parser.dart",
+      "line": 56,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/document_parser.dart",
+      "line": 88,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/document_parser.dart",
+      "line": 90,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/document_parser.dart",
+      "line": 97,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/document_parser.dart",
+      "line": 100,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/document_parser.dart",
+      "line": 198,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/document_parser.dart",
+      "line": 243,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/document_parser.dart",
+      "line": 246,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/domain.dart",
+      "line": 526,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/domain.dart",
+      "line": 551,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/gemma_download.dart",
+      "line": 70,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/helper.dart",
+      "line": 243,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/helper.dart",
+      "line": 244,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/helper.dart",
+      "line": 248,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/helper.dart",
+      "line": 249,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/helper.dart",
+      "line": 284,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/helper.dart",
+      "line": 397,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/model_asset_lifecycle.dart",
+      "line": 188,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/model_asset_lifecycle.dart",
+      "line": 245,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/model_vault.dart",
+      "line": 144,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/model_vault.dart",
+      "line": 145,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/platform_services.dart",
+      "line": 321,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/platform_services.dart",
+      "line": 400,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/platform_services.dart",
+      "line": 463,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/platform_services.dart",
+      "line": 551,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/platform_services.dart",
+      "line": 558,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/platform_services.dart",
+      "line": 560,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/platform_services.dart",
+      "line": 585,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/platform_services.dart",
+      "line": 598,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/profile_paths.dart",
+      "line": 32,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/profile_paths.dart",
+      "line": 36,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/profile_paths.dart",
+      "line": 88,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/secret_store.dart",
+      "line": 50,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/secret_store.dart",
+      "line": 51,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/secret_store.dart",
+      "line": 104,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/secret_store.dart",
+      "line": 120,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/service_diagnostics.dart",
+      "line": 11,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/service_diagnostics.dart",
+      "line": 23,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/service_frontend.dart",
+      "line": 479,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/service_frontend.dart",
+      "line": 480,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/service_gates.dart",
+      "line": 51,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/service_operation_handlers.dart",
+      "line": 72,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/service_operation_handlers.dart",
+      "line": 88,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/service_operation_handlers.dart",
+      "line": 109,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/service_ownership.dart",
+      "line": 129,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/service_ownership.dart",
+      "line": 350,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/service_ownership.dart",
+      "line": 366,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/service_ownership.dart",
+      "line": 516,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/service_resources.dart",
+      "line": 38,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/service_socket.dart",
+      "line": 128,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/service_startup.dart",
+      "line": 387,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/service_startup.dart",
+      "line": 411,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/service_startup.dart",
+      "line": 702,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/service_startup.dart",
+      "line": 706,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/speech_models.dart",
+      "line": 89,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/speech_models.dart",
+      "line": 90,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/speech_models.dart",
+      "line": 92,
+      "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
+    },
+    {
+      "path": "packages/foresight_core/lib/src/store.dart",
+      "line": 266,
+      "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
+    },
+    {
+      "path": "packages/foresight_core/bin/mcp.dart",
+      "line": 191,
+      "disposition": "B2: preserve exact stdout transport; replace raw catch diagnostics; independently dispose output before logger deadline"
+    },
+    {
+      "path": "packages/foresight_core/bin/service.dart",
+      "line": 38,
+      "disposition": "B2: preserve admin/status/progress presentation; replace raw error/stack diagnostics with typed outcomes"
+    },
+    {
+      "path": "packages/foresight_core/bin/service.dart",
+      "line": 56,
+      "disposition": "B2: preserve admin/status/progress presentation; replace raw error/stack diagnostics with typed outcomes"
+    },
+    {
+      "path": "packages/foresight_core/bin/service.dart",
+      "line": 89,
+      "disposition": "B2: preserve admin/status/progress presentation; replace raw error/stack diagnostics with typed outcomes"
+    },
+    {
+      "path": "packages/foresight_core/bin/service.dart",
+      "line": 138,
+      "disposition": "B2: preserve admin/status/progress presentation; replace raw error/stack diagnostics with typed outcomes"
+    },
+    {
+      "path": "packages/foresight_core/bin/service.dart",
+      "line": 142,
+      "disposition": "B2: preserve admin/status/progress presentation; replace raw error/stack diagnostics with typed outcomes"
+    },
+    {
+      "path": "packages/foresight_core/bin/service.dart",
+      "line": 183,
+      "disposition": "B2: preserve admin/status/progress presentation; replace raw error/stack diagnostics with typed outcomes"
+    },
+    {
+      "path": "packages/foresight_core/bin/service.dart",
+      "line": 207,
+      "disposition": "B2: preserve admin/status/progress presentation; replace raw error/stack diagnostics with typed outcomes"
+    },
+    {
+      "path": "packages/foresight_core/bin/service.dart",
+      "line": 253,
+      "disposition": "B2: preserve admin/status/progress presentation; replace raw error/stack diagnostics with typed outcomes"
+    },
+    {
+      "path": "packages/foresight_core/bin/service.dart",
+      "line": 265,
+      "disposition": "B2: preserve admin/status/progress presentation; replace raw error/stack diagnostics with typed outcomes"
+    },
+    {
+      "path": "packages/foresight_core/bin/service.dart",
+      "line": 282,
+      "disposition": "B2: preserve admin/status/progress presentation; replace raw error/stack diagnostics with typed outcomes"
+    },
+    {
+      "path": "packages/foresight_core/bin/service.dart",
+      "line": 295,
+      "disposition": "B2: preserve admin/status/progress presentation; replace raw error/stack diagnostics with typed outcomes"
+    },
+    {
+      "path": "apps/desktop/lib/application.dart",
+      "line": 465,
+      "disposition": "B2: install framework/platform/zone reporting once and preserve old fatal handling; typed diagnostics"
+    },
+    {
+      "path": "apps/desktop/lib/application.dart",
+      "line": 466,
+      "disposition": "B2: install framework/platform/zone reporting once and preserve old fatal handling; typed diagnostics"
+    },
+    {
+      "path": "apps/desktop/lib/commands.dart",
+      "line": 159,
+      "disposition": "B2: install framework/platform/zone reporting once and preserve old fatal handling; typed diagnostics"
+    },
+    {
+      "path": "apps/desktop/lib/desktop_environment.dart",
+      "line": 78,
+      "disposition": "B2: install framework/platform/zone reporting once and preserve old fatal handling; typed diagnostics"
+    },
+    {
+      "path": "apps/desktop/lib/desktop_environment.dart",
+      "line": 82,
+      "disposition": "B2: install framework/platform/zone reporting once and preserve old fatal handling; typed diagnostics"
+    },
+    {
+      "path": "apps/desktop/lib/features/integrations/hypr_shortcuts.dart",
+      "line": 54,
+      "disposition": "B2: install framework/platform/zone reporting once and preserve old fatal handling; typed diagnostics"
+    },
+    {
+      "path": "apps/desktop/lib/features/integrations/hypr_shortcuts.dart",
+      "line": 87,
+      "disposition": "B2: install framework/platform/zone reporting once and preserve old fatal handling; typed diagnostics"
+    },
+    {
+      "path": "apps/desktop/lib/features/integrations/integrations_controller.dart",
+      "line": 256,
+      "disposition": "B2: install framework/platform/zone reporting once and preserve old fatal handling; typed diagnostics"
+    },
+    {
+      "path": "apps/desktop/lib/features/meetings/meetings_controller.dart",
+      "line": 243,
+      "disposition": "B2: install framework/platform/zone reporting once and preserve old fatal handling; typed diagnostics"
+    },
+    {
+      "path": "apps/desktop/lib/features/meetings/meetings_controller.dart",
+      "line": 244,
+      "disposition": "B2: install framework/platform/zone reporting once and preserve old fatal handling; typed diagnostics"
+    },
+    {
+      "path": "apps/desktop/lib/features/settings/gemma_setup_view.dart",
+      "line": 236,
+      "disposition": "B2: install framework/platform/zone reporting once and preserve old fatal handling; typed diagnostics"
+    },
+    {
+      "path": "apps/desktop/lib/features/settings/gemma_setup_view.dart",
+      "line": 237,
+      "disposition": "B2: install framework/platform/zone reporting once and preserve old fatal handling; typed diagnostics"
+    },
+    {
+      "path": "apps/desktop/macos/Runner/MainFlutterWindow.swift",
+      "line": 16,
+      "disposition": "B3: native startup metadata only; preserve fatal/runtime handling"
+    },
+    {
+      "path": "apps/desktop/macos/Runner/MainFlutterWindow.swift",
+      "line": 67,
+      "disposition": "B3: native startup metadata only; preserve fatal/runtime handling"
+    },
+    {
+      "path": "apps/desktop/macos/Runner/MainFlutterWindow.swift",
+      "line": 98,
+      "disposition": "B3: native startup metadata only; preserve fatal/runtime handling"
+    },
+    {
+      "path": "native/file_parser.swift",
+      "line": 137,
+      "disposition": "B3: preserve command result/self-test protocol; parent observes safe outcome only"
+    },
+    {
+      "path": "native/file_parser.swift",
+      "line": 166,
+      "disposition": "B3: preserve command result/self-test protocol; parent observes safe outcome only"
+    },
+    {
+      "path": "native/foresight_native.cpp",
+      "line": 286,
+      "disposition": "B3: preserve PCM/model/exec protocol; parent derives allowlisted exit/state metadata, never mirrors raw child text"
+    },
+    {
+      "path": "native/foresight_native.cpp",
+      "line": 289,
+      "disposition": "B3: preserve PCM/model/exec protocol; parent derives allowlisted exit/state metadata, never mirrors raw child text"
+    },
+    {
+      "path": "native/foresight_native.cpp",
+      "line": 290,
+      "disposition": "B3: preserve PCM/model/exec protocol; parent derives allowlisted exit/state metadata, never mirrors raw child text"
+    },
+    {
+      "path": "native/macos_audio_cli.cpp",
+      "line": 8,
+      "disposition": "B3: preserve CLI JSON/usage; use closed metadata diagnostics on stderr"
+    },
+    {
+      "path": "native/macos_audio_cli.cpp",
+      "line": 10,
+      "disposition": "B3: preserve CLI JSON/usage; use closed metadata diagnostics on stderr"
+    },
+    {
+      "path": "native/macos_audio_cli.cpp",
+      "line": 12,
+      "disposition": "B3: preserve CLI JSON/usage; use closed metadata diagnostics on stderr"
+    },
+    {
+      "path": "native/macos_audio_cli.cpp",
+      "line": 15,
+      "disposition": "B3: preserve CLI JSON/usage; use closed metadata diagnostics on stderr"
+    },
+    {
+      "path": "native/macos_audio_cli.cpp",
+      "line": 37,
+      "disposition": "B3: preserve CLI JSON/usage; use closed metadata diagnostics on stderr"
+    },
+    {
+      "path": "native/macos_audio_cli.cpp",
+      "line": 42,
+      "disposition": "B3: preserve CLI JSON/usage; use closed metadata diagnostics on stderr"
+    },
+    {
+      "path": "native/macos_audio_cli.cpp",
+      "line": 46,
+      "disposition": "B3: preserve CLI JSON/usage; use closed metadata diagnostics on stderr"
+    },
+    {
+      "path": "native/model_crypto.swift",
+      "line": 342,
+      "disposition": "B3: preserve command result/self-test protocol; parent observes safe outcome only"
+    },
+    {
+      "path": "native/model_crypto.swift",
+      "line": 374,
+      "disposition": "B3: preserve command result/self-test protocol; parent observes safe outcome only"
+    },
+    {
+      "path": "services/helper/child_process.h",
+      "line": 44,
+      "disposition": "B3: preserve worker protocol/readiness/build-id; drain diagnostics as bounded bytes without arbitrary parsing or persistence"
+    },
+    {
+      "path": "services/helper/child_process.h",
+      "line": 45,
+      "disposition": "B3: preserve worker protocol/readiness/build-id; drain diagnostics as bounded bytes without arbitrary parsing or persistence"
+    },
+    {
+      "path": "services/helper/main.cpp",
+      "line": 918,
+      "disposition": "B3: preserve worker protocol/readiness/build-id; drain diagnostics as bounded bytes without arbitrary parsing or persistence"
+    },
+    {
+      "path": "services/helper/main.cpp",
+      "line": 926,
+      "disposition": "B3: preserve worker protocol/readiness/build-id; drain diagnostics as bounded bytes without arbitrary parsing or persistence"
+    },
+    {
+      "path": "services/helper/main.cpp",
+      "line": 973,
+      "disposition": "B3: preserve worker protocol/readiness/build-id; drain diagnostics as bounded bytes without arbitrary parsing or persistence"
+    },
+    {
+      "path": "services/helper/main.cpp",
+      "line": 979,
+      "disposition": "B3: preserve worker protocol/readiness/build-id; drain diagnostics as bounded bytes without arbitrary parsing or persistence"
+    },
+    {
+      "path": "services/inference/legacy_query.cpp",
+      "line": 567,
+      "disposition": "B3: preserve worker protocol/readiness/build-id; drain diagnostics as bounded bytes without arbitrary parsing or persistence"
+    },
+    {
+      "path": "services/inference/main.cpp",
+      "line": 589,
+      "disposition": "B3: preserve worker protocol/readiness/build-id; drain diagnostics as bounded bytes without arbitrary parsing or persistence"
+    },
+    {
+      "path": "services/inference/main.cpp",
+      "line": 590,
+      "disposition": "B3: preserve worker protocol/readiness/build-id; drain diagnostics as bounded bytes without arbitrary parsing or persistence"
+    },
+    {
+      "path": "services/inference/main.cpp",
+      "line": 748,
+      "disposition": "B3: preserve worker protocol/readiness/build-id; drain diagnostics as bounded bytes without arbitrary parsing or persistence"
+    },
+    {
+      "path": "services/inference/model_startup.h",
+      "line": 16,
+      "disposition": "B3: preserve worker protocol/readiness/build-id; drain diagnostics as bounded bytes without arbitrary parsing or persistence"
+    },
+    {
+      "path": "services/speech/worker.cpp",
+      "line": 47,
+      "disposition": "B3: preserve worker protocol/readiness/build-id; drain diagnostics as bounded bytes without arbitrary parsing or persistence"
+    },
+    {
+      "path": "services/speech/worker.cpp",
+      "line": 70,
+      "disposition": "B3: preserve worker protocol/readiness/build-id; drain diagnostics as bounded bytes without arbitrary parsing or persistence"
+    },
+    {
+      "path": "services/speech/worker.cpp",
+      "line": 108,
+      "disposition": "B3: preserve worker protocol/readiness/build-id; drain diagnostics as bounded bytes without arbitrary parsing or persistence"
+    }
+  ]
+}

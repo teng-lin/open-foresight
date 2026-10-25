@@ -252,6 +252,7 @@ class ApplicationService {
     void Function()? onDraining,
     Future<void> Function()? beforeReleaseOwnership,
     DesktopPeerVerifier? desktopPeerVerifier,
+    void Function()? onProfileOwned,
   }) async {
     // This must precede native loads, database opens, and worker creation.
     final installationLock = acquireInstallationLock();
@@ -267,6 +268,7 @@ class ApplicationService {
         createTimer: createTimer,
         helperStartupProbeTimeout: helperStartupProbeTimeout,
         desktopPeerVerifier: desktopPeerVerifier,
+        onProfileOwned: onProfileOwned,
       );
       service._desktopDetachGrace = desktopDetachGrace;
       service._onDraining = onDraining;
@@ -289,6 +291,7 @@ class ApplicationService {
     Timer Function(Duration, void Function())? createTimer,
     Duration? helperStartupProbeTimeout,
     DesktopPeerVerifier? desktopPeerVerifier,
+    void Function()? onProfileOwned,
   }) async {
     final lock = await acquireServiceProfileLock(
       profile,
@@ -306,6 +309,7 @@ class ApplicationService {
     var publishedRecord = false;
     String? claimed;
     try {
+      onProfileOwned?.call();
       // This owner holds the profile lock; any endpoint record is a
       // predecessor's. Claim it before anything that can wait.
       claimed = claimServiceEndpointRecord(profile.data);

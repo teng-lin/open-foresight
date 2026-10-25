@@ -11,14 +11,48 @@ import 'package:foresight_core/src/operations.dart';
 import 'package:foresight_core/src/service_compatibility.dart';
 import 'package:foresight_core/src/service_socket.dart' show probeSocketPath;
 
+import 'package:foresight_core/src/diagnostic_bootstrap.dart';
+import 'package:foresight_core/src/diagnostics/startup.dart';
+import 'package:foresight_core/src/diagnostics/session.dart';
+import 'package:foresight_core/src/diagnostics/storage_worker_dispatch.dart';
+
 Future<void> main(List<String> args) async {
-  if (args.length == 1 && args.single == '--model-transport-worker') {
+  final internal = DiagnosticWorkerInvocation.parse(args);
+  if (internal.kind != DiagnosticWorkerInvocationKind.absent) {
+    if (internal.kind != DiagnosticWorkerInvocationKind.valid) {
+      exitCode = 64;
+      return;
+    }
+    try {
+      final selected = loadDiagnosticChildStartup(internal);
+      exitCode = await runDiagnosticStorageWorker(
+        functions: selected.functions,
+        expectedParentPid: selected.expectedParentPid,
+        nativeId: selected.nativeId,
+        dartId: selected.dartId,
+        catalogId: selected.catalogId,
+        verifyBeforeHello: selected.verifyBeforeHello,
+      );
+    } catch (_) {
+      exitCode = 65;
+    }
+    return;
+  }
+  if (args.any((arg) => arg.startsWith('--model-transport-worker'))) {
+    if (args.length != 1 || args.single != '--model-transport-worker') {
+      exitCode = 64;
+      return;
+    }
     await runModelTransportWorker();
     return;
   }
   IsolatedApplicationService? service;
+  LoggingSession? diagnostics;
   try {
+    final runtime = ApplicationRuntimeBootstrap.prepare(DiagnosticHost.service);
+    diagnostics = await runtime.startDiagnostics(transient: args.isNotEmpty);
     final profile = ProfilePaths.resolve(runtimeConfiguration.environment);
+    diagnostics.selectProfile(profile.data);
     if (args.isNotEmpty) {
       if (args.length != 1) {
         throw ArgumentError(
@@ -165,7 +199,10 @@ Future<void> main(List<String> args) async {
       return;
     }
     try {
-      service = await IsolatedApplicationService.start(profile);
+      service = await IsolatedApplicationService.start(
+        profile,
+        diagnostics: diagnostics,
+      );
     } catch (error) {
       // A detached launch has no stderr; tell the launcher why (L3).
       recordServiceStartupFailure(profile, error);
@@ -188,6 +225,12 @@ Future<void> main(List<String> args) async {
   } catch (error, stack) {
     stderr.writeln('$error\n$stack');
     exitCode = 1;
+  } finally {
+    // Application/native cleanup must finish before logger close can request
+    // a process exit to retire a held diagnostic FFI/isolate owner.
+    await service?.close();
+    final result = await diagnostics?.close();
+    if (result?.requiresExplicitExit == true) exit(exitCode);
   }
 }
 
