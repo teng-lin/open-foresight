@@ -107,6 +107,11 @@
       "disposition": "B2: typed registered event/category/numeric outcome; do not serialize exception text, stack text, paths or payloads"
     },
     {
+      "path": "packages/foresight_core/lib/src/diagnostic_support_local.dart",
+      "line": 79,
+      "disposition": "B4: explicit-click reveal of the validated private profile logs folder through the inventoried platform_services opener; closed result only, opener error/output discarded; no upload or new sink"
+    },
+    {
       "path": "packages/foresight_core/lib/src/document_parser.dart",
       "line": 55,
       "disposition": "B2/B3: intentional subprocess result or sensitive protocol; never persist raw output/error; parent safe outcome only"
@@ -478,12 +483,12 @@
     },
     {
       "path": "apps/desktop/lib/desktop_environment.dart",
-      "line": 78,
+      "line": 83,
       "disposition": "B2: install framework/platform/zone reporting once and preserve old fatal handling; typed diagnostics"
     },
     {
       "path": "apps/desktop/lib/desktop_environment.dart",
-      "line": 82,
+      "line": 87,
       "disposition": "B2: install framework/platform/zone reporting once and preserve old fatal handling; typed diagnostics"
     },
     {
@@ -510,6 +515,11 @@
       "path": "apps/desktop/lib/features/meetings/meetings_controller.dart",
       "line": 244,
       "disposition": "B2: install framework/platform/zone reporting once and preserve old fatal handling; typed diagnostics"
+    },
+    {
+      "path": "apps/desktop/lib/features/settings/diagnostic_support_view.dart",
+      "line": 93,
+      "disposition": "B4: explicit-click clipboard copy of the closed in-memory health summary for manual review; no file, log, network or upload sink"
     },
     {
       "path": "apps/desktop/lib/features/settings/gemma_setup_view.dart",

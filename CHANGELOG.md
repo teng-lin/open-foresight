@@ -15,6 +15,11 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 - Add an opt-in manual update notice in Settings. Checks use public GitHub release
   metadata and never download or execute installers.
+- Settings → Diagnostics shows the desktop app's local logging health and opens
+  the profile's private logs folder. Copy a health summary of status values and
+  counters into the new bug report form; nothing is uploaded. The
+  [diagnostics guide](docs/diagnostics.md) covers log location, configuration,
+  retention, privacy and troubleshooting.
 - Support opt-in Developer ID signing, notarization and stapling for macOS DMGs,
   with checksums calculated after Gatekeeper assessment of the final image.
 - Rename meetings from the workspace header. Manual names persist across restarts

@@ -38,6 +38,7 @@ remain in git history. Current AI workflow research is linked below.
 
 - [Application storage retention and recovery](validation/storage-recovery.md)
 - [Manual update checks and rollback](platforms/manual-updates.md)
+- [Diagnostics and logs](diagnostics.md)
 - [Explicit integration gates](validation/integration-gates.md)
 - [Published installer acceptance](validation/release-acceptance.md)
 - [Release preparation and recovery](../RELEASING.md)

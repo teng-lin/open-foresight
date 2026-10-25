@@ -14,6 +14,7 @@ export 'src/diagnostics/startup.dart'
         DiagnosticWorkerInvocation,
         DiagnosticWorkerInvocationKind;
 export 'src/diagnostics/session.dart' show LoggingSession;
+export 'src/diagnostic_support_local.dart' show LocalDiagnosticSupport;
 export 'src/platform_services.dart'
     show privateDirectory, privateRuntime, configureProfileRuntime;
 
