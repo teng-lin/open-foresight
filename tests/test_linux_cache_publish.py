@@ -21,7 +21,8 @@ def test_maintenance_is_independent_main_only_and_preserves_original_upload_proo
     triggers = config.get("on", config.get(True))
     assert set(triggers) == {"push", "workflow_dispatch", "schedule"}
     assert triggers["push"] == {"branches": ["main"]}
-    assert triggers["schedule"] == [{"cron": "17,47 * * * *"}]
+    # One fallback poll; its bounded cadence is owned by tests/test_ci_cadence.py.
+    assert [set(row) for row in triggers["schedule"]] == [{"cron"}]
     assert all(value == "read" for value in config["permissions"].values())
     assert "concurrency" not in config
     jobs = config["jobs"]
