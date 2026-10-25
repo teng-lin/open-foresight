@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:meta/meta.dart';
 
 import '../persistence/backup_files.dart';
+import 'bounded_json.dart';
 import 'events.dart';
 
 /// Roles are diagnostic classification only; they grant no application lease.
@@ -26,6 +27,15 @@ enum DiagnosticHealthReason {
   sinkFailed,
   writerFailed,
   closed,
+  storageWorkerUnconfigured,
+  storageStagingUnavailable,
+  storagePlatformUnsupported,
+  storageDescriptorLimit,
+  storageWorkerLaunchFailed,
+  storageWorkerProtocolFailed,
+  storageWorkerExited,
+  storageWorkerUnresponsive,
+  storageWorkerUnknown,
 }
 
 final class DiagnosticStorageUnavailable implements Exception {
@@ -59,6 +69,11 @@ final class _Manifest {
     'failed': failed,
   };
   static _Manifest parse(Uint8List bytes) {
+    if (!diagnosticManifestJsonShape(bytes)) {
+      throw const DiagnosticStorageUnavailable(
+        DiagnosticHealthReason.storageUnavailable,
+      );
+    }
     final value = jsonDecode(utf8.decode(bytes));
     if (value is! Map ||
         value.length != 8 ||

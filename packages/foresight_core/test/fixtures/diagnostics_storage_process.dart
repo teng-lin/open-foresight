@@ -144,9 +144,9 @@ Future<void> main(List<String> arguments) async {
   }
   if (arguments.contains('fill')) {
     final record = Uint8List.fromList(
-      utf8.encode('${jsonEncode({'schema': 1, 'fixture': 'x' * 15000})}\n'),
+      utf8.encode('${jsonEncode({'schema': 1, 'fixture': 'x' * 4000})}\n'),
     );
-    for (var i = 0; i < 400; i++) {
+    for (var i = 0; i < 1500; i++) {
       if (!storage.append(record)) {
         throw StateError('Fixture quota fill failed');
       }
@@ -190,9 +190,13 @@ Future<void> main(List<String> arguments) async {
       throw StateError('Cannot set fixture size limit');
     }
     release(limit.cast<Void>());
+    const prefix = '{"schema":1,"fixture":"', suffix = '"}\n';
     final record = Uint8List.fromList(
-      utf8.encode('${jsonEncode({'schema': 1, 'fixture': 'x' * 6000})}\n'),
+      utf8.encode(
+        '$prefix${'x' * (4096 - prefix.length - suffix.length)}$suffix',
+      ),
     );
+    if (record.length != 4096) throw StateError('Fixture record size mismatch');
     final first = storage.append(record);
     final second = storage.append(record);
     final third = storage.append(record);

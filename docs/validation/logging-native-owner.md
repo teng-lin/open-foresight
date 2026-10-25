@@ -88,7 +88,8 @@ the call; active-operation expiry also works while parent heartbeats continue.
 
 All six JIT/AOT normal/FORCE/operation-deadline cases passed on each host after
 the repairs. FORCE observation was about 100–110 ms; operation expiry about
-5.1 seconds. Linux observed/reaped exit class 0 or 66 as appropriate; Darwin
+5.1 seconds. Linux observed/reaped normal class 1 (OS exit 0) or retirement
+class 66 as appropriate; Darwin
 reports no-live-child and unknown/unconsumed status, never a reap claim. Analysis
 and pinned formatting passed for the two added Dart files. Commands and source
 hashes are in `/var/tmp/of-support/fixed-matrix` and the remote same-named folder
