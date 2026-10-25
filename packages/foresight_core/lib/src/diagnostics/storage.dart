@@ -143,6 +143,10 @@ abstract interface class DiagnosticSink {
   void close();
 }
 
+/// Closed native admission of a libc directory-stream buffer bound for one
+/// anchored directory descriptor. Checked before every enumeration.
+typedef DiagnosticDirectoryBound = bool Function(int descriptor);
+
 typedef DiagnosticSinkFactory =
     DiagnosticSink? Function(
       String profile,
@@ -158,6 +162,7 @@ final class DiagnosticStorage implements DiagnosticSink {
     this.slot,
     this._manifest,
     this._clock,
+    this._bound,
   );
   static const slotCount = 10;
   static const segmentCount = 3;
@@ -180,6 +185,7 @@ final class DiagnosticStorage implements DiagnosticSink {
   final int slot;
   final _Manifest _manifest;
   final DateTime Function() _clock;
+  final DiagnosticDirectoryBound? _bound;
   BackupFile? _segment;
   int _segmentIndex = 0, _segmentSize = 0;
   bool _closed = false, _failed = false;
@@ -220,6 +226,7 @@ final class DiagnosticStorage implements DiagnosticSink {
     DateTime Function()? clock,
     int? applicationPid,
     Set<int> ownedSlots = const {},
+    DiagnosticDirectoryBound? directoryBound,
   }) {
     if (role == DiagnosticRole.transient) return null;
     final logicalPid = applicationPid ?? pid;
@@ -251,7 +258,7 @@ final class DiagnosticStorage implements DiagnosticSink {
           DiagnosticHealthReason.unsupportedFilesystem,
         );
       }
-      _validateRoot(root);
+      _validateRoot(root, directoryBound);
       admission = _file(root, 'admission.lock', create: true);
       if (admission.size != 0 || !admission.tryExclusiveLease()) return null;
       final manifests = <int, _Manifest>{};
@@ -261,8 +268,8 @@ final class DiagnosticStorage implements DiagnosticSink {
           final directory = root.child('slot-$index');
           directories[index] = directory;
           try {
-            _validateSlot(directory);
-            final manifest = _readManifest(directory);
+            _validateSlot(directory, directoryBound);
+            final manifest = _readManifest(directory, directoryBound);
             if (manifest != null) manifests[index] = manifest;
           } catch (_) {
             // A corrupt slot remains occupied; never classify it as empty.
@@ -327,7 +334,7 @@ final class DiagnosticStorage implements DiagnosticSink {
         if (inactive.isEmpty) return null;
         chosen = inactive.first;
         final selected = chosen;
-        _validateSlot(selected.directory);
+        _validateSlot(selected.directory, directoryBound);
         // Keep valid classification until all payload is removed. If cleanup
         // stops midway the next admission still sees an occupied valid session.
         for (final name in ['0.jsonl', '1.jsonl', '2.jsonl', 'manifest.next']) {
@@ -346,7 +353,7 @@ final class DiagnosticStorage implements DiagnosticSink {
           role: role,
           opened: now().toUtc().millisecondsSinceEpoch,
         );
-        _writeManifest(selected.directory, manifest);
+        _writeManifest(selected.directory, manifest, directoryBound);
         root.verifyAnchor();
         final storage = DiagnosticStorage._(
           root,
@@ -355,6 +362,7 @@ final class DiagnosticStorage implements DiagnosticSink {
           selected.index,
           manifest,
           now,
+          directoryBound,
         );
         root = null;
         return storage;
@@ -408,7 +416,27 @@ final class DiagnosticStorage implements DiagnosticSink {
       (role == DiagnosticRole.desktop && index >= 3 && index < 5);
   static int _reserved(int index, DiagnosticRole role) =>
       index < 5 && _eligible(index, role) ? 0 : 1;
-  static void _validateRoot(BackupDirectory root) {
+
+  /// Every BackupDirectory enumeration (entries, containsEntry and replace)
+  /// follows this check on the same anchored descriptor; no stream is opened
+  /// when the native bound is missing, refused or failed. Null keeps utility
+  /// semantics for direct fixtures; the exec-child worker always supplies it.
+  static void _bounded(
+    BackupDirectory directory,
+    DiagnosticDirectoryBound? bound,
+  ) {
+    if (bound != null && !bound(directory.descriptor)) {
+      throw const DiagnosticStorageUnavailable(
+        DiagnosticHealthReason.unsupportedFilesystem,
+      );
+    }
+  }
+
+  static void _validateRoot(
+    BackupDirectory root,
+    DiagnosticDirectoryBound? bound,
+  ) {
+    _bounded(root, bound);
     final allowed = {
       'admission.lock',
       for (var i = 0; i < slotCount; i++) 'slot-$i',
@@ -420,12 +448,16 @@ final class DiagnosticStorage implements DiagnosticSink {
     }
   }
 
-  static void _validateSlot(BackupDirectory directory) {
+  static void _validateSlot(
+    BackupDirectory directory,
+    DiagnosticDirectoryBound? bound,
+  ) {
     if (directory.localFileSystem == ScopedLocalFileSystem.unsupported) {
       throw const DiagnosticStorageUnavailable(
         DiagnosticHealthReason.unsupportedFilesystem,
       );
     }
+    _bounded(directory, bound);
     final entries = directory.entries();
     if (entries.any((name) => !_slotEntries.contains(name))) {
       throw const DiagnosticStorageUnavailable(
@@ -457,7 +489,11 @@ final class DiagnosticStorage implements DiagnosticSink {
     }
   }
 
-  static _Manifest? _readManifest(BackupDirectory directory) {
+  static _Manifest? _readManifest(
+    BackupDirectory directory,
+    DiagnosticDirectoryBound? bound,
+  ) {
+    _bounded(directory, bound);
     if (!directory.entries().contains('manifest.json')) return null;
     final file = _file(directory, 'manifest.json');
     try {
@@ -467,7 +503,11 @@ final class DiagnosticStorage implements DiagnosticSink {
     }
   }
 
-  static void _writeManifest(BackupDirectory directory, _Manifest manifest) {
+  static void _writeManifest(
+    BackupDirectory directory,
+    _Manifest manifest,
+    DiagnosticDirectoryBound? bound,
+  ) {
     final file = _file(directory, 'manifest.next', create: true);
     try {
       final bytes = Uint8List.fromList(
@@ -488,6 +528,8 @@ final class DiagnosticStorage implements DiagnosticSink {
     } finally {
       file.close();
     }
+    // replace() enumerates through containsEntry before its rename.
+    _bounded(directory, bound);
     directory.replace('manifest.next', 'manifest.json');
     directory.sync();
   }
@@ -510,8 +552,8 @@ final class DiagnosticStorage implements DiagnosticSink {
     try {
       admission = _file(_root, 'admission.lock');
       if (!admission.tryExclusiveLease()) return false;
-      _validateRoot(_root);
-      _validateSlot(_directory);
+      _validateRoot(_root, _bound);
+      _validateSlot(_directory, _bound);
       _manifest.role = role;
       if (error) _manifest.hasError = true;
       if (role == DiagnosticRole.service &&
@@ -522,8 +564,8 @@ final class DiagnosticStorage implements DiagnosticSink {
           BackupDirectory? directory;
           try {
             directory = _root.child('slot-$i', create: false);
-            _validateSlot(directory);
-            final manifest = _readManifest(directory);
+            _validateSlot(directory, _bound);
+            final manifest = _readManifest(directory, _bound);
             if (manifest != null && manifest.failureOrder > maximum) {
               maximum = manifest.failureOrder;
             }
@@ -542,7 +584,7 @@ final class DiagnosticStorage implements DiagnosticSink {
         _manifest.failureOrder = maximum + 1;
         _manifest.failed = _clock().toUtc().millisecondsSinceEpoch;
       }
-      _writeManifest(_directory, _manifest);
+      _writeManifest(_directory, _manifest, _bound);
       return true;
     } catch (_) {
       _failed = true;

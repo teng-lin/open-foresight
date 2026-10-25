@@ -247,6 +247,19 @@ if(BUILD_TESTING)
   add_test(NAME diagnostic_support COMMAND diagnostic_support_test
     $<TARGET_FILE:diagnostic_launcher_fixture> $<TARGET_FILE:diagnostic_support_test>)
   set_tests_properties(diagnostic_support PROPERTIES TIMEOUT 20)
+  add_executable(diagnostic_directory_test ${FS_DIAG_KERNEL_SOURCE}
+    diagnostic_protocol.c diagnostic_endpoint.c diagnostic_inherited.c
+    diagnostic_support.c ../tests/native/diagnostic_directory.c)
+  set_target_properties(diagnostic_directory_test PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
+  target_compile_options(diagnostic_directory_test PRIVATE -Wall -Wextra -Werror -Wpedantic)
+  target_compile_definitions(diagnostic_directory_test PRIVATE
+    FORESIGHT_DIAGNOSTIC_NATIVE_ID="${FS_DIAG_TEST_NATIVE_ID}"
+    FS_DIAG_DIRECTORY_TEST_HOOKS=1)
+  target_include_directories(diagnostic_directory_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(diagnostic_directory_test PRIVATE Threads::Threads)
+  add_test(NAME diagnostic_directory COMMAND diagnostic_directory_test)
+  set_tests_properties(diagnostic_directory PROPERTIES TIMEOUT 20)
   add_executable(diagnostic_support_races_test ${FS_DIAG_KERNEL_SOURCE}
     diagnostic_protocol.c diagnostic_endpoint.c diagnostic_inherited.c
     ../tests/native/diagnostic_support_races.c)

@@ -528,4 +528,91 @@ void main() {
     expect(storage.append(Uint8List.fromList([123])), isFalse);
     expect(storage.append(_record()), isTrue);
   });
+
+  group('native directory-stream bound', () {
+    test('refusal precedes every root enumeration and admission IO', () {
+      final profile = _profile();
+      // Root admission creates logs; an unexpected entry would be found only
+      // by enumeration (storageUnavailable), never by the bound refusal.
+      Directory('$profile/logs').createSync();
+      File('$profile/logs/unexpected').writeAsStringSync('x');
+      final seen = <int>[];
+      expect(
+        () => DiagnosticStorage.admit(
+          profile,
+          DiagnosticIdentity.random(),
+          DiagnosticRole.service,
+          directoryBound: (descriptor) {
+            seen.add(descriptor);
+            return false;
+          },
+        ),
+        throwsA(
+          isA<DiagnosticStorageUnavailable>().having(
+            (error) => error.reason,
+            'reason',
+            DiagnosticHealthReason.unsupportedFilesystem,
+          ),
+        ),
+      );
+      expect(seen, hasLength(1));
+      expect(File('$profile/logs/admission.lock').existsSync(), isFalse);
+      expect(Directory('$profile/logs').listSync().map((e) => e.path), [
+        '$profile/logs/unexpected',
+      ]);
+    });
+
+    test('refused slot directories are never enumerated or leased', () {
+      final profile = _profile();
+      int? root;
+      final seen = <int>[];
+      final storage = DiagnosticStorage.admit(
+        profile,
+        DiagnosticIdentity.random(),
+        DiagnosticRole.service,
+        directoryBound: (descriptor) {
+          seen.add(descriptor);
+          root ??= descriptor;
+          return descriptor == root;
+        },
+      );
+      expect(storage, isNull);
+      expect(seen.where((value) => value == root), hasLength(1));
+      expect(seen.where((value) => value != root), hasLength(10));
+      for (var index = 0; index < DiagnosticStorage.slotCount; index++) {
+        expect(Directory('$profile/logs/slot-$index').listSync(), isEmpty);
+      }
+    });
+
+    test('accepted bound gates every enumeration on anchored descriptors', () {
+      final profile = _profile();
+      final seen = <int>[];
+      bool bound(int descriptor) {
+        seen.add(descriptor);
+        return true;
+      }
+
+      final storage = DiagnosticStorage.admit(
+        profile,
+        DiagnosticIdentity.random(),
+        DiagnosticRole.service,
+        directoryBound: bound,
+      )!;
+      addTearDown(storage.close);
+      final proof = storage.descriptorProof;
+      final root = proof[0].descriptor, slot = proof[1].descriptor;
+      // Root once; slot validate+manifest read per slot, selected slot's
+      // revalidation and its manifest replace.
+      expect(seen.first, root);
+      expect(seen.where((value) => value == root), hasLength(1));
+      expect(seen.last, slot);
+      expect(seen, hasLength(1 + 2 * DiagnosticStorage.slotCount + 2));
+      seen.clear();
+      expect(storage.append(_record()), isTrue);
+      expect(seen, isEmpty);
+      expect(storage.classify(DiagnosticRole.service, error: true), isTrue);
+      expect(seen.first, root);
+      expect(seen, [root, slot, slot]);
+    });
+  });
 }

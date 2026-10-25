@@ -154,9 +154,14 @@ void main() {
       final path = profile.path;
       profile.close();
       parent.close();
+      final bounded = <int>[];
       final worker = DiagnosticStorageWorkerState.authenticated(
         parentPid: pid,
         buildId: build,
+        directoryBound: (descriptor) {
+          bounded.add(descriptor);
+          return true;
+        },
       );
       addTearDown(() {
         if (!worker.retired) worker.handle(8, empty);
@@ -167,6 +172,7 @@ void main() {
       );
       final first = worker.handle(4, empty);
       expect(first.result, DiagnosticWorkerResult.ok);
+      expect(bounded, isNotEmpty);
       expect(
         classify(worker, role: DiagnosticRole.candidate).result,
         DiagnosticWorkerResult.ok,
@@ -406,6 +412,36 @@ void main() {
       }
     },
   );
+  test('worker admission refuses an unbounded directory stream', () {
+    final parent = BackupDirectory(
+      createTestTempDirectorySync('diag-bound-').path,
+      private: false,
+    );
+    final profile = parent.child('profile');
+    final path = profile.path;
+    profile.close();
+    parent.close();
+    final bounded = <int>[];
+    final worker = DiagnosticStorageWorkerState.authenticated(
+      parentPid: pid,
+      buildId: build,
+      directoryBound: (descriptor) {
+        bounded.add(descriptor);
+        return false;
+      },
+    );
+    expect(
+      worker.handle(2, init(path).encode()).result,
+      DiagnosticWorkerResult.ok,
+    );
+    final reply = worker.handle(4, empty);
+    expect(reply.result, DiagnosticWorkerResult.retry);
+    expect(reply.reason, DiagnosticHealthReason.unsupportedFilesystem);
+    expect(reply.slot, isNull);
+    expect(bounded, hasLength(1));
+    expect(Directory('$path/logs').listSync(), isEmpty);
+    expect(worker.handle(8, empty).reason, DiagnosticHealthReason.closed);
+  });
   test('INIT grants no files and admission retries stay at five', () {
     var calls = 0;
     final worker = DiagnosticStorageWorkerState.forTesting(
@@ -505,9 +541,14 @@ void main() {
       final path = profile.path;
       profile.close();
       parent.close();
+      final bounded = <int>[];
       final worker = DiagnosticStorageWorkerState.authenticated(
         parentPid: pid,
         buildId: build,
+        directoryBound: (descriptor) {
+          bounded.add(descriptor);
+          return true;
+        },
       );
       addTearDown(() {
         if (!worker.retired) worker.handle(8, empty);
@@ -518,6 +559,7 @@ void main() {
       );
       final admitted = worker.handle(4, empty);
       expect(admitted.result, DiagnosticWorkerResult.ok);
+      expect(bounded, isNotEmpty);
       expect(classify(worker).result, DiagnosticWorkerResult.ok);
       final bytes = jsonBytes(record());
       expect(worker.handle(6, bytes).result, DiagnosticWorkerResult.ok);

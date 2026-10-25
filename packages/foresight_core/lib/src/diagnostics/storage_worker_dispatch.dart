@@ -17,18 +17,22 @@ final class DiagnosticStorageWorkerState {
   DiagnosticStorageWorkerState.authenticated({
     required this.parentPid,
     required this.buildId,
-  }) : _factory = null;
+    required DiagnosticDirectoryBound directoryBound,
+  }) : _factory = null,
+       _directoryBound = directoryBound;
 
   @visibleForTesting
   DiagnosticStorageWorkerState.forTesting({
     required this.parentPid,
     required this.buildId,
     required DiagnosticSinkFactory factory,
-  }) : _factory = factory;
+  }) : _factory = factory,
+       _directoryBound = null;
 
   final int parentPid;
   final String buildId;
   final DiagnosticSinkFactory? _factory;
+  final DiagnosticDirectoryBound? _directoryBound;
   DiagnosticWorkerInit? _init;
   DiagnosticSink? _sink;
   DiagnosticRole? _role;
@@ -105,6 +109,7 @@ final class DiagnosticStorageWorkerState {
                     init.session,
                     _role!,
                     applicationPid: parentPid,
+                    directoryBound: _directoryBound,
                   )
                 : _factory(init.profile, init.session, _role!);
           } on DiagnosticStorageUnavailable catch (error) {
@@ -318,6 +323,7 @@ Future<int> runDiagnosticStorageWorker({
     final state = DiagnosticStorageWorkerState.authenticated(
       parentPid: expectedParentPid,
       buildId: dartId,
+      directoryBound: functions.directoryBound,
     );
     final idle = Stopwatch()..start();
     var offset = 0;

@@ -62,9 +62,13 @@ typedef _Receive =
 final class DiagnosticNativeFunctions {
   DiagnosticNativeFunctions.fromImage(DynamicLibrary image)
     : this._(
-        List<int>.unmodifiable(
-          _symbols.map((name) => image.lookup<Void>(name).address),
-        ),
+        List<int>.unmodifiable([
+          ..._symbols.map((name) => image.lookup<Void>(name).address),
+          // Optional: an image without it loads, and storage refuses admission.
+          image.providesSymbol(_directoryBoundSymbol)
+              ? image.lookup<Void>(_directoryBoundSymbol).address
+              : 0,
+        ]),
         image,
       );
 
@@ -90,6 +94,8 @@ final class DiagnosticNativeFunctions {
     'fs_diag_parent_exit_class',
     'fs_diag_child_finish',
   ];
+  static const _directoryBoundSymbol = 'fs_diag_directory_bound';
+  static const directoryBounded = 0;
   static const error = -1,
       prepared = 2,
       spawned = 8,
@@ -107,11 +113,31 @@ final class DiagnosticNativeFunctions {
   final DynamicLibrary? image;
 
   static List<int> _validatedAddresses(List<int> values) {
-    if (values.length != _symbols.length ||
-        values.any((value) => value <= 0 || value > 0x7fffffffffffffff)) {
+    if (values.length != _symbols.length + 1 ||
+        values
+            .take(_symbols.length)
+            .any((value) => value <= 0 || value > 0x7fffffffffffffff) ||
+        values.last < 0) {
       throw ArgumentError('Invalid owned diagnostic function table');
     }
     return List<int>.unmodifiable(values);
+  }
+
+  late final _directoryBound = codeAddresses.last == 0
+      ? null
+      : Pointer<NativeFunction<Int32 Function(Int32)>>.fromAddress(
+          codeAddresses.last,
+        ).asFunction<int Function(int)>();
+
+  /// Closed native DIR-buffer admission for an anchored directory descriptor.
+  /// Only [directoryBounded] permits enumeration; a missing optional symbol,
+  /// refusal or error never falls back to an unbounded libc directory stream.
+  bool directoryBound(int descriptor) {
+    final bound = _directoryBound;
+    return bound != null &&
+        descriptor >= 0 &&
+        descriptor <= 0x7fffffff &&
+        bound(descriptor) == directoryBounded;
   }
 
   late final _reserve = Pointer<NativeFunction<_ReserveNative>>.fromAddress(

@@ -14,6 +14,7 @@
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
@@ -22,7 +23,21 @@
 #include <sys/wait.h>
 #else
 #include <sys/event.h>
+#include <sys/mount.h>
 #include <sys/random.h>
+#endif
+
+// Native fixtures replace only the metadata observations, never enumeration.
+#ifdef FS_DIAG_DIRECTORY_TEST_HOOKS
+int fs_diag_test_fstat(int descriptor, struct stat *information);
+#define DIRECTORY_FSTAT fs_diag_test_fstat
+#ifdef __APPLE__
+int fs_diag_test_fstatfs(int descriptor, struct statfs *volume);
+#define DIRECTORY_FSTATFS fs_diag_test_fstatfs
+#endif
+#else
+#define DIRECTORY_FSTAT fstat
+#define DIRECTORY_FSTATFS fstatfs
 #endif
 
 #ifndef FORESIGHT_DIAGNOSTIC_NATIVE_ID
@@ -659,4 +674,30 @@ int fs_diag_support_receive(uint64_t id, uint8_t *output, uint32_t capacity,
       atomic_store(&context.init_received, 1);
   }
   return result;
+}
+
+int fs_diag_directory_bound(int descriptor) {
+  // The same descriptor that a later fdopendir(openat(descriptor, ".")) reads:
+  // "." names this vnode, so its inode/mount metadata are the ones observed.
+  struct stat information;
+  if (descriptor < 0 || DIRECTORY_FSTAT(descriptor, &information) != 0)
+    return FS_DIAG_SUPPORT_ERROR;
+  if (!S_ISDIR(information.st_mode))
+    return FS_DIAG_DIRECTORY_UNSUPPORTED;
+#ifdef __linux__
+  // glibc fdopendir: malloc(sizeof(DIR) + MIN(MAX(st_blksize, 32KiB), 1MiB))
+  // from this fstat. A larger or bogus hint is refused, never enumerated.
+  if (information.st_blksize <= 0 ||
+      information.st_blksize > FS_DIAG_DIRECTORY_BLOCK_BYTES)
+    return FS_DIAG_DIRECTORY_UNSUPPORTED;
+#else
+  // Darwin Libc fdopendir reads a MNT_UNION stack completely (_filldir). An
+  // ordinary directory uses a 2KiB buffer that readdir grows once to 8KiB.
+  struct statfs volume;
+  if (DIRECTORY_FSTATFS(descriptor, &volume) != 0)
+    return FS_DIAG_SUPPORT_ERROR;
+  if (volume.f_flags & MNT_UNION)
+    return FS_DIAG_DIRECTORY_UNSUPPORTED;
+#endif
+  return FS_DIAG_DIRECTORY_OK;
 }

@@ -81,6 +81,18 @@ int fs_diag_support_receive(uint64_t id, uint8_t *output, uint32_t capacity,
                             uint32_t *copied, uint8_t *type,
                             uint64_t *request_id, uint32_t *total_length);
 
+// Closed directory-enumeration admission for diagnostic storage. Observes only
+// the caller's already anchored directory descriptor: no path, allocation,
+// enumeration or errno text. OK proves the qualified libc DIR buffer bound
+// before fdopendir/readdir: glibc sizes it from fstat st_blksize (accepted
+// <=64KiB); Darwin Libc reads a MNT_UNION directory whole (refused).
+enum {
+  FS_DIAG_DIRECTORY_OK = 0,
+  FS_DIAG_DIRECTORY_UNSUPPORTED = 1,
+  FS_DIAG_DIRECTORY_BLOCK_BYTES = 65536
+};
+int fs_diag_directory_bound(int descriptor);
+
 #ifdef __cplusplus
 }
 #endif
