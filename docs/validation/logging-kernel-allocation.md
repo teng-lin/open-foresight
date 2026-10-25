@@ -51,6 +51,27 @@ component project and built and tested on both hosts: one CTest passed, zero
 skipped, on each. This checks the new target and private test definitions; it is
 not a replacement for the full repository-root native suite.
 
+The initial allocator checkpoint `8c1463e0` subsequently passed fresh
+repository-root builds and native CTest: Linux 34/34 and Mac 37/37, zero skipped.
+Those counts precede the additional interruption and fault tests below.
+
+The Darwin fault fixture compiles the unchanged allocator into a test-only
+translation unit with syscall substitutions. It checks failed low-descriptor
+duplication without descriptor growth, and a substituted unlink failure that
+retains exactly one descriptor and an externally observed directory lease until
+the child exits. An abrupt `_exit` immediately after real exclusive kernel-object
+creation leaves a zero-size object that the next allocation safely reclaims.
+These checks passed on the actual Mac; substitution is not an OS-generated
+unlink failure, and `_exit` is not a SIGKILL interruption.
+
+Both Mac fixtures serialize invocations with their private base-directory lease
+and recover only exact known test leftovers with verified metadata. Unknown or
+nonempty ordinary files, external hardlinks and oversized kernel objects remain
+untouched. CTest interruption setup and guarded cleanup also cover setup-only
+test filtering. The focused extracted CMake project passed six tests, zero
+skipped, on Mac; each setup-only selection ran its setup and cleanup successfully.
+The full native suite has not yet run with these additional fixture changes.
+
 ## Outstanding acceptance
 
 The full repository-root native suite and matching Dart, compiled-service and
@@ -58,8 +79,8 @@ isolated desktop suites remain required for the integrated logging change.
 Current component results do not qualify the eventual child, launcher-to-child
 handshake, watchdog, lifetime owner, build identities or installed application.
 
-Crash-before-unlink, forced unlink failure, cleaner/name replacement and nested
-unsupported mounts need their own runtime controls. Minimum supported operating
+Actual SIGKILL during unlink, OS-generated unlink failure, cleaner/name replacement
+and nested unsupported mounts need their own runtime controls. Minimum supported operating
 systems, other qualified filesystems and packaging targets remain separate
 acceptance lanes. Resource accounting must include the retained lease, kernel
 mapping, directory scan workspace and complete composed owner lifetime.

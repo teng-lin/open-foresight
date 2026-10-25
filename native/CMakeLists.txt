@@ -81,9 +81,48 @@ if(BUILD_TESTING)
       FS_DIAG_TEST_CONTEXT=1
       FS_DIAG_FIXTURE_BASE="${CMAKE_CURRENT_BINARY_DIR}/diagnostic-kernel-namespace"
       FS_DIAG_FIXTURE_PREFIX="/oft${FS_DIAG_NAMESPACE_HASH}")
+    add_test(NAME diagnostic_kernel_interruption COMMAND diagnostic_kernel_test
+      "${CMAKE_CURRENT_BINARY_DIR}" leave-interrupted-fixture)
+    set_tests_properties(diagnostic_kernel_interruption PROPERTIES
+      TIMEOUT 20 FIXTURES_SETUP diagnostic_kernel_stale
+      FIXTURES_REQUIRED diagnostic_kernel_cleanup_guard)
+    add_test(NAME diagnostic_kernel_cleanup COMMAND diagnostic_kernel_test
+      "${CMAKE_CURRENT_BINARY_DIR}" cleanup-fixture)
+    set_tests_properties(diagnostic_kernel_cleanup PROPERTIES
+      TIMEOUT 20 FIXTURES_CLEANUP
+      "diagnostic_kernel_stale;diagnostic_kernel_cleanup_guard")
+    add_executable(diagnostic_kernel_faults_test diagnostic_protocol.c
+      ../tests/native/diagnostic_kernel_faults.c)
+    set_target_properties(diagnostic_kernel_faults_test PROPERTIES
+      C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
+    target_compile_options(diagnostic_kernel_faults_test PRIVATE
+      -Wall -Wextra -Werror -Wpedantic)
+    target_include_directories(diagnostic_kernel_faults_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(diagnostic_kernel_faults_test PRIVATE
+      FS_DIAG_TEST_CONTEXT=1
+      FS_DIAG_FIXTURE_BASE="${CMAKE_CURRENT_BINARY_DIR}/diagnostic-kernel-fault-namespace"
+      FS_DIAG_FIXTURE_PREFIX="/ofx${FS_DIAG_NAMESPACE_HASH}")
+    add_test(NAME diagnostic_kernel_faults_interruption
+      COMMAND diagnostic_kernel_faults_test leave-interrupted-fixture)
+    # A separately required cleanup guard also covers setup-only filtering.
+    set_tests_properties(diagnostic_kernel_faults_interruption PROPERTIES
+      TIMEOUT 25 FIXTURES_SETUP diagnostic_kernel_faults_stale
+      FIXTURES_REQUIRED diagnostic_kernel_faults_cleanup_guard)
+    add_test(NAME diagnostic_kernel_faults COMMAND diagnostic_kernel_faults_test)
+    set_tests_properties(diagnostic_kernel_faults PROPERTIES
+      TIMEOUT 25 FIXTURES_REQUIRED diagnostic_kernel_faults_stale)
+    add_test(NAME diagnostic_kernel_faults_cleanup
+      COMMAND diagnostic_kernel_faults_test cleanup-fixture)
+    set_tests_properties(diagnostic_kernel_faults_cleanup PROPERTIES
+      TIMEOUT 25 FIXTURES_CLEANUP
+      "diagnostic_kernel_faults_stale;diagnostic_kernel_faults_cleanup_guard")
   endif()
   add_test(NAME diagnostic_kernel COMMAND diagnostic_kernel_test "${CMAKE_CURRENT_BINARY_DIR}")
   set_tests_properties(diagnostic_kernel PROPERTIES TIMEOUT 20)
+  if(APPLE)
+    set_tests_properties(diagnostic_kernel PROPERTIES FIXTURES_REQUIRED diagnostic_kernel_stale)
+  endif()
   add_executable(native_spawn_contract_test ../tests/native/spawn_contract.cpp)
   target_compile_features(native_spawn_contract_test PRIVATE cxx_std_20)
   target_link_libraries(native_spawn_contract_test PRIVATE Threads::Threads ${CMAKE_DL_LIBS})

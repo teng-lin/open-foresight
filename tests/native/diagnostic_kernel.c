@@ -12,6 +12,9 @@
 #include <string.h>
 #include <sys/file.h>
 #include <sys/mman.h>
+#ifdef __APPLE__
+#include <sys/mount.h>
+#endif
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -23,6 +26,12 @@
               #value);                                                         \
       abort();                                                                 \
     }                                                                          \
+  } while (0)
+
+#define FORMAT(buffer, ...)                                                    \
+  do {                                                                         \
+    int length = snprintf(buffer, sizeof(buffer), __VA_ARGS__);                \
+    CHECK(length > 0 && (size_t)length < sizeof(buffer));                      \
   } while (0)
 
 static void joined(pid_t child) {
@@ -72,7 +81,7 @@ static void allocation(const char *executable) {
   CHECK(atomic_load(&page.mapping->header.child_pid) == (uint64_t)child);
 
   char descriptor[24];
-  CHECK(snprintf(descriptor, sizeof(descriptor), "%d", page.descriptor) > 0);
+  FORMAT(descriptor, "%d", page.descriptor);
   child = fork();
   CHECK(child >= 0);
   if (child == 0) {
@@ -139,16 +148,103 @@ static void ordinary_file_lock(const char *root) {
 #error Darwin allocator tests require a private compiled namespace
 #endif
 
+static int fixture_directory(int parent, const char *name) {
+  int descriptor =
+      openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  if (descriptor < 0) {
+    CHECK(errno == ENOENT);
+    return -1;
+  }
+  struct stat metadata;
+  struct statfs mount;
+  CHECK(fstat(descriptor, &metadata) == 0 && S_ISDIR(metadata.st_mode));
+  CHECK(metadata.st_uid == geteuid() && (metadata.st_mode & 07777) == 0700);
+  CHECK(fstatfs(descriptor, &mount) == 0 && (mount.f_flags & MNT_LOCAL));
+  CHECK(strcmp(mount.f_fstypename, "apfs") == 0);
+  return descriptor;
+}
+
+static void remove_planted_file(int parent, const char *name) {
+  struct stat metadata;
+  if (fstatat(parent, name, &metadata, AT_SYMLINK_NOFOLLOW) < 0) {
+    CHECK(errno == ENOENT);
+    return;
+  }
+  CHECK(S_ISREG(metadata.st_mode) && metadata.st_uid == geteuid());
+  CHECK((metadata.st_mode & 07777) == 0600 && metadata.st_nlink == 1 &&
+        metadata.st_size == 0);
+  CHECK(unlinkat(parent, name, 0) == 0);
+}
+
+// Only this build's private fixture owns these names. Serialize invocations
+// before reclaiming the exact objects intentionally left by interrupted tests;
+// refuse anything whose type, owner, mode or size differs from our fixtures.
+static int prepare_fixture(void) {
+  CHECK(FS_DIAG_FIXTURE_PREFIX[0] == '/' &&
+        strcmp(FS_DIAG_FIXTURE_PREFIX, "/ofdg1") != 0);
+  for (size_t i = 1; i != sizeof(FS_DIAG_FIXTURE_PREFIX) - 1; ++i)
+    CHECK(
+        (FS_DIAG_FIXTURE_PREFIX[i] >= 'a' &&
+         FS_DIAG_FIXTURE_PREFIX[i] <= 'z') ||
+        (FS_DIAG_FIXTURE_PREFIX[i] >= '0' && FS_DIAG_FIXTURE_PREFIX[i] <= '9'));
+  CHECK(mkdir(FS_DIAG_FIXTURE_BASE, 0700) == 0 || errno == EEXIST);
+  int base = fixture_directory(AT_FDCWD, FS_DIAG_FIXTURE_BASE);
+  CHECK(base >= 0 && flock(base, LOCK_EX | LOCK_NB) == 0);
+  char name[48];
+  FORMAT(name, "%s.%lu.00", FS_DIAG_FIXTURE_PREFIX, (unsigned long)geteuid());
+  int object = shm_open(name, O_RDONLY, 0);
+  if (object >= 0) {
+    struct stat metadata;
+    CHECK(fstat(object, &metadata) == 0 && (metadata.st_mode & S_IFMT) == 0);
+    CHECK(metadata.st_uid == geteuid());
+    CHECK((metadata.st_mode & 07777) == 0600 ||
+          (metadata.st_mode & 07777) == 0400);
+    CHECK(metadata.st_size == 0 || metadata.st_size == FS_DIAG_PAGE_BYTES);
+    CHECK(shm_unlink(name) == 0 && close(object) == 0);
+  } else {
+    CHECK(errno == ENOENT);
+  }
+  FORMAT(name, "of-diag-v1-%lu", (unsigned long)geteuid());
+  int root = fixture_directory(base, name);
+  if (root >= 0) {
+    remove_planted_file(root, "unexpected");
+    int slot = fixture_directory(root, "00");
+    if (slot >= 0) {
+      remove_planted_file(slot, "entry");
+      CHECK(close(slot) == 0);
+    }
+    CHECK(close(root) == 0);
+  }
+  return base;
+}
+
+static void leave_interrupted_fixture(void) {
+  char root[1024], name[48];
+  FORMAT(root, "%s/of-diag-v1-%lu", FS_DIAG_FIXTURE_BASE,
+         (unsigned long)geteuid());
+  int directory = fixture_directory(AT_FDCWD, root);
+  CHECK(directory >= 0);
+  int planted =
+      openat(directory, "unexpected", O_CREAT | O_EXCL | O_RDWR, 0600);
+  CHECK(planted >= 0 && close(planted) == 0);
+  int slot = fixture_directory(directory, "00");
+  CHECK(slot >= 0);
+  planted = openat(slot, "entry", O_CREAT | O_EXCL | O_RDWR, 0600);
+  CHECK(planted >= 0 && close(planted) == 0);
+  FORMAT(name, "%s.%lu.00", FS_DIAG_FIXTURE_PREFIX, (unsigned long)geteuid());
+  CHECK(shm_open(name, O_CREAT | O_EXCL | O_RDWR, 0400) >= 0);
+  _exit(0);
+}
+
 static void private_namespace(void) {
   char root[1024], path[1100], name[32];
-  CHECK(snprintf(root, sizeof(root), "%s/of-diag-v1-%lu", FS_DIAG_FIXTURE_BASE,
-                 (unsigned long)geteuid()) > 0);
-  CHECK(snprintf(name, sizeof(name), "%s.%lu.00", FS_DIAG_FIXTURE_PREFIX,
-                 (unsigned long)geteuid()) > 0);
+  FORMAT(root, "%s/of-diag-v1-%lu", FS_DIAG_FIXTURE_BASE,
+         (unsigned long)geteuid());
+  FORMAT(name, "%s.%lu.00", FS_DIAG_FIXTURE_PREFIX, (unsigned long)geteuid());
   fs_diag_kernel_page page;
   // An unexpected ordinary-file candidate is never data-opened or closed by
   // the allocator, even when it is an alias of a held application lock.
-  CHECK(snprintf(path, sizeof(path), "%s/unexpected", root) > 0);
+  FORMAT(path, "%s/unexpected", root);
   int ordinary = open(path, O_CREAT | O_EXCL | O_RDWR, 0600);
   CHECK(ordinary >= 0);
   struct flock lock = {.l_type = F_WRLCK, .l_whence = SEEK_SET};
@@ -158,7 +254,7 @@ static void private_namespace(void) {
   CHECK(!contender_can_lock(ordinary));
   CHECK(close(ordinary) == 0 && unlink(path) == 0);
 
-  CHECK(snprintf(path, sizeof(path), "%s/00/entry", root) > 0);
+  FORMAT(path, "%s/00/entry", root);
   ordinary = open(path, O_CREAT | O_EXCL | O_RDWR, 0600);
   CHECK(ordinary >= 0);
   CHECK(fs_diag_kernel_page_create(&page) ==
@@ -167,7 +263,7 @@ static void private_namespace(void) {
 
   int slots[64];
   for (unsigned index = 0; index != 64; ++index) {
-    CHECK(snprintf(path, sizeof(path), "%s/%02u", root, index) > 0);
+    FORMAT(path, "%s/%02u", root, index);
     CHECK(mkdir(path, 0700) == 0 || errno == EEXIST);
     slots[index] = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     CHECK(slots[index] >= 0 && flock(slots[index], LOCK_EX | LOCK_NB) == 0);
@@ -215,9 +311,20 @@ int main(int argc, char **argv) {
     size_is_fixed(FS_DIAG_CHILD_FD);
     return 0;
   }
-  CHECK(argc == 2 && argv[0][0] == '/' && argv[1][0] == '/');
+  CHECK((argc == 2 || argc == 3) && argv[0][0] == '/' && argv[1][0] == '/');
 #ifdef __APPLE__
-  CHECK(mkdir(FS_DIAG_FIXTURE_BASE, 0700) == 0 || errno == EEXIST);
+  int fixture_lease = prepare_fixture();
+  if (argc == 3) {
+    if (strcmp(argv[2], "cleanup-fixture") == 0) {
+      CHECK(close(fixture_lease) == 0);
+      return 0;
+    }
+    CHECK(strcmp(argv[2], "leave-interrupted-fixture") == 0);
+    allocation(argv[0]);
+    leave_interrupted_fixture();
+  }
+#else
+  CHECK(argc == 2);
 #endif
   CHECK(fs_diag_kernel_page_create(NULL) == FS_DIAG_KERNEL_UNSUPPORTED);
   allocation(argv[0]);
@@ -237,6 +344,9 @@ int main(int argc, char **argv) {
     }
     joined(child);
   }
+#ifdef __APPLE__
+  CHECK(close(fixture_lease) == 0);
+#endif
   puts("kernel allocation, fixed size, inheritance, low stdio and lock "
        "controls passed");
   return 0;
