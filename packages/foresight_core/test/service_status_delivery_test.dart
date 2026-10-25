@@ -7,6 +7,7 @@ import 'package:clock/clock.dart';
 import 'package:foresight_core/desktop.dart'
     show
         GenerationPresentationValue,
+        RemoteModelDownloader,
         CapturePresentation,
         GooglePresentation,
         GenerationPresentation;
@@ -164,6 +165,53 @@ void main() {
       'token': File('${profile.data}/.desktop-capability').readAsStringSync(),
     });
   });
+
+  test(
+    'real changed broadcasts deliver model download phases to RemoteDomain',
+    () async {
+      final remote = await RemoteDomain.connect(profile);
+      addTearDown(() async {
+        remote.close();
+        await remote.closed;
+      });
+      await client.call('security.detach_desktop');
+      await remote.setDesktopVisible(true);
+      await remote.enableDesktopApprovals((_) {});
+      final model = gemmaModels.last;
+      final phases = <String>[];
+      final delivered = remote.changes.firstWhere(
+        (_) => remote.modelAssetDownload.digest == model.digest,
+      );
+      final proxy = RemoteModelDownloader(remote);
+      addTearDown(proxy.cancel);
+      await expectLater(
+        proxy.download(
+          model,
+          Directory('${root.path}/unused-client-root'),
+          phase: (value) => phases.add(value.name),
+        ),
+        throwsA(
+          isA<RpcError>().having(
+            (e) => e.code,
+            'code',
+            RpcErrorCode.invalidArgument,
+          ),
+        ),
+      );
+      // The real owner has a checking phase; no model bytes, native runner or
+      // publisher consent are fabricated by this fixture. This crosses both
+      // the real service envelope (which assigns its own requestId) and proxy.
+      await delivered.timeout(const Duration(seconds: 3));
+      expect(remote.modelAssetDownload.requestId, startsWith('model-asset-'));
+      expect(remote.modelAssetDownload.phase.name, 'checkingCache');
+      expect(remote.modelAssetDownload.active, false);
+      expect(phases, contains('checkingCache'));
+      expect(
+        snapshots.last['model_asset_download'],
+        containsPair('request_id', remote.modelAssetDownload.requestId),
+      );
+    },
+  );
 
   test('typed desktop values decode real service producer JSON', () async {
     final application = service.application;

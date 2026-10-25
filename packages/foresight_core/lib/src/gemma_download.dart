@@ -1,3 +1,5 @@
+export 'model_asset_failure.dart';
+import 'model_asset_failure.dart';
 export 'model_host_info.dart';
 import 'model_catalog.dart';
 import 'model_download_contract.dart';
@@ -20,7 +22,7 @@ Future<int> availableModelDiskBytes(Directory directory) async {
   final columns = rows.last.trim().split(RegExp(r'\s+'));
   final blocks = columns.length >= 6 ? int.tryParse(columns[3]) : null;
   if (result.exitCode != 0 || blocks == null || blocks < 0) {
-    throw StateError('Unable to check free disk space for model download.');
+    throw ModelAssetFailure(ModelAssetFailureCode.diskSpace);
   }
   return blocks * 1024;
 }
@@ -187,8 +189,9 @@ class GemmaDownload implements ModelDownloader {
           16 * 1024 * 1024;
       final available = await availableBytes(directory);
       if (available < required) {
-        throw StateError(
-          'Not enough free disk space. Model setup needs ${(required / 1e9).toStringAsFixed(2)} GB more free space.',
+        throw ModelAssetFailure(
+          ModelAssetFailureCode.diskSpace,
+          requiredBytes: required,
         );
       }
       _check();
@@ -233,8 +236,9 @@ class GemmaDownload implements ModelDownloader {
           if (offset > 0) {
             if (await availableBytes(directory) <
                 model.bytes + 16 * 1024 * 1024) {
-              throw StateError(
-                'Not enough free disk space to restart this download.',
+              throw ModelAssetFailure(
+                ModelAssetFailureCode.diskSpace,
+                requiredBytes: model.bytes + 16 * 1024 * 1024,
               );
             }
             received -= offset;
@@ -308,7 +312,7 @@ class GemmaDownload implements ModelDownloader {
         // A complete corrupt transfer cannot be resumed into a valid file.
         await temporary.delete(recursive: true);
         assembly = null;
-        throw StateError('Model download failed size or hash verification');
+        throw ModelAssetFailure(ModelAssetFailureCode.hash);
       }
       _check();
       // POSIX rename atomically replaces only after complete authentication.
@@ -322,9 +326,7 @@ class GemmaDownload implements ModelDownloader {
           failure is SocketException ||
           failure is HandshakeException ||
           failure is TimeoutException) {
-        throw StateError(
-          'Model transfer interrupted. Retry to resume the saved download.',
-        );
+        throw ModelAssetFailure(ModelAssetFailureCode.interrupted);
       }
       rethrow;
     } finally {
@@ -355,7 +357,7 @@ class GemmaDownload implements ModelDownloader {
     var uri = source;
     for (var redirects = 0; redirects <= 5; redirects++) {
       if (uri.scheme != 'https' || uri.userInfo.isNotEmpty) {
-        throw StateError('Model downloads require HTTPS');
+        throw ModelAssetFailure(ModelAssetFailureCode.https);
       }
       _check();
       final request = await client

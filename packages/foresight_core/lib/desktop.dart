@@ -82,3 +82,4 @@ export 'src/client_results.dart'
         ServiceStopResult;
 export 'src/operation_requests/graph_inputs.dart' show GraphSourceInput;
 export 'src/operation_descriptor.dart' show OperationDescriptor;
+export 'src/model_asset_failure.dart';

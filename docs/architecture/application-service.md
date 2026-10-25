@@ -468,17 +468,36 @@ source/JIT total-deadline case. Question-model downloads retain their existing
 buffered-byte semantics. Public
 Gemma and speech assets reuse that worker ownership and deadline policy while
 retaining their disk-backed resumable parts, bounded-memory assembly and final
-checksum verification. Only the final path returns to the service parent.
+checksum verification. Public-file whole-attempt budgets derive from independently
+pinned catalog byte counts: five minutes of headroom, transfer at 256 KiB/s, and
+five full disk passes at 1 MiB/s. The total allows the configured finite retry
+count plus one minute for retry delays. Caller-asserted sizes do not set these
+bounds. Connect/header/body-idle limits remain 30 seconds; question-model budgets
+remain five/15 minutes. Only the final path returns to the service parent.
 
 `models.inspect_asset` verifies a pinned model's existing cache/registration and
 returns its path or null. `models.download_asset` requires a pinned kind/digest
 and request ID, verifies publisher consent before network work, and performs
 Gemma runtime preflight in the service. Progress is published in the normal
-`model_asset_download` status value. A desktop owns its subscription/current
+`model_asset_download` status value and each normal changed broadcast. The
+validated optional `progress_key` (1–256 characters) correlates that presentation
+with the desktop subscription independently of the service's authoritative
+request ID and cancellation envelope. A desktop owns its subscription/current
 predicate; the service retains its busy owner until download and worker cleanup
 settle. Shutdown revokes new work synchronously and joins that producer before
 model/runtime teardown. Existing model install operations keep their separate
-configuration reservation and native ownership.
+configuration reservation and native ownership. If bounded preflight or transfer
+termination cannot confirm child exit, the job's bookkeeping still settles and
+a `restart_required` state blocks replacement downloads until service restart;
+it does not claim the unknown child was reaped.
+
+Public workers return closed failure codes (`diskSpace`, `interrupted`, `hash`,
+`https`, `invalid`) and an optional bounded required-byte count. The service maps
+those to safe model-setup RpcErrors; model dialogs allow only known model error
+messages and never display arbitrary exception, path or authenticated URL text.
+Service cache hashing checks cancellation between streamed file chunks.
+Audio discovery shares one in-flight adapter child and kills and reaps it on
+timeout before admitting another enumeration.
 
 Desktop setup imports model/catalog values, read-only cache helpers and the
 remote downloader interface. Its compile closure excludes the HTTP download

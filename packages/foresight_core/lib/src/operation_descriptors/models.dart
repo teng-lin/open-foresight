@@ -22,6 +22,13 @@ const modelsDownloadAssetDescriptor = OperationDescriptor(
   createsLease: true,
   arguments: OperationArgumentSchema([
     ArgumentField(
+      'progress_key',
+      ArgumentKind.string,
+      nullable: true,
+      minimumLength: 1,
+      maximumLength: 256,
+    ),
+    ArgumentField(
       'kind',
       ArgumentKind.string,
       choices: ['generation', 'embedding', 'speech'],
