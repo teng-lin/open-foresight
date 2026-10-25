@@ -713,3 +713,40 @@ The next hosted head must verify these changes. Logging, native lifecycle and
 client/service architecture candidate branches remain separate and unaccepted
 by this draft until their remaining implementation, reviews and combined gates
 finish. This follow-up does not close the deferred security findings.
+
+### Darwin parallel-gate cancellation follow-up
+
+Hosted `f333f819` passed quality, dependency and sanitizer workflows. Its Mac
+source/SDK contracts failed **1 / 511 passed / 12 skipped / 1 deselected**:
+`test_cancellation_reaps_owned_branch_and_descendant` encountered `EPERM` when
+signalling a retiring process group after its leader was reaped. Full failed
+job output is retained at `/var/tmp/of-pr180-f333-macos-job.log` (job
+`121042480521`, platform run `40151027601`). This is a tooling cancellation
+failure; subsequent Mac application gates did not establish acceptance.
+
+Reviewed repair `f9410366`, applied locally as `140e6eb7`, retries that permission
+error only on Darwin after the owned leader exits, for at most one second.
+Success still requires actual signal delivery or group disappearance; live or
+persistent permission failures remain errors. Cleanup attempts TERM and KILL for
+every started group even if an earlier group fails, reaps joinable leaders with
+a shared finite deadline, and retains all cleanup errors. A real-process negative
+control reproduced the old cleanup leaving the second gate running; the repaired
+test verifies that later gate is reaped while the first denial remains a failure.
+
+Native-peer and updated Claude reviews converged. Full Linux Python passed
+**5,626 / 31 skipped / 95.85%**, enforcing the 95% combined line/branch gate;
+ruff, mypy (**168** files) and the subprocess-timeout guard passed. The focused
+runner suites passed **26/26**, zero skips, on Linux and HanSolo Mac 26.6 with
+matching source hashes. Initial Linux infrastructure failures selected an
+unconfigured Ninja shim; all **36** affected cases passed first after selecting
+the already pinned CMake 3.31.6 and Ninja 1.12.1, before coherent full checks.
+Original output and the intermediate mypy correction remain under
+`/var/tmp/of-pg`. No compiler/SDK input, workflow permission, artifact-trust
+selector, test timeout or coverage gate changed. Hosted Mac 15 must still verify
+the repair.
+
+Logging allocator and protocol work remains on its separate candidate branch;
+its component results do not establish the storage child or application
+integration. Native lifecycle/client candidates also remain unaccepted while
+their remaining review findings are repaired. This follow-up keeps one draft PR
+and does not claim completion of either combined plan.
