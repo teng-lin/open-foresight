@@ -33,8 +33,8 @@ Notable changes to Open Foresight are recorded here. Versions follow
 ### Fixed
 
 - Let cancelled model downloads finish cleanup when a descendant still holds a
-  worker output pipe. Refuse replacement downloads if worker exit cannot be
-  confirmed.
+  worker output pipe. Reach restart-required promptly when cancellation cannot
+  confirm worker exit or reader retirement.
 - Keep model and recording cleanup responsive while native workers finish.
   Model replacement and service shutdown retain ownership until native cleanup
   and pending callbacks settle; recording preserves speech model reuse.

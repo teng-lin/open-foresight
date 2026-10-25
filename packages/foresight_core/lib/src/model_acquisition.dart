@@ -870,6 +870,11 @@ class _ModelTransportProcess {
     // No diagnostic bytes from the child are trusted or retained. Draining is
     // independent of stdout and cannot grow an in-memory stderr tail.
     final output = _output = StreamIterator(process.stdout);
+    // StreamIterator subscribes lazily. Own the read end before cancellation
+    // during launch/stdin close can retire it; cancelling an untouched iterator
+    // would otherwise leave the process pipe open until VM finalization.
+    var more = output.moveNext();
+    more.ignore();
     final errors = _errors = StreamIterator(process.stderr);
     Future<void> discardErrors() async {
       while (await errors.moveNext()) {}
@@ -886,7 +891,7 @@ class _ModelTransportProcess {
     final header = BytesBuilder(copy: false);
     Uint8List? result;
     var offset = 0;
-    while (await output.moveNext()) {
+    while (await more) {
       if (_cancelled) throw const ModelTransportException('cancelled');
       final chunk = output.current;
       var begin = 0;
@@ -991,6 +996,7 @@ class _ModelTransportProcess {
         result.setRange(offset, offset + count, chunk, begin);
         offset += count;
       }
+      more = output.moveNext();
     }
     if (_cancelled) throw const ModelTransportException('cancelled');
     await errorsDone;

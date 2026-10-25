@@ -24,13 +24,24 @@ Future<void> reached(File marker) async {
   }
 }
 
-Future<File> heldPipeWorker(Directory root) async {
+Future<File> heldPipeWorker(
+  Directory root, {
+  bool stderrOnly = false,
+  bool skipConfiguration = false,
+}) async {
   final worker = File('${root.path}/transport-worker');
   final python = Platform.environment['FORESIGHT_PYTHON'] ?? '/usr/bin/python3';
   worker.writeAsStringSync('''#!$python
-import os,pathlib,signal,subprocess,sys,time
+import os,pathlib,signal,subprocess,sys,threading,time
 root=pathlib.Path(__file__)
 if '--held-output-child' in sys.argv:
+ def cleanup():
+  deadline=time.monotonic()+20
+  while not pathlib.Path(str(root)+'.cleanup').exists():
+   if time.monotonic()>deadline:break
+   time.sleep(.005)
+  os._exit(0)
+ threading.Thread(target=cleanup,daemon=True).start()
  pathlib.Path(str(root)+'.pipe-entered').write_text(str(os.getpid()))
  deadline=time.monotonic()+20
  while not pathlib.Path(str(root)+'.release').exists():
@@ -38,21 +49,41 @@ if '--held-output-child' in sys.argv:
   time.sleep(.005)
  try:
   for _ in range(128):
-   os.write(1,b'!'*4096)
+   os.write(${stderrOnly ? 2 : 1},b'!'*4096)
    time.sleep(.005)
  except BrokenPipeError:
   pathlib.Path(str(root)+'.pipe-closed').write_text('closed')
   os._exit(0)
  sys.exit(4)
 signal.signal(signal.SIGTERM,signal.SIG_IGN)
-sys.stdin.buffer.read()
-subprocess.Popen([sys.executable,__file__,'--held-output-child'],stdin=subprocess.DEVNULL)
+if not ${skipConfiguration ? 'True' : 'False'}:sys.stdin.buffer.read()
+subprocess.Popen([sys.executable,__file__,'--held-output-child'],stdin=subprocess.DEVNULL,stdout=${stderrOnly ? 'subprocess.DEVNULL' : 'None'})
+${stderrOnly ? 'os.close(1)' : ''}
 pathlib.Path(str(root)+'.leader-entered').write_text(str(os.getpid()))
 while True:time.sleep(.1)
 ''');
   final mode = await Process.run('/bin/chmod', ['700', worker.path]);
   expect(mode.exitCode, 0, reason: '${mode.stdout}\n${mode.stderr}');
   return worker;
+}
+
+Future<void> fixtureDescendantExited(File worker) async {
+  final marker = File('${worker.path}.pipe-entered');
+  if (!marker.existsSync()) return;
+  final child = int.parse(marker.readAsStringSync());
+  final elapsed = Stopwatch()..start();
+  while (true) {
+    // Signal zero observes existence only; never kill a potentially reused PID.
+    final observed = await Process.run('/bin/kill', [
+      '-0',
+      '$child',
+    ]).timeout(const Duration(seconds: 2));
+    if (observed.exitCode != 0) return;
+    if (elapsed.elapsed > const Duration(seconds: 5)) {
+      throw TestFailure('Fixture descendant did not exit after cleanup');
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
 }
 
 GemmaModel controlModel() => GemmaModel(
@@ -102,39 +133,72 @@ void main() {
     );
   });
 
-  test(
-    'public cancellation retires the owned stdout before a descendant EOF',
-    () async {
-      final root = createTestTempDirectorySync('held-transport-');
-      final worker = await heldPipeWorker(root);
-      runtimeConfiguration.environment['FORESIGHT_SERVICE'] = worker.path;
-      final downloader = PublicModelFileDownloader();
-      final work = downloader.download(controlModel(), root);
-      final result = work.then<Object?>(
-        (value) => value,
-        onError: (Object error) => error,
-      );
-      try {
-        await reached(File('${worker.path}.leader-entered'));
-        await reached(File('${worker.path}.pipe-entered'));
-        downloader.cancel();
-        expect(
-          await result.timeout(const Duration(seconds: 4)),
-          isA<ModelDownloadCancelled>(),
+  for (final scenario in [
+    (name: 'stdout', stderrOnly: false, duringLaunch: false),
+    (name: 'stderr after stdout EOF', stderrOnly: true, duringLaunch: false),
+    (name: 'stdout during launch', stderrOnly: false, duringLaunch: true),
+  ]) {
+    test(
+      'public cancellation retires owned ${scenario.name} before descendant EOF',
+      () async {
+        final root = createTestTempDirectorySync('held-transport-');
+        final worker = await heldPipeWorker(
+          root,
+          stderrOnly: scenario.stderrOnly,
+          skipConfiguration: scenario.duringLaunch,
         );
-        // EOF is deliberately withheld until after cancellation has settled.
-        expect(File('${worker.path}.release').existsSync(), isFalse);
-      } finally {
-        downloader.cancel();
-        File('${worker.path}.release').writeAsStringSync('release');
-        await result.timeout(const Duration(seconds: 5));
-        // The real descendant observes our closed read end, rather than being
-        // silently abandoned or allowed to hold the producer's close Future.
-        await reached(File('${worker.path}.pipe-closed'));
-      }
-    },
-    timeout: const Timeout(Duration(seconds: 25)),
-  );
+        runtimeConfiguration.environment['FORESIGHT_SERVICE'] = worker.path;
+        late final PublicModelFileDownloader downloader;
+        downloader = PublicModelFileDownloader(
+          startWorker: scenario.duringLaunch
+              ? (command) async {
+                  final process = await Process.start(
+                    command.first,
+                    command.skip(1).toList(),
+                    includeParentEnvironment: false,
+                  );
+                  await reached(File('${worker.path}.leader-entered'));
+                  await reached(File('${worker.path}.pipe-entered'));
+                  downloader.cancel();
+                  return process;
+                }
+              : null,
+        );
+        final work = downloader.download(controlModel(), root);
+        final result = work.then<Object?>(
+          (value) => value,
+          onError: (Object error) => error,
+        );
+        try {
+          await reached(File('${worker.path}.leader-entered'));
+          await reached(File('${worker.path}.pipe-entered'));
+          downloader.cancel();
+          expect(
+            await result.timeout(const Duration(seconds: 4)),
+            isA<ModelDownloadCancelled>(),
+          );
+          expect(File('${worker.path}.release').existsSync(), isFalse);
+          File('${worker.path}.release').writeAsStringSync('release');
+          // The real descendant must observe the closed read end, including
+          // cancellation before the parser's first moveNext call.
+          await reached(File('${worker.path}.pipe-closed'));
+        } finally {
+          downloader.cancel();
+          File('${worker.path}.release').writeAsStringSync('release');
+          // An independent fixture thread exits even when its main thread is
+          // blocked writing to an incorrectly retained pipe. No guessed PID
+          // signal is needed to clean up a failing regression control.
+          File('${worker.path}.cleanup').writeAsStringSync('cleanup');
+          try {
+            await result.timeout(const Duration(seconds: 5));
+          } finally {
+            await fixtureDescendantExited(worker);
+          }
+        }
+      },
+      timeout: const Timeout(Duration(seconds: 25)),
+    );
+  }
 
   test(
     'lost exit acknowledgement settles close and forbids replacement',
@@ -173,6 +237,7 @@ sys.stdout.buffer.flush()
         },
       );
       final store = Store('${root.path}/app.db');
+      addTearDown(store.close);
       final model = controlModel();
       store.setPreference('modelTerms.fixture/model.revision', 'accepted');
       final owner = ModelAssetAcquisitionCoordinator(
@@ -236,7 +301,6 @@ sys.stdout.buffer.flush()
         }
         await result.timeout(const Duration(seconds: 5));
         await owner.close().timeout(const Duration(seconds: 2));
-        store.close();
       }
     },
     timeout: const Timeout(Duration(seconds: 20)),
