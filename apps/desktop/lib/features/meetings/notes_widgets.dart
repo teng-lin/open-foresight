@@ -1,3 +1,4 @@
+import '../../generated_content.dart';
 import 'package:flutter/material.dart';
 import 'meeting_visuals.dart';
 
@@ -120,4 +121,199 @@ class MeetingNotesInput extends StatelessWidget {
       ],
     );
   }
+}
+
+class MeetingEnhancedBody extends StatelessWidget {
+  const MeetingEnhancedBody({
+    super.key,
+    required this.enhancedText,
+    required this.preview,
+    required this.hasProgress,
+    required this.status,
+    required this.openLink,
+  });
+  final String enhancedText, status;
+  final bool preview, hasProgress;
+  final Future<void> Function(Uri) openLink;
+  @override
+  Widget build(BuildContext context) => enhancedText.isEmpty && !hasProgress
+      ? Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (!preview) ...[
+                  const Icon(
+                    Icons.auto_awesome,
+                    color: Color(0xffb8bec8),
+                    size: 32,
+                  ),
+                  const SizedBox(height: 16),
+                ],
+                Text(
+                  status.isEmpty
+                      ? 'Live enhanced notes will appear here as shorthand notes are written.'
+                      : status,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Color(0xff959ba5),
+                    fontSize: 14,
+                    height: 1.5,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        )
+      : SingleChildScrollView(
+          padding: const EdgeInsets.all(20),
+          child: GeneratedContent(enhancedText, openLink: openLink),
+        );
+}
+
+class MeetingNotesToolbar extends StatelessWidget {
+  const MeetingNotesToolbar({
+    super.key,
+    required this.preview,
+    required this.live,
+    required this.enhancing,
+    required this.enhancedVisible,
+    required this.noteStyle,
+    required this.onFormat,
+    required this.onStyle,
+    required this.onEnhance,
+    required this.onToggleLive,
+    required this.onShowEnhanced,
+    this.assistantToggle,
+  });
+  final bool preview, live, enhancing, enhancedVisible;
+  final String noteStyle;
+  final void Function(String, String) onFormat;
+  final ValueChanged<String> onStyle;
+  final VoidCallback? onEnhance;
+  final VoidCallback onToggleLive, onShowEnhanced;
+  final Widget? assistantToggle;
+  @override
+  Widget build(BuildContext context) => Container(
+    width: double.infinity,
+    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+    child: Wrap(
+      alignment: WrapAlignment.spaceBetween,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 8,
+      runSpacing: 4,
+      children: [_formatting(), _actions()],
+    ),
+  );
+  Widget _formatting() => preview
+      ? PopupMenuButton<String>(
+          tooltip: 'Format notes',
+          icon: const Icon(Icons.text_format),
+          onSelected: (format) {
+            switch (format) {
+              case 'Bold':
+                onFormat('**', '**');
+              case 'Italic':
+                onFormat('*', '*');
+              case 'Bullet list':
+                onFormat('\n- ', '');
+              case 'Numbered list':
+                onFormat('\n1. ', '');
+              case 'Heading':
+                onFormat('\n# ', '');
+            }
+          },
+          itemBuilder: (_) => [
+            for (final format in [
+              'Bold',
+              'Italic',
+              'Bullet list',
+              'Numbered list',
+              'Heading',
+            ])
+              PopupMenuItem(value: format, child: Text(format)),
+          ],
+        )
+      : IconButtonTheme(
+          data: IconButtonThemeData(
+            style: IconButton.styleFrom(
+              fixedSize: const Size(40, 40),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                tooltip: 'Bold',
+                onPressed: () => onFormat('**', '**'),
+                icon: const Icon(Icons.format_bold),
+              ),
+              IconButton(
+                tooltip: 'Italic',
+                onPressed: () => onFormat('*', '*'),
+                icon: const Icon(Icons.format_italic),
+              ),
+              IconButton(
+                tooltip: 'Bullet list',
+                onPressed: () => onFormat('\n- ', ''),
+                icon: const Icon(Icons.format_list_bulleted),
+              ),
+              IconButton(
+                tooltip: 'Numbered list',
+                onPressed: () => onFormat('\n1. ', ''),
+                icon: const Icon(Icons.format_list_numbered),
+              ),
+              IconButton(
+                tooltip: 'Heading',
+                onPressed: () => onFormat('\n# ', ''),
+                icon: const Icon(Icons.title),
+              ),
+            ],
+          ),
+        );
+
+  Widget _actions() => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      DropdownButton<String>(
+        value: noteStyle,
+        underline: const SizedBox.shrink(),
+        items: [
+          'Standard',
+          'Concise',
+        ].map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
+        onChanged: (style) => onStyle(style!),
+      ),
+      const SizedBox(width: 18),
+      if (preview)
+        FilledButton.tonalIcon(
+          onPressed: onEnhance,
+          icon: const Icon(Icons.auto_awesome, size: 18),
+          label: Text(enhancing ? 'Enhancing…' : 'Enhance'),
+        )
+      else
+        FilledButton.tonalIcon(
+          key: const ValueKey('meeting-live-enhance'),
+          onPressed: onToggleLive,
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xffdce9ff),
+            foregroundColor: const Color(0xff254ab5),
+          ),
+          icon: const Icon(Icons.auto_awesome, size: 18),
+          label: Text('Live Enhance ${live ? 'ON' : 'OFF'}'),
+        ),
+      if (assistantToggle != null) ...[
+        const SizedBox(width: 8),
+        assistantToggle!,
+      ],
+      if (!enhancedVisible)
+        IconButton(
+          tooltip: 'Show enhanced notes',
+          onPressed: onShowEnhanced,
+          icon: const Icon(Icons.vertical_split),
+        ),
+    ],
+  );
 }
