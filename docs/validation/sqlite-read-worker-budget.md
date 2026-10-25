@@ -33,9 +33,10 @@ entrypoint owner review must establish the real process-entrypoint/worker order.
 The separate `foresight_sql_support` image has only system dependencies.
 Diagnostics-off does not remove the SQL deadline requirement and does not make
 SQL load the diagnostic DSO/child. Its sole exported startup operation uses
-`pthread_once` to join concurrent early callers, checks ABI/size and every code
+`pthread_once` to join concurrent early callers, checks ABI and every code
 entry's image base, and retains the already mapped image. This loader-owner
 operation must precede any application connection/locks and worker creation.
+Dart separately checks the returned table size, capacity and interval.
 Failure is permanent for that image. Worker handoffs include no initializer.
 
 Each private handoff contains only the validated ready/begin/end code addresses,
@@ -56,7 +57,8 @@ prior package initialization that prevents capturing the actual mapping refuses.
 The entrypoint owns the package-wide loader override, replacing earlier
 foreign overrides with its existing Mac or Linux bundle selector. An installed
 Linux executable shape with missing layout refuses before fallback. Unbundled
-Linux source use explicitly retains the existing system basename callback;
+Linux source use retains the pinned package default: executable-linked Flutter
+SQLite first, then its existing system basename fallback;
 installed products never use it. Broader artifact/path validation remains the
 validated-selection integration gate.
 The opaque original-code handoff includes this SQLite mapping, never a database
@@ -89,6 +91,10 @@ unloaded copy without mapping it and reject a mismatched anchor.
 Owned sessions construct their budget eagerly. No read snapshot/BEGIN performs
 a support-image or SQLite-symbol lookup. `Database.handle` stays in its owning
 isolate and is supplied only to this synchronous native registration.
+
+The callback executes synchronously on the OS thread running its SQLite
+statement. The owning Dart isolate may migrate between separate FFI calls;
+registration, statement and cleanup remain serialized by that owner.
 
 The native callback checks `CLOCK_MONOTONIC` every 1,000 SQLite VM instructions,
 without entering Dart, allocating, locking, calling SQLite, or using the loader.
@@ -232,6 +238,15 @@ run passed 58 tests with four macOS-only skips on Linux and 60 with zero skips
 on Mac; two new source/missing-layout cases apply only to Linux. All 54 named
 input hashes again match before/after and across hosts. The broader artifact
 validation gate remains separate from this selector ownership repair.
+
+The final bound-image follow-up captures from the image actually supplying
+package bindings and refuses a different candidate progress address on retry.
+Its fixture models the cached-binding mismatch using two real images; it does
+not force a complete lazy-initializer failure. Linux passed 58/four macOS-only
+skips and Mac 60/zero skips, with all 54 named hashes matching across hosts.
+Mac checked all five changed Dart files. The executable-linked Flutter branch
+matches the pinned package default but has no positive fixture here; source
+CLI tests exercise its system fallback.
 
 Two Linux-only prior-resolver negatives use the exact 1ba public bootstrap,
 support and SQLite resolver: one reaches the direct-isolate oracle, and one

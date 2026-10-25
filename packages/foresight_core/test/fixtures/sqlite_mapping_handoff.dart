@@ -154,6 +154,45 @@ Future<void> main(List<String> arguments) async {
   if (!scenario.startsWith('legacy-')) {
     final unloaded = original.copySync('${lib.path}/unloaded-sqlite');
     checkMappingRefusal(boundSqliteMapping!, unloaded.path);
+    // Model the cached-package retry mismatch with two real loaded images.
+    // Only the image actually supplying the package bindings may be captured.
+    final alternate = original.copySync('${lib.path}/alternate-sqlite');
+    if (Platform.isMacOS) {
+      // dyld may coalesce identical install names. Give the copied test image
+      // its own identity so the pointer mismatch is a real distinct mapping.
+      for (final command in [
+        [
+          '/usr/bin/install_name_tool',
+          '-id',
+          '@rpath/foresight-binding-mismatch.dylib',
+          alternate.path,
+        ],
+        ['/usr/bin/codesign', '--force', '--sign', '-', alternate.path],
+      ]) {
+        final result = await Process.run(
+          command.first,
+          command.skip(1).toList(),
+        ).timeout(const Duration(seconds: 10));
+        check(
+          result.exitCode == 0,
+          'alternate mapping fixture failed: ${result.stdout} ${result.stderr}',
+        );
+      }
+    }
+    var mismatchedBindingRefused = false;
+    try {
+      captureBoundSqliteMapping(
+        DynamicLibrary.open(alternate.path),
+        applicationSqliteLibrary,
+        applicationSqliteProgressInstaller.address,
+        sqlite3.version.sourceId,
+      );
+    } on StateError catch (error) {
+      mismatchedBindingRefused =
+          error.message ==
+          'SQLite package binding changed during initialization';
+    }
+    check(mismatchedBindingRefused, 'a different candidate image was captured');
   }
   final anchor = applicationSqliteProgressInstaller.address;
   final source = sqlite3.version.sourceId;

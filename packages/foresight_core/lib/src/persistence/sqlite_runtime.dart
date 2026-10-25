@@ -106,7 +106,15 @@ upstream.Sqlite3 _loadSqlite() {
       // Preserve the existing unbundled Linux source behavior explicitly.
       // Installed executable shapes never reach this basename search, and a
       // pre-existing package override cannot replace this entrypoint selector.
-      loader.open.overrideForAll(() => DynamicLibrary.open('libsqlite3.so'));
+      loader.open.overrideForAll(() {
+        final executable = DynamicLibrary.executable();
+        if (executable.providesSymbol(
+          'sqlite3_flutter_libs_plugin_register_with_registrar',
+        )) {
+          return executable;
+        }
+        return DynamicLibrary.open('libsqlite3.so');
+      });
     }
   }
   // Retain the original mapping for connection-local FFI such as progress
@@ -136,7 +144,12 @@ upstream.Sqlite3 _loadSqlite() {
       throw StateError('Cannot replace the original SQLite mapping');
     }
   } else {
-    final mapping = captureSqliteMapping(library, api.version.sourceId);
+    final mapping = captureBoundSqliteMapping(
+      library,
+      _sqliteLibrary!,
+      _progressInstaller!.address,
+      api.version.sourceId,
+    );
     bindSqliteMapping(mapping);
     attachOriginalSqliteMapping(mapping);
   }

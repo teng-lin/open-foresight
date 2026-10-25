@@ -152,6 +152,23 @@ SqliteMappingBootstrap captureSqliteMapping(
   }
 }
 
+/// A retry may encounter package:sqlite3's cached first binding. A candidate
+/// image must match that actual binding before any mapping can be handed out.
+SqliteMappingBootstrap captureBoundSqliteMapping(
+  DynamicLibrary selected,
+  DynamicLibrary bound,
+  int progressAddress,
+  String sourceId,
+) {
+  if (selected.lookup<Void>('sqlite3_progress_handler').address !=
+          progressAddress ||
+      bound.lookup<Void>('sqlite3_progress_handler').address !=
+          progressAddress) {
+    throw StateError('SQLite package binding changed during initialization');
+  }
+  return captureSqliteMapping(bound, sourceId);
+}
+
 /// Worker path: no environment, basename search, realpath or install alias.
 /// Refuse before a normal open unless the frozen original is already mapped.
 DynamicLibrary openOriginalSqliteMapping(SqliteMappingBootstrap mapping) {
