@@ -200,18 +200,36 @@ def test_asan_probe_requires_fatal_diagnostic_and_retains_log(
     )
     monkeypatch.setenv("LD_PRELOAD", "/must/not/be/inherited")
     commands = []
-    diagnostics = iter([v[1] for v in asan.CASES.values()])
+    seen_probes = []
 
     def run(command, **kwargs):
         commands.append((command, kwargs))
         if "capture_output" not in kwargs:
-            assert Path(command[-3]).read_text().startswith("int main()")
+            source = Path(command[-3]).read_text()
+            assert source in [
+                *(code for code, _ in asan.CASES.values()),
+                asan.HOST_LIBRARY,
+            ]
             return subprocess.CompletedProcess(command, 0)
-        assert "LD_PRELOAD" not in kwargs["env"]
-        diagnostic = next(diagnostics)
+        if command[0] == sys.executable:
+            mode = command[-1]
+            name, (_, diagnostics) = next(
+                (name, case)
+                for name, case in asan.HOST_CASES.items()
+                if case[0] == mode
+            )
+            assert kwargs["env"]["LD_PRELOAD"] == str(
+                tmp_path / "runtime/libasan.so"
+            )
+        else:
+            assert "LD_PRELOAD" not in kwargs["env"]
+            name = Path(command[0]).name
+            diagnostics = asan.CASES[name][1]
+        seen_probes.append(name)
+        diagnostic = "\n".join(diagnostics or ())
         return subprocess.CompletedProcess(
             command,
-            0 if failure == "zero-exit" else 1,
+            0 if diagnostics is None or failure == "zero-exit" else 1,
             "stdout evidence\n",
             "wrong" if failure == "no-diagnostic" else diagnostic,
         )
@@ -223,6 +241,14 @@ def test_asan_probe_requires_fatal_diagnostic_and_retains_log(
     else:
         asan.main()
         assert (tmp_path / "undefined.log").is_file()
+        assert seen_probes == [
+            *asan.CASES,
+            *(asan.HOST_CASES if "CLANG" in compiler else ()),
+        ]
+        for name in seen_probes:
+            assert (tmp_path / (name + ".log")).read_text().startswith(
+                "stdout evidence"
+            )
     assert (tmp_path / "address.log").read_text().startswith("stdout evidence")
     assert ("-shared-libasan" in commands[0][0]) == ("CLANG" in compiler)
 

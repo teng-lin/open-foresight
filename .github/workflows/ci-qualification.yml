@@ -92,7 +92,10 @@ jobs:
           python -m tools.ci_acceptance_history --baseline tests/fixtures/ci-acceptance-failures-20261020.json --baseline-sha256 "$task_checksum" --output build/qualification/acceptance-failures.json --evidence build/qualification/acceptance-evidence
       - name: Require zero missed phases across actual historical and later failures
         if: steps.refresh.outputs.needed == 'true' && (inputs.exercise || 'acceptance-replay') == 'acceptance-replay'
+        env:
+          FORESIGHT_EVIDENCE_CACHE: ${{ runner.temp }}/evidence-fixtures
         run: |
+          python -m tools.evidence_fixture --fetch
           task_checksum=$(sha256sum build/qualification/acceptance-failures.json | cut -d' ' -f1)
           python -m tools.ci_acceptance_plan --replay build/qualification/acceptance-failures.json --sha256 "$task_checksum" --output build/qualification/acceptance-replay.json
           python -m pytest tests/test_ci_acceptance_history.py tests/test_ci_acceptance_history_collector.py tests/test_ci_acceptance_plan.py -q --junitxml=build/qualification/acceptance-replay.junit.xml

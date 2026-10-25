@@ -926,3 +926,39 @@ The integrated head still requires its full applicable before-push checks.
 Native coverage reporting, logging physical/performance acceptance, compiled
 worker/package adoption, restore and the other retained ordinary audit items
 remain open; these two merges do not establish whole-plan or hosted acceptance.
+
+### Immutable fixture provisioning and parallel completion, October 25
+
+Fixture unit `fd7bf391` is integrated locally through `f6f45c59`. The 14.7 MB
+historical evidence archive is removed from tracked source. Its original frozen
+baseline still supplies the archive name and SHA-256; explicit provisioning
+reads the immutable original-commit asset or an authorized local copy into a
+private content-addressed cache. Ordinary test reads remain offline and fail
+with an actionable command if the fixture is absent or invalid. Both actual CI
+consumers provision explicitly before their historical tests. No original
+archive checksum, run/job inventory or negative integrity assertion is removed.
+
+With the source archive physically absent, the provider/history/qualification/PR
+workflow group passed **104 tests and 2 subtests**, zero skips. The exact three
+historical replay workflow modules separately passed **143/143**, zero skips.
+Real explicit immutable-URL fetching to a fresh cache and offline local-copy
+provisioning both verified the original digest. Ruff, focused mypy and actionlint
+1.7.7 with ShellCheck 0.9.0 passed. Coordinator and repeated Claude reviews
+converged; an intermediate review's archive-presence claim was disproved by
+filesystem checks and reconciled (its Read tool rejected gzip extensions before
+checking existence). Evidence: `/var/tmp/fixtq/` and
+`/var/tmp/of-more-agents/fixture-review-current/`. Full combined Python checks
+remain required before pushing.
+
+The separate development integration branch contains the logging/runtime,
+startup, SQL semantics and package-adoption candidates through `24ff86dd`.
+Its fresh native/application matrix is running from a regular copy-on-write
+source view, preserving the qualified source snapshot and the credential/source
+exclusions. The first attempt's missing Python protobuf dependency is retained
+as an infrastructure failure; the failed build is resumed with the existing
+locked environment. This is qualification in progress, not accepted evidence.
+Independent workers own native numerical reports, offline restore and the
+remaining Python import conversion. Runtime accounting also reproduced an
+unbounded health-message mailbox with a paused coordinator; a bounded ACK repair
+is undergoing its own review/platform checks before integration. These are real
+remaining implementation/acceptance gates, not a whole-plan completion claim.
