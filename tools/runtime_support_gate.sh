@@ -9,8 +9,14 @@ foresight_verify_runtime_support() {
   "$task_support_python" "$task_support_root/tools/diagnostic_product_receipt.py" \
     --root "$task_support_root" --build "$task_support_build/native" --verify || return $?
   case "$(uname -s)" in
-    Darwin) export FORESIGHT_TEST_SQL_SUPPORT_LIBRARY="$task_support_build/native/libforesight_sql_support.dylib" ;;
-    Linux) export FORESIGHT_TEST_SQL_SUPPORT_LIBRARY="$task_support_build/native/libforesight_sql_support.so" ;;
+    Darwin)
+      export FORESIGHT_TEST_SQL_SUPPORT_LIBRARY="$task_support_build/native/libforesight_sql_support.dylib"
+      export FORESIGHT_NATIVE_LIBRARY="$task_support_build/native/libforesight_native.dylib"
+      ;;
+    Linux)
+      export FORESIGHT_TEST_SQL_SUPPORT_LIBRARY="$task_support_build/native/libforesight_sql_support.so"
+      export FORESIGHT_NATIVE_LIBRARY="$task_support_build/native/libforesight_native.so"
+      ;;
     *) echo 'Unsupported runtime-support gate host' >&2; return 2 ;;
   esac
   export FORESIGHT_HELPER="$task_support_build/services/helper/ForesightHelper"
