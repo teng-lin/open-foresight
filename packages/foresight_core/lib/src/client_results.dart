@@ -1,5 +1,6 @@
 import 'audio_device.dart';
 import 'client_contract.dart';
+import 'client_projection_results.dart';
 import 'desktop_status.dart';
 import 'model_asset_status.dart';
 import 'read_models.dart';
@@ -45,37 +46,37 @@ final class AnswerTextResult {
 }
 
 SourceDocument decodeSource(Object? value) =>
-    SourceDocument.fromRow(resultObject(value));
+    SourceDocument.fromRow(sourceResult(value));
 List<SourceSummary> decodeSources(Object? value) =>
-    resultList(value, (row) => SourceSummary.fromRow(resultObject(row)));
+    resultList(value, (row) => SourceSummary.fromRow(sourceResult(row)));
 List<ExportNote> decodeNotes(Object? value) =>
-    resultList(value, (row) => ExportNote.fromRow(resultObject(row)));
+    resultList(value, (row) => ExportNote.fromRow(exportNoteResult(row)));
 List<MeetingCollectionEntry> decodeMeetings(Object? value) => resultList(
   value,
-  (row) => MeetingCollectionEntry.fromRow(resultObject(row)),
+  (row) => MeetingCollectionEntry.fromRow(meetingResult(row)),
 );
 List<MeetingTask> decodeTasks(Object? value) =>
-    resultList(value, (row) => MeetingTask.fromRow(resultObject(row)));
+    resultList(value, (row) => MeetingTask.fromRow(taskResult(row)));
 
 final class MeetingDetailResult {
   MeetingDetailResult.fromWire(Object? value) : this._(resultObject(value));
   MeetingDetailResult._(Map<String, Object?> value)
-    : meeting = MeetingDetails.fromRow(resultObject(value['meeting'])),
+    : meeting = MeetingDetails.fromRow(meetingResult(value['meeting'])),
       notes = resultList(
         value['notes'],
-        (row) => MeetingNoteData.fromRow(resultObject(row)),
+        (row) => MeetingNoteData.fromRow(meetingNoteResult(row)),
       ),
       transcript = resultList(
         value['transcript'],
-        (row) => TranscriptSegment.fromRow(resultObject(row)),
+        (row) => TranscriptSegment.fromRow(transcriptResult(row)),
       ),
       artifacts = resultList(
         value['artifacts'],
-        (row) => MeetingArtifact.fromRow(resultObject(row)),
+        (row) => MeetingArtifact.fromRow(artifactResult(row)),
       ),
       questions = resultList(
         value['questions'],
-        (row) => MeetingQuestion.fromRow(resultObject(row)),
+        (row) => MeetingQuestion.fromRow(questionResult(row)),
       );
   final MeetingDetails meeting;
   final List<MeetingNoteData> notes;
