@@ -831,3 +831,56 @@ private roots after test-only `a6b487ec` makes the capture fixture runtime
 absolute. The preceding relative-path failure is retained. This native candidate
 is not integrated yet; full Mac native and combined application qualification
 remain required. Evidence is under `/var/tmp/of-ci66`.
+
+
+### Main integration, architecture facts and HanSolo follow-up, October 25
+
+Native repair `a6b487ec` is integrated through `31195f72`; repeated native peer
+and whole-unit Claude reviews converged. Fresh root native CTest passed
+**38/38 Linux** and **42/42 HanSolo Mac**, zero skips. Exact native source and
+product evidence is retained under `/var/tmp/of-ci66/mac-full/` and
+`/var/tmp/of-ci66/linux-app-311/`. This supersedes the preceding pending-native
+integration statement without claiming hosted CI acceptance.
+
+Current main's merged PRs #185 and #187 are included locally through `9645f24c`.
+The model-selection merge retains the service-owned downloader, consent and
+metadata-only discovery. Test fixture follow-up `8dc462d3` injects discovery
+failures at the new discovery seam. Linux full core passed **2,422 / 17 skipped**
+with **92.79%** coverage against 90%; desktop passed after the failed-first
+fixture repair and its existing 90% coverage check passed. Earlier failed
+attempts and their output remain in the same evidence directory.
+
+HanSolo's exact seven-file application overlay over qualified `9199c5fe`
+passed both analyzers, **2,423 / 14 skipped** core tests and
+**592 / 13 skipped** desktop tests. Freshly compiled service/MCP passed
+**35 / 2 skipped**; both skips are explicitly Linux package-layout controls.
+The fast integration suite passed **1/1**, zero skips. Matching native products
+reuse the fresh, unchanged `31195f72` native build above; this application run
+is not another native build. Source reuse uses metadata links into the prior
+qualified source snapshot and seven explicit overlay files, without a new
+broad source copy/hash. The initial coverage formatter counted only overlay
+files due to canonical source paths: its percentages are incomplete and are
+not accepted. Corrected full collection includes both canonical roots and
+preserves the existing generated-code exclusion: core **93.10% (19,681/21,139)**
+and desktop **93.43% (8,859/9,482)**, both report-only on Mac. The original
+unfiltered report is retained alongside the explicit nine-generated-file
+exclusion record. The linked Python harness also resolved GUI source to the
+older checkout; its GUI result was not accepted for the new source. After
+materializing three explicit harness files and 30 platform project files in
+the private workspace, both actual current-source GUI checks passed **2/2**,
+zero skips, including all **68** named service/MCP observations. The initial
+CocoaPods configuration failures and output remain retained. Evidence and full
+skip inventories: `/var/tmp/of-ci66/mac-app-8dc/`. Real weights, physical audio/GPU,
+account data, minimum macOS 15 runtime and signed installed-product acceptance
+are not established by these suites.
+
+Architecture fact repair `6c4e0fec` is integrated locally through `1e2c56f5`.
+It corrects schema/tool
+facts using the existing schema and operation authorities, with an offline
+drift checker and **17/17** mutation/shape tests, zero skips. Ruff and focused
+mypy passed. Native coordinator review and two complete Claude reviews
+converged; the follow-up removes a proxy frozen-schema count, requires the
+schema-version authority and rejects direct unprojected tool declarations.
+Full Python/before-push checks for the new combined head remain required.
+Logging, startup identities, SQL integration and the remaining ordinary audit
+scope remain in progress; no completion or merge-readiness claim is made.
