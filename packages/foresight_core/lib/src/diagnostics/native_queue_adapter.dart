@@ -85,9 +85,19 @@ extension _NativeWriterControl on _Writer {
     _nativeHealthPending = true;
   }
 
-  void _publishNativeHealth() {
-    if (!_nativeHealthPending) return;
+  void _publishNativeHealth({bool finalState = false}) {
+    if (!_nativeHealthPending || (_nativeHealthInFlight && !finalState)) return;
     _nativeHealthPending = false;
+    if (_nativePublishedReason == _nativeReason &&
+        _nativePublishedDropsExact == _nativeDropsExact) {
+      return;
+    }
+    _nativePublishedReason = _nativeReason;
+    _nativePublishedDropsExact = _nativeDropsExact;
+    _nativeHealthInFlight = true;
+    // One acknowledged report in flight; later changes coalesce in fields.
+    // Final close may publish one additional latest state before `closed`.
+    _nativeHealthMessages = _sum(_nativeHealthMessages, 1);
     owner.send(['native_health', _nativeReason.index, _nativeDropsExact]);
   }
 
@@ -99,6 +109,9 @@ extension _NativeWriterControl on _Writer {
 
   bool _nativeControl(List value) {
     switch (value.first) {
+      case 'native_health_ack':
+        if (value.length == 1) _nativeHealthInFlight = false;
+        return true;
       case 'native_attach':
       case 'native_unsupported':
         final source = ledger.matching(value);

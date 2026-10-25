@@ -25,7 +25,8 @@ final class DiagnosticProducerBudget {
 
 final class DiagnosticBudgetSnapshot {
   DiagnosticBudgetSnapshot._(List value)
-    : normalBytes = value[0] as int,
+    : nativeHealthMessages = value[7] as int,
+      normalBytes = value[0] as int,
       priorityBytes = value[1] as int,
       normalRecords = value[2] as int,
       priorityRecords = value[3] as int,
@@ -34,6 +35,7 @@ final class DiagnosticBudgetSnapshot {
       producers = List.unmodifiable(
         (value[6] as List).map((p) => DiagnosticProducerBudget._(p as List)),
       );
+  final int nativeHealthMessages;
   final int normalBytes,
       priorityBytes,
       normalRecords,

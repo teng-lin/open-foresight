@@ -270,6 +270,7 @@ final class LoggingSession {
       if (value.first == 'native_health' && value.length == 3) {
         health.nativeReason = NativeDiagnosticHealth.values[value[1] as int];
         health.nativeDropsExact = value[2] as bool;
+        currentSession?._writer?.send(['native_health_ack']);
         return;
       }
       if (value.first == 'worker_probe' && value.length == 1) {
@@ -524,7 +525,7 @@ final class LoggingSession {
   @visibleForTesting
   Future<DiagnosticBudgetSnapshot> inspectBudgetForTesting() async {
     if (_writer == null) {
-      return DiagnosticBudgetSnapshot._([0, 0, 0, 0, 0, 0, const []]);
+      return DiagnosticBudgetSnapshot._([0, 0, 0, 0, 0, 0, const [], 0]);
     }
     if (_closed) throw StateError('Diagnostic budget unavailable during close');
     final reply = ReceivePort();
@@ -1015,7 +1016,12 @@ final class _Writer {
       _nativeFinishing = false;
   NativeDiagnosticHealth _nativeReason = NativeDiagnosticHealth.unconfigured;
   bool _nativeDropsExact = true;
-  bool _nativeHealthPending = false, _nativePrecisionPending = false;
+  bool _nativeHealthPending = false,
+      _nativeHealthInFlight = false,
+      _nativePrecisionPending = false;
+  NativeDiagnosticHealth? _nativePublishedReason;
+  bool? _nativePublishedDropsExact;
+  int _nativeHealthMessages = 0;
 
   void handle(dynamic value) {
     if (value is! List || value.isEmpty) return;
@@ -1051,6 +1057,7 @@ final class _Writer {
                   p.quarantined,
                 ],
           ],
+          _nativeHealthMessages,
         ]);
       case 'record':
         if (closing) return;
@@ -1806,7 +1813,7 @@ final class _Writer {
   void _finish() {
     if (_finished) return;
     if (!_finishNative()) return;
-    _publishNativeHealth();
+    _publishNativeHealth(finalState: true);
     _finished = true;
     _captureLedgerHighWater();
     timer?.cancel();
