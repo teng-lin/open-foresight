@@ -255,14 +255,16 @@ SELECT key, CASE WHEN key='slow' THEN (
             ),
           )
           .listen((event) {
-            if (event.freshness == ReadFreshness.busy && !expired.isCompleted)
+            if (event.freshness == ReadFreshness.busy && !expired.isCompleted) {
               expired.complete();
+            }
           });
       await expired.future;
       expect(reader.activeReads, 1);
       await subscription.cancel();
-      if (reader.busy)
+      if (reader.busy) {
         await reader.activityChanges.firstWhere((_) => !reader.busy);
+      }
       expect(reader.activeReads, 0);
       expect(
         (await worker.read(request('workspaceEpoch', 2))).value,
