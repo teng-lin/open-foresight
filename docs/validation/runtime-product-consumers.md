@@ -26,10 +26,16 @@ SQL support has a separate `diagnostic-sql-inputs.json` source/recipe record.
 closure, ordered public compile flags and selected public compiler/OS metadata.
 It never incorporates NativeID. Its private NUL-delimited
 `FORESIGHT_SQL_SUPPORT_SOURCE_ID:v1:<digest>:end` byte marker adds no exported ABI.
-The CMake producer validates its final SQL target, source, directory and Threads
-recipe; unknown recipes or unavailable public metadata leave mandatory SQL
-support unmarked and its record unavailable. A separate build prerequisite
-rechecks selected toolchain metadata even when the SQL object is up to date.
+The qualified CMake producer compiles SQL in a dedicated sub-build with a
+closed public cache vector and an environment containing only fixed PATH/locale
+and a private temporary directory. Application directory, target, source, rule
+and imported Threads properties cannot reach that compiler. The source record
+also binds this isolated producer and its environment/generator recipe.
+Unrecognized public flags or unavailable metadata leave the ordinary mandatory
+SQL target unmarked and its record unavailable. A separate build prerequisite
+rechecks selected toolchain metadata; the qualified producer uses CMake 3.24's
+`--fresh` to compile the small component again without inheriting a cache.
+Existing CMake pins meet that requirement; older CMake still builds unmarked SQL.
 Direct C mechanism proofs remain unmarked. The marker binds declared inputs to
 bytes; it does not independently witness compiler execution, SDK bytes or a
 production WorkerID.

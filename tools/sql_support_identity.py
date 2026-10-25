@@ -14,6 +14,7 @@ INPUTS = (
     "native/sql_support.h",
     "cmake/ForesightSqlSupport.cmake",
     "cmake/ForesightSqlIdentity.cmake",
+    "cmake/SqlSupportProduct/CMakeLists.txt",
     "cmake/VerifyDiagnosticToolchain.cmake",
     "tools/sql_support_identity.py",
     "tools/diagnostic_toolchain_metadata.py",
@@ -79,6 +80,10 @@ def identity(root: Path, metadata: dict[str, Any], flags: list[str]) -> dict[str
         "toolchain": metadata,
         "recipe": {
             "flags": flags,
+            "producer": "isolated-cmake-sql-v1",
+            "environment": {"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+            "generator": "Unix Makefiles",
+            "make": "/usr/bin/make",
             "c_standard": 11,
             "extensions": False,
             "visibility": "hidden",
