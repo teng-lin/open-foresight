@@ -10,104 +10,25 @@ extension _NotesView on MeetingsController {
     if (loadedMeetingNotes != id)
       return const Center(child: Text('Loading meeting notes…'));
     final live = _reads.preference('liveEnhance', 'true') == 'true';
-    final editor = _meetingNotesInput();
-    final enhancedPane = _meetingEnhancedPane(id, preview: preview);
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: MeetingVisuals.panelRadius,
+    return MeetingNotesLayout(
+      wide: wide,
+      preview: preview,
+      enhancedVisible: meetingEnhancedVisible,
+      toolbar: _meetingNotesToolbar(
+        id,
+        preview: preview,
+        live: live,
+        assistantToggle: assistantToggle,
       ),
-      child: Column(
-        children: [
-          _meetingNotesToolbar(
-            id,
-            preview: preview,
-            live: live,
-            assistantToggle: assistantToggle,
-          ),
-          const Divider(height: 1),
-          Expanded(
-            child: !meetingEnhancedVisible
-                ? editor
-                : preview
-                ? Column(
-                    children: [
-                      Expanded(flex: 3, child: editor),
-                      Expanded(flex: 2, child: enhancedPane),
-                    ],
-                  )
-                : wide
-                ? Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Expanded(flex: 11, child: editor),
-                      const SizedBox(width: 24),
-                      Expanded(flex: 9, child: enhancedPane),
-                    ],
-                  )
-                : DefaultTabController(
-                    length: 2,
-                    child: Column(
-                      children: [
-                        const TabBar(
-                          tabs: [
-                            Tab(text: 'Notes'),
-                            Tab(text: 'Enhanced'),
-                          ],
-                        ),
-                        Expanded(
-                          child: TabBarView(children: [editor, enhancedPane]),
-                        ),
-                      ],
-                    ),
-                  ),
-          ),
-        ],
-      ),
+      editor: _meetingNotesInput(),
+      enhancedPane: _meetingEnhancedPane(id, preview: preview),
     );
   }
 
-  Widget _meetingNotesInput() {
-    final editorField = TextField(
-      key: const ValueKey('meeting-notes-editor'),
-      controller: meetingNotesController,
-      expands: true,
-      maxLines: null,
-      minLines: null,
-      textAlignVertical: TextAlignVertical.top,
-      style: MeetingVisuals.notes,
-      onChanged: (_) => scheduleMeetingNotesSave(),
-      decoration: const InputDecoration(
-        filled: false,
-        border: InputBorder.none,
-        enabledBorder: InputBorder.none,
-        focusedBorder: InputBorder.none,
-        contentPadding: EdgeInsets.all(24),
-      ),
-    );
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        Semantics(label: 'Meeting notes', child: editorField),
-        ValueListenableBuilder<TextEditingValue>(
-          valueListenable: meetingNotesController,
-          builder: (_, value, _) => value.text.isNotEmpty
-              ? const SizedBox.shrink()
-              : IgnorePointer(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.all(24),
-                    child: Text(
-                      'Enter your notes here. Markdown formatting is supported.\n\nMarkdown guide:\n• # Heading\n• **bold**\n• *italics*\n• - Bullet list\n• 1. Numbered list',
-                      style: MeetingVisuals.notes.copyWith(
-                        color: const Color(0xff9ba3b3),
-                      ),
-                    ),
-                  ),
-                ),
-        ),
-      ],
-    );
-  }
+  Widget _meetingNotesInput() => MeetingNotesInput(
+    controller: meetingNotesController,
+    onChanged: scheduleMeetingNotesSave,
+  );
 
   Widget _meetingEnhancedPane(int id, {required bool preview}) {
     final enhanced = _reads.artifacts(id, 'enhanced_notes').firstOrNull;

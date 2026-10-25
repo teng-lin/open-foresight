@@ -119,6 +119,7 @@ void main() {
         'features/meetings/collection_view.dart',
         'features/meetings/workspace_view.dart',
         'features/meetings/transcript_view.dart',
+        'features/meetings/notes_widgets.dart',
         'features/sources/source_tiles.dart',
         'features/sources/note_widgets.dart',
         'features/sources/graph_widgets.dart',

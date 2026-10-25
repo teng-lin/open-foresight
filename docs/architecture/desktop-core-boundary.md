@@ -63,9 +63,11 @@ startup; `service_server.dart` exposes service-only composition.
 
 ## Logical widget libraries
 
-Collection/preview, workspace/header, recording and summary renderers receive
+Collection/preview, workspace/header, recording, summary and transcript renderers receive
 immutable presentation values and explicit callbacks. Source collections, tiles,
 note editor/review and graph scene/inspector renderers follow the same boundary.
+Meeting note layout and text input also render independently; the enhanced-note
+progress and command composition remains with the owner.
 Editor, transform and scroll handles stay with their existing controller owners;
 renderers receive only those explicit UI handles. Async saves, retry keys, dialog
 retirement, selection and workspace/session identity checks remain in controllers.
@@ -79,7 +81,10 @@ and 200 decision nodes per logical desktop library. Residual meeting, source and
 settings owners have explicit ceilings of 3,000/425, 3,000/400 and 2,000/200
 respectively. At the guard's introduction, these owners measured 2,462/360,
 2,163/306 and 1,558/155 including their parts. These are measured debt ratchets,
-not a PR file-count rule. The guard also rejects transitive controller/read-model
+not a PR file-count rule. The existing desktop physical-file ceiling (800 lines)
+and widget-method ceiling (150 lines) remain in force. Owner composition parts
+keep those physical budgets while still counting toward the full logical owner.
+The guard also rejects transitive controller/read-model
 imports and `part of` coupling in the extracted renderer libraries.
 
 ## Pinned helper transport workaround
