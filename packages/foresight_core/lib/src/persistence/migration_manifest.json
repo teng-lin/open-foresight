@@ -144,6 +144,16 @@
       "symbols": [
         "_createMeetingIndex"
       ]
+    },
+    "23": {
+      "sha256": "6ef498957c2f39ca7f4cfab9fa4269e4dba8377809959f4414d70685cba9055d",
+      "symbols": [
+        "_legacyEntityInteger",
+        "_legacyPreferenceEntityKey",
+        "_migratePreferenceEntities",
+        "_moveLegacyPreferenceEntity",
+        "rows"
+      ]
     }
   },
   "fixtures": {

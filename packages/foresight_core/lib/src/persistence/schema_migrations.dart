@@ -101,9 +101,222 @@ class ApplicationMigrations {
         _routeBackupErasure();
       case 22:
         _createMeetingIndex();
+      case 23:
+        _migratePreferenceEntities();
       default:
         throw StateError('Missing application database migration $version');
     }
+  }
+
+  // Ordered23 owns its complete helper closure. Earlier definitions stay frozen.
+  void _migratePreferenceEntities() {
+    db.execute('''
+CREATE TABLE answer_metadata(
+ answer_id INTEGER PRIMARY KEY REFERENCES answers(id) ON DELETE CASCADE,
+ scope_identity TEXT,web_answer INTEGER CHECK(web_answer IN (0,1)));
+CREATE TABLE conversation_scopes(
+ conversation TEXT PRIMARY KEY,meeting_id INTEGER REFERENCES meetings(id) ON DELETE CASCADE,
+ mode TEXT NOT NULL);
+CREATE TABLE proactive_scopes(
+ meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,mode TEXT NOT NULL);
+CREATE TABLE source_selections(
+ purpose TEXT NOT NULL CHECK(purpose IN ('answer','picker','preparation')),
+ owner TEXT NOT NULL,meeting_id INTEGER REFERENCES meetings(id) ON DELETE CASCADE,
+ PRIMARY KEY(purpose,owner),CHECK(purpose='answer' OR meeting_id IS NOT NULL));
+CREATE TABLE source_selection_items(
+ purpose TEXT NOT NULL,owner TEXT NOT NULL,position INTEGER NOT NULL CHECK(position>=0),
+ source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+ PRIMARY KEY(purpose,owner,position),
+ FOREIGN KEY(purpose,owner) REFERENCES source_selections(purpose,owner) ON DELETE CASCADE);
+CREATE TABLE legacy_preference_entities(
+ key TEXT PRIMARY KEY,value BLOB NOT NULL,reason TEXT NOT NULL,created INTEGER NOT NULL,
+ answer_id INTEGER REFERENCES answers(id) ON DELETE CASCADE,
+ meeting_id INTEGER REFERENCES meetings(id) ON DELETE CASCADE);
+CREATE INDEX legacy_preference_entities_created ON legacy_preference_entities(created);
+CREATE TRIGGER legacy_preference_entities_erasure AFTER DELETE ON legacy_preference_entities BEGIN
+ INSERT OR IGNORE INTO preferences(key,value) VALUES('internal.backupErasurePending','1'); END;
+CREATE TRIGGER answer_metadata_erasure AFTER DELETE ON answer_metadata BEGIN
+ INSERT OR IGNORE INTO preferences(key,value) VALUES('internal.backupErasurePending','1'); END;
+CREATE TRIGGER answer_preference_orphans AFTER INSERT ON answers BEGIN
+ DELETE FROM legacy_preference_entities WHERE answer_id IS NULL AND key IN
+ ('answerScope.v1.'||NEW.id,'webAnswer.v1.'||NEW.id); END;
+CREATE TRIGGER meeting_preference_orphans AFTER INSERT ON meetings BEGIN
+ DELETE FROM legacy_preference_entities WHERE meeting_id IS NULL AND key IN
+ ('answerScope.meeting:'||NEW.id,'answerSources.meeting:'||NEW.id,
+ 'proactiveScope.'||NEW.id,'answerSourcesSelection.'||NEW.id,'preparationSources.'||NEW.id); END;
+
+''');
+    for (final row in rows(
+      "SELECT key,value FROM preferences WHERE key GLOB 'answerScope.*' OR key GLOB 'webAnswer.v1.*' OR key GLOB 'answerSources.*' OR key GLOB 'proactiveScope.*' OR key GLOB 'answerSourcesSelection.*' OR key GLOB 'preparationSources.*' ORDER BY key",
+    )) {
+      final key = row['key'] as String, value = row['value'];
+      final parsed = _legacyPreferenceEntityKey(key);
+      final reason = _moveLegacyPreferenceEntity(parsed, value);
+      if (reason != null) {
+        db.execute(
+          "INSERT INTO legacy_preference_entities(key,value,reason,created,answer_id,meeting_id) VALUES(?,?,?,CAST(strftime('%s','now') AS INTEGER)*1000,?,?)",
+          [
+            key,
+            value,
+            reason,
+            parsed.answer != null &&
+                    rows('SELECT 1 FROM answers WHERE id=?', [
+                      parsed.answer,
+                    ]).isNotEmpty
+                ? parsed.answer
+                : null,
+            parsed.meeting != null &&
+                    rows('SELECT 1 FROM meetings WHERE id=?', [
+                      parsed.meeting,
+                    ]).isNotEmpty
+                ? parsed.meeting
+                : null,
+          ],
+        );
+      }
+      db.execute('DELETE FROM preferences WHERE key=?', [key]);
+    }
+  }
+
+  ({String kind, String owner, int? meeting, int? answer, String? purpose})
+  _legacyPreferenceEntityKey(String key) {
+    for (final prefix in ['answerScope.v1.', 'webAnswer.v1.']) {
+      if (!key.startsWith(prefix)) continue;
+      final owner = key.substring(prefix.length),
+          id = _legacyEntityInteger(key.substring(prefix.length));
+      return (
+        kind: id == null
+            ? 'invalid'
+            : prefix == 'answerScope.v1.'
+            ? 'answerScope'
+            : 'webAnswer',
+        owner: owner,
+        meeting: null,
+        answer: id,
+        purpose: null,
+      );
+    }
+    for (final entry in {
+      'answerScope.': 'conversation',
+      'answerSources.': 'answer',
+      'proactiveScope.': 'proactive',
+      'answerSourcesSelection.': 'picker',
+      'preparationSources.': 'preparation',
+    }.entries) {
+      if (!key.startsWith(entry.key)) continue;
+      final owner = key.substring(entry.key.length);
+      final conversation =
+          entry.value == 'conversation' || entry.value == 'answer';
+      final meeting = conversation
+          ? owner.startsWith('meeting:')
+                ? _legacyEntityInteger(owner.substring(8))
+                : null
+          : _legacyEntityInteger(owner);
+      final invalid =
+          owner.isEmpty ||
+          ((!conversation || owner.startsWith('meeting:')) && meeting == null);
+      return (
+        kind: invalid
+            ? 'invalid'
+            : entry.value == 'conversation'
+            ? 'conversation'
+            : entry.value == 'proactive'
+            ? 'proactive'
+            : 'selection',
+        owner: owner,
+        meeting: meeting,
+        answer: null,
+        purpose: conversation ? 'answer' : entry.value,
+      );
+    }
+    return (
+      kind: 'invalid',
+      owner: key,
+      meeting: null,
+      answer: null,
+      purpose: null,
+    );
+  }
+
+  int? _legacyEntityInteger(String text) {
+    final value = int.tryParse(text);
+    return value != null && '$value' == text ? value : null;
+  }
+
+  String? _moveLegacyPreferenceEntity(
+    ({String kind, String owner, int? meeting, int? answer, String? purpose})
+    key,
+    Object? value,
+  ) {
+    if (key.kind == 'invalid') return 'invalid_key';
+    if (value is! String) return 'invalid_value_type';
+    if (key.answer != null &&
+        rows('SELECT 1 FROM answers WHERE id=?', [key.answer]).isEmpty) {
+      return 'orphan_answer';
+    }
+    if (key.meeting != null &&
+        rows('SELECT 1 FROM meetings WHERE id=?', [key.meeting]).isEmpty) {
+      return 'orphan_meeting';
+    }
+    switch (key.kind) {
+      case 'answerScope':
+      case 'webAnswer':
+        if (key.kind == 'webAnswer' && value != 'true' && value != 'false') {
+          return 'invalid_web_flag';
+        }
+        final column = key.kind == 'answerScope'
+            ? 'scope_identity'
+            : 'web_answer';
+        db.execute(
+          'INSERT INTO answer_metadata(answer_id,$column) VALUES(?,?) ON CONFLICT(answer_id) DO UPDATE SET $column=excluded.$column',
+          [
+            key.answer,
+            key.kind == 'answerScope'
+                ? value
+                : value == 'true'
+                ? 1
+                : 0,
+          ],
+        );
+      case 'conversation':
+        db.execute(
+          'INSERT INTO conversation_scopes(conversation,meeting_id,mode) VALUES(?,?,?)',
+          [key.owner, key.meeting, value],
+        );
+      case 'proactive':
+        db.execute(
+          'INSERT INTO proactive_scopes(meeting_id,mode) VALUES(?,?)',
+          [key.meeting, value],
+        );
+      case 'selection':
+        Object? decoded;
+        try {
+          decoded = jsonDecode(value);
+        } on FormatException {
+          return 'invalid_source_selection';
+        }
+        if (decoded is! List || decoded.any((id) => id is! String)) {
+          return 'invalid_source_selection';
+        }
+        for (final id in decoded) {
+          if (rows('SELECT 1 FROM sources WHERE id=?', [id]).isEmpty) {
+            return 'missing_selected_source';
+          }
+        }
+        db.execute(
+          'INSERT INTO source_selections(purpose,owner,meeting_id) VALUES(?,?,?)',
+          [key.purpose, key.owner, key.meeting],
+        );
+        for (var position = 0; position < decoded.length; position++) {
+          db.execute(
+            'INSERT INTO source_selection_items(purpose,owner,position,source_id) VALUES(?,?,?,?)',
+            [key.purpose, key.owner, position, decoded[position]],
+          );
+        }
+      default:
+        throw StateError('Unknown legacy entity kind');
+    }
+    return null;
   }
 
   /// Ordered22: current derived pieces; outbox holds identities/hashes only.

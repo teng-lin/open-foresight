@@ -91,6 +91,19 @@ void main() {
       ),
     );
   });
+  test('preference entity migration helper remains hash-bound', () {
+    change("return 'orphan_answer';", "return 'changed_orphan_policy';");
+    expect(
+      () => check(),
+      throwsA(
+        isA<StateError>().having(
+          (error) => error.message,
+          'reason',
+          contains('committed migration 23'),
+        ),
+      ),
+    );
+  });
   test(
     'actual main unrelated Store movement retains frozen origin provenance',
     () {

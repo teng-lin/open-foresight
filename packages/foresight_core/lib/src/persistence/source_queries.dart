@@ -1,3 +1,4 @@
+import 'preference_entities.dart';
 import 'dart:convert';
 import 'source_contents.dart';
 import 'package:sqlite3/sqlite3.dart';
@@ -72,12 +73,15 @@ class SourceQueries {
   ).map(ExportNote.fromRow).toList();
   String noteBody(int id) =>
       _rows('SELECT body FROM notes WHERE id=?', [id]).single['body'] as String;
-  String preference(String key, [String fallback = '']) =>
-      _rows('SELECT value FROM preferences WHERE key=?', [
-            key,
-          ]).firstOrNull?['value']
-          as String? ??
-      fallback;
+  String preference(String key, [String fallback = '']) => _read(
+    () =>
+        PreferenceEntities(db).read(key) ??
+        _rows('SELECT value FROM preferences WHERE key=?', [
+              key,
+            ]).firstOrNull?['value']
+            as String? ??
+        fallback,
+  );
   Map<String, String> googleSourceMimes() => {
     for (final row in _rows('SELECT source_id,mime FROM google_sources'))
       row['source_id'] as String: row['mime'] as String,

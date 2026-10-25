@@ -1,3 +1,4 @@
+import 'persistence/preference_entities.dart';
 import 'persistence/application_schema.dart';
 import 'persistence/sqlite_snapshot_source.dart';
 import 'label_organization.dart';
@@ -194,6 +195,9 @@ class Store implements SqliteSnapshotSource {
         ],
       );
       if (db.updatedRows == 256) delay = const Duration(milliseconds: 10);
+      if (PreferenceEntities(db).pruneLegacy()) {
+        delay = const Duration(milliseconds: 10);
+      }
       if (path != ':memory:') migrationBackups.prune();
     } catch (_) {
       // Reads already exclude expired records. Retry physical retention without
@@ -577,10 +581,14 @@ class Store implements SqliteSnapshotSource {
   @override
   String preference(String key, [String fallback = '']) =>
       sourceQueries.preference(key, fallback);
-  void setPreference(String key, String value) => db.execute(
-    'INSERT INTO preferences VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-    [key, value],
-  );
+  void setPreference(String key, String value) {
+    if (PreferenceEntities(db).write(key, value)) return;
+    db.execute(
+      'INSERT INTO preferences VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+      [key, value],
+    );
+  }
+
   void putDocumentLabel(DocumentLabel label) {
     requireSource(label.documentId);
     _labelStore.put(label);
