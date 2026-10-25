@@ -6,6 +6,38 @@ import 'package:foresight_core/src/gemma_download.dart';
 
 void main() {
   test(
+    'UI discovery is metadata only; consumption still authenticates bytes',
+    () async {
+      final root = createTestTempDirectorySync('model-discovery-');
+      final bytes = List.generate(32, (i) => i);
+      final model = GemmaModel(
+        'fixture',
+        '',
+        '',
+        'fixture.bin',
+        sha256.convert(bytes).toString(),
+        bytes.length,
+        0,
+      );
+      final file = File('${root.path}/${model.directory}/${model.filename}')
+        ..createSync(recursive: true)
+        ..writeAsBytesSync(bytes);
+      expect((await localModelCandidate(model, root))?.path, file.path);
+      expect((await localModelFile(model, root))?.path, file.path);
+      file.writeAsBytesSync(List.filled(bytes.length, 0));
+      expect((await localModelCandidate(model, root))?.path, file.path);
+      expect(await localModelFile(model, root), isNull);
+      file.writeAsBytesSync([0]);
+      expect(await localModelCandidate(model, root), isNull);
+      file.deleteSync();
+      final target = File('${root.path}/target')..writeAsBytesSync(bytes);
+      Link(file.path).createSync(target.path);
+      expect(await localModelCandidate(model, root), isNull);
+      expect(await localModelFile(model, root), isNull);
+    },
+  );
+
+  test(
     'registered asset outside the cache is verified and reused without network access',
     () async {
       final root = createTestTempDirectorySync('existing-model-');

@@ -3,12 +3,237 @@ import 'store_reader_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'fixtures/verified_model_files.dart';
 import 'dart:io';
+import 'dart:async';
+import 'pump_until.dart';
+import 'controller_fixture.dart' show ReadyGeneration;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import '../test_support/core_fixture.dart';
 import 'package:open_foresight/features/settings/gemma_setup_view.dart';
 
 void main() {
+  testWidgets(
+    'activation verifies a local model once and reuses it without downloading',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1000, 1100));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final root = createTestTempDirectorySync('gemma-local-activation-');
+      final store = Store('${root.path}/app.db');
+      addTearDown(store.close);
+      final model = gemmaModels.last;
+      final file = File('${root.path}/${model.directory}/${model.filename}')
+        ..createSync(recursive: true);
+      file.openSync(mode: FileMode.write)
+        ..truncateSync(model.bytes)
+        ..closeSync();
+      var verifications = 0, installs = 0, finishes = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: GemmaSetupDialog(
+              store: fixtureReader(store),
+              savePreference: (key, value) async =>
+                  store.setPreference(key, value),
+              environment: setupEnvironment(),
+              directory: root,
+              library: '',
+              runner: '/usr/bin/true',
+              memoryGb: 64,
+              findLocalModel: (model, directory, {registration}) async {
+                verifications++;
+                return verifiedFixtureModelFile(
+                  model,
+                  directory,
+                  registration: registration,
+                );
+              },
+              createDownload: () => GemmaDownload(
+                createClient: () => throw StateError(
+                  'Verified local models must not use the network',
+                ),
+              ),
+              installGeneration: (path, runner, current) async {
+                expect(verifications, 1);
+                expect(path, file.path);
+                expect(current(), isTrue);
+                installs++;
+                return ReadyGeneration();
+              },
+              onDone: () => finishes++,
+              installed: (_, chosen) => expect(chosen, model),
+              localSetup: () {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(verifications, 0);
+      await tester.tap(find.widgetWithText(FilledButton, 'Use model'));
+      await tester.pump(const Duration(milliseconds: 300));
+      await pumpUntil(tester, () => finishes == 1);
+      expect(verifications, 1);
+      expect(installs, 1);
+      expect(find.text('${model.name} terms'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'selection stays available during discovery and is not overwritten',
+    (tester) async {
+      final root = createTestTempDirectorySync('gemma-discovery-');
+      final store = Store('${root.path}/app.db');
+      addTearDown(store.close);
+      final discovery = Completer<File?>();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: GemmaSetupDialog(
+              store: fixtureReader(store),
+              savePreference: (key, value) async =>
+                  store.setPreference(key, value),
+              environment: setupEnvironment(),
+              directory: root,
+              library: '',
+              runner: '/usr/bin/true',
+              memoryGb: 64,
+              findLocalCandidate: (model, directory, {registration}) =>
+                  discovery.future,
+              findLocalModel: (model, directory, {registration}) =>
+                  throw StateError('Opening the chooser must not hash files'),
+              installed: (_, _) => fail('No installation requested'),
+              localSetup: () {},
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.textContaining('Checking local files…'), findsNWidgets(3));
+      await tester.tap(find.text('Gemma 4 E4B'));
+      await tester.pump();
+      final group = find.byType(RadioGroup<GemmaModel>);
+      expect(
+        tester.widget<RadioGroup<GemmaModel>>(group).groupValue,
+        gemmaModels[1],
+      );
+      discovery.complete(null);
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<RadioGroup<GemmaModel>>(group).groupValue,
+        gemmaModels[1],
+      );
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'local file is verified only on activation and corruption requires download consent',
+    (tester) async {
+      final root = createTestTempDirectorySync('gemma-discovery-integrity-');
+      final store = Store('${root.path}/app.db');
+      addTearDown(store.close);
+      final model = gemmaModels.last;
+      final file = File('${root.path}/${model.directory}/${model.filename}')
+        ..createSync(recursive: true);
+      file.openSync(mode: FileMode.write)
+        ..truncateSync(model.bytes)
+        ..closeSync();
+      var verifications = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: GemmaSetupDialog(
+              store: fixtureReader(store),
+              savePreference: (key, value) async =>
+                  store.setPreference(key, value),
+              environment: setupEnvironment(),
+              directory: root,
+              library: '',
+              runner: '/usr/bin/true',
+              memoryGb: 64,
+              findLocalModel: (model, directory, {registration}) async {
+                verifications++;
+                return null;
+              },
+              installed: (_, _) => fail('Corrupt model must not be loaded'),
+              localSetup: () {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(verifications, 0);
+      expect(
+        find.textContaining('Found locally; verified before use'),
+        findsOneWidget,
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Use model'));
+      await tester.pump(const Duration(milliseconds: 300));
+      await pumpUntil(tester, () => verifications > 0);
+      await pumpUntil(
+        tester,
+        () => find.text('${model.name} terms').evaluate().isNotEmpty,
+      );
+      expect(verifications, 1);
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel').last);
+      await tester.pumpAndSettle();
+      expect(store.model('generation'), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  for (final firstRun in [true, false]) {
+    testWidgets(
+      'fresh setup defaults to E2B with 64 GB RAM (firstRun: $firstRun)',
+      (tester) async {
+        final root = createTestTempDirectorySync('gemma-default-');
+        final store = Store('${root.path}/app.db');
+        addTearDown(store.close);
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: GemmaSetupDialog(
+                store: fixtureReader(store),
+                savePreference: (key, value) async =>
+                    store.setPreference(key, value),
+                environment: setupEnvironment(),
+                directory: root,
+                library: '',
+                runner: '/usr/bin/true',
+                memoryGb: 64,
+                firstRun: firstRun,
+                needsEmbedding: true,
+                installed: (_, _) => fail('No installation requested'),
+                localSetup: () {},
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final group = find.byType(RadioGroup<GemmaModel>);
+        expect(
+          tester.widget<RadioGroup<GemmaModel>>(group).groupValue,
+          gemmaModels.last,
+        );
+        await tester.tap(find.text('Gemma 4 E4B'));
+        await tester.pump();
+        expect(
+          tester.widget<RadioGroup<GemmaModel>>(group).groupValue,
+          gemmaModels[1],
+        );
+        expect(
+          tester
+              .widget<FilledButton>(
+                find.widgetWithText(FilledButton, 'Download models'),
+              )
+              .onPressed,
+          isNotNull,
+        );
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
+
   testWidgets('missing runner reuses a registered model outside the cache', (
     tester,
   ) async {
@@ -106,7 +331,7 @@ void main() {
         );
         expect(find.text('Download EmbeddingGemma 2'), findsNothing);
         expect(
-          find.text('Downloaded · Ready to use for local source search'),
+          find.text('Found locally · Checksum verified before use'),
           findsOneWidget,
         );
       } finally {
@@ -156,7 +381,7 @@ void main() {
         'Gemma 4 E4B',
         'Gemma 4 E2B',
       ]);
-      expect(options.map((o) => o.enabled), [false, false, true]);
+      expect(options.map((o) => o.enabled), [true, true, true]);
       final group = tester.widget<RadioGroup<GemmaModel>>(
         find.byType(RadioGroup<GemmaModel>),
       );
