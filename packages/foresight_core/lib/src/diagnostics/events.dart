@@ -331,7 +331,7 @@ final class DiagnosticRecord {
   final int? request, attempt;
   final SafeDiagnosticStack? stack;
   final bool transport;
-  static const maximumRecordBytes = 16 * 1024;
+  static const maximumRecordBytes = 4096;
   // Registered scalar fields+eight numeric frames are below this producer cap.
   // It also bounds temporary UTF16/UTF8 encoding scratch across16 producers.
   static const maximumProducerRecordBytes = 2048;

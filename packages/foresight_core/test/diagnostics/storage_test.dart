@@ -300,11 +300,16 @@ void main() {
           '${jsonEncode({
             'schema': 1,
             'fields': {'count': 1},
-            'fixture': 'x' * 15000,
+            'fixture': 'x' * 4000,
           })}\n',
         ),
       );
-      for (var i = 0; i < 500; i++) {
+      expect(record.length, lessThanOrEqualTo(4096));
+      expect(
+        record.length * 2100,
+        greaterThan(4 * DiagnosticStorage.segmentBytes),
+      );
+      for (var i = 0; i < 2100; i++) {
         expect(storage.append(record), isTrue);
       }
       final segments = Directory('$profile/logs/slot-${storage.slot}')
