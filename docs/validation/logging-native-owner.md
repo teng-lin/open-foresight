@@ -232,3 +232,11 @@ or RETIRED published between EMPTY and a later exit observation cannot be lost.
 The deterministic FFI regression reproduces EMPTY followed by NOT_LIVE while
 RETIRED remains available for the next receive; it retains the failed close and
 the corrected flushed disposition without claiming an actual OS-child fixture.
+
+The asynchronous drain re-enters records, summaries and final classification
+as one loop. Records admitted during a held summary or final classification
+therefore remain part of close's finite admitted suffix. A worker retry that
+otherwise carries healthy/bootstrap-only is classified storageUnavailable,
+matching the direct-sink contention oracle: dropped protected records cannot be
+reported as a flushed, healthy close. Both held-summary and contended-classify
+regressions retain their premature-success failures.

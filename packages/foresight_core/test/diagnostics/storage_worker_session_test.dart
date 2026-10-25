@@ -19,7 +19,7 @@ final class _Sink implements DiagnosticSink {
   final records = <Map>[];
   final classifications = <DiagnosticRole>[];
   final protections = <(bool, bool)>[];
-  bool closed = false, failFirstAppend = false;
+  bool closed = false, failFirstAppend = false, classifyContended = false;
   @override
   int get slot => 4;
   @override
@@ -32,7 +32,7 @@ final class _Sink implements DiagnosticSink {
   }) {
     classifications.add(role);
     protections.add((error, genuineFailure));
-    return true;
+    return !classifyContended;
   }
 
   @override
@@ -139,6 +139,71 @@ final class _Owner implements DiagnosticWorkerOwner {
 }
 
 void main() {
+  test('close drains records admitted during a held summary append', () async {
+    final profile = createTestTempDirectorySync('summary-suffix-');
+    _Owner? owner;
+    final session = await LoggingSession.startForTesting(
+      configuration: const DiagnosticConfiguration(),
+      profilePath: profile.path,
+      workerFactory: (context) =>
+          owner = _Owner(context, holdFirstAppend: true),
+    );
+    addTearDown(() async {
+      if (owner != null && !owner!.release.isCompleted) {
+        owner!.release.complete();
+      }
+      await session.close();
+    });
+    session.producer.noteDropped(DiagnosticDropReason.correlationCapacity);
+    await eventually(() => owner != null);
+    await owner!.entered.future.timeout(const Duration(seconds: 2));
+    expect(owner!.sink.records.single['event'], 'logging.records_dropped');
+    expect(
+      session.producer.emit(
+        DiagnosticEvent.runtimeFailed,
+        DiagnosticComponent.service,
+      ),
+      isTrue,
+    );
+    await session.inspectBudgetForTesting();
+    final closing = session.close();
+    await Future<void>.delayed(Duration.zero);
+    owner!.release.complete();
+    final result = await closing;
+    expect(result.flushed, isTrue);
+    expect(
+      owner!.sink.records.where((r) => r['event'] == 'runtime.failed'),
+      hasLength(1),
+    );
+  });
+
+  test(
+    'worker classification contention at close is not a flushed sink',
+    () async {
+      final profile = createTestTempDirectorySync('classify-busy-');
+      _Owner? owner;
+      final session = await LoggingSession.startForTesting(
+        configuration: const DiagnosticConfiguration(),
+        profilePath: profile.path,
+        role: DiagnosticRole.desktop,
+        workerFactory: (context) =>
+            owner = _Owner(context)..sink.classifyContended = true,
+      );
+      addTearDown(session.close);
+      expect(
+        session.producer.emit(
+          DiagnosticEvent.runtimeFailed,
+          DiagnosticComponent.desktop,
+        ),
+        isTrue,
+      );
+      final result = await session.close();
+      expect(result.flushed, isFalse);
+      expect(session.health.reason, DiagnosticHealthReason.storageUnavailable);
+      expect(owner!.sink.records, isEmpty);
+    },
+  );
+
   for (final duringAppend in [false, true]) {
     test(
       'late ownership during ${duringAppend ? 'append' : 'classification'} survives close until its decision',

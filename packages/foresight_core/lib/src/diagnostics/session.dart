@@ -1393,7 +1393,12 @@ final class _Writer {
 
   bool _accepted(DiagnosticWorkerReply reply) {
     _remoteSlot = reply.slot ?? _remoteSlot;
-    reason = reply.reason;
+    reason =
+        reply.result == DiagnosticWorkerResult.retry &&
+            (reply.reason == DiagnosticHealthReason.healthy ||
+                reply.reason == DiagnosticHealthReason.bootstrapOnly)
+        ? DiagnosticHealthReason.storageUnavailable
+        : reply.reason;
     if (reply.result == DiagnosticWorkerResult.disabled) _remoteDisabled = true;
     return reply.result == DiagnosticWorkerResult.ok;
   }
@@ -1473,76 +1478,81 @@ final class _Writer {
         }
         _admitted = true;
       }
-      while (records.isNotEmpty) {
+      // Data and counters can arrive during summary/classification RPCs.
+      // Re-enter the whole drain before acknowledging close; closing revokes
+      // new admission, so its admitted suffix is finite.
+      do {
+        while (records.isNotEmpty) {
+          if (_disposed) {
+            _finishOrHealth();
+            return;
+          }
+          if (decisionExpected && !decisionReceived) {
+            _health();
+            return;
+          }
+          if (!await _classify()) {
+            _finishOrHealth();
+            return;
+          }
+          if (_disposed) {
+            _finishOrHealth();
+            return;
+          }
+          final record = records.first;
+          final bytes = _encode(record);
+          if (bytes.length > 4096) {
+            _complete(record, droppedRecord: true);
+            reason = DiagnosticHealthReason.sinkFailed;
+            continue;
+          }
+          _inFlight = record;
+          final reply = await _request(DiagnosticWorkerFrame.append, bytes);
+          _inFlight = null;
+          if (!_accepted(reply)) {
+            if (reply.result == DiagnosticWorkerResult.disabled) {
+              // This matching ACK definitively disposed of this failed append.
+              // Return exactly its charge; newer unsent records stay queued.
+              _complete(record, droppedRecord: true);
+            }
+            _finishOrHealth();
+            return;
+          }
+          _complete(record);
+        }
         if (_disposed) {
           _finishOrHealth();
           return;
         }
-        if (decisionExpected && !decisionReceived) {
-          _health();
-          return;
+        while (_pendingSummary != null || _hasSummaries) {
+          final summary = _pendingSummary ??= _summaries().firstOrNull;
+          if (summary == null) break;
+          if (!await _classify(priority: true)) {
+            _finishOrHealth();
+            return;
+          }
+          final reply = await _request(
+            DiagnosticWorkerFrame.append,
+            _encode(summary),
+          );
+          if (!_accepted(reply)) {
+            _finishOrHealth();
+            return;
+          }
+          _pendingSummary = null;
+          if (_disposed) {
+            _finishOrHealth();
+            return;
+          }
         }
+        // Ownership may change during the last APPEND, or after an earlier
+        // flush emptied the queue. Publish its protection even without new data;
+        // _classify also retains a pending decision's close deadline.
         if (!await _classify()) {
           _finishOrHealth();
           return;
         }
-        if (_disposed) {
-          _finishOrHealth();
-          return;
-        }
-        final record = records.first;
-        final bytes = _encode(record);
-        if (bytes.length > 4096) {
-          _complete(record, droppedRecord: true);
-          reason = DiagnosticHealthReason.sinkFailed;
-          continue;
-        }
-        _inFlight = record;
-        final reply = await _request(DiagnosticWorkerFrame.append, bytes);
-        _inFlight = null;
-        if (!_accepted(reply)) {
-          if (reply.result == DiagnosticWorkerResult.disabled) {
-            // This matching ACK definitively disposed of this failed append.
-            // Return exactly its charge; newer unsent records stay queued.
-            _complete(record, droppedRecord: true);
-          }
-          _finishOrHealth();
-          return;
-        }
-        _complete(record);
-      }
-      if (_disposed) {
-        _finishOrHealth();
-        return;
-      }
-      while (_pendingSummary != null || _hasSummaries) {
-        final summary = _pendingSummary ??= _summaries().firstOrNull;
-        if (summary == null) break;
-        if (!await _classify(priority: true)) {
-          _finishOrHealth();
-          return;
-        }
-        final reply = await _request(
-          DiagnosticWorkerFrame.append,
-          _encode(summary),
-        );
-        if (!_accepted(reply)) {
-          _finishOrHealth();
-          return;
-        }
-        _pendingSummary = null;
-        if (_disposed) {
-          _finishOrHealth();
-          return;
-        }
-      }
-      // Ownership may change during the last APPEND, or after an earlier
-      // flush emptied the queue. Publish its protection even without new data;
-      // _classify also retains a pending decision's close deadline.
-      if (!await _classify()) {
-        _finishOrHealth();
-        return;
-      }
+      } while (records.isNotEmpty || _pendingSummary != null || _hasSummaries);
       _health();
       if (closing) _finish();
     } on DiagnosticWorkerFailure catch (error) {
