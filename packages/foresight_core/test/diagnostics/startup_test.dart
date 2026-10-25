@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:foresight_core/src/diagnostics/startup.dart';
 import 'package:foresight_test_support/test_paths.dart';
+import 'package:foresight_test_support/native_fixture.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -175,6 +176,35 @@ void main() {
     expect(unavailable.available, isFalse);
     expect(unavailable.selection, isNull);
   });
+
+  test(
+    'early support mapping defers absent command candidates until eligibility',
+    () async {
+      final root = createTestTempDirectorySync('startup-lazy-');
+      final support = '${root.path}/lib/libforesight_diagnostic_support.so';
+      File(support).parent.createSync(recursive: true);
+      await buildCachedNativeFixture(
+        source: 'test/fixtures/diagnostics_owner_ffi.cpp',
+        output: support,
+      );
+      final selected = DiagnosticStartup.beforeApplication(
+        environment: {},
+        context: context(root.path),
+      );
+      expect(selected.available, isTrue);
+      expect(selected.functions, isNotNull);
+      // No service or launcher exists. Mapping support must not check either.
+      expect(File('${root.path}/bin/foresight-service').existsSync(), isFalse);
+      expect(
+        File('${root.path}/bin/foresight-diagnostic-launcher').existsSync(),
+        isFalse,
+      );
+      expect(
+        () => selected.selection!.command(22),
+        throwsA(isA<DiagnosticStartupUnavailable>()),
+      );
+    },
+  );
 
   test(
     'compiled service self-reexec and MCP service selection are immutable',

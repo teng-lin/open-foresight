@@ -394,8 +394,8 @@ final class RuntimeSupportSelection {
   }
 }
 
-/// Immutable selection completed before application authority. Lazy owner
-/// resolution copies this metadata only; it never reopens code/source paths.
+/// Metadata-only command selection. Resolve only when persistence becomes
+/// eligible; it never opens or hashes regular code/source files.
 final class DiagnosticStartupSelection {
   DiagnosticStartupSelection._(
     this.context,
@@ -563,6 +563,79 @@ final class DiagnosticStartupSelection {
       arguments: arguments,
     );
   }
+}
+
+({String anchor, String support}) _supportLocation(
+  DiagnosticStartupContext context,
+) {
+  if (!_absolute(context.executable)) _refuse();
+  final marker = context.executable.indexOf('.app/Contents/');
+  if (_sourceSelected(context)) {
+    final anchor = context.sourceAnchor;
+    if (!_absolute(anchor) ||
+        marker >= 0 && !p.isWithin(anchor, context.executable)) {
+      _refuse();
+    }
+    return (
+      anchor: anchor,
+      support: p.join(
+        anchor,
+        'build/native/libforesight_diagnostic_support.${context.macOS ? 'dylib' : 'so'}',
+      ),
+    );
+  }
+  if (context.workerMode != 'aot') _refuse();
+  if (marker >= 0) {
+    final anchor = context.executable.substring(0, marker + 4);
+    return (
+      anchor: anchor,
+      support: p.join(
+        anchor,
+        'Contents/Resources/lib/libforesight_diagnostic_support.dylib',
+      ),
+    );
+  }
+  if (!_linuxInstallationEntry(context.executable)) _refuse();
+  final anchor = p.dirname(p.dirname(context.executable));
+  return (
+    anchor: anchor,
+    support: p.join(anchor, 'lib/libforesight_diagnostic_support.so'),
+  );
+}
+
+/// The only authority selected early is the trusted support image. Command
+/// metadata is intentionally unresolved until the owner's first eligibility.
+final class DiagnosticPreparedSupport {
+  const DiagnosticPreparedSupport._(this.context, this.anchor, this.support);
+  final DiagnosticStartupContext context;
+  final String anchor, support;
+
+  static DiagnosticPreparedSupport resolveEarly(
+    DiagnosticStartupContext context,
+  ) {
+    if (!context.identitiesAvailable) _refuse();
+    if (_sourceSelected(context) &&
+        context.workerMode != 'aot' &&
+        (!_absolute(context.dartSdkRoot) ||
+            !_identity(context.dartSdkIdentity) ||
+            context.dartExecutable != p.join(context.dartSdkRoot, 'bin/dart') ||
+            !_absolute(context.packageConfig))) {
+      _refuse();
+    }
+    final location = _supportLocation(context);
+    _candidate(location.anchor, location.support);
+    return DiagnosticPreparedSupport._(
+      context,
+      location.anchor,
+      location.support,
+    );
+  }
+
+  DiagnosticStorageCommand command(int applicationPid) {
+    final selected = DiagnosticStartupSelection.resolve(context);
+    if (selected.support != support) _refuse();
+    return selected.command(applicationPid);
+  }
 
   DiagnosticNativeFunctions loadEarly() =>
       DiagnosticNativeFunctions.fromImage(DynamicLibrary.open(support));
@@ -571,7 +644,7 @@ final class DiagnosticStartupSelection {
 final class DiagnosticStartup {
   const DiagnosticStartup._(this.configuration, this.selection, this.functions);
   final DiagnosticConfiguration configuration;
-  final DiagnosticStartupSelection? selection;
+  final DiagnosticPreparedSupport? selection;
   final DiagnosticNativeFunctions? functions;
   bool get available => selection != null && functions != null;
 
@@ -586,8 +659,7 @@ final class DiagnosticStartup {
       return DiagnosticStartup._(configuration, null, null);
     }
     try {
-      final selection = DiagnosticStartupSelection.resolve(context);
-      selection.command(pid);
+      final selection = DiagnosticPreparedSupport.resolveEarly(context);
       return DiagnosticStartup._(
         configuration,
         selection,
@@ -623,39 +695,13 @@ DiagnosticChildStartup loadDiagnosticChildStartup(
   if (invocation.kind != DiagnosticWorkerInvocationKind.valid) _refuse();
   final context = DiagnosticStartupContext.current(host);
   if (!context.identitiesAvailable) _refuse();
-  String anchor, expectedSupport;
-  final marker = context.executable.indexOf('.app/Contents/');
-  if (_sourceSelected(context)) {
-    anchor = context.sourceAnchor;
-    if (!_absolute(anchor) ||
-        marker >= 0 && !p.isWithin(anchor, context.executable)) {
-      _refuse();
-    }
-    expectedSupport = p.join(
-      anchor,
-      'build/native/libforesight_diagnostic_support.${context.macOS ? 'dylib' : 'so'}',
-    );
-  } else if (marker >= 0 && context.workerMode == 'aot') {
-    anchor = context.executable.substring(0, marker + 4);
-    expectedSupport = p.join(
-      anchor,
-      'Contents/Resources/lib/libforesight_diagnostic_support.dylib',
-    );
-  } else {
-    if (context.workerMode != 'aot' ||
-        p.basename(context.executable) != 'foresight-service' ||
-        p.basename(p.dirname(context.executable)) != 'bin') {
-      _refuse();
-    }
-    anchor = p.dirname(p.dirname(context.executable));
-    expectedSupport = p.join(anchor, 'lib/libforesight_diagnostic_support.so');
-  }
-  if (invocation.support != expectedSupport) _refuse();
+  final location = _supportLocation(context);
+  if (invocation.support != location.support) _refuse();
   // The sole pre-watch regular-file exception: trusted system DSO. Do not
   // resolve/check source, packages, kernels, launcher or profile at this point.
-  _candidate(anchor, expectedSupport);
+  _candidate(location.anchor, location.support);
   final functions = DiagnosticNativeFunctions.fromImage(
-    DynamicLibrary.open(expectedSupport),
+    DynamicLibrary.open(location.support),
   );
   return DiagnosticChildStartup._(
     functions: functions,

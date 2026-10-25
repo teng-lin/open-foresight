@@ -33,8 +33,12 @@ refused except the exact reviewed root:admin0775 `/Applications`, root:staff0277
 requires its next descendant to be private. All consumed Linux statx fields
 (TYPE/MODE/NLINK/UID/GID) must be present. No symlink, hardlink, foreign owner
 or writable ordinary candidate is admitted. It does not open or hash source/command files.
-The validated system DSO is the sole early regular-file load. Lazy owner
-resolution retains immutable metadata, not a loader callback. UTF-8 argv must
+The validated system DSO is the sole early regular-file load. Early selection
+checks only that image and its physical ancestor chain. Launcher, worker, SDK,
+package-config and argv metadata are checked only by the lazy owner callback
+when persistence becomes eligible; no regular candidate is opened or hashed
+then. The callback retains immutable context and the early-selected image path,
+not a loader callback. UTF-8 argv must
 fit sixteen entries, 1,024 bytes per entry and 2,048 bytes total. Source JIT uses
 three identity defines and one closed public path descriptor, not an ambient
 `-D` vector or profile/session data. Kernels carry compiled identities/context.
@@ -49,10 +53,14 @@ The current source callback refuses: no reviewed source/SDK input-manifest
 verifier or production worker ID has been activated. Declarative `-D` equality
 does not establish source-byte identity.
 
-Initial Linux selector tests executed twenty cases, zero skips, and targeted
+Linux selector tests executed twenty-one cases, zero skips, and targeted
 analysis/format passed. These include real symlink/hardlink/writable files,
 compiled service/MCP path selection, finite argv and SQL independence from off
-or missing diagnostic identity. They are metadata fixtures, not loaded-product,
+or missing diagnostic identity. One regression maps an actual controlled FFI
+image while service/launcher candidates are absent; the previous early full
+resolver fails that oracle. This proves support-only mapping and deferred
+command checks, not a production worker load. The remaining tests are metadata
+fixtures, not loaded-product,
 Darwin FFI, compiled service worker, native owner, shutdown or installed-package
 acceptance. Full startup/session wiring, native product identities, source
 verification, build/package/consumer integration and combined Linux/Mac gates
