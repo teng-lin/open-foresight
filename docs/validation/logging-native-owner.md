@@ -175,3 +175,31 @@ active RPC first consumes any matching final ACK before its remaining queue can
 be disposed. A disabled APPEND ACK drops/refunds only its known failed prefix;
 newer unsent records remain bounded in memory. Initial idle-observation and
 failed-prefix controls are retained alongside the passing followups.
+
+
+The real-session fixture additionally compiles the current system-only native
+support and launcher with an explicit private fixture identity, then starts a
+fresh caller VM for each scenario. Its child is the shared storage executor,
+not a test implementation of that executor. Normal operation verifies two
+ordered schema-2 records, logical application PID/session, selected worker build
+ID, producer generation, protected service manifest and typed RETIRED response.
+Idle FORCE uses the original native context rather than a PID signal and is
+observed through the existing coalesced status edge. Final shutdown checks actual
+writer/parent ownership and observed child exit separately; Darwin need not
+claim reaping or a known exit class.
+
+The reverse-alias scenario holds a real SQLite write transaction, hardlinks its
+database to the diagnostic admission filename, and probes POSIX locks from a
+separate process before and after rejected admission. Shared-child admission
+must preserve the parent's lock. The explicit legacy same-PID test sink must
+release it, proving the fixture reaches the unsafe open/refuse/close path rather
+than refusing an earlier directory. Business database cleanup precedes logger
+close. Compiler/source/binary hashes and child output are retained in the test
+log. These are actual fixture-child/filesystem controls, not installed-command,
+package, product-image or physical resource-ceiling acceptance. SDK-container,
+Mac and complete product gates must be reported for their exact source and
+execution environment separately.
+
+Worker requests validate their closed type and byte limit before making a copy;
+the owned byte view is read-only so later caller mutation cannot change an
+in-flight command. Its regression retains the formerly mutable-view failure.

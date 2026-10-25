@@ -126,6 +126,27 @@ final class _Owner implements DiagnosticWorkerOwner {
 }
 
 void main() {
+  test('worker request owns immutable bounded bytes', () {
+    final bytes = Uint8List.fromList([1]);
+    final request = DiagnosticWorkerRequest(
+      DiagnosticWorkerFrame.append,
+      bytes,
+    );
+    bytes[0] = 2;
+    expect(request.payload, [1]);
+    expect(() => request.payload[0] = 3, throwsUnsupportedError);
+    expect(
+      () => DiagnosticWorkerRequest(
+        DiagnosticWorkerFrame.append,
+        Uint8List(4097),
+      ),
+      throwsArgumentError,
+    );
+    expect(
+      () => DiagnosticWorkerRequest(255, Uint8List(0)),
+      throwsArgumentError,
+    );
+  });
   test(
     'off, transient, cold and no-profile paths never invoke the worker factory',
     () async {

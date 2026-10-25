@@ -39,7 +39,9 @@ final class DiagnosticStorageLaunchContext {
 
 final class DiagnosticWorkerRequest {
   DiagnosticWorkerRequest(this.type, Uint8List payload)
-    : payload = Uint8List.fromList(payload) {
+    : payload = _copy(type, payload);
+
+  static Uint8List _copy(int type, Uint8List payload) {
     final maximum = type == DiagnosticWorkerFrame.append ? 4096 : 8192;
     if (!const {
           DiagnosticWorkerFrame.init,
@@ -52,7 +54,9 @@ final class DiagnosticWorkerRequest {
         payload.length > maximum) {
       throw ArgumentError('Invalid diagnostic worker request');
     }
+    return Uint8List.fromList(payload).asUnmodifiableView();
   }
+
   final int type;
   final Uint8List payload;
 }
