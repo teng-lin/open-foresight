@@ -105,6 +105,28 @@ void run_owner_subprocess(const char *executable, const char *mode) {
 void live_legacy_exit(const char *executable) {
   run_owner_subprocess(executable, "--live-legacy-exit");
 }
+void held_legacy_finalization(const char *executable) {
+  auto *engine = fs_engine_create(executable, "/dev/null");
+  auto *conversation = fs_conversation_create(engine);
+  check(conversation, "legacy finalization fixture admitted");
+  auto &worker = *static_cast<Conversation *>(conversation);
+  HeldWorker held;
+  worker.thread_finished = false;
+  worker.thread = held.start();
+  held.ready();
+  // active/done is deliberately insufficient: finalization must use the
+  // thread wrapper's terminal publication, without waiting for held work.
+  worker.active = false;
+  finalize_legacy_threads(native_handles());
+  check(worker.thread.joinable(),
+        "finalization retains unfinished legacy work");
+  held.release();
+  worker.join();
+  worker.thread_finished = true;
+  check(fs_conversation_destroy(conversation, 1) == 0 &&
+            fs_engine_destroy(engine) == 0,
+        "held legacy authority still supports actual cleanup");
+}
 void retirement_admission_failure(const char *executable) {
   run_owner_subprocess(executable, "--retire-admission-failure");
 }
@@ -610,12 +632,21 @@ void probes(const char *executable) {
         "probe results acknowledge independently");
   release_owner(engine, fs_engine_retire(engine));
   const char *root = std::getenv("FORESIGHT_TEST_TEMP_ROOT");
-  check(root, "private root required");
-  auto marker = std::filesystem::path(root) /
-                ("owned-probe-v2-" + std::to_string(getpid()));
+#ifdef __APPLE__
+  if (!root)
+    root = "/private/var/tmp";
+#else
+  if (!root)
+    root = "/var/tmp";
+#endif
+  auto scratch =
+      (std::filesystem::canonical(root) / "owned-probe-v2-XXXXXX").string();
+  check(mkdtemp(scratch.data()), "private probe fixture root required");
+  auto marker = std::filesystem::path(scratch) / "child";
   foresight::ScopeExit cleanup([&] {
     unsetenv("FORESIGHT_OWNED_PROBE_MARKER");
     std::filesystem::remove(marker);
+    std::filesystem::remove(scratch);
   });
   setenv("FORESIGHT_OWNED_PROBE_MARKER", marker.c_str(), 1);
   engine = fs_owned_engine_create(executable, "/dev/null", 1, 0);
@@ -687,6 +718,11 @@ int main(int argc, char **argv) {
       }
     }
     // Deliberately retain both legacy handles and the joinable finished thread.
+    if (done)
+      until([&] {
+        return static_cast<Conversation *>(conversation)
+            ->thread_finished.load();
+      });
     return done ? 0 : 3;
   }
   if (argc > 1) {
@@ -705,6 +741,8 @@ int main(int argc, char **argv) {
           "separate owned v2 capability");
     std::cerr << "CASE live_legacy_exit\n";
     live_legacy_exit(argv[0]);
+    std::cerr << "CASE held_legacy_finalization\n";
+    held_legacy_finalization(argv[0]);
     std::cerr << "CASE retirement_admission_failure\n";
     retirement_admission_failure(argv[0]);
     std::cerr << "CASE legacy_failure\n";
