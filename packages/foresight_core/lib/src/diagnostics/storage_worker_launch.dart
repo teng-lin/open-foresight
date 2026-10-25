@@ -10,4 +10,3 @@ final class DiagnosticStorageCommand {
   final String nativeId, dartId, catalogId;
   final List<String> arguments;
 }
-
