@@ -99,16 +99,23 @@ extension _SourceActions on SourcesController {
         height: 400,
         saveLabel: 'Save and index',
         onSave: () async {
-          await d.command(Operation.sourcesImport, {
-            'title': s['title'],
-            'text': text.text,
-            'mime': s['mime'],
-            'provenance': s['provenance'],
-            'id': s['id'],
-            'locallyEdited': true,
-            'index': false,
-            if (epoch != null) 'workspace_epoch': epoch,
-          });
+          await sourcesImportDescriptor.send(
+            d,
+            SourcesImportInput(
+              title: s['title'] as String,
+              text: text.text,
+              mime: WireField(s['mime'] as String?),
+              provenance: WireField(s['provenance'] as String?),
+              id: WireField(s['id'] as String?),
+              locallyEdited: WireField(true),
+              index: WireField(false),
+              envelope: ClientEnvelope(
+                workspaceEpoch: epoch != null
+                    ? WireField(epoch)
+                    : const WireField.absent(),
+              ),
+            ),
+          );
           await d.index(s['id'] as String);
         },
       ),
@@ -118,7 +125,10 @@ extension _SourceActions on SourcesController {
   }
 
   Future<void> _featureImportPath(String path) async {
-    await d.command(Operation.sourcesImportFile, {'path': path});
+    await sourcesImportFileDescriptor.send(
+      d,
+      SourcesImportFileInput(path: path),
+    );
     if (mounted) update(() {});
   }
 
@@ -188,11 +198,14 @@ extension _SourceActions on SourcesController {
   }
 
   Future<void> _featureImportDirectory(String path) async {
-    await d.command(Operation.sourcesImportDirectory, {'path': path});
+    await sourcesImportDirectoryDescriptor.send(
+      d,
+      SourcesImportDirectoryInput(path: path),
+    );
   }
 
   Future<void> _featureReimport() async {
-    await d.command(Operation.sourcesRefresh);
+    await sourcesRefreshDescriptor.send(d, SourcesRefreshInput());
   }
 
   Future<void> _featureImportUrl() async {
@@ -255,9 +268,14 @@ extension _SourceActions on SourcesController {
     String value, {
     bool allowPrivateNetwork = false,
   }) async {
-    await d.command(Operation.sourcesImportUrl, {
-      'url': value,
-      if (allowPrivateNetwork) 'allow_private_network': true,
-    });
+    await sourcesImportUrlDescriptor.send(
+      d,
+      SourcesImportUrlInput(
+        url: value,
+        allowPrivateNetwork: allowPrivateNetwork
+            ? WireField(true)
+            : const WireField.absent(),
+      ),
+    );
   }
 }

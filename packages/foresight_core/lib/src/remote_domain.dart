@@ -1,3 +1,8 @@
+import 'client_command.dart';
+import 'client_requests.dart';
+import 'operation_descriptors.dart';
+import 'operation_requests/graph_inputs.dart';
+import 'model_asset_status.dart';
 import 'desktop_status.dart';
 import 'cancellation.dart';
 export 'recording_status.dart' show RemoteRecording;
@@ -15,7 +20,9 @@ import 'sqlite_store_reader.dart';
 import 'store_reader.dart';
 import 'persistence/read_schema_guard.dart';
 import 'profile_paths.dart';
-import 'service.dart';
+import 'service_client.dart';
+import 'service_startup.dart';
+import 'service_ownership.dart';
 import 'service_socket.dart' show probeSocketPath;
 
 /// Whether a failed request never took effect, so it may be sent once more
@@ -26,7 +33,14 @@ bool _resendable(RpcError error) =>
 /// Desktop facade: reads use SQLite WAL snapshots; all writes and workers are
 /// delegated to the single application service. No migrations run in this client.
 class RemoteDomain
-    implements DesktopConnection, CaptureLevelEvents, RemoteGoogleOwner {
+    implements
+        DesktopConnection,
+        CaptureLevelEvents,
+        RemoteGoogleOwner,
+        ModelAssetProgressSource {
+  @override
+  ModelAssetDownloadPresentation modelAssetDownload =
+      const ModelAssetDownloadPresentation();
   @override
   StoreReader get store => _reader;
   final SqliteStoreReader _reader;
@@ -337,6 +351,9 @@ class RemoteDomain
     }
     _webSearchAvailable = event['web_search_available'] == true;
     googleStatus = Map<String, dynamic>.from(event['google'] as Map? ?? {});
+    modelAssetDownload = ModelAssetDownloadPresentation.fromWire(
+      event['model_asset_download'],
+    );
     capture = Map<String, dynamic>.from(event['capture'] as Map? ?? {});
     _paused = event['sources_paused'] == true;
     _sourceControlRevision++;
@@ -846,12 +863,12 @@ class RemoteDomain
 
   @override
   Future<void> index(String id) async {
-    await command(Operation.sourcesIndex, {'id': id});
+    await sourcesIndexDescriptor.send(this, SourcesIndexInput(id: id));
   }
 
   @override
   Future<void> delete(String id) async {
-    await command(Operation.sourcesDelete, {'id': id});
+    await sourcesDeleteDescriptor.send(this, SourcesDeleteInput(id: id));
   }
 
   @override
@@ -860,7 +877,10 @@ class RemoteDomain
 
   @override
   Future<void> resume() async {
-    await command(Operation.applicationResume);
+    await applicationResumeDescriptor.send(
+      this,
+      const ApplicationResumeInput(),
+    );
   }
 
   @override
@@ -879,14 +899,16 @@ class RemoteDomain
     final previous = _paused;
     final revision = ++_sourceControlRevision;
     _paused = paused;
+    final work = operation == Operation.sourcesPause
+        ? sourcesPauseDescriptor.send(this, const SourcesPauseInput())
+        : sourcesResumeDescriptor.send(this, const SourcesResumeInput());
     unawaited(
-      command(operation).catchError((Object error) {
+      work.catchError((Object error) {
         if (!_disposed) {
           if (revision == _sourceControlRevision) _paused = previous;
           _helper.state = 'Source control failed: $error';
           _notifyChanges();
         }
-        return null;
       }),
     );
   }
@@ -921,7 +943,7 @@ class RemoteDomain
       if (current != null && !current()) {
         throw operationCancelled('Answer cancelled');
       }
-      yield value as String;
+      yield answerStreamDescriptor.decodeResponse(value);
     }
   }
 
@@ -946,7 +968,7 @@ class RemoteDomain
       if (current != null && !current()) {
         throw operationCancelled('Answer cancelled');
       }
-      yield value as String;
+      yield answerStreamDescriptor.decodeResponse(value);
     }
   }
 
@@ -954,13 +976,9 @@ class RemoteDomain
   Future<Map<String, List<double>>> graphEmbeddings(
     List<Map<String, Object?>> sources,
   ) async {
-    final result =
-        await command(Operation.graphEmbeddings, {'sources': sources}) as Map;
-    return result.map(
-      (k, v) => MapEntry(
-        k as String,
-        (v as List).map((n) => (n as num).toDouble()).toList(),
-      ),
+    return graphEmbeddingsDescriptor.send(
+      this,
+      GraphEmbeddingsInput(sources: decodeGraphSources(sources, 'sources')),
     );
   }
 

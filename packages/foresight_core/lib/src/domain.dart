@@ -1,10 +1,11 @@
 import 'generation_runtime_slot.dart';
 import 'application_services/service_runtime_ports.dart';
 import 'package:meta/meta.dart';
+import 'application_services/service_workflow_ports.dart';
+import 'application_services/service_workspace_ports.dart';
 import 'cancellation.dart';
 export 'cancellation.dart' show CancellationWatch;
-import 'text_budget.dart' show boundUtf8;
-export 'text_budget.dart' show boundUtf8;
+export 'text_budget.dart' show boundUtf8, balancedTranscriptWindow;
 import 'rpc_error.dart';
 import 'package:clock/clock.dart';
 import 'model_setup.dart';
@@ -13,7 +14,6 @@ import 'platform_services.dart';
 import 'dart:async';
 import 'dart:developer' as developer;
 import 'model_gate.dart';
-import 'dart:convert';
 import 'dart:typed_data';
 import 'package:grpc/grpc.dart';
 import 'package:grpc/service_api.dart' as grpc_api;
@@ -35,7 +35,21 @@ typedef GenerationRuntimeDiscovery =
       Future<void> Function(NativeRuntime)? retire,
     });
 
-class Domain implements RecordingWorkspace, SummaryWorkspace, ModelWorkspace {
+class Domain
+    implements
+        RecordingWorkspace,
+        SummaryWorkspace,
+        ModelWorkspace,
+        SourceOperationsPort,
+        GoogleWorkspacePort,
+        MeetingMutationPort,
+        WorkspaceResetPort,
+        ConversationWorkspacePort,
+        MeetingGenerationPort,
+        MeetingWorkflowPort,
+        NoteEnhancementPort,
+        RuntimeOperationsPort,
+        MeetingIndexingPort {
   @override
   final Store store;
   @override
@@ -58,7 +72,9 @@ class Domain implements RecordingWorkspace, SummaryWorkspace, ModelWorkspace {
   set generator(NativeRuntime? runtime) =>
       generationRuntimes.installForTesting(runtime);
   bool get generationBusy => generationRuntimes.busy;
+  @override
   Object? get generationFailure => generationRuntimes.failure;
+  @override
   bool get generationRestartRequired => generationRuntimes.restartRequired;
   void stopGeneration() => generationRuntimes.stop();
   @override
@@ -81,15 +97,18 @@ class Domain implements RecordingWorkspace, SummaryWorkspace, ModelWorkspace {
        _discoverGeneration = discoverGeneration ?? discoverGenerationRuntime;
   Future<void> Function(int, {bool Function()? current})?
   indexMeetingTranscript;
+  @override
   ModelGate modelGate;
   SearchCallbacks? _webSearch;
   WebContentService? _ownedWebContent;
+  @override
   bool get webSearchAvailable =>
       _webSearch != null ||
       ((runtimeConfiguration['FORESIGHT_SEARCH_API_KEY'] ?? '').isNotEmpty &&
           (runtimeConfiguration['FORESIGHT_WEB_CONTENT_API_KEY'] ?? '')
               .isNotEmpty);
 
+  @override
   SearchCallbacks searchCallbacks() {
     if (!webSearchAvailable) {
       throw RpcError(
@@ -126,6 +145,7 @@ class Domain implements RecordingWorkspace, SummaryWorkspace, ModelWorkspace {
   }
 
   /// Invalidate work before deleting local data.
+  @override
   void invalidateWorkspace() {
     _workspaceGeneration++;
     checkCancellations();
@@ -142,12 +162,14 @@ class Domain implements RecordingWorkspace, SummaryWorkspace, ModelWorkspace {
     return watch;
   }
 
+  @override
   void checkCancellations() {
     for (final watch in _cancellations.toList()) {
       watch.check();
     }
   }
 
+  @override
   Future<T> awaitCurrent<T>(Future<T> shared, bool Function()? current) async {
     if (current == null) return shared;
     shared.ignore();
@@ -195,18 +217,22 @@ class Domain implements RecordingWorkspace, SummaryWorkspace, ModelWorkspace {
     }
   });
 
+  @override
   void cleanupClearedSources(List<String> sourceIds) {
     unawaited(retryPendingHelperDeletes().catchError((Object _) {}));
   }
 
   bool _sourcesPaused = false;
+  @override
   bool get sourcesPaused => _sourcesPaused;
   Completer<void>? _sourceWorkResumed;
+  @override
   void pauseSources() {
     _checkOpen();
     _sourcesPaused = true;
   }
 
+  @override
   void resumeSources() {
     _checkOpen();
     _sourcesPaused = false;
@@ -219,6 +245,7 @@ class Domain implements RecordingWorkspace, SummaryWorkspace, ModelWorkspace {
     signal?.complete();
   }
 
+  @override
   Future<void> waitForSourceWork({bool Function()? current}) async {
     void check() {
       _checkOpen();
@@ -278,6 +305,7 @@ class Domain implements RecordingWorkspace, SummaryWorkspace, ModelWorkspace {
     return task;
   }
 
+  @override
   Future<Map<String, List<double>>> graphEmbeddings(
     List<Map<String, Object?>> sources,
   ) async {
@@ -367,6 +395,7 @@ class Domain implements RecordingWorkspace, SummaryWorkspace, ModelWorkspace {
 
   /// Read the helper's committed incremental cursor after any durable purge.
   /// The cursor is advisory; ApplyDelta checks it atomically before mutation.
+  @override
   Future<transcript.TranscriptCursor> transcriptCursor(
     String id, {
     bool Function()? current,
@@ -399,6 +428,7 @@ class Domain implements RecordingWorkspace, SummaryWorkspace, ModelWorkspace {
   /// Send only changed immutable transcript segments. No full source body is
   /// read, concatenated or tokenized on this path. Cancellation retains the
   /// mutation reservation until the actual helper RPC has settled.
+  @override
   Future<transcript.TranscriptDeltaResult> applyTranscriptDelta(
     transcript.TranscriptDelta delta, {
     bool Function()? current,
@@ -517,6 +547,7 @@ class Domain implements RecordingWorkspace, SummaryWorkspace, ModelWorkspace {
     }
   }
 
+  @override
   Future<void> delete(String id) {
     _checkOpen();
     store.tombstone(id);
@@ -550,6 +581,7 @@ class Domain implements RecordingWorkspace, SummaryWorkspace, ModelWorkspace {
 
   /// The note producer's lazy service getter shares an initialization future.
   /// Readiness policy and the single reset/reacquisition live in its caller.
+  @override
   Future<NativeRuntime?> noteEnhancementService() async {
     _checkOpen();
     if (generator?.loaded == true) return generator;
@@ -607,6 +639,7 @@ class Domain implements RecordingWorkspace, SummaryWorkspace, ModelWorkspace {
     }, current: () => !_closed && workspace == workspaceGeneration);
   }
 
+  @override
   Future<void> resetNoteEnhancementService() async {
     _checkOpen();
     _noteServiceInitialization = null;
@@ -631,6 +664,7 @@ class Domain implements RecordingWorkspace, SummaryWorkspace, ModelWorkspace {
   }
 
   bool get restoring => _resuming != null || _initialization != null;
+  @override
   Future<void> resume() => _resuming ??= _resume().whenComplete(() {
     _resuming = null;
     onBackgroundSettled?.call();
@@ -742,27 +776,4 @@ class Domain implements RecordingWorkspace, SummaryWorkspace, ModelWorkspace {
 
   bool citationCurrent(Map<String, Object?> citation) =>
       _queries.citationCurrent(citation['document_id'], citation['revision']);
-}
-
-/// UTF-8 bytes conservatively bound tokenizer input. Select the beginning,
-/// midpoint and ending rather than silently discarding the end of a meeting.
-String balancedTranscriptWindow(String text, int budget) {
-  if (utf8.encode(text).length <= budget) return text;
-  const omitted =
-      '\n[Transcript abridged: balanced beginning, middle and ending excerpts; omitted passages are not evidence.]\n';
-  final share = (budget - utf8.encode(omitted).length - 20) ~/ 3;
-  if (share < 1) {
-    throw StateError('Model context is too small for transcript excerpts');
-  }
-  final runes = text.runes.toList();
-  final head = boundUtf8(text, share);
-  final middle = boundUtf8(
-    String.fromCharCodes(runes.skip(runes.length ~/ 2)),
-    share,
-  );
-  final reverse = String.fromCharCodes(runes.reversed);
-  final tail = String.fromCharCodes(
-    boundUtf8(reverse, share).runes.toList().reversed,
-  );
-  return '$omitted$head\n[… ]\n$middle\n[… ]\n$tail';
 }

@@ -1,5 +1,5 @@
 import 'read_models.dart';
-import 'graph_persistence.dart';
+import 'graph_view_data.dart';
 import 'graph_labels.dart';
 import 'read_coordinator.dart';
 

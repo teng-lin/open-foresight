@@ -15,6 +15,11 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Changed
 
+- Separate meeting and source renderers from feature commands while preserving
+  note saves, answer retries, generation cancellation and dialog ownership.
+
+- Use typed desktop operation requests and replies while retaining request keys,
+  workspace checks and retry behavior when a reply is lost or malformed.
 - Search waits only for actively owned stopped-transcript indexing; saved failed
   backlog no longer blocks later searches of other indexed documents.
 
@@ -30,6 +35,11 @@ Notable changes to Open Foresight are recorded here. Versions follow
 - Keep model and recording cleanup responsive while native workers finish.
   Model replacement and service shutdown retain ownership until native cleanup
   and pending callbacks settle; recording preserves speech model reuse.
+- Deliver public model progress across the real service connection, scale finite download budgets to pinned asset sizes, preserve actionable setup errors and retire model/audio subprocesses before replacing their owners.
+
+- Keep public model downloads, cache verification and runtime preflight in the application service. Setup dialogs retain publisher consent and receive progress while cancellation joins the owned transfer.
+
+- Bound question-model metadata and download phases, retry attempts and cancellation. An owned transport subprocess can terminate and reap stalled TLS work on the pinned Dart runtime.
 
 - Let search wait briefly for already-stopped meeting transcripts to finish
   indexing. Stop remains independent of the helper; paused or unconfigured

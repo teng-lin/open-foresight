@@ -1,44 +1,46 @@
+import 'persistence/answer_scope_queries.dart';
 import 'dart:convert';
 
-import 'persistence/sqlite_runtime.dart';
+import 'persistence/application_schema.dart';
+import 'persistence/sqlite_snapshot_source.dart';
+import 'persistence/label_queries.dart';
+import 'persistence/output_statistics.dart';
+import 'persistence/graph_queries.dart';
+import 'persistence/answer_passage_queries.dart';
 
-import 'answer_source_scope.dart';
 import 'read_models.dart';
-import 'graph_persistence.dart';
+import 'graph_view_data.dart';
 import 'persistence/meeting_queries.dart';
-import 'persistence/conversation_queries.dart';
 import 'persistence/read_schema_guard.dart';
 import 'persistence/source_queries.dart';
 import 'read_coordinator.dart';
 import 'rpc_error.dart';
-import 'store.dart';
 
 /// Private persistence implementation; never exported through the desktop API.
 final class SqliteReadSession {
-  final Store _store;
+  final SqliteSnapshotSource _store;
   final bool _ownsStore;
   bool _closed = false;
   IncompatibleReadSchema? _incompatibility;
   void Function(IncompatibleReadSchema)? onIncompatible;
 
-  SqliteReadSession.borrow(Store store) : _store = store, _ownsStore = false;
+  SqliteReadSession.borrow(SqliteSnapshotSource store)
+    : _store = store,
+      _ownsStore = false;
   SqliteReadSession.open(String path) : _store = _open(path), _ownsStore = true;
 
-  static Store _open(String path) {
-    try {
-      return Store.readOnly(path);
-    } catch (_) {
-      // Store's established startup refusal is StateError. Classify a newer
-      // schema into the reader's typed terminal failure without parsing text.
-      final db = openApplicationDatabase(path, mode: OpenMode.readOnly);
-      try {
-        readSnapshot(db, () {}, supportedVersion: Store.schemaVersion);
-      } finally {
-        db.dispose();
-      }
-      rethrow;
-    }
-  }
+  static SqliteSnapshotDatabase _open(String path) =>
+      SqliteSnapshotDatabase.open(path);
+  SourceQueries get _sources =>
+      SourceQueries(_store.db, supportedVersion: applicationSchemaVersion);
+  String get _epoch => _store.preference('workspaceEpoch');
+  LabelQueries get _labels =>
+      LabelQueries(_store.db, supportedVersion: applicationSchemaVersion);
+  late final OutputStatistics _statistics = OutputStatistics(
+    _store.db,
+    supportedVersion: applicationSchemaVersion,
+    dataRevision: () => _store.dataRevision,
+  );
 
   T snapshot<T>(T Function() read) {
     final incompatible = _incompatibility;
@@ -48,7 +50,7 @@ final class SqliteReadSession {
       return readSnapshot(
         _store.db,
         read,
-        supportedVersion: Store.schemaVersion,
+        supportedVersion: applicationSchemaVersion,
       );
     } on IncompatibleReadSchema catch (error) {
       _incompatibility = error;
@@ -70,7 +72,7 @@ final class SqliteReadSession {
       throw StateError('Reader identity requires an autocommit boundary');
     }
     final revision = _store.dataRevision;
-    final epoch = snapshot(() => _store.workspaceEpoch);
+    final epoch = snapshot(() => _epoch);
     return ReadIdentity(
       owner: owner,
       profile: profile,
@@ -82,28 +84,32 @@ final class SqliteReadSession {
 
   ReadWorkerReply query(String projection, Map<String, Object?> arguments) =>
       snapshot(() {
-        final epoch = _store.workspaceEpoch;
+        final epoch = _epoch;
         return ReadWorkerReply(epoch, _project(projection, arguments));
       });
 
   Object? _project(String projection, Map<String, Object?> args) {
     final sources = SourceQueries(
       _store.db,
-      supportedVersion: Store.schemaVersion,
+      supportedVersion: applicationSchemaVersion,
     );
     final meetings = MeetingQueries(
       _store.db,
-      supportedVersion: Store.schemaVersion,
+      supportedVersion: applicationSchemaVersion,
     );
     int id() => args['id'] as int;
     switch (projection) {
       case 'answer_passages':
-        return ConversationQueries(_store).answerPassages(
+        final revisions = Map<String, Object?>.from(args['revisions'] as Map);
+        final semantic = (args['semantic'] as List)
+            .map((row) => Map<String, Object?>.from(row as Map))
+            .toList();
+        return readAnswerPassages(
+          _store.db,
           args['question'] as String,
-          Map<String, Object?>.from(args['revisions'] as Map),
-          (args['semantic'] as List)
-              .map((row) => Map<String, Object?>.from(row as Map))
-              .toList(),
+          revisions,
+          semantic,
+          supportedVersion: applicationSchemaVersion,
         );
       case 'sources':
         return sources.summaries();
@@ -121,8 +127,8 @@ final class SqliteReadSession {
                 Map<String, Object?>.from(args['period'] as Map),
               );
         return OutputStats(
-          words: _store.localOutputWords,
-          weekly: _store.weeklyOutputWords(
+          words: _statistics.localOutputWords,
+          weekly: _statistics.weeklyOutputWords(
             DateTime.fromMillisecondsSinceEpoch(args['now'] as int),
             weekStarts: period?.weeks
                 .map((week) => week.startMilliseconds)
@@ -149,13 +155,13 @@ final class SqliteReadSession {
       case 'source_mimes':
         return sources.googleSourceMimes();
       case 'labels':
-        return _store.documentLabels;
+        return _labels.documentLabels;
       case 'clusters':
         return sources.clusters();
       case 'cluster_names':
         return sources.clusterNames();
       case 'graph_label_set':
-        return _store.graphLabelSet();
+        return _labels.graphLabelSet();
       case 'meetings':
         return meetings.collection();
       case 'meeting_note':
@@ -177,13 +183,12 @@ final class SqliteReadSession {
       case 'questions':
         return meetings.questions(id());
       case 'answer_scope':
-        final scope = AnswerSourceScope.read(
-          _store,
+        return readAnswerScope(
+          _store.preference,
           args['conversation'] as String,
           meeting: args['meeting'] as int?,
           automatic: args['automatic'] == true,
         );
-        return AnswerScopeSnapshot(mode: scope.mode, ids: scope.ids);
       case 'answers':
         return _answers(args, meetings, sources);
       case 'export_notes':
@@ -203,16 +208,18 @@ final class SqliteReadSession {
       case 'graph_layout':
         // Captured IDs are selection parameters, not authoritative row data.
         final ids = (args['source_ids'] as List).cast<String>().toSet();
-        final sources = _store.sourceSummaries
+        final sources = _sources
+            .summaries()
+            .map((source) => source.toRow())
             .where((row) => ids.contains(row['id']))
             .toList();
         final identity = args['identity'] as String?;
         final layout = identity == null
-            ? _store.loadRegisteredGraphLayout(
+            ? GraphQueries(_store.db).loadRegisteredGraphLayout(
                 sources,
                 labelSet: args['label_set'] as String?,
               )
-            : _store.loadGraphLayout(
+            : GraphQueries(_store.db).loadGraphLayout(
                 identity,
                 sources,
                 args['dimensions'] as int,
@@ -254,6 +261,6 @@ final class SqliteReadSession {
   void close() {
     if (_closed) return;
     _closed = true;
-    if (_ownsStore) _store.close();
+    if (_ownsStore) (_store as SqliteSnapshotDatabase).close();
   }
 }

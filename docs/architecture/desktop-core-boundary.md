@@ -3,7 +3,7 @@
 Production desktop features import `package:foresight_core/desktop.dart`.
 This curated API exports `DesktopConnection`, its read-only `StoreReader`, immutable
 helper/recording/persistence values, typed read queries, RPC operation/error values,
-and the existing UI algorithms and asset-download utilities. It exports no writer
+and the existing UI algorithms, model catalog/cache values and remote acquisition interfaces. It exports no writer
 Store, Domain, Helper, native handle, generated gRPC client, helper transport,
 credential store or service transport. Only `main.dart` imports
 `desktop_bootstrap.dart`: startup resolves the profile, prepares its private
@@ -21,10 +21,12 @@ implementation/test-support modules explicitly.
 The connection owns events, transport, helper presentation and its core reader.
 Call `initialize()`, subscribe to `changes`, flush pending note saves before
 `close()`, then await `closed`. Helper status contains state only. The desktop
-never constructs helper channels or performs migrations. Cheap synchronous read
-adapters remain during the core-to-feature transition; search, statistics and
-graph loads already use the core read worker. Work package 7 replaces remaining
-render-time queries and temporary `toRow()` adapters with owned view models.
+never constructs helper channels or performs migrations. Named read projections
+run through the core read worker; feature-owned read models prepare the values
+used during rendering. The snapshot path opens an explicit read-only SQLite
+connection and shares read-only model, label, graph, answer-scope and passage
+queries with service persistence. It does not import `Store`, mutation helpers
+or schema migrations.
 
 `clientSessionGeneration` is an opaque identity token for the adopted RPC client.
 Every actual client adoption changes it and emits `changes`, including replacement
@@ -52,8 +54,38 @@ suite. They inspect production imports/exports and resolve both curated public
 namespaces, preventing a proxy export from silently restoring implementation
 capabilities. Only the two entry files are direct analyzer roots; referenced
 libraries still participate in complete transitive export linking. The separate
-recursive desktop import scan and every capability assertion remain. The bootstrap
-entry point is admitted only in `main.dart`.
+recursive desktop import scan and every capability assertion remain. Both desktop
+and MCP adapter closures include conditional import/export alternatives and reject
+service authority, native capture/runtime and mutation modules. The deliberate
+read-only SQLite snapshot path remains named and tested. The bootstrap entry point
+is admitted only in `main.dart`. `service_client.dart` exposes remote transport and
+startup; `service_server.dart` exposes service-only composition.
+
+## Logical widget libraries
+
+Collection/preview, workspace/header, recording, summary and transcript renderers receive
+immutable presentation values and explicit callbacks. Source collections, tiles,
+note editor/review and graph scene/inspector renderers follow the same boundary.
+Meeting note layout and text input also render independently; the enhanced-note
+progress and command composition remains with the owner.
+Editor, transform and scroll handles stay with their existing controller owners;
+renderers receive only those explicit UI handles. Async saves, retry keys, dialog
+retirement, selection and workspace/session identity checks remain in controllers.
+Remaining meeting assistant/note/AI parts and source action/layout/interaction
+parts still count against their controller's logical library; extracting the
+renderers does not claim that all remaining coupling is removed.
+
+`desktop_logical_library_test.dart` follows every `part` recursively when counting
+physical source lines and AST decision nodes. The default ceiling is 1,000 lines
+and 200 decision nodes per logical desktop library. Residual meeting, source and
+settings owners have explicit ceilings of 3,000/425, 3,000/400 and 2,000/200
+respectively. At the guard's introduction, these owners measured 2,462/360,
+2,163/306 and 1,558/155 including their parts. These are measured debt ratchets,
+not a PR file-count rule. The existing desktop physical-file ceiling (800 lines)
+and widget-method ceiling (150 lines) remain in force. Owner composition parts
+keep those physical budgets while still counting toward the full logical owner.
+The guard also rejects transitive controller/read-model
+imports and `part of` coupling in the extracted renderer libraries.
 
 ## Pinned helper transport workaround
 

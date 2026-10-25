@@ -2,8 +2,8 @@ import 'dart:convert';
 import 'source_contents.dart';
 import 'package:sqlite3/sqlite3.dart';
 import '../read_models.dart';
-import 'label_store.dart';
-import 'model_store.dart';
+import 'label_queries.dart';
+import 'model_queries.dart';
 import 'read_schema_guard.dart';
 
 /// Immutable named reads on the caller's connection and short SQLite snapshot.
@@ -22,7 +22,8 @@ class SourceQueries {
         .map((row) => Map<String, Object?>.from(row))
         .toList(),
   );
-  LabelStore get _labels => LabelStore(db, supportedVersion: supportedVersion);
+  LabelQueries get _labels =>
+      LabelQueries(db, supportedVersion: supportedVersion);
   List<SourceSummary> summaries() => _labels
       .sourceRows(
         'SELECT sources.id,sources.title,sources.mime,sources.provenance,sources.locally_edited,sources.state,sources.error,sources.revision,sources.deleted,source_details.imported,source_details.changed,source_details.source_uri '
@@ -81,7 +82,8 @@ class SourceQueries {
     for (final row in _rows('SELECT source_id,mime FROM google_sources'))
       row['source_id'] as String: row['mime'] as String,
   };
-  ModelStore get _models => ModelStore(db, supportedVersion: supportedVersion);
+  ModelQueries get _models =>
+      ModelQueries(db, supportedVersion: supportedVersion);
   ModelRegistration? model(String kind) => _read(() {
     final row = _models.model(kind);
     return row == null ? null : ModelRegistration.fromRow(row);

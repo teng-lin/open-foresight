@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:grpc/grpc.dart' show GrpcError, StatusCode;
 
-import '../domain.dart';
+import 'service_workflow_ports.dart';
 import '../cancellation.dart';
 import '../persistence/capture_queries.dart';
 import '../persistence/meeting_index_jobs.dart';
@@ -33,7 +33,7 @@ final class MeetingIndexer {
   }) : queries = CaptureQueries(domain.store, meetings),
        jobs = MeetingIndexJobs.forStore(domain.store),
        projection = MeetingTranscriptProjection(domain.store);
-  final Domain domain;
+  final MeetingIndexingPort domain;
   final MeetingQueries meetings;
   final CaptureActivity capture;
   final CaptureQueries queries;

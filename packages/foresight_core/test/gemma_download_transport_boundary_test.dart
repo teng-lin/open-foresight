@@ -137,11 +137,18 @@ void main() {
       await expectLater(
         downloader.download(fixture, cache, sourceForTesting: uri),
         throwsA(
-          isA<StateError>().having(
-            (e) => e.message,
-            'reason',
-            contains('restart'),
-          ),
+          isA<ModelAssetFailure>()
+              .having((e) => e.code, 'code', ModelAssetFailureCode.diskSpace)
+              .having(
+                (e) => e.requiredBytes,
+                'required restart space',
+                fixture.bytes + 16 * 1024 * 1024,
+              )
+              .having(
+                (e) => e.message,
+                'safe actionable reason',
+                'Not enough free disk space. Model setup needs 0.02 GB of free space.',
+              ),
         ),
       );
       expect(partial.readAsBytesSync(), [1, 2, 3]);

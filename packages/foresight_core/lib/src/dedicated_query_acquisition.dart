@@ -1,3 +1,4 @@
+export 'dedicated_query_terms.dart';
 import 'rpc_error.dart';
 import 'dart:async';
 import 'dart:io';
@@ -14,21 +15,6 @@ import 'store.dart';
 /// Compatibility version of the inspected distribution, whose detector this
 /// runtime authenticates. This is internal distribution data, not user setup.
 const referenceDetectorDistributionVersion = '1.0.0';
-
-/// The accepted revision is the authenticated model digest, not server metadata.
-const dedicatedQueryTermsKey =
-    'modelTerms.query-detector.$dedicatedQueryModelDigest';
-Uri? dedicatedQueryTermsUri() {
-  final uri = Uri.tryParse(
-    runtimeConfiguration['FORESIGHT_QUERY_TERMS_URL'] ?? '',
-  );
-  return uri != null &&
-          uri.scheme == 'https' &&
-          uri.host.isNotEmpty &&
-          uri.userInfo.isEmpty
-      ? uri
-      : null;
-}
 
 /// One owned metadata/download/encryption/registration operation. The existing
 /// registration remains usable until the new encrypted candidate passes the

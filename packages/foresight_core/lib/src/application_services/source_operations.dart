@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../agent_access.dart';
-import '../domain.dart';
+import 'service_workspace_ports.dart';
 import '../generated/rag_service.pb.dart';
 import '../graph_labels.dart';
 import '../graph_persistence.dart';
@@ -25,7 +25,7 @@ final class SourceOperations {
     required this.accounts,
     this.awaitSearchReadiness,
   }) : queries = SourceAdmissionQueries(domain.store);
-  final Domain domain;
+  final SourceOperationsPort domain;
   final GoogleMaintenance accounts;
   final SourceAdmissionQueries queries;
   final Future<void> Function({bool Function()? current})? awaitSearchReadiness;

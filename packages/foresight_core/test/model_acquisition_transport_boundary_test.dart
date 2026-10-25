@@ -1,3 +1,5 @@
+import 'package:crypto/crypto.dart';
+import 'package:foresight_core/src/gemma_download.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -6,9 +8,462 @@ import 'package:foresight_core/src/model_acquisition.dart';
 import 'package:foresight_core/src/platform_services.dart'
     show runtimeConfiguration;
 import 'package:foresight_test_support/test_paths.dart';
+import 'package:foresight_test_support/capture_process.dart';
 import 'package:test/test.dart';
 
+// A peer deliberately aborting a progressing response may fail the output sink
+// as well as end the input stream. Observe only that expected network failure;
+// programming errors still fail the fixture rather than becoming stray futures.
+void _observeSocketOutput(Socket socket) {
+  unawaited(
+    socket.done.then<void>(
+      (_) {},
+      onError: (Object error) {
+        expect(error, isA<SocketException>());
+      },
+    ),
+  );
+}
+
 void main() {
+  late String transportService;
+  setUpAll(() async {
+    final compiled = createTestTempDirectorySync('transport-deadline-aot-');
+    transportService = '${compiled.path}/service';
+    final result = await runCaptureProcess(Platform.resolvedExecutable, [
+      'compile',
+      'exe',
+      'bin/service.dart',
+      '-o',
+      transportService,
+    ], timeout: const Duration(seconds: 90));
+    expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+  });
+  setUp(() {
+    final saved = Map.of(runtimeConfiguration.environment);
+    addTearDown(
+      () => runtimeConfiguration.environment
+        ..clear()
+        ..addAll(saved),
+    );
+    // Exercise the real production early worker. Compilation belongs to fixture
+    // setup; the unchanged transport budgets still include OS process startup.
+    runtimeConfiguration.environment['FORESIGHT_SERVICE'] = transportService;
+  });
+  test(
+    'public file worker returns a verified cache path without buffering the asset',
+    () async {
+      final root = createTestTempDirectorySync('public-model-worker-');
+      final bytes = List<int>.generate(1024 * 1024, (i) => i % 251);
+      final existing = File('${root.path}/registered.bin')
+        ..writeAsBytesSync(bytes);
+      final model = GemmaModel(
+        'fixture',
+        'fixture/model',
+        'revision',
+        'fixture.bin',
+        sha256.convert(bytes).toString(),
+        bytes.length,
+        0,
+      );
+      final phases = <ModelDownloadPhase>[];
+      final progress = <(int, int)>[];
+      final downloader = PublicModelFileDownloader();
+      addTearDown(downloader.cancel);
+      final result = await downloader.download(
+        model,
+        Directory('${root.path}/cache'),
+        existingFile: existing,
+        phase: phases.add,
+        progress: (n, total) => progress.add((n, total)),
+      );
+      expect(result.path, existing.path);
+      expect(result.readAsBytesSync(), bytes);
+      expect(phases, [
+        ModelDownloadPhase.checkingCache,
+        ModelDownloadPhase.verifyingCache,
+      ]);
+      expect(progress.last, (bytes.length, bytes.length));
+      expect(Directory('${root.path}/cache').existsSync(), isFalse);
+    },
+  );
+
+  test('public file cancellation reaps a stalled TLS producer', () async {
+    final root = createTestTempDirectorySync('public-model-cancel-');
+    final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final accepted = Completer<void>(), closed = Completer<void>();
+    Socket? peer;
+    final subscription = server.listen((socket) {
+      peer = socket;
+      socket.listen(
+        (_) {},
+        onDone: () {
+          socket.destroy();
+          if (!closed.isCompleted) closed.complete();
+        },
+        onError: (Object _) {
+          socket.destroy();
+          if (!closed.isCompleted) closed.complete();
+        },
+      );
+      if (!accepted.isCompleted) accepted.complete();
+    });
+    final downloader = PublicModelFileDownloader();
+    addTearDown(() async {
+      downloader.cancel();
+      peer?.destroy();
+      await subscription.cancel();
+      await server.close();
+    });
+    final model = GemmaModel(
+      'fixture',
+      'fixture/model',
+      'revision',
+      'fixture.bin',
+      sha256.convert([1, 2, 3, 4]).toString(),
+      4,
+      0,
+    );
+    final work = downloader.download(
+      model,
+      root,
+      sourceForTesting: Uri.parse('https://127.0.0.1:${server.port}/fixture'),
+    );
+    final rejected = expectLater(work, throwsA(isA<ModelDownloadCancelled>()));
+    await accepted.future.timeout(const Duration(seconds: 5));
+    downloader.cancel();
+    await rejected.timeout(const Duration(seconds: 3));
+    await closed.future.timeout(const Duration(seconds: 2));
+    expect(
+      File('${root.path}/${model.directory}/${model.filename}').existsSync(),
+      isFalse,
+    );
+  });
+
+  test(
+    'transport worker executable cannot escape an installed application',
+    () async {
+      final root = createTestTempDirectorySync('worker-installation-');
+      final saved = Map.of(runtimeConfiguration.environment);
+      addTearDown(
+        () => runtimeConfiguration.environment
+          ..clear()
+          ..addAll(saved),
+      );
+      runtimeConfiguration.environment['FORESIGHT_INSTALL_ROOT'] = root.path;
+      runtimeConfiguration.environment['FORESIGHT_SERVICE'] =
+          Platform.resolvedExecutable;
+      final downloader = ModelBlobDownloader(apiKey: 'private-fixture');
+      addTearDown(downloader.close);
+      await expectLater(
+        downloader.download(blobId: 'fixture', size: 4),
+        throwsA(
+          isA<ModelTransportException>().having(
+            (e) => e.failureType,
+            'category',
+            'worker_unavailable',
+          ),
+        ),
+      );
+    },
+  );
+
+  for (final phase in ['connect', 'headers', 'body']) {
+    test('$phase stall aborts its socket and exhausts finite retries', () async {
+      final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      final sockets = <Socket>[];
+      final closed = <Completer<void>>[];
+      server.listen((socket) {
+        if (phase == 'connect' && closed.isNotEmpty) {
+          expect(
+            closed.last.isCompleted,
+            isTrue,
+            reason: 'retry must follow actual TLS socket retirement',
+          );
+        }
+        sockets.add(socket);
+        _observeSocketOutput(socket);
+        final done = Completer<void>();
+        closed.add(done);
+        var answered = false;
+        socket.listen(
+          (bytes) {
+            if (!answered && phase == 'body') {
+              answered = true;
+              socket.add(
+                ascii.encode(
+                  'HTTP/1.1 206 Partial Content\r\nContent-Length: 4\r\nConnection: close\r\n\r\n',
+                ),
+              );
+              socket.add([1]);
+            }
+          },
+          onDone: () {
+            socket.destroy();
+            if (!done.isCompleted) done.complete();
+          },
+          onError: (Object _) {
+            socket.destroy();
+            if (!done.isCompleted) done.complete();
+          },
+        );
+      });
+      final downloader = ModelBlobDownloader(
+        apiKey: 'must-not-escape',
+        parallelCount: 1,
+        origin: Uri.parse(
+          '${phase == 'connect' ? 'https' : 'http'}://127.0.0.1:${server.port}',
+        ),
+        retryPolicy: ModelDownloadRetryPolicy(
+          maxAttempts: 2,
+          delay: (_) => Duration.zero,
+        ),
+        deadlines: const ModelTransportDeadlines(
+          connect: Duration(milliseconds: 150),
+          headers: Duration(milliseconds: 150),
+          bodyIdle: Duration(milliseconds: 150),
+          attempt: Duration(seconds: 1),
+          total: Duration(seconds: 5),
+        ),
+      );
+      addTearDown(() async {
+        downloader.close();
+        for (final s in sockets) {
+          s.destroy();
+        }
+        await server.close();
+      });
+      await expectLater(
+        downloader.download(blobId: 'fixture', size: 4),
+        throwsA(
+          phase == 'connect'
+              ? isA<ModelTransportException>().having(
+                  (error) => error.failureType,
+                  'connect retries exhausted',
+                  'connect_timeout',
+                )
+              : isA<ModelTransportException>(),
+        ),
+      ).timeout(const Duration(seconds: 7));
+      expect(sockets, hasLength(2));
+      await Future.wait(
+        closed.map((done) => done.future),
+      ).timeout(const Duration(seconds: 2));
+    });
+  }
+
+  test(
+    'close during a TLS handshake reaps the worker and closes its peer',
+    () async {
+      // Keep actual source/JIT fallback coverage as well as the compiled worker.
+      runtimeConfiguration.environment.remove('FORESIGHT_SERVICE');
+      final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      final entered = Completer<void>(), ended = Completer<void>();
+      Socket? active;
+      server.listen((socket) {
+        active = socket;
+        _observeSocketOutput(socket);
+        entered.complete();
+        socket.listen(
+          (_) {},
+          onDone: () {
+            socket.destroy();
+            if (!ended.isCompleted) ended.complete();
+          },
+          onError: (Object _) {
+            socket.destroy();
+            if (!ended.isCompleted) ended.complete();
+          },
+        );
+      });
+      final downloader = ModelBlobDownloader(
+        apiKey: 'private-handshake-canary',
+        parallelCount: 1,
+        origin: Uri.parse('https://127.0.0.1:${server.port}'),
+      );
+      addTearDown(() async {
+        downloader.close();
+        active?.destroy();
+        await server.close();
+      });
+      final pending = downloader.download(blobId: 'fixture', size: 4);
+      final failed = expectLater(pending, throwsStateError);
+      await entered.future.timeout(const Duration(seconds: 5));
+      downloader.close();
+      await failed.timeout(const Duration(seconds: 3));
+      await ended.future.timeout(const Duration(seconds: 2));
+    },
+  );
+
+  test('attempt deadline closes a continuously progressing response', () async {
+    final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final ended = Completer<void>();
+    final timers = <Timer>[];
+    final sockets = <Socket>[];
+    server.listen((socket) {
+      sockets.add(socket);
+      _observeSocketOutput(socket);
+      var replied = false;
+      Timer? timer;
+      socket.listen(
+        (_) {
+          if (replied) return;
+          replied = true;
+          socket.add(
+            ascii.encode(
+              'HTTP/1.1 206 Partial Content\r\nContent-Length: 10000\r\nConnection: close\r\n\r\n',
+            ),
+          );
+          timer = Timer.periodic(
+            const Duration(milliseconds: 30),
+            (_) => socket.add([1]),
+          );
+          timers.add(timer!);
+        },
+        onDone: () {
+          timer?.cancel();
+          socket.destroy();
+          if (!ended.isCompleted) ended.complete();
+        },
+        onError: (Object _) {
+          timer?.cancel();
+          socket.destroy();
+          if (!ended.isCompleted) ended.complete();
+        },
+      );
+    });
+    final downloader = ModelBlobDownloader(
+      apiKey: 'local',
+      parallelCount: 1,
+      origin: Uri.parse('http://127.0.0.1:${server.port}'),
+      retryPolicy: ModelDownloadRetryPolicy(
+        maxAttempts: 1,
+        delay: (_) => Duration.zero,
+      ),
+      deadlines: const ModelTransportDeadlines(
+        bodyIdle: Duration(seconds: 1),
+        attempt: Duration(milliseconds: 250),
+        total: Duration(seconds: 5),
+      ),
+    );
+    addTearDown(() async {
+      downloader.close();
+      for (final t in timers) {
+        t.cancel();
+      }
+      for (final socket in sockets) {
+        socket.destroy();
+      }
+      await server.close();
+    });
+    await expectLater(
+      downloader.download(blobId: 'fixture', size: 10000),
+      throwsA(isA<ModelTransportException>()),
+    ).timeout(const Duration(seconds: 7));
+    expect(sockets, hasLength(1));
+    await ended.future.timeout(const Duration(seconds: 2));
+  });
+
+  test(
+    'source worker total budget includes JIT startup and retires every accepted peer',
+    () async {
+      runtimeConfiguration.environment.remove('FORESIGHT_SERVICE');
+      final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      final sockets = <Socket>[];
+      final closed = <Completer<void>>[];
+      server.listen((socket) {
+        sockets.add(socket);
+        _observeSocketOutput(socket);
+        final done = Completer<void>();
+        closed.add(done);
+        void finish() {
+          socket.destroy();
+          if (!done.isCompleted) done.complete();
+        }
+
+        socket.listen((_) {}, onDone: finish, onError: (Object _) => finish());
+      });
+      final downloader = ModelBlobDownloader(
+        apiKey: 'source-budget-canary',
+        parallelCount: 1,
+        origin: Uri.parse('https://127.0.0.1:${server.port}'),
+        retryPolicy: ModelDownloadRetryPolicy(
+          maxAttempts: 2,
+          delay: (_) => Duration.zero,
+        ),
+        deadlines: const ModelTransportDeadlines(
+          connect: Duration(milliseconds: 150),
+          attempt: Duration(seconds: 1),
+          total: Duration(milliseconds: 250),
+        ),
+      );
+      addTearDown(() async {
+        downloader.close();
+        for (final socket in sockets) {
+          socket.destroy();
+        }
+        await server.close();
+      });
+      await expectLater(
+        downloader.download(blobId: 'fixture', size: 4),
+        throwsA(
+          isA<ModelTransportException>().having(
+            (error) => error.failureType,
+            'finite source/JIT total',
+            'total_timeout',
+          ),
+        ),
+      ).timeout(const Duration(seconds: 3));
+      await Future.wait(
+        closed.map((done) => done.future),
+      ).timeout(const Duration(seconds: 2));
+      final retiredCount = sockets.length;
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(
+        sockets,
+        hasLength(retiredCount),
+        reason: 'a reaped source worker cannot connect later',
+      );
+    },
+  );
+
+  test(
+    'total budget bounds retry delay after the failed request is aborted',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      var requests = 0;
+      server.listen((request) {
+        requests++;
+        request.response.statusCode = 503;
+        unawaited(request.response.close());
+      });
+      final client = HttpClient();
+      addTearDown(() => client.close(force: true));
+      final downloader = ModelBlobDownloader(
+        client: client,
+        apiKey: 'local',
+        parallelCount: 1,
+        origin: Uri.parse('http://127.0.0.1:${server.port}'),
+        retryPolicy: ModelDownloadRetryPolicy(
+          maxAttempts: 5,
+          delay: (_) => const Duration(seconds: 30),
+        ),
+        deadlines: const ModelTransportDeadlines(
+          total: Duration(milliseconds: 250),
+        ),
+      );
+      addTearDown(() async {
+        downloader.close();
+        await server.close(force: true);
+      });
+      await expectLater(
+        downloader.download(blobId: 'fixture', size: 4),
+        throwsA(isA<ModelTransportException>()),
+      ).timeout(const Duration(seconds: 3));
+      expect(requests, 1);
+    },
+  );
+
   test(
     'transport worker executable cannot escape an installed application',
     () async {

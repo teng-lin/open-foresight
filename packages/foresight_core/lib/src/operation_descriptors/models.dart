@@ -1,7 +1,81 @@
 import '../operation_descriptor.dart';
+import '../client_contract.dart';
+import '../client_results.dart';
+import '../client_requests/models.dart';
 import '../operation_argument_schema.dart';
 
+const modelsDownloadAssetDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeDownloadLocation),
+  requestEncoder: OperationInputEncoder<ModelsDownloadAssetInput>(),
+  scope: OperationScope.application,
+  readOnly: false,
+  approval: ApprovalPolicy.desktop,
+  capability: CapabilityPolicy.ordinary,
+  requiresHelper: false,
+  modelGate: ModelGatePolicy.none,
+  notifiesChanges: true,
+  response: ResponseShape.result,
+  carriesWorkspaceEpoch: false,
+  acceptsIdempotencyKey: false,
+  stampsAgentActivity: true,
+  leaseBusy: true,
+  createsLease: true,
+  arguments: OperationArgumentSchema([
+    ArgumentField(
+      'progress_key',
+      ArgumentKind.string,
+      nullable: true,
+      minimumLength: 1,
+      maximumLength: 256,
+    ),
+    ArgumentField(
+      'kind',
+      ArgumentKind.string,
+      choices: ['generation', 'embedding', 'speech'],
+    ),
+    ArgumentField(
+      'digest',
+      ArgumentKind.string,
+      minimumLength: 64,
+      maximumLength: 64,
+    ),
+  ]),
+);
+
+const modelsInspectAssetDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeInspectionLocation),
+  requestEncoder: OperationInputEncoder<ModelsInspectAssetInput>(),
+  scope: OperationScope.application,
+  readOnly: true,
+  approval: ApprovalPolicy.never,
+  capability: CapabilityPolicy.ordinary,
+  requiresHelper: false,
+  modelGate: ModelGatePolicy.none,
+  notifiesChanges: false,
+  response: ResponseShape.result,
+  carriesWorkspaceEpoch: false,
+  acceptsIdempotencyKey: false,
+  stampsAgentActivity: true,
+  leaseBusy: true,
+  createsLease: true,
+  arguments: OperationArgumentSchema([
+    ArgumentField(
+      'kind',
+      ArgumentKind.string,
+      choices: ['generation', 'embedding', 'speech'],
+    ),
+    ArgumentField(
+      'digest',
+      ArgumentKind.string,
+      minimumLength: 64,
+      maximumLength: 64,
+    ),
+  ]),
+);
+
 const modelsCancelQueryAcquisitionDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<ModelsCancelQueryAcquisitionInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -19,6 +93,8 @@ const modelsCancelQueryAcquisitionDescriptor = OperationDescriptor(
 );
 
 const modelsAcquireQueryDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<ModelsAcquireQueryInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -36,6 +112,8 @@ const modelsAcquireQueryDescriptor = OperationDescriptor(
 );
 
 const modelsSpeechDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<ModelsSpeechInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -57,6 +135,8 @@ const modelsSpeechDescriptor = OperationDescriptor(
 );
 
 const modelsRegisterDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<ModelsRegisterInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -81,6 +161,8 @@ const modelsRegisterDescriptor = OperationDescriptor(
 );
 
 const modelsGenerationDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<ModelsGenerationInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -103,6 +185,8 @@ const modelsGenerationDescriptor = OperationDescriptor(
 );
 
 const modelsEmbeddingDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<ModelsEmbeddingInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,

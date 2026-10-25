@@ -1,35 +1,52 @@
+import 'ai_panels.dart';
+import 'ai_dialogs.dart';
+import 'assistant_widgets.dart';
+import 'enhanced_notes_view.dart';
+import 'notes_widgets.dart';
+import 'transcript_view.dart';
+import 'workspace_view.dart';
+import 'collection_view.dart';
+import 'summary_view.dart';
+import 'recording_view.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math' as math;
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:foresight_core/desktop.dart';
 import '../../failure_text.dart';
 import '../../feature_request_identity.dart';
-import '../../generated_content.dart';
 import '../../presentation/workspace_presentation.dart';
 import '../../service_edit_dialog.dart';
 import '../../shell/ports.dart';
 import '../../shell/workspace_tab.dart';
-import 'capture_waveform.dart';
 import 'meeting_export.dart';
 import 'meeting_note_state.dart';
 import 'meeting_visuals.dart';
 import 'note_save_scheduler.dart';
 import 'read_model.dart';
-part 'collection_view.dart';
-part 'workspace_view.dart';
+part 'meeting_composition.dart';
 part 'notes_view.dart';
 part 'assistant_views.dart';
-part 'summary_view.dart';
-part 'recording_view.dart';
 part 'ai_views.dart';
 
 const _meetingAssistantMinWidth = 760.0;
 
 class MeetingsController implements MeetingActivity, MeetingCommands {
+  Widget immersiveMeetingWorkspace() => _composeImmersiveMeetingWorkspace();
+  void syncCapture() => _composeSyncCapture();
+  void loadMeetingNotes(int id, {bool acceptedSave = false}) =>
+      _composeLoadMeetingNotes(id, acceptedSave: acceptedSave);
+  void formatMeetingNotes(String before, [String after = '']) =>
+      _composeFormatMeetingNotes(before, after);
+  Widget meetingListTile(MeetingCollectionEntry meeting) =>
+      _composeMeetingListTile(meeting);
+  @override
+  String get echoCancellationDescription => _composeEchoCancellationDescription;
+  Future<void> saveMeetingNotes() => _composeSaveMeetingNotes();
+  Future<void> flushMeetingNotesDraft() => _composeFlushMeetingNotesDraft();
+  void scheduleMeetingNotesSave() => _composeScheduleMeetingNotesSave();
   MeetingsController({
     required FeatureHost host,
     required WorkspaceNavigation navigation,
@@ -218,11 +235,16 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
 
   late final NoteSaveScheduler meetingNoteSaves = NoteSaveScheduler(
     (id, body, lastManualEdit) async {
-      await d.command(Operation.meetingsNotes, {
-        'id': id,
-        'body': body,
-        if (lastManualEdit != null) 'last_manual_edit': lastManualEdit,
-      });
+      await meetingsNotesDescriptor.send(
+        d,
+        MeetingsNotesInput(
+          id: id,
+          body: body,
+          lastManualEdit: lastManualEdit != null
+              ? WireField(lastManualEdit)
+              : const WireField.absent(),
+        ),
+      );
     },
     onSaved: (id) {
       if (mounted) {
@@ -294,13 +316,193 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
 
   Future<String> exportMeetingMarkdown() => meetingMarkdown();
 
-  Widget immersiveMeetingWorkspace() => _immersiveMeetingWorkspace();
+  Future<void> _renameMeeting(
+    MeetingDetails meeting,
+    FeatureRequestIdentity identity,
+  ) async {
+    bool current() => _meetingActionCurrent(meeting.id, identity);
+    if (!current() || !_dialogs.rowsAreCurrent()) return;
+    final controller = TextEditingController(text: meeting.title);
+    try {
+      await _dialogs.showInputDialog<bool>(
+        builder: (context) => ServiceEditDialog(
+          title: 'Rename meeting',
+          controller: controller,
+          saveLabel: 'Save',
+          height: 90,
+          maxLines: 1,
+          onSave: () async {
+            if (!current()) {
+              throw StateError(
+                'The meeting view changed. Close this editor and try again.',
+              );
+            }
+            await meetingsRenameDescriptor.sendCurrent(
+              d,
+              MeetingsRenameInput(
+                id: meeting.id,
+                title: controller.text.trim(),
+                envelope: ClientEnvelope(
+                  workspaceEpoch: WireField(identity.workspaceEpoch),
+                ),
+              ),
+              current,
+            );
+          },
+        ),
+      );
+    } finally {
+      controller.dispose();
+    }
+  }
 
-  Widget recordingHeader() => _recordingHeader();
-
-  Widget meetings() => MeetingStyleScope(
-    child: meetingId == null ? meetingCollection() : meetingWorkspace(),
+  Widget meetingListHeading() => heading(
+    'Meetings',
+    actions: [
+      if (!_integrations.googlePresentation.connected)
+        OutlinedButton.icon(
+          onPressed: _operations.busy
+              ? null
+              : () => _operations.run(
+                  _integrations.granolaCalendar
+                      ? _integrationCommands.connectGranolaCalendar
+                      : _integrationCommands.connectGoogle,
+                ),
+          icon: const Icon(Icons.calendar_today, size: 18),
+          label: const Text('Connect Calendar'),
+        ),
+      if (_integrations.googlePresentation.connected)
+        OutlinedButton.icon(
+          onPressed: _operations.busy || _integrations.googleSyncing
+              ? null
+              : () => _operations.run(_integrationCommands.syncCalendar),
+          icon: const Icon(Icons.calendar_today, size: 18),
+          label: Text(
+            _integrations.lastCompletedRefreshMilliseconds == 0
+                ? 'Import Calendar'
+                : 'Last imported: ${timeLabel(_integrations.lastCompletedRefreshMilliseconds)}',
+          ),
+        ),
+      OutlinedButton.icon(
+        onPressed: _operations.busy
+            ? null
+            : () => _operations.run(exportMeetings),
+        icon: const Icon(Icons.ios_share, size: 18),
+        label: const Text('Export meeting notes'),
+      ),
+      pill(
+        'New meeting',
+        _operations.busy || recording != null
+            ? null
+            : () => _operations.run(() async {
+                final epoch = d.workspaceEpoch;
+                final created = await meetingsCreateDescriptor.sendKeyed(
+                  newMeetingKey,
+                  d,
+                  const MeetingsCreateInput(title: '[New Meeting]'),
+                  sendEnvelope: ClientEnvelope(
+                    workspaceEpoch: epoch != null
+                        ? WireField(epoch)
+                        : const WireField.absent(),
+                  ),
+                );
+                if (mounted && d.workspaceEpoch == epoch)
+                  update(() => meetingId = created.id);
+              }),
+        icon: Icons.add,
+      ),
+    ],
   );
+
+  Widget meetingSummaryPanel(int id, {bool actions = false}) {
+    if (actions) return meetingActionsPanel(id);
+    final identity = _reads.presentationIdentity;
+    final fromPreview = meetingId == null;
+    final summary = d.capturePresentation.summary(id);
+    final active = summary?.active == true;
+    return MeetingSummaryPanel(
+      versions: _reads.artifacts(id, 'summary'),
+      summary: summary,
+      revision: _reads.revision(id) ?? 0,
+      fontSize: _chat.answerFontSize,
+      openLink: _host.environment.openUri,
+      onGenerate:
+          identity == null ||
+              active ||
+              _operations.busy ||
+              _chat.asking ||
+              meetingEnhancing
+          ? null
+          : () => _runMeetingAction(
+              id,
+              identity,
+              (current) => generateMeeting(
+                'summary',
+                id: id,
+                workspaceEpoch: identity.workspaceEpoch,
+                current: current,
+              ),
+              preview: fromPreview,
+            ),
+      onCancel: () => unawaited(
+        meetingsCancelSummaryDescriptor
+            .send(d, MeetingsCancelSummaryInput(id: id))
+            .catchError(_operations.reportAsyncError),
+      ),
+      onEdit: (artifact) => unawaited(
+        editArtifact(artifact).catchError(_operations.reportAsyncError),
+      ),
+      onCopy: (body) => Clipboard.setData(ClipboardData(text: body)),
+    );
+  }
+
+  Widget recordingHeader() {
+    final elapsed =
+        recordingElapsed +
+        (recording!.paused
+            ? Duration.zero
+            : DateTime.now().difference(recordingElapsedAt));
+    final clock =
+        '${elapsed.inMinutes.toString().padLeft(2, '0')}:${(elapsed.inSeconds % 60).toString().padLeft(2, '0')}';
+    return RecordingHeader(
+      clock: clock,
+      paused: recording!.paused,
+      captureVolumes: _host.captureVolumes,
+      fallbackVolumes: d is CaptureLevelEvents
+          ? null
+          : recording!.currentVolumes,
+      onToggleWorkspace: () => update(() {
+        _navigation.navigate(WorkspaceTab.meetings);
+        meetingId = recordingMeeting;
+        meetingSidecarVisible = true;
+        meetingImmersive = !meetingImmersive;
+      }),
+      onOpenWorkspace: () => update(() {
+        _navigation.navigate(WorkspaceTab.meetings);
+        meetingId = recordingMeeting;
+        meetingSidecarVisible = true;
+      }),
+      onPauseResume: _operations.busy || recording!.finishing
+          ? null
+          : () => _operations.run(() async {
+              if (recording!.paused) {
+                await meetingsResumeDescriptor.send(
+                  d,
+                  MeetingsResumeInput(id: WireField(recordingMeeting)),
+                );
+              } else {
+                await meetingsPauseDescriptor.send(
+                  d,
+                  MeetingsPauseInput(id: WireField(recordingMeeting)),
+                );
+              }
+              if (mounted) update(syncCapture);
+            }),
+      onStop: recording!.finishing
+          ? null
+          : () => _operations.run(stopRecording),
+    );
+  }
 
   Future<String> importText(
     String title,
@@ -311,46 +513,20 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
     int? modifiedAtMs,
     String? sourceUri,
   }) async {
-    final result =
-        await d.command(Operation.sourcesImport, {
-              'title': title,
-              'text': text,
-              'mime': mime,
-              'provenance': provenance,
-              'id': id,
-              'modifiedAtMs': modifiedAtMs,
-              'sourceUri': sourceUri,
-              'index': false,
-            })
-            as Map;
-    return result['id'] as String;
-  }
-
-  void syncCapture() {
-    _reads.reconcile();
-    final state = d.capturePresentation;
-    meetingEnhancements = state.noteEnhancements;
-    meetingEnhancing =
-        meetingEnhancementStarting ||
-        meetingEnhancements.values.any((value) => value.active);
-    recording = state.active ? RecordingSnapshot.fromPresentation(state) : null;
-    recordingMeeting = state.meetingId;
-    recordingState = state.state;
-    final began = state.beganMilliseconds;
-    recordingBegan = began == null
-        ? null
-        : DateTime.fromMillisecondsSinceEpoch(began);
-    recordingElapsedAt = DateTime.now();
-    recordingElapsed = Duration(
-      milliseconds: state.elapsedMillisecondsProvided
-          ? state.elapsedMilliseconds
-          : recordingBegan == null
-          ? 0
-          : recordingElapsedAt.difference(recordingBegan!).inMilliseconds,
+    final result = await sourcesImportDescriptor.send(
+      d,
+      SourcesImportInput(
+        title: title,
+        text: text,
+        mime: WireField(mime),
+        provenance: WireField(provenance),
+        id: WireField(id),
+        modifiedAtMs: WireField(modifiedAtMs),
+        sourceUri: WireField(sourceUri),
+        index: WireField(false),
+      ),
     );
-    provisionalTranscript
-      ..clear()
-      ..addAll(state.provisional);
+    return result.id;
   }
 
   Future<void> startRecording({bool accessReviewed = false}) async {
@@ -370,20 +546,20 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
         'Recording did not start: the meeting was closed while recording '
         'access was requested.',
       );
-    await d.command(Operation.meetingsStart, {'id': id});
+    await meetingsStartDescriptor.send(d, MeetingsStartInput(id: id));
     syncCapture();
     if (mounted) setState(() {});
   }
 
   Future<void> stopRecording() async {
-    await d.command(Operation.meetingsStop);
+    await meetingsStopDescriptor.send(d, MeetingsStopInput());
     syncCapture();
     if (mounted) setState(() {});
     await _integrationCommands.notify('Meeting transcription completed');
   }
 
   Future<void> indexMeeting(int id) async {
-    await d.command(Operation.meetingsIndex, {'id': id});
+    await meetingsIndexDescriptor.send(d, MeetingsIndexInput(id: id));
   }
 
   Future<void> generateMeeting(
@@ -392,15 +568,19 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
     String? workspaceEpoch,
     bool Function()? current,
   }) async {
-    final args = {
-      'id': id ?? meetingId!,
-      'kind': kind,
-      if (workspaceEpoch != null) 'workspace_epoch': workspaceEpoch,
-    };
+    final request = MeetingsGenerateInput(
+      id: id ?? meetingId!,
+      kind: kind,
+      envelope: ClientEnvelope(
+        workspaceEpoch: workspaceEpoch != null
+            ? WireField(workspaceEpoch)
+            : const WireField.absent(),
+      ),
+    );
     if (current == null) {
-      await d.command(Operation.meetingsGenerate, args);
+      await meetingsGenerateDescriptor.send(d, request);
     } else {
-      await d.commandCurrent(Operation.meetingsGenerate, args, current);
+      await meetingsGenerateDescriptor.sendCurrent(d, request, current);
     }
   }
 
@@ -426,43 +606,26 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
           }
         },
         onSave: () async {
-          await d.command(Operation.artifactsEdit, {
-            'id': a.id,
-            'text': controller.text,
-            if (lastManualEdit != null) 'last_manual_edit': lastManualEdit,
-            if (epoch != null) 'workspace_epoch': epoch,
-          });
+          await artifactsEditDescriptor.send(
+            d,
+            ArtifactsEditInput(
+              id: a.id,
+              text: controller.text,
+              lastManualEdit: lastManualEdit != null
+                  ? WireField(lastManualEdit)
+                  : const WireField.absent(),
+              envelope: ClientEnvelope(
+                workspaceEpoch: epoch != null
+                    ? WireField(epoch)
+                    : const WireField.absent(),
+              ),
+            ),
+          );
         },
       ),
     );
     if (saved == true && mounted) setState(() {});
     controller.dispose();
-  }
-
-  @override
-  String get echoCancellationDescription {
-    final capture = d.capturePresentation;
-    final echo = capture.echoCancellation;
-    if (!capture.active)
-      return 'Reduce system playback picked up by your microphone.';
-    if (capture.paused)
-      return 'The selected setting will apply when recording resumes.';
-    if (echo.pending) return 'Applying echo cancellation…';
-    if (echo.fallbackStatus != 0)
-      return 'Echo cancellation is unavailable; microphone recording continues.';
-    if (echo.restartRequired)
-      return 'Restart recording to enable echo cancellation.';
-    return echo.active
-        ? 'Echo cancellation is active for this microphone.'
-        : 'Echo cancellation is off.';
-  }
-
-  Future<String?> _speechSetupProblem() async {
-    final registration = await readCurrentMeeting<ModelRegistration?>(
-      d.store,
-      StoreReadQueries.model('speech'),
-    );
-    return preparedSpeechSetupProblem(registration);
   }
 
   @override
@@ -485,19 +648,21 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
         return;
       await _operations.run(() async {
         final epoch = d.workspaceEpoch;
-        final created =
-            await quickStartKey.run(
-                  {'title': '[New Meeting]'},
-                  (keyed) => d.commandCurrent(Operation.meetingsCreate, {
-                    ...keyed,
-                    if (epoch != null) 'workspace_epoch': epoch,
-                  }, current),
-                )
-                as Map;
+        final created = await meetingsCreateDescriptor.sendKeyed(
+          quickStartKey,
+          d,
+          const MeetingsCreateInput(title: '[New Meeting]'),
+          current: current,
+          sendEnvelope: ClientEnvelope(
+            workspaceEpoch: epoch != null
+                ? WireField(epoch)
+                : const WireField.absent(),
+          ),
+        );
         if (!current()) return;
         update(() {
           _navigation.navigate(WorkspaceTab.meetings);
-          meetingId = created['id'] as int;
+          meetingId = created.id;
         });
         await startRecording(accessReviewed: true);
       });
@@ -539,94 +704,6 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
     }
   }
 
-  Future<void> exportMeetings() async {
-    final identity = FeatureRequestIdentity.capture(d);
-    bool current() => identity.isCurrent(d, alive: mounted);
-    await saveMeetingNotes();
-    if (!current() || !context.mounted) return;
-    await showDialog<void>(
-      context: context,
-      builder: (_) => MeetingExportDialog(
-        environment: _host.environment,
-        store: d.store,
-        current: current,
-        save: (markdown) async {
-          if (!current()) return false;
-          final location = await getSaveLocation(
-            suggestedName: 'meeting_notes.md',
-            acceptedTypeGroups: [
-              const XTypeGroup(label: 'Markdown', extensions: ['md']),
-            ],
-          );
-          if (location == null || !current()) return false;
-          await writePrivateTextFile(File(location.path), markdown);
-          return true;
-        },
-      ),
-    );
-  }
-
-  Future<String> meetingMarkdown() async =>
-      (await readMeetingExport(d.store)).markdown;
-
-  Future<void> saveMeetingNotes() async {
-    final id = loadedMeetingNotes;
-    if (id == null) return;
-    meetingNoteSaves.schedule(
-      id,
-      meetingNotesController.text,
-      lastManualEdit: meetingNoteManualEdit,
-    );
-    try {
-      await flushMeetingNotesDraft();
-    } catch (_) {
-      // flushMeetingNotesDraft already presented this failed save.
-    }
-  }
-
-  Future<void> flushMeetingNotesDraft() async {
-    try {
-      await meetingNoteSaves.flush();
-    } catch (failure) {
-      if (mounted) {
-        update(
-          () => _operations.setError(
-            'Unable to save meeting notes: ${failureText(failure)}',
-          ),
-        );
-      }
-      rethrow;
-    }
-  }
-
-  void scheduleMeetingNotesSave() {
-    final id = loadedMeetingNotes;
-    if (id == null) return;
-    if (meetingNotesController.text != loadedMeetingNoteSnapshot?.body) {
-      meetingNoteManualEdit = DateTime.now().millisecondsSinceEpoch;
-    }
-    meetingNoteSaves.schedule(
-      id,
-      meetingNotesController.text,
-      lastManualEdit: meetingNoteManualEdit,
-    );
-  }
-
-  void formatMeetingNotes(String before, [String after = '']) {
-    final value = meetingNotesController.value;
-    final selection = value.selection;
-    final start = selection.isValid ? selection.start : value.text.length;
-    final end = selection.isValid ? selection.end : start;
-    final replacement = '$before${value.text.substring(start, end)}$after';
-    meetingNotesController.value = TextEditingValue(
-      text: value.text.replaceRange(start, end, replacement),
-      selection: TextSelection.collapsed(
-        offset: start + replacement.length - after.length,
-      ),
-    );
-    scheduleMeetingNotesSave();
-  }
-
   Future<void> enhanceMeetingNotes(int id) async {
     if (meetingEnhancing) return;
     update(() {
@@ -639,10 +716,17 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
     final epoch = d.workspaceEpoch;
     try {
       await flushMeetingNotesDraft();
-      await d.command(Operation.meetingsEnhance, {
-        'id': id,
-        if (epoch != null) 'workspace_epoch': epoch,
-      });
+      await meetingsEnhanceDescriptor.send(
+        d,
+        MeetingsEnhanceInput(
+          id: id,
+          envelope: ClientEnvelope(
+            workspaceEpoch: epoch != null
+                ? WireField(epoch)
+                : const WireField.absent(),
+          ),
+        ),
+      );
     } catch (e) {
       if (mounted) update(() => meetingEnhanceStatus = failureText(e));
     } finally {
@@ -652,98 +736,6 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
           syncCapture();
         });
     }
-  }
-
-  Future<void> _refreshSavedNote(int id) async {
-    final identity = FeatureRequestIdentity.capture(d),
-        generation = _noteReadGeneration;
-    final body = meetingNotesController.text,
-        manualEdit = meetingNoteManualEdit;
-    bool current() =>
-        identity.isCurrent(d, alive: mounted) &&
-        generation == _noteReadGeneration &&
-        loadedMeetingNotes == id &&
-        !meetingNoteSaves.isDirty(id) &&
-        meetingNotesController.text == body &&
-        meetingNoteManualEdit == manualEdit;
-    try {
-      await Future.wait([
-        readCurrentMeeting(d.store, StoreReadQueries.meetingNote(id)),
-        readCurrentMeeting(d.store, StoreReadQueries.enhancedNotes(id)),
-      ]);
-      if (current()) loadMeetingNotes(id, acceptedSave: true);
-    } catch (_) {
-      // The write is accepted. Retain its draft until a later current watch
-      // reply arrives rather than turning a read failure into a save failure.
-    }
-  }
-
-  void loadMeetingNotes(int id, {bool acceptedSave = false}) {
-    if (!_reads.noteLoaded(id) || !_reads.enhancedLoaded(id)) return;
-    final row = _reads.note(id);
-    final stored = MeetingNoteSnapshot(
-      body: row?.body ?? '',
-      enhanced: _reads.enhanced(id),
-      timestamp: row?.timestamp,
-      lastEnhanced: row?.lastEnhancedAt,
-      lastManualEdit: row?.lastManualEdit,
-    );
-    final changedId = loadedMeetingNotes != id;
-    if (changedId ||
-        acceptedSave ||
-        (row != null &&
-            !stored.sameRecord(loadedMeetingNoteSnapshot) &&
-            stored.shouldReload(
-              currentBody: meetingNotesController.text,
-              currentEnhanced: loadedMeetingNoteSnapshot?.enhanced ?? '',
-              localManualEdit: meetingNoteManualEdit,
-              localEnhanced: loadedMeetingNoteSnapshot?.lastEnhanced,
-              dirty: meetingNoteSaves.isDirty(id),
-              programmaticWrite: meetingEnhancing,
-            ))) {
-      if (changedId) {
-        unawaited(flushMeetingNotesDraft().catchError((Object _) {}));
-        loadedMeetingNotes = id;
-      }
-      if (meetingNotesController.text != stored.body)
-        meetingNotesController.text = stored.body;
-      loadedMeetingNoteSnapshot = stored;
-      meetingNoteManualEdit = stored.lastManualEdit;
-      meetingEnhanceStatus = '';
-    }
-  }
-
-  Future<void> openMeetingAssistant(BuildContext workspaceContext) async {
-    final id = meetingId;
-    final availableWidth = workspaceContext.size!.width;
-    update(() {
-      meetingSidecarVisible = true;
-      meetingAssistantFallback = false;
-    });
-    if (availableWidth >= _meetingAssistantMinWidth) return;
-    try {
-      await const MethodChannel('foresight/window').invokeMethod<void>(
-        'ensureWidth',
-        {
-          // The app adds 24px more right padding above 1000px window width.
-          'width':
-              MediaQuery.sizeOf(context).width +
-              _meetingAssistantMinWidth -
-              availableWidth +
-              24,
-        },
-      );
-      // Native resize requests are asynchronous, especially on Wayland.
-      await Future<void>.delayed(const Duration(milliseconds: 250));
-    } on MissingPluginException {
-      // Hosts without native window control can still open the assistant.
-    } on PlatformException {
-      // A compositor may decline application-requested window resizing.
-    }
-    if (!mounted || !workspaceContext.mounted || meetingId != id) return;
-    if (workspaceContext.size!.width < _meetingAssistantMinWidth &&
-        meetingSidecarVisible)
-      update(() => meetingAssistantFallback = true);
   }
 
   Future<void> importMeetingTranscript(int id) async {
@@ -763,12 +755,19 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
       transcriptImportKey.reset();
       transcriptImport = chosen;
     }
-    await transcriptImportKey.run(
-      {'id': id, 'text': text, 'source': 'imported transcript'},
-      (keyed) => d.command(Operation.meetingsTranscript, {
-        ...keyed,
-        if (epoch != null) 'workspace_epoch': epoch,
-      }),
+    await meetingsTranscriptDescriptor.sendKeyed(
+      transcriptImportKey,
+      d,
+      MeetingsTranscriptInput(
+        id: id,
+        text: text,
+        source: const WireField('imported transcript'),
+      ),
+      sendEnvelope: ClientEnvelope(
+        workspaceEpoch: epoch != null
+            ? WireField(epoch)
+            : const WireField.absent(),
+      ),
     );
     transcriptImport = null;
   }

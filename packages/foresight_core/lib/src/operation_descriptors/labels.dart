@@ -1,7 +1,12 @@
 import '../operation_descriptor.dart';
+import '../client_contract.dart';
+import '../client_results.dart';
+import '../client_requests/labels.dart';
 import '../operation_argument_schema.dart';
 
 const labelsAutoAssignDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeInteger),
+  requestEncoder: OperationInputEncoder<LabelsAutoAssignInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -21,6 +26,8 @@ const labelsAutoAssignDescriptor = OperationDescriptor(
 );
 
 const labelsPutDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<LabelsPutInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -44,6 +51,8 @@ const labelsPutDescriptor = OperationDescriptor(
 );
 
 const labelsSetDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<LabelsSetInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -64,6 +73,8 @@ const labelsSetDescriptor = OperationDescriptor(
 );
 
 const labelsClusterDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<LabelsClusterInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -83,6 +94,8 @@ const labelsClusterDescriptor = OperationDescriptor(
 );
 
 const labelsDeleteDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<LabelsDeleteInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,

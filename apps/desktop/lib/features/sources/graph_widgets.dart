@@ -1,12 +1,83 @@
-part of 'sources_controller.dart';
+import 'dart:math' as math;
+import 'package:flutter/material.dart';
+import 'package:foresight_core/desktop.dart';
+import 'cluster_rendering.dart';
+import 'graph_rendering.dart';
+import 'graph_label_controls.dart';
+import 'source_painters.dart';
 
-extension _GraphWidgets on SourcesController {
-  Widget _featureGraphInspector(
-    SourceSummary selected,
-    List<SourceSummary> rows,
-    List<GraphEdge> edges,
-    List<DocumentLabel> labels,
-  ) {
+final class GraphViewSnapshot {
+  GraphViewSnapshot({
+    required this.size,
+    required List<SourceSummary> rows,
+    required Map<String, GraphPoint> worldPoints,
+    required Map<String, List<DocumentLabel>> documentLabelRecords,
+    required List<GraphCluster> clusters,
+    required List<GraphPoint> rotated,
+    required List<Offset> positions,
+    required List<int> paintOrder,
+    required this.zoom,
+    required this.selected,
+    required List<GraphEdge> selectionEdges,
+    required List<GraphNodePainter> painters,
+  }) : rows = List.unmodifiable(rows),
+       worldPoints = Map.unmodifiable(worldPoints),
+       documentLabelRecords = Map.unmodifiable(
+         documentLabelRecords.map(
+           (key, value) =>
+               MapEntry(key, List<DocumentLabel>.unmodifiable(value)),
+         ),
+       ),
+       clusters = List.unmodifiable(clusters),
+       rotated = List.unmodifiable(rotated),
+       positions = List.unmodifiable(positions),
+       paintOrder = List.unmodifiable(paintOrder),
+       selectionEdges = List.unmodifiable(selectionEdges),
+       painters = List.unmodifiable(painters);
+  final Size size;
+  final List<SourceSummary> rows;
+  final Map<String, GraphPoint> worldPoints;
+  final Map<String, List<DocumentLabel>> documentLabelRecords;
+  final List<GraphCluster> clusters;
+  final List<GraphPoint> rotated;
+  final List<Offset> positions;
+  final List<int> paintOrder;
+  final double zoom;
+  final SourceSummary? selected;
+  final List<GraphEdge> selectionEdges;
+  final List<GraphNodePainter> painters;
+}
+
+class GraphInspector extends StatelessWidget {
+  GraphInspector({
+    super.key,
+    required this.selected,
+    required List<SourceSummary> rows,
+    required List<GraphEdge> edges,
+    required List<DocumentLabel> labels,
+    required this.labelInput,
+    required this.enabled,
+    required this.relatedLoading,
+    required this.relatedError,
+    required this.openLink,
+    required this.onSelect,
+    required this.onAddLabel,
+    required this.onRemoveLabel,
+  }) : rows = List.unmodifiable(rows),
+       edges = List.unmodifiable(edges),
+       labels = List.unmodifiable(labels);
+  final SourceSummary selected;
+  final List<SourceSummary> rows;
+  final List<GraphEdge> edges;
+  final List<DocumentLabel> labels;
+  final TextEditingController labelInput;
+  final bool enabled, relatedLoading, relatedError;
+  final Future<void> Function(Uri) openLink;
+  final ValueChanged<String?> onSelect;
+  final Future<void> Function(String) onAddLabel;
+  final ValueChanged<String> onRemoveLabel;
+  @override
+  Widget build(BuildContext context) {
     final id = selected.id;
     final sourceUri = selected.sourceUri ?? '';
     final byId = {for (final row in rows) row.id: row};
@@ -53,7 +124,7 @@ extension _GraphWidgets on SourcesController {
                       final uri = Uri.tryParse(sourceUri);
                       if (uri == null || !allowedSourceUri(uri)) return;
                       try {
-                        await _host.sourceLinkOpener(uri);
+                        await openLink(uri);
                       } catch (_) {
                         if (context.mounted)
                           ScaffoldMessenger.of(context).showSnackBar(
@@ -68,25 +139,24 @@ extension _GraphWidgets on SourcesController {
                 IconButton(
                   key: const ValueKey('graph-inspector-close'),
                   tooltip: 'Close inspector',
-                  onPressed: () => selectGraphDocument(null),
+                  onPressed: () => onSelect(null),
                   icon: const Icon(Icons.close, size: 18),
                 ),
               ],
             ),
             GraphLabelControls(
               labels: labels,
-              controller: graphLabelInput,
-              enabled: !_operations.busy,
-              onAdd: (value) =>
-                  _operations.run(() => addSelectedGraphLabel(id, value)),
-              onRemove: (name) => removeSelectedGraphLabel(id, name),
+              controller: labelInput,
+              enabled: enabled,
+              onAdd: onAddLabel,
+              onRemove: onRemoveLabel,
             ),
             const SizedBox(height: 8),
             const Text(
               'Related documents:',
               style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
             ),
-            if (graphRelatedLoading)
+            if (relatedLoading)
               const Padding(
                 padding: EdgeInsets.only(top: 12),
                 child: Text(
@@ -94,7 +164,7 @@ extension _GraphWidgets on SourcesController {
                   style: TextStyle(fontSize: 12),
                 ),
               )
-            else if (graphRelatedError.isNotEmpty)
+            else if (relatedError)
               const Padding(
                 padding: EdgeInsets.only(top: 12),
                 child: Text(
@@ -124,162 +194,82 @@ extension _GraphWidgets on SourcesController {
                     '${(item.similarity * 100).round()}% Match',
                     style: const TextStyle(fontSize: 12),
                   ),
-                  onTap: () => selectGraphDocument(item.row!.id),
+                  onTap: () => onSelect(item.row!.id),
                 ),
           ],
         ),
       ),
     );
   }
+}
 
-  Color _featureFallbackGraphLabelColor() =>
-      Theme.of(context).colorScheme.primary;
-
-  _GraphViewSnapshot _projectGraph(
-    List<SourceSummary> rows,
-    Map<String, GraphPoint> worldPoints,
-    List<SourceSummary> matches,
-    Map<String, List<Color>> documentLabelColors,
-    Map<String, Color> labelColorsByName,
-    Map<String, List<DocumentLabel>> documentLabelRecords,
-    List<GraphCluster> clusters,
-    BoxConstraints constraints,
-  ) {
-    final size = Size(constraints.maxWidth, constraints.maxHeight);
-    if (graphViewportSize != size) {
-      graphViewportSize = size;
-      scheduleGraphFit();
-    }
-    final rotated = rows.map((row) {
-      final id = row.id;
-      return rotateGraphPoint(
-        worldPoints[id] ?? const GraphPoint(0, 0, 0),
-        yaw: graphYaw,
-        pitch: graphPitch,
-      );
-    }).toList();
-    final positions = rotated
-        .map(
-          (point) => Offset(
-            graphSceneOrigin + point.x * graphPaintPerspective(point.z),
-            graphSceneOrigin + point.y * graphPaintPerspective(point.z),
+class SourceGraphScene extends StatelessWidget {
+  const SourceGraphScene({
+    super.key,
+    required this.view,
+    required this.transform,
+    required this.yaw,
+    required this.pitch,
+    required this.labelFilter,
+    required this.panEnabled,
+    required this.animationPaused,
+    required this.organizing,
+    required this.layoutError,
+    required this.inspector,
+    required this.onSelect,
+    required this.onPointerDown,
+    required this.onPointerMove,
+    required this.onPointerEnd,
+    required this.onZoom,
+    required this.onFit,
+    required this.onToggleAnimation,
+  });
+  final GraphViewSnapshot view;
+  final TransformationController transform;
+  final double yaw, pitch;
+  final String labelFilter, layoutError;
+  final bool panEnabled, animationPaused, organizing;
+  final Widget? inspector;
+  final ValueChanged<String?> onSelect;
+  final ValueChanged<PointerDownEvent> onPointerDown;
+  final ValueChanged<PointerMoveEvent> onPointerMove;
+  final ValueChanged<PointerEvent> onPointerEnd;
+  final ValueChanged<double> onZoom;
+  final VoidCallback onFit, onToggleAnimation;
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        if (organizing || layoutError.isNotEmpty)
+          Positioned(
+            right: 16,
+            bottom: 16,
+            child: Tooltip(
+              message: layoutError.isEmpty ? 'Organizing sources' : layoutError,
+              child: Text(
+                layoutError.isEmpty
+                    ? 'Organizing sources…'
+                    : 'Graph layout unavailable',
+              ),
+            ),
           ),
-        )
-        .toList();
-    final paintOrder = List.generate(rows.length, (i) => i)
-      ..sort((a, b) => rotated[b].z.compareTo(rotated[a].z));
-    final zoom = graphTransform.value.getMaxScaleOnAxis();
-    final selected = rows
-        .where((row) => row.id == graphSelectedDocument)
-        .firstOrNull;
-    final selectedId = selected?.id;
-    final selectionEdges = selectedId == null
-        ? <GraphEdge>[]
-        : graphSelectionEdges;
-    final connected = <String>{
-      if (selectedId != null) selectedId,
-      for (final edge in selectionEdges) ...[edge.source, edge.target],
-    };
-    final matchingIds = matches.map((row) => row.id).toSet();
-    final dimmed = <String>{
-      for (final row in rows)
-        if (labelFilter.isNotEmpty
-            ? !sourceLabels(row).contains(labelFilter)
-            : selectedId != null
-            ? !connected.contains(row.id)
-            : !matchingIds.contains(row.id))
-          row.id,
-    };
-    final painters = [
-      for (var i = 0; i < rows.length; i++)
-        GraphNodePainter(
-          depth: rotated[i].z,
-          zoom: zoom,
-          labelColors: documentLabelColors[rows[i].id] ?? const [],
-          matchColor: labelFilter.isEmpty
-              ? Colors.white
-              : labelColorsByName[labelFilter] ?? fallbackGraphLabelColor(),
-          title: rows[i].title,
-          fontFamily: Theme.of(context).textTheme.bodyMedium?.fontFamily,
-          textDirection: Directionality.of(context),
-          selected: selectedId == rows[i].id,
-          dimmed: dimmed.contains(rows[i].id),
-          activeMatch:
-              (sourceQuery.isNotEmpty || labelFilter.isNotEmpty) &&
-              !dimmed.contains(rows[i].id),
-        ),
-    ];
-    return (
-      size: size,
-      rows: rows,
-      worldPoints: worldPoints,
-      documentLabelRecords: documentLabelRecords,
-      clusters: clusters,
-      rotated: rotated,
-      positions: positions,
-      paintOrder: paintOrder,
-      zoom: zoom,
-      selected: selected,
-      selectionEdges: selectionEdges,
-      painters: painters,
+        _graphCanvas(context, view),
+        if (view.selected != null) _graphSelection(view, view.selected!),
+        _graphCameraControls(context),
+      ],
     );
   }
 
-  Widget _featureSourceGraph(
-    List<SourceSummary> rows,
-    Map<String, GraphPoint> worldPoints,
-    List<SourceSummary> matches,
-    Map<String, List<Color>> documentLabelColors,
-    Map<String, Color> labelColorsByName,
-    Map<String, List<DocumentLabel>> documentLabelRecords,
-    List<GraphCluster> clusters,
-  ) => LayoutBuilder(
-    builder: (_, constraints) {
-      final view = _projectGraph(
-        rows,
-        worldPoints,
-        matches,
-        documentLabelColors,
-        labelColorsByName,
-        documentLabelRecords,
-        clusters,
-        constraints,
-      );
-      return Stack(
-        children: [
-          if (graphOrganizing || graphLayoutError.isNotEmpty)
-            Positioned(
-              right: 16,
-              bottom: 16,
-              child: Tooltip(
-                message: graphLayoutError.isEmpty
-                    ? 'Organizing sources'
-                    : graphLayoutError,
-                child: Text(
-                  graphLayoutError.isEmpty
-                      ? 'Organizing sources…'
-                      : 'Graph layout unavailable',
-                ),
-              ),
-            ),
-          _graphCanvas(view),
-          if (view.selected != null) _graphSelection(view, view.selected!),
-          _graphCameraControls(),
-        ],
-      );
-    },
-  );
-
-  Widget _graphCanvas(_GraphViewSnapshot view) => Listener(
+  Widget _graphCanvas(BuildContext context, GraphViewSnapshot view) => Listener(
     key: const ValueKey('source-graph-canvas'),
     behavior: HitTestBehavior.opaque,
-    onPointerDown: startGraphPointer,
-    onPointerMove: moveGraphPointer,
-    onPointerUp: endGraphPointer,
-    onPointerCancel: endGraphPointer,
+    onPointerDown: onPointerDown,
+    onPointerMove: onPointerMove,
+    onPointerUp: onPointerEnd,
+    onPointerCancel: onPointerEnd,
     child: GestureDetector(
       onTapDown: (details) {
-        final scenePoint = graphTransform.toScene(details.localPosition);
+        final scenePoint = transform.toScene(details.localPosition);
         String? document;
         var depth = double.infinity;
         for (var i = 0; i < view.rows.length; i++) {
@@ -295,11 +285,11 @@ extension _GraphWidgets on SourcesController {
             depth = view.rotated[i].z;
           }
         }
-        selectGraphDocument(document);
+        onSelect(document);
       },
       child: InteractiveViewer(
-        transformationController: graphTransform,
-        panEnabled: graphMousePointer == null,
+        transformationController: transform,
+        panEnabled: panEnabled,
         minScale: .015,
         maxScale: 5,
         constrained: false,
@@ -315,8 +305,8 @@ extension _GraphWidgets on SourcesController {
                   clusters: view.clusters,
                   points: view.worldPoints,
                   labels: view.documentLabelRecords,
-                  yaw: graphYaw,
-                  pitch: graphPitch,
+                  yaw: yaw,
+                  pitch: pitch,
                   zoom: view.zoom,
                   filter: labelFilter,
                   fallback: Theme.of(context).colorScheme.primary,
@@ -344,7 +334,7 @@ extension _GraphWidgets on SourcesController {
                     child: Semantics(
                       button: true,
                       label: view.rows[i].title,
-                      onTap: () => selectGraphDocument(view.rows[i].id),
+                      onTap: () => onSelect(view.rows[i].id),
                       child: SizedBox(
                         key: ValueKey('graph-node-${view.rows[i].id}'),
                         width: view.painters[i].extent * 2,
@@ -364,7 +354,7 @@ extension _GraphWidgets on SourcesController {
     ),
   );
 
-  Widget _graphSelection(_GraphViewSnapshot view, SourceSummary selected) =>
+  Widget _graphSelection(GraphViewSnapshot view, SourceSummary selected) =>
       Positioned(
         right: 20,
         bottom: 20,
@@ -374,17 +364,12 @@ extension _GraphWidgets on SourcesController {
             constraints: BoxConstraints(
               maxHeight: math.max(0, view.size.height - 40),
             ),
-            child: graphInspector(
-              selected,
-              view.rows,
-              view.selectionEdges,
-              view.documentLabelRecords[selected.id] ?? const [],
-            ),
+            child: inspector,
           ),
         ),
       );
 
-  Widget _graphCameraControls() => Positioned(
+  Widget _graphCameraControls(BuildContext context) => Positioned(
     left: 18,
     bottom: 16,
     child: Material(
@@ -394,11 +379,11 @@ extension _GraphWidgets on SourcesController {
         children: [
           IconButton(
             tooltip: 'Zoom out',
-            onPressed: () => zoomGraph(0.7692307692307692),
+            onPressed: () => onZoom(0.7692307692307692),
             icon: const Icon(Icons.remove),
           ),
           ValueListenableBuilder<Matrix4>(
-            valueListenable: graphTransform,
+            valueListenable: transform,
             builder: (_, value, _) => Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4),
               child: Text(
@@ -412,27 +397,25 @@ extension _GraphWidgets on SourcesController {
           ),
           IconButton(
             tooltip: 'Zoom in',
-            onPressed: () => zoomGraph(1.3),
+            onPressed: () => onZoom(1.3),
             icon: const Icon(Icons.add),
           ),
           IconButton(
             tooltip: 'Fit graph',
-            onPressed: fitGraph,
+            onPressed: onFit,
             icon: const Icon(Icons.center_focus_strong),
           ),
           IconButton(
             tooltip: MediaQuery.disableAnimationsOf(context)
                 ? 'Graph animation is disabled by reduced motion'
-                : graphAnimationPaused
+                : animationPaused
                 ? 'Resume graph animation'
                 : 'Pause graph animation',
             onPressed: MediaQuery.disableAnimationsOf(context)
                 ? null
-                : () => update(
-                    () => graphAnimationPaused = !graphAnimationPaused,
-                  ),
+                : onToggleAnimation,
             icon: Icon(
-              graphAnimationPaused || MediaQuery.disableAnimationsOf(context)
+              animationPaused || MediaQuery.disableAnimationsOf(context)
                   ? Icons.play_arrow
                   : Icons.pause,
             ),
@@ -442,18 +425,3 @@ extension _GraphWidgets on SourcesController {
     ),
   );
 }
-
-typedef _GraphViewSnapshot = ({
-  Size size,
-  List<SourceSummary> rows,
-  Map<String, GraphPoint> worldPoints,
-  Map<String, List<DocumentLabel>> documentLabelRecords,
-  List<GraphCluster> clusters,
-  List<GraphPoint> rotated,
-  List<Offset> positions,
-  List<int> paintOrder,
-  double zoom,
-  SourceSummary? selected,
-  List<GraphEdge> selectionEdges,
-  List<GraphNodePainter> painters,
-});

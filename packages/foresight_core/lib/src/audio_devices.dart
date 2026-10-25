@@ -1,4 +1,7 @@
 import 'native_lifetime.dart';
+import 'audio_device_process.dart';
+import 'audio_device.dart';
+export 'audio_device.dart';
 import 'dart:ffi';
 import 'dart:isolate';
 import 'package:ffi/ffi.dart';
@@ -6,20 +9,14 @@ import 'platform_services.dart';
 import 'dart:convert';
 import 'dart:io';
 
-class AudioDevice {
-  final String name, label;
-  final bool playback;
-  AudioDevice(this.name, this.label, this.playback);
-}
+final _deviceProcess = AudioDeviceProcessRunner();
 
 Future<List<AudioDevice>> audioDevices({
   bool? macOS,
   Future<ProcessResult> Function(String executable, List<String> arguments)?
   runProcess,
 }) async {
-  final run =
-      runProcess ??
-      ((executable, arguments) => Process.run(executable, arguments));
+  final run = runProcess ?? _deviceProcess.run;
   if (macOS ?? Platform.isMacOS) {
     final helper = runtimeConfiguration['FORESIGHT_AUDIO_DEVICES'];
     if (helper == null) {

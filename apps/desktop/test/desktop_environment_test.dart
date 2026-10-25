@@ -1,5 +1,7 @@
 import 'desktop_fixture_owner.dart';
 import 'dart:io';
+import 'dart:convert';
+import 'desktop_connection_fixture.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import '../test_support/core_fixture.dart';
@@ -138,33 +140,75 @@ void main() {
   });
 
   testWidgets(
-    'default device discovery uses the injected process runner',
+    'default device discovery executes the service provider',
     (tester) async => withDesktopFixtures(tester, () async {
-      final root = createTestTempDirectorySync('default-devices-');
-      final connection = ControllerConnection(
+      final root = createTestTempDirectorySync('service-devices-');
+      final calls = <String>[];
+      final connection = TestDesktopConnection(
         Application(
           Domain(
             Store('${root.path}/app.db'),
             OfflineHelper('${root.path}/socket', '${root.path}/helper'),
           ),
+          audioOperations: AudioOperations(
+            enumerate: () => audioDevices(
+              macOS: false,
+              runProcess: (executable, arguments) async {
+                calls.add(executable);
+                expect(arguments, isEmpty);
+                return ProcessResult(
+                  1,
+                  0,
+                  jsonEncode([
+                    for (final (media, name, label) in [
+                      ('Audio/Source', 'fixture-mic', 'Fixture microphone'),
+                      ('Audio/Sink', 'fixture-output', 'Fixture speakers'),
+                    ])
+                      {
+                        'info': {
+                          'props': {
+                            'media.class': media,
+                            'node.name': name,
+                            'node.description': label,
+                          },
+                        },
+                      },
+                  ]),
+                  '',
+                );
+              },
+            ),
+            capabilities: () => {'microphone': 'authorized'},
+            requestSystem: () async =>
+                fail('Enumeration requested system access'),
+            requestMicrophone: () async =>
+                fail('Enumeration requested microphone access'),
+          ),
         ),
       );
-      final calls = <String>[];
       await tester.binding.setSurfaceSize(const Size(1400, 1000));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       await tester.pumpWidget(
         Foresight(
           connection,
           environment: DesktopEnvironment(
-            run: (executable, arguments) async {
-              calls.add(executable);
-              return ProcessResult(1, 0, '[]', '');
-            },
+            run: (_, _) async => fail('Desktop attempted local enumeration'),
           ),
         ),
       );
       await tester.pumpAndSettle();
-      if (!Platform.isMacOS) expect(calls, ['pw-dump']);
+      expect(calls, ['pw-dump']);
+      final shell = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
+      expect(
+        shell.integrationFeature.availableAudioDevices.map(
+          (device) => (device.name, device.label, device.playback),
+        ),
+        [
+          ('fixture-mic', 'Fixture microphone', false),
+          ('fixture-output', 'Fixture speakers', true),
+        ],
+      );
+      expect(shell.integrationFeature.audioDeviceState, isEmpty);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       await tester.pumpAndSettle();

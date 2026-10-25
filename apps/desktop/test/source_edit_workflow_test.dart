@@ -73,7 +73,11 @@ void main() {
         Operation.sourcesRefresh,
         Operation.sourcesImportUrl,
       ]) {
-        f.connection.replies[op] = {};
+        f.connection.replies[op] =
+            op == Operation.sourcesImportFile ||
+                op == Operation.sourcesImportUrl
+            ? {'id': 'fixture-import'}
+            : null;
       }
       await source.import();
       await source.importFolder();

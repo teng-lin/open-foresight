@@ -1,11 +1,10 @@
+export 'model_identity.dart' show dedicatedEncryptedQueryBackend;
 import 'rpc_error.dart';
 import 'dart:async';
 import 'dart:io';
 
 import 'dedicated_query_runtime.dart';
 import 'model_vault.dart';
-
-const dedicatedEncryptedQueryBackend = 'legacy_query_cpu_encrypted';
 
 typedef LeasedQueryRuntimeFactory =
     QueryCompletionRuntime Function(

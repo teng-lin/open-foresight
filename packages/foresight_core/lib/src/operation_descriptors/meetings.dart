@@ -1,7 +1,12 @@
 import '../operation_descriptor.dart';
+import '../client_contract.dart';
+import '../client_results.dart';
+import '../client_requests/meetings.dart';
 import '../operation_argument_schema.dart';
 
 const meetingsListDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeMeetings),
+  requestEncoder: OperationInputEncoder<MeetingsListInput>(),
   scope: OperationScope.application,
   readOnly: true,
   approval: ApprovalPolicy.never,
@@ -19,6 +24,8 @@ const meetingsListDescriptor = OperationDescriptor(
 );
 
 const meetingsCreateDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(IntegerIdentityResult.fromWire),
+  requestEncoder: OperationInputEncoder<MeetingsCreateInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.never,
@@ -38,6 +45,8 @@ const meetingsCreateDescriptor = OperationDescriptor(
 );
 
 const meetingsRenameDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<MeetingsRenameInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.overwrite,
@@ -63,6 +72,8 @@ const meetingsRenameDescriptor = OperationDescriptor(
 );
 
 const meetingsGetDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(MeetingDetailResult.fromWire),
+  requestEncoder: OperationInputEncoder<MeetingsGetInput>(),
   scope: OperationScope.application,
   readOnly: true,
   approval: ApprovalPolicy.never,
@@ -82,6 +93,8 @@ const meetingsGetDescriptor = OperationDescriptor(
 );
 
 const meetingsRetryQuestionDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<MeetingsRetryQuestionInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.never,
@@ -101,6 +114,8 @@ const meetingsRetryQuestionDescriptor = OperationDescriptor(
 );
 
 const meetingsRetryDetectionDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<MeetingsRetryDetectionInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.never,
@@ -120,6 +135,8 @@ const meetingsRetryDetectionDescriptor = OperationDescriptor(
 );
 
 const meetingsLinkAnswerDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<MeetingsLinkAnswerInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.never,
@@ -140,6 +157,8 @@ const meetingsLinkAnswerDescriptor = OperationDescriptor(
 );
 
 const meetingsNotesDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<MeetingsNotesInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.overwrite,
@@ -161,6 +180,8 @@ const meetingsNotesDescriptor = OperationDescriptor(
 );
 
 const meetingsTranscriptDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<MeetingsTranscriptInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -184,6 +205,8 @@ const meetingsTranscriptDescriptor = OperationDescriptor(
 );
 
 const meetingsIndexDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<MeetingsIndexInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -203,6 +226,8 @@ const meetingsIndexDescriptor = OperationDescriptor(
 );
 
 const meetingsGenerateDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<MeetingsGenerateInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.overwrite,
@@ -223,6 +248,8 @@ const meetingsGenerateDescriptor = OperationDescriptor(
 );
 
 const meetingsTasksDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeTasks),
+  requestEncoder: OperationInputEncoder<MeetingsTasksInput>(),
   scope: OperationScope.application,
   readOnly: true,
   approval: ApprovalPolicy.never,
@@ -242,6 +269,8 @@ const meetingsTasksDescriptor = OperationDescriptor(
 );
 
 const meetingsEditTaskDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<MeetingsEditTaskInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.overwrite,
@@ -270,6 +299,8 @@ const meetingsEditTaskDescriptor = OperationDescriptor(
 );
 
 const meetingsPrepareDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<MeetingsPrepareInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.overwrite,
@@ -296,6 +327,8 @@ const meetingsPrepareDescriptor = OperationDescriptor(
 );
 
 const meetingsCancelGenerationDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<MeetingsCancelGenerationInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.never,
@@ -316,6 +349,8 @@ const meetingsCancelGenerationDescriptor = OperationDescriptor(
 );
 
 const meetingsEnhanceDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<MeetingsEnhanceInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.overwrite,
@@ -336,6 +371,8 @@ const meetingsEnhanceDescriptor = OperationDescriptor(
 );
 
 const meetingsCancelEnhanceDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeBoolean),
+  requestEncoder: OperationInputEncoder<MeetingsCancelEnhanceInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.never,
@@ -356,6 +393,8 @@ const meetingsCancelEnhanceDescriptor = OperationDescriptor(
 );
 
 const meetingsCancelSummaryDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<MeetingsCancelSummaryInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.never,
@@ -375,6 +414,8 @@ const meetingsCancelSummaryDescriptor = OperationDescriptor(
 );
 
 const meetingsStartDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeCapture),
+  requestEncoder: OperationInputEncoder<MeetingsStartInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -394,6 +435,8 @@ const meetingsStartDescriptor = OperationDescriptor(
 );
 
 const meetingsStopDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeCapture),
+  requestEncoder: OperationInputEncoder<MeetingsStopInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.never,
@@ -411,6 +454,8 @@ const meetingsStopDescriptor = OperationDescriptor(
 );
 
 const meetingsPauseDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeCapture),
+  requestEncoder: OperationInputEncoder<MeetingsPauseInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.never,
@@ -430,6 +475,8 @@ const meetingsPauseDescriptor = OperationDescriptor(
 );
 
 const meetingsResumeDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeCapture),
+  requestEncoder: OperationInputEncoder<MeetingsResumeInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,

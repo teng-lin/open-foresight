@@ -1,4 +1,5 @@
 import 'operation_argument_schema.dart';
+import 'client_contract.dart';
 
 enum OperationScope { application, service }
 
@@ -18,7 +19,7 @@ enum ResponseShape { result, answerStream, signInStream }
 
 /// Complete per-operation policy. Admission order and resource ownership stay
 /// with the service; these declarations never create a second lifetime ledger.
-class OperationDescriptor {
+class OperationDescriptor<Q extends ClientArguments, R> {
   const OperationDescriptor({
     required this.scope,
     required this.readOnly,
@@ -34,6 +35,8 @@ class OperationDescriptor {
     required this.leaseBusy,
     required this.createsLease,
     required this.arguments,
+    required this.requestEncoder,
+    required this.resultDecoder,
   });
   final OperationScope scope;
   final bool readOnly;
@@ -46,6 +49,8 @@ class OperationDescriptor {
   final bool carriesWorkspaceEpoch, acceptsIdempotencyKey;
   final bool stampsAgentActivity, leaseBusy, createsLease;
   final OperationArgumentSchema arguments;
+  final ClientRequestEncoder<Q> requestEncoder;
+  final ClientResultDecoder<R> resultDecoder;
 
   bool requiresApproval({
     required bool webSearch,

@@ -1,15 +1,21 @@
+import 'client_results.dart';
+import 'operation_descriptors.dart';
+import 'client_requests.dart';
+import 'client_contract.dart';
 import 'dart:async';
 import 'dart:io';
 import 'desktop_connection.dart';
 import 'desktop_status.dart';
 import 'operations.dart';
+import 'client_command.dart';
 import 'store_reader.dart';
 
 /// Only the state, commands and sign-in stream consumed by account proxies.
-abstract interface class RemoteGoogleOwner {
+abstract interface class RemoteGoogleOwner implements ClientCommandPort {
   Map<String, dynamic> get googleStatus;
   set googleStatus(Map<String, dynamic> value);
   StoreReader get store;
+  @override
   Future<Object?> command(
     Operation operation, [
     Map<String, dynamic> args = const {},
@@ -36,18 +42,17 @@ class RemoteGoogleAuth implements GoogleAccount {
   bool get signingIn => domain.googleStatus['signingIn'] == true;
   @override
   bool get configured => domain.googleStatus['configured'] == true;
-  Future<void> _call(
-    Operation operation, [
-    Map<String, dynamic> a = const {},
-  ]) async {
-    domain.googleStatus = Map<String, dynamic>.from(
-      await domain.command(operation, a) as Map,
-    );
+  Future<void> _accept(Future<GooglePresentation> response) async {
+    domain.googleStatus = (await response).toWire();
   }
 
   @override
-  Future<void> configure(File file) =>
-      _call(Operation.googleConfigure, {'path': file.path});
+  Future<void> configure(File file) => _accept(
+    googleConfigureDescriptor.send(
+      domain,
+      GoogleConfigureInput(path: WireField(file.path)),
+    ),
+  );
   @override
   Future<void> signIn(Future<void> Function(Uri) openBrowser) =>
       _signIn(openBrowser, Operation.googleSignIn);
@@ -58,11 +63,19 @@ class RemoteGoogleAuth implements GoogleAccount {
   List<GoogleAccountPresentation> get accounts =>
       GooglePresentation.fromWire(domain.googleStatus).accounts;
   @override
-  Future<void> switchAccount(String id) =>
-      _call(Operation.googleSwitchAccount, {'id': id});
+  Future<void> switchAccount(String id) => _accept(
+    googleSwitchAccountDescriptor.send(
+      domain,
+      GoogleSwitchAccountInput(id: id),
+    ),
+  );
   @override
-  Future<void> signOutAccount(String id) =>
-      _call(Operation.googleSignOutAccount, {'id': id});
+  Future<void> signOutAccount(String id) => _accept(
+    googleSignOutAccountDescriptor.send(
+      domain,
+      GoogleSignOutAccountInput(id: id),
+    ),
+  );
 
   Future<void> _signIn(
     Future<void> Function(Uri) openBrowser,
@@ -70,26 +83,44 @@ class RemoteGoogleAuth implements GoogleAccount {
   ) async {
     try {
       await for (final value in domain.googleSignIn(operation)) {
-        final state = Map<String, dynamic>.from(value as Map);
-        if (state['authorization_url'] is String) {
-          await openBrowser(Uri.parse(state['authorization_url'] as String));
+        final event =
+            (operation == Operation.googleAddAccount
+                    ? googleAddAccountDescriptor
+                    : googleSignInDescriptor)
+                .decodeResponse(value);
+        if (event.authorizationUrl case final url?) {
+          await openBrowser(Uri.parse(url));
         } else {
-          domain.googleStatus = state;
+          domain.googleStatus = event.status!.toWire();
         }
       }
     } catch (_) {
-      await _call(Operation.googleCancelSignIn);
+      await _accept(
+        googleCancelSignInDescriptor.send(
+          domain,
+          const GoogleCancelSignInInput(),
+        ),
+      );
       rethrow;
     }
   }
 
   @override
   void cancelSignIn() {
-    unawaited(_call(Operation.googleCancelSignIn));
+    unawaited(
+      _accept(
+        googleCancelSignInDescriptor.send(
+          domain,
+          const GoogleCancelSignInInput(),
+        ),
+      ),
+    );
   }
 
   @override
-  Future<void> disconnect() => _call(Operation.googleDisconnect);
+  Future<void> disconnect() => _accept(
+    googleDisconnectDescriptor.send(domain, const GoogleDisconnectInput()),
+  );
   @override
   Future<void> close() async {}
 }
@@ -106,22 +137,27 @@ class RemoteGoogleConnections implements ConnectedSources {
     String? parent,
     String query = '',
     DateTime? modifiedAfter,
-  }) async =>
-      (await domain.command(Operation.googleDriveFiles, {
-                'parent': parent,
-                'query': query,
-                'modifiedAfter': modifiedAfter?.toIso8601String(),
-              })
-              as List)
-          .map((v) => Map<String, dynamic>.from(v as Map))
-          .toList();
+  }) async => [
+    for (final file in await googleDriveFilesDescriptor.send(
+      domain,
+      GoogleDriveFilesInput(
+        parent: WireField(parent),
+        query: WireField(query),
+        modifiedAfter: WireField(modifiedAfter?.toIso8601String()),
+      ),
+    ))
+      file.toWire(),
+  ];
   @override
   Future<void> importDriveFile(
     String fileId, {
     Map<String, dynamic>? metadata,
     bool preserveDeleted = false,
   }) async {
-    await domain.command(Operation.googleImportFile, {'id': fileId});
+    await googleImportFileDescriptor.send(
+      domain,
+      GoogleImportFileInput(id: fileId),
+    );
   }
 
   @override
@@ -129,12 +165,15 @@ class RemoteGoogleConnections implements ConnectedSources {
     String folderId, {
     bool refreshing = false,
   }) async {
-    await domain.command(Operation.googleImportFolder, {'id': folderId});
+    await googleImportFolderDescriptor.send(
+      domain,
+      GoogleImportFolderInput(id: folderId),
+    );
   }
 
   @override
   Future<void> importLastYear() async {
-    await domain.command(Operation.googleImportYear);
+    await googleImportYearDescriptor.send(domain, GoogleImportYearInput());
   }
 
   @override
@@ -142,17 +181,20 @@ class RemoteGoogleConnections implements ConnectedSources {
     String calendarId = 'primary',
     DateTime? now,
   }) async {
-    await domain.command(Operation.googleCalendar);
+    await googleCalendarDescriptor.send(domain, GoogleCalendarInput());
   }
 
   @override
   Future<void> refresh() async {
-    await domain.command(Operation.googleRefresh);
+    await googleRefreshDescriptor.send(domain, GoogleRefreshInput());
   }
 
   @override
   Future<void> importAttachments(int meeting) async {
-    await domain.command(Operation.googleAttachments, {'id': meeting});
+    await googleAttachmentsDescriptor.send(
+      domain,
+      GoogleAttachmentsInput(id: meeting),
+    );
   }
 
   Future<void> reminders(

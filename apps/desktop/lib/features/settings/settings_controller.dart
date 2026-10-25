@@ -159,7 +159,10 @@ class SettingsController
   bool modelSetupShown = false;
 
   Future<void> saveModelPreference(String key, String value) async {
-    await d.command(Operation.preferencesSet, {'key': key, 'value': value});
+    await preferencesSetDescriptor.send(
+      d,
+      PreferencesSetInput(key: key, value: value),
+    );
   }
 
   @override
@@ -184,6 +187,14 @@ class SettingsController
   }) {
     final generation = _reads.generation;
     return GemmaSetupDialog(
+      createDownload: () => RemoteModelDownloader(
+        d,
+        ownerCurrent: () => mounted && _reads.owns(generation),
+      ),
+      findLocalModel: DesktopModelAssetClient(
+        d,
+        current: () => mounted && _reads.owns(generation),
+      ).findLocalModel,
       environment: _host.environment,
       store: d.store,
       ownerCurrent: () => mounted && _reads.owns(generation),
@@ -202,11 +213,15 @@ class SettingsController
                 'generation',
               )),
       installEmbedding: (asset, current) async {
-        await d.commandCurrent(Operation.modelsEmbedding, {
-          'path': asset.path,
-          'gpu': true,
-          'digest': embeddingGemmaModel.digest,
-        }, current);
+        await modelsEmbeddingDescriptor.sendCurrent(
+          d,
+          ModelsEmbeddingInput(
+            path: asset.path,
+            gpu: WireField(true),
+            digest: WireField(embeddingGemmaModel.digest),
+          ),
+          current,
+        );
         if (!current()) return;
         if (mounted)
           setState(() {
@@ -219,11 +234,15 @@ class SettingsController
       runner: desktopRuntimeSettings['FORESIGHT_LITERT_RUNNER'] ?? '',
       memoryGb: physicalMemoryGb(),
       installGeneration: (path, runtime, current) async {
-        await d.commandCurrent(Operation.modelsGeneration, {
-          'path': path,
-          'runtime': runtime,
-          'backend': 'litert_lm',
-        }, current);
+        await modelsGenerationDescriptor.sendCurrent(
+          d,
+          ModelsGenerationInput(
+            path: path,
+            runtime: runtime,
+            backend: WireField('litert_lm'),
+          ),
+          current,
+        );
         return d.runtime;
       },
       installed: (runtime, model) {
@@ -265,6 +284,14 @@ class SettingsController
     final generation = _reads.generation;
     final registration = _reads.model('speech');
     return SpeechSetupDialog(
+      createDownload: () => RemoteModelDownloader(
+        d,
+        ownerCurrent: () => mounted && _reads.owns(generation),
+      ),
+      findLocalModel: DesktopModelAssetClient(
+        d,
+        current: () => mounted && _reads.owns(generation),
+      ).findLocalModel,
       environment: _host.environment,
       store: d.store,
       ownerCurrent: () => mounted && _reads.owns(generation),
@@ -276,11 +303,11 @@ class SettingsController
           registration?.runtime ??
           '',
       installSpeech: (asset, runner, digest, current) async {
-        await d.commandCurrent(Operation.modelsSpeech, {
-          'path': asset.path,
-          'runtime': runner,
-          'digest': digest,
-        }, current);
+        await modelsSpeechDescriptor.sendCurrent(
+          d,
+          ModelsSpeechInput(path: asset.path, runtime: runner, digest: digest),
+          current,
+        );
       },
       installed: () {
         if (mounted)
@@ -386,7 +413,7 @@ class SettingsController
     await _operations.run(() async {
       _lifecycle.setClearingWorkspace(true);
       try {
-        await d.command(Operation.workspaceClear);
+        await workspaceClearDescriptor.send(d, WorkspaceClearInput());
       } finally {
         _lifecycle.setClearingWorkspace(false);
       }
@@ -396,7 +423,10 @@ class SettingsController
 
   @override
   Future<void> preference(String key, String value) async {
-    await d.command(Operation.preferencesSet, {'key': key, 'value': value});
+    await preferencesSetDescriptor.send(
+      d,
+      PreferencesSetInput(key: key, value: value),
+    );
     if (mounted) _host.update(() {});
   }
 

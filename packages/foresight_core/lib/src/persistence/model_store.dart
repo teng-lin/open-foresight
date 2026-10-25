@@ -1,9 +1,9 @@
+import 'model_queries.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:sqlite3/sqlite3.dart';
 import '../model_integrity.dart';
 import '../model_asset_lifecycle.dart';
-import '../platform_services.dart';
 import '../rpc_error.dart';
 import 'read_schema_guard.dart';
 
@@ -30,101 +30,17 @@ class ModelStore {
         .toList(),
     supportedVersion: supportedVersion,
   );
-  String _preference(String key, [String fallback = '']) =>
-      _rows('SELECT value FROM preferences WHERE key=?', [
-            key,
-          ]).firstOrNull?['value']
-          as String? ??
-      fallback;
   void _setPreference(String key, String value) => db.execute(
     'INSERT INTO preferences VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
     [key, value],
   );
-  static const _runtimeResources = {
-    'generation': 'FORESIGHT_LITERT_RUNNER',
-    'query-detection': 'FORESIGHT_QUERY_RUNTIME',
-    'speech': 'FORESIGHT_WHISPER_RUNTIME',
-  };
-
-  String? _ownedRuntime(String resource) {
-    final root = runtimeConfiguration['FORESIGHT_INSTALL_ROOT'];
-    final path =
-        runtimeConfiguration[resource] ??
-        (resource == 'FORESIGHT_QUERY_RUNTIME'
-            ? runtimeConfiguration['FORESIGHT_LITERT_PYTHON']
-            : null);
-    if (root == null || path == null) return null;
-    try {
-      final canonicalRoot = Directory(root).resolveSymbolicLinksSync();
-      final file = File(path);
-      final canonical = file.resolveSymbolicLinksSync();
-      if (!canonical.startsWith('$canonicalRoot/') ||
-          (file.statSync().mode & 0x49) == 0) {
-        return null;
-      }
-      return canonical;
-    } on FileSystemException {
-      return null;
-    }
-  }
-
-  /// Resolve only provenance recorded during an explicit model registration.
-  /// Legacy absolute paths and external runners never acquire inferred ownership.
+  ModelQueries get _queries =>
+      ModelQueries(db, supportedVersion: supportedVersion);
   Map<String, Object?> resolveModelRuntime(Map<String, Object?> model) =>
-      readSnapshot(
-        db,
-        () => _resolveModelRuntime(model),
-        supportedVersion: supportedVersion,
-      );
-  Map<String, Object?> _resolveModelRuntime(Map<String, Object?> model) {
-    final kind = model['kind'];
-    final resource = _runtimeResources[kind];
-    if (resource == null) return model;
-    try {
-      final record = jsonDecode(_preference('modelRuntimeResource.$kind'));
-      if (record is! Map ||
-          (record['resource'] != resource &&
-              !(kind == 'query-detection' &&
-                  record['resource'] == 'FORESIGHT_LITERT_PYTHON')) ||
-          record['runtime'] != model['runtime'] ||
-          record['digest'] != model['digest'] ||
-          record['backend'] != model['backend']) {
-        return model;
-      }
-      final current = _ownedRuntime(resource);
-      if (current == null) return model;
-      return {...model, 'runtime': current};
-    } on FormatException {
-      return model;
-    }
-  }
-
-  Map<String, Object?>? model(String kind) =>
-      readSnapshot(db, () => _model(kind), supportedVersion: supportedVersion);
-  Map<String, Object?>? _model(String kind) {
-    final registration = _rows('SELECT * FROM models WHERE kind=?', [
-      kind,
-    ]).firstOrNull;
-    if (registration == null) return null;
-    final resolved = resolveModelRuntime(registration);
-    if (kind == 'generation' &&
-        resolved['backend'] == 'litert_lm' &&
-        resolved['model_type'] == 0) {
-      return {
-        ...resolved,
-        'model_type': referenceGenerationModelType(
-          resolved['digest'] as String,
-        ),
-      };
-    }
-    return resolved;
-  }
-
-  List<Map<String, Object?>> get models => readSnapshot(
-    db,
-    () => _rows('SELECT * FROM models').map(resolveModelRuntime).toList(),
-    supportedVersion: supportedVersion,
-  );
+      _queries.resolveModelRuntime(model);
+  Map<String, Object?>? model(String kind) => _queries.model(kind);
+  List<Map<String, Object?>> get models => _queries.models;
+  String? _ownedRuntime(String resource) => _queries.ownedRuntime(resource);
 
   /// Re-read stored bytes before any model worker is created. Startup rejects
   /// invalid registrations while preserving their files so setup can repair them.
@@ -212,7 +128,7 @@ class ModelStore {
         'The $kind model does not match its installation digest',
       );
     }
-    String? resource = _runtimeResources[kind];
+    String? resource = modelRuntimeResources[kind];
     if (resource != null) {
       final owned = _ownedRuntime(resource);
       try {

@@ -1,12 +1,9 @@
 import 'package:foresight_core/src/mcp/rpc_tools.dart';
 import 'dart:async';
-import 'package:foresight_core/src/operations.dart';
-import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:mcp_dart/mcp_dart.dart';
-import 'package:foresight_core/src/profile_paths.dart';
-import 'package:foresight_core/src/service.dart';
+import 'package:foresight_core/service_client.dart';
 import 'package:foresight_core/src/version.dart';
 
 Future<void> main() async {

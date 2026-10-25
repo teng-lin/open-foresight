@@ -12,11 +12,12 @@ opening and imports to other features without exposing a writer or controller.
 | `source_collection.dart`, `source_tiles.dart` | Prepared collection, filters, list and grid presentation |
 | `source_actions.dart` | Import, discovery and guarded source dialogs |
 | `source_labels.dart` | Label and graph persistence commands |
-| `note_widgets.dart` | Note loading, draft preservation, saving and editor presentation |
+| `note_widgets.dart` | Independent loading/status/editor/review presentation and callbacks |
 | `graph_layout_owner.dart` | Asynchronous graph snapshot and embedding work |
 | `graph_interaction.dart` | Camera, pointer and selection actions |
 | `graph_widgets.dart`, `source_painters.dart` | Pure graph projection and painting |
-| `typed_graph.dart` | Typed scene helpers and serialization at command boundaries |
+| `typed_graph.dart` | Typed scene helpers, graph queries and serialization at command boundaries |
+| `source_type_view.dart` | Pure source-type presentation shared with the collection |
 | `file_discovery_sheet.dart`, `graph_label_controls.dart` | Feature-owned interactive widgets |
 
 The feature-local parts share only this controller's state. They do not obtain
@@ -45,3 +46,16 @@ workspace reset, session replacement and disposal prevent stale reads or saves
 from publishing into another editor. The global operation gate still owns saves
 and imports; opening a local source dialog remains nongated so its Edit action
 can run. Asynchronous source-opening failures report only to their live owner.
+
+Independent collection, note, tile and graph renderers receive immutable view
+values, UI handles and callbacks. `source_type_view.dart` keeps collection
+presentation outside the graph-query helper's import closure. The controller
+retains the draft/save/read lifecycle and guarded source-opening actions.
+
+Residual parts are orchestration: `source_actions.dart` handles import/discovery
+and async source dialogs; `source_labels.dart` handles label dialogs and typed
+persistence operations; `graph_layout_owner.dart` owns layout reads/worker work;
+`graph_interaction.dart` owns pointer/camera/selection actions. None returns a
+widget. `source_composition.dart` connects snapshots and owner callbacks to
+independent renderers and owns graph animation bookkeeping. All these parts
+remain included in the recursive controller size/decision budget.

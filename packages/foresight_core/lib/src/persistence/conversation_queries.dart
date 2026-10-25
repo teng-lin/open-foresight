@@ -1,7 +1,6 @@
+import 'answer_passage_queries.dart';
 import '../store.dart';
-import 'source_contents.dart';
 import '../read_models.dart';
-import '../answer_retrieval.dart';
 import '../reference_chat_history.dart';
 import 'dart:convert';
 import 'read_schema_guard.dart';
@@ -106,20 +105,13 @@ class ConversationQueries {
     String question,
     Map<String, Object?> revisions,
     List<Map<String, Object?>> semantic,
-  ) {
-    final sources = readSnapshot(
-      _store.db,
-      () =>
-          _rows(
-                "SELECT id,title,content,revision,generated FROM sources WHERE deleted=0 AND state='indexed'",
-              )
-              .where((row) => revisions[row['id']] == row['revision'])
-              .map((row) => materializeSource(_store.db, row))
-              .toList(),
-      supportedVersion: Store.schemaVersion,
-    );
-    return rankAnswerPassages(question, sources, semantic);
-  }
+  ) => readAnswerPassages(
+    _store.db,
+    question,
+    revisions,
+    semantic,
+    supportedVersion: Store.schemaVersion,
+  );
 
   void save(
     String question,

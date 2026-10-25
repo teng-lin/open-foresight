@@ -1,3 +1,4 @@
+import 'persistence/answer_scope_queries.dart';
 import 'read_models.dart' show AnswerScopeSnapshot;
 import 'store.dart';
 
@@ -12,16 +13,11 @@ class AnswerSourceScope {
     int? meeting,
     bool automatic = false,
   }) {
-    final key = automatic
-        ? 'proactiveScope.$meeting'
-        : 'answerScope.$conversation';
-    final mode = store.preference(key, automatic ? 'meeting' : 'workspace');
-    final scope = AnswerScopeSnapshot.fromPreferences(
-      mode: mode,
-      selectedJson: mode == 'selected'
-          ? store.preference('answerSources.$conversation', '[]')
-          : '[]',
+    final scope = readAnswerScope(
+      store.preference,
+      conversation,
       meeting: meeting,
+      automatic: automatic,
     );
     return AnswerSourceScope(scope.mode, scope.ids?.toSet());
   }

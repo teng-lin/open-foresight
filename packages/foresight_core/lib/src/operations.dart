@@ -124,6 +124,14 @@ enum Operation {
   meetingsPause('meetings.pause', contracts.meetingsPauseDescriptor),
   meetingsResume('meetings.resume', contracts.meetingsResumeDescriptor),
   artifactsEdit('artifacts.edit', contracts.artifactsEditDescriptor),
+  modelsDownloadAsset(
+    'models.download_asset',
+    contracts.modelsDownloadAssetDescriptor,
+  ),
+  modelsInspectAsset(
+    'models.inspect_asset',
+    contracts.modelsInspectAssetDescriptor,
+  ),
   modelsCancelQueryAcquisition(
     'models.cancel_query_acquisition',
     contracts.modelsCancelQueryAcquisitionDescriptor,

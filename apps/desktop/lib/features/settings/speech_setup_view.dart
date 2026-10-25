@@ -14,7 +14,7 @@ class SpeechSetupDialog extends StatefulWidget {
   final StoreReader store;
   final bool Function()? ownerCurrent;
   final ModelPreferenceWriter savePreference;
-  final GemmaDownload Function()? createDownload;
+  final ModelDownloader Function()? createDownload;
   final LocalModelFinder findLocalModel;
   final Future<void> Function(File, String, String, bool Function())?
   installSpeech;
@@ -47,10 +47,9 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
   bool working = false, cancelled = false;
   String status = '', error = '';
   double? progress;
-  GemmaDownload? download;
+  ModelDownloader? download;
   final verifiedFiles = <GemmaModel, File>{};
   bool checkingCache = true;
-  Process? probe;
   @override
   void initState() {
     super.initState();
@@ -75,7 +74,7 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
     } catch (failure) {
       if (active)
         setState(() {
-          error = failure.toString();
+          error = modelSetupFailureMessage(failure);
           checkingCache = false;
         });
     }
@@ -117,7 +116,6 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
   void cancel() {
     cancelled = true;
     download?.cancel();
-    probe?.kill();
   }
 
   @override
@@ -138,8 +136,10 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
       error = '';
       progress = null;
     });
-    download = widget.createDownload?.call() ?? GemmaDownload();
     try {
+      download = widget.createDownload?.call();
+      if (download == null)
+        throw StateError('Model download service is unavailable');
       final model = selected;
       if (!cached(model) &&
           !await confirmModelTerms(
@@ -193,7 +193,8 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
     } on ModelDownloadCancelled {
       // Closing this dialog leaves the previous registration intact.
     } catch (failure) {
-      if (active && !cancelled) setState(() => error = failure.toString());
+      if (active && !cancelled)
+        setState(() => error = modelSetupFailureMessage(failure));
     } finally {
       if (active) setState(() => working = false);
     }
