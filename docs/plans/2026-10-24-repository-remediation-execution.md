@@ -831,3 +831,98 @@ private roots after test-only `a6b487ec` makes the capture fixture runtime
 absolute. The preceding relative-path failure is retained. This native candidate
 is not integrated yet; full Mac native and combined application qualification
 remain required. Evidence is under `/var/tmp/of-ci66`.
+
+
+### Main integration, architecture facts and HanSolo follow-up, October 25
+
+Native repair `a6b487ec` is integrated through `31195f72`; repeated native peer
+and whole-unit Claude reviews converged. Fresh root native CTest passed
+**38/38 Linux** and **42/42 HanSolo Mac**, zero skips. Exact native source and
+product evidence is retained under `/var/tmp/of-ci66/mac-full/` and
+`/var/tmp/of-ci66/linux-app-311/`. This supersedes the preceding pending-native
+integration statement without claiming hosted CI acceptance.
+
+Current main's merged PRs #185 and #187 are included locally through `9645f24c`.
+The model-selection merge retains the service-owned downloader, consent and
+metadata-only discovery. Test fixture follow-up `8dc462d3` injects discovery
+failures at the new discovery seam. Linux full core passed **2,422 / 17 skipped**
+with **92.79%** coverage against 90%; desktop passed after the failed-first
+fixture repair and its existing 90% coverage check passed. Earlier failed
+attempts and their output remain in the same evidence directory.
+
+HanSolo's exact seven-file application overlay over qualified `9199c5fe`
+passed both analyzers, **2,423 / 14 skipped** core tests and
+**592 / 13 skipped** desktop tests. Freshly compiled service/MCP passed
+**35 / 2 skipped**; both skips are explicitly Linux package-layout controls.
+The fast integration suite passed **1/1**, zero skips. Matching native products
+reuse the fresh, unchanged `31195f72` native build above; this application run
+is not another native build. Source reuse uses metadata links into the prior
+qualified source snapshot and seven explicit overlay files, without a new
+broad source copy/hash. The initial coverage formatter counted only overlay
+files due to canonical source paths: its percentages are incomplete and are
+not accepted. Corrected full collection includes both canonical roots and
+preserves the existing generated-code exclusion: core **93.10% (19,681/21,139)**
+and desktop **93.43% (8,859/9,482)**, both report-only on Mac. The original
+unfiltered report is retained alongside the explicit nine-generated-file
+exclusion record. The linked Python harness also resolved GUI source to the
+older checkout; its GUI result was not accepted for the new source. After
+materializing three explicit harness files and 30 platform project files in
+the private workspace, both actual current-source GUI checks passed **2/2**,
+zero skips, including all **68** named service/MCP observations. The initial
+CocoaPods configuration failures and output remain retained. Evidence and full
+skip inventories: `/var/tmp/of-ci66/mac-app-8dc/`. Real weights, physical audio/GPU,
+account data, minimum macOS 15 runtime and signed installed-product acceptance
+are not established by these suites.
+
+Architecture fact repair `6c4e0fec` is integrated locally through `1e2c56f5`.
+It corrects schema/tool
+facts using the existing schema and operation authorities, with an offline
+drift checker and **17/17** mutation/shape tests, zero skips. Ruff and focused
+mypy passed. Native coordinator review and two complete Claude reviews
+converged; the follow-up removes a proxy frozen-schema count, requires the
+schema-version authority and rejects direct unprojected tool declarations.
+Full Python/before-push checks for the new combined head remain required.
+Logging, startup identities, SQL integration and the remaining ordinary audit
+scope remain in progress; no completion or merge-readiness claim is made.
+
+
+### Reviewed sanitizer and CI cadence integration, October 25
+
+Leak detection unit `b7a862a7` is integrated locally as `1c7ea8b8`.
+The shared gate settings enable ASan/UBSan/LSan for tests and children, preserve
+fatal report scanning, and permit only individually justified exact CPython
+retained-allocation suppressions. The six real controls include a deliberately
+unreachable native allocation through the same ctypes host. On the exact
+2026/10/18 Arch compiler/ABI profile, all six controls and freshly compiled root
+native CTest **38/38**, zero skips, passed without sanitizer reports. The
+published instrumented SDK artifact **12152408008** was reused after matching its
+pinned archive hash, recipe, compiler/runtime environment and complete **1,632**
+file inventory; its original compile provenance is retained. This is a new
+repository-native build, not a new SDK build. The earlier Ubuntu experiments
+with missing runtime/symbolizer, mixed sanitizer runtimes and an uninstrumented
+protobuf closure are failed, retained diagnostic attempts, not acceptance.
+
+Focused Python passed **56/56**, zero skips; Ruff, focused mypy and actionlint
+**1.7.7 with ShellCheck 0.9.0** passed. Full-unit coordinator and independent
+Claude reviews converged on the frozen unit. Evidence:
+`/var/tmp/of-extra-parallel/lsan/arch23/summary.json`, its reports/logs and
+`/var/tmp/of-extra-parallel/lsan/review-b7/`. No SDK cache-key input, TSan gate,
+workflow permission or publishing/trust selector changed.
+
+CI cadence unit `b148a216` is integrated locally as `fbba3301`. The only workflow
+body differences are three cron values: hourly qualification index at :11,
+main evidence at :17 and cache reconciliation at :41. Existing event/manual
+recovery, write guards and job bodies are retained. The structural scheduled
+invocation count falls from 192 to 96 per day, including the scheduled publisher's
+index wakeup; this is not a measured runner-minute saving. Recovery tests now
+exercise every minute-of-day phase and assert both suppression and dispatch
+bounds. Focused tests passed **120/120**, zero skips, with Ruff and matching
+workflow lint clean. Coordinator and repeated whole-unit Claude reviews
+converged. Documentation distinguishes delivered ticks, dropped schedules,
+dispatch timing, queue/execution time and required reviewed-main qualification
+renewal. Evidence: `/var/tmp/of-extra-parallel/ci-cadence/`.
+
+The integrated head still requires its full applicable before-push checks.
+Native coverage reporting, logging physical/performance acceptance, compiled
+worker/package adoption, restore and the other retained ordinary audit items
+remain open; these two merges do not establish whole-plan or hosted acceptance.

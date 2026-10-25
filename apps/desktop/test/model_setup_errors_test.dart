@@ -48,6 +48,10 @@ void main() {
                       memoryGb: 16,
                       needsEmbedding: true,
                       needsGeneration: false,
+                      findLocalCandidate: (_, _, {registration}) async {
+                        if (cacheFailure) throw failure;
+                        return null;
+                      },
                       findLocalModel: (_, _, {registration}) async {
                         if (cacheFailure) throw failure;
                         return null;
