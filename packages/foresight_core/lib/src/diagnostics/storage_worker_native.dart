@@ -88,6 +88,7 @@ final class DiagnosticNativeFunctions {
     'fs_diag_support_send',
     'fs_diag_support_receive',
     'fs_diag_parent_exit_class',
+    'fs_diag_child_finish',
   ];
   static const error = -1,
       prepared = 2,
@@ -127,6 +128,9 @@ final class DiagnosticNativeFunctions {
   late final _watch = _unary(7);
   late final _map = _unary(8);
   late final _exitClass = _unary(12);
+  late final _finish = Pointer<NativeFunction<_OperationNative>>.fromAddress(
+    codeAddresses[13],
+  ).asFunction<_Operation>();
   late final _operation = Pointer<NativeFunction<_OperationNative>>.fromAddress(
     codeAddresses[9],
   ).asFunction<_Operation>();
@@ -149,6 +153,7 @@ final class DiagnosticNativeFunctions {
   int heartbeat(int id) => _heartbeat(id);
   int watch(int id) => _watch(id);
   int mapChild(int id) => _map(id);
+  int finishChild(int id, int status) => _finish(id, status);
   int operation(int id, {required bool active}) =>
       _operation(id, active ? 1 : 0);
 
@@ -256,7 +261,18 @@ final class DiagnosticNativeEndpoint {
     return functions._send(id, type, request, total, _buffer, chunk.length);
   }
 
-  ({int result, int type, int request, int total, Uint8List bytes}) receive() {
+  ({int result, int type, int request, int total, Uint8List bytes}) receive() =>
+      _read(copy: true);
+
+  /// Sole child decoder only: copy this view into its bounded assembly buffer
+  /// synchronously before ANY next send/receive/close. It is invalidated by the
+  /// next endpoint call. This avoids an extra live4KiB event copy during parse.
+  ({int result, int type, int request, int total, Uint8List bytes})
+  receiveBorrowed() => _read(copy: false);
+
+  ({int result, int type, int request, int total, Uint8List bytes}) _read({
+    required bool copy,
+  }) {
     if (_closed) throw StateError('Closed diagnostic endpoint');
     final result = functions._receive(
       id,
@@ -272,7 +288,9 @@ final class DiagnosticNativeEndpoint {
       type: _type.value,
       request: _request.value,
       total: _total.value,
-      bytes: Uint8List.fromList(_buffer.asTypedList(_copied.value)),
+      bytes: copy
+          ? Uint8List.fromList(_buffer.asTypedList(_copied.value))
+          : _buffer.asTypedList(_copied.value),
     );
   }
 

@@ -602,6 +602,14 @@ int fs_diag_child_watch(uint64_t id) {
   return 0;
 }
 
+int fs_diag_child_finish(uint64_t id, int status) {
+  if (!valid(id, FS_DIAG_ENDPOINT_CHILD) ||
+      (status != 0 && status != 65 && status != 67) ||
+      (status == 0 && !context.endpoint.retired))
+    return FS_DIAG_SUPPORT_ERROR;
+  _exit(status);
+}
+
 static int endpoint_valid(uint64_t id) {
   if (id != 1 || !(atomic_load(&context.status) & FS_DIAG_SUPPORT_PREPARED) ||
       (atomic_load(&context.status) & FS_DIAG_SUPPORT_FAILED))
