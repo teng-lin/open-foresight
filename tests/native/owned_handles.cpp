@@ -127,6 +127,20 @@ void held_legacy_finalization(const char *executable) {
             fs_engine_destroy(engine) == 0,
         "held legacy authority still supports actual cleanup");
 }
+void owned_finalization(const char *executable) {
+  const auto engine = fs_owned_engine_create(executable, "/dev/null", 0, 0);
+  const auto conversation = fs_owned_conversation_create(engine);
+  check(conversation, "owned finalization fixture admitted");
+  auto owner = control(conversation);
+  auto &worker = *static_cast<Conversation *>(owner->object.get());
+  worker.thread = start_worker_thread(worker, "finalization-fixture", [] {});
+  until([&] { return worker.thread_finished.load(); });
+  finalize_legacy_threads(native_handles());
+  check(worker.thread.joinable() && !owner->closing,
+        "process finalization cannot acknowledge owned-v2 cleanup");
+  release_owner(conversation, fs_conversation_retire(conversation));
+  release_owner(engine, fs_engine_retire(engine));
+}
 void retirement_admission_failure(const char *executable) {
   run_owner_subprocess(executable, "--retire-admission-failure");
 }
@@ -743,6 +757,8 @@ int main(int argc, char **argv) {
     live_legacy_exit(argv[0]);
     std::cerr << "CASE held_legacy_finalization\n";
     held_legacy_finalization(argv[0]);
+    std::cerr << "CASE owned_finalization\n";
+    owned_finalization(argv[0]);
     std::cerr << "CASE retirement_admission_failure\n";
     retirement_admission_failure(argv[0]);
     std::cerr << "CASE legacy_failure\n";
