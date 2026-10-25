@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/MacOSDeploymentTarget.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ForesightTestHooks.cmake")
-project(foresight_native LANGUAGES CXX)
+project(foresight_native LANGUAGES C CXX)
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ForesightSanitizers.cmake")
 set(CMAKE_CXX_EXTENSIONS OFF)
 add_compile_options(-Wall -Wextra)
@@ -39,6 +39,29 @@ install(FILES foresight_native.h DESTINATION include)
 
 include(CTest)
 if(BUILD_TESTING)
+  add_executable(diagnostic_protocol_test diagnostic_protocol.c
+    ../tests/native/diagnostic_protocol.c
+    ../tests/native/diagnostic_protocol_cpp.cpp)
+  target_compile_features(diagnostic_protocol_test PRIVATE c_std_11 cxx_std_20)
+  target_compile_options(diagnostic_protocol_test PRIVATE -Werror -Wpedantic)
+  target_include_directories(diagnostic_protocol_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  add_test(NAME diagnostic_protocol COMMAND diagnostic_protocol_test)
+  set_tests_properties(diagnostic_protocol PROPERTIES TIMEOUT 15)
+  # Fixture identity only; these targets are never installed as products.
+  set(FS_DIAG_TEST_NATIVE_ID
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+  add_executable(diagnostic_launcher_fixture diagnostic_launcher.c diagnostic_protocol.c)
+  add_executable(diagnostic_launcher_test ../tests/native/diagnostic_launcher.c)
+  foreach(target diagnostic_launcher_fixture diagnostic_launcher_test)
+    target_compile_features(${target} PRIVATE c_std_11)
+    target_compile_options(${target} PRIVATE -Werror -Wpedantic)
+    target_compile_definitions(${target} PRIVATE
+      FORESIGHT_DIAGNOSTIC_NATIVE_ID="${FS_DIAG_TEST_NATIVE_ID}")
+    target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  endforeach()
+  add_test(NAME diagnostic_launcher COMMAND diagnostic_launcher_test
+    $<TARGET_FILE:diagnostic_launcher_fixture> $<TARGET_FILE:diagnostic_launcher_test>)
+  set_tests_properties(diagnostic_launcher PROPERTIES TIMEOUT 15)
   add_executable(native_spawn_contract_test ../tests/native/spawn_contract.cpp)
   target_compile_features(native_spawn_contract_test PRIVATE cxx_std_20)
   target_link_libraries(native_spawn_contract_test PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
