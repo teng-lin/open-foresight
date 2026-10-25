@@ -418,6 +418,7 @@ class Contract:
         if (
             type(data["schema"]) is not int
             or data["schema"] != 1
+            or not isinstance(data["scope"], str)
             or data["scope"] not in {"components", "fixture"}
         ):
             raise IdentityError("invalid_contract")

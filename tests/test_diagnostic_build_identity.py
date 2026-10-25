@@ -583,6 +583,18 @@ def test_malformed_or_ambiguous_json_contract_is_refused(source, text):
         identity.Contract(root)
 
 
+@pytest.mark.parametrize("scope", [[], {"canary": "SCOPE_PRIVATE_CANARY"}, None])
+def test_invalid_scope_is_a_closed_cli_failure(source, scope):
+    root, config = source
+    config["scope"] = scope
+    save(root, config)
+    result = cli(root)
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert json.loads(result.stderr) == {"error": "invalid_contract"}
+    assert "SCOPE_PRIVATE_CANARY" not in result.stderr
+
+
 def test_contract_aliases_and_special_files_are_not_read(source):
     root, _ = source
     with pytest.raises(identity.IdentityError, match="unsafe_source_path"):
