@@ -925,6 +925,10 @@ def _assert_native_package_notice(tmp_path, kind, tool):
     assert "usr/share/doc/open-foresight/notices/nlohmann-json-LICENSE.MIT" in listing
 
 
+@unittest.skipUnless(
+    sys.platform == "linux",
+    "Linux maintainer scripts require GNU stat and Linux LP64 record locks",
+)
 def test_new_nss_home_lock_blocks_package_change_and_maintenance_spans_hooks(tmp_path):
     import fcntl
     import pwd
@@ -977,3 +981,49 @@ def test_new_nss_home_lock_blocks_package_change_and_maintenance_spans_hooks(tmp
             os.close(descriptor)
     finally:
         shutil.rmtree(directory)
+
+
+@unittest.skipUnless(
+    sys.platform == "linux",
+    "Linux maintainer scripts require GNU stat and Linux LP64 record locks",
+)
+def test_removal_finalizer_prunes_only_empty_installation_directory(tmp_path):
+    root = tmp_path / "installation"
+    root.mkdir()
+    marker = root / ".installation-maintenance"
+    marker.write_text("")
+    marker.chmod(0o600)
+    command = packages.upgrade_helper() + '\nfinish_installation_removal "$1"\n'
+
+    def finalize():
+        return subprocess.run(
+            ["sh", "-c", command, "fixture", str(root)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+    # Simulate the package manager leaving its directory because the marker
+    # still existed during payload removal, then running the post-remove hook.
+    result = finalize()
+    assert result.returncode == 0, result.stderr
+    assert not root.exists()
+    assert finalize().returncode == 0
+
+    # Unknown user data is never recursively removed by package cleanup.
+    root.mkdir()
+    retained = root / "unowned"
+    retained.write_text("preserve")
+    result = finalize()
+    assert result.returncode == 0, result.stderr
+    assert retained.read_text() == "preserve"
+
+    # A marker with an unsafe mode is still refused and retained.
+    marker.write_text("")
+    marker.chmod(0o644)
+    assert finalize().returncode != 0
+    assert marker.exists() and retained.read_text() == "preserve"
+
+    assert "finish_installation_removal" in packages.deb_postrm()
+    assert "finish_installation_removal" in packages.rpm_scriptlets().split("%postun\n")[1]
+    assert "post_remove() { finish_installation_removal" in packages.arch_install_script()

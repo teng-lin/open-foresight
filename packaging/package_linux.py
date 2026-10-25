@@ -257,7 +257,7 @@ def deb_postrm():
     return (
         "#!/bin/sh\nset -eu\n"
         + upgrade_helper()
-        + 'case "${1-}" in remove|purge) finish_installation_maintenance /opt/open-foresight ;; esac\n'
+        + 'case "${1-}" in remove|purge) finish_installation_removal /opt/open-foresight ;; esac\n'
     )
 
 
@@ -281,7 +281,7 @@ def rpm_scriptlets():
         + "finish_installation_maintenance /opt/open-foresight\n"
         + '%postun\nif [ "$1" = 0 ]; then\n'
         + helper
-        + "  finish_installation_maintenance /opt/open-foresight\nfi\n"
+        + "  finish_installation_removal /opt/open-foresight\nfi\n"
     )
 
 
@@ -298,7 +298,7 @@ def arch_install_script():
         "}\n\n"
         "post_install() { finish_installation_maintenance /opt/open-foresight; }\n"
         "post_upgrade() { finish_installation_maintenance /opt/open-foresight; }\n"
-        "post_remove() { finish_installation_maintenance /opt/open-foresight; }\n"
+        "post_remove() { finish_installation_removal /opt/open-foresight; }\n"
     )
 
 

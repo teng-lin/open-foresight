@@ -140,6 +140,16 @@ finish_installation_maintenance() {
   rm -- "$maintenance"
 }
 
+# The package manager may try to remove its directory while our admission
+# marker still exists. After removal, prune only that now-empty directory;
+# never remove unowned files or recursively erase an installation path.
+finish_installation_removal() {
+  finish_installation_maintenance "$1" || return 1
+  if [ -d "$1" ] && [ ! -L "$1" ]; then
+    rmdir -- "$1" 2>/dev/null || :
+  fi
+}
+
 prepare_installation_change() {
   begin_installation_maintenance "$1" || return 1
   if ! refuse_upgrade_if_recording "$1"; then

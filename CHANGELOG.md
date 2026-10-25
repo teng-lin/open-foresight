@@ -32,6 +32,10 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Fixed
 
+- Preserve legacy macOS installation-lock checks through the system temporary
+  directory alias, and remove empty installation directories after native
+  package removal without deleting unowned files.
+
 - Let cancelled model downloads finish cleanup when a descendant still holds a
   worker output pipe. Reach restart-required promptly when cancellation cannot
   confirm worker exit or reader retirement.

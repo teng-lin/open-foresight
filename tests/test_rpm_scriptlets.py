@@ -52,6 +52,9 @@ class RpmScriptletsTest(unittest.TestCase):
                 "/tmp/of-install-*", str(root_path / "of-install-*")
             )
             with (directory / "lock").open("w+") as lock:
+                # Match the released service protocol, whose private lock is
+                # mode0600 even when the test runner has a permissive umask.
+                os.fchmod(lock.fileno(), 0o600)
                 for held in (False, True, False):
                     fcntl.lockf(lock, fcntl.LOCK_SH if held else fcntl.LOCK_UN)
                     result = subprocess.run(

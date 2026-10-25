@@ -231,7 +231,10 @@ def installation_lock_path(app):
 
 def legacy_installation_lock_path(app):
     identity = hashlib.sha256(str(Path(app).resolve()).encode("utf-8")).hexdigest()[:24]
-    return Path(f"/tmp/of-install-{os.getuid()}-{identity}/lock")  # noqa: S108 - Only the released lock protocol uses this bridge.
+    # macOS /tmp is the system alias for /private/tmp. Start at its fixed
+    # canonical directory so every untrusted descendant remains O_NOFOLLOW.
+    temporary = Path("/private/tmp" if sys.platform == "darwin" else "/tmp")  # noqa: S108 - Released lock protocol bridge only.
+    return temporary / f"of-install-{os.getuid()}-{identity}" / "lock"
 
 
 @contextmanager

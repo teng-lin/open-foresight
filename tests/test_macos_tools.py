@@ -410,6 +410,22 @@ except Deferred:
                 pass
         path.parent.chmod(0o700)
 
+    def test_legacy_lock_uses_canonical_system_temporary_directory(self):
+        path = installer.legacy_installation_lock_path(self.destination)
+        expected = Path("/private/tmp" if sys.platform == "darwin" else "/tmp")
+        self.assertEqual(path.parent.parent, expected)
+        self.assertEqual(path.name, "lock")
+
+    def test_lock_rejects_untrusted_ancestor_symlink(self):
+        private = self.root / "private-locks"
+        private.mkdir(mode=0o700)
+        alias = self.root / "aliased-locks"
+        alias.symlink_to(private, target_is_directory=True)
+        with self.assertRaises(OSError):
+            with installer._installation_lock_file(alias / "lock"):
+                self.fail("followed an untrusted lock ancestor")
+        self.assertFalse((private / "lock").exists())
+
     def test_signature_team_cannot_change_during_upgrade(self):
         self.options["verify"] = lambda path: dict(
             SIGNATURE, team="foreign" if path == self.destination else "test-team"
