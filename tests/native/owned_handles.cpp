@@ -105,6 +105,75 @@ void run_owner_subprocess(const char *executable, const char *mode) {
 void live_legacy_exit(const char *executable) {
   run_owner_subprocess(executable, "--live-legacy-exit");
 }
+void held_legacy_finalization(const char *executable) {
+  auto *engine = fs_engine_create(executable, "/dev/null");
+  auto *conversation = fs_conversation_create(engine);
+  check(conversation, "legacy finalization fixture admitted");
+  auto &worker = *static_cast<Conversation *>(conversation);
+  HeldWorker held;
+  worker.thread_finished = false;
+  worker.thread = held.start();
+  held.ready();
+  // active/done is deliberately insufficient: finalization must use the
+  // thread wrapper's terminal publication, without waiting for held work.
+  worker.active = false;
+  finalize_legacy_threads(native_handles());
+  check(worker.thread.joinable() &&
+            !native_handles().handles.at(conversation)->closing,
+        "finalization retains unfinished legacy work");
+  held.release();
+  worker.join();
+  worker.thread_finished = true;
+  check(fs_conversation_destroy(conversation, 1) == 0 &&
+            fs_engine_destroy(engine) == 0,
+        "held legacy authority still supports actual cleanup");
+}
+void owned_finalization(const char *executable) {
+  const auto engine = fs_owned_engine_create(executable, "/dev/null", 0, 0);
+  const auto conversation = fs_owned_conversation_create(engine);
+  check(conversation, "owned finalization fixture admitted");
+  auto owner = control(conversation);
+  auto &worker = *static_cast<Conversation *>(owner->object.get());
+  worker.thread = start_worker_thread(worker, "finalization-fixture", [] {});
+  until([&] { return worker.thread_finished.load(); });
+  finalize_legacy_threads(native_handles());
+  check(worker.thread.joinable() && !owner->closing,
+        "process finalization cannot acknowledge owned-v2 cleanup");
+  release_owner(conversation, fs_conversation_retire(conversation));
+  release_owner(engine, fs_engine_retire(engine));
+}
+void completed_legacy_finalization(const char *executable) {
+  auto *engine = fs_engine_create(executable, "/dev/null");
+  auto *conversation = fs_conversation_create(engine);
+  check(conversation, "completed legacy finalization fixture admitted");
+  auto owner = native_handles().handles.at(conversation);
+  auto &worker = *static_cast<Conversation *>(conversation);
+  worker.thread = start_worker_thread(worker, "finalization-fixture", [] {});
+  until([&] { return worker.thread_finished.load(); });
+  finalize_legacy_threads(native_handles());
+  check(!worker.thread.joinable() && owner->closing && owner->object &&
+            native_handles().handles.at(conversation) == owner,
+        "completed legacy finalization retains actual object and graph");
+  check(fs_conversation_destroy(conversation, 1) == 0 &&
+            fs_engine_destroy(engine) == 0,
+        "completed legacy authority still supports actual cleanup");
+}
+void capture_start_finalization(const char *executable) {
+  const auto runtime = std::filesystem::absolute(executable).string();
+  setenv("FORESIGHT_CAPTURE_RUNTIME", runtime.c_str(), 1);
+  setenv("FORESIGHT_TEST_THREAD_FAILURE", "capture", 1);
+  capture_start_lock_probe = true;
+  foresight::ScopeExit cleanup([] {
+    capture_start_lock_probe = false;
+    unsetenv("FORESIGHT_CAPTURE_RUNTIME");
+    unsetenv("FORESIGHT_TEST_THREAD_FAILURE");
+  });
+  check(fs_capture_start("fixture", 0, 16000) == nullptr,
+        "capture thread construction failure rolls back publication");
+  check(
+      capture_start_lock_observed,
+      "capture publication serializes its thread assignment with finalization");
+}
 void retirement_admission_failure(const char *executable) {
   run_owner_subprocess(executable, "--retire-admission-failure");
 }
@@ -610,12 +679,21 @@ void probes(const char *executable) {
         "probe results acknowledge independently");
   release_owner(engine, fs_engine_retire(engine));
   const char *root = std::getenv("FORESIGHT_TEST_TEMP_ROOT");
-  check(root, "private root required");
-  auto marker = std::filesystem::path(root) /
-                ("owned-probe-v2-" + std::to_string(getpid()));
+#ifdef __APPLE__
+  if (!root)
+    root = "/private/var/tmp";
+#else
+  if (!root)
+    root = "/var/tmp";
+#endif
+  auto scratch =
+      (std::filesystem::canonical(root) / "owned-probe-v2-XXXXXX").string();
+  check(mkdtemp(scratch.data()), "private probe fixture root required");
+  auto marker = std::filesystem::path(scratch) / "child";
   foresight::ScopeExit cleanup([&] {
     unsetenv("FORESIGHT_OWNED_PROBE_MARKER");
     std::filesystem::remove(marker);
+    std::filesystem::remove(scratch);
   });
   setenv("FORESIGHT_OWNED_PROBE_MARKER", marker.c_str(), 1);
   engine = fs_owned_engine_create(executable, "/dev/null", 1, 0);
@@ -687,6 +765,11 @@ int main(int argc, char **argv) {
       }
     }
     // Deliberately retain both legacy handles and the joinable finished thread.
+    if (done)
+      until([&] {
+        return static_cast<Conversation *>(conversation)
+            ->thread_finished.load();
+      });
     return done ? 0 : 3;
   }
   if (argc > 1) {
@@ -705,10 +788,18 @@ int main(int argc, char **argv) {
           "separate owned v2 capability");
     std::cerr << "CASE live_legacy_exit\n";
     live_legacy_exit(argv[0]);
+    std::cerr << "CASE held_legacy_finalization\n";
+    held_legacy_finalization(argv[0]);
     std::cerr << "CASE retirement_admission_failure\n";
     retirement_admission_failure(argv[0]);
     std::cerr << "CASE legacy_failure\n";
     legacy_failure(argv[0]);
+    std::cerr << "CASE owned_finalization\n";
+    owned_finalization(argv[0]);
+    std::cerr << "CASE completed_legacy_finalization\n";
+    completed_legacy_finalization(argv[0]);
+    std::cerr << "CASE capture_start_finalization\n";
+    capture_start_finalization(argv[0]);
     std::cerr << "CASE generation\n";
     generation(argv[0]);
     std::cerr << "CASE independent_speech\n";

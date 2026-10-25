@@ -40,6 +40,41 @@ struct NativeHandles {
     operations.shutdown();
   }
 };
+// Process finalization never waits for abandoned work or destroys its owners.
+// A completed legacy thread can, however, release its pthread join bookkeeping.
+// Keep the complete resource graph alive even after detaching: this is not an
+// owned-v2 retirement acknowledgement or permission to unload its image.
+void finalize_legacy_threads(NativeHandles &state) noexcept {
+  try {
+    std::unique_lock registry(state.mutex, std::try_to_lock);
+    if (!registry.owns_lock())
+      return;
+    for (const auto &[address, control] : state.handles) {
+      if (control->identity || control->private_operations ||
+          control->closing || control->kind == NativeKind::engine ||
+          !control->object)
+        continue;
+      std::unique_lock users(control->users_mutex, std::try_to_lock);
+      if (!users.owns_lock() || control->users)
+        continue;
+      auto *object = control->object.get();
+      auto *worker =
+          control->kind == NativeKind::conversation
+              ? static_cast<Worker *>(static_cast<Conversation *>(object))
+          : control->kind == NativeKind::speech
+              ? static_cast<Worker *>(static_cast<Speech *>(object))
+              : static_cast<Worker *>(static_cast<Capture *>(object));
+      std::unique_lock life(worker->life, std::try_to_lock);
+      if (!life.owns_lock() || !worker->thread_finished.load() ||
+          !worker->thread.joinable())
+        continue;
+      worker->thread.detach();
+      control->closing = true;
+    }
+  } catch (...) {
+    // Retain all authority if the platform refuses the bookkeeping release.
+  }
+}
 NativeHandles &native_handles() {
   // Trivial pointer storage stays valid while process-finalization callbacks
   // run. Never access a destroyed C++ Holder from a still-owned actor.
@@ -47,6 +82,7 @@ NativeHandles &native_handles() {
     auto registry = std::make_unique<NativeHandles>();
     if (std::atexit([] {
           auto &state = native_handles();
+          finalize_legacy_threads(state);
           // Legacy-only users can unload after local synchronous cleanup.
           // Owned groups/quarantined authority end only with OS cleanup.
           bool empty = false;

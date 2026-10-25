@@ -75,6 +75,8 @@ struct PollWaitBoundary {
   std::atomic<bool> pause{false}, entered{false}, release{false};
 };
 PollWaitBoundary poll_wait_boundary;
+std::atomic<bool> capture_start_lock_probe{false},
+    capture_start_lock_observed{false};
 #endif
 struct Events {
   const std::shared_ptr<PollLifetime> poll_lifetime =
@@ -117,6 +119,7 @@ void retire_events(Events *events) {
 struct Worker : Events {
   std::thread thread;
   std::atomic<bool> cancel{false}, active{false};
+  std::atomic<bool> thread_finished{true};
   std::atomic<const std::atomic<bool> *> owner_closing{nullptr};
   bool cancelled() const {
     const auto *owner = owner_closing.load(std::memory_order_acquire);
@@ -147,8 +150,17 @@ struct Worker : Events {
   }
 };
 template <class Fn>
-std::thread start_worker_thread(const char *operation, Fn run) {
+std::thread start_worker_thread(Worker &worker, const char *operation, Fn run) {
 #if FORESIGHT_ENABLE_TEST_HOOKS
+  if (capture_start_lock_probe && std::strcmp(operation, "capture") == 0) {
+    std::thread probe([&] {
+      const bool acquired = worker.life.try_lock();
+      capture_start_lock_observed = !acquired;
+      if (acquired)
+        worker.life.unlock();
+    });
+    probe.join();
+  }
   const char *failure = std::getenv("FORESIGHT_TEST_THREAD_FAILURE");
   if (failure && std::string(failure) == operation)
     throw std::system_error(EAGAIN, std::generic_category(),
@@ -156,7 +168,14 @@ std::thread start_worker_thread(const char *operation, Fn run) {
 #else
   (void)operation;
 #endif
-  return std::thread(std::move(run));
+  worker.thread_finished = false;
+  foresight::ScopeExit rollback([&] { worker.thread_finished = true; });
+  auto thread = std::thread([&worker, run = std::move(run)]() mutable {
+    foresight::ScopeExit finished([&] { worker.thread_finished = true; });
+    run();
+  });
+  rollback.release();
+  return thread;
 }
 // The probe is a synchronous FFI call. A separate timer must stop its owned
 // process even if stdout has closed and run() is waiting for the supervisor.
@@ -1007,242 +1026,248 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
   c.active = true;
   std::string text = prompt;
   std::string json_schema = schema ? schema : "";
-  c.thread = start_worker_thread("generation", [&c, text, json_schema,
-                                                max_output_tokens, tools] {
-    auto &e = *c.engine;
-    bool settled = false;
-    foresight::guarded_worker(
-        [&] {
-          uint64_t seq = 0;
-          // Completion mode avoids runner UI/chat banners; app assembles
-          // structured prompt.
-          std::string utf8;
-          bool tool_answer_received = false;
-          bool tool_protocol_failed = false;
-          bool worker_error_received = false;
-          bool plain_text_received = false;
-          auto tool_line = [&](const std::string &line) {
-            bool request = line.starts_with("tool ");
-            bool model = line.starts_with("model ");
-            bool answer = line.starts_with("answer ");
-            bool delta = line.starts_with("delta ");
-            if (line.starts_with("error ") && !tool_answer_received) {
-              worker_error_received = true;
-              failure(c, c.request, seq, "runtime_failure", line.substr(6));
-              return;
-            }
-            if ((!request && !model && !answer && !delta) ||
-                tool_answer_received || (delta && c.awaiting_tool)) {
-              tool_protocol_failed = true;
-              failure(c, c.request, seq, "tool_protocol",
-                      "Invalid tool worker frame");
-              c.stop();
-              return;
-            }
-            if (answer)
-              tool_answer_received = true;
-            if (request || model)
-              c.awaiting_tool = true;
-            c.emit(event(delta     ? "model_delta"
-                         : model   ? "model_response"
-                         : request ? "tool_request"
-                                   : "tool_answer",
-                         c.request, seq++,
-                         ",\"text\":" + quote(line.substr(model || delta ? 6
-                                                          : request ? 5
-                                                                    : 7))));
-          };
-          std::vector<std::string> args;
-          bool duplex = tools;
-          // Keep request files alive through run(), including cancellation and
-          // exceptions. Destruction follows the child's owned cleanup/reap.
-          auto launch = foresight::one_shot_launch(
-              e.backend, e.runtime, e.model, text, max_output_tokens,
-              e.model_type, json_schema, tools);
-          {
-            args = std::move(launch.arguments);
-            if (e.backend == 1 && e.cpu_fallback) {
-              args.push_back("--backend");
-              args.push_back("cpu");
-            }
-            {
-              std::lock_guard lock(c.input_mutex);
-              c.input.push_back(std::move(launch.standard_input));
-            }
-            c.finish_input = e.backend != 1;
-            duplex = true;
-          }
-          int status;
-          if (e.persistent_protocol) {
-            // A persistent request owns its input; discard the one-shot stdin
-            // envelope.
-            {
-              std::lock_guard lock(c.input_mutex);
-              c.input.clear();
-            }
-            const auto payload =
-                "{\"prompt\":" + quote(text) +
-                (tools ? ",\"tools\":" : ",\"schema\":") +
-                (json_schema.empty() ? "null" : json_schema) +
-                ",\"max_output_tokens\":" + std::to_string(max_output_tokens) +
-                "}";
-            status =
-                run_persistent(e, c, payload, [&](const std::string &line) {
-                  if (tools) {
-                    tool_line(line);
-                    return;
-                  }
-                  if (line.starts_with("text ") &&
-                      foresight::json_string_literal(line.substr(5))) {
-                    plain_text_received = true;
-                    // The worker frames text as a JSON string, preserving
-                    // Unicode/newlines.
-                    c.emit(event("delta", c.request, seq++,
-                                 ",\"text\":" + line.substr(5)));
-                  } else {
-                    worker_error_received = true;
-                    failure(c, c.request, seq, "runtime_failure", line);
-                  }
-                });
-            if (tool_protocol_failed)
-              shutdown_persistent(e, false);
-          } else {
-            // A one-shot mode must not load another model alongside the
-            // retained worker.
-            shutdown_persistent(e);
-            status = run(
-                c, std::move(args),
-                [&](const char *data, size_t n) {
-                  utf8.append(data, n);
-                  if (tools) {
-                    size_t newline;
-                    while ((newline = utf8.find('\n')) != std::string::npos) {
-                      auto line = utf8.substr(0, newline);
-                      utf8.erase(0, newline + 1);
-                      tool_line(line);
-                      if (tool_protocol_failed)
-                        return;
-                    }
-                    return;
-                  }
-                  size_t complete = utf8.size() > 32 ? utf8.size() - 32 : 0;
-                  if (complete) {
-                    size_t lead = complete - 1;
-                    while (lead > 0 && (static_cast<unsigned char>(utf8[lead]) &
-                                        0xc0) == 0x80)
-                      --lead;
-                    unsigned char byte = utf8[lead];
-                    size_t width = byte < 128              ? 1
-                                   : (byte & 0xe0) == 0xc0 ? 2
-                                   : (byte & 0xf0) == 0xe0 ? 3
-                                                           : 4;
-                    if (complete - lead < width)
-                      complete = lead;
-                  }
-                  if (complete && !c.cancelled()) {
-                    c.emit(
-                        event("delta", c.request, seq++,
-                              ",\"text\":" + quote(utf8.substr(0, complete))));
-                    utf8.erase(0, complete);
-                  }
-                },
-                duplex);
-          }
-          c.finish_input = false;
-          if (!c.cancelled() && !tools) {
-            size_t marker = utf8.find(" [end of text]");
-            if (marker != std::string::npos)
-              utf8.erase(marker);
-            if (!utf8.empty())
-              c.emit(
-                  event("delta", c.request, seq++, ",\"text\":" + quote(utf8)));
-          }
-          std::string terminal =
-              (tool_protocol_failed || worker_error_received ||
-               (!tools && e.persistent_protocol && !plain_text_received &&
-                !c.cancelled()))
-                  ? "failed"
-              : c.cancelled() ? "cancelled"
-              : status == 0   ? "completed"
-                              : "failed";
-          if (tools && (!utf8.empty() || !tool_answer_received) &&
-              !c.cancelled())
-            terminal = "failed";
-          bool cpu_recovered = false;
-          if (terminal == "failed" && !c.cancelled() && !tool_protocol_failed &&
-              e.backend == 1 && !e.cpu_fallback &&
-              std::getenv("FORESIGHT_LITERT_BACKEND") &&
-              std::string(std::getenv("FORESIGHT_LITERT_BACKEND")) == "gpu") {
-            {
-              std::lock_guard lock(e.mu);
-              e.cpu_fallback = true;
-              e.state = "loading";
-            }
-            shutdown_persistent(e, false);
-            if (e.persistent_protocol) {
-              cpu_recovered = start_persistent(e, c);
-            } else {
-              std::vector<std::string> probe{e.runtime, "--model",   e.model,
-                                             "--probe", "--backend", "cpu"};
-              if (e.model_type) {
-                probe.push_back("--model-type");
-                probe.push_back(std::to_string(e.model_type));
+  c.thread = start_worker_thread(
+      c, "generation", [&c, text, json_schema, max_output_tokens, tools] {
+        auto &e = *c.engine;
+        bool settled = false;
+        foresight::guarded_worker(
+            [&] {
+              uint64_t seq = 0;
+              // Completion mode avoids runner UI/chat banners; app assembles
+              // structured prompt.
+              std::string utf8;
+              bool tool_answer_received = false;
+              bool tool_protocol_failed = false;
+              bool worker_error_received = false;
+              bool plain_text_received = false;
+              auto tool_line = [&](const std::string &line) {
+                bool request = line.starts_with("tool ");
+                bool model = line.starts_with("model ");
+                bool answer = line.starts_with("answer ");
+                bool delta = line.starts_with("delta ");
+                if (line.starts_with("error ") && !tool_answer_received) {
+                  worker_error_received = true;
+                  failure(c, c.request, seq, "runtime_failure", line.substr(6));
+                  return;
+                }
+                if ((!request && !model && !answer && !delta) ||
+                    tool_answer_received || (delta && c.awaiting_tool)) {
+                  tool_protocol_failed = true;
+                  failure(c, c.request, seq, "tool_protocol",
+                          "Invalid tool worker frame");
+                  c.stop();
+                  return;
+                }
+                if (answer)
+                  tool_answer_received = true;
+                if (request || model)
+                  c.awaiting_tool = true;
+                c.emit(event(delta     ? "model_delta"
+                             : model   ? "model_response"
+                             : request ? "tool_request"
+                                       : "tool_answer",
+                             c.request, seq++,
+                             ",\"text\":" + quote(line.substr(model || delta ? 6
+                                                              : request ? 5
+                                                                        : 7))));
+              };
+              std::vector<std::string> args;
+              bool duplex = tools;
+              // Keep request files alive through run(), including cancellation
+              // and exceptions. Destruction follows the child's owned
+              // cleanup/reap.
+              auto launch = foresight::one_shot_launch(
+                  e.backend, e.runtime, e.model, text, max_output_tokens,
+                  e.model_type, json_schema, tools);
+              {
+                args = std::move(launch.arguments);
+                if (e.backend == 1 && e.cpu_fallback) {
+                  args.push_back("--backend");
+                  args.push_back("cpu");
+                }
+                {
+                  std::lock_guard lock(c.input_mutex);
+                  c.input.push_back(std::move(launch.standard_input));
+                }
+                c.finish_input = e.backend != 1;
+                duplex = true;
               }
-              cpu_recovered =
-                  run(c, std::move(probe), [](const char *, size_t) {}) == 0;
-            }
-            if (cpu_recovered)
-              c.emit(event("state", c.request, seq++,
-                           ",\"state\":\"ready\",\"backend\":\"cpu\","
-                           "\"message\":\"GPU generation failed; CPU runtime "
-                           "rebuilt. Retry the answer.\""));
-          }
-          c.awaiting_tool = false;
-          if (terminal == "failed" && !tool_protocol_failed &&
-              !worker_error_received)
-            failure(c, c.request, seq, "runtime_failure",
-                    tools && status == 0
-                        ? "Tool worker exited without a complete answer"
-                        : "Generation runner exited with status " +
-                              std::to_string(status));
-          settled = true;
-          c.emit(event("done", c.request, seq++,
-                       ",\"status\":" + quote(terminal)));
-          {
-            std::lock_guard lock(e.mu);
-            e.busy = false;
-            e.state =
-                terminal == "failed" && !cpu_recovered ? "failed" : "ready";
-            e.error = terminal == "failed"
-                          ? (cpu_recovered ? "GPU generation failed; CPU "
-                                             "runtime ready for retry"
-                                           : "runtime_failure")
-                          : "";
-          }
-          c.active = false;
-        },
-        [&](const std::string &message) {
-          if (settled)
-            return;
-          uint64_t seq = 0;
-          failure(c, c.request, seq, "runtime_failure", message);
-          c.emit(
-              event("done", c.request, seq, ",\"status\":" + quote("failed")));
-          {
-            std::lock_guard lock(e.mu);
-            e.busy = false;
-            e.state = "failed";
-            e.error = "runtime_failure";
-          }
-        },
-        [&] {
-          c.finish_input = false;
-          c.awaiting_tool = false;
-          c.active = false;
-          std::lock_guard lock(e.mu);
-          e.busy = false;
-        });
-  });
+              int status;
+              if (e.persistent_protocol) {
+                // A persistent request owns its input; discard the one-shot
+                // stdin envelope.
+                {
+                  std::lock_guard lock(c.input_mutex);
+                  c.input.clear();
+                }
+                const auto payload =
+                    "{\"prompt\":" + quote(text) +
+                    (tools ? ",\"tools\":" : ",\"schema\":") +
+                    (json_schema.empty() ? "null" : json_schema) +
+                    ",\"max_output_tokens\":" +
+                    std::to_string(max_output_tokens) + "}";
+                status =
+                    run_persistent(e, c, payload, [&](const std::string &line) {
+                      if (tools) {
+                        tool_line(line);
+                        return;
+                      }
+                      if (line.starts_with("text ") &&
+                          foresight::json_string_literal(line.substr(5))) {
+                        plain_text_received = true;
+                        // The worker frames text as a JSON string, preserving
+                        // Unicode/newlines.
+                        c.emit(event("delta", c.request, seq++,
+                                     ",\"text\":" + line.substr(5)));
+                      } else {
+                        worker_error_received = true;
+                        failure(c, c.request, seq, "runtime_failure", line);
+                      }
+                    });
+                if (tool_protocol_failed)
+                  shutdown_persistent(e, false);
+              } else {
+                // A one-shot mode must not load another model alongside the
+                // retained worker.
+                shutdown_persistent(e);
+                status = run(
+                    c, std::move(args),
+                    [&](const char *data, size_t n) {
+                      utf8.append(data, n);
+                      if (tools) {
+                        size_t newline;
+                        while ((newline = utf8.find('\n')) !=
+                               std::string::npos) {
+                          auto line = utf8.substr(0, newline);
+                          utf8.erase(0, newline + 1);
+                          tool_line(line);
+                          if (tool_protocol_failed)
+                            return;
+                        }
+                        return;
+                      }
+                      size_t complete = utf8.size() > 32 ? utf8.size() - 32 : 0;
+                      if (complete) {
+                        size_t lead = complete - 1;
+                        while (lead > 0 &&
+                               (static_cast<unsigned char>(utf8[lead]) &
+                                0xc0) == 0x80)
+                          --lead;
+                        unsigned char byte = utf8[lead];
+                        size_t width = byte < 128              ? 1
+                                       : (byte & 0xe0) == 0xc0 ? 2
+                                       : (byte & 0xf0) == 0xe0 ? 3
+                                                               : 4;
+                        if (complete - lead < width)
+                          complete = lead;
+                      }
+                      if (complete && !c.cancelled()) {
+                        c.emit(event("delta", c.request, seq++,
+                                     ",\"text\":" +
+                                         quote(utf8.substr(0, complete))));
+                        utf8.erase(0, complete);
+                      }
+                    },
+                    duplex);
+              }
+              c.finish_input = false;
+              if (!c.cancelled() && !tools) {
+                size_t marker = utf8.find(" [end of text]");
+                if (marker != std::string::npos)
+                  utf8.erase(marker);
+                if (!utf8.empty())
+                  c.emit(event("delta", c.request, seq++,
+                               ",\"text\":" + quote(utf8)));
+              }
+              std::string terminal =
+                  (tool_protocol_failed || worker_error_received ||
+                   (!tools && e.persistent_protocol && !plain_text_received &&
+                    !c.cancelled()))
+                      ? "failed"
+                  : c.cancelled() ? "cancelled"
+                  : status == 0   ? "completed"
+                                  : "failed";
+              if (tools && (!utf8.empty() || !tool_answer_received) &&
+                  !c.cancelled())
+                terminal = "failed";
+              bool cpu_recovered = false;
+              if (terminal == "failed" && !c.cancelled() &&
+                  !tool_protocol_failed && e.backend == 1 && !e.cpu_fallback &&
+                  std::getenv("FORESIGHT_LITERT_BACKEND") &&
+                  std::string(std::getenv("FORESIGHT_LITERT_BACKEND")) ==
+                      "gpu") {
+                {
+                  std::lock_guard lock(e.mu);
+                  e.cpu_fallback = true;
+                  e.state = "loading";
+                }
+                shutdown_persistent(e, false);
+                if (e.persistent_protocol) {
+                  cpu_recovered = start_persistent(e, c);
+                } else {
+                  std::vector<std::string> probe{e.runtime,   "--model",
+                                                 e.model,     "--probe",
+                                                 "--backend", "cpu"};
+                  if (e.model_type) {
+                    probe.push_back("--model-type");
+                    probe.push_back(std::to_string(e.model_type));
+                  }
+                  cpu_recovered = run(c, std::move(probe),
+                                      [](const char *, size_t) {}) == 0;
+                }
+                if (cpu_recovered)
+                  c.emit(
+                      event("state", c.request, seq++,
+                            ",\"state\":\"ready\",\"backend\":\"cpu\","
+                            "\"message\":\"GPU generation failed; CPU runtime "
+                            "rebuilt. Retry the answer.\""));
+              }
+              c.awaiting_tool = false;
+              if (terminal == "failed" && !tool_protocol_failed &&
+                  !worker_error_received)
+                failure(c, c.request, seq, "runtime_failure",
+                        tools && status == 0
+                            ? "Tool worker exited without a complete answer"
+                            : "Generation runner exited with status " +
+                                  std::to_string(status));
+              settled = true;
+              c.emit(event("done", c.request, seq++,
+                           ",\"status\":" + quote(terminal)));
+              {
+                std::lock_guard lock(e.mu);
+                e.busy = false;
+                e.state =
+                    terminal == "failed" && !cpu_recovered ? "failed" : "ready";
+                e.error = terminal == "failed"
+                              ? (cpu_recovered ? "GPU generation failed; CPU "
+                                                 "runtime ready for retry"
+                                               : "runtime_failure")
+                              : "";
+              }
+              c.active = false;
+            },
+            [&](const std::string &message) {
+              if (settled)
+                return;
+              uint64_t seq = 0;
+              failure(c, c.request, seq, "runtime_failure", message);
+              c.emit(event("done", c.request, seq,
+                           ",\"status\":" + quote("failed")));
+              {
+                std::lock_guard lock(e.mu);
+                e.busy = false;
+                e.state = "failed";
+                e.error = "runtime_failure";
+              }
+            },
+            [&] {
+              c.finish_input = false;
+              c.awaiting_tool = false;
+              c.active = false;
+              std::lock_guard lock(e.mu);
+              e.busy = false;
+            });
+      });
   rollback.release();
   return 0;
 }
@@ -1495,7 +1520,7 @@ int fs_speech_finish(void *h, const char *id) {
             event("state", request, 0, ",\"phase\":\"speech_queued\"");
         s.emit(queued_event);
         queued_published = true;
-        s.thread = start_worker_thread("speech", [&s, request, samples] {
+        s.thread = start_worker_thread(s, "speech", [&s, request, samples] {
           bool settled = false;
           uint64_t seq = 1;
           foresight::guarded_worker(
@@ -1721,8 +1746,9 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate,
         // physical capture. Thread creation failure rolls back this owner.
         foresight::ScopeExit rollback_capture(
             [&] { rollback_unpublished_native(c); });
+        std::lock_guard life(c->life);
         c->active = true;
-        c->thread = start_worker_thread("capture", [c] {
+        c->thread = start_worker_thread(*c, "capture", [c] {
           foresight::guarded_worker(
               [&] {
 #ifdef __APPLE__
