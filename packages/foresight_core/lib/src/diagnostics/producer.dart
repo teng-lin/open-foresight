@@ -26,9 +26,14 @@ final class DiagnosticProducerBootstrap {
   int get slot => id;
   final DiagnosticProducerKind kind;
   final DiagnosticConfiguration configuration;
-  DiagnosticProducer connect() => _writer == null
-      ? DiagnosticProducer._inactive(configuration)
-      : DiagnosticProducer._(this);
+  SendPort? _executionVm;
+  DiagnosticProducer connect() {
+    if (_writer == null ||
+        (_executionVm != null && _executionVm != Isolate.current.controlPort)) {
+      return DiagnosticProducer._inactive(configuration);
+    }
+    return DiagnosticProducer._connect(this);
+  }
 
   // Only the owned paused-spawn helper wires this after binding the exact VM.
   // A transferable producer bootstrap does not convey retirement authority.
@@ -49,6 +54,76 @@ final class DiagnosticProducerBootstrap {
 enum DiagnosticDropReason { correlationCapacity }
 
 final class DiagnosticProducer {
+  // One logging owner per VM. A bootstrap cannot change that selection. The
+  // owner/private entry wrapper may replace an entirely unwound test context.
+  static SendPort? _connectionWriter;
+  static final _connections = List<DiagnosticProducer?>.filled(16, null);
+  static final _latestGenerations = Uint64List(16);
+  static bool _selectWriter(SendPort writer) {
+    if (_connectionWriter == writer) return true;
+    for (final old in _connections) {
+      if (old != null &&
+          (!old._closed || old._emitting || old._credits != null)) {
+        return false;
+      }
+    }
+    _connectionWriter = writer;
+    _connections.fillRange(0, 16, null);
+    _latestGenerations.fillRange(0, 16, 0);
+    return true;
+  }
+
+  static DiagnosticProducer _connect(DiagnosticProducerBootstrap bootstrap) {
+    final writer = bootstrap._writer!, slot = bootstrap.slot;
+    // Legacy unbound callers can select their first context. Subsequent writer
+    // selection belongs to the owner, never to a copied/stale capability.
+    _connectionWriter ??= writer;
+    if (_connectionWriter != writer ||
+        slot < 0 ||
+        slot >= 16 ||
+        bootstrap.generation <= _latestGenerations[slot]) {
+      return _inactive(bootstrap.configuration);
+    }
+    final old = _connections[slot];
+    if (old != null &&
+        (!old._closed || old._emitting || old._credits != null)) {
+      return _inactive(bootstrap.configuration);
+    }
+    _latestGenerations[slot] = bootstrap.generation;
+    return _connections[slot] = DiagnosticProducer._(bootstrap);
+  }
+
+  static void _denyConnection(
+    SendPort? writer,
+    int slot,
+    int generation, {
+    bool retired = false,
+  }) {
+    if (writer != _connectionWriter ||
+        slot < 0 ||
+        slot >= 16 ||
+        generation < _latestGenerations[slot]) {
+      return;
+    }
+    final old = _connections[slot];
+    if (generation == _latestGenerations[slot]) {
+      if (retired) old?._markRetired();
+    } else if (old == null ||
+        (old._closed && !old._emitting && old._credits == null)) {
+      _latestGenerations[slot] = generation;
+      _connections[slot] = null;
+    }
+  }
+
+  @visibleForTesting
+  static int get localEndpointCount =>
+      _connections.where((p) => p?._credits != null).length;
+  @visibleForTesting
+  static int get localRegistrationTimerCount =>
+      _connections.where((p) => p?._registrationDeadline != null).length;
+  @visibleForTesting
+  static int get retainedConnectionCount =>
+      _latestGenerations.where((generation) => generation != 0).length;
   static DiagnosticProducer? _inactiveProducer;
   static DiagnosticProducer _inactive(DiagnosticConfiguration configuration) =>
       _inactiveProducer ??= DiagnosticProducer._off(configuration);
@@ -66,9 +141,10 @@ final class DiagnosticProducer {
       generation = bootstrap.generation,
       configuration = bootstrap.configuration {
     _credits = RawReceivePort(_receive);
-    _registrationDeadline = Timer(LoggingSession.closeDeadline, () {
-      _shutdown(); // A lost registration is quarantined, never self-refunded.
-    });
+    _registrationDeadline = Timer(
+      LoggingSession.closeDeadline,
+      _registrationExpired,
+    );
     _writer!.send([
       'register',
       _slot,
@@ -91,7 +167,7 @@ final class DiagnosticProducer {
   int _bytes = 0, _records = 0, _priority = 0, _priorityCount = 0;
   int _dropped = 0, _rejected = 0, _correlationRefused = 0, _totalDropped = 0;
   int? _revokeNormal, _revokePriority;
-  bool _normalGranted = false, _priorityGranted = false;
+  bool _normalGranted = false, _priorityGranted = false, _hadAuthority = false;
   bool _closed = false,
       _accepted = false,
       _emitting = false,
@@ -103,6 +179,9 @@ final class DiagnosticProducer {
   int get dropped => _totalDropped;
   int get rejected => _rejected;
   int get correlationRefused => _correlationRefused;
+  @visibleForTesting
+  (int, bool, int, bool) get receivedGrantsForTesting =>
+      (_normalEpoch, _normalGranted, _priorityEpoch, _priorityGranted);
 
   void noteDropped(DiagnosticDropReason reason) {
     if (!active) return;
@@ -191,6 +270,7 @@ final class DiagnosticProducer {
         _registrationDeadline?.cancel();
         _registrationDeadline = null;
         _accepted = !_closed;
+        if (_accepted) _hadAuthority = true;
         _credits?.keepIsolateAlive = false;
         if (!_ready.isCompleted) _ready.complete();
         if (_closed) _scheduleControl();
@@ -365,6 +445,8 @@ final class DiagnosticProducer {
           _priorityCount,
           _dropped,
           _rejected,
+          _normalGranted,
+          _priorityGranted,
         ]);
         _bytes = _records = _priority = _priorityCount = 0;
         _dropped = _rejected = 0;
@@ -402,6 +484,17 @@ final class DiagnosticProducer {
         }
       }
     });
+  }
+
+  void _registrationExpired() {
+    if (_hadAuthority || _terminalSent) return;
+    final reply = _credits?.sendPort;
+    if (reply != null) {
+      _writer?.send(['withdraw', _slot, generation, 0, reply]);
+    }
+    // No encoder ever ran. The exact endpoint's withdrawal precedes any later
+    // reuse acknowledgement; closing locally does not refund writer leases.
+    _shutdown();
   }
 
   void _markRetired() {

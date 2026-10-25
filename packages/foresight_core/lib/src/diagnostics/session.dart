@@ -307,6 +307,9 @@ final class LoggingSession {
         exited,
         health,
       );
+      if (!DiagnosticProducer._selectWriter(port)) {
+        throw StateError('Diagnostic writer context is already active');
+      }
       currentSession = session;
       session._generations.fillRange(0, maximumProducers, generationSeed);
       session.producer = session
@@ -364,6 +367,11 @@ final class LoggingSession {
     final slot = _slots[bootstrap.id]!;
     if (slot.ownerExitSent) return;
     slot.ownerExitSent = true;
+    DiagnosticProducer._denyConnection(
+      _writer,
+      bootstrap.slot,
+      bootstrap.generation,
+    );
     _writer?.send(['owner_exit', bootstrap.id, bootstrap.generation, 0]);
   }
 
@@ -415,14 +423,15 @@ final class LoggingSession {
     Isolate? isolate;
     try {
       isolate = await Isolate.spawn(
-        entrypoint,
-        (bootstrap, message),
+        _activateProducer<T>,
+        (bootstrap, entrypoint, message),
         paused: true,
         onError: onError,
         onExit: onExit,
         errorsAreFatal: errorsAreFatal,
         debugName: debugName,
       );
+      bootstrap._executionVm = isolate.controlPort;
       if (_current(bootstrap)) {
         _writer?.send([
           'bind_vm',

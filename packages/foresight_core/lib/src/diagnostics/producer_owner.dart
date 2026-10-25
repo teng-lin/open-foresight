@@ -4,9 +4,9 @@ final class _OwnedProducer {
   _OwnedProducer(this.bootstrap);
   final DiagnosticProducerBootstrap bootstrap;
   DiagnosticProducer? local;
-  Completer<void>? completion;
+  final completion = Completer<void>();
   bool ownerExitSent = false;
-  Future<void> get retired => (completion ??= Completer<void>()).future;
+  Future<void> get retired => completion.future;
 }
 
 /// A reservation whose capability has not yet been made transferable.
@@ -81,6 +81,7 @@ extension _ProducerOwnership on LoggingSession {
         kind,
         configuration,
       );
+      bootstrap._executionVm = executingIsolate;
       final owned = _OwnedProducer(bootstrap);
       _slots[slot] = owned;
       _writer.send([
@@ -128,9 +129,32 @@ extension _ProducerOwnership on LoggingSession {
     if (slot < 0 || slot >= _slots.length) return;
     final owned = _slots[slot];
     if (owned == null || owned.bootstrap.generation != generation) return;
+    DiagnosticProducer._denyConnection(
+      _writer,
+      slot,
+      generation,
+      retired: true,
+    );
     owned.local?._markRetired();
     final completion = owned.completion;
-    if (completion != null && !completion.isCompleted) completion.complete();
+    if (!completion.isCompleted) completion.complete();
     _slots[slot] = null;
   }
+}
+
+// Only this private entry wrapper activates a transferable owned capability.
+// User code never receives the helper's temporarily unbound bootstrap.
+void _activateProducer<T>(
+  (
+    DiagnosticProducerBootstrap,
+    void Function((DiagnosticProducerBootstrap, T)),
+    T,
+  )
+  invocation,
+) {
+  final bootstrap = invocation.$1;
+  bootstrap._executionVm = Isolate.current.controlPort;
+  final writer = bootstrap._writer;
+  if (writer != null) DiagnosticProducer._selectWriter(writer);
+  invocation.$2((bootstrap, invocation.$3));
 }

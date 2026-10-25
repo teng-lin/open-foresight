@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:isolate';
+import 'dart:io';
 
 import 'package:foresight_core/src/diagnostics/session.dart';
 import 'package:foresight_core/src/read_coordinator.dart';
@@ -39,6 +40,12 @@ void _heldProducer((DiagnosticProducerBootstrap, SendPort) message) async {
   });
 }
 
+void _copyBootstraps((DiagnosticProducerBootstrap, SendPort) message) {
+  for (var i = 0; i < 32; i++) {
+    message.$2.send(message.$1);
+  }
+}
+
 void _unobservedExit(DiagnosticProducerBootstrap _) => Isolate.exit();
 
 void _foreignConnection((DiagnosticProducerBootstrap, SendPort) message) async {
@@ -53,7 +60,13 @@ void _foreignConnection((DiagnosticProducerBootstrap, SendPort) message) async {
       return {};
     },
   );
-  message.$2.send((producer.active, admitted, built));
+  message.$2.send((
+    producer.active,
+    admitted,
+    built,
+    DiagnosticProducer.localEndpointCount,
+    DiagnosticProducer.localRegistrationTimerCount,
+  ));
 }
 
 void _forwardedCapability(
@@ -214,23 +227,233 @@ void main() {
   );
 
   test(
-    'duplicate bootstrap connections never retire the accepted endpoint',
+    'ten thousand duplicate and copied connects allocate one endpoint',
     () async {
       final session = await _session();
       addTearDown(session.close);
+      final baselinePorts = DiagnosticProducer.localEndpointCount;
       final bootstrap = session.reserveProducer(DiagnosticProducerKind.domain);
-      final accepted = bootstrap.connect(), duplicate = bootstrap.connect();
-      await Future.wait([accepted.ready, duplicate.ready]);
+      final accepted = bootstrap.connect();
+      final inactive = bootstrap.connect();
+      for (var i = 0; i < 10000; i++) {
+        expect(identical(bootstrap.connect(), inactive), isTrue);
+      }
+      expect(DiagnosticProducer.localEndpointCount, baselinePorts + 1);
+      expect(DiagnosticProducer.localRegistrationTimerCount, 1);
+      await accepted.ready;
       expect(accepted.active, isTrue);
-      expect(duplicate.active, isFalse);
-      duplicate.close();
-      final state = await session.inspectBudgetForTesting();
+      final echo = ReceivePort();
+      addTearDown(echo.close);
+      await Isolate.spawn(_copyBootstraps, (bootstrap, echo.sendPort));
+      final copies = await echo.take(32).toList();
+      expect(copies, hasLength(32));
+      for (var i = 1; i < copies.length; i++) {
+        expect(identical(copies[i - 1], copies[i]), isFalse);
+      }
+      for (final copied in copies.cast<DiagnosticProducerBootstrap>()) {
+        expect(identical(copied, bootstrap), isFalse);
+        expect(identical(copied.connect(), inactive), isTrue);
+      }
+      inactive.close();
+      expect(accepted.active, isTrue);
+      expect(DiagnosticProducer.localEndpointCount, baselinePorts + 1);
+      expect(DiagnosticProducer.localRegistrationTimerCount, 0);
+      accepted.close();
+      await accepted.retired.timeout(const Duration(seconds: 2));
+      for (var i = 0; i < 10000; i++) {
+        expect(identical(bootstrap.connect(), inactive), isTrue);
+      }
+      expect(DiagnosticProducer.localEndpointCount, baselinePorts);
+      expect(DiagnosticProducer.retainedConnectionCount, lessThanOrEqualTo(16));
+      expect(session.retainedSlotCount, 1);
+    },
+  );
+
+  test(
+    'writer context replacement refuses old capabilities and active peers',
+    () async {
+      final first = await _session();
+      addTearDown(first.close);
+      final old = first.reserveProducer(DiagnosticProducerKind.domain);
+      final live = old.connect();
+      await live.ready;
+      final count = DiagnosticProducer.localEndpointCount;
+      final concurrent = await _session();
+      addTearDown(concurrent.close);
+      expect(concurrent.health.reason, DiagnosticHealthReason.writerFailed);
+      expect(concurrent.producer.active, isFalse);
+      expect(DiagnosticProducer.localEndpointCount, count);
+      expect(live.active, isTrue);
+      live.close();
+      await live.retired;
+      await first.close();
+      final replacement = await _session();
+      addTearDown(replacement.close);
+      final now = DiagnosticProducer.localEndpointCount;
+      expect(old.connect().active, isFalse);
+      expect(DiagnosticProducer.localEndpointCount, now);
+      expect(replacement.producer.active, isTrue);
+    },
+  );
+
+  test('retirement remains completed for late reservation observers', () async {
+    final session = await _session();
+    addTearDown(session.close);
+    final cancelled = session.reserveProducerForSpawn(
+      DiagnosticProducerKind.domain,
+    );
+    expect(cancelled.cancelNeverSpawned(), isTrue);
+    await eventually(() => session.retainedSlotCount == 1);
+    await cancelled.retired.timeout(const Duration(milliseconds: 100));
+    final exposed = session.reserveProducerForSpawn(
+      DiagnosticProducerKind.domain,
+    );
+    final producer = exposed.bootstrap.connect();
+    await producer.ready;
+    producer.close();
+    await eventually(() => session.retainedSlotCount == 1);
+    await exposed.retired.timeout(const Duration(milliseconds: 100));
+    final spawned = session.reserveProducerForSpawn(
+      DiagnosticProducerKind.domain,
+    );
+    await spawned.spawn(_exitBeforeRegistration, 0);
+    await eventually(() => session.retainedSlotCount == 1);
+    await spawned.retired.timeout(const Duration(milliseconds: 100));
+  });
+
+  for (final priority in [false, true]) {
+    test(
+      'close after revoke ACK before replacement grant priority=$priority',
+      () async {
+        final session = await _session();
+        addTearDown(session.close);
+        final producer = session.registerProducer(
+          DiagnosticProducerKind.domain,
+        );
+        await producer.ready;
+        await eventually(() async {
+          final state = await session.inspectBudgetForTesting();
+          final own = state.producers.singleWhere(
+            (p) => p.slot == producer.slot,
+          );
+          return own.normalBytes > 0 && producer.receivedGrantsForTesting.$2;
+        });
+        final event = priority
+            ? DiagnosticEvent.runtimeFailed
+            : DiagnosticEvent.serviceStarting;
+        var admitted = 0;
+        while (producer.emit(event, DiagnosticComponent.domain)) {
+          admitted++;
+          expect(admitted, lessThanOrEqualTo(224));
+        }
+        expect(admitted, greaterThan(0));
+        // pressure then inspect are ordered to the same writer. Its revoke is
+        // dispatched before inspectReply, whose continuation closes before the
+        // replacement grant queued by the revoke ACK can be dispatched here.
+        final before = await session.inspectBudgetForTesting();
+        final previous = before.producers.singleWhere(
+          (p) => p.slot == producer.slot,
+        );
+        final received = producer.receivedGrantsForTesting;
+        expect(
+          priority ? received.$4 : received.$2,
+          isFalse,
+          reason: 'closure must observe an ACKed but unreceived replacement',
+        );
+        expect(
+          priority ? received.$3 : received.$1,
+          (priority ? previous.priorityEpoch : previous.normalEpoch) + 1,
+        );
+        producer.close();
+        await producer.retired.timeout(const Duration(seconds: 2));
+        expect(session.retainedSlotCount, 1);
+        expect(
+          (await session.inspectBudgetForTesting()).producers.any(
+            (p) => p.quarantined,
+          ),
+          isFalse,
+        );
+        final replacement = session.registerProducer(
+          DiagnosticProducerKind.domain,
+        );
+        await replacement.ready;
+        expect(replacement.slot, producer.slot);
+        expect(replacement.generation, producer.generation + 1);
+        replacement.close();
+        await replacement.retired.timeout(const Duration(seconds: 2));
+      },
+    );
+  }
+
+  test(
+    'registration deadline withdraws only its own never-enabled endpoint',
+    () async {
+      final blocked = ReceivePort();
+      final output = blocked.sendPort;
+      addTearDown(blocked.close);
+      final session = await LoggingSession.startForTesting(
+        configuration: const DiagnosticConfiguration(),
+        role: DiagnosticRole.desktop,
+        sinkFactory: (path, id, role) {
+          output.send(true);
+          sleep(const Duration(milliseconds: 650));
+          return MemorySink(output);
+        },
+      );
+      addTearDown(session.close);
+      final acceptedBootstrap = session.reserveProducer(
+        DiagnosticProducerKind.domain,
+      );
+      final accepted = acceptedBootstrap.connect();
+      await accepted.ready;
+      session.selectProfile('private-profile');
       expect(
-        state.producers
-            .singleWhere((p) => p.slot == bootstrap.slot)
-            .quarantined,
+        session.producer.emit(
+          DiagnosticEvent.runtimeFailed,
+          DiagnosticComponent.domain,
+        ),
+        isTrue,
+      );
+      await blocked.first.timeout(const Duration(seconds: 2));
+      final duplicate = ReceivePort();
+      addTearDown(duplicate.close);
+      await Isolate.spawn(_foreignConnection, (
+        acceptedBootstrap,
+        duplicate.sendPort,
+      ));
+      final bootstrap = session.reserveProducer(DiagnosticProducerKind.domain);
+      final producer = bootstrap.connect();
+      await producer.ready;
+      expect(producer.active, isFalse);
+      expect(DiagnosticProducer.localRegistrationTimerCount, 0);
+      var built = false;
+      expect(
+        producer.emit(
+          DiagnosticEvent.runtimeFailed,
+          DiagnosticComponent.domain,
+          fields: () {
+            built = true;
+            return {};
+          },
+        ),
         isFalse,
       );
+      expect(built, isFalse);
+      await eventually(
+        () => session.retainedSlotCount == 2,
+        timeout: const Duration(seconds: 2),
+      );
+      final state = await session.inspectBudgetForTesting();
+      expect(state.producers.any((p) => p.quarantined), isFalse);
+      expect(bootstrap.connect().active, isFalse);
+      expect(await duplicate.first.timeout(const Duration(seconds: 2)), (
+        false,
+        false,
+        false,
+        0,
+        0,
+      ));
+      expect(accepted.active, isTrue);
       accepted.close();
       await accepted.retired.timeout(const Duration(seconds: 2));
       expect(session.retainedSlotCount, 1);
@@ -317,6 +540,8 @@ void main() {
         false,
         false,
         false,
+        0,
+        0,
       ));
       await owned.retired.timeout(const Duration(seconds: 2));
       expect(session.retainedSlotCount, 1);
@@ -693,7 +918,7 @@ void main() {
   );
 
   test(
-    '20 scoped SQL readers and32 failed opens retain only their owner producer',
+    'unadopted SQL reader compatibility retains only its explicit owner producer',
     () async {
       final root = createTestTempDirectorySync('diagnostic-readers-');
       final store = Store('${root.path}/profile.db');

@@ -129,6 +129,18 @@ final class _ProducerLedger {
           }
         }
         return true;
+      case 'withdraw':
+        final producer = matching(value);
+        // Endpoint identity matters: a timed-out rejected duplicate must never
+        // withdraw the accepted endpoint belonging to the same capability.
+        if (producer != null && value[3] == 0 && producer.port == value[4]) {
+          if (producer.sequence == 0) {
+            _retire(producer);
+          } else {
+            _quarantine(producer);
+          }
+        }
+        return true;
       case 'pressure':
         final producer = matching(value);
         if (producer == null || producer.quarantined) return true;
@@ -147,15 +159,19 @@ final class _ProducerLedger {
         return true;
       case 'terminal':
         final producer = matching(value);
-        if (producer == null || value.length != 12) return true;
-        // Terminal carries both credit epochs and the final sent sequence.
+        if (producer == null || value.length != 14) return true;
+        // A new-epoch grant can be in flight after its revoke ACK. A closed,
+        // unwound producer that never received it owns zero local balance;
+        // retirement releases the writer's corresponding unused grant.
+        final normalReceived = value[12] as bool;
+        final priorityReceived = value[13] as bool;
         if (value[3] != producer.normalEpoch ||
             value[4] != producer.priorityEpoch ||
             value[5] != producer.sequence ||
-            value[6] != producer.bytes ||
-            value[7] != producer.records ||
-            value[8] != producer.priority ||
-            value[9] != producer.priorityCount) {
+            value[6] != (normalReceived ? producer.bytes : 0) ||
+            value[7] != (normalReceived ? producer.records : 0) ||
+            value[8] != (priorityReceived ? producer.priority : 0) ||
+            value[9] != (priorityReceived ? producer.priorityCount : 0)) {
           _quarantine(producer);
           return true;
         }

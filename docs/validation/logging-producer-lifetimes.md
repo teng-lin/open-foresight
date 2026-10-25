@@ -49,7 +49,9 @@ idle normal credits cannot block a synchronous warning using priority credits.
 
 `LoggingSession.spawnProducer` creates a paused isolate, binds registration to
 that VM's control-port identity, installs its private direct exit response, then
-resumes it. A bootstrap copied into a different isolate receives no credits;
+resumes it. Its private entry wrapper binds the cloned capability before user
+code can see it. A bootstrap copied into a different isolate is rejected locally
+before creating a response port, deadline timer or register message;
 the transferable capability cannot install an exit listener for another VM. Startup does not await diagnostic readiness.
 `reserveProducerForSpawn` supports preflight cancellation only before its
 bootstrap capability is exposed. Its `spawn` method binds that same reservation
@@ -60,6 +62,12 @@ It never independently refunds an encoder or releases its scratch reservation.
 
 Cooperative close/revoke acknowledgements run after a synchronous builder
 unwinds. They include final sequence, both credit epochs and unused leases.
+Each terminal also states whether each current-epoch grant was actually received.
+After a revoke ACK, close may precede delivery of its replacement grant; exact
+epoch/sequence reconciliation releases that unused in-flight lease without
+quarantining the unwound endpoint. A never-enabled registration deadline sends
+an exact-response-port-bound withdrawal, so a rejected duplicate cannot withdraw
+the accepted endpoint. No timeout locally refunds writer credits.
 The writer settles those leases and acknowledges retirement to the coordinator
 before reuse. Queued records hold immutable kind/slot/generation snapshots and
 the charged producer string; later completion frees only the independent queue
@@ -69,7 +77,23 @@ legacy `kind:slot` grammar. This unit invents no schema2 identity.
 Excess/off/closed registrations reuse an inactive handle and have no builder
 authority. Registration refusal is one saturating health counter with at most
 one acknowledged notification edge outstanding. No historical producer list or
-unbounded exited-ticket set remains.
+unbounded exited-ticket set remains. Retirement completion is eager and stable,
+including when a caller first observes its future after the ACK.
+
+Each VM keeps one selected writer identity, sixteen endpoint entries and sixteen
+latest-generation numbers. Duplicate/pending/retired/copied connects reuse one
+inactive handle, without ports, timers or per-refusal messages. Only the owner
+and private spawn entry may select a new writer context after the old endpoints
+have completely unwound and closed. Copied older contexts cannot select
+themselves again. Product startup already permits one process session; a second
+concurrent `startForTesting` context refuses with closed writer-failure health
+while preserving the first. Sequential isolated test contexts remain supported.
+
+The legacy unbound `reserveProducer(...).connect()` API remains available for
+manual transfer. Each foreign VM may allocate its first bounded endpoint before
+writer rejection; arbitrary unbound foreign VMs are **not** a processwide control
+footprint proof. Final adoption must use the owned helper for actual cross-VM
+production sites. This checkpoint does not claim that migration is complete.
 
 ## Accounting and remaining qualification
 
@@ -88,9 +112,14 @@ installed acceptance remain separate integration requirements.
 The fixtures preserve16 synchronous warnings under normal saturation and add
 120 sequential cooperative completions,120 actual VM exits, pre-registration
 exits, stale/duplicate capabilities, exposed cancellation refusal,32 failed
-spawns,20 scoped SQL readers/32 failed opens, positive63-bit exhaustion, a
+spawns, positive63-bit exhaustion, a
 catalog-small cold100 trigger and old-generation queued attribution/credits.
-Focused check counts and original failures accompany each frozen commit.
+The20 scoped SQL reader/32 failed-open fixture checks compatibility with the
+unadopted baseline worker; only its explicitly registered owner uses diagnostics.
+It supplies no production worker-adoption evidence. New controls cover10,000
+duplicate connects before/after readiness and retirement,32 independently copied
+capabilities, late retirement observers, both revoke/close races and endpoint-bound
+registration withdrawal. Focused counts and original failures accompany each head.
 
 ## Async storage handoff assumptions
 
