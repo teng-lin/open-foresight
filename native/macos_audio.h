@@ -10,6 +10,13 @@ void fs_macos_capture_revoke(const std::shared_ptr<MacCaptureOwner> &) noexcept;
 void fs_macos_capture_close(const std::shared_ptr<MacCaptureOwner> &);
 bool fs_macos_capture_close_pending(const std::shared_ptr<MacCaptureOwner> &);
 enum class MacCaptureOutcome { stopped, cancelled, failed };
+enum class MacCaptureFailure { none, permission, unavailable };
+inline MacCaptureOutcome
+fs_macos_capture_terminal(bool cancelled, MacCaptureFailure failure) noexcept {
+  if (failure != MacCaptureFailure::none)
+    return MacCaptureOutcome::failed;
+  return cancelled ? MacCaptureOutcome::cancelled : MacCaptureOutcome::stopped;
+}
 // Invoked on the service worker, never on a Core Audio realtime callback.
 MacCaptureOutcome fs_macos_capture(
     const std::string &target, bool playback, int rate,

@@ -101,6 +101,19 @@ void checkPcmFormats() {
 }
 
 int main() {
+  REQUIRE(fs_macos_capture_terminal(false, MacCaptureFailure::none) ==
+          MacCaptureOutcome::stopped);
+  REQUIRE(fs_macos_capture_terminal(true, MacCaptureFailure::none) ==
+          MacCaptureOutcome::cancelled);
+  for (const auto failure :
+       {MacCaptureFailure::permission, MacCaptureFailure::unavailable}) {
+    // A later cancel must preserve an already observed terminal failure. The
+    // capture loop still delivers its buffered final PCM before this decision.
+    REQUIRE(fs_macos_capture_terminal(false, failure) ==
+            MacCaptureOutcome::failed);
+    REQUIRE(fs_macos_capture_terminal(true, failure) ==
+            MacCaptureOutcome::failed);
+  }
   @autoreleasepool {
     checkPcmFormats();
     // One-shot startup watchdog: converted PCM, including silent buffers,

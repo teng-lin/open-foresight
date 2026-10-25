@@ -37,3 +37,8 @@ before any permission request. This result still does not certify that an
 asynchronous Core Audio owner has retired; existing ownership gates remain.
 The producer fixture owns its supervisor and observes an actual nonzero
 false-executable child failure before cancelling and joining the capture thread.
+
+Terminal tap-watchdog and microphone-permission-revocation failures also retain
+their typed failure through the final buffered PCM drain. A pure terminal
+selector gives an already observed failure precedence over a later cancel; its
+permission/device cases are covered by the consent-free macOS audio unit.

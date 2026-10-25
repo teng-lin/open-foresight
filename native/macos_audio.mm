@@ -915,6 +915,7 @@ MacCaptureOutcome fs_macos_capture(
       bool configurationRestart = false;
       InputConfigurationRecovery configuration;
       uint64_t configurationChanges = 0;
+      auto terminalFailure = MacCaptureFailure::none;
       while (true) {
         if (cancel) {
           fs_macos_capture_revoke(owner);
@@ -988,6 +989,7 @@ MacCaptureOutcome fs_macos_capture(
             break;
           }
           if (action == TapWatchdogAction::failed) {
+            terminalFailure = MacCaptureFailure::unavailable;
             event(@"state", @"failed",
                   @"Microphone audio stream stalled (no buffers received).",
                   @"microphone_tap_timeout");
@@ -1006,6 +1008,7 @@ MacCaptureOutcome fs_macos_capture(
         if (std::chrono::steady_clock::now() - check >
             std::chrono::milliseconds(250)) {
           if (!playback && micStatus() != "authorized") {
+            terminalFailure = MacCaptureFailure::permission;
             event(@"state", @"failed",
                   @"Microphone access was revoked. Enable it in System "
                   @"Settings and restart recording.",
@@ -1035,6 +1038,10 @@ MacCaptureOutcome fs_macos_capture(
       }
       if (!frame.empty())
         pcm(frame); // Drain buffered final audio before returning.
+      if (fs_macos_capture_terminal(cancel.load(), terminalFailure) ==
+          MacCaptureOutcome::failed) {
+        return failed(terminalFailure == MacCaptureFailure::permission ? 7 : 9);
+      }
       if (watchdogFallback && !cancel) {
         emit(json(@{
           @"type" : @"gap",
@@ -1072,6 +1079,5 @@ MacCaptureOutcome fs_macos_capture(
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
   }
-  return cancel.load() ? MacCaptureOutcome::cancelled
-                       : MacCaptureOutcome::stopped;
+  return fs_macos_capture_terminal(cancel.load(), MacCaptureFailure::none);
 }
