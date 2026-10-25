@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'package:foresight_core/src/model_pins.dart';
@@ -8,6 +9,7 @@ import 'package:foresight_core/src/gemma_download.dart';
 import 'package:foresight_core/src/store.dart';
 
 void main() {
+  bootstrapSqlSupportFixture();
   test('speech candidates are pinned multilingual models', () {
     expect(speechModels.length, 5);
     expect(speechModels.any((m) => m.filename.contains('.en')), false);

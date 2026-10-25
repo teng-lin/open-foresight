@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
 import 'dart:async';
 import 'dart:io';
@@ -55,6 +56,7 @@ class CloseQueueService extends DelayedIndexService {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   test(
     'close refuses queued deletes before RPC and joins held index cancellation',
     () async {

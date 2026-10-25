@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -8,6 +9,7 @@ import 'package:foresight_core/src/graph_layout.dart';
 import 'package:foresight_core/src/force_layout.dart';
 
 void main() {
+  bootstrapSqlSupportFixture();
   test(
     'scene admits missing-vector text and excludes blank names and placeholders',
     () async {

@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:io';
 
 import 'package:foresight_core/src/domain.dart';
@@ -34,6 +35,7 @@ final class _RestoredDomain extends Domain {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory scratch;
   late Store store;
   late DomainQueries queries;

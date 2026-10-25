@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_core/src/model_acquisition.dart'
     show ModelTransportException;
 import 'package:foresight_core/src/model_asset_failure.dart';
@@ -62,6 +63,7 @@ class NeverSettledPreflight implements Process {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Store store;
   late Directory root;
   late GemmaModel model;

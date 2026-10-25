@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_core/src/application_services/answer_coordinator.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_test_support/test_paths.dart';
@@ -165,6 +166,7 @@ class OperationsAnswers extends AnswerGateway {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory root;
   late OperationsDomain domain;
   late Application app;

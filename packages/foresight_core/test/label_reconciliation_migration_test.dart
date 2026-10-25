@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/persistence_fixtures.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:convert';
@@ -6,6 +7,7 @@ import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
 import 'package:test/test.dart';
 
 void main() {
+  bootstrapSqlSupportFixture();
   test('legacy label repair runs once and tolerates malformed JSON', () {
     final directory = createTestTempDirectorySync('label-repair-');
     addTearDown(() => directory.deleteSync(recursive: true));

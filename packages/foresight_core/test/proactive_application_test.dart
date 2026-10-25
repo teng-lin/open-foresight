@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_core/src/generated/transcript_index.pb.dart'
     as transcript;
 import 'package:foresight_test_support/transcript_index_service.dart';
@@ -146,6 +147,7 @@ class _Runtime extends NativeRuntime {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory directory;
   late Store store;
   late Server server;

@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/persistence_fixtures.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/application.dart';
@@ -8,6 +9,7 @@ import 'package:test/test.dart';
 import 'package:foresight_core/src/store.dart';
 
 void main() {
+  bootstrapSqlSupportFixture();
   test('URL reimport deduplicates edited sources by source_uri', () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     server.listen((request) async {

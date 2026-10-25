@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:convert';
 
 import 'package:foresight_core/desktop.dart'
@@ -26,6 +27,7 @@ class InterleavedScopeStore extends Store {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Store writer;
   late SqliteStoreReader reader;
   late String path;

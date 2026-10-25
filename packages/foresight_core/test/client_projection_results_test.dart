@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_core/desktop.dart';
 import 'package:foresight_core/foresight_core.dart' show Store, Domain, Helper;
 import 'package:foresight_core/src/application.dart';
@@ -29,6 +30,7 @@ final invalidResponse = isA<RpcError>()
     );
 
 void main() {
+  bootstrapSqlSupportFixture();
   test(
     'actual service projection replies retain their nullable SQL fields',
     () async {

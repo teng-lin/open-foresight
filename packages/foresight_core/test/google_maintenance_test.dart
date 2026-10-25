@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:convert';
 
@@ -34,6 +35,7 @@ class RejectingMaintenanceSecrets implements SecretStore {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory directory;
   late Store store;
   late Helper helper;

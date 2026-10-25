@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -77,6 +78,7 @@ class WorkflowRuntime extends NativeRuntime {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory root;
   late Store store;
   late Helper helper;

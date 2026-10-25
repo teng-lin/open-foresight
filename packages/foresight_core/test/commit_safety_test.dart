@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_test_support/google_connections.dart'
@@ -36,6 +37,7 @@ Matcher throwsRpc(RpcErrorCode code, [Object? message]) => throwsA(
 );
 
 void main() {
+  bootstrapSqlSupportFixture();
   group('application', () {
     late Directory directory;
     late Store store;

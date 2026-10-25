@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:convert';
 import 'dart:io';
@@ -7,6 +8,7 @@ import 'package:foresight_core/src/model_setup.dart';
 import 'package:foresight_core/src/store.dart';
 
 void main() {
+  bootstrapSqlSupportFixture();
   test(
     'verified embedding bundle installs GPU selection without replacing user models',
     () async {

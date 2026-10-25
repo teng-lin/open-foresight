@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -59,6 +60,7 @@ class _RegistryOnlyHttp implements HttpClient {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory root;
   late GoogleFixture fixture;
   late _MediaAuth auth;

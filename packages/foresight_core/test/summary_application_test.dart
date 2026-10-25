@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -61,6 +62,7 @@ class SummaryRuntime extends NativeRuntime {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory directory;
   late Store store;
   late AdapterDomain domain;

@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:foresight_core/foresight_core.dart';
@@ -8,6 +9,7 @@ import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
 
 void main() {
+  bootstrapSqlSupportFixture();
   test(
     'portable dedicated worker validates model bytes and raw protocol before registration',
     () async {

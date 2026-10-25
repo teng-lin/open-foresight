@@ -1,3 +1,4 @@
+import '../sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:isolate';
@@ -100,6 +101,7 @@ Future<LoggingSession> _session() => LoggingSession.startForTesting(
 );
 
 void main() {
+  bootstrapSqlSupportFixture();
   test(
     'catalog-small cold100 admits before five seconds using only normal credits',
     () async {

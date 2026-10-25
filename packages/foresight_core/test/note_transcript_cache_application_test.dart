@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/google_connections.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_test_support/native_fixture.dart';
@@ -173,6 +174,7 @@ Future<void> withTranscriptFixture(
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   test(
     'a chained live enhancement never exposes a zero producer count between producers',
     () async {

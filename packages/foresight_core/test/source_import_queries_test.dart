@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:typed_data';
 
 import 'package:foresight_core/src/persistence/source_admission_queries.dart';
@@ -5,6 +6,7 @@ import 'package:foresight_core/src/store.dart';
 import 'package:test/test.dart';
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Store store;
   late SourceAdmissionQueries queries;
   setUp(() {

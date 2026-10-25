@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:convert';
 import 'package:test/test.dart';
@@ -8,6 +9,7 @@ import 'package:foresight_core/src/graph_persistence.dart';
 import 'package:foresight_core/src/graph_clusters.dart';
 
 void main() {
+  bootstrapSqlSupportFixture();
   test('registered scene does not reuse pre-recovery PCA cache identity', () {
     final dir = createTestTempDirectorySync('pca-cache-version-');
     addTearDown(() {

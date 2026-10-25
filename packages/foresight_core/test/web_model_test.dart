@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/application.dart';
 import 'dart:convert';
@@ -7,6 +8,7 @@ import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
 import 'package:test/test.dart';
 
 void main() {
+  bootstrapSqlSupportFixture();
   final env = Platform.environment;
   test(
     'real model searches and persists a cited controlled answer',

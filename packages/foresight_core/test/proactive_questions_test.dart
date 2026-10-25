@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/persistence_fixtures.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
@@ -8,6 +9,7 @@ import 'package:foresight_core/src/proactive_questions.dart';
 import 'package:foresight_core/src/reference_query_detector.dart';
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory directory;
   late Store store;
   late ProactiveQuestions queue;

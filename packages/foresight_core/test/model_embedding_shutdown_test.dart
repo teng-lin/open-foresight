@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -43,6 +44,7 @@ class HeldModelUpdate extends RagServiceBase {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   test(
     'shutdown cancels only the owned embedding update and joins its configuration lease',
     () async {

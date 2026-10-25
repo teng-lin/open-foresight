@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:foresight_core/foresight_core.dart';
@@ -53,6 +54,7 @@ class HeldNotesRuntime extends NativeRuntime {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   for (final cleared in [false, true]) {
     test(
       'yielded live Notes ${cleared ? "retires retry after clear and ID reuse" : "retains retry in the same workspace"}',

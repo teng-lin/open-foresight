@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
@@ -33,6 +34,7 @@ class _OwnedQueryRuntime implements QueryCompletionRuntime {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory root;
   late Store store;
   late Helper helper;

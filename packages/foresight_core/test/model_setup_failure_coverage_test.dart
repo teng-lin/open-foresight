@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:io';
 
 import 'package:foresight_core/src/model_setup.dart';
@@ -7,6 +8,7 @@ import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
 
 void main() {
+  bootstrapSqlSupportFixture();
   test(
     'lost-registry recovery preserves local generation assets when bundled runtime is absent',
     () async {
