@@ -20,7 +20,15 @@ import sys
 from typing import Never, Sequence
 
 DEFAULT_CONTRACT = "tools/diagnostic_build_inputs.json"
-NATIVE_ALGORITHM = "foresight-diagnostic-native-v1"
+NATIVE_ALGORITHM = "foresight-diagnostic-native-v2"
+NATIVE_RECIPE_INPUTS = (
+    "cmake/ForesightDiagnostics.cmake",
+    "cmake/DiagnosticProducts/CMakeLists.txt",
+    "cmake/VerifyDiagnosticToolchain.cmake",
+    "cmake/PublishDiagnosticProducts.cmake",
+    "cmake/ProduceRuntimeSupport.cmake",
+    "cmake/NormalizeRuntimeSupport.cmake",
+)
 WORKER_ALGORITHM = "foresight-diagnostic-worker-v1"
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 VERSION = re.compile(r"[0-9]{1,10}(?:\.[0-9]{1,10}){1,3}\Z")
@@ -605,6 +613,11 @@ class Contract:
             "flags": list(flags),
             "inputs": inputs,
         }
+        if self.scope == "components":
+            record["producer_inputs"] = {
+                name: hashlib.sha256(_read(self.root, name, seen=seen)).hexdigest()
+                for name in NATIVE_RECIPE_INPUTS
+            }
         return {
             "schema": 1,
             "kind": "native-components",

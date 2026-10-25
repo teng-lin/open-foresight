@@ -104,7 +104,9 @@ def _artifact(build: Path, name: str, marker: bytes | None = None) -> dict[str, 
         os.close(descriptor)
 
 
-def collect(root: Path, build: Path) -> dict[str, Any]:
+def collect(
+    root: Path, build: Path, *, sql_product: Path | None = None
+) -> dict[str, Any]:
     """Require available diagnostics and exact current native and SQL inputs."""
     state = _json(build, "diagnostic-products.json")
     if type(state.get("schema")) is not int or state.get("schema") != 1:
@@ -150,6 +152,12 @@ def collect(root: Path, build: Path) -> dict[str, Any]:
     ):
         raise ProductError("toolchain_metadata_mismatch")
     suffix = {"linux-x86_64": "so", "darwin-arm64": "dylib"}[record["target"]]
+    if (
+        sql_product is not None
+        and sql_product.absolute()
+        != (build / f"libforesight_sql_support.{suffix}").absolute()
+    ):
+        raise ProductError("unexpected_sql_product_location")
     sql = _json(build, "diagnostic-sql-inputs.json")
     sql_id = verify_sql_record(root, sql)
     if (
@@ -195,15 +203,19 @@ def collect(root: Path, build: Path) -> dict[str, Any]:
     }
 
 
-def verify(root: Path, build: Path) -> dict[str, Any]:
+def verify(
+    root: Path, build: Path, *, sql_product: Path | None = None
+) -> dict[str, Any]:
     receipt = _json(build, RECEIPT)
-    if receipt != collect(root, build):
+    if receipt != collect(root, build, sql_product=sql_product):
         raise ProductError("runtime_support_receipt_mismatch")
     return receipt
 
 
-def write(root: Path, build: Path) -> dict[str, Any]:
-    receipt = collect(root, build)
+def write(
+    root: Path, build: Path, *, sql_product: Path | None = None
+) -> dict[str, Any]:
+    receipt = collect(root, build, sql_product=sql_product)
     temporary = build / f".{RECEIPT}.{os.getpid()}"
     created = False
     try:
@@ -225,9 +237,12 @@ def main() -> int:
         "--build", type=Path, required=True, help="Native binary directory"
     )
     parser.add_argument("--verify", action="store_true")
+    parser.add_argument("--sql-product", type=Path)
     args = parser.parse_args()
     try:
-        (verify if args.verify else write)(args.root, args.build)
+        (verify if args.verify else write)(
+            args.root, args.build, sql_product=args.sql_product
+        )
     except (OSError, ValueError, KeyError, TypeError, IdentityError) as error:
         print(
             f"Runtime support products refused: {type(error).__name__}: {error}",

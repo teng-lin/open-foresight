@@ -19,6 +19,8 @@ foreach(_product IN ITEMS "${DIAGNOSTIC_SUPPORT}" "${DIAGNOSTIC_LAUNCHER}")
   if(_size LESS 1 OR _size GREATER 67108864)
     message(FATAL_ERROR "Diagnostic linked product size refused")
   endif()
+  file(CHMOD "${_product}" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
+    GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
   file(READ "${_product}" _bytes HEX)
   string(REGEX MATCHALL "00${_marker}00" _markers "${_bytes}")
   list(LENGTH _markers _count)

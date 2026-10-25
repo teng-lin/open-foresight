@@ -8,6 +8,7 @@ set(FORESIGHT_DIAGNOSTIC_TOOLCHAIN_SHA256 "" CACHE STRING
     "Optional expected fingerprint of actual selected public compiler/OS metadata")
 set(FORESIGHT_DIAGNOSTIC_PRODUCTS_AVAILABLE FALSE CACHE INTERNAL "Current diagnostic build availability" FORCE)
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-products.json" "{\"schema\":1,\"available\":false}\n")
+file(REMOVE "${CMAKE_CURRENT_BINARY_DIR}/runtime-support-build.json")
 file(REMOVE "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-native-inputs.json"
   "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-toolchain-metadata.json")
 macro(_diag_unavailable)
@@ -17,12 +18,25 @@ macro(_diag_unavailable)
   message(STATUS "Diagnostic products unavailable: identity or recipe was refused")
   return()
 endmacro()
-if(NOT CMAKE_C_COMPILER_ID MATCHES "^(GNU|AppleClang|Clang)$")
+if(CMAKE_VERSION VERSION_LESS 3.24 OR
+   NOT CMAKE_C_COMPILER_ID MATCHES "^(GNU|AppleClang|Clang)$")
   _diag_unavailable()
 endif()
 if(NOT CMAKE_BUILD_TYPE OR CMAKE_CONFIGURATION_TYPES)
   _diag_unavailable()
 endif()
+if(NOT EXISTS "/usr/bin/env" OR NOT EXISTS "/usr/bin/make")
+  _diag_unavailable()
+endif()
+set(_diag_temp "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-product-temp")
+if(IS_SYMLINK "${_diag_temp}")
+  _diag_unavailable()
+endif()
+file(MAKE_DIRECTORY "${_diag_temp}")
+file(CHMOD "${_diag_temp}" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE)
+# The compiler, make and metadata probes receive no ambient recipe environment.
+set(_diag_clean_environment /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C
+  "TMPDIR=${_diag_temp}")
 # Keep the optional lookup local: never replace Python3 selection used by the
 # application/root native tests. An explicit selected interpreter is honored.
 if(Python3_EXECUTABLE)
@@ -33,7 +47,7 @@ endif()
 if(NOT _diag_python OR CMAKE_CROSSCOMPILING)
   _diag_unavailable()
 endif()
-execute_process(COMMAND "${_diag_python}" -I -c
+execute_process(COMMAND ${_diag_clean_environment} "${_diag_python}" -I -c
   "import sys; print('.'.join(map(str, sys.version_info[:2])))"
   RESULT_VARIABLE _diag_python_status OUTPUT_VARIABLE _diag_python_version
   ERROR_QUIET TIMEOUT 10 OUTPUT_STRIP_TRAILING_WHITESPACE)
@@ -101,7 +115,7 @@ elseif(APPLE AND CMAKE_OSX_SYSROOT AND NOT CMAKE_OSX_SYSROOT STREQUAL "macosx")
   _diag_unavailable()
 endif()
 execute_process(
-  COMMAND "${_diag_python}" -I "${_diag_root}/tools/diagnostic_toolchain_metadata.py"
+  COMMAND ${_diag_clean_environment} "${_diag_python}" -I "${_diag_root}/tools/diagnostic_toolchain_metadata.py"
     --target "${_diag_target}" --compiler "${CMAKE_C_COMPILER}"
     --family "${_diag_family}" --version "${CMAKE_C_COMPILER_VERSION}" ${_diag_sdk_arguments}
   RESULT_VARIABLE _diag_metadata_status OUTPUT_VARIABLE _diag_metadata
@@ -144,7 +158,7 @@ foreach(_diag_flag IN LISTS _diag_identity_flags)
   list(APPEND _diag_flag_arguments "--flag=${_diag_flag}")
 endforeach()
 execute_process(
-  COMMAND "${_diag_python}" -I "${_diag_root}/tools/diagnostic_build_identity.py"
+  COMMAND ${_diag_clean_environment} "${_diag_python}" -I "${_diag_root}/tools/diagnostic_build_identity.py"
     native --root "${_diag_root}" --target "${_diag_target}"
     --compiler-family "${_diag_family}"
     --compiler-version "${CMAKE_C_COMPILER_VERSION}"
@@ -176,58 +190,30 @@ set(_diag_support_sources
 set(_diag_launcher_sources
   "${_diag_root}/native/diagnostic_launcher.c"
   "${_diag_root}/native/diagnostic_protocol.c")
-add_library(foresight_diagnostic_support SHARED ${_diag_support_sources})
-add_executable(foresight-diagnostic-launcher ${_diag_launcher_sources})
-foreach(_diag_product IN ITEMS foresight_diagnostic_support foresight-diagnostic-launcher)
-  target_compile_options(${_diag_product} PRIVATE ${_diag_compile_flags})
-  target_compile_definitions(${_diag_product} PRIVATE
-    FORESIGHT_DIAGNOSTIC_NATIVE_ID="${FORESIGHT_DIAGNOSTIC_NATIVE_ID}")
-  target_link_libraries(${_diag_product} PRIVATE Threads::Threads)
-endforeach()
-set(_diag_expected_target_options ${_diag_directory_flags} ${_diag_compile_flags})
-set(_diag_expected_definition "FORESIGHT_DIAGNOSTIC_NATIVE_ID=\"${FORESIGHT_DIAGNOSTIC_NATIVE_ID}\"")
+# Parent project targets are scheduling handles only. Their source/usage/rule
+# properties cannot contribute code to the dedicated product-only sub-build.
+set(_diag_support "${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_SHARED_LIBRARY_PREFIX}foresight_diagnostic_support${CMAKE_SHARED_LIBRARY_SUFFIX}")
+set(_diag_launcher "${CMAKE_CURRENT_BINARY_DIR}/foresight-diagnostic-launcher")
+set(_diag_expected_build_type "${CMAKE_BUILD_TYPE}")
 set(_diag_expected_global_flags "${CMAKE_C_FLAGS};${CMAKE_C_FLAGS_${_diag_configuration}}")
-foreach(_diag_product IN ITEMS foresight_diagnostic_support foresight-diagnostic-launcher)
-  set_target_properties(${_diag_product} PROPERTIES C_STANDARD 11
-    C_STANDARD_REQUIRED ON C_EXTENSIONS OFF INTERPROCEDURAL_OPTIMIZATION OFF
-    INTERPROCEDURAL_OPTIMIZATION_${_diag_configuration} OFF
-    UNITY_BUILD OFF C_VISIBILITY_PRESET default LINKER_LANGUAGE C
-    SKIP_BUILD_RPATH ON BUILD_RPATH "" INSTALL_RPATH "" LINKER_TYPE ""
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
-endforeach()
-set_target_properties(foresight_diagnostic_support PROPERTIES POSITION_INDEPENDENT_CODE ON)
-set_target_properties(foresight-diagnostic-launcher PROPERTIES POSITION_INDEPENDENT_CODE OFF)
-set(_diag_expected_compiler "${CMAKE_C_COMPILER}")
+set(_diag_expected_target_options ${_diag_directory_flags} ${_diag_compile_flags})
 set(_diag_expected_os_context "${CMAKE_OSX_SYSROOT};${CMAKE_OSX_ARCHITECTURES};${CMAKE_OSX_DEPLOYMENT_TARGET}")
 function(_diag_recipe_failed)
   file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-products.json" "{\"schema\":1,\"available\":false}\n")
   message(FATAL_ERROR "Diagnostic effective product recipe changed")
 endfunction()
 function(_diag_validate_products)
+  if(NOT CMAKE_BUILD_TYPE STREQUAL _diag_expected_build_type OR
+     NOT "${CMAKE_C_FLAGS};${CMAKE_C_FLAGS_${_diag_configuration}}" STREQUAL "${_diag_expected_global_flags}" OR
+     NOT "${CMAKE_OSX_SYSROOT};${CMAKE_OSX_ARCHITECTURES};${CMAKE_OSX_DEPLOYMENT_TARGET}" STREQUAL "${_diag_expected_os_context}")
+    _diag_recipe_failed()
+  endif()
   get_directory_property(_definitions COMPILE_DEFINITIONS)
   get_directory_property(_includes INCLUDE_DIRECTORIES)
   get_directory_property(_options COMPILE_OPTIONS)
   get_directory_property(_link_options LINK_OPTIONS)
   if(_definitions OR _includes OR _link_options OR
-     NOT "${_options}" STREQUAL "${_diag_directory_flags}" OR
-     NOT "${CMAKE_C_FLAGS};${CMAKE_C_FLAGS_${_diag_configuration}}" STREQUAL "${_diag_expected_global_flags}" OR
-     CMAKE_EXE_LINKER_FLAGS OR CMAKE_SHARED_LINKER_FLAGS OR
-     CMAKE_EXE_LINKER_FLAGS_${_diag_configuration} OR CMAKE_SHARED_LINKER_FLAGS_${_diag_configuration} OR
-     CMAKE_INTERPROCEDURAL_OPTIMIZATION OR CMAKE_C_COMPILER_LAUNCHER OR
-     CMAKE_C_LINKER_LAUNCHER OR CMAKE_SYSROOT OR CMAKE_C_COMPILER_TARGET OR
-     CMAKE_C_COMPILER_EXTERNAL_TOOLCHAIN OR CMAKE_C_STANDARD_INCLUDE_DIRECTORIES OR
-     CMAKE_C_STANDARD_LIBRARIES OR CMAKE_UNITY_BUILD)
-    _diag_recipe_failed()
-  endif()
-  foreach(_initializer IN LISTS _diag_unbound_initializers)
-    if(${_initializer})
-      _diag_recipe_failed()
-    endif()
-  endforeach()
-  if(NOT "${CMAKE_C_COMPILER}" STREQUAL "${_diag_expected_compiler}" OR
-     NOT "${CMAKE_C_LINK_FLAGS}" STREQUAL "${_diag_expected_platform_link_flags}" OR
-     NOT "${CMAKE_OSX_SYSROOT};${CMAKE_OSX_ARCHITECTURES};${CMAKE_OSX_DEPLOYMENT_TARGET}" STREQUAL "${_diag_expected_os_context}")
+     NOT "${_options}" STREQUAL "${_diag_directory_flags}")
     _diag_recipe_failed()
   endif()
   foreach(_property IN ITEMS RULE_LAUNCH_COMPILE RULE_LAUNCH_LINK LINK_DIRECTORIES)
@@ -237,9 +223,37 @@ function(_diag_validate_products)
       _diag_recipe_failed()
     endif()
   endforeach()
+  foreach(_product IN ITEMS foresight_diagnostic_support foresight-diagnostic-launcher)
+    foreach(_property IN ITEMS COMPILE_DEFINITIONS INCLUDE_DIRECTORIES
+        LINK_OPTIONS LINK_DIRECTORIES COMPILE_FLAGS LINK_FLAGS BUILD_RPATH INSTALL_RPATH
+        C_VISIBILITY_PRESET INTERPROCEDURAL_OPTIMIZATION_${_diag_configuration})
+      get_target_property(_value ${_product} ${_property})
+      if(_value)
+        _diag_recipe_failed()
+      endif()
+    endforeach()
+    get_target_property(_options ${_product} COMPILE_OPTIONS)
+    if("${_options}" MATCHES "-NOTFOUND$")
+      set(_options "")
+    endif()
+    if(NOT "${_options}" STREQUAL "${_diag_directory_flags}")
+      _diag_recipe_failed()
+    endif()
+    get_target_property(_sources ${_product} SOURCES)
+    if(_product STREQUAL "foresight_diagnostic_support")
+      set(_expected "${_diag_support_sources}")
+    else()
+      set(_expected "${_diag_launcher_sources}")
+    endif()
+    if(NOT "${_sources}" STREQUAL "${_expected}")
+      _diag_recipe_failed()
+    endif()
+  endforeach()
   foreach(_property IN ITEMS INTERFACE_COMPILE_OPTIONS INTERFACE_COMPILE_DEFINITIONS
-      INTERFACE_INCLUDE_DIRECTORIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES INTERFACE_LINK_OPTIONS
-      INTERFACE_LINK_LIBRARIES INTERFACE_LINK_DIRECTORIES INTERFACE_COMPILE_FEATURES)
+      INTERFACE_INCLUDE_DIRECTORIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+      INTERFACE_LINK_OPTIONS INTERFACE_LINK_LIBRARIES INTERFACE_LINK_DIRECTORIES
+      INTERFACE_COMPILE_FEATURES INTERFACE_SOURCES INTERFACE_PRECOMPILE_HEADERS
+      INTERFACE_LINK_LIBRARIES_DIRECT)
     get_target_property(_value Threads::Threads ${_property})
     if(_value)
       _diag_recipe_failed()
@@ -247,92 +261,17 @@ function(_diag_validate_products)
   endforeach()
   foreach(_source IN LISTS _diag_support_sources _diag_launcher_sources)
     foreach(_property IN ITEMS COMPILE_OPTIONS COMPILE_DEFINITIONS COMPILE_FLAGS
-        INCLUDE_DIRECTORIES COMPILE_DEFINITIONS_${_diag_configuration} OBJECT_DEPENDS)
+        INCLUDE_DIRECTORIES COMPILE_DEFINITIONS_${_diag_configuration}
+        OBJECT_DEPENDS HEADER_FILE_ONLY EXTERNAL_OBJECT)
       get_source_file_property(_value "${_source}" ${_property})
       if(_value)
         _diag_recipe_failed()
       endif()
     endforeach()
-    get_source_file_property(_value "${_source}" LANGUAGE)
-    if(NOT _value STREQUAL "C")
-      _diag_recipe_failed()
-    endif()
-  endforeach()
-  foreach(_product IN ITEMS foresight_diagnostic_support foresight-diagnostic-launcher)
-    foreach(_property IN ITEMS INCLUDE_DIRECTORIES LINK_OPTIONS C_COMPILER_LAUNCHER C_LINKER_LAUNCHER
-        RULE_LAUNCH_COMPILE RULE_LAUNCH_LINK COMPILE_FLAGS LINK_FLAGS
-        LINK_DIRECTORIES PRECOMPILE_HEADERS PRECOMPILE_HEADERS_REUSE_FROM
-        COMPILE_FEATURES LINKER_TYPE BUILD_RPATH INSTALL_RPATH OUTPUT_NAME PREFIX SUFFIX
-        OUTPUT_NAME_${_diag_configuration} ${_diag_configuration}_POSTFIX)
-      get_target_property(_value ${_product} ${_property})
-      if(_value)
-        _diag_recipe_failed()
-      endif()
-    endforeach()
-    get_target_property(_value ${_product} SOURCES)
-    if(_product STREQUAL "foresight_diagnostic_support")
-      set(_expected_sources "${_diag_support_sources}")
-      set(_expected_pic ON)
-    else()
-      set(_expected_sources "${_diag_launcher_sources}")
-      set(_expected_pic OFF)
-    endif()
-    if(NOT "${_value}" STREQUAL "${_expected_sources}")
-      _diag_recipe_failed()
-    endif()
-    get_target_property(_value ${_product} POSITION_INDEPENDENT_CODE)
-    if(NOT _value STREQUAL _expected_pic)
-      _diag_recipe_failed()
-    endif()
-    get_target_property(_value ${_product} C_VISIBILITY_PRESET)
-    if(NOT _value STREQUAL "default")
-      _diag_recipe_failed()
-    endif()
-    get_target_property(_value ${_product} LINKER_LANGUAGE)
-    if(NOT _value STREQUAL "C")
-      _diag_recipe_failed()
-    endif()
-    get_target_property(_value ${_product} SKIP_BUILD_RPATH)
-    if(NOT _value)
-      _diag_recipe_failed()
-    endif()
-    foreach(_property IN ITEMS LIBRARY_OUTPUT_DIRECTORY RUNTIME_OUTPUT_DIRECTORY)
-      get_target_property(_value ${_product} ${_property})
-      if(NOT _value STREQUAL CMAKE_CURRENT_BINARY_DIR)
-        _diag_recipe_failed()
-      endif()
-    endforeach()
-    get_target_property(_value ${_product} COMPILE_DEFINITIONS)
-    if(NOT "${_value}" STREQUAL "${_diag_expected_definition}")
-      _diag_recipe_failed()
-    endif()
-    get_target_property(_value ${_product} COMPILE_OPTIONS)
-    if(NOT "${_value}" STREQUAL "${_diag_expected_target_options}")
-      _diag_recipe_failed()
-    endif()
-    get_target_property(_value ${_product} LINK_LIBRARIES)
-    if(NOT _value STREQUAL "Threads::Threads")
-      _diag_recipe_failed()
-    endif()
-    foreach(_property IN ITEMS INTERPROCEDURAL_OPTIMIZATION INTERPROCEDURAL_OPTIMIZATION_${_diag_configuration} UNITY_BUILD C_EXTENSIONS)
-      get_target_property(_value ${_product} ${_property})
-      if(_value)
-        _diag_recipe_failed()
-      endif()
-    endforeach()
-    get_target_property(_value ${_product} C_STANDARD)
-    if(NOT _value STREQUAL "11")
-      _diag_recipe_failed()
-    endif()
   endforeach()
 endfunction()
-# Directory/global properties can change after include(), so validate the final
-# effective recipe rather than trusting an early snapshot.
 cmake_language(DEFER CALL _diag_validate_products)
 
-# Revalidate actual selected public metadata before every build invocation,
-# including builds whose objects are already up to date. A changed toolchain
-# invalidates the advertised state and requires an explicit reconfigure.
 add_custom_target(foresight_diagnostic_identity_check
   COMMAND "${CMAKE_COMMAND}"
     "-DDIAGNOSTIC_PYTHON=${_diag_python}"
@@ -344,32 +283,88 @@ add_custom_target(foresight_diagnostic_identity_check
     "-DDIAGNOSTIC_SDK=${CMAKE_OSX_SYSROOT}"
     "-DDIAGNOSTIC_EXPECTED=${_diag_actual_fingerprint}"
     "-DDIAGNOSTIC_INVALIDATE_BEFORE_BUILD=TRUE"
+    "-DDIAGNOSTIC_ENV_TEMP=${_diag_temp}"
     "-DDIAGNOSTIC_STATE=${CMAKE_CURRENT_BINARY_DIR}/diagnostic-products.json"
     -P "${_diag_root}/cmake/VerifyDiagnosticToolchain.cmake"
   VERBATIM)
-add_dependencies(foresight_diagnostic_support foresight_diagnostic_identity_check)
-add_dependencies(foresight-diagnostic-launcher foresight_diagnostic_identity_check)
-set_target_properties(foresight_diagnostic_support PROPERTIES
-  MACOSX_RPATH ON INSTALL_NAME_DIR "@rpath" BUILD_WITH_INSTALL_NAME_DIR TRUE)
+# The only selected cache inputs below are public compiler/OS/flag metadata.
+add_custom_target(foresight_diagnostic_compile
+  COMMAND ${_diag_clean_environment} "${CMAKE_COMMAND}"
+    --fresh
+    -S "${_diag_root}/cmake/DiagnosticProducts"
+    -B "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-product-build"
+    -G "Unix Makefiles" "-DCMAKE_MAKE_PROGRAM:FILEPATH=/usr/bin/make"
+    "-DCMAKE_C_COMPILER:FILEPATH=${CMAKE_C_COMPILER}"
+    "-DCMAKE_BUILD_TYPE:STRING=${_diag_expected_build_type}"
+    "-DCMAKE_C_FLAGS:STRING=${CMAKE_C_FLAGS}"
+    "-DCMAKE_C_FLAGS_${_diag_configuration}:STRING=${CMAKE_C_FLAGS_${_diag_configuration}}"
+    "-DCMAKE_EXE_LINKER_FLAGS:STRING=" "-DCMAKE_SHARED_LINKER_FLAGS:STRING="
+    "-DCMAKE_OSX_SYSROOT:STRING=${CMAKE_OSX_SYSROOT}"
+    "-DCMAKE_OSX_ARCHITECTURES:STRING=${CMAKE_OSX_ARCHITECTURES}"
+    "-DCMAKE_OSX_DEPLOYMENT_TARGET:STRING=${CMAKE_OSX_DEPLOYMENT_TARGET}"
+    "-DDIAGNOSTIC_SOURCE_ROOT:PATH=${_diag_root}"
+    "-DDIAGNOSTIC_OUTPUT_DIRECTORY:PATH=${CMAKE_CURRENT_BINARY_DIR}"
+    "-DDIAGNOSTIC_CONFIGURATION:STRING=${_diag_configuration}"
+    "-DDIAGNOSTIC_COMPILE_OPTIONS:STRING=${_diag_expected_target_options}"
+    "-DDIAGNOSTIC_PLATFORM_LINK_FLAGS:STRING=${_diag_expected_platform_link_flags}"
+    "-DDIAGNOSTIC_NATIVE_ID:STRING=${FORESIGHT_DIAGNOSTIC_NATIVE_ID}"
+  COMMAND ${_diag_clean_environment} "${CMAKE_COMMAND}"
+    --build "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-product-build" --parallel 2
+  DEPENDS foresight_diagnostic_identity_check
+  BYPRODUCTS "${_diag_support}" "${_diag_launcher}"
+  VERBATIM)
+add_custom_target(foresight_diagnostic_support DEPENDS foresight_diagnostic_compile
+  SOURCES ${_diag_support_sources})
+add_custom_target(foresight-diagnostic-launcher DEPENDS foresight_diagnostic_compile
+  SOURCES ${_diag_launcher_sources})
 add_custom_target(foresight_diagnostic_products ALL
   COMMAND "${CMAKE_COMMAND}"
     "-DDIAGNOSTIC_STATE=${CMAKE_CURRENT_BINARY_DIR}/diagnostic-products.json"
     "-DDIAGNOSTIC_NATIVE_ID=${FORESIGHT_DIAGNOSTIC_NATIVE_ID}"
-    "-DDIAGNOSTIC_SUPPORT=$<TARGET_FILE:foresight_diagnostic_support>"
-    "-DDIAGNOSTIC_LAUNCHER=$<TARGET_FILE:foresight-diagnostic-launcher>"
+    "-DDIAGNOSTIC_SUPPORT=${_diag_support}"
+    "-DDIAGNOSTIC_LAUNCHER=${_diag_launcher}"
     -P "${_diag_root}/cmake/PublishDiagnosticProducts.cmake"
   DEPENDS foresight_diagnostic_support foresight-diagnostic-launcher
-    foresight_diagnostic_identity_check
   VERBATIM)
-if(TARGET foresight_sql_support)
+function(_diag_add_runtime_products)
+  if(NOT TARGET foresight_sql_support)
+    return()
+  endif()
+  if(NOT TARGET foresight_sql_identity_check)
+    file(REMOVE "${CMAKE_CURRENT_BINARY_DIR}/runtime-support-build.json")
+    if(FORESIGHT_REQUIRE_DIAGNOSTIC_PRODUCTS)
+      message(FATAL_ERROR "Runtime SQL product identity unavailable")
+    endif()
+    return()
+  endif()
+  get_target_property(_sql_file foresight_sql_support FORESIGHT_SQL_SUPPORT_FILE)
+  if("${_sql_file}" MATCHES "-NOTFOUND$")
+    set(_sql_file "$<TARGET_FILE:foresight_sql_support>")
+  endif()
   add_custom_target(foresight_runtime_support_products ALL
-    COMMAND "${_diag_python}" -I "${_diag_root}/tools/diagnostic_product_receipt.py"
-      --root "${_diag_root}" --build "${CMAKE_CURRENT_BINARY_DIR}"
+    COMMAND "${CMAKE_COMMAND}"
+      "-DSQL_PRODUCT=${_sql_file}"
+      "-DEXPECTED_SQL_PRODUCT=${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_SHARED_LIBRARY_PREFIX}foresight_sql_support${CMAKE_SHARED_LIBRARY_SUFFIX}"
+      "-DRUNTIME_PYTHON=${_diag_python}" "-DRUNTIME_ROOT=${_diag_root}"
+      "-DRUNTIME_BUILD=${CMAKE_CURRENT_BINARY_DIR}" "-DRUNTIME_TEMP=${_diag_temp}"
+      "-DRUNTIME_REQUIRED=${FORESIGHT_REQUIRE_DIAGNOSTIC_PRODUCTS}"
+      -P "${_diag_root}/cmake/ProduceRuntimeSupport.cmake"
     DEPENDS foresight_diagnostic_products foresight_sql_support
     VERBATIM)
-endif()
-install(TARGETS foresight_diagnostic_support LIBRARY DESTINATION lib)
-install(TARGETS foresight-diagnostic-launcher RUNTIME DESTINATION bin)
+endfunction()
+# SQL's earlier deferred decision must precede creation of its optional receipt.
+cmake_language(DEFER CALL _diag_add_runtime_products)
+
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${_diag_root}/cmake/ForesightDiagnostics.cmake"
+  "${_diag_root}/cmake/DiagnosticProducts/CMakeLists.txt"
+  "${_diag_root}/cmake/VerifyDiagnosticToolchain.cmake"
+  "${_diag_root}/cmake/PublishDiagnosticProducts.cmake"
+  "${_diag_root}/cmake/ProduceRuntimeSupport.cmake"
+  "${_diag_root}/cmake/NormalizeRuntimeSupport.cmake")
+install(FILES "${_diag_support}" DESTINATION lib
+  PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
+install(PROGRAMS "${_diag_launcher}" DESTINATION bin)
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-native-inputs.json"
   "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-toolchain-metadata.json"
   "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-products.json"

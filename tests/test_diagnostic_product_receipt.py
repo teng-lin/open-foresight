@@ -22,7 +22,12 @@ def built(tmp_path):
     build.mkdir()
     config = json.loads((ROOT / identity.DEFAULT_CONTRACT).read_text())
     names = [row["path"] for row in config["native"]["inputs"]]
-    for name in [identity.DEFAULT_CONTRACT, *names, *products.SQL_INPUTS]:
+    for name in [
+        identity.DEFAULT_CONTRACT,
+        *names,
+        *products.SQL_INPUTS,
+        *identity.NATIVE_RECIPE_INPUTS,
+    ]:
         target = root / name
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / name, target)
@@ -195,7 +200,12 @@ def test_sql_source_changes_refuse_receipt(built, name):
     products.write(root, build)
     with (root / name).open("a") as stream:
         stream.write("\n/* changed source */\n")
-    with pytest.raises(ValueError, match="sql_source_record_mismatch"):
+    expected = (
+        "native_product_inputs_mismatch"
+        if name in identity.NATIVE_RECIPE_INPUTS
+        else "sql_source_record_mismatch"
+    )
+    with pytest.raises(ValueError, match=expected):
         products.verify(root, build)
 
 

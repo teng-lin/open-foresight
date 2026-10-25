@@ -46,6 +46,11 @@ flag. Unsupported recipes require a reviewed contract update, not an ambient
 option. Both products will embed the same selected native identity at that
 integration; there are no native products from this generator alone.
 
+For production components, algorithm v2 additionally hashes the six explicit
+CMake producer scripts, including the fixed isolated product project. Fixture
+contracts retain their scoped synthetic input inventory. Producer hashes contain
+no generated identity values or Dart/WorkerID inputs.
+
 The default JSON result records `kind: native-components`, a 64-character
 lowercase `native_id`, and its canonical nonsecret input record. `--format header`
 emits only the native macro. Keep generated output outside the source inventory;
