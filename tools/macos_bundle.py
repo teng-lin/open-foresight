@@ -270,6 +270,7 @@ def _sign_application(app, identity, entitlements, *, before_seal=None):
     service = app / "Contents/Library/Services/Open Foresight Service.app"
     aot_paths = {
         app / "Contents/MacOS/foresight-mcp",
+        app / "Contents/Resources/bin/foresight-diagnostic-worker",
         service,
         service / "Contents/MacOS/foresight-service",
     }

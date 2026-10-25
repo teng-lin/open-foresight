@@ -16,6 +16,7 @@ from app_version import read_version
 from runtime_package_support import prepare as prepare_runtime_support
 from runtime_package_support import stage as stage_runtime_support
 from runtime_package_support import seal as seal_runtime_support
+from runtime_package_support import prepare_worker, stage_worker, seal_worker
 from web_search_release import release_web_search_keys
 from macos_bundle import (
     audit_dependencies,
@@ -57,9 +58,10 @@ def write_litert_manifests(app, library, service):
         manifest.write_text(json.dumps({"gemma_runtime": runtime}, indent=2) + "\n")
 
 
-def seal_runtime_provenance(app, values, service, support):
+def seal_runtime_provenance(app, values, service, support, worker):
     write_litert_manifests(app, values["FORESIGHT_LITERT_LIBRARY"], service)
     seal_runtime_support(app / "Contents/Resources", support, transformed=True)
+    seal_worker(app / "Contents/Resources", worker, transformed=True)
     resources = app / "Contents/Resources"
     provenance = resources / "licenses/sqlite-provenance.json"
     metadata = json.loads(provenance.read_text())
@@ -196,7 +198,10 @@ def main(argv=None):
     for path in [args.flutter_app, service, mcp, sqlite_provenance, *required.values()]:
         if not path.exists():
             parser.error(f"Build all components first: missing {path}")
+    worker = prepare_worker(ROOT, args.build)
     support = prepare_runtime_support(ROOT, args.build / "native", "darwin-arm64")
+    if worker.receipt["native_id"] != support.receipt["native_id"]:
+        raise ValueError("Diagnostic worker and support NativeID differ")
     app = args.output.absolute()
     app.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(args.flutter_app, app, symlinks=True)
@@ -236,6 +241,7 @@ def main(argv=None):
     library_directory = resources / "lib"
     library_directory.mkdir(exist_ok=True)
     stage_runtime_support(resources, support)
+    stage_worker(resources, worker)
     copy_macos_extension_dependencies(extensions, library_directory)
     values["FORESIGHT_LITERT_LIBRARY"] = library_directory / "liblitert-lm.dylib"
     notices = resources / "licenses"
@@ -293,7 +299,9 @@ def main(argv=None):
         app,
         args.identity,
         entitlements,
-        before_seal=lambda: seal_runtime_provenance(app, values, service_path, support),
+        before_seal=lambda: seal_runtime_provenance(
+            app, values, service_path, support, worker
+        ),
     )
     environment = dict(
         os.environ, FORESIGHT_LITERT_LIBRARY=str(values["FORESIGHT_LITERT_LIBRARY"])

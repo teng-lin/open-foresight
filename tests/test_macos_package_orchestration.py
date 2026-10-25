@@ -85,6 +85,25 @@ def packaging(tmp_path, monkeypatch):
         return prepared
 
     monkeypatch.setattr(package, "prepare_runtime_support", prepare)
+    worker_receipt = {
+        "artifact": {
+            "size": len(b"synthetic companion"),
+            "mode": 0o755,
+            "sha256": hashlib.sha256(b"synthetic companion").hexdigest(),
+        },
+        "native_id": "a" * 64,
+        "worker_id": "b" * 64,
+        "catalog_id": "c" * 64,
+    }
+    worker = support.PreparedWorker(
+        worker_receipt,
+        b"synthetic companion",
+        {
+            "diagnostic-worker-build.json": json.dumps(worker_receipt).encode(),
+            "diagnostic-worker-inputs.json": b"synthetic worker context",
+        },
+    )
+    monkeypatch.setattr(package, "prepare_worker", lambda root, actual_build: worker)
     monkeypatch.setattr(package.sys, "platform", "darwin")
     monkeypatch.setattr(
         package,
@@ -144,7 +163,21 @@ def packaging(tmp_path, monkeypatch):
             app / "Contents/Resources/lib/libforesight_diagnostic_support.dylib"
         )
         diagnostic.write_bytes(diagnostic.read_bytes() + b"synthetic signing change")
+        companion = app / "Contents/Resources/bin/foresight-diagnostic-worker"
+        companion.write_bytes(companion.read_bytes() + b"synthetic signed AOT")
         before_seal()
+        worker_final = json.loads(
+            (
+                app
+                / "Contents/Resources"
+                / support.METADATA_DIRECTORY
+                / "diagnostic-worker-package.json"
+            ).read_text()
+        )
+        assert (
+            worker_final["artifact"]["sha256"]
+            == hashlib.sha256(companion.read_bytes()).hexdigest()
+        )
         final_support = json.loads(
             (
                 app
@@ -341,3 +374,22 @@ def test_packaging_retains_failure_and_removes_notary_submission(packaging, prob
     assert not (app.parent / "Packaged.manifest.json").exists()
     if problem == "existing-archive":
         assert archive.read_bytes() == b"preserve me"
+
+
+def test_worker_support_identity_mismatch_refuses_before_package_output(
+    packaging, monkeypatch
+):
+    args, app, *_ = packaging
+    original = package.prepare_worker
+
+    def mismatched(root, build):
+        worker = original(root, build)
+        worker.receipt["native_id"] = "d" * 64
+        return worker
+
+    monkeypatch.setattr(package, "prepare_worker", mismatched)
+    with pytest.raises(
+        ValueError, match="Diagnostic worker and support NativeID differ"
+    ):
+        package.main(args)
+    assert not app.exists()

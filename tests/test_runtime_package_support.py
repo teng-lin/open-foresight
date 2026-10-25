@@ -162,3 +162,84 @@ def test_stage_refuses_symlink_output_directory(source_build, tmp_path):
     ):
         package.stage(payload, prepared)
     assert not list(unrelated.iterdir())
+
+
+@pytest.fixture
+def worker_build(tmp_path, monkeypatch):
+    source = tmp_path / "worker-source"
+    build = tmp_path / "worker-build"
+    target = build / "application/foresight-diagnostic-worker"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"synthetic AOT fixture, not product qualification")
+    target.chmod(0o755)
+    receipt = {
+        "schema": 1,
+        "kind": "standalone-worker-build",
+        "mode": "aot",
+        "native_id": "a" * 64,
+        "worker_id": "b" * 64,
+        "catalog_id": "c" * 64,
+        "artifact": {
+            "path": "application/foresight-diagnostic-worker",
+            **package._read(target)[1],
+        },
+        "defines": {"fixture": "exact recipe owned by source verifier"},
+    }
+    (build / "application/diagnostic-worker-build.json").write_bytes(
+        package._canonical(receipt) + b"\n"
+    )
+    (build / "native").mkdir()
+    (build / "native/diagnostic-worker-inputs.json").write_bytes(
+        b'{"synthetic":"context"}\n'
+    )
+    dart = tmp_path / "sdk/bin/dart"
+    dart.parent.mkdir(parents=True)
+    dart.write_bytes(b"synthetic executable path")
+    monkeypatch.setattr(package.shutil, "which", lambda name: str(dart))
+
+    def verify(root, actual_build, sdk):
+        assert root == source and actual_build == build and sdk == dart.parent.parent
+        return deepcopy(receipt)
+
+    monkeypatch.setattr(package, "_verify_worker", verify)
+    return source, build, receipt
+
+
+@pytest.mark.parametrize("transformed", [False, True])
+def test_worker_copy_and_final_signed_byte_receipts(
+    worker_build, tmp_path, transformed
+):
+    source, build, receipt = worker_build
+    prepared = package.prepare_worker(source, build)
+    payload = tmp_path / "payload"
+    package.stage_worker(payload, prepared)
+    output = payload / "bin/foresight-diagnostic-worker"
+    if transformed:
+        output.write_bytes(output.read_bytes() + b"synthetic signing bytes")
+    final = package.seal_worker(payload, prepared, transformed=transformed)
+    assert final["artifact"]["sha256"] == package._digest(output.read_bytes())
+    assert final["artifact"]["source_build_sha256"] == receipt["artifact"]["sha256"]
+    assert final["worker_id"] == receipt["worker_id"]
+
+
+def test_worker_changed_source_bytes_refuse(worker_build):
+    source, build, _ = worker_build
+    with (build / "application/foresight-diagnostic-worker").open("ab") as stream:
+        stream.write(b"corruption")
+    with pytest.raises(
+        package.PackageSupportError, match="package_worker_bytes_changed"
+    ):
+        package.prepare_worker(source, build)
+
+
+def test_worker_changed_staged_bytes_refuse_unmodified_seal(worker_build, tmp_path):
+    source, build, _ = worker_build
+    prepared = package.prepare_worker(source, build)
+    payload = tmp_path / "payload"
+    package.stage_worker(payload, prepared)
+    with (payload / "bin/foresight-diagnostic-worker").open("ab") as stream:
+        stream.write(b"corruption")
+    with pytest.raises(
+        package.PackageSupportError, match="package_worker_copy_changed"
+    ):
+        package.seal_worker(payload, prepared, transformed=False)

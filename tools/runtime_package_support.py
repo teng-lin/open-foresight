@@ -8,8 +8,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import importlib
 import json
 import os
+import shutil
 from pathlib import Path
 import stat
 from typing import Any
@@ -214,4 +216,105 @@ def seal(
         json.dump(receipt, stream, sort_keys=True, indent=2)
         stream.write("\n")
     (metadata / PACKAGE_RECEIPT).chmod(0o644)
+    return receipt
+
+
+@dataclass(frozen=True)
+class PreparedWorker:
+    receipt: dict[str, Any]
+    artifact: bytes
+    metadata: dict[str, bytes]
+
+
+def _verify_worker(root: Path, build: Path, sdk: Path) -> dict[str, Any]:
+    module = importlib.import_module(
+        "tools.build_diagnostic_worker" if __package__ else "build_diagnostic_worker"
+    )
+    receipt: dict[str, Any] = module.verify_worker_build(
+        root,
+        build,
+        sdk,
+        root / "packages/foresight_core/.dart_tool/package_config.json",
+        "aot",
+    )
+    return receipt
+
+
+def prepare_worker(root: Path, build: Path) -> PreparedWorker:
+    dart = shutil.which("dart")
+    if dart is None:
+        raise PackageSupportError("missing_worker_verification_sdk")
+    sdk = Path(dart).resolve().parent.parent
+    receipt = _verify_worker(root, build, sdk)
+    artifact = receipt["artifact"]
+    if (
+        receipt["mode"] != "aot"
+        or artifact["path"] != "application/foresight-diagnostic-worker"
+    ):
+        raise PackageSupportError("invalid_package_worker")
+    blob, measured = _read(build / artifact["path"], executable=True)
+    if _canonical({"path": artifact["path"], **measured}) != _canonical(artifact):
+        raise PackageSupportError("package_worker_bytes_changed")
+    metadata = {
+        "diagnostic-worker-build.json": _read(
+            build / "application/diagnostic-worker-build.json"
+        )[0],
+        "diagnostic-worker-inputs.json": _read(
+            build / "native/diagnostic-worker-inputs.json"
+        )[0],
+    }
+    if metadata["diagnostic-worker-build.json"] != _canonical(receipt) + b"\n":
+        raise PackageSupportError("package_worker_receipt_changed")
+    if _canonical(_verify_worker(root, build, sdk)) != _canonical(receipt):
+        raise PackageSupportError("package_worker_context_changed")
+    return PreparedWorker(receipt, blob, metadata)
+
+
+def stage_worker(payload: Path, prepared: PreparedWorker) -> None:
+    target = _directory(payload, "bin") / "foresight-diagnostic-worker"
+    with target.open("xb") as stream:
+        stream.write(prepared.artifact)
+    target.chmod(prepared.receipt["artifact"]["mode"])
+    metadata = _directory(payload, METADATA_DIRECTORY)
+    for name, blob in prepared.metadata.items():
+        with (metadata / name).open("xb") as stream:
+            stream.write(blob)
+        (metadata / name).chmod(0o644)
+
+
+def seal_worker(
+    payload: Path, prepared: PreparedWorker, *, transformed: bool
+) -> dict[str, Any]:
+    metadata = _directory(payload, METADATA_DIRECTORY)
+    for name, blob in prepared.metadata.items():
+        if _read(metadata / name)[0] != blob:
+            raise PackageSupportError("package_worker_provenance_changed")
+    _, measured = _read(payload / "bin/foresight-diagnostic-worker", executable=True)
+    original = {
+        key: prepared.receipt["artifact"][key] for key in ("sha256", "size", "mode")
+    }
+    if not transformed and _canonical(measured) != _canonical(original):
+        raise PackageSupportError("package_worker_copy_changed")
+    receipt = {
+        "schema": 1,
+        "kind": "diagnostic-worker-package",
+        "native_id": prepared.receipt["native_id"],
+        "worker_id": prepared.receipt["worker_id"],
+        "catalog_id": prepared.receipt["catalog_id"],
+        "processing": "relocated-signed" if transformed else "unmodified-copy",
+        "source_receipt_sha256": _digest(
+            prepared.metadata["diagnostic-worker-build.json"]
+        ),
+        "artifact": {
+            "path": "bin/foresight-diagnostic-worker",
+            **measured,
+            "source_build_sha256": original["sha256"],
+        },
+    }
+    with (metadata / "diagnostic-worker-package.json").open(
+        "x", encoding="ascii"
+    ) as stream:
+        json.dump(receipt, stream, sort_keys=True, indent=2)
+        stream.write("\n")
+    (metadata / "diagnostic-worker-package.json").chmod(0o644)
     return receipt
