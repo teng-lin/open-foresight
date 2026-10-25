@@ -1,4 +1,5 @@
 import 'persistence/answer_scope_queries.dart';
+import 'persistence/sqlite_statement_budget.dart';
 import 'dart:convert';
 
 import 'persistence/application_schema.dart';
@@ -21,13 +22,21 @@ final class SqliteReadSession {
   final SqliteSnapshotSource _store;
   final bool _ownsStore;
   bool _closed = false;
+  final Duration? _executionBudget;
+  late final SqliteStatementBudget _budget = SqliteStatementBudget(_store.db);
   IncompatibleReadSchema? _incompatibility;
   void Function(IncompatibleReadSchema)? onIncompatible;
 
   SqliteReadSession.borrow(SqliteSnapshotSource store)
     : _store = store,
-      _ownsStore = false;
-  SqliteReadSession.open(String path) : _store = _open(path), _ownsStore = true;
+      _ownsStore = false,
+      _executionBudget = null;
+  SqliteReadSession.open(
+    String path, {
+    Duration executionBudget = const Duration(seconds: 5),
+  }) : _store = _open(path),
+       _ownsStore = true,
+       _executionBudget = executionBudget;
 
   static SqliteSnapshotDatabase _open(String path) =>
       SqliteSnapshotDatabase.open(path);
@@ -84,8 +93,10 @@ final class SqliteReadSession {
 
   ReadWorkerReply query(String projection, Map<String, Object?> arguments) =>
       snapshot(() {
-        final epoch = _epoch;
-        return ReadWorkerReply(epoch, _project(projection, arguments));
+        ReadWorkerReply project() =>
+            ReadWorkerReply(_epoch, _project(projection, arguments));
+        final limit = _executionBudget;
+        return limit == null ? project() : _budget.run(limit, project);
       });
 
   Object? _project(String projection, Map<String, Object?> args) {

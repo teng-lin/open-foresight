@@ -15,6 +15,9 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Changed
 
+- Bound background SQLite read admission and execution, restart failed readers
+  after actual exit, and retain cancelled work until its statement settles.
+
 - Separate meeting and source renderers from feature commands while preserving
   note saves, answer retries, generation cancellation and dialog ownership.
 

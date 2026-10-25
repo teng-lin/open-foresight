@@ -18,6 +18,17 @@ const applicationSqliteSourceId =
 // any connection. Never silently fall back to Apple's different WAL behavior.
 final upstream.Sqlite3 sqlite3 = _loadSqlite();
 
+DynamicLibrary? _sqliteLibrary;
+
+/// Only for owner-isolate connection controls; no handle leaves that isolate.
+DynamicLibrary get applicationSqliteLibrary {
+  sqlite3; // Initialize and retain the same mapping used by package:sqlite3.
+  return _sqliteLibrary ??
+      (throw StateError(
+        'SQLite was initialized outside the application loader',
+      ));
+}
+
 DynamicLibrary _openMacSqlite() {
   final path = runtimeConfiguration['FORESIGHT_SQLITE_LIBRARY'];
   if (path == null || !File(path).isAbsolute) {
@@ -59,6 +70,14 @@ upstream.Sqlite3 _loadSqlite() {
       );
     }
   }
+  // Retain the original mapping for connection-local FFI such as progress
+  // handlers. The package loader receives these exact bytes, never a later
+  // path reopen after a bundle or symlink might have changed.
+  final library = loader.open.openSqlite();
+  loader.open.overrideForAll(() {
+    _sqliteLibrary = library;
+    return library;
+  });
   final api = upstream.sqlite3;
   if (Platform.isMacOS && api.version.sourceId != applicationSqliteSourceId) {
     throw StateError(
