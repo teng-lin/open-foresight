@@ -1,3 +1,4 @@
+import '../sql_support_test_bootstrap.dart';
 // A launcher process for lifecycle tests. It runs ensureService for the
 // profile in FORESIGHT_DATA and FORESIGHT_RUNTIME, relayed by a fault proxy,
 // and prints `refused` once a closing refusal reaches it, then
@@ -10,6 +11,7 @@ import 'package:foresight_core/src/service.dart';
 import 'package:foresight_test_support/service_fault_proxy.dart';
 
 Future<void> main() async {
+  bootstrapSqlSupportFixture();
   final profile = ProfilePaths(
     Platform.environment['FORESIGHT_DATA']!,
     Platform.environment['FORESIGHT_RUNTIME']!,

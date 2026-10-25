@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
@@ -39,6 +40,7 @@ Matcher invalidReply(String? reason) => rpcError(
 );
 
 void main() {
+  bootstrapSqlSupportFixture();
   for (final bareError in [true, false]) {
     test(
       bareError

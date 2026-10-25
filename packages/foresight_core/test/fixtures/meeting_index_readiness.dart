@@ -1,3 +1,4 @@
+import '../sql_support_test_bootstrap.dart';
 // A separate owner lets the parent kill a microtask-starved producer without
 // hanging the test isolate that owns the watchdog and captures diagnostics.
 import 'dart:async';
@@ -27,6 +28,7 @@ class NotReadyRag extends RagServiceBase {
 }
 
 Future<void> main(List<String> arguments) async {
+  bootstrapSqlSupportFixture();
   final root = arguments[0], ownership = arguments[1], readiness = arguments[2];
   final store = Store('$root/profile.db');
   final peer = NotReadyRag();

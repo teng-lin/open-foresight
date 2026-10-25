@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'support/current_read.dart';
@@ -18,6 +19,7 @@ Matcher throwsRpcCode(RpcErrorCode code) =>
     throwsA(isA<RpcError>().having((error) => error.code, 'code', code));
 
 void main() {
+  bootstrapSqlSupportFixture();
   late RemoteFixture f;
   setUp(() async {
     f = RemoteFixture();

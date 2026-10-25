@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/rpc_error.dart';
@@ -9,6 +10,7 @@ import 'package:test/test.dart';
 // Lost replies with production code on both sides: the in-process service,
 // the real client, and the fault proxy cutting the reply after the commit.
 void main() {
+  bootstrapSqlSupportFixture();
   late ProfilePaths profile;
   late Map<String, String> original;
   setUp(() {

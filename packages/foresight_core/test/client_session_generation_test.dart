@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -66,6 +67,7 @@ class Publication {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late RemoteFixture f;
   setUp(() async {
     f = RemoteFixture();

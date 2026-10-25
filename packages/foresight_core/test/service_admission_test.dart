@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -14,6 +15,7 @@ Matcher code(RpcErrorCode value) =>
     isA<RpcError>().having((e) => e.code, 'code', value);
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory root;
   late ApplicationService service;
   late ServiceClient agent, host;
