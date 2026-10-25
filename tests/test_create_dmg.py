@@ -42,6 +42,7 @@ def signed_dmg(tmp_path, monkeypatch):
             Path(arguments[-1]).write_bytes(b"signed disk image")
         if arguments[:3] == ["xcrun", "notarytool", "submit"]:
             assert kwargs["timeout"] == 3600
+            assert arguments[arguments.index("--timeout") + 1] == "55m"
             return subprocess.CompletedProcess(
                 arguments,
                 0,
@@ -86,7 +87,7 @@ def test_signed_dmg_hashes_final_stapled_bytes_after_gatekeeper_acceptance(signe
         json.loads(Path(str(image) + ".notary.json").read_text())["status"]
         == "Accepted"
     )
-    assert commands[-3:] == [
+    assert commands[-4:] == [
         ["xcrun", "stapler", "staple", str(image)],
         ["xcrun", "stapler", "validate", str(image)],
         [
@@ -99,6 +100,7 @@ def test_signed_dmg_hashes_final_stapled_bytes_after_gatekeeper_acceptance(signe
             "--verbose=2",
             str(image),
         ],
+        ["hdiutil", "verify", str(image)],
     ]
     assert commands.index(
         ["xcrun", "stapler", "validate", str(manifest.parent / "Open Foresight.app")]
@@ -245,6 +247,47 @@ def test_nonzero_notary_rejection_retains_response_and_primary_failure(
     else:
         assert Path(str(image) + ".notary.log.json").is_file()
     assert not Path(str(image) + ".sha256").exists()
+
+
+@pytest.mark.parametrize("response", ["[]", "null", '"unexpected"'])
+def test_nonobject_notary_response_fails_with_saved_diagnostics(
+    signed_dmg, monkeypatch, response
+):
+    create, _, _, manifest = signed_dmg
+    original = create_dmg.subprocess.run
+
+    def run(arguments, **kwargs):
+        if arguments[:3] == ["xcrun", "notarytool", "submit"]:
+            return subprocess.CompletedProcess(arguments, 0, response, "")
+        return original(arguments, **kwargs)
+
+    monkeypatch.setattr(create_dmg.subprocess, "run", run)
+    with pytest.raises(ValueError, match="JSON object"):
+        create()
+    image = manifest.parent / "dist/Open-Foresight-0.1.2-macos-arm64.dmg"
+    assert Path(str(image) + ".notary.json").read_text() == response
+    assert not Path(str(image) + ".sha256").exists()
+
+
+def test_final_stapled_image_verification_failure_prevents_success_sidecars(
+    signed_dmg, monkeypatch
+):
+    create, _, _, manifest = signed_dmg
+    original = create_dmg.subprocess.run
+
+    def run(arguments, **kwargs):
+        if (
+            arguments[:2] == ["hdiutil", "verify"]
+            and Path(arguments[-1]).read_bytes() == b"signed and stapled disk image"
+        ):
+            return subprocess.CompletedProcess(arguments, 1, "", "checksum mismatch")
+        return original(arguments, **kwargs)
+
+    monkeypatch.setattr(create_dmg.subprocess, "run", run)
+    with pytest.raises(subprocess.CalledProcessError, match="hdiutil"):
+        create()
+    assert not list(manifest.parent.glob("dist/*.sha256"))
+    assert not list(manifest.parent.glob("dist/*.build.json"))
 
 
 def test_development_certificate_is_rejected_even_with_team_identifier(monkeypatch):

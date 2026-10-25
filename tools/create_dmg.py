@@ -221,6 +221,8 @@ def sign_disk_image(destination, identity, notary_profile, app_team):
             "--keychain-profile",
             notary_profile,
             "--wait",
+            "--timeout",
+            "55m",
             "--output-format",
             "json",
         ],
@@ -234,6 +236,9 @@ def sign_disk_image(destination, identity, notary_profile, app_team):
     except json.JSONDecodeError:
         result.check_returncode()
         raise
+    if not isinstance(submission, dict):
+        result.check_returncode()
+        raise ValueError("Notarization response must be a JSON object")
     if result.returncode or submission.get("status") != "Accepted":
         if submission.get("id"):
             try:
@@ -345,6 +350,7 @@ def create(app, manifest, name, output, *, identity=None, notary_profile=None):
         raise
     if identity:
         sign_disk_image(destination, identity, notary_profile, app_team)
+        verify_image(destination)
     with destination.open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
     Path(str(destination) + ".sha256").write_text(f"{digest}  {name}\n")

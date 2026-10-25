@@ -194,12 +194,14 @@ export FORESIGHT_SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)'
 DMG signing requires both options and a signed, notarized, stapled app. The tool
 checks that the app and DMG use the same Developer ID team, submits the signed
 DMG to Apple, requires acceptance, staples and validates its ticket, then runs
-Gatekeeper assessment. Checksums and build sidecars describe the final stapled
-bytes and are written only after those checks succeed. The `.notary.json`
+Gatekeeper assessment and verifies the final image with `hdiutil`. Checksums and
+build sidecars describe the final stapled bytes and are written only after those
+checks succeed. The `.notary.json`
 response and, on rejection when available, `.notary.log.json` retain submission
 diagnostics. A log-download failure preserves the original notarization failure.
-Notarization submission has a one-hour process timeout; other signing commands
-have five-minute timeouts. A failed command leaves its output for diagnosis;
+Notarization waits up to 55 minutes in `notarytool`, within a one-hour process
+timeout, so a timed-out wait can return its submission ID for diagnosis. Other
+signing commands have five-minute timeouts. A failed command leaves its output for diagnosis;
 choose a new output path when retrying.
 
 The default DMG path remains available for ad-hoc development and previews by
