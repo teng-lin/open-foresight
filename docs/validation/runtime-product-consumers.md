@@ -15,6 +15,19 @@ old files is not a fresh build. Existing CI source/artifact receipt verification
 and owner review remain required. Native identity stays independent of SQL.
 The tool never loads these libraries or runs the launcher.
 
+SQL support has a separate `diagnostic-sql-inputs.json` source/recipe record.
+`tools/sql_support_identity.py` binds its explicit C/header/CMake/generator
+closure, ordered public compile flags and selected public compiler/OS metadata.
+It never incorporates NativeID. Its private NUL-delimited
+`FORESIGHT_SQL_SUPPORT_SOURCE_ID:v1:<digest>:end` byte marker adds no exported ABI.
+The CMake producer validates its final SQL target, source, directory and Threads
+recipe; unknown recipes or unavailable public metadata leave mandatory SQL
+support unmarked and its record unavailable. A separate build prerequisite
+rechecks selected toolchain metadata even when the SQL object is up to date.
+Direct C mechanism proofs remain unmarked. The marker binds declared inputs to
+bytes; it does not independently witness compiler execution, SDK bytes or a
+production WorkerID.
+
 Unavailable diagnostics, a nonproduction native record, changed source inputs,
 missing products, unsafe artifact modes and mismatched bytes refuse verification.
 The tool does not accept, create or review any WorkerID. The currently pending
