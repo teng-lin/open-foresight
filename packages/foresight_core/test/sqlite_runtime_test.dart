@@ -48,7 +48,7 @@ void main() {
     }
   });
 
-  for (final mappingScenario in ['alias', 'physical']) {
+  for (final mappingScenario in ['alias', 'physical', 'foreign-global']) {
     test(
       'AOT reader retains original mapping across changed $mappingScenario path',
       () async {
@@ -89,6 +89,59 @@ void main() {
             'original SQLite mapping retained; alias reverse control; parent transaction; real reader',
           ),
         );
+      },
+      timeout: const Timeout(Duration(seconds: 100)),
+    );
+  }
+
+  if (Platform.isLinux) {
+    test(
+      'Linux source selection replaces a pre-existing global override',
+      () async {
+        final root = createTestTempDirectorySync('sqlite-source-');
+        final result = await Process.run(Platform.resolvedExecutable, [
+          'test/fixtures/sqlite_mapping_handoff.dart',
+          root.path,
+          'source-global',
+        ]).timeout(const Duration(seconds: 30));
+        expect(
+          result.exitCode,
+          0,
+          reason: '${result.stdout}\n${result.stderr}',
+        );
+        expect(result.stdout, contains('source-global: SQLite initialized'));
+      },
+    );
+
+    test(
+      'Linux installed shape refuses missing layout before source fallback',
+      () async {
+        final root = createTestTempDirectorySync('sqlite-missing-');
+        final binary = File('${root.path}/bin/foresight-service');
+        binary.parent.createSync();
+        final compilation = await Process.run(Platform.resolvedExecutable, [
+          'compile',
+          'exe',
+          'test/fixtures/sqlite_mapping_handoff.dart',
+          '-o',
+          binary.path,
+        ]).timeout(const Duration(seconds: 60));
+        expect(
+          compilation.exitCode,
+          0,
+          reason: '${compilation.stdout}\n${compilation.stderr}',
+        );
+        final result = await Process.run(binary.path, [
+          root.path,
+          'missing-layout',
+        ]).timeout(const Duration(seconds: 30));
+        expect(
+          result.exitCode,
+          isNot(0),
+          reason: '${result.stdout}\n${result.stderr}',
+        );
+        expect(result.stderr, contains('installed SQLite layout is missing'));
+        expect(result.stdout, isNot(contains('SQLite initialized')));
       },
       timeout: const Timeout(Duration(seconds: 100)),
     );

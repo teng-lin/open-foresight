@@ -84,6 +84,31 @@ Future<void> main(List<String> arguments) async {
   }
   final root = Directory(arguments.first);
   final scenario = arguments.length > 1 ? arguments[1] : 'alias';
+  if (scenario == 'missing-layout' || scenario == 'source-global') {
+    if (scenario == 'source-global') {
+      loader.open.overrideForAll(
+        () => DynamicLibrary.open(
+          Platform.environment['FORESIGHT_TEST_SQL_SUPPORT_LIBRARY']!,
+        ),
+      );
+    }
+    bootstrapSqlSupportFixture();
+    initializeSqliteRuntime(
+      supportLibrary:
+          Platform.environment['FORESIGHT_TEST_SQL_SUPPORT_LIBRARY']!,
+    );
+    final db = openApplicationDatabase(':memory:');
+    try {
+      check(
+        db.select('SELECT 42').single.values.single == 42,
+        'source SQLite did not work',
+      );
+      stdout.writeln('$scenario: SQLite initialized');
+    } finally {
+      db.dispose();
+    }
+    return;
+  }
   final lib = Directory('${root.path}/lib')..createSync(recursive: true);
   Directory('${root.path}/app').createSync();
   final resources = Directory('${root.path}/share/open-foresight')
@@ -107,6 +132,13 @@ Future<void> main(List<String> arguments) async {
         ).path;
   final original = File(initialPath).copySync('${lib.path}/original-sqlite');
   final alias = Link('${lib.path}/libsqlite3.so')..createSync(original.path);
+  if (scenario == 'foreign-global') {
+    loader.open.overrideForAll(
+      () => DynamicLibrary.open(
+        Platform.environment['FORESIGHT_TEST_SQL_SUPPORT_LIBRARY']!,
+      ),
+    );
+  }
   bootstrapSqlSupportFixture();
   final bootstrap = initializeSqliteRuntime(
     supportLibrary: Platform.environment['FORESIGHT_TEST_SQL_SUPPORT_LIBRARY']!,

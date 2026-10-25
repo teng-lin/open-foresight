@@ -53,9 +53,12 @@ captures the actual mapping's physical absolute path, image base, progress
 installer address and SQLite source identity, retains it with `RTLD_NOLOAD`,
 and registers that canonical loader name before any database locks. A foreign
 prior package initialization that prevents capturing the actual mapping refuses.
-At this seam, an earlier package loader override can still select the initial
-image before capture; owning that selector and refusing production basename
-fallback remain part of the validated-selection integration gate.
+The entrypoint owns the package-wide loader override, replacing earlier
+foreign overrides with its existing Mac or Linux bundle selector. An installed
+Linux executable shape with missing layout refuses before fallback. Unbundled
+Linux source use explicitly retains the existing system basename callback;
+installed products never use it. Broader artifact/path validation remains the
+validated-selection integration gate.
 The opaque original-code handoff includes this SQLite mapping, never a database
 or native context pointer.
 
@@ -220,6 +223,15 @@ mismatched progress anchor is refused. The lock-oracle extension also closes the
 real read worker before an independent process requires `SQLITE_BUSY` from
 `BEGIN IMMEDIATE`, while the parent still holds its transaction. Analysis/format scope and explicit reuse
 of unchanged native artifacts remain as described above.
+
+The entry-selector extension replaces a pre-existing global package override
+with the owner selector, including the Linux source callback, and refuses an
+installed Linux executable shape with missing layout. All three new Linux
+regressions failed before repair and passed afterward. The complete focused
+run passed 58 tests with four macOS-only skips on Linux and 60 with zero skips
+on Mac; two new source/missing-layout cases apply only to Linux. All 54 named
+input hashes again match before/after and across hosts. The broader artifact
+validation gate remains separate from this selector ownership repair.
 
 Two Linux-only prior-resolver negatives use the exact 1ba public bootstrap,
 support and SQLite resolver: one reaches the direct-isolate oracle, and one

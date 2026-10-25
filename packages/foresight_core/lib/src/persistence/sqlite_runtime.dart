@@ -72,20 +72,41 @@ DynamicLibrary _openLinuxBundleSqlite(String root) {
   return DynamicLibrary.open(path);
 }
 
+bool _hasLinuxInstalledShape() {
+  final executable = File(
+    Platform.resolvedExecutable,
+  ).resolveSymbolicLinksSync();
+  final file = File(executable);
+  final directory = file.parent.uri.pathSegments
+      .where((part) => part.isNotEmpty)
+      .last;
+  final name = file.uri.pathSegments.last;
+  return (directory == 'bin' &&
+          {'foresight-service', 'foresight-mcp'}.contains(name)) ||
+      (directory == 'app' && name == 'open-foresight');
+}
+
 upstream.Sqlite3 _loadSqlite() {
   requireSqlSupportBeforeConnection();
   final inherited = boundSqliteMapping;
   if (inherited != null) {
     loader.open.overrideForAll(() => openOriginalSqliteMapping(inherited));
   } else if (Platform.isMacOS) {
-    loader.open.overrideFor(loader.OperatingSystem.macOS, _openMacSqlite);
+    loader.open.overrideForAll(_openMacSqlite);
   } else if (Platform.isLinux) {
     final root = runtimeConfiguration.linuxBundleRoot;
     if (root != null) {
-      loader.open.overrideFor(
-        loader.OperatingSystem.linux,
-        () => _openLinuxBundleSqlite(root),
-      );
+      loader.open.overrideForAll(() => _openLinuxBundleSqlite(root));
+    } else {
+      if (_hasLinuxInstalledShape()) {
+        throw StateError(
+          'The installed SQLite layout is missing. Reinstall Open Foresight.',
+        );
+      }
+      // Preserve the existing unbundled Linux source behavior explicitly.
+      // Installed executable shapes never reach this basename search, and a
+      // pre-existing package override cannot replace this entrypoint selector.
+      loader.open.overrideForAll(() => DynamicLibrary.open('libsqlite3.so'));
     }
   }
   // Retain the original mapping for connection-local FFI such as progress
