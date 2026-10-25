@@ -6,6 +6,7 @@ import 'dart:ffi';
 import 'native_lifetime.dart';
 import 'application_service.dart';
 import 'platform_services.dart';
+import 'persistence/sql_support.dart';
 import 'profile_paths.dart';
 import 'service_diagnostics.dart';
 import 'service_framing.dart';
@@ -73,6 +74,9 @@ class IsolatedApplicationService {
     ProfilePaths profile, {
     DesktopPeerVerifier? desktopPeerVerifier,
   }) async {
+    // Entrypoint/embedding already mapped the trusted support image before
+    // any DB. Only original code is handed to the application worker.
+    final sqlSupport = currentSqlSupportBootstrap;
     if (_nativeRestartRequired) {
       throw StateError('Native ownership is unconfirmed; restart the service');
     }
@@ -132,6 +136,7 @@ class IsolatedApplicationService {
           profile.data,
           profile.runtime,
           Map<String, String>.from(runtimeConfiguration.environment),
+          sqlSupport,
         ],
         onError: host._errors.sendPort,
         onExit: host._exits.sendPort,
@@ -556,6 +561,7 @@ Future<void> _runApplicationServiceWorker(List<Object?> configuration) async {
   installServiceWorkerEnvironment(
     (configuration[3] as Map).cast<String, String>(),
   );
+  bindSqlSupportBootstrap(configuration[4] as SqlSupportBootstrap);
   traceServiceTransport(() => 'worker starting');
   final control = ReceivePort();
   final nativePermits = <int, Completer<void>>{};
