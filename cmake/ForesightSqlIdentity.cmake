@@ -135,6 +135,31 @@ function(_foresight_prepare_sql_identity)
     VERBATIM)
 endfunction()
 _foresight_prepare_sql_identity()
+
+# Parent custom-command launchers wrap the scheduler itself and could append
+# cache overrides after the isolated producer's fixed vector. Reject that final
+# state rather than letting a wrapper alter the actual compiler recipe.
+function(_foresight_validate_sql_scheduler)
+  if(NOT TARGET foresight_sql_compile)
+    return()
+  endif()
+  get_directory_property(_directory_launcher RULE_LAUNCH_CUSTOM)
+  get_property(_global_launcher GLOBAL PROPERTY RULE_LAUNCH_CUSTOM)
+  set(_refused "${_directory_launcher}${_global_launcher}")
+  foreach(_target IN ITEMS foresight_sql_identity_check foresight_sql_compile foresight_sql_support)
+    get_target_property(_launcher ${_target} RULE_LAUNCH_CUSTOM)
+    if(NOT "${_launcher}" MATCHES "-NOTFOUND$" AND
+       NOT "${_launcher}" STREQUAL "")
+      string(APPEND _refused "${_launcher}")
+    endif()
+  endforeach()
+  if(NOT "${_refused}" STREQUAL "")
+    file(WRITE "${_sql_record_path}" "{\"schema\":1,\"available\":false}\n")
+    file(REMOVE "${CMAKE_CURRENT_BINARY_DIR}/runtime-support-build.json")
+    message(FATAL_ERROR "SQL isolated scheduling recipe changed")
+  endif()
+endfunction()
+cmake_language(DEFER CALL _foresight_validate_sql_scheduler)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${_foresight_sql_root}/native/sql_support.c"
   "${_foresight_sql_root}/native/sql_support.h"

@@ -219,3 +219,42 @@ def test_generic_output_override_installs_actual_target_not_old_default(
     assert (build / "selected-product.txt").read_text() == str(actual)
     assert (destination / "lib" / default.name).read_bytes() == actual.read_bytes()
     assert (destination / "lib" / default.name).read_bytes() != default.read_bytes()
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [
+        "GLOBAL",
+        "DIRECTORY",
+        "TARGET foresight_sql_compile",
+        "TARGET foresight_sql_identity_check",
+        "TARGET foresight_sql_support",
+    ],
+)
+def test_custom_launchers_cannot_wrap_isolated_recipe_commands(product, scope):
+    source, build = product
+    result = configure(
+        source,
+        build,
+        extra=f'set_property({scope} PROPERTY RULE_LAUNCH_CUSTOM "unrecorded-launcher")',
+        allow_failure=True,
+    )
+    assert result.returncode != 0
+    assert "SQL isolated scheduling recipe changed" in result.stderr
+    assert json.loads((build / "diagnostic-sql-inputs.json").read_text()) == {
+        "schema": 1,
+        "available": False,
+    }
+    assert not (build / "runtime-support-build.json").exists()
+
+
+def test_boolean_looking_custom_launcher_is_still_a_nonempty_command(product):
+    source, build = product
+    result = configure(
+        source,
+        build,
+        extra='set_property(GLOBAL PROPERTY RULE_LAUNCH_CUSTOM "OFF")',
+        allow_failure=True,
+    )
+    assert result.returncode != 0
+    assert "SQL isolated scheduling recipe changed" in result.stderr
