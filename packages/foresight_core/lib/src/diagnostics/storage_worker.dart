@@ -415,25 +415,22 @@ final class NativeDiagnosticWorkerOwner implements DiagnosticWorkerOwner {
             DiagnosticHealthReason.storageWorkerProtocolFailed,
           );
         }
-        if (request.type == DiagnosticWorkerFrame.retire) {
-          if (frame.total != 0 || frame.bytes.isNotEmpty) {
-            throw const DiagnosticWorkerFailure(
-              DiagnosticHealthReason.storageWorkerProtocolFailed,
-            );
-          }
-          _retired = true;
-          return DiagnosticWorkerReply(
-            DiagnosticWorkerResult.ok,
-            DiagnosticHealthReason.closed,
-            slot: _slot,
-          );
-        }
         if (frame.total != 4 || frame.bytes.length != 4) {
           throw const DiagnosticWorkerFailure(
             DiagnosticHealthReason.storageWorkerProtocolFailed,
           );
         }
         final reply = DiagnosticWorkerReply.decode(frame.bytes);
+        if (request.type == DiagnosticWorkerFrame.retire) {
+          if (reply.result != DiagnosticWorkerResult.ok ||
+              reply.reason != DiagnosticHealthReason.closed) {
+            throw const DiagnosticWorkerFailure(
+              DiagnosticHealthReason.storageWorkerProtocolFailed,
+            );
+          }
+          _retired = true;
+          return reply;
+        }
         _slot = reply.slot;
         _nextRequest++;
         return reply;
