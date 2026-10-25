@@ -357,6 +357,26 @@ def test_submission_without_id_is_retained_and_never_waited(signed_dmg, monkeypa
     )
 
 
+def test_rejection_without_echoed_id_fetches_log_using_saved_submission(
+    signed_dmg, monkeypatch
+):
+    create, _, _, _ = signed_dmg
+    original = create_dmg.subprocess.run
+    log_ids = []
+
+    def run(arguments, **kwargs):
+        if arguments[:3] == ["xcrun", "notarytool", "wait"]:
+            return subprocess.CompletedProcess(arguments, 0, '{"status":"Invalid"}', "")
+        if arguments[:3] == ["xcrun", "notarytool", "log"]:
+            log_ids.append(arguments[3])
+        return original(arguments, **kwargs)
+
+    monkeypatch.setattr(create_dmg.subprocess, "run", run)
+    with pytest.raises(ValueError, match="DMG notarization failed"):
+        create()
+    assert log_ids == ["submission-id"]
+
+
 def test_final_stapled_image_verification_failure_prevents_success_sidecars(
     signed_dmg, monkeypatch
 ):

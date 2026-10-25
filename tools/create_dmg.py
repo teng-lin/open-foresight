@@ -275,29 +275,28 @@ def sign_disk_image(destination, identity, notary_profile, app_team):
     )
     submission = notary_response(result, Path(str(destination) + ".notary.json"))
     if result.returncode or submission.get("status") != "Accepted":
-        if submission.get("id"):
-            try:
-                signing_command(
-                    [
-                        "xcrun",
-                        "notarytool",
-                        "log",
-                        submission["id"],
-                        "--keychain-profile",
-                        notary_profile,
-                        Path(str(destination) + ".notary.log.json"),
-                    ]
-                )
-            except (
-                subprocess.CalledProcessError,
-                subprocess.TimeoutExpired,
-                OSError,
-            ) as error:
-                print(
-                    f"Notarization log unavailable: {error}",
-                    file=sys.stderr,
-                    flush=True,
-                )
+        try:
+            signing_command(
+                [
+                    "xcrun",
+                    "notarytool",
+                    "log",
+                    submission_id,
+                    "--keychain-profile",
+                    notary_profile,
+                    Path(str(destination) + ".notary.log.json"),
+                ]
+            )
+        except (
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+            OSError,
+        ) as error:
+            print(
+                f"Notarization log unavailable: {error}",
+                file=sys.stderr,
+                flush=True,
+            )
         result.check_returncode()
         raise ValueError(f"DMG notarization failed: {submission}")
     signing_command(["xcrun", "stapler", "staple", destination])

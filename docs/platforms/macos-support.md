@@ -164,8 +164,8 @@ xcrun notarytool store-credentials open-foresight-release \
 
 Replace the Apple ID and team ID placeholders with your account details. The
 second command securely prompts for an app-specific password. Keep credentials
-in Keychain; supply only the profile name to the
-packaging tools. See Apple's [notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow)
+in Keychain; supply only the profile name to the packaging tools. See Apple's
+[notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow)
 for credential alternatives and provisioning details.
 
 Set the signing identity to the exact name reported by `security`, then package
@@ -200,8 +200,8 @@ Gatekeeper assessment and verifies the final image with `hdiutil`. Checksums and
 build sidecars describe the final stapled bytes and are written only after those
 checks succeed. The `.notary.submit.json` receipt saves the submission ID before
 waiting; the `.notary.json` response and, on rejection when available,
-`.notary.log.json` retain submission
-diagnostics. A log-download failure preserves the original notarization failure.
+`.notary.log.json` retain submission diagnostics. A log-download failure
+preserves the original notarization failure.
 Upload and waiting share a one-hour budget. Polling uses at most 55 minutes or
 the remaining budget minus five seconds, whichever is shorter. The submission
 receipt remains available even if waiting times out. Other signing commands
