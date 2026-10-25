@@ -208,6 +208,12 @@ final class NativeDiagnosticWorkerOwner implements DiagnosticWorkerOwner {
       _reason = DiagnosticHealthReason.storageWorkerUnknown;
     }
     if (status >= 0) _status = status;
+    if (_notLive &&
+        !_retired &&
+        !_closing &&
+        _reason == DiagnosticHealthReason.healthy) {
+      _reason = DiagnosticHealthReason.storageWorkerExited;
+    }
   }
 
   @override

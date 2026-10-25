@@ -618,8 +618,9 @@ void main() {
         },
       );
       addTearDown(() async {
-        if (owner != null && !owner!.release.isCompleted)
+        if (owner != null && !owner!.release.isCompleted) {
           owner!.release.complete();
+        }
         await session.close();
       });
       session.producer.emit(
@@ -654,6 +655,91 @@ void main() {
       expect(result.flushed, isFalse);
       expect(result.requiresExplicitExit, isFalse);
       expect(session.health.dropped, 2);
+    },
+  );
+  test(
+    'existing writer tick observes idle child exit without a new record',
+    () async {
+      final profile = createTestTempDirectorySync('owner-idle-exit-');
+      _Owner? owner;
+      final session = await LoggingSession.startForTesting(
+        configuration: const DiagnosticConfiguration(),
+        profilePath: profile.path,
+        workerFactory: (context) => owner = _Owner(context),
+      );
+      addTearDown(session.close);
+      session.producer.emit(
+        DiagnosticEvent.runtimeFailed,
+        DiagnosticComponent.service,
+      );
+      await eventually(() => owner != null);
+      await eventually(
+        () async =>
+            (await session.inspectBudgetForTesting()).queuedRecords == 0,
+      );
+      expect(session.health.reason, DiagnosticHealthReason.healthy);
+      owner!.sink.closed =
+          true; // Sole owner now authoritatively reports not-live.
+      await eventually(
+        () =>
+            session.health.reason == DiagnosticHealthReason.storageWorkerExited,
+        timeout: const Duration(seconds: 2),
+      );
+      expect(
+        owner!.calls.where((t) => t == DiagnosticWorkerFrame.append),
+        hasLength(1),
+      );
+      expect((await session.close()).requiresExplicitExit, isFalse);
+    },
+  );
+
+  test(
+    'status observation disposes an earlier unknown APPEND without replay',
+    () async {
+      final profile = createTestTempDirectorySync('owner-later-exit-');
+      _Owner? owner;
+      final session = await LoggingSession.startForTesting(
+        configuration: const DiagnosticConfiguration(),
+        profilePath: profile.path,
+        workerFactory: (context) =>
+            owner = _Owner(context, holdFirstAppend: true),
+      );
+      addTearDown(() async {
+        if (owner != null && !owner!.release.isCompleted) {
+          owner!.release.complete();
+        }
+        await session.close();
+      });
+      session.producer.emit(
+        DiagnosticEvent.runtimeFailed,
+        DiagnosticComponent.service,
+      );
+      await eventually(() => owner != null);
+      await owner!.entered.future.timeout(const Duration(seconds: 2));
+      owner!.childUnknown = true;
+      owner!.failAppend = const DiagnosticWorkerFailure(
+        DiagnosticHealthReason.storageWorkerUnknown,
+      );
+      owner!.release.complete();
+      await eventually(
+        () =>
+            session.health.reason ==
+            DiagnosticHealthReason.storageWorkerUnknown,
+      );
+      expect((await session.inspectBudgetForTesting()).queuedRecords, 1);
+      owner!.sink.closed = true;
+      owner!.childUnknown = false;
+      await eventually(
+        () async =>
+            (await session.inspectBudgetForTesting()).queuedRecords == 0,
+        timeout: const Duration(seconds: 2),
+      );
+      expect(
+        owner!.calls.where((t) => t == DiagnosticWorkerFrame.append),
+        hasLength(1),
+      );
+      expect(session.health.dropped, 1);
+      expect((await session.close()).requiresExplicitExit, isFalse);
     },
   );
 }

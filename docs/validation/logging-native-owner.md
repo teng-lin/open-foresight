@@ -164,3 +164,14 @@ Local focused results, failure controls and initial failed output are retained
 under `/var/tmp/of-log-owner`. They do not qualify a product native image,
 actual storage child, SDK-container/Mac/full application matrix, packaging,
 resource ceilings or physical capture. Those remain separate required lanes.
+
+The existing 100 ms credit timer also drives one coalesced status edge to the
+coordinator; it does not renew the child lease or add a timer. The coordinator
+polls only the original native owner. Exactly one probe/ACK may be outstanding,
+and no per-probe Future listener attaches to writer exit or owner close. An idle
+child exit becomes closed health without waiting for another record. Observed
+not-live also disposes an earlier unknown APPEND without replay. A currently
+active RPC first consumes any matching final ACK before its remaining queue can
+be disposed. A disabled APPEND ACK drops/refunds only its known failed prefix;
+newer unsent records remain bounded in memory. Initial idle-observation and
+failed-prefix controls are retained alongside the passing followups.
