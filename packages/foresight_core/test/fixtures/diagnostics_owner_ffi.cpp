@@ -85,6 +85,10 @@ int fs_diag_child_map(uint64_t) {
 int fs_diag_child_operation(uint64_t, int) {
   return -1;
 }
+// This backend is parent-role only; the child-only operation must reject it.
+int fs_diag_child_finish(uint64_t, int) {
+  return -1;
+}
 int fs_diag_support_send(uint64_t, uint8_t type, uint64_t id, uint32_t,
                          const uint8_t *, uint32_t) {
   if (mode != "ack-exit")
@@ -107,8 +111,9 @@ int fs_diag_support_receive(uint64_t, uint8_t *bytes, uint32_t,
     return 0;
   *type = static_cast<uint8_t>(reply_type);
   *id = reply_id;
-  if (reply_type == 3) {
-    const uint8_t response[] = {1, 0, 0, 5};
+  if (reply_type == 3 || reply_type == 9) {
+    const uint8_t response[] = {
+        1, 0, static_cast<uint8_t>(reply_type == 9 ? 7 : 0), 5};
     std::memcpy(bytes, response, sizeof(response));
     *copied = *total = sizeof(response);
   }
