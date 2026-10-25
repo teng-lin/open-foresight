@@ -23,7 +23,9 @@ work starts. Each group has its own queue/thread, so a held model probe or speec
 join cannot delay another owner's capture finish or retirement. Groups are
 reusable only after actual resource destruction. The maximum is32 owner executor
 threads plus one lazily used generic test executor; production owned work uses
-only the32 owner groups. Idle executor threads retain no application, profile,
+only the32 owner groups. Native Mac legacy capture has up to32 additional
+private group threads, so both APIs together can retain64 owner executor threads
+plus that generic executor. Idle executor threads retain no application, profile,
 callback, model or capture authority. Their code image stays pinned. The thread
 stacks and registry metadata are infrastructure costs, not event or model data.
 
@@ -98,11 +100,12 @@ cannot unload executor code. Main-executable fixtures already have process
 lifetime code. The launch lock and poll/speech registries use lazy process
 lifetime storage inside existing admission/error boundaries so retained actors
 cannot race their C++ static destruction. Explicit application close remains the
-normal cleanup path. Unconfirmed owners remain quarantined for explicit retry
-or OS process cleanup; process finalization never reports them successfully
-closed. One exact-image loader reference and bounded executor infrastructure
-remain until process exit after use of the owned capability. Mac capture and
-explicit consent also pin callback code. A legacy cleanup exception preserves
+normal cleanup path. Native C/C++ owners may explicitly retry their own
+unconfirmed cleanup, retaining all dependent authority until confirmed. Dart
+uses the stricter restart policy below and never automatically retries status3.
+Process finalization never reports unconfirmed owners successfully closed. One exact-image loader reference and bounded executor infrastructure
+remain until process exit after use of the owned capability or native Mac
+legacy capture. Mac capture and explicit consent also pin callback code. A legacy cleanup exception preserves
 its failure sentinel and retained authority; a serialized retry can complete
 that original cleanup.
 
@@ -111,7 +114,12 @@ through actual exported finish, held API/poll/worker ownership, final PCM, child
 cleanup exception and retry, actual child reaping after stdout closes, forced
 resource-address reuse, repeated probes,32/4096 admission, legacy independence,
 allocation/reporter/thread rollback and exact-image lifetime after pathname
-replacement. Host controls and sanitizers are supporting evidence only. Fresh
+replacement. A minimal module sharing the production stateless pin helper
+proves actual unload without a pin and retention with it, including controlled
+pin omission and a second valid replacement image. Intrinsic retention of the
+full native library (GNU-unique or Objective-C/TLS) is separately observed;
+it is not evidence that the explicit pin works. Host controls and sanitizers
+are supporting evidence only. Fresh
 repository-root Linux/Mac CTest, the final Dart consumers, full core/desktop
 coverage, compiled service/MCP, isolated display, real models, physical audio and
 latency lanes require their own exact-source qualification.
@@ -124,6 +132,8 @@ of the owned API's4096 records. If startup is still pending, legacy stop/finish
 revokes admission immediately and queues actual cleanup there instead of joining
 Core Audio on the caller. A subsequent stop coalesces with that same producer.
 Retirement releases its private records automatically after actual cleanup.
+At the exact capacity boundary, group release may precede record removal and
+cause a transient admission refusal. Callers surface refusal without retry loops.
 Already initialized legacy capture keeps its synchronous final-PCM/drain behavior.
 The standalone probe reports failed pending cleanup and exits its dedicated
 process instead of waiting past its deadline on a permission dialog. Clients
@@ -131,8 +141,8 @@ requiring observable physical completion use the owned v2 token API.
 
 Unacknowledged owned results and lost owner IDs are deliberately not evicted.
 The production Dart owner is the service main isolate; replacement isolates must
-not adopt that mapping after its ownership state is lost. Status3, an unknown
-completion or lost acknowledgement requires surfacing unconfirmed ownership,
+not adopt that mapping after its ownership state is lost. For Dart, status3, an
+unknown completion or lost acknowledgement requires surfacing unconfirmed ownership,
 stopping new native admissions and restarting the service/application process.
 Capacity refusal must be surfaced without automatic retry loops. Normal tracked
 watchers acknowledge their own probe/join/finish results independently, even if
@@ -140,3 +150,5 @@ their original subscriber cancels. This restart policy is a required Dart
 consumer contract; native qualification alone does not establish its adoption.
 Process exit keeps any still-live legacy registry intact for OS/ownership-pipe
 cleanup rather than destructing joinable workers from a static finalizer.
+Legacy callers must end API admission before process exit; exit is not a
+concurrent registry-management API.
