@@ -29,8 +29,9 @@ void _nativeImageLoaded(NativeLibrary loaded) {
     if (producer == null ||
         producer._closed ||
         producer._writer == null ||
-        !producer.configuration.enabled)
+        !producer.configuration.enabled) {
       continue;
+    }
     DiagnosticProducer._nativeAnnounced = true;
     try {
       final functions = NativeDiagnosticQueueFunctions.fromLoaded(loaded);
@@ -38,7 +39,7 @@ void _nativeImageLoaded(NativeLibrary loaded) {
           functions.pin() &&
           functions.configureLevel(producer.configuration.level.name)) {
         NativeLibrary.diagnosticConfigurationAccepted = true;
-        producer._writer!.send([
+        producer._writer.send([
           'native_attach',
           producer.slot,
           producer.generation,
@@ -50,7 +51,7 @@ void _nativeImageLoaded(NativeLibrary loaded) {
     } catch (_) {
       // The business runtime retains its independent required ABI checks.
     }
-    producer._writer!.send([
+    producer._writer.send([
       'native_unsupported',
       producer.slot,
       producer.generation,
@@ -86,7 +87,9 @@ extension _NativeWriterControl on _Writer {
   }
 
   void _publishNativeHealth({bool finalState = false}) {
-    if (!_nativeHealthPending || (_nativeHealthInFlight && !finalState)) return;
+    if (!_nativeHealthPending || (_nativeHealthInFlight && !finalState)) {
+      return;
+    }
     _nativeHealthPending = false;
     if (_nativePublishedReason == _nativeReason &&
         _nativePublishedDropsExact == _nativeDropsExact) {
@@ -119,8 +122,9 @@ extension _NativeWriterControl on _Writer {
             source == null ||
             source.port == null ||
             source.quarantined ||
-            value[3] != 0)
+            value[3] != 0) {
           return true;
+        }
         if (value.first == 'native_unsupported') {
           // An unrelated old image cannot revoke an already accepted consumer.
           if (_nativeRequested || _nativeQueue != null) return true;
@@ -141,8 +145,9 @@ extension _NativeWriterControl on _Writer {
         if (closing || _nativeQueue != null || value.length != 3) return true;
         final bootstrap = value[1] as DiagnosticProducerBootstrap;
         if (bootstrap.kind != DiagnosticProducerKind.nativeDrain ||
-            bootstrap._executionVm != Isolate.current.controlPort)
+            bootstrap._executionVm != Isolate.current.controlPort) {
           return true;
+        }
         final functions =
             NativeDiagnosticQueueFunctions.fromPinnedCodeAddresses(
               value[2] as List<int>,
@@ -172,8 +177,10 @@ extension _NativeWriterControl on _Writer {
     adapter.producer.close();
     final slot = adapter.producer.slot;
     if (slot >= 0 &&
-        ledger.slots[slot]?.snapshot.generation == adapter.producer.generation)
+        ledger.slots[slot]?.snapshot.generation ==
+            adapter.producer.generation) {
       return false;
+    }
     adapter.producer._markRetired();
     _nativeFinishing = false;
     return true;
