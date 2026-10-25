@@ -1,4 +1,4 @@
-#include "diagnostic_queue.h"
+#include "diagnostic_queue_internal.h"
 
 #include <atomic>
 #include <cstddef>
@@ -93,6 +93,10 @@ bool emit(fs_diagnostic_record record, bool priority,
   record.sequence = queue.sequence + 1;
   record.monotonic_us = static_cast<uint64_t>(time.tv_sec) * 1000000 +
                         static_cast<uint64_t>(time.tv_nsec / 1000);
+  if (record.monotonic_us > maximum_number) {
+    drop(priority);
+    return false;
+  }
   const bool accepted =
       priority ? queue.priority.append(record) : queue.general.append(record);
   if (accepted)

@@ -1,3 +1,6 @@
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include "../../native/diagnostic_queue.cpp"
 
 #include <array>
@@ -108,6 +111,25 @@ int main() {
   }
   assert(normal_drained == general_capacity);
 
+  // A partial priority overtake leaves both lanes populated. The next full
+  // drain accepts the older ordinary record and merges the remaining heads.
+  assert(capture_state(0, 1, 1, true));
+  assert(worker_failed(0, 3, 1, 0));
+  assert(capture_state(0, 1, 2, true));
+  assert(worker_failed(0, 3, 2, 0));
+  assert(fs_diagnostic_drain(token, 1, 64, records.data(), 1,
+                             FS_DIAGNOSTIC_PRIORITY_ONLY, &batch,
+                             sizeof(batch)) == 0);
+  assert(batch.count == 1 && records[0].event == FS_DIAGNOSTIC_WORKER_FAILED);
+  const auto partial_sequence = records[0].sequence;
+  assert(drain() == 0 && batch.count == 3);
+  assert(records[0].sequence < partial_sequence);
+  assert(records[0].event == FS_DIAGNOSTIC_CAPTURE_STATE);
+  assert(records[1].event == FS_DIAGNOSTIC_CAPTURE_STATE);
+  assert(records[2].event == FS_DIAGNOSTIC_WORKER_FAILED);
+  assert(records[0].sequence < records[1].sequence &&
+         records[1].sequence < records[2].sequence);
+
   // Without restricted credits the two lanes merge in original admission
   // order. Older ordinary records remain valid after priority overtook them.
   assert(capture_state(0, 1, 1, true));
@@ -145,6 +167,8 @@ int main() {
       running.fetch_sub(1);
     });
   size_t concurrent_count = 0;
+  uint64_t concurrent_dropped = 0;
+  bool concurrent_precision_lost = false;
   previous_sequence = 0;
   while (true) {
     const bool finished = running.load() == 0;
@@ -152,6 +176,9 @@ int main() {
     if (result == FS_DIAGNOSTIC_BUSY)
       continue;
     assert(result == 0);
+    assert(batch.dropped_general == 0);
+    concurrent_dropped += batch.dropped_priority;
+    concurrent_precision_lost |= batch.flags & FS_DIAGNOSTIC_PRECISION_LOST;
     concurrent_count += batch.count;
     for (uint32_t i = 0; i < batch.count; ++i) {
       assert(records[i].sequence > previous_sequence);
@@ -164,11 +191,24 @@ int main() {
   for (auto &producer : producers)
     producer.join();
   assert(concurrent_count > 0 && concurrent_count <= 80000);
+  assert(concurrent_count + concurrent_dropped <= 80000);
+  if (!concurrent_precision_lost)
+    assert(concurrent_count + concurrent_dropped == 80000);
 
   // Saturation is explicit and monotonic identifiers never wrap/reuse.
-  queue.dropped_priority = std::numeric_limits<uint64_t>::max();
+  const auto last_sequence = queue.sequence;
   queue.sequence = std::numeric_limits<uint64_t>::max();
   assert(!worker_failed(0, 3, 0, 0));
+  assert(drain() == 0 && batch.count == 0);
+  assert(batch.dropped_priority == 1);
+  assert(batch.flags == FS_DIAGNOSTIC_COUNTER_SATURATED);
+  queue.sequence = last_sequence;
+  {
+    TryGuard guard;
+    assert(guard.acquired);
+    queue.dropped_priority = std::numeric_limits<uint64_t>::max();
+    drop(true);
+  }
   assert(drain() == 0 && batch.count == 0);
   assert(batch.dropped_priority == std::numeric_limits<uint64_t>::max());
   assert(batch.flags == FS_DIAGNOSTIC_COUNTER_SATURATED);
