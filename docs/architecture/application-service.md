@@ -180,7 +180,7 @@ Peer verification protects the desktop approval connection against bearer-token 
 
 Tool failures return `isError: true` with a useful message and a structured `error` containing a stable `code` and `message`. Codes distinguish invalid arguments, missing resources, busy workers, cancellation, unavailable services, denied access, and internal failures. An `unavailable` error may also carry a `reason`: `closing` (the service refused the request before running it, so retrying is safe), `outcomeUnknown` (the request was sent and may have committed), or `notSent` (it never reached the service). A `denied` error may carry `reason: needsDesktop` when the operation needs the desktop's approval and no desktop is attached. Invalid protocol requests are handled by the SDK. Tools expose their input schemas and effect annotations. Clients may supply a progress token for started/ongoing/completed notifications. `ask` returns the final checked answer; provisional generation remains internal to the service/desktop stream.
 
-The operation identities live in `packages/foresight_core/lib/src/operations.dart`. Required descriptors define argument shape, access, helper readiness, model admission, activity and MCP projection. The wire adapter decodes one immutable typed request before access checks, leases, activity stamps or dispatch. The application and service registries own 75 and eight handlers respectively; runtime tests assert their disjoint, exhaustive union. Desktop command interfaces and remote facades accept operation identities and convert them to wire names at the transport. The RPC contracts check the frozen 32 MCP schemas, reject raw operation names outside approved declarations, and invoke every MCP tool over stdio against a controlled service socket. Request fingerprints retain the original argument field presence and JSON number representations.
+The operation identities live in `packages/foresight_core/lib/src/operations.dart`. Required descriptors define argument shape, access, helper readiness, model admission, activity and MCP projection. The wire adapter decodes one immutable typed request before access checks, leases, activity stamps or dispatch. The application and service registries own 78 and nine handlers respectively; runtime tests assert their disjoint, exhaustive union. Desktop command interfaces and remote facades accept operation identities and convert them to wire names at the transport. The RPC contracts check the frozen 32 MCP schemas, reject raw operation names outside approved declarations, and invoke every MCP tool over stdio against a controlled service socket. Request fingerprints retain the original argument field presence and JSON number representations.
 
 The owned helper API is `foresight.helper.v1.RagService`; all failures use non-OK gRPC statuses. Legacy success acknowledgement fields retain their wire tags, but carry no error channel. The immutable recovered descriptor preserves historical message presence and edition features. `tools/generate_bindings.py` versions its package and source name for production. To regenerate Dart bindings, activate `protoc_plugin 24.0.0` and run `python tools/check_dart_bindings.py --write`. CI regenerates all three schemas and rejects drift; descriptor snapshots also check the control and web-content RPC shapes, defaults, and reserved tags.
 
@@ -545,5 +545,16 @@ corresponding contracts, rather than treated as void acknowledgements.
 
 Model download progress uses an explicit optional `progress_key`, separate from
 RPC-authoritative request IDs and cancellation. The typed desktop bridge sends
-its local correlation key there; the server-owned progress implementation and
-its real-wire acceptance remain part of the separately reviewed acquisition unit.
+its local correlation key there. The acquisition owner publishes it through both
+startup status and normal changed snapshots; capture-level telemetry leaves that
+progress untouched. The real service-to-proxy fixture verifies checking phase,
+correlation and terminal state without downloading a model or claiming installed
+runtime acceptance.
+
+Answer streams decode each chunk through `answerStreamDescriptor`, so malformed
+chunks receive the same safe `internal/outcomeUnknown` classification as other
+data replies. The client AST guard rejects direct command calls and method
+tear-offs. Its exact RemoteDomain transport-leaf inventory permits the existing
+desktop attach/visibility/detach, import-root consent, request/resend, clear-status,
+Google sign-in and answer stream adapters, and separately records callback calls.
+An extra operation, duplicate leaf or transport tear-off fails that inventory.

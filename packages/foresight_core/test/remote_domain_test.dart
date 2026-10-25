@@ -655,6 +655,44 @@ void main() {
     },
   );
 
+  for (final web in [false, true]) {
+    test(
+      'malformed ${web ? 'web ' : ''}answer chunk has an unknown outcome',
+      () async {
+        f.handler = (socket, request) {
+          f.reply(socket, request, {'unexpected': 'private-chunk-canary'});
+        };
+        final before = f.requests
+            .where((r) => r['method'] == 'answer.stream')
+            .length;
+        final stream = web
+            ? f.remote.askWithWebInConversation('Question', 'desktop')
+            : f.remote.askInConversation('Question', 'desktop');
+        await expectLater(
+          stream.toList(),
+          throwsA(
+            isA<RpcError>()
+                .having((e) => e.code, 'code', RpcErrorCode.internal)
+                .having(
+                  (e) => e.reason,
+                  'reason',
+                  RpcErrorReason.outcomeUnknown,
+                )
+                .having(
+                  (e) => e.message,
+                  'safe message',
+                  'The service returned an invalid response; the operation may have completed.',
+                ),
+          ),
+        );
+        expect(
+          f.requests.where((r) => r['method'] == 'answer.stream'),
+          hasLength(before + 1),
+        );
+      },
+    );
+  }
+
   test(
     'remote model cancellation reaches the active answer without closing shared runtime',
     () async {

@@ -943,7 +943,7 @@ class RemoteDomain
       if (current != null && !current()) {
         throw operationCancelled('Answer cancelled');
       }
-      yield value as String;
+      yield answerStreamDescriptor.decodeResponse(value);
     }
   }
 
@@ -968,7 +968,7 @@ class RemoteDomain
       if (current != null && !current()) {
         throw operationCancelled('Answer cancelled');
       }
-      yield value as String;
+      yield answerStreamDescriptor.decodeResponse(value);
     }
   }
 

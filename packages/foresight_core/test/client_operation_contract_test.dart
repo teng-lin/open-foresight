@@ -39,17 +39,135 @@ final class _Port implements CurrentClientCommandPort {
   }
 }
 
-final class _RawCommandCalls extends RecursiveAstVisitor<void> {
-  final calls = <MethodInvocation>[];
+String _scope(AstNode node) {
+  final names = <String>[];
+  for (AstNode? parent = node.parent; parent != null; parent = parent.parent) {
+    if (parent is ClassDeclaration) names.add(parent.namePart.typeName.lexeme);
+    if (parent is MethodDeclaration) names.add(parent.name.lexeme);
+    if (parent is FunctionDeclaration) names.add(parent.name.lexeme);
+  }
+  return names.reversed.join('.');
+}
+
+bool _locallyBound(SimpleIdentifier node) {
+  bool parameter(FormalParameterList? parameters) =>
+      parameters?.parameters.any((p) => p.name?.lexeme == node.name) ?? false;
+  for (AstNode? parent = node.parent; parent != null; parent = parent.parent) {
+    if (parent is MethodDeclaration && parameter(parent.parameters)) {
+      return true;
+    }
+    if (parent is FunctionExpression && parameter(parent.parameters)) {
+      return true;
+    }
+    if (parent is Block) {
+      for (final statement in parent.statements) {
+        if (statement.offset >= node.offset) break;
+        if (statement is VariableDeclarationStatement &&
+            statement.variables.variables.any(
+              (v) => v.name.lexeme == node.name,
+            )) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+final class _RawReferences extends RecursiveAstVisitor<void> {
+  _RawReferences(this.names);
+  final Set<String> names;
+  final references = <String>[];
+  void record(SimpleIdentifier name, String target, String argument) {
+    for (
+      AstNode? parent = name.parent;
+      parent != null;
+      parent = parent.parent
+    ) {
+      if (parent is Comment || parent is CommentReference) return;
+    }
+    if (names.contains(name.name)) {
+      references.add('${_scope(name)}|$target|${name.name}|$argument');
+    }
+  }
+
   @override
   void visitMethodInvocation(MethodInvocation node) {
-    if (node.methodName.name == 'command' ||
-        node.methodName.name == 'commandCurrent') {
-      calls.add(node);
-    }
+    record(
+      node.methodName,
+      node.target?.toSource() ?? '',
+      node.argumentList.arguments.firstOrNull?.toSource() ?? '',
+    );
     super.visitMethodInvocation(node);
   }
+
+  @override
+  void visitPrefixedIdentifier(PrefixedIdentifier node) {
+    record(node.identifier, node.prefix.toSource(), '<tear-off>');
+    super.visitPrefixedIdentifier(node);
+  }
+
+  @override
+  void visitPropertyAccess(PropertyAccess node) {
+    record(node.propertyName, node.target?.toSource() ?? '', '<tear-off>');
+    super.visitPropertyAccess(node);
+  }
+
+  @override
+  void visitSimpleIdentifier(SimpleIdentifier node) {
+    final parent = node.parent;
+    if (!node.inDeclarationContext() &&
+        parent is! Label &&
+        !_locallyBound(node) &&
+        !(parent is MethodInvocation && identical(parent.methodName, node)) &&
+        !(parent is PrefixedIdentifier && identical(parent.identifier, node)) &&
+        !(parent is PropertyAccess && identical(parent.propertyName, node))) {
+      record(node, '', '<tear-off>');
+    }
+    super.visitSimpleIdentifier(node);
+  }
 }
+
+Map<String, int> _referenceCounts(Iterable<String> references) {
+  final counts = <String, int>{};
+  for (final reference in references) {
+    counts.update(reference, (count) => count + 1, ifAbsent: () => 1);
+  }
+  return counts;
+}
+
+// Closed transport leaves, including their operation/argument and exact count.
+// Callback .call sites are explicitly distinguished from ServiceClient leaves;
+// adding an operation, alias/tear-off or duplicate call requires owner review.
+const _remoteTransportLeaves = <String, int>{
+  // StreamController getters carry already received values, not new RPCs.
+  'RemoteDomain.changes|_changes|stream|<tear-off>': 1,
+  'RemoteDomain.captureLevels|_captureLevels|stream|<tear-off>': 1,
+  'RemoteDomain._listen|connection.events|stream|<tear-off>': 1,
+  'RemoteDomain._streamCurrent|controller|stream|<tear-off>': 1,
+  'RemoteDomain._performDesktopAttach|connection|call|Operation.securityAttachDesktop.wire':
+      1,
+  'RemoteDomain._syncDesktopVisibility|connection|call|Operation.securityDesktopVisibility.wire':
+      1,
+  'RemoteDomain.disableDesktopApprovals|client|call|Operation.securityDetachDesktop.wire':
+      1,
+  'RemoteDomain._apply|_approvalEvents|call|event': 1,
+  'RemoteDomain._call|current|stream|method': 1,
+  'RemoteDomain.connect|createdForTesting|call|domain': 1,
+  'RemoteDomain.command||_call|Operation.securityAllowImportRoot.wire': 1,
+  'RemoteDomain.command||_call|operation.wire': 1,
+  'RemoteDomain.command|client|call|Operation.status.wire': 1,
+  'RemoteDomain._settleLostClear||_call|Operation.status.wire': 1,
+  'RemoteDomain._streamCurrent.send|connection|stream|operation.wire': 1,
+  'RemoteDomain._streamCurrent.send|current|call|': 2,
+  'RemoteDomain._streamCurrent|current|call|': 1,
+  'RemoteDomain.commandCurrent||_streamCurrent|operation': 1,
+  'RemoteDomain.googleSignIn|client|stream|operation.wire': 1,
+  'RemoteDomain.askInConversation||_streamCurrent|Operation.answerStream': 1,
+  'RemoteDomain.askWithWebInConversation||_streamCurrent|Operation.answerStream':
+      1,
+  'RemoteRuntime.cancel|onCancel|call|requestId': 1,
+};
 
 void main() {
   test('typed descriptors retain one original operation registry', () {
@@ -431,24 +549,62 @@ void main() {
     ];
     final violations = <String>[];
     for (final file in files) {
-      final visitor = _RawCommandCalls();
+      final visitor = _RawReferences({'command', 'commandCurrent'});
       parseString(
         content: file.readAsStringSync(),
         path: file.path,
       ).unit.accept(visitor);
       violations.addAll(
-        visitor.calls.map(
-          (call) => '${file.path}:${call.offset}: ${call.methodName.name}',
-        ),
+        visitor.references.map((reference) => '${file.path}: $reference'),
       );
     }
     expect(violations, isEmpty);
-    final control = _RawCommandCalls();
+    final control = _RawReferences({'command', 'commandCurrent'});
     parseString(
       content:
-          "void example() { owner.command(null); owner.commandCurrent(null, {}, current); final text = 'owner.command()'; }",
+          "void example() { owner.command(null); owner.commandCurrent(null, {}, current); final invoke = owner.command; final invokeCurrent = (owner).commandCurrent; final implicit = command; final text = 'owner.command()'; }",
     ).unit.accept(control);
-    expect(control.calls, hasLength(2));
+    expect(control.references, hasLength(5));
+    final values = _RawReferences({'command', 'commandCurrent'});
+    parseString(
+      content:
+          "void example(String command) { use(command, command: command); } void local() { final command = 'activate'; use(command); } /// [commandCurrent]\nvoid docs() {}",
+    ).unit.accept(values);
+    expect(values.references, isEmpty);
+
+    final leaves = _RawReferences({
+      'call',
+      'stream',
+      '_call',
+      '_streamCurrent',
+    });
+    parseString(
+      content: File(
+        '${core.path}/lib/src/remote_domain.dart',
+      ).readAsStringSync(),
+    ).unit.accept(leaves);
+    expect(_referenceCounts(leaves.references), _remoteTransportLeaves);
+    for (final bypass in [
+      'void command() { client.call(Operation.notesSave.wire); }',
+      'void command() { final bypass = client.stream; }',
+      'void command() { final bypass = _call; }',
+      'void command() { _call(operation.wire); _call(operation.wire); }',
+    ]) {
+      final negative = _RawReferences({
+        'call',
+        'stream',
+        '_call',
+        '_streamCurrent',
+      });
+      parseString(
+        content: 'class RemoteDomain { $bypass }',
+      ).unit.accept(negative);
+      expect(negative.references, isNotEmpty);
+      expect(
+        _referenceCounts([...leaves.references, ...negative.references]),
+        isNot(_remoteTransportLeaves),
+      );
+    }
   });
   test(
     'optional reply metadata preserves explicit null and empty object presence',
