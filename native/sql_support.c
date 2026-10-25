@@ -12,6 +12,15 @@
 #include <stddef.h>
 #include <time.h>
 
+/* Product builds supply an independent SQL source/recipe identity. This private
+ * byte marker is not an ABI entry or a compiler-execution attestation. Direct C
+ * mechanism proofs intentionally remain unmarked unless given that identity. */
+#ifdef FORESIGHT_SQL_SUPPORT_SOURCE_ID
+__attribute__((used)) static const char sql_support_source_id[] =
+    "\0FORESIGHT_SQL_SUPPORT_SOURCE_ID:v1:" FORESIGHT_SQL_SUPPORT_SOURCE_ID
+    ":end\0";
+#endif
+
 _Static_assert(ATOMIC_LONG_LOCK_FREE == 2 && ATOMIC_LLONG_LOCK_FREE == 2 &&
                    ATOMIC_INT_LOCK_FREE == 2,
                "SQL support requires lock-free native integer atomics");

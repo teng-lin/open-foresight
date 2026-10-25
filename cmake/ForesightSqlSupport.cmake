@@ -10,6 +10,17 @@ set_target_properties(foresight_sql_support PROPERTIES
   C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
   C_VISIBILITY_PRESET hidden)
 target_compile_options(foresight_sql_support PRIVATE -Wall -Wextra -Werror)
+# The product receipt producer computes this from the exact SQL C/header/module
+# inputs and public build recipe. It is independent of diagnostic NativeID.
+if(DEFINED FORESIGHT_SQL_SUPPORT_SOURCE_ID)
+  string(LENGTH "${FORESIGHT_SQL_SUPPORT_SOURCE_ID}" _foresight_sql_id_length)
+  if(NOT _foresight_sql_id_length EQUAL 64 OR
+     NOT FORESIGHT_SQL_SUPPORT_SOURCE_ID MATCHES "^[0-9a-f]+$")
+    message(FATAL_ERROR "SQL support source identity must be 64 lowercase hex digits")
+  endif()
+  target_compile_definitions(foresight_sql_support PRIVATE
+    "FORESIGHT_SQL_SUPPORT_SOURCE_ID=\"${FORESIGHT_SQL_SUPPORT_SOURCE_ID}\"")
+endif()
 target_link_libraries(foresight_sql_support PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
 install(TARGETS foresight_sql_support LIBRARY DESTINATION lib)
 install(FILES "${_foresight_sql_root}/native/sql_support.h" DESTINATION include)
