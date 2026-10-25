@@ -117,10 +117,17 @@ class HookedServiceBuild {
       'of-build-',
     );
     final kernel = '${directory.path}/service.dill';
+    final checkout = Directory('$root/../..').resolveSymbolicLinksSync();
+    final build = Directory(
+      Platform.environment['FORESIGHT_BUILD_DIR'] ?? '$checkout/build',
+    ).resolveSymbolicLinksSync();
     final result = await Process.run(Platform.resolvedExecutable, [
       'compile',
       'kernel',
       if (testHooks) '-DFORESIGHT_ENABLE_TEST_HOOKS=true',
+      '-DFORESIGHT_DIAGNOSTIC_TEST_CONTEXT=true',
+      '-DFORESIGHT_DIAGNOSTIC_SOURCE_ANCHOR=$checkout',
+      '-DFORESIGHT_DIAGNOSTIC_BUILD_ROOT=$build',
       '--packages=$packages',
       '$root/$entryPoint',
       '-o',
