@@ -329,3 +329,21 @@ def test_unavailable_sql_state_has_private_writer_mode_under_group_umask(product
         umask=0o002,
     )
     assert (build / "diagnostic-sql-inputs.json").stat().st_mode & 0o777 == 0o644
+
+
+def test_sql_verification_ignores_unavailable_diagnostic_temporary_root(
+    product, tmp_path
+):
+    source, build = product
+    build.mkdir()
+    unrelated = tmp_path / "unrelated-native-temporary"
+    unrelated.mkdir(mode=0o750)
+    sentinel = unrelated / "sentinel"
+    sentinel.write_bytes(b"unrelated native temporary directory")
+    (build / "diagnostic-product-temp").symlink_to(unrelated, target_is_directory=True)
+    configure(source, build)
+    record, _ = compile_product(build)
+    assert sql.verify_record(source, record) == record["sql_source_id"]
+    assert sentinel.read_bytes() == b"unrelated native temporary directory"
+    assert unrelated.stat().st_mode & 0o777 == 0o750
+    assert (build / "diagnostic-product-temp").is_symlink()

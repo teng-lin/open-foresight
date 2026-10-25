@@ -124,6 +124,7 @@ function(_foresight_prepare_sql_identity)
       "-DDIAGNOSTIC_FAMILY=${_family}" "-DDIAGNOSTIC_VERSION=${CMAKE_C_COMPILER_VERSION}"
       "-DDIAGNOSTIC_SDK=${CMAKE_OSX_SYSROOT}" "-DDIAGNOSTIC_EXPECTED=${_fingerprint}"
       "-DDIAGNOSTIC_STATE=${_sql_record_path}"
+      "-DDIAGNOSTIC_ENV_TEMP=${_sql_temporary}"
       -P "${_foresight_sql_root}/cmake/VerifyDiagnosticToolchain.cmake"
     VERBATIM)
   add_custom_target(foresight_sql_compile
