@@ -140,153 +140,31 @@ extension _AssistantViews on MeetingsController {
     );
   }
 
-  Widget meetingTranscriptPanel(int id, {bool questions = false}) {
-    final rows = _reads.transcript(id);
-    final displayed = questions
-        ? rows.where((t) => (t.text).contains('?')).toList()
-        : rows;
-    return Column(
-      children: [
-        if (!questions)
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Transcript',
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                ),
-                IconButton(
-                  tooltip: 'Import transcript',
-                  onPressed: _operations.busy
-                      ? null
-                      : () =>
-                            _operations.run(() => importMeetingTranscript(id)),
-                  icon: const Icon(Icons.file_upload_outlined),
-                ),
-                if (_reads.attachments(id).isNotEmpty)
-                  IconButton(
-                    tooltip: 'Import meeting attachments',
-                    onPressed:
-                        _operations.busy ||
-                            !_integrations.googlePresentation.connected
-                        ? null
-                        : () => _operations.run(
-                            () => _integrationCommands.importMeetingAttachments(
-                              id,
-                            ),
-                          ),
-                    icon: const Icon(Icons.attach_file),
-                  ),
-                IconButton(
-                  tooltip: 'Copy full transcript',
-                  onPressed: rows.isEmpty
-                      ? null
-                      : () => Clipboard.setData(
-                          ClipboardData(
-                            text: rows.map((row) => row.text).join('\n\n'),
-                          ),
-                        ),
-                  icon: const Icon(Icons.copy_all),
-                ),
-              ],
-            ),
-          ),
-        Expanded(
-          child:
-              displayed.isEmpty && (questions || provisionalTranscript.isEmpty)
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Text(
-                      questions
-                          ? 'Questions from the live transcript will appear here.'
-                          : 'Your live transcript will appear here.',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        color: Color(0xff87a8b7),
-                        fontSize: 17,
-                      ),
-                    ),
-                  ),
-                )
-              : ListView(
-                  padding: const EdgeInsets.all(16),
-                  children: [
-                    if (!questions && rows.isNotEmpty)
-                      SelectableText.rich(
-                        key: ValueKey('meeting-transcript-$id'),
-                        TextSpan(
-                          children: [
-                            for (
-                              var index = 0;
-                              index < rows.length;
-                              index++
-                            ) ...[
-                              TextSpan(
-                                text:
-                                    '${MeetingSpeaker.fromSource(rows[index].source).label}\n',
-                                style: Theme.of(context).textTheme.bodySmall,
-                              ),
-                              TextSpan(text: rows[index].text),
-                              if (index < rows.length - 1)
-                                const TextSpan(text: '\n\n'),
-                            ],
-                          ],
-                        ),
-                        style: Theme.of(context).textTheme.bodyLarge,
-                      ),
-                    if (questions)
-                      for (final t in displayed)
-                        ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          title: SelectableText(t.text),
-                          subtitle: Text(
-                            MeetingSpeaker.fromSource(t.source).label,
-                          ),
-                          trailing: questions
-                              ? IconButton(
-                                  tooltip: 'Answer this question',
-                                  onPressed:
-                                      _operations.busy ||
-                                          _chat.asking ||
-                                          meetingEnhancing
-                                      ? null
-                                      : () {
-                                          _chatCommands.setQuestion(id, t.text);
-                                          update(() => meetingPanel = 'Chat');
-                                          unawaited(
-                                            _chatCommands.askQuestion(
-                                              meetingScope: id,
-                                            ),
-                                          );
-                                        },
-                                  icon: const Icon(Icons.arrow_upward),
-                                )
-                              : null,
-                        ),
-                    if (!questions && recordingMeeting == id)
-                      for (final entry in provisionalTranscript.entries.where(
-                        (e) => e.value.isNotEmpty,
-                      ))
-                        ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          title: Text(
-                            entry.value,
-                            style: const TextStyle(color: Color(0xff818995)),
-                          ),
-                          subtitle: Text(
-                            '${MeetingSpeaker.fromSource(entry.key).label} · Live',
-                          ),
-                        ),
-                  ],
-                ),
-        ),
-      ],
-    );
-  }
+  Widget meetingTranscriptPanel(int id, {bool questions = false}) =>
+      MeetingTranscriptPanel(
+        id: id,
+        rows: _reads.transcript(id),
+        provisional: provisionalTranscript,
+        questions: questions,
+        showProvisional: recordingMeeting == id,
+        hasAttachments: _reads.attachments(id).isNotEmpty,
+        canAnswer: !_operations.busy && !_chat.asking && !meetingEnhancing,
+        onImportTranscript: _operations.busy
+            ? null
+            : () => _operations.run(() => importMeetingTranscript(id)),
+        onImportAttachments:
+            _operations.busy || !_integrations.googlePresentation.connected
+            ? null
+            : () => _operations.run(
+                () => _integrationCommands.importMeetingAttachments(id),
+              ),
+        onCopy: (text) => Clipboard.setData(ClipboardData(text: text)),
+        onQuestion: (text) {
+          _chatCommands.setQuestion(id, text);
+          update(() => meetingPanel = 'Chat');
+          unawaited(_chatCommands.askQuestion(meetingScope: id));
+        },
+      );
 
   Widget _meetingAutomaticQuestion(MeetingQuestion item) => Card(
     child: Padding(

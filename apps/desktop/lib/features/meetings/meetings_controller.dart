@@ -1,3 +1,4 @@
+import 'transcript_view.dart';
 import 'workspace_view.dart';
 import 'collection_view.dart';
 import 'summary_view.dart';
