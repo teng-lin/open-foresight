@@ -7,7 +7,7 @@ import '../test_support/desktop_architecture.dart';
 
 void main() {
   final desktop = Directory('lib');
-  test('desktop import closure does not reach the MCP implementation', () {
+  test('desktop closure excludes authority and server entry retains it', () {
     final config = File('.dart_tool/package_config.json');
     final packages =
         (jsonDecode(config.readAsStringSync()) as Map)['packages'] as List;
@@ -17,43 +17,68 @@ void main() {
             .resolve('${entry['rootUri']}/')
             .resolve(entry['packageUri'] as String? ?? ''),
     };
-    final pending = desktop
-        .listSync(recursive: true)
-        .whereType<File>()
-        .where((file) => file.path.endsWith('.dart'))
-        .toList();
-    final visited = <String>{};
-    final violations = <String>[];
-    while (pending.isNotEmpty) {
-      final file = pending.removeLast();
-      if (!visited.add(file.absolute.path)) continue;
-      final unit = parseString(
-        content: file.readAsStringSync(),
-        path: file.path,
-      ).unit;
-      for (final directive in unit.directives.whereType<UriBasedDirective>()) {
-        for (final uri in desktopDependencyUris(directive)) {
-          if (uri.startsWith('package:mcp_dart/')) {
-            violations.add('${file.path}: $uri');
-          } else if (uri.startsWith('package:')) {
-            final parsed = Uri.parse(uri);
-            final parts = parsed.path.split('/');
-            final root = roots[parts.first];
-            expect(
-              root,
-              isNotNull,
-              reason: 'Unresolved dependency in desktop closure: $uri',
-            );
-            pending.add(File.fromUri(root!.resolve(parts.skip(1).join('/'))));
-          } else if (uri.isNotEmpty && !uri.contains(':')) {
-            pending.add(File.fromUri(file.uri.resolve(uri)));
+    ({Set<String> visited, List<String> violations}) walk(List<File> pending) {
+      final visited = <String>{};
+      final violations = <String>[];
+      while (pending.isNotEmpty) {
+        final file = pending.removeLast();
+        if (!visited.add(file.absolute.path)) continue;
+        final unit = parseString(
+          content: file.readAsStringSync(),
+          path: file.path,
+        ).unit;
+        for (final directive
+            in unit.directives.whereType<UriBasedDirective>()) {
+          for (final uri in desktopDependencyUris(directive)) {
+            if (uri.startsWith('package:mcp_dart/')) {
+              violations.add('${file.path}: $uri');
+            } else if (uri.startsWith('package:')) {
+              final parsed = Uri.parse(uri);
+              final parts = parsed.path.split('/');
+              final root = roots[parts.first];
+              expect(
+                root,
+                isNotNull,
+                reason: 'Unresolved dependency in desktop closure: $uri',
+              );
+              pending.add(File.fromUri(root!.resolve(parts.skip(1).join('/'))));
+            } else if (uri.isNotEmpty && !uri.contains(':')) {
+              pending.add(File.fromUri(file.uri.resolve(uri)));
+            }
           }
         }
       }
+      return (visited: visited, violations: violations);
     }
-    expect(visited, contains(endsWith('/src/remote_domain.dart')));
-    expect(visited, contains(endsWith('/src/application_service.dart')));
-    expect(violations, isEmpty);
+
+    final client = walk(desktopDartFiles(desktop));
+    expect(client.visited, contains(endsWith('/src/remote_domain.dart')));
+    for (final authority in [
+      'application_service.dart',
+      'application.dart',
+      'domain.dart',
+      'store.dart',
+      'native.dart',
+      'recording.dart',
+    ]) {
+      expect(client.visited, isNot(contains(endsWith('/src/$authority'))));
+    }
+    expect(client.violations, isEmpty);
+    // A deliberate server entry must still find authority: this proves the
+    // resolver would detect an accidental implementation edge from the client.
+    final server = walk([
+      File('../../packages/foresight_core/lib/service_server.dart'),
+    ]);
+    for (final authority in [
+      'application_service.dart',
+      'application.dart',
+      'domain.dart',
+      'store.dart',
+      'native.dart',
+    ]) {
+      expect(server.visited, contains(endsWith('/src/$authority')));
+    }
+    expect(server.violations, isEmpty);
   });
 
   test('StoreReader exposes only asynchronous queries and read metadata', () {
