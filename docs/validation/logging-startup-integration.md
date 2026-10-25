@@ -22,10 +22,17 @@ application lock. Off and unavailable worker identities produce no diagnostic
 image, owner, page or child. Mandatory SQL selection is independent of logging
 configuration. Command resolution selects the installed service, never MCP,
 the GUI or an environment wrapper. Source selection needs explicit public
-compile-time context and a pinned Dart/package/script-or-kernel tuple.
+compile-time context, a selected SDK root/public identity, and a pinned
+Dart/package/script-or-kernel tuple; the executable cannot select its own trust
+anchor. Installed entries ignore embedded source-fixture selections.
 
-Parent selection uses metadata only, with no symlink, hardlink, foreign owner
-or writable candidate admitted. It does not open or hash source/command files.
+Parent selection uses metadata only and walks every physical ancestor outside
+and within the selected anchor. Symlinks and foreign/writable directories are
+refused except the exact reviewed root:admin0775 `/Applications`, root:staff02775
+`/usr/local` and physical root-sticky temp directory rules. A sticky ancestor
+requires its next descendant to be private. All consumed Linux statx fields
+(TYPE/MODE/NLINK/UID/GID) must be present. No symlink, hardlink, foreign owner
+or writable ordinary candidate is admitted. It does not open or hash source/command files.
 The validated system DSO is the sole early regular-file load. Lazy owner
 resolution retains immutable metadata, not a loader callback. UTF-8 argv must
 fit sixteen entries, 1,024 bytes per entry and 2,048 bytes total. Source JIT uses
@@ -42,7 +49,7 @@ The current source callback refuses: no reviewed source/SDK input-manifest
 verifier or production worker ID has been activated. Declarative `-D` equality
 does not establish source-byte identity.
 
-Initial Linux selector tests executed sixteen cases, zero skips, and targeted
+Initial Linux selector tests executed twenty cases, zero skips, and targeted
 analysis/format passed. These include real symlink/hardlink/writable files,
 compiled service/MCP path selection, finite argv and SQL independence from off
 or missing diagnostic identity. They are metadata fixtures, not loaded-product,

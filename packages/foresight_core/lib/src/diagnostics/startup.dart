@@ -78,6 +78,23 @@ bool _identity(String value) =>
     value.length == 64 &&
     value.codeUnits.every((c) => (c >= 48 && c <= 57) || (c >= 97 && c <= 102));
 
+bool _linuxInstallationEntry(String executable) {
+  final directory = p.basename(p.dirname(executable));
+  final name = p.basename(executable);
+  return directory == 'bin' &&
+          const {'foresight-service', 'foresight-mcp'}.contains(name) ||
+      directory == 'app' && name == 'open-foresight';
+}
+
+bool _sourceSelected(DiagnosticStartupContext context) {
+  if (!context.sourceContext) return false;
+  if (context.executable.contains('.app/Contents/')) {
+    return !context.product && !context.profile;
+  }
+  // Copied installed bytes cannot retain authority over their old build root.
+  return !_linuxInstallationEntry(context.executable);
+}
+
 /// Build-selected public values, never populated from runtime environment.
 /// A source test context must be explicit at compilation. Missing reviewed
 /// worker identity leaves logging unavailable without opening candidates.
@@ -93,6 +110,8 @@ final class DiagnosticStartupContext {
     this.sourceAnchor = '',
     this.sourceContext = false,
     this.dartExecutable = '',
+    this.dartSdkRoot = '',
+    this.dartSdkIdentity = '',
     this.packageConfig = '',
     this.sourceWorker = '',
     this.kernelWorker = '',
@@ -102,7 +121,11 @@ final class DiagnosticStartupContext {
   });
   final DiagnosticHost host;
   final String executable, script, nativeId, dartId, catalogId, workerMode;
-  final String sourceAnchor, dartExecutable, packageConfig;
+  final String sourceAnchor,
+      dartExecutable,
+      dartSdkRoot,
+      dartSdkIdentity,
+      packageConfig;
   final String sourceWorker, kernelWorker;
   final bool sourceContext, product, profile, macOS;
 
@@ -110,6 +133,7 @@ final class DiagnosticStartupContext {
     const descriptor = String.fromEnvironment(
       'FORESIGHT_DIAGNOSTIC_SOURCE_DESCRIPTOR',
     );
+
     Map<String, Object?>? source;
     if (descriptor.isNotEmpty) {
       try {
@@ -123,6 +147,8 @@ final class DiagnosticStartupContext {
           'source',
           'kernel',
           'mode',
+          'sdk',
+          'sdk_id',
         };
         if (value is! Map<String, dynamic> ||
             value.length != keys.length ||
@@ -161,6 +187,12 @@ final class DiagnosticStartupContext {
       dartExecutable:
           source?['dart'] as String? ??
           const String.fromEnvironment('FORESIGHT_DIAGNOSTIC_DART_EXECUTABLE'),
+      dartSdkRoot:
+          source?['sdk'] as String? ??
+          const String.fromEnvironment('FORESIGHT_DIAGNOSTIC_DART_SDK_ROOT'),
+      dartSdkIdentity:
+          source?['sdk_id'] as String? ??
+          const String.fromEnvironment('FORESIGHT_DIAGNOSTIC_DART_SDK_ID'),
       packageConfig:
           source?['packages'] as String? ??
           const String.fromEnvironment('FORESIGHT_DIAGNOSTIC_PACKAGE_CONFIG'),
@@ -191,7 +223,7 @@ final class DiagnosticStartupUnavailable implements Exception {
 
 Never _refuse() => throw const DiagnosticStartupUnavailable();
 
-typedef _Metadata = ({int mode, int uid, int links});
+typedef _Metadata = ({int mode, int uid, int gid, int links});
 
 /// Metadata only: no regular candidate is opened, hashed or read here. The
 /// sole regular-file open is the explicit early DynamicLibrary.open below.
@@ -208,10 +240,13 @@ _Metadata _metadata(String path) {
           >('statx');
       if (statx(-100, name, 0x100, 0x7ff, buffer) != 0) _refuse();
       final data = ByteData.sublistView(buffer.asTypedList(256));
-      if (data.getUint32(0, Endian.host) & 0x17 != 0x17) _refuse();
+      // TYPE|MODE|NLINK|UID|GID must all be supplied. A missing UID cannot
+      // acquire root authority from the zero-initialized result buffer.
+      if (data.getUint32(0, Endian.host) & 0x1f != 0x1f) _refuse();
       return (
         mode: data.getUint16(28, Endian.host),
         uid: data.getUint32(20, Endian.host),
+        gid: data.getUint32(24, Endian.host),
         links: data.getUint32(16, Endian.host),
       );
     }
@@ -226,6 +261,7 @@ _Metadata _metadata(String path) {
     return (
       mode: data.getUint16(4, Endian.host),
       uid: data.getUint32(16, Endian.host),
+      gid: data.getUint32(20, Endian.host),
       links: data.getUint16(6, Endian.host),
     );
   } finally {
@@ -237,20 +273,69 @@ _Metadata _metadata(String path) {
 int _effectiveUid() => DynamicLibrary.process()
     .lookupFunction<Uint32 Function(), int Function()>('geteuid')();
 
-void _directory(String path) {
+/// Closed metadata policy. Special writable ancestors are accepted only at
+/// their exact physical system names; a sticky root needs a private descendant.
+bool diagnosticDirectoryModeAllowed({
+  required String path,
+  required int mode,
+  required int uid,
+  required int gid,
+  required int effectiveUid,
+  required bool macOS,
+}) {
+  if (mode & 0xf000 != 0x4000 || uid != 0 && uid != effectiveUid) return false;
+  if (mode & 0x12 == 0) return true;
+  if (uid != 0) return false;
+  final permissions = mode & 0xfff;
+  if (macOS && path == '/Applications' && gid == 80 && permissions == 0x1fd) {
+    return true;
+  }
+  if (macOS && path == '/usr/local' && gid == 20 && permissions == 0x5fd) {
+    return true;
+  }
+  return path == (macOS ? '/private/var/tmp' : '/var/tmp') &&
+      gid == 0 &&
+      permissions == 0x3ff;
+}
+
+_Metadata _directory(String path) {
   final metadata = _metadata(path);
-  if (metadata.mode & 0xf000 != 0x4000 ||
-      metadata.mode & 0x12 != 0 ||
-      (metadata.uid != 0 && metadata.uid != _effectiveUid())) {
+  if (!diagnosticDirectoryModeAllowed(
+    path: path,
+    mode: metadata.mode,
+    uid: metadata.uid,
+    gid: metadata.gid,
+    effectiveUid: _effectiveUid(),
+    macOS: Platform.isMacOS,
+  )) {
     _refuse();
   }
+  return metadata;
+}
+
+void _ancestors(String anchor) {
+  var current = p.rootPrefix(anchor);
+  var requiresPrivate = false;
+  for (final part in p.split(anchor)) {
+    if (part != p.rootPrefix(anchor)) current = p.join(current, part);
+    final info = _directory(current);
+    if (requiresPrivate) {
+      if (info.uid != _effectiveUid() || info.mode & 0x3f != 0) _refuse();
+      requiresPrivate = false;
+    }
+    if (current == (Platform.isMacOS ? '/private/var/tmp' : '/var/tmp') &&
+        info.mode & 0xfff == 0x3ff) {
+      requiresPrivate = true;
+    }
+  }
+  if (requiresPrivate) _refuse();
 }
 
 void _candidate(String anchor, String path, {bool executable = false}) {
   if (!_absolute(anchor) || !_absolute(path) || !p.isWithin(anchor, path)) {
     _refuse();
   }
-  _directory(anchor);
+  _ancestors(anchor);
   var parent = anchor;
   final parts = p.split(p.relative(path, from: anchor));
   for (final component in parts.take(parts.length - 1)) {
@@ -277,10 +362,10 @@ final class RuntimeSupportSelection {
     if (!_absolute(context.executable)) _refuse();
     final marker = context.executable.indexOf('.app/Contents/');
     String anchor, support;
-    if (context.sourceContext) {
+    if (_sourceSelected(context)) {
       anchor = context.sourceAnchor;
       if (!_absolute(anchor) ||
-          marker >= 0 && (context.product || context.profile)) {
+          marker >= 0 && !p.isWithin(anchor, context.executable)) {
         _refuse();
       }
       support = p.join(
@@ -331,10 +416,10 @@ final class DiagnosticStartupSelection {
     String anchor, worker, launcher, support;
     final prefix = <String>[];
     final marker = context.executable.indexOf('.app/Contents/');
-    if (context.sourceContext) {
+    if (_sourceSelected(context)) {
       anchor = context.sourceAnchor;
       if (!_absolute(anchor) ||
-          marker >= 0 && (context.product || context.profile)) {
+          marker >= 0 && !p.isWithin(anchor, context.executable)) {
         _refuse();
       }
       support = p.join(
@@ -356,7 +441,11 @@ final class DiagnosticStartupSelection {
                 context.host == DiagnosticHost.service) {
           _refuse();
         }
-        _candidate(p.dirname(worker), worker, executable: true);
+        if (!_identity(context.dartSdkIdentity) ||
+            worker != p.join(context.dartSdkRoot, 'bin/dart')) {
+          _refuse();
+        }
+        _candidate(context.dartSdkRoot, worker, executable: true);
         _candidate(anchor, context.packageConfig);
         prefix.addAll([
           '--disable-dart-dev',
@@ -390,6 +479,8 @@ final class DiagnosticStartupSelection {
                 'source': script,
                 'kernel': '',
                 'mode': 'jit',
+                'sdk': context.dartSdkRoot,
+                'sdk_id': context.dartSdkIdentity,
               }),
             ),
           );
@@ -534,10 +625,10 @@ DiagnosticChildStartup loadDiagnosticChildStartup(
   if (!context.identitiesAvailable) _refuse();
   String anchor, expectedSupport;
   final marker = context.executable.indexOf('.app/Contents/');
-  if (context.sourceContext) {
+  if (_sourceSelected(context)) {
     anchor = context.sourceAnchor;
     if (!_absolute(anchor) ||
-        marker >= 0 && (context.product || context.profile)) {
+        marker >= 0 && !p.isWithin(anchor, context.executable)) {
       _refuse();
     }
     expectedSupport = p.join(
