@@ -22,8 +22,12 @@ bool _isStartupStatusPath(String path, ProfilePaths profile) =>
 /// to the lock holder, so a launch that holds the lock while its lease is
 /// still there is the owner its launcher waits for. Starts without a lease,
 /// such as direct starts, are unaffected.
-bool serviceLaunchLeaseWithdrawn(ProfilePaths profile) {
-  final path = runtimeConfiguration['FORESIGHT_STARTUP_STATUS'];
+bool serviceLaunchLeaseWithdrawn(
+  ProfilePaths profile, {
+  RuntimeConfiguration? configuration,
+}) {
+  final path =
+      (configuration ?? runtimeConfiguration)['FORESIGHT_STARTUP_STATUS'];
   if (path == null || !_isStartupStatusPath(path, profile)) return false;
   return FileSystemEntity.typeSync(path, followLinks: false) ==
       FileSystemEntityType.notFound;
@@ -64,6 +68,7 @@ Future<ServiceStartup> _connectCompatibleService(
   Duration statusProbeLimit, {
   required bool snapshot,
   required bool fromRecord,
+  required RuntimeConfiguration configuration,
   Set<String> refused = const {},
 }) async {
   final left = remaining();
@@ -116,8 +121,8 @@ Future<ServiceStartup> _connectCompatibleService(
       );
     }
     validateApplicationApiVersion(value, endpoint: path);
-    if (runtimeConfiguration['FORESIGHT_RUNTIME_REVISION'] != null) {
-      validateServiceCompatibility(value);
+    if (configuration['FORESIGHT_RUNTIME_REVISION'] != null) {
+      validateServiceCompatibility(value, configuration: configuration);
     }
     return value;
   }
@@ -462,10 +467,12 @@ Future<ServiceClient> ensureService(
   ProfilePaths profile, {
   Duration startupTimeout = const Duration(minutes: 3),
   Duration statusProbeLimit = const Duration(seconds: 30),
+  RuntimeConfiguration? configuration,
 }) async => (await _ensureService(
   profile,
   startupTimeout: startupTimeout,
   statusProbeLimit: statusProbeLimit,
+  configuration: configuration ?? runtimeConfiguration,
 )).client;
 
 /// Reserve desktop socket lifetime and obtain its final startup snapshot.
@@ -477,17 +484,22 @@ Future<ServiceStartup> ensureServiceSnapshot(
   ProfilePaths profile, {
   Duration startupTimeout = const Duration(minutes: 3),
   Duration statusProbeLimit = const Duration(seconds: 30),
+  RuntimeConfiguration? configuration,
 }) => _ensureService(
   profile,
   startupTimeout: startupTimeout,
   statusProbeLimit: statusProbeLimit,
+  configuration: configuration ?? runtimeConfiguration,
   snapshot: true,
 );
 
+/// [configuration] is captured once by the public entry point; the compatibility
+/// probe and every launch of this startup use that same snapshot.
 Future<ServiceStartup> _ensureService(
   ProfilePaths profile, {
   required Duration startupTimeout,
   required Duration statusProbeLimit,
+  required RuntimeConfiguration configuration,
   bool snapshot = false,
 }) async {
   if (startupTimeout <= Duration.zero ||
@@ -500,7 +512,7 @@ Future<ServiceStartup> _ensureService(
   final startup = Stopwatch()..start();
   var closingOwner = false;
   var launches = 0;
-  final launcher = _ServiceLaunchAttempt(profile);
+  final launcher = _ServiceLaunchAttempt(profile, configuration);
   String? ignoredRecord;
   // Why this profile's endpoint record names another profile's service.
   String? staleRecord;
@@ -544,6 +556,7 @@ Future<ServiceStartup> _ensureService(
           statusProbeLimit,
           snapshot: snapshot,
           fromRecord: record is EndpointValid,
+          configuration: configuration,
           refused: refused,
         );
       } on _ForeignOwner catch (owner) {
@@ -636,15 +649,16 @@ Future<ServiceStartup> _ensureService(
 /// One launcher owns its temporary lease and private environment handoff.
 /// The startup coordinator alone owns the shared deadline and retry decision.
 final class _ServiceLaunchAttempt {
-  _ServiceLaunchAttempt(this.profile);
+  _ServiceLaunchAttempt(this.profile, this.configuration);
   final ProfilePaths profile;
+  final RuntimeConfiguration configuration;
   String? executable;
   String? startupLog;
   File? handoff;
   // Where the latest launch records a start that did not happen.
   File? startupStatus;
   Future<void> launch() async {
-    final serviceExecutable = runtimeConfiguration['FORESIGHT_SERVICE'];
+    final serviceExecutable = configuration['FORESIGHT_SERVICE'];
     if (serviceExecutable == null || !File(serviceExecutable).existsSync()) {
       throw StateError(
         'Set FORESIGHT_SERVICE to the application-service executable',
@@ -667,7 +681,7 @@ final class _ServiceLaunchAttempt {
     );
     protectPrivateFile(startupStatus!.path);
     final environment = {
-      ...runtimeConfiguration.environment,
+      ...configuration.environment,
       'FORESIGHT_DATA': profile.data,
       'FORESIGHT_RUNTIME': profile.runtime,
       // On macOS this travels through the private startup handoff.

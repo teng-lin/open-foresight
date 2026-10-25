@@ -28,11 +28,14 @@ Future<NativeRuntime> configureGeneration(
   void Function()? onRegister,
   Future<void> Function(NativeRuntime)? retire,
   bool Function()? registrationAllowed,
+  RuntimeConfiguration? configuration,
 }) async {
   bool valid() =>
       (current?.call() ?? true) && (registrationAllowed?.call() ?? true);
   if (!valid()) throw RpcError(RpcErrorCode.cancelled, 'Model setup cancelled');
-  if (backend == 'litert_lm') runner = liteRtRunner(runner);
+  if (backend == 'litert_lm') {
+    runner = liteRtRunner(runner, configuration: configuration);
+  }
   final candidate = NativeRuntime(library);
   try {
     onCandidate?.call(candidate);
@@ -87,6 +90,7 @@ Future<NativeRuntime?> discoverGenerationRuntime(
   Store store,
   String library, {
   String? runner,
+  RuntimeConfiguration? configuration,
   bool Function()? current,
   void Function(NativeRuntime)? onCandidate,
   Future<void> Function(NativeRuntime)? retire,
@@ -100,7 +104,9 @@ Future<NativeRuntime?> discoverGenerationRuntime(
     for (final type in referenceInferenceModelOrder) {
       final path = await catalog.localPath(type);
       if (path == null) continue;
-      final runtime = runner ?? runtimeConfiguration['FORESIGHT_LITERT_RUNNER'];
+      final runtime =
+          runner ??
+          (configuration ?? runtimeConfiguration)['FORESIGHT_LITERT_RUNNER'];
       if (runtime == null) {
         throw StateError('Bundled generation runtime is unavailable');
       }
@@ -115,6 +121,7 @@ Future<NativeRuntime?> discoverGenerationRuntime(
         retire: retire,
         current: current,
         registrationAllowed: () => store.model('generation') == null,
+        configuration: configuration,
       );
     }
     return null;
@@ -128,6 +135,7 @@ Future<bool> discoverDedicatedQueryModel(
   bool Function()? current,
   MacModelVault? vault,
   String? runtime,
+  RuntimeConfiguration? configuration,
 }) async {
   if (store.model(dedicatedQueryModelKind) != null) return false;
   final catalog = ModelAssetLifecycle(
@@ -145,6 +153,7 @@ Future<bool> discoverDedicatedQueryModel(
       current: () =>
           (current?.call() ?? true) &&
           store.model(dedicatedQueryModelKind) == null,
+      configuration: configuration,
     );
     return true;
   } finally {
@@ -160,6 +169,7 @@ Future<void> configureDedicatedQuery(
   String? runtime,
   String? expectedDigest,
   bool Function()? current,
+  RuntimeConfiguration? configuration,
 }) async {
   if (expectedDigest != null && expectedDigest != dedicatedQueryModelDigest) {
     throw StateError(
@@ -170,6 +180,7 @@ Future<void> configureDedicatedQuery(
     path,
     runtime: runtime,
     current: current,
+    configuration: configuration ?? runtimeConfiguration,
   );
   await store.register(
     dedicatedQueryModelKind,
@@ -188,6 +199,7 @@ Future<void> configureEncryptedDedicatedQuery(
   String? runtime,
   bool Function()? current,
   MacModelVault? vault,
+  RuntimeConfiguration? configuration,
 }) async {
   if (current != null && !current()) {
     throw RpcError(RpcErrorCode.cancelled, 'Model setup cancelled');
@@ -201,7 +213,9 @@ Future<void> configureEncryptedDedicatedQuery(
     );
   }
   final digest = (await sha256.bind(encrypted.openRead()).first).toString();
-  final ownedVault = vault ?? MacModelVault(root: encrypted.parent);
+  final ownedVault =
+      vault ??
+      MacModelVault(root: encrypted.parent, configuration: configuration);
   ModelVaultLease? lease;
   late final String python;
   try {
@@ -210,6 +224,7 @@ Future<void> configureEncryptedDedicatedQuery(
       lease.path,
       runtime: runtime,
       current: current,
+      configuration: configuration ?? runtimeConfiguration,
     );
   } finally {
     try {
@@ -235,6 +250,7 @@ Future<String> _prepareDedicatedQuery(
   String path, {
   String? runtime,
   bool Function()? current,
+  required RuntimeConfiguration configuration,
 }) async {
   void checkCurrent() {
     if (current != null && !current()) {
@@ -258,9 +274,9 @@ Future<String> _prepareDedicatedQuery(
   }
   final python = runtime?.trim().isNotEmpty == true
       ? runtime!
-      : (runtimeConfiguration['FORESIGHT_QUERY_RUNTIME'] ??
-            runtimeConfiguration['FORESIGHT_LITERT_PYTHON']);
-  final worker = runtimeConfiguration['FORESIGHT_QUERY_WORKER'];
+      : (configuration['FORESIGHT_QUERY_RUNTIME'] ??
+            configuration['FORESIGHT_LITERT_PYTHON']);
+  final worker = configuration['FORESIGHT_QUERY_WORKER'];
   if (python == null ||
       !File(python).existsSync() ||
       (File(python).statSync().mode & 0x49) == 0 ||
@@ -308,7 +324,11 @@ String? dedicatedQuerySetupProblem(Store store) =>
 
 /// Register an explicitly supplied, digest-identified local installation.
 /// Existing user registrations win. No network or model downloads occur here.
-Future<int> registerInstalledModels(Store store, String manifestPath) async {
+Future<int> registerInstalledModels(
+  Store store,
+  String manifestPath, {
+  RuntimeConfiguration? configuration,
+}) async {
   final manifest =
       jsonDecode(await File(manifestPath).readAsString())
           as Map<String, dynamic>;
@@ -335,6 +355,7 @@ Future<int> registerInstalledModels(Store store, String manifestPath) async {
         model,
         runtime: entry['runtime'] as String?,
         expectedDigest: entry['sha256'] as String?,
+        configuration: configuration,
       );
       registered++;
       continue;
@@ -342,7 +363,7 @@ Future<int> registerInstalledModels(Store store, String manifestPath) async {
     final runtime = kind == 'embedding'
         ? ''
         : kind == 'generation' && entry['backend'] == 'litert_lm'
-        ? liteRtRunner(entry['runtime'] as String)
+        ? liteRtRunner(entry['runtime'] as String, configuration: configuration)
         : entry['runtime'] as String;
     if (kind == 'embedding') requireEmbeddingBundle(model);
     if (kind != 'embedding' &&

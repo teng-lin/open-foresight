@@ -47,6 +47,22 @@ void main() {
       expect(identity['source_id'], applicationSqliteSourceId);
     }
   });
+  test(
+    'a transported snapshot selects the same SQLite in a fresh isolate',
+    () async {
+      final identity = engineIdentity();
+      final support = currentSqlSupportBootstrap;
+      // Read workers install their owner's exact immutable snapshot.
+      final snapshot = runtimeConfiguration;
+      final (previous, isolated) = await Isolate.run(() {
+        final previous = installRuntimeConfiguration(snapshot);
+        bindSqlSupportBootstrap(support);
+        return (previous, engineIdentity());
+      });
+      expect(previous, isNull);
+      expect(isolated, identity);
+    },
+  );
 
   for (final mappingScenario in ['alias', 'physical', 'foreign-global']) {
     test(

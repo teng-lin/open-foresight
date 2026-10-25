@@ -8,6 +8,7 @@ import '../model_gate.dart';
 import '../native.dart';
 import '../store.dart';
 import '../web_search.dart';
+import 'service_runtime_ports.dart' show RuntimeConfigurationPort;
 
 abstract interface class GenerationReadPort {
   Store get store;
@@ -45,7 +46,8 @@ abstract interface class NoteEnhancementPort implements GenerationReadPort {
   Future<void> resetNoteEnhancementService();
 }
 
-abstract interface class RuntimeOperationsPort implements GenerationReadPort {
+abstract interface class RuntimeOperationsPort
+    implements GenerationReadPort, RuntimeConfigurationPort {
   Object? get generationFailure;
   bool get generationRestartRequired;
   Helper get helper;

@@ -241,6 +241,8 @@ class ApplicationService {
 
   /// [desktopDetachGrace] is how long the service waits for a desktop to
   /// reattach after its approval connection closes before it shuts down.
+  /// [configuration] defaults to this process's boundary snapshot, captured
+  /// once here; every service-owned consumer receives it from this owner.
   static Future<ApplicationService> start(
     ProfilePaths profile, {
     SearchCallbacks? webSearch,
@@ -253,15 +255,18 @@ class ApplicationService {
     Future<void> Function()? beforeReleaseOwnership,
     DesktopPeerVerifier? desktopPeerVerifier,
     void Function()? onProfileOwned,
+    RuntimeConfiguration? configuration,
   }) async {
+    final captured = configuration ?? runtimeConfiguration;
     // This must precede native loads, database opens, and worker creation.
-    final installationLock = acquireInstallationLock();
+    final installationLock = acquireInstallationLock(configuration: captured);
     void Function()? releaseLocalOwner;
     try {
       releaseLocalOwner = retainLocalServiceOwner(profile.data);
       final service = await _start(
         profile,
         installationLock,
+        captured,
         webSearch: webSearch,
         internalWorker: internalWorker,
         clock: clock,
@@ -284,7 +289,8 @@ class ApplicationService {
 
   static Future<ApplicationService> _start(
     ProfilePaths profile,
-    InstallationLock? installationLock, {
+    InstallationLock? installationLock,
+    RuntimeConfiguration captured, {
     SearchCallbacks? webSearch,
     bool internalWorker = false,
     Clock? clock,
@@ -295,8 +301,11 @@ class ApplicationService {
   }) async {
     final lock = await acquireServiceProfileLock(
       profile,
-      launchWithdrawn: () => serviceLaunchLeaseWithdrawn(profile),
+      launchWithdrawn: () =>
+          serviceLaunchLeaseWithdrawn(profile, configuration: captured),
+      configuration: captured,
     );
+    final configuration = profileServiceConfiguration(profile, captured);
     Store? store;
     Helper? helper;
     Application? startedApplication;
@@ -337,6 +346,7 @@ class ApplicationService {
         '${profile.data}/helper',
         startupProbeTimeout:
             helperStartupProbeTimeout ?? const Duration(milliseconds: 400),
+        configuration: configuration,
       );
       final domain = Domain(
         store,
@@ -344,6 +354,7 @@ class ApplicationService {
         webSearch: webSearch,
         clock: clock,
         createTimer: createTimer,
+        configuration: configuration,
       );
       final application = Application(domain)..profileId = profile.identity;
       startedApplication = application;
@@ -373,7 +384,7 @@ class ApplicationService {
         installationLock,
         application,
         internalWorker,
-        desktopPeerVerifier ?? verifyInstalledDesktopPeer,
+        desktopPeerVerifier ?? installedDesktopPeerVerifier(configuration),
       );
       try {
         await publishServiceSocket(binding, service._accept);
@@ -381,10 +392,14 @@ class ApplicationService {
         service._discard();
         rethrow;
       }
-      final manifest = runtimeConfiguration['FORESIGHT_MODEL_MANIFEST'];
+      final manifest = configuration['FORESIGHT_MODEL_MANIFEST'];
       if (manifest != null && File(manifest).existsSync()) {
         domain.initialize(
-          registerInstalledModels(store, manifest).then<void>((_) {}),
+          registerInstalledModels(
+            store,
+            manifest,
+            configuration: configuration,
+          ).then<void>((_) {}),
         );
       }
       helper.changed = () {
@@ -872,6 +887,7 @@ class ApplicationService {
     try {
       _enforceCapability(client, request);
       final guard = ServiceIdleShutdownGuard(
+        configuration: domain.configuration,
         helper: domain.helper,
         recording: () => application.recording != null,
         operationsBusy: () => _ledger.operationsBusy,

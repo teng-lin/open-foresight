@@ -4,7 +4,6 @@ import 'dart:io';
 import 'service_runtime_ports.dart';
 import '../persistence/capture_queries.dart';
 import '../persistence/meeting_queries.dart';
-import '../platform_services.dart';
 import '../proactive_questions.dart';
 import '../recording.dart';
 import '../rpc_error.dart';
@@ -165,7 +164,7 @@ final class RecordingController {
       },
     );
     final active = Recording(
-      runtimeConfiguration.nativeLibrary,
+      domain.configuration.nativeLibrary,
       (state) {
         if (session != _session ||
             persistence.failed ||
@@ -204,10 +203,10 @@ final class RecordingController {
         speech.runtime,
         speech.path,
         microphoneTarget:
-            runtimeConfiguration['FORESIGHT_MICROPHONE_TARGET'] ??
+            domain.configuration['FORESIGHT_MICROPHONE_TARGET'] ??
             store.preference('microphoneTarget', 'auto'),
         playbackTarget:
-            runtimeConfiguration['FORESIGHT_PLAYBACK_TARGET'] ??
+            domain.configuration['FORESIGHT_PLAYBACK_TARGET'] ??
             store.preference('playbackTarget', 'auto'),
         echoCancellation:
             Platform.isMacOS &&

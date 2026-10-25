@@ -12,17 +12,17 @@ import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
 
+/// Install a derived snapshot; the captured configuration itself is immutable.
+void _configure(Map<String, String?> values) =>
+    installRuntimeConfiguration(runtimeConfiguration.withOverrides(values));
+
 void main() {
   bootstrapSqlSupportFixture();
   late Directory root;
   setUp(() {
     root = createTestTempDirectorySync('of-hb-');
-    final previous = Map<String, String>.from(runtimeConfiguration.environment);
-    addTearDown(() {
-      runtimeConfiguration.environment
-        ..clear()
-        ..addAll(previous);
-    });
+    final previous = runtimeConfiguration;
+    addTearDown(() => installRuntimeConfiguration(previous));
   });
   test(
     'query distribution terms require HTTPS without embedded credentials',
@@ -35,14 +35,11 @@ void main() {
         'https://user:secret@publisher.example/terms',
         'file:///tmp/terms',
       ]) {
-        runtimeConfiguration.environment.remove('FORESIGHT_QUERY_TERMS_URL');
-        if (value != null) {
-          runtimeConfiguration.environment['FORESIGHT_QUERY_TERMS_URL'] = value;
-        }
+        _configure({'FORESIGHT_QUERY_TERMS_URL': value});
         expect(dedicatedQueryTermsUri(), isNull, reason: value);
       }
       const valid = 'https://publisher.example/terms?revision=2';
-      runtimeConfiguration.environment['FORESIGHT_QUERY_TERMS_URL'] = valid;
+      _configure({'FORESIGHT_QUERY_TERMS_URL': valid});
       expect(dedicatedQueryTermsUri(), Uri.parse(valid));
     },
   );
@@ -133,8 +130,8 @@ void main() {
         await helper.close();
         store.close();
       });
-      runtimeConfiguration.environment.remove('FORESIGHT_SEARCH_API_KEY');
-      runtimeConfiguration.environment.remove('FORESIGHT_WEB_CONTENT_API_KEY');
+      _configure({'FORESIGHT_SEARCH_API_KEY': null});
+      _configure({'FORESIGHT_WEB_CONTENT_API_KEY': null});
       expect(domain.webSearchAvailable, isFalse);
       expect(
         domain.searchCallbacks,
@@ -146,11 +143,9 @@ void main() {
           ),
         ),
       );
-      runtimeConfiguration.environment['FORESIGHT_SEARCH_API_KEY'] =
-          'search-fixture';
+      _configure({'FORESIGHT_SEARCH_API_KEY': 'search-fixture'});
       expect(domain.webSearchAvailable, isFalse);
-      runtimeConfiguration.environment['FORESIGHT_WEB_CONTENT_API_KEY'] =
-          'content-fixture';
+      _configure({'FORESIGHT_WEB_CONTENT_API_KEY': 'content-fixture'});
       expect(domain.webSearchAvailable, isTrue);
       final callbacks = domain.searchCallbacks();
       expect(identical(domain.searchCallbacks(), callbacks), isTrue);

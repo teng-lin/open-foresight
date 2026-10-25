@@ -11,16 +11,20 @@ class ServiceIdleShutdownGuard {
     required this.recording,
     required this.operationsBusy,
     required this.backgroundBusy,
-  });
+    RuntimeConfiguration? configuration,
+  }) : configuration = configuration ?? runtimeConfiguration;
+
+  /// The owning service's snapshot; direct construction captures the boundary.
+  final RuntimeConfiguration configuration;
   final Helper helper;
   final bool Function() recording, operationsBusy, backgroundBusy;
   void validateOwner(ServiceStopIfIdleRequest request) {
     if ((request.expectedPid != null && request.expectedPid != pid) ||
         (request.installationRoot != null &&
-            request.installationRoot != configuredInstallationRoot) ||
+            request.installationRoot != configuration.installationRoot) ||
         (request.runtimeRevision != null &&
             request.runtimeRevision !=
-                runtimeConfiguration['FORESIGHT_RUNTIME_REVISION'])) {
+                configuration['FORESIGHT_RUNTIME_REVISION'])) {
       throw RpcError(
         RpcErrorCode.cancelled,
         'Application service ownership changed before idle shutdown; retry without replacing the app.',

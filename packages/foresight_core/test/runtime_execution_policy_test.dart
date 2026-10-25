@@ -8,17 +8,16 @@ import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
 
+/// Install a derived snapshot; the captured configuration itself is immutable.
+void _configure(Map<String, String?> values) =>
+    installRuntimeConfiguration(runtimeConfiguration.withOverrides(values));
+
 void main() {
   late Directory root;
-  late Map<String, String> environment;
   setUp(() {
     root = createTestTempDirectorySync('runtime-policy-');
-    environment = Map.of(runtimeConfiguration.environment);
-    addTearDown(() {
-      runtimeConfiguration.environment
-        ..clear()
-        ..addAll(environment);
-    });
+    final previous = runtimeConfiguration;
+    addTearDown(() => installRuntimeConfiguration(previous));
   });
   final denied = isA<RpcError>().having(
     (error) => error.code,
@@ -28,7 +27,7 @@ void main() {
 
   test('installed runtime roots reject external files and symlink escapes', () {
     final installed = Directory('${root.path}/installed')..createSync();
-    runtimeConfiguration.environment['FORESIGHT_INSTALL_ROOT'] = installed.path;
+    _configure({'FORESIGHT_INSTALL_ROOT': installed.path});
     final inside = File('${installed.path}/runner')
       ..writeAsStringSync('fixture');
     final outside = File('${root.path}/outside')..writeAsStringSync('fixture');
@@ -48,7 +47,7 @@ void main() {
   test(
     'empty and unbundled runtime selections keep their existing meaning',
     () {
-      runtimeConfiguration.environment['FORESIGHT_INSTALL_ROOT'] = root.path;
+      _configure({'FORESIGHT_INSTALL_ROOT': root.path});
       expect(requireInstalledRuntime(''), '');
       final bundledWhitespace = File('${root.path}/ ')
         ..writeAsStringSync('data');
@@ -56,7 +55,7 @@ void main() {
         requireInstalledRuntime(bundledWhitespace.path),
         bundledWhitespace.resolveSymbolicLinksSync(),
       );
-      runtimeConfiguration.environment.remove('FORESIGHT_INSTALL_ROOT');
+      _configure({'FORESIGHT_INSTALL_ROOT': null});
       expect(requireInstalledRuntime(' '), ' ');
       expect(requireInstalledRuntime(''), '');
     },
@@ -92,8 +91,7 @@ done
       expect(marker.readAsStringSync(), 'executed');
       marker.deleteSync();
 
-      runtimeConfiguration.environment['FORESIGHT_INSTALL_ROOT'] =
-          installed.path;
+      _configure({'FORESIGHT_INSTALL_ROOT': installed.path});
       var spawned = false;
       final runtime = DedicatedQueryRuntime(
         python: ' ',
@@ -123,7 +121,7 @@ done
   test(
     'installed query processes execute canonical runtime and worker paths',
     () async {
-      runtimeConfiguration.environment['FORESIGHT_INSTALL_ROOT'] = root.path;
+      _configure({'FORESIGHT_INSTALL_ROOT': root.path});
       final report = File('${root.path}/paths');
       final python = File('${root.path}/python')
         ..writeAsStringSync('''#!/bin/sh
@@ -164,7 +162,7 @@ for line in sys.stdin:
   test(
     'restored query registrations refuse execution before spawning',
     () async {
-      runtimeConfiguration.environment['FORESIGHT_INSTALL_ROOT'] = root.path;
+      _configure({'FORESIGHT_INSTALL_ROOT': root.path});
       var spawned = false;
       final runtime = DedicatedQueryRuntime(
         python: '/outside/python',
@@ -185,7 +183,7 @@ for line in sys.stdin:
   );
 
   test('restored generation refuses execution before native probing', () async {
-    runtimeConfiguration.environment['FORESIGHT_INSTALL_ROOT'] = root.path;
+    _configure({'FORESIGHT_INSTALL_ROOT': root.path});
     await expectLater(
       probeNativeModel(
         '/missing-native-fixture',
@@ -207,7 +205,7 @@ for line in sys.stdin:
   test(
     'stored speech runtimes cannot start outside the installation',
     () async {
-      runtimeConfiguration.environment['FORESIGHT_INSTALL_ROOT'] = root.path;
+      _configure({'FORESIGHT_INSTALL_ROOT': root.path});
       final recording = Recording(
         Platform.isMacOS ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6',
         (_) {},

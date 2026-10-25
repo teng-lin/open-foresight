@@ -69,13 +69,18 @@ final class ModelAssetAcquisitionCoordinator {
     Iterable<GemmaModel> Function(String kind)? catalog,
     this.startPreflight,
     this.stopPreflight = _stopProcess,
-  }) : createDownloader = createDownloader ?? PublicModelFileDownloader.new,
+    RuntimeConfiguration? configuration,
+  }) : configuration = configuration ?? runtimeConfiguration,
+       createDownloader = createDownloader ?? PublicModelFileDownloader.new,
        _prepareGemma = prepareGemma,
        _catalog = catalog,
        modelRoot =
            modelRoot ?? Directory('${File(store.path).parent.path}/models');
   final Future<Process> Function(String runner)? startPreflight;
   final Future<void> Function(Process) stopPreflight;
+
+  /// The owning service's snapshot; direct construction captures the boundary.
+  final RuntimeConfiguration configuration;
   final Store store;
   final void Function() changed;
   final Directory modelRoot;
@@ -287,7 +292,7 @@ final class ModelAssetAcquisitionCoordinator {
       check();
       return;
     }
-    final runner = runtimeConfiguration['FORESIGHT_LITERT_RUNNER'];
+    final runner = configuration['FORESIGHT_LITERT_RUNNER'];
     if (runner == null || runner.isEmpty) {
       throw RpcError(RpcErrorCode.unavailable, modelRuntimeUnavailableMessage);
     }
@@ -332,9 +337,9 @@ final class ModelAssetAcquisitionCoordinator {
     try {
       return await (startPreflight?.call(runner) ??
           Process.start(
-            requireInstalledRuntime(runner),
+            requireInstalledRuntime(runner, configuration: configuration),
             ['--check'],
-            environment: runtimeConfiguration.environment,
+            environment: configuration.environment,
           ));
     } catch (_) {
       throw RpcError(RpcErrorCode.unavailable, modelRuntimeUnavailableMessage);

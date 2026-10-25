@@ -17,8 +17,10 @@ Future<void> configureSpeech(
   String digest, {
   required bool Function() current,
   void Function(Process)? onProcess,
+  RuntimeConfiguration? configuration,
 }) async {
-  runner = requireInstalledRuntime(runner);
+  final config = configuration ?? runtimeConfiguration;
+  runner = requireInstalledRuntime(runner, configuration: config);
   final executable = File(runner);
   if (!executable.existsSync() || (executable.statSync().mode & 0x49) == 0) {
     throw StateError('The whisper.cpp runner is missing or not executable.');
@@ -63,16 +65,16 @@ Future<void> configureSpeech(
       '-t',
       '4',
     ];
-    if (runtimeConfiguration['FORESIGHT_WHISPER_BACKEND'] == 'cpu') {
+    if (config['FORESIGHT_WHISPER_BACKEND'] == 'cpu') {
       arguments.add('-ng');
-    } else if (runtimeConfiguration['FORESIGHT_WHISPER_DEVICE']
-        case final String device when device.isNotEmpty) {
+    } else if (config['FORESIGHT_WHISPER_DEVICE'] case final String device
+        when device.isNotEmpty) {
       arguments.addAll(['-dev', device]);
     }
     process = await Process.start(
       runner,
       arguments,
-      environment: runtimeConfiguration.environment,
+      environment: config.environment,
     );
     onProcess?.call(process);
     final stdout = process.stdout.drain<void>();

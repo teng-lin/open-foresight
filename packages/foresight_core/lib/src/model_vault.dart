@@ -32,7 +32,10 @@ class MacModelVault {
     Directory? tempRoot,
     Future<Process> Function(String, List<String>)? startProcess,
     this.helperTimeout = const Duration(minutes: 2),
-  }) : _helper = helperPath ?? runtimeConfiguration['FORESIGHT_MODEL_CRYPTO'],
+    RuntimeConfiguration? configuration,
+  }) : _helper =
+           helperPath ??
+           (configuration ?? runtimeConfiguration)['FORESIGHT_MODEL_CRYPTO'],
        _tempRoot = tempRoot ?? Directory.systemTemp,
        _startProcess =
            startProcess ??

@@ -15,10 +15,12 @@ Future<List<AudioDevice>> audioDevices({
   bool? macOS,
   Future<ProcessResult> Function(String executable, List<String> arguments)?
   runProcess,
+  RuntimeConfiguration? configuration,
 }) async {
   final run = runProcess ?? _deviceProcess.run;
   if (macOS ?? Platform.isMacOS) {
-    final helper = runtimeConfiguration['FORESIGHT_AUDIO_DEVICES'];
+    final helper =
+        (configuration ?? runtimeConfiguration)['FORESIGHT_AUDIO_DEVICES'];
     if (helper == null) {
       throw StateError('The bundled Mac audio device adapter is unavailable.');
     }
@@ -68,9 +70,9 @@ Future<List<AudioDevice>> audioDevices({
 }
 
 /// Querying capabilities never asks for protected resources or starts capture.
-Map<String, dynamic> audioCapabilities() {
+Map<String, dynamic> audioCapabilities({RuntimeConfiguration? configuration}) {
   final lib = NativeLibrary(
-    DynamicLibrary.open(runtimeConfiguration.nativeLibrary),
+    DynamicLibrary.open((configuration ?? runtimeConfiguration).nativeLibrary),
   ).library;
   final result = lib
       .lookupFunction<Pointer<Utf8> Function(), Pointer<Utf8> Function()>(
@@ -89,14 +91,18 @@ Map<String, dynamic> audioCapabilities() {
 
 /// Explicit permission setup only. Run the blocking TCC request off the service
 /// event loop so other clients and active model/recording work stay responsive.
-Future<Map<String, dynamic>> requestMicrophonePermission() async {
-  final capabilities = audioCapabilities();
+Future<Map<String, dynamic>> requestMicrophonePermission({
+  RuntimeConfiguration? configuration,
+}) async {
+  final config = configuration ?? runtimeConfiguration;
+  final capabilities = audioCapabilities(configuration: config);
   if (Platform.isMacOS && capabilities['microphone_purpose_present'] != true) {
     throw StateError(
       'The application service bundle is missing its microphone purpose string. Launch the installed Open Foresight application service and reinstall if necessary.',
     );
   }
-  final path = runtimeConfiguration.nativeLibrary;
+  // Only the resolved library path crosses into the request isolate.
+  final path = config.nativeLibrary;
   final granted = await Isolate.run(() {
     final lib = NativeLibrary(DynamicLibrary.open(path)).library;
     return lib.lookupFunction<Int32 Function(), int Function()>(
@@ -104,21 +110,24 @@ Future<Map<String, dynamic>> requestMicrophonePermission() async {
         )() ==
         0;
   });
-  return {'granted': granted, ...audioCapabilities()};
+  return {'granted': granted, ...audioCapabilities(configuration: config)};
 }
 
 /// Explicitly exercise the service's system-audio tap consent path. CoreAudio
 /// cannot verify authorization publicly: completed requests may still be silent.
 /// Preserve native unknown/pending/denied results instead of claiming a grant.
-Future<Map<String, dynamic>> requestSystemAudioPermission() async {
-  final capabilities = audioCapabilities();
+Future<Map<String, dynamic>> requestSystemAudioPermission({
+  RuntimeConfiguration? configuration,
+}) async {
+  final config = configuration ?? runtimeConfiguration;
+  final capabilities = audioCapabilities(configuration: config);
   if (Platform.isMacOS &&
       capabilities['system_audio_purpose_present'] != true) {
     throw StateError(
       'The application service bundle is missing its system audio purpose string. Launch the installed Open Foresight application service and reinstall if necessary.',
     );
   }
-  final path = runtimeConfiguration.nativeLibrary;
+  final path = config.nativeLibrary;
   return await Isolate.run(() {
     final lib = NativeLibrary(DynamicLibrary.open(path)).library;
     final result = lib

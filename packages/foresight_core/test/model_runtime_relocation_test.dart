@@ -7,11 +7,15 @@ import 'package:foresight_core/src/platform_services.dart';
 import 'package:foresight_core/src/store.dart';
 import 'package:test/test.dart';
 
+/// Install a derived snapshot; the captured configuration itself is immutable.
+void _configure(Map<String, String?> values) =>
+    installRuntimeConfiguration(runtimeConfiguration.withOverrides(values));
+
 void main() {
   bootstrapSqlSupportFixture();
   late Directory scratch;
   late Store store;
-  late Map<String, String> previous;
+  late RuntimeConfiguration previous;
   late String root, generation, speech, query;
   late File asset;
   File runner(String path) {
@@ -23,7 +27,7 @@ void main() {
 
   setUp(() {
     scratch = createTestTempDirectorySync('runtime-relocation-');
-    previous = Map.of(runtimeConfiguration.environment);
+    previous = runtimeConfiguration;
     root = '${scratch.path}/Old App.app';
     generation = '$root/Contents/Resources/bin/litert-runner';
     speech = '$root/Contents/Resources/bin/whisper-cli';
@@ -31,7 +35,7 @@ void main() {
     runner(generation);
     runner(speech);
     runner(query);
-    runtimeConfiguration.environment.addAll({
+    _configure({
       'FORESIGHT_INSTALL_ROOT': root,
       'FORESIGHT_LITERT_RUNNER': generation,
       'FORESIGHT_WHISPER_RUNTIME': speech,
@@ -43,16 +47,14 @@ void main() {
   setUp(() {
     addTearDown(() {
       store.close();
-      runtimeConfiguration.environment
-        ..clear()
-        ..addAll(previous);
+      installRuntimeConfiguration(previous);
       scratch.deleteSync(recursive: true);
     });
   });
   void move() {
     final moved = '${scratch.path}/Moved App With Spaces.app';
     Directory(root).renameSync(moved);
-    runtimeConfiguration.environment.addAll({
+    _configure({
       'FORESIGHT_INSTALL_ROOT': moved,
       'FORESIGHT_LITERT_RUNNER': generation.replaceFirst(root, moved),
       'FORESIGHT_WHISPER_RUNTIME': speech.replaceFirst(root, moved),
@@ -178,13 +180,12 @@ void main() {
     'external resource overrides and symlinks out of bundle are not trusted',
     () async {
       final external = runner('${scratch.path}/external');
-      runtimeConfiguration.environment['FORESIGHT_WHISPER_RUNTIME'] =
-          external.path;
+      _configure({'FORESIGHT_WHISPER_RUNTIME': external.path});
       await store.register('speech', asset.path, external.path);
       expect(store.preference('modelRuntimeResource.speech'), isEmpty);
       File(speech).deleteSync();
       Link(speech).createSync(external.path);
-      runtimeConfiguration.environment['FORESIGHT_WHISPER_RUNTIME'] = speech;
+      _configure({'FORESIGHT_WHISPER_RUNTIME': speech});
       await store.register('speech', asset.path, speech);
       await store.register(
         'query-detection',
@@ -199,8 +200,7 @@ void main() {
         generation,
         backend: 'litert_lm',
       );
-      runtimeConfiguration.environment['FORESIGHT_LITERT_RUNNER'] =
-          external.path;
+      _configure({'FORESIGHT_LITERT_RUNNER': external.path});
       expect(store.model('generation')!['runtime'], generation);
     },
   );

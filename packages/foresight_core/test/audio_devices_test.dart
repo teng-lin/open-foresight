@@ -5,19 +5,15 @@ import 'package:foresight_core/src/audio_devices.dart';
 import 'package:foresight_core/src/platform_services.dart';
 import 'package:test/test.dart';
 
+/// Install a derived snapshot; the captured configuration itself is immutable.
+void _configure(Map<String, String?> values) =>
+    installRuntimeConfiguration(runtimeConfiguration.withOverrides(values));
+
 void main() {
-  String? previous;
   setUp(() {
-    previous = runtimeConfiguration.environment['FORESIGHT_AUDIO_DEVICES'];
-    runtimeConfiguration.environment['FORESIGHT_AUDIO_DEVICES'] =
-        '/fixture/audio adapter';
-  });
-  tearDown(() {
-    if (previous == null) {
-      runtimeConfiguration.environment.remove('FORESIGHT_AUDIO_DEVICES');
-    } else {
-      runtimeConfiguration.environment['FORESIGHT_AUDIO_DEVICES'] = previous!;
-    }
+    final previous = runtimeConfiguration;
+    addTearDown(() => installRuntimeConfiguration(previous));
+    _configure({'FORESIGHT_AUDIO_DEVICES': '/fixture/audio adapter'});
   });
 
   test(
@@ -53,7 +49,7 @@ void main() {
   );
 
   test('missing Mac adapter fails without launching a process', () async {
-    runtimeConfiguration.environment.remove('FORESIGHT_AUDIO_DEVICES');
+    _configure({'FORESIGHT_AUDIO_DEVICES': null});
     await expectLater(
       audioDevices(
         macOS: true,

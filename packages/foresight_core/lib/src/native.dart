@@ -13,10 +13,11 @@ import 'runtime_execution_policy.dart';
 
 /// Packaged installations always use their bundled native worker, including
 /// profiles that still contain the former Python runner path.
-String liteRtRunner(String registered) => resolveLiteRtRunner(
-  registered,
-  runtimeConfiguration['FORESIGHT_LITERT_RUNNER'],
-);
+String liteRtRunner(String registered, {RuntimeConfiguration? configuration}) =>
+    resolveLiteRtRunner(
+      registered,
+      (configuration ?? runtimeConfiguration)['FORESIGHT_LITERT_RUNNER'],
+    );
 
 typedef CreateNative = Uint64 Function(Pointer<Utf8>, Pointer<Utf8>);
 typedef CreateDart = int Function(Pointer<Utf8>, Pointer<Utf8>);

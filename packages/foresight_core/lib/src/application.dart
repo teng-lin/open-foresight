@@ -130,7 +130,9 @@ class Application implements ModelGate, GenerationReservationGate {
     AudioOperations? audioOperations,
   }) : _auth = auth,
        _providedAnswers = answers,
-       _audioOperations = audioOperations ?? AudioOperations() {
+       _audioOperations =
+           audioOperations ??
+           AudioOperations(configuration: domain.configuration) {
     _models = ModelRegistry(
       domain: domain,
       queryRuntime: queryRuntime,
@@ -261,7 +263,11 @@ class Application implements ModelGate, GenerationReservationGate {
     accounts: _googleMaintenance,
   );
   late final ModelAssetAcquisitionCoordinator _assetDownloads =
-      ModelAssetAcquisitionCoordinator(store: store, changed: changed);
+      ModelAssetAcquisitionCoordinator(
+        store: store,
+        changed: changed,
+        configuration: domain.configuration,
+      );
   late final RuntimeOperations _runtime = RuntimeOperations(
     audio: _audioOperations,
     domain: domain,

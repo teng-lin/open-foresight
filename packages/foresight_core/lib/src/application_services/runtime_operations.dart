@@ -76,8 +76,8 @@ final class RuntimeOperations {
     'pid': pid,
     'profile_id': identity.profileId,
     'application_api_version': applicationApiVersion,
-    'installation_root': configuredInstallationRoot,
-    'runtime_revision': runtimeConfiguration['FORESIGHT_RUNTIME_REVISION'],
+    'installation_root': domain.configuration.installationRoot,
+    'runtime_revision': domain.configuration['FORESIGHT_RUNTIME_REVISION'],
     'models_busy': generation.modelBusy,
     'query_model_download': models.acquisitionState,
     'model_asset_download': assetDownloads.state.toWire(),
@@ -100,11 +100,15 @@ final class RuntimeOperations {
   List<OperationHandler> get handlers => [
     TypedOperationHandler<NotificationsCapabilitiesRequest>(
       Operation.notificationsCapabilities,
-      (request, {current}) => notificationCapabilities(),
+      (request, {current}) =>
+          notificationCapabilities(configuration: domain.configuration),
     ),
     TypedOperationHandler<NotificationsRequestPermissionRequest>(
       Operation.notificationsRequestPermission,
-      (request, {current}) => notificationCapabilities(requestPermission: true),
+      (request, {current}) => notificationCapabilities(
+        requestPermission: true,
+        configuration: domain.configuration,
+      ),
     ),
     ...audio.handlers,
     TypedOperationHandler<StatusRequest>(

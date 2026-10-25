@@ -440,16 +440,27 @@ class ServiceLaunchWithdrawn extends StateError {
 bool hasLocalServiceOwner(String canonicalData) =>
     _localServiceOwners.containsKey(canonicalData);
 
+/// The configuration a service uses once it owns [profile]. Native
+/// installations add profile-owned cache defaults; explicit values win.
+RuntimeConfiguration profileServiceConfiguration(
+  ProfilePaths profile,
+  RuntimeConfiguration configuration,
+) => configuration['FORESIGHT_NATIVE'] != null
+    ? configuration.withProfileRuntime(profile.data)
+    : configuration;
+
 /// One non-waiting profile lock attempt, before worker resources are opened.
 Future<RandomAccessFile> acquireServiceProfileLock(
   ProfilePaths profile, {
   required bool Function() launchWithdrawn,
+  RuntimeConfiguration? configuration,
 }) async {
   privateDirectory(profile.data, repairOwnedPermissions: true);
+  final config = configuration ?? runtimeConfiguration;
   // Configure native state only when a native installation is present. Tests
   // and administration may use the storage-only service without model workers.
-  if (runtimeConfiguration['FORESIGHT_NATIVE'] != null) {
-    configureProfileRuntime(profile.data);
+  if (config['FORESIGHT_NATIVE'] != null) {
+    configureProfileRuntime(profile.data, configuration: config);
   }
   privateRuntime(profile);
   final lock = File(

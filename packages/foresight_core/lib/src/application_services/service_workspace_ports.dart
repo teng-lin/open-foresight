@@ -2,6 +2,7 @@ import 'package:clock/clock.dart';
 
 import '../helper.dart';
 import '../store.dart';
+import 'service_runtime_ports.dart' show RuntimeConfigurationPort;
 
 /// Source work shares the service's existing queue and cancellation owner.
 abstract interface class SourceIndexPort {
@@ -12,7 +13,8 @@ abstract interface class SourceIndexPort {
   Future<void> waitForSourceWork({bool Function()? current});
 }
 
-abstract interface class SourceOperationsPort implements SourceIndexPort {
+abstract interface class SourceOperationsPort
+    implements SourceIndexPort, RuntimeConfigurationPort {
   Helper get helper;
   bool get closed;
   int get workspaceGeneration;

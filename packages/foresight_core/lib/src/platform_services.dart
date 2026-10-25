@@ -63,10 +63,21 @@ String? _linuxBundleRoot(String executable) {
   return root.resolveSymbolicLinksSync();
 }
 
+/// An immutable runtime snapshot. Construction copies [environment], so neither
+/// the caller's map nor the exposed view can change a captured configuration;
+/// owners derive a new snapshot instead of mutating a shared one.
 class RuntimeConfiguration {
   final Map<String, String> environment;
   final String? linuxBundleRoot;
-  RuntimeConfiguration(this.environment, {this.linuxBundleRoot});
+  RuntimeConfiguration(Map<String, String> environment, {this.linuxBundleRoot})
+    : environment = Map.unmodifiable(environment);
+
+  /// A frontend's already resolved map in this process's service runtime.
+  factory RuntimeConfiguration.serviceWorker(Map<String, String> environment) =>
+      RuntimeConfiguration(
+        environment,
+        linuxBundleRoot: _linuxBundleRoot(Platform.resolvedExecutable),
+      );
   factory RuntimeConfiguration.resolve({
     Map<String, String>? environment,
     String? executable,
@@ -185,19 +196,58 @@ class RuntimeConfiguration {
       (Platform.isMacOS
           ? 'libforesight_native.dylib'
           : 'libforesight_native.so');
+  String? get installationRoot => switch (this['FORESIGHT_INSTALL_ROOT']) {
+    final String root => canonicalProfilePath(root),
+    null => null,
+  };
+
+  /// A new snapshot where explicit values win over [defaults].
+  RuntimeConfiguration withDefaults(Map<String, String> defaults) =>
+      defaults.keys.every(environment.containsKey)
+      ? this
+      : RuntimeConfiguration({
+          ...defaults,
+          ...environment,
+        }, linuxBundleRoot: linuxBundleRoot);
+
+  /// A new snapshot where [values] replace entries; a null value removes one.
+  RuntimeConfiguration withOverrides(Map<String, String?> values) =>
+      RuntimeConfiguration({
+        for (final entry in environment.entries)
+          if (!values.containsKey(entry.key)) entry.key: entry.value,
+        for (final entry in values.entries)
+          if (entry.value case final String value) entry.key: value,
+      }, linuxBundleRoot: linuxBundleRoot);
+
+  /// Profile-owned caches for native and Python workers of the [data] profile.
+  RuntimeConfiguration withProfileRuntime(String data) => withDefaults({
+    'FORESIGHT_LITERT_CACHE': '$data/cache/litert',
+    'PYTHONPYCACHEPREFIX': '$data/cache/python',
+  });
 }
 
 RuntimeConfiguration? _runtimeConfiguration;
+
+/// This process/isolate boundary snapshot. Composition roots capture it once
+/// and pass it through owned ports; it is resolved lazily on first use.
 RuntimeConfiguration get runtimeConfiguration =>
     _runtimeConfiguration ??= RuntimeConfiguration.resolve();
 
 /// Install the frontend's resolved map before any worker runtime access. The
 /// process environment still names the handoff already consumed by the frontend.
 void installServiceWorkerEnvironment(Map<String, String> environment) {
-  _runtimeConfiguration = RuntimeConfiguration(
-    Map<String, String>.from(environment),
-    linuxBundleRoot: _linuxBundleRoot(Platform.resolvedExecutable),
-  );
+  _runtimeConfiguration = RuntimeConfiguration.serviceWorker(environment);
+}
+
+/// Install an exact snapshot transported from another isolate, or restore a
+/// previous one in tests. Returns the installed snapshot it replaced, without
+/// resolving one: a worker's process handoff may already be consumed.
+RuntimeConfiguration? installRuntimeConfiguration(
+  RuntimeConfiguration configuration,
+) {
+  final previous = _runtimeConfiguration;
+  _runtimeConfiguration = configuration;
+  return previous;
 }
 
 // mode_t is unsigned short on Darwin and unsigned int on Linux. Calling libc
@@ -468,8 +518,13 @@ Future<void> openPlatformUri(Uri uri) async {
   }
 }
 
-Future<void> platformNotification(String title, String message) async {
-  final helper = runtimeConfiguration['FORESIGHT_NOTIFICATIONS'];
+Future<void> platformNotification(
+  String title,
+  String message, {
+  RuntimeConfiguration? configuration,
+}) async {
+  final helper =
+      (configuration ?? runtimeConfiguration)['FORESIGHT_NOTIFICATIONS'];
   final result = Platform.isMacOS
       ? helper == null
             ? throw StateError(
@@ -506,9 +561,10 @@ bool _nativeEnvironmentConfigured = false;
 
 /// Configure C/C++ getenv consumers once, before service-owned workers start.
 /// Dart's resource map does not otherwise modify the process environment.
-void configureNativeEnvironment() {
+void configureNativeEnvironment({RuntimeConfiguration? configuration}) {
   if (_nativeEnvironmentConfigured) return;
-  final values = runtimeConfiguration.environment.entries
+  final config = configuration ?? runtimeConfiguration;
+  final values = config.environment.entries
       .where(
         (entry) =>
             _nativeEnvironmentKeys.contains(entry.key) &&
@@ -518,9 +574,9 @@ void configureNativeEnvironment() {
       .toList();
   late final DynamicLibrary selected;
   try {
-    selected = DynamicLibrary.open(runtimeConfiguration.nativeLibrary);
+    selected = DynamicLibrary.open(config.nativeLibrary);
   } on ArgumentError {
-    if (values.isNotEmpty || runtimeConfiguration['FORESIGHT_NATIVE'] != null) {
+    if (values.isNotEmpty || config['FORESIGHT_NATIVE'] != null) {
       rethrow;
     }
     // A SQL-only development worker may have no native mapping available.
@@ -583,16 +639,19 @@ void configureNativeEnvironment() {
   _nativeEnvironmentConfigured = true;
 }
 
-void configureProfileRuntime(String data) {
-  runtimeConfiguration.environment.putIfAbsent(
-    'FORESIGHT_LITERT_CACHE',
-    () => '$data/cache/litert',
-  );
-  runtimeConfiguration.environment.putIfAbsent(
-    'PYTHONPYCACHEPREFIX',
-    () => '$data/cache/python',
-  );
-  configureNativeEnvironment();
+/// Add the [data] profile's cache defaults and configure native consumers from
+/// that snapshot. Deriving from the installed boundary snapshot (the default)
+/// replaces it, so later boundary captures see the profile; a snapshot owned
+/// by a caller is only returned.
+RuntimeConfiguration configureProfileRuntime(
+  String data, {
+  RuntimeConfiguration? configuration,
+}) {
+  final base = configuration ?? runtimeConfiguration;
+  final profiled = base.withProfileRuntime(data);
+  if (identical(base, _runtimeConfiguration)) _runtimeConfiguration = profiled;
+  configureNativeEnvironment(configuration: profiled);
+  return profiled;
 }
 
 String _notificationFailure(ProcessResult result) {
@@ -614,6 +673,7 @@ String _notificationFailure(ProcessResult result) {
 
 Future<Map<String, dynamic>> notificationCapabilities({
   bool requestPermission = false,
+  RuntimeConfiguration? configuration,
 }) async {
   if (!Platform.isMacOS) {
     return {
@@ -621,7 +681,8 @@ Future<Map<String, dynamic>> notificationCapabilities({
       'backend': 'freedesktop',
     };
   }
-  final helper = runtimeConfiguration['FORESIGHT_NOTIFICATIONS'];
+  final helper =
+      (configuration ?? runtimeConfiguration)['FORESIGHT_NOTIFICATIONS'];
   if (helper == null) {
     throw StateError(
       'The bundled notification adapter is unavailable. Reinstall Open Foresight.',
@@ -654,8 +715,11 @@ String installationLockPath(String appRoot) {
   return '$cache/install-locks/$identity/lock';
 }
 
-InstallationLock? acquireInstallationLock() {
-  final root = runtimeConfiguration['FORESIGHT_INSTALL_ROOT'];
+InstallationLock? acquireInstallationLock({
+  RuntimeConfiguration? configuration,
+}) {
+  final root =
+      (configuration ?? runtimeConfiguration)['FORESIGHT_INSTALL_ROOT'];
   if (root == null) return null;
   void refuseMaintenance() {
     if (FileSystemEntity.typeSync(
@@ -682,10 +746,7 @@ InstallationLock? acquireInstallationLock() {
   }
 }
 
-String? get configuredInstallationRoot {
-  final root = runtimeConfiguration['FORESIGHT_INSTALL_ROOT'];
-  return root == null ? null : canonicalProfilePath(root);
-}
+String? get configuredInstallationRoot => runtimeConfiguration.installationRoot;
 
 /// A packaged client may attach only to its own installed application revision.
 /// Development clients without a packaged revision retain the existing contract.

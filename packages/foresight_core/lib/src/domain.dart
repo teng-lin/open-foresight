@@ -52,6 +52,10 @@ class Domain
         MeetingIndexingPort {
   @override
   final Store store;
+
+  /// The owning service's snapshot; direct construction captures the boundary.
+  @override
+  final RuntimeConfiguration configuration;
   @override
   final Helper helper;
   late final _queries = DomainQueries(store);
@@ -83,8 +87,28 @@ class Domain
   final Timer Function(Duration, void Function()) createTimer;
   final GenerationRuntimeDiscovery _discoverGeneration;
   Domain(
+    Store store,
+    Helper helper, {
+    SearchCallbacks? webSearch,
+    ModelGate? modelGate,
+    Clock? clock,
+    Timer Function(Duration, void Function())? createTimer,
+    GenerationRuntimeDiscovery? discoverGeneration,
+    RuntimeConfiguration? configuration,
+  }) : this._(
+         store,
+         helper,
+         configuration ?? runtimeConfiguration,
+         webSearch: webSearch,
+         modelGate: modelGate,
+         clock: clock,
+         createTimer: createTimer,
+         discoverGeneration: discoverGeneration,
+       );
+  Domain._(
     this.store,
-    this.helper, {
+    this.helper,
+    this.configuration, {
     SearchCallbacks? webSearch,
     ModelGate? modelGate,
     Clock? clock,
@@ -94,7 +118,17 @@ class Domain
        _webSearch = webSearch,
        clock = clock ?? const Clock(),
        createTimer = createTimer ?? Timer.new,
-       _discoverGeneration = discoverGeneration ?? discoverGenerationRuntime;
+       _discoverGeneration =
+           discoverGeneration ??
+           ((store, library, {current, onCandidate, retire}) =>
+               discoverGenerationRuntime(
+                 store,
+                 library,
+                 configuration: configuration,
+                 current: current,
+                 onCandidate: onCandidate,
+                 retire: retire,
+               ));
   Future<void> Function(int, {bool Function()? current})?
   indexMeetingTranscript;
   @override
@@ -610,7 +644,7 @@ class Domain
 
   /// Separate construction allows fixture runtimes to exercise real ownership.
   NativeRuntime createNoteEnhancementRuntime() =>
-      NativeRuntime(runtimeConfiguration.nativeLibrary);
+      NativeRuntime(configuration.nativeLibrary);
 
   Future<void> _initializeNoteEnhancementService() async {
     final workspace = workspaceGeneration;
@@ -619,7 +653,8 @@ class Domain
       if (model == null) {
         return discoverGenerationRuntime(
           store,
-          runtimeConfiguration.nativeLibrary,
+          configuration.nativeLibrary,
+          configuration: configuration,
           current: attempt.current,
           onCandidate: attempt.own,
           retire: attempt.retire,
@@ -708,7 +743,7 @@ class Domain
         if (!_queries.hasModel('generation')) {
           final candidate = await _discoverGeneration(
             store,
-            runtimeConfiguration.nativeLibrary,
+            configuration.nativeLibrary,
             current: attempt.current,
             onCandidate: attempt.own,
             retire: attempt.retire,

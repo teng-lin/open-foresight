@@ -7,6 +7,7 @@ import 'platform_services.dart';
 class Parser {
   final bool _macOS;
   final String? _macParser;
+  final RuntimeConfiguration? _configuration;
   final Duration extractionTimeout;
   final Future<Process> Function(String, List<String>) _startProcess;
   Parser({
@@ -14,8 +15,10 @@ class Parser {
     String? macParser,
     this.extractionTimeout = const Duration(seconds: 30),
     Future<Process> Function(String, List<String>)? startProcess,
+    RuntimeConfiguration? configuration,
   }) : _macOS = macOS ?? Platform.isMacOS,
        _macParser = macParser,
+       _configuration = configuration,
        _startProcess =
            startProcess ??
            ((executable, arguments) => Process.start(
@@ -77,7 +80,8 @@ class Parser {
     if (_macOS && (lower.endsWith('.pdf') || lower.endsWith('.rtf'))) {
       return _MacDocumentExtractor(
         _extractProcess,
-        _macParser,
+        _macParser ??
+            (_configuration ?? runtimeConfiguration)['FORESIGHT_FILE_PARSER'],
       ).extract(path, lower);
     }
     if (lower.endsWith('.pdf')) {
@@ -220,8 +224,7 @@ final class _MacDocumentExtractor {
   final String? _macParser;
   const _MacDocumentExtractor(this._extractProcess, this._macParser);
   Future<(String, String)> extract(String path, String lower) async {
-    final executable =
-        _macParser ?? runtimeConfiguration['FORESIGHT_FILE_PARSER'];
+    final executable = _macParser;
     if (executable == null || executable.isEmpty) {
       throw StateError(
         'The bundled PDF/RTF extractor is unavailable. Reinstall Open Foresight.',

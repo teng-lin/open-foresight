@@ -15,7 +15,7 @@ const _ownerAttachTimeout = Duration(seconds: 5);
 final class SqliteReadWorker
     implements ReadWorker, ReadQueueCancellation, ReadAdmissionAvailability {
   final String _path;
-  final Map<String, String> _environment;
+  final RuntimeConfiguration _configuration;
   final SqlSupportBootstrap _sqlSupport;
   final Duration executionBudget;
   final int maxQueuedReads;
@@ -25,16 +25,22 @@ final class SqliteReadWorker
   // Bounded by the callers waiting for admission, never by refused requests.
   final _admissionWaiters = <_AdmissionWaiter>{};
 
+  /// The reader isolate installs exactly [configuration] when given. Otherwise
+  /// it receives [environment] (by default the owner's boundary map) with this
+  /// service runtime's packaged root, as the worker always derived it.
   SqliteReadWorker(
     String path, {
     Map<String, String>? environment,
+    RuntimeConfiguration? configuration,
     SqlSupportBootstrap? sqlSupport,
     this.executionBudget = const Duration(seconds: 5),
     this.maxQueuedReads = 16,
   }) : _path = path,
-       _environment = Map.unmodifiable(
-         environment ?? runtimeConfiguration.environment,
-       ),
+       _configuration =
+           configuration ??
+           RuntimeConfiguration.serviceWorker(
+             environment ?? runtimeConfiguration.environment,
+           ),
        _sqlSupport = sqlSupport ?? currentSqlSupportBootstrap {
     if (executionBudget <= Duration.zero ||
         executionBudget > const Duration(seconds: 30)) {
@@ -98,7 +104,7 @@ final class SqliteReadWorker
         _runReader,
         (
           _path,
-          _environment,
+          _configuration,
           generation.messages.sendPort,
           executionBudget,
           _sqlSupport,
@@ -308,13 +314,13 @@ final class _ReadStartupFailure {
 }
 
 void _runReader(
-  (String, Map<String, String>, SendPort, Duration, SqlSupportBootstrap)
+  (String, RuntimeConfiguration, SendPort, Duration, SqlSupportBootstrap)
   startup,
 ) {
-  final (path, environment, results, executionBudget, sqlSupport) = startup;
+  final (path, configuration, results, executionBudget, sqlSupport) = startup;
   // The process handoff may already have been consumed. Resolve once in the
-  // owner and install exactly that map before model/runtime projections run.
-  installServiceWorkerEnvironment(environment);
+  // owner and install exactly that snapshot before model/runtime projections.
+  installRuntimeConfiguration(configuration);
   SqliteReadSession session;
   try {
     bindSqlSupportBootstrap(sqlSupport);

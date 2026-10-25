@@ -76,13 +76,24 @@ String _executable(int process) {
 
 /// Only the installed desktop executable can own the approval surface. Generic
 /// interpreters and the service/MCP executables do not qualify as the desktop.
-bool verifyInstalledDesktopPeer(Socket peer) {
+bool verifyInstalledDesktopPeer(Socket peer) =>
+    _verifyInstalledDesktopPeer(peer, runtimeConfiguration);
+
+/// [verifyInstalledDesktopPeer] against a service-owned [configuration].
+DesktopPeerVerifier installedDesktopPeerVerifier(
+  RuntimeConfiguration configuration,
+) =>
+    (peer) => _verifyInstalledDesktopPeer(peer, configuration);
+
+bool _verifyInstalledDesktopPeer(
+  Socket peer,
+  RuntimeConfiguration configuration,
+) {
   try {
     final identity = unixPeerIdentity(peer);
     if (identity.uid != effectiveUserId) return false;
-    final root = configuredInstallationRoot;
-    if (root != null ||
-        runtimeConfiguration['FORESIGHT_RUNTIME_REVISION'] != null) {
+    final root = configuration.installationRoot;
+    if (root != null || configuration['FORESIGHT_RUNTIME_REVISION'] != null) {
       if (root == null) return false;
       final candidate = File(
         Platform.isMacOS
@@ -93,14 +104,13 @@ bool verifyInstalledDesktopPeer(Socket peer) {
           identity.executable == candidate &&
           _nativeDesktopExecutable(candidate);
     }
-    final testExecutable =
-        runtimeConfiguration['FORESIGHT_TEST_DESKTOP_EXECUTABLE'];
+    final testExecutable = configuration['FORESIGHT_TEST_DESKTOP_EXECUTABLE'];
     if (foresightTestHooksEnabled && testExecutable != null) {
       return identity.executable ==
           File(testExecutable).resolveSymbolicLinksSync();
     }
     final development =
-        runtimeConfiguration['FORESIGHT_DEVELOPMENT_DESKTOP_EXECUTABLES'];
+        configuration['FORESIGHT_DEVELOPMENT_DESKTOP_EXECUTABLES'];
     if (development == null) return false;
     final allowed = jsonDecode(development);
     if (allowed is! List ||

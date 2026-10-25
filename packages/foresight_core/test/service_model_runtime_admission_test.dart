@@ -48,6 +48,10 @@ Future<void> _runIsolatedSelection(String selection) async {
   }
 }
 
+/// Install a derived snapshot; the captured configuration itself is immutable.
+void _configure(Map<String, String?> values) =>
+    installRuntimeConfiguration(runtimeConfiguration.withOverrides(values));
+
 void main() {
   bootstrapSqlSupportFixture();
   final library = Platform.environment['FORESIGHT_NATIVE_LIBRARY'];
@@ -65,12 +69,8 @@ void main() {
             expect(Platform.environment[_isolatedCase], selection);
             final directory = createTestTempDirectorySync('model-admission-');
             File('${directory.path}/asset').writeAsStringSync('fixture');
-            final environment = Map.of(runtimeConfiguration.environment);
-            addTearDown(
-              () => runtimeConfiguration.environment
-                ..clear()
-                ..addAll(environment),
-            );
+            final previous = runtimeConfiguration;
+            addTearDown(() => installRuntimeConfiguration(previous));
             final outside = createTestTempDirectorySync('outside-runner-');
             final invoked = File('${outside.path}/invoked');
             final legacy = File('${outside.path}/legacy-python')
@@ -94,7 +94,7 @@ print(json.dumps({'native_stop_token_sequences':True}))
             }
             final alias = Link('${directory.path}/bundled-alias')
               ..createSync(worker.path);
-            runtimeConfiguration.environment.addAll({
+            _configure({
               'FORESIGHT_INSTALL_ROOT': directory.path,
               'FORESIGHT_LITERT_RUNNER': alias.path,
               'FORESIGHT_NATIVE': library!,
