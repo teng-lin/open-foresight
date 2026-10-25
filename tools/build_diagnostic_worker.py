@@ -104,6 +104,19 @@ def _copy(root: Path, name: str, destination: Path, expected: str) -> None:
         os.close(directory)
 
 
+def _publish(path: Path, data: bytes) -> None:
+    with tempfile.NamedTemporaryFile(
+        dir=path.parent, prefix="worker-record-", delete=False
+    ) as output:
+        staging = Path(output.name)
+        output.write(data)
+    try:
+        staging.chmod(0o644)
+        staging.replace(path)
+    finally:
+        staging.unlink(missing_ok=True)
+
+
 def build_worker(
     root: Path, build: Path, sdk: Path, config: Path, mode: str
 ) -> dict[str, Any]:
@@ -121,7 +134,7 @@ def build_worker(
     metadata.unlink(missing_ok=True)
     worker_inputs = build / "native/diagnostic-worker-inputs.json"
     worker_inputs.unlink(missing_ok=True)
-    worker_inputs.write_bytes(b'{"schema":1,"available":false}\n')
+    _publish(worker_inputs, b'{"schema":1,"available":false}\n')
     manifest = context.collect(root, build / "native", sdk, config, mode)
     defines = definitions(root, build, sdk, config, manifest)
     if mode == "jit":
@@ -217,8 +230,9 @@ def build_worker(
             "mode": stat.S_IMODE(target.stat().st_mode),
         }
     manifest["kind"] = "standalone-worker"
-    (build / "native/diagnostic-worker-inputs.json").write_bytes(
-        identity._canonical(manifest) + b"\n"
+    _publish(
+        build / "native/diagnostic-worker-inputs.json",
+        identity._canonical(manifest) + b"\n",
     )
     receipt = {
         "schema": 1,
@@ -230,7 +244,7 @@ def build_worker(
         "artifact": artifact,
         "defines": defines,
     }
-    metadata.write_bytes(identity._canonical(receipt) + b"\n")
+    _publish(metadata, identity._canonical(receipt) + b"\n")
     return receipt
 
 

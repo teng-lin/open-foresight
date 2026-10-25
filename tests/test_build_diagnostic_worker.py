@@ -1,6 +1,8 @@
 """Receipt/closed-snapshot mechanics with synthetic compiler outputs only."""
 
 import json
+import os
+import stat
 from pathlib import Path
 import subprocess
 from unittest import mock
@@ -191,3 +193,19 @@ def test_cli_refuses_symlink_defines_output(tmp_path):
     ):
         assert build.main() == 1
     assert sentinel.read_text() == "unchanged"
+
+
+def test_permissive_umask_cannot_make_child_manifest_writable(product):
+    previous = os.umask(0o002)
+    try:
+        with mock.patch.object(
+            context.products, "verify", return_value={"native_id": "a" * 64}
+        ):
+            build.build_worker(*product, "jit")
+            for name in [
+                "native/diagnostic-worker-inputs.json",
+                "application/diagnostic-worker-build.json",
+            ]:
+                assert stat.S_IMODE((product[1] / name).stat().st_mode) == 0o644
+    finally:
+        os.umask(previous)
