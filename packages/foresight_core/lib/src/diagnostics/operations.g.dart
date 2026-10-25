@@ -60,6 +60,8 @@ const diagnosticOperations = <String>{
   'meetings.pause',
   'meetings.resume',
   'artifacts.edit',
+  'models.download_asset',
+  'models.inspect_asset',
   'models.cancel_query_acquisition',
   'models.acquire_query',
   'models.speech',
