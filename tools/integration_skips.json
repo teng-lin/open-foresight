@@ -279,6 +279,30 @@
       ],
       "gate": "core-native",
       "reason": "The core gate supplies FORESIGHT_TEST_HELPER from the matched repository-root ForesightHelperTest target. This exercises real application-to-helper transcript indexing without a downloaded model; it does not substitute the test helper for the production helper."
+    },
+    {
+      "path": "packages/foresight_core/test/native_cross_isolate_lifetime_test.dart",
+      "conditions": [
+        "library == null ? 'Requires the current built native lifetime v2 library' : false"
+      ],
+      "gate": "core-native",
+      "reason": "Runs in the regular core-native gate with the matching built lifetime-v2 library; an owned child VM checks cross-isolate refusal and joined cleanup without model assets."
+    },
+    {
+      "path": "packages/foresight_core/test/native_recording_lifetime_test.dart",
+      "conditions": [
+        "library == null ? 'Requires the current native library and helper; deterministic worker, no physical audio or model inference' : false"
+      ],
+      "gate": "core-native",
+      "reason": "Runs in the regular core-native gate with the matching built library/helper and a deterministic owned speech worker; no physical audio or inference weights are required."
+    },
+    {
+      "path": "packages/foresight_core/test/service_native_owner_lifetime_test.dart",
+      "conditions": [
+        "library == null ? 'Requires the current native library/helper; controlled models, no physical audio/GPU/model inference' : false"
+      ],
+      "gate": "core-native",
+      "reason": "Runs in the regular core-native gate with the matching built library/helper; owned child VMs check real native work loss, the admission ACK gap, joined replacement and SQL-only replacement without physical audio or model weights."
     }
   ]
 }
