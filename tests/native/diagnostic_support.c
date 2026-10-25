@@ -87,6 +87,7 @@ static int worker(const char *parent_text, const char *mode) {
       pause();
   }
   assert(mapped == FS_DIAG_SUPPORT_PREPARED);
+  assert(fs_diag_child_finish(1, 0) == FS_DIAG_SUPPORT_ERROR);
   assert(fs_diag_support_send(1, FS_DIAG_HELLO, 0, 0, NULL, 0) ==
          FS_DIAG_CHANNEL_COMPLETE);
   assert(receive(FS_DIAG_INIT, 1, 0));
@@ -102,7 +103,10 @@ static int worker(const char *parent_text, const char *mode) {
   assert(receive(FS_DIAG_RETIRE, 2, 0));
   assert(fs_diag_support_send(1, FS_DIAG_RETIRED, 2, 0, NULL, 0) ==
          FS_DIAG_CHANNEL_COMPLETE);
-  return 0;
+  assert(fs_diag_child_finish(1, 66) == FS_DIAG_SUPPORT_ERROR);
+  assert(fs_diag_child_finish(2, 0) == FS_DIAG_SUPPORT_ERROR);
+  fs_diag_child_finish(1, 0);
+  return 99;
 }
 
 static void run_case(const char *launcher, const char *self, const char *mode) {
@@ -128,6 +132,7 @@ static void run_case(const char *launcher, const char *self, const char *mode) {
   if (bad)
     return;
   assert(fs_diag_parent_prepare(2) == FS_DIAG_SUPPORT_ERROR);
+  assert(fs_diag_child_finish(1, 0) == FS_DIAG_SUPPORT_ERROR);
   if (strcmp(mode, "cancel-before") == 0) {
     assert(fs_diag_parent_force(1) == FS_DIAG_SUPPORT_CANCELLED);
     assert(fs_diag_parent_prepare(1) == FS_DIAG_SUPPORT_CANCELLED);

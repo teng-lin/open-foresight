@@ -7,7 +7,9 @@
 // never pointers or descriptors. Exactly one context may be reserved for the
 // lifetime of a process, including after failed startup. Mappings/contexts are
 // retained until process exit; callers must retain the original loaded image.
-// Only prepare/spawn/map may block. Each runs on its dedicated owned isolate.
+// Only prepare/spawn/map may block. Parent preparation belongs to the writer,
+// spawn to its dedicated owned isolate, and mapping to the exec-child main
+// isolate after its independent watcher acknowledgement.
 // All other calls are bounded observations/copies (not scheduler guarantees).
 enum {
   FS_DIAG_SUPPORT_ERROR = -1,
@@ -65,6 +67,9 @@ uint64_t fs_diag_child_arm(int64_t expected_parent, const char *native_id,
 int fs_diag_child_watch(uint64_t id);
 int fs_diag_child_map(uint64_t id);
 int fs_diag_child_operation(uint64_t id, int active);
+// Final exec-child-only process retirement. Never exits a parent context.
+// Closed statuses0/65/67 only; no VM teardown waits on held worker/watch FFI.
+int fs_diag_child_finish(uint64_t id, int status);
 
 // Sole writer/main-isolate endpoint owner. No concurrent send/receive calls.
 // Chunk and capacity <=4056. COMPLETE metadata is exposed only after protocol
