@@ -252,6 +252,10 @@ final class LoggingSession {
         return;
       }
       if (value is! List || value.isEmpty) return;
+      if (value.first == 'worker_probe' && value.length == 1) {
+        currentSession?._coordinator?.probe();
+        return;
+      }
       if (value.first == 'worker_request' && value.length == 4) {
         currentSession?._coordinator?.request(value);
         return;
@@ -777,6 +781,17 @@ final class _DiagnosticCoordinator {
     unawaited(run());
   }
 
+  void probe() {
+    final state = _snapshot;
+    if (_writerGone) return;
+    if (!state.childNotLive &&
+        state.reason == DiagnosticHealthReason.storageWorkerUnknown &&
+        !_forced) {
+      force();
+    }
+    writer.send(['worker_probe_reply', state.childNotLive, state.reason.index]);
+  }
+
   void beginClose(Stopwatch elapsed) {
     if (_closing != null) return;
     _closing = elapsed;
@@ -913,10 +928,10 @@ void _writerMain(List<Object?> arguments) {
     arguments[9] as DateTime Function()?,
   );
   receive.listen(state.handle);
-  state.creditTimer = Timer.periodic(
-    const Duration(milliseconds: 100),
-    (_) => state.ledger.rebalance(),
-  );
+  state.creditTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
+    state.ledger.rebalance();
+    state.probe();
+  });
   state.timer = Timer.periodic(const Duration(milliseconds: 250), (_) {
     state.heartbeat();
     state.flush();
@@ -1237,6 +1252,7 @@ final class _Writer {
       _remoteDisabled = false,
       _unknown = false;
   _QueuedRecord? _inFlight, _pendingSummary;
+  bool _probePending = false, _disposed = false;
   (DiagnosticRole, bool, bool)? _classification;
 
   void heartbeat() {
@@ -1245,8 +1261,56 @@ final class _Writer {
     if (_nativeGeneration != 0) _nativeFunctions?.heartbeat(_nativeGeneration);
   }
 
+  void probe() {
+    if (_initialized && !_finished && !_probePending) {
+      _probePending = true;
+      owner.send(['worker_probe']);
+    }
+  }
+
+  void _disposalHealth() {
+    if (reason == DiagnosticHealthReason.healthy ||
+        reason == DiagnosticHealthReason.bootstrapOnly ||
+        reason == DiagnosticHealthReason.storageWorkerUnknown) {
+      reason = DiagnosticHealthReason.storageWorkerExited;
+    }
+  }
+
+  void _disposeConfirmed() {
+    // Let an active native request consume a matching final ACK first. Actual
+    // native requests settle promptly after observed exit; an earlier unknown
+    // request has no pending Future and can be disposed immediately.
+    if (!_disposed || _reply != null || _inFlight != null) return;
+    _unknown = false;
+    dropped = _sum(dropped, records.length);
+    _discard();
+    _pendingSummary = null;
+    _disposalHealth();
+  }
+
   bool workerControl(List value) {
     switch (value.first) {
+      case 'worker_probe_reply':
+        if (value.length == 3 && _probePending) {
+          _probePending = false;
+          final observed = DiagnosticHealthReason.values[value[2] as int];
+          if (value[1] == true) {
+            _disposed = true;
+            _remoteDisabled = true;
+            // An earlier failed APPEND is now authoritatively disposed.
+            if (_reply == null) _inFlight = null;
+            _disposeConfirmed();
+            _health();
+          } else if (observed == DiagnosticHealthReason.storageWorkerUnknown) {
+            _remoteDisabled = true;
+            if (reason == DiagnosticHealthReason.healthy ||
+                reason == DiagnosticHealthReason.bootstrapOnly) {
+              reason = observed;
+            }
+            _health();
+          }
+        }
+        return true;
       case 'native_prepare':
         final functions = DiagnosticNativeFunctions.fromCodeAddresses(
           (value[1] as List).cast<int>(),
@@ -1410,11 +1474,19 @@ final class _Writer {
         _admitted = true;
       }
       while (records.isNotEmpty) {
+        if (_disposed) {
+          _finishOrHealth();
+          return;
+        }
         if (decisionExpected && !decisionReceived) {
           _health();
           return;
         }
         if (!await _classify()) {
+          _finishOrHealth();
+          return;
+        }
+        if (_disposed) {
           _finishOrHealth();
           return;
         }
@@ -1439,6 +1511,10 @@ final class _Writer {
         }
         _complete(record);
       }
+      if (_disposed) {
+        _finishOrHealth();
+        return;
+      }
       while (_pendingSummary != null || _hasSummaries) {
         final summary = _pendingSummary ??= _summaries().firstOrNull;
         if (summary == null) break;
@@ -1455,6 +1531,10 @@ final class _Writer {
           return;
         }
         _pendingSummary = null;
+        if (_disposed) {
+          _finishOrHealth();
+          return;
+        }
       }
       _health();
       if (closing) _finish();
@@ -1482,7 +1562,7 @@ final class _Writer {
 
   Future<bool> _classify({bool priority = false}) async {
     while (true) {
-      if (decisionExpected && !decisionReceived) return false;
+      if (_disposed || (decisionExpected && !decisionReceived)) return false;
       final state = (role, hadPriority || priority, hadFailure);
       if (_classification == state) return true;
       final reply = await _request(
@@ -1528,6 +1608,7 @@ final class _Writer {
   }
 
   void _finishOrHealth() {
+    _disposeConfirmed();
     if (closing) {
       _discardUnsent();
       _finish();
