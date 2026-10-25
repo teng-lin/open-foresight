@@ -34,7 +34,7 @@ def product(tmp_path):
     return source, build
 
 
-def configure(source, build, extra="", before="", allow_failure=False):
+def configure(source, build, extra="", before="", allow_failure=False, umask=-1):
     (source / "CMakeLists.txt").write_text(
         "cmake_minimum_required(VERSION 3.24)\n"
         "project(sql_identity_fixture LANGUAGES C)\n"
@@ -58,7 +58,9 @@ def configure(source, build, extra="", before="", allow_failure=False):
     ]
     if sys.platform == "darwin":
         args.append("-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0")
-    result = subprocess.run(args, text=True, capture_output=True, timeout=60)
+    result = subprocess.run(
+        args, text=True, capture_output=True, timeout=60, umask=umask
+    )
     if not allow_failure:
         assert result.returncode == 0, result.stdout + result.stderr
     return result
@@ -309,3 +311,21 @@ def test_malformed_identity_output_keeps_generic_sql_available(product, output):
         timeout=120,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_sql_public_metadata_has_private_writer_mode_under_group_umask(product):
+    source, build = product
+    configure(source, build, umask=0o002)
+    for name in ("diagnostic-sql-inputs.json", "sql-toolchain-metadata.json"):
+        assert (build / name).stat().st_mode & 0o777 == 0o644
+
+
+def test_unavailable_sql_state_has_private_writer_mode_under_group_umask(product):
+    source, build = product
+    configure(
+        source,
+        build,
+        before='set_property(GLOBAL PROPERTY RULE_LAUNCH_CUSTOM "OFF")',
+        umask=0o002,
+    )
+    assert (build / "diagnostic-sql-inputs.json").stat().st_mode & 0o777 == 0o644
