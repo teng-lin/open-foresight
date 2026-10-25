@@ -360,9 +360,9 @@ class PublicModelFileDownloader implements ModelDownloader {
   PublicModelFileDownloader({
     ModelTransportDeadlines? deadlines,
     ModelDownloadRetryPolicy? retryPolicy,
-    Future<Process> Function(List<String> command)? startWorker,
+    Future<Process> Function(List<String> command)? startWorkerForTesting,
   }) : _testDeadlines = deadlines,
-       _startWorker = startWorker,
+       _startWorkerForTesting = startWorkerForTesting,
        retryPolicy = retryPolicy ?? ModelDownloadRetryPolicy.reference() {
     deadlines?.validate();
     if (this.retryPolicy.maxAttempts <= 0 ||
@@ -373,7 +373,7 @@ class PublicModelFileDownloader implements ModelDownloader {
   final ModelTransportDeadlines? _testDeadlines;
   // Controlled process/acknowledgement fixtures use the same ownership path.
   // Production keeps the private worker's environment and default launcher.
-  final Future<Process> Function(List<String> command)? _startWorker;
+  final Future<Process> Function(List<String> command)? _startWorkerForTesting;
   final ModelDownloadRetryPolicy retryPolicy;
   ModelTransportDeadlines deadlinesFor(GemmaModel model) {
     if (_testDeadlines case final deadlines?) return deadlines;
@@ -422,7 +422,7 @@ class PublicModelFileDownloader implements ModelDownloader {
           throw const ModelTransportException('total_timeout');
         }
         final worker = _worker = _ModelTransportProcess(
-          startWorker: _startWorker,
+          startWorker: _startWorkerForTesting,
         );
         try {
           final path = await worker.run(
@@ -1021,17 +1021,18 @@ class _ModelTransportProcess {
         return;
       } // No child exists to retire.
       try {
-        await Future.wait([_stop(process), _closePipes()]);
+        await Future.wait([_stop(process), _closePipes(process)]);
       } catch (_) {
         throw const ModelTransportException('worker_exit_unknown');
       }
     }();
   }
 
-  Future<void> _closePipes() async {
+  Future<void> _closePipes(Process process) async {
     // StreamIterator cancellation wakes pending moveNext calls, including the
     // diagnostic drainer; neither owner waits for an inherited pipe's EOF.
     await Future.wait([
+      process.stdin.close(),
       if (_output case final output?) output.cancel(),
       if (_errors case final errors?) errors.cancel(),
     ]).timeout(const Duration(seconds: 2));

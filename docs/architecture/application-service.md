@@ -527,8 +527,8 @@ it does not claim the unknown child was reaped.
 
 Transport cancellation closes the parent's owned stdout and stderr stream
 readers while joining the worker's bounded termination attempt. A descendant
-holding a pipe open cannot keep the operation waiting for EOF. Confirmed cleanup
-also joins the parser. If cancellation cannot confirm worker exit or reader
+holding a pipe open cannot keep a cancelled operation waiting for EOF. Confirmed
+cleanup also joins the parser. If cancellation cannot confirm worker exit or reader
 retirement, the operation settles as `restart_required` rather than waiting for
 the download's size-scaled deadline. Without cancellation, the existing attempt
 deadline still bounds an absent exit acknowledgement.
