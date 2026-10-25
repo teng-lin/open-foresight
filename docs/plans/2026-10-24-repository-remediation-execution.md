@@ -789,3 +789,45 @@ whole-VM teardown gap remain unfinished. Real weights, GPU, physical audio,
 cloud credentials and signed installed distributions were not accepted by these
 offline suites. This remains one draft PR; these local results do not establish
 whole-plan completion or hosted acceptance of the new head.
+
+### Full-scope continuation and CI repairs, October 25
+
+The owner explicitly retained the full combined scope before merge. Only the
+broader security additions already covered by the delivery-scope amendment are
+deferred. Logging alone does not close the ordinary audit obligations. Runtime
+logging, startup/build identity, and SQL/package integration continue in separate
+worktrees, with independent native and Claude reviews of frozen checkpoints.
+
+Hosted head `66c23c9e` failed Python, installer/package, native-stage and sanitizer
+checks. The failed logs were retrieved before repairs. Installer/package repair
+`91025542` is integrated locally as `01cc52a9`: use macOS's fixed physical
+`/private/tmp` legacy-lock location while retaining no-follow checks below it;
+remove only an empty installation directory after removal-marker cleanup; and
+make the RPM lock fixture match the released private mode. The GNU/Linux-only
+maintainer-script fixture now has its actual platform prerequisite. Independent
+peer review converged for this seven-file repair.
+
+On that integrated source, Python passed **5,644 / 31 skipped**, with skip
+reasons retained; ruff, mypy and the subprocess-timeout guard passed. This run
+was `pytest`, not a new combined-coverage qualification. Real tiny generated
+Deb, RPM and Arch packages passed installation/removal controls, and Mac signed
+DMG controls passed **4/4**. These component fixtures do not establish actual
+application-package acceptance. Full hosted checks remain pending.
+
+The native failures included an unset private probe-root requirement and a fatal
+ThreadSanitizer report for a completed but joinable legacy generation at process
+exit. Separate candidate `9b220b2b` supplies a private `mkdtemp` fallback and
+nonblocking finalization of completed legacy thread bookkeeping while retaining
+the complete object graph. It does not acknowledge owned-v2 retirement. Both
+reviewers independently found a capture-publication race in the first candidate;
+the follow-up serializes capture thread assignment with its lifecycle mutex.
+A real cross-thread probe fails when that lock is removed.
+
+The repaired candidate passed Linux root CTest **38/38**, zero skips, and the
+ownership executable passed fatal Clang 23 TSan plus ASan/UBSan with leak
+detection enabled. Repeated whole-unit Claude review converged; repeated native
+peer review is pending. Mac component checks passed both unset and explicit
+private roots after test-only `a6b487ec` makes the capture fixture runtime
+absolute. The preceding relative-path failure is retained. This native candidate
+is not integrated yet; full Mac native and combined application qualification
+remain required. Evidence is under `/var/tmp/of-ci66`.
