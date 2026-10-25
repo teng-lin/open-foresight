@@ -525,6 +525,12 @@ termination cannot confirm child exit, the job's bookkeeping still settles and
 a `restart_required` state blocks replacement downloads until service restart;
 it does not claim the unknown child was reaped.
 
+Transport cancellation closes the parent's owned stdout and stderr stream
+readers while joining the worker's bounded termination attempt. A descendant
+holding a pipe open cannot keep the operation waiting for EOF. Confirmed cleanup
+also joins the parser; an unconfirmed exit acknowledgement settles as
+`restart_required` rather than waiting for the download's size-scaled deadline.
+
 Public workers return closed failure codes (`diskSpace`, `interrupted`, `hash`,
 `https`, `invalid`) and an optional bounded required-byte count. The service maps
 those to safe model-setup RpcErrors; model dialogs allow only known model error

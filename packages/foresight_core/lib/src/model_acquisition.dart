@@ -360,7 +360,9 @@ class PublicModelFileDownloader implements ModelDownloader {
   PublicModelFileDownloader({
     ModelTransportDeadlines? deadlines,
     ModelDownloadRetryPolicy? retryPolicy,
+    Future<Process> Function(List<String> command)? startWorker,
   }) : _testDeadlines = deadlines,
+       _startWorker = startWorker,
        retryPolicy = retryPolicy ?? ModelDownloadRetryPolicy.reference() {
     deadlines?.validate();
     if (this.retryPolicy.maxAttempts <= 0 ||
@@ -369,6 +371,9 @@ class PublicModelFileDownloader implements ModelDownloader {
     }
   }
   final ModelTransportDeadlines? _testDeadlines;
+  // Controlled process/acknowledgement fixtures use the same ownership path.
+  // Production keeps the private worker's environment and default launcher.
+  final Future<Process> Function(List<String> command)? _startWorker;
   final ModelDownloadRetryPolicy retryPolicy;
   ModelTransportDeadlines deadlinesFor(GemmaModel model) {
     if (_testDeadlines case final deadlines?) return deadlines;
@@ -416,7 +421,9 @@ class PublicModelFileDownloader implements ModelDownloader {
         if (remaining <= Duration.zero) {
           throw const ModelTransportException('total_timeout');
         }
-        final worker = _worker = _ModelTransportProcess();
+        final worker = _worker = _ModelTransportProcess(
+          startWorker: _startWorker,
+        );
         try {
           final path = await worker.run(
             {
@@ -750,10 +757,22 @@ const _maxTransportBytes = 512 * 1024 * 1024;
 const _maxTransportConfiguration = 16 * 1024;
 
 class _ModelTransportProcess {
+  _ModelTransportProcess({this.startWorker});
+  final Future<Process> Function(List<String> command)? startWorker;
   Process? _process;
   Future<Process>? _launching;
   bool _cancelled = false;
+  final _cancelledSignal = Completer<void>();
   Future<void>? _cancelling;
+  StreamIterator<List<int>>? _output;
+  StreamIterator<List<int>>? _errors;
+
+  Future<T> _untilCancelled<T>(Future<T> work) => Future.any<T>([
+    work,
+    _cancelledSignal.future.then<T>(
+      (_) => throw const ModelTransportException('cancelled'),
+    ),
+  ]);
 
   Future<Uint8List> run(
     Map<String, Object?> config,
@@ -767,19 +786,29 @@ class _ModelTransportProcess {
     if (encoded.length > _maxTransportConfiguration) {
       throw const ModelTransportException('configuration_too_large');
     }
+    final work = _run(
+      encoded,
+      maximum,
+      onProgress,
+      onPhase,
+      progressTotal ?? maximum,
+    );
     try {
-      return await _run(
-        encoded,
-        maximum,
-        onProgress,
-        onPhase,
-        progressTotal ?? maximum,
-      ).timeout(
+      return await _untilCancelled(work).timeout(
         timeout,
         onTimeout: () => throw const ModelTransportException('total_timeout'),
       );
     } finally {
+      // Failed cleanup is explicitly unconfirmed: surface restart authority
+      // rather than waiting indefinitely for a failed acknowledgement again.
       await cancel();
+      // Confirmed cleanup closes our stream owners and wakes the parser. Join
+      // its actual settlement instead of leaving an EOF waiter behind.
+      try {
+        await work;
+      } catch (_) {
+        // The result/error above remains primary.
+      }
     }
   }
 
@@ -806,8 +835,10 @@ class _ModelTransportProcess {
     } else {
       // Source development only: use this Dart SDK and this package's source.
       // A compiled application must have its validated bundled service path.
-      final source = await Isolate.resolvePackageUri(
-        Uri.parse('package:foresight_core/src/model_transport_worker.dart'),
+      final source = await _untilCancelled(
+        Isolate.resolvePackageUri(
+          Uri.parse('package:foresight_core/src/model_transport_worker.dart'),
+        ),
       );
       if (!Platform.resolvedExecutable.endsWith('/dart') ||
           source == null ||
@@ -818,15 +849,17 @@ class _ModelTransportProcess {
       command = [Platform.resolvedExecutable, source.toFilePath()];
     }
     if (_cancelled) throw const ModelTransportException('cancelled');
-    final launch = _launching = Process.start(
-      command.first,
-      command.skip(1).toList(),
-      includeParentEnvironment: false,
-      environment: {
-        if (Platform.environment['SYSTEMROOT'] case final root?)
-          'SYSTEMROOT': root,
-      },
-    );
+    final launch = _launching =
+        startWorker?.call(command) ??
+        Process.start(
+          command.first,
+          command.skip(1).toList(),
+          includeParentEnvironment: false,
+          environment: {
+            if (Platform.environment['SYSTEMROOT'] case final root?)
+              'SYSTEMROOT': root,
+          },
+        );
     final Process process;
     try {
       process = await launch;
@@ -836,17 +869,26 @@ class _ModelTransportProcess {
     _process = process;
     // No diagnostic bytes from the child are trusted or retained. Draining is
     // independent of stdout and cannot grow an in-memory stderr tail.
-    final errors = process.stderr.drain<void>();
+    final output = _output = StreamIterator(process.stdout);
+    final errors = _errors = StreamIterator(process.stderr);
+    Future<void> discardErrors() async {
+      while (await errors.moveNext()) {}
+    }
+
+    final errorsDone = discardErrors();
+    errorsDone.ignore();
     if (_cancelled) {
       await cancel();
       throw const ModelTransportException('cancelled');
     }
     process.stdin.add(config);
-    await process.stdin.close();
+    await _untilCancelled(process.stdin.close());
     final header = BytesBuilder(copy: false);
     Uint8List? result;
     var offset = 0;
-    await for (final chunk in process.stdout) {
+    while (await output.moveNext()) {
+      if (_cancelled) throw const ModelTransportException('cancelled');
+      final chunk = output.current;
       var begin = 0;
       if (result == null) {
         while (begin < chunk.length && result == null) {
@@ -950,10 +992,11 @@ class _ModelTransportProcess {
         offset += count;
       }
     }
-    await errors;
-    if (await process.exitCode != 0 ||
-        result == null ||
-        offset != result.length) {
+    if (_cancelled) throw const ModelTransportException('cancelled');
+    await errorsDone;
+    if (_cancelled) throw const ModelTransportException('cancelled');
+    final code = await _untilCancelled(process.exitCode);
+    if (code != 0 || result == null || offset != result.length) {
       throw const ModelTransportException('worker_incomplete');
     }
     return result;
@@ -961,6 +1004,7 @@ class _ModelTransportProcess {
 
   Future<void> cancel() {
     _cancelled = true;
+    if (!_cancelledSignal.isCompleted) _cancelledSignal.complete();
     return _cancelling ??= () async {
       final launch = _launching;
       if (launch == null) return;
@@ -970,8 +1014,21 @@ class _ModelTransportProcess {
       } on ProcessException {
         return;
       } // No child exists to retire.
-      await _stop(process);
+      try {
+        await Future.wait([_stop(process), _closePipes()]);
+      } catch (_) {
+        throw const ModelTransportException('worker_exit_unknown');
+      }
     }();
+  }
+
+  Future<void> _closePipes() async {
+    // StreamIterator cancellation wakes pending moveNext calls, including the
+    // diagnostic drainer; neither owner waits for an inherited pipe's EOF.
+    await Future.wait([
+      if (_output case final output?) output.cancel(),
+      if (_errors case final errors?) errors.cancel(),
+    ]).timeout(const Duration(seconds: 2));
   }
 
   Future<void> _stop(Process process) async {
