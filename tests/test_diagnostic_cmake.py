@@ -253,6 +253,7 @@ def test_metadata_change_refuses_even_when_objects_need_no_rebuild(tmp_path):
         'set_property(GLOBAL PROPERTY RULE_LAUNCH_CUSTOM "0")',
         'set_property(TARGET foresight_diagnostic_identity_check PROPERTY RULE_LAUNCH_CUSTOM "OFF")',
         'set_property(TARGET foresight_diagnostic_compile PROPERTY RULE_LAUNCH_CUSTOM "foreign")',
+        'set_property(TARGET foresight_diagnostic_compile PROPERTY RULE_LAUNCH_CUSTOM "custom-NOTFOUND")',
         'set_property(TARGET foresight_diagnostic_products PROPERTY RULE_LAUNCH_CUSTOM "foreign")',
         'set_property(TARGET foresight_diagnostic_support PROPERTY RULE_LAUNCH_CUSTOM "foreign")',
         'set_property(TARGET foresight-diagnostic-launcher PROPERTY RULE_LAUNCH_CUSTOM "foreign")',
@@ -739,3 +740,36 @@ def test_preexisting_launcher_keeps_optional_native_unavailable(tmp_path, scope,
         json.loads((build / "diagnostic-products.json").read_bytes())["available"]
         is False
     )
+
+
+def test_public_provenance_has_safe_modes_under_umask002(tmp_path):
+    source, build = fixture(tmp_path, sql=True)
+    build.mkdir(mode=0o700)
+    previous = os.umask(0o002)
+    try:
+        configured = configure(source, build)
+        assert configured.returncode == 0, configured.stdout + configured.stderr
+        completed = subprocess.run(
+            [
+                "cmake",
+                "--build",
+                str(build),
+                "--target",
+                "foresight_runtime_support_products",
+            ],
+            text=True,
+            capture_output=True,
+            timeout=90,
+        )
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+    finally:
+        os.umask(previous)
+    for name in [
+        "diagnostic-products.json",
+        "diagnostic-native-inputs.json",
+        "diagnostic-toolchain-metadata.json",
+        "diagnostic-sql-inputs.json",
+        "sql-toolchain-metadata.json",
+        "runtime-support-build.json",
+    ]:
+        assert (build / name).stat().st_mode & 0o777 == 0o644, name

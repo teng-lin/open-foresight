@@ -1,6 +1,8 @@
 """Receipt mechanics use synthetic bytes; they do not qualify compiled products."""
 
 import json
+import os
+import stat
 from pathlib import Path
 import shutil
 import subprocess
@@ -280,3 +282,30 @@ def test_toolchain_metadata_must_match_native_id(built, mutation):
     path.write_text(json.dumps(metadata))
     with pytest.raises(products.ProductError, match="toolchain_metadata_mismatch"):
         products.verify(root, build)
+
+
+@pytest.mark.parametrize(
+    "change", ["schema_bool", "artifact_mode_float", "artifact_size_float"]
+)
+def test_receipt_exact_json_types_are_required(built, change):
+    root, build = built
+    receipt = products.write(root, build)
+    if change == "schema_bool":
+        receipt["schema"] = True
+    else:
+        artifact = next(iter(receipt["artifacts"].values()))
+        field = "mode" if change == "artifact_mode_float" else "size"
+        artifact[field] = float(artifact[field])
+    (build / products.RECEIPT).write_text(json.dumps(receipt))
+    with pytest.raises(products.ProductError):
+        products.verify(root, build)
+
+
+def test_written_runtime_receipt_has_fixed_safe_mode_under_umask002(built):
+    root, build = built
+    previous = os.umask(0o002)
+    try:
+        products.write(root, build)
+    finally:
+        os.umask(previous)
+    assert stat.S_IMODE((build / products.RECEIPT).stat().st_mode) == 0o644

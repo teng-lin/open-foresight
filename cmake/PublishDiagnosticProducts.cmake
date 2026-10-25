@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 # Runs only after both linked targets and the current toolchain check succeed.
 # Inspect bytes without loading either product into the build process.
 file(WRITE "${DIAGNOSTIC_STATE}" "{\"schema\":1,\"available\":false}\n")
+file(CHMOD "${DIAGNOSTIC_STATE}" PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ)
 if(NOT DIAGNOSTIC_NATIVE_ID MATCHES "^[0-9a-f]+$")
   message(FATAL_ERROR "Invalid diagnostic product identity")
 endif()
@@ -31,3 +32,4 @@ foreach(_product IN ITEMS "${DIAGNOSTIC_SUPPORT}" "${DIAGNOSTIC_LAUNCHER}")
   endif()
 endforeach()
 file(WRITE "${DIAGNOSTIC_STATE}" "{\"schema\":1,\"available\":true,\"native_id\":\"${DIAGNOSTIC_NATIVE_ID}\"}\n")
+file(CHMOD "${DIAGNOSTIC_STATE}" PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ)

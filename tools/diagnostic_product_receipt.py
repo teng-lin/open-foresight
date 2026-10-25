@@ -19,7 +19,13 @@ if __package__ in {None, ""}:
     # independently of cwd, PYTHONPATH and the ambient executable search path.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tools.diagnostic_build_identity import Compiler, Contract, IdentityError, _read
+from tools.diagnostic_build_identity import (
+    Compiler,
+    Contract,
+    IdentityError,
+    _canonical,
+    _read,
+)
 from tools.sql_support_identity import (
     INPUTS as SQL_INPUTS,
     verify_record as verify_sql_record,
@@ -207,7 +213,7 @@ def verify(
     root: Path, build: Path, *, sql_product: Path | None = None
 ) -> dict[str, Any]:
     receipt = _json(build, RECEIPT)
-    if receipt != collect(root, build, sql_product=sql_product):
+    if _canonical(receipt) != _canonical(collect(root, build, sql_product=sql_product)):
         raise ProductError("runtime_support_receipt_mismatch")
     return receipt
 
@@ -223,6 +229,7 @@ def write(
             created = True
             json.dump(receipt, stream, sort_keys=True, indent=2)
             stream.write("\n")
+        temporary.chmod(0o644)
         os.replace(temporary, build / RECEIPT)
     finally:
         if created:

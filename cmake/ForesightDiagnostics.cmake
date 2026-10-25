@@ -8,6 +8,7 @@ set(FORESIGHT_DIAGNOSTIC_TOOLCHAIN_SHA256 "" CACHE STRING
     "Optional expected fingerprint of actual selected public compiler/OS metadata")
 set(FORESIGHT_DIAGNOSTIC_PRODUCTS_AVAILABLE FALSE CACHE INTERNAL "Current diagnostic build availability" FORCE)
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-products.json" "{\"schema\":1,\"available\":false}\n")
+file(CHMOD "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-products.json" PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ)
 file(REMOVE "${CMAKE_CURRENT_BINARY_DIR}/runtime-support-build.json")
 file(REMOVE "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-native-inputs.json"
   "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-toolchain-metadata.json")
@@ -145,6 +146,7 @@ if(_diag_json_error)
   _diag_unavailable()
 endif()
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-toolchain-metadata.json" "${_diag_metadata}\n")
+file(CHMOD "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-toolchain-metadata.json" PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ)
 
 # The same explicit options feed the identity and both actual target recipes.
 # Ambient/global flags are also included, so unreviewed options fail closed in
@@ -184,6 +186,7 @@ if(_diag_json_error)
   _diag_unavailable()
 endif()
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-native-inputs.json" "${_diag_record}\n")
+file(CHMOD "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-native-inputs.json" PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ)
 file(GLOB_RECURSE _diag_owned_inputs CONFIGURE_DEPENDS "${_diag_root}/native/diagnostic_*")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   ${_diag_owned_inputs} "${_diag_root}/tools/diagnostic_build_identity.py"
@@ -210,6 +213,7 @@ set(_diag_expected_target_options ${_diag_directory_flags} ${_diag_compile_flags
 set(_diag_expected_os_context "${CMAKE_OSX_SYSROOT};${CMAKE_OSX_ARCHITECTURES};${CMAKE_OSX_DEPLOYMENT_TARGET}")
 function(_diag_recipe_failed)
   file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-products.json" "{\"schema\":1,\"available\":false}\n")
+  file(CHMOD "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-products.json" PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ)
   message(FATAL_ERROR "Diagnostic effective product recipe changed")
 endfunction()
 function(_diag_validate_products)
@@ -237,8 +241,9 @@ function(_diag_validate_products)
       foresight_diagnostic_identity_check foresight_diagnostic_compile
       foresight_diagnostic_products foresight_runtime_support_products)
     if(TARGET ${_target})
+      get_property(_custom_set TARGET ${_target} PROPERTY RULE_LAUNCH_CUSTOM SET)
       get_target_property(_custom ${_target} RULE_LAUNCH_CUSTOM)
-      if(NOT "${_custom}" MATCHES "-NOTFOUND$" AND NOT "${_custom}" STREQUAL "")
+      if(_custom_set AND NOT "${_custom}" STREQUAL "")
         _diag_recipe_failed()
       endif()
     endif()
