@@ -1,0 +1,67 @@
+#ifndef FORESIGHT_DIAGNOSTIC_SUPPORT_H
+#define FORESIGHT_DIAGNOSTIC_SUPPORT_H
+
+#include <stdint.h>
+
+// Private system-only diagnostic runtime. IDs are process-local generations,
+// never pointers or descriptors. Exactly one context may be reserved for the
+// lifetime of a process, including after failed startup. Mappings/contexts are
+// retained until process exit; callers must retain the original loaded image.
+// Only prepare/spawn/map may block. Each runs on its dedicated owned isolate.
+// All other calls are bounded observations/copies (not scheduler guarantees).
+enum {
+  FS_DIAG_SUPPORT_ERROR = -1,
+  FS_DIAG_SUPPORT_RESERVED = 1,
+  FS_DIAG_SUPPORT_PREPARED = 2,
+  FS_DIAG_SUPPORT_SPAWNING = 4,
+  FS_DIAG_SUPPORT_SPAWNED = 8,
+  FS_DIAG_SUPPORT_NOT_LIVE = 16,
+  FS_DIAG_SUPPORT_REAPED = 32,
+  FS_DIAG_SUPPORT_CANCELLED = 64,
+  FS_DIAG_SUPPORT_FAILED = 128,
+  FS_DIAG_SUPPORT_WATCH_BOUND = 256
+};
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// Copies exactly argc NUL-terminated strings in argv_bytes (including final
+// NUL), <=16 entries/2048 bytes/1024 bytes per entry. The already validated
+// composition supplies launcher, native ID, parent PID, worker executable and
+// worker arguments. No path is opened or resolved here. A successful reserve
+// returns generation1; all subsequent operations require that same ID.
+uint64_t fs_diag_parent_reserve(const char *native_id, const char *dart_id,
+                                const char *catalog_id,
+                                const uint8_t *argv_bytes, uint32_t length,
+                                uint32_t argc);
+int fs_diag_parent_prepare(uint64_t id);
+int fs_diag_parent_spawn(uint64_t id);
+int fs_diag_parent_poll(uint64_t id);
+int fs_diag_parent_force(uint64_t id);
+int fs_diag_parent_heartbeat(uint64_t id);
+
+// Exec-child only. Arm before inherited descriptor scanning; start a separate
+// watcher isolate and observe its positive ACK before child_map or any file
+// FFI. The first watch call acknowledges arming; bootstrap timeout starts in
+// arm.
+uint64_t fs_diag_child_arm(int64_t expected_parent, const char *native_id,
+                           const char *dart_id, const char *catalog_id);
+int fs_diag_child_watch(uint64_t id);
+int fs_diag_child_map(uint64_t id);
+int fs_diag_child_operation(uint64_t id, int active);
+
+// Sole writer/main-isolate endpoint owner. No concurrent send/receive calls.
+// Chunk and capacity <=4056. COMPLETE metadata is exposed only after protocol
+// checks; partial payloads retain ownership and must not be decoded.
+int fs_diag_support_send(uint64_t id, uint8_t type, uint64_t request_id,
+                         uint32_t total_length, const uint8_t *chunk,
+                         uint32_t chunk_length);
+int fs_diag_support_receive(uint64_t id, uint8_t *output, uint32_t capacity,
+                            uint32_t *copied, uint8_t *type,
+                            uint64_t *request_id, uint32_t *total_length);
+
+#ifdef __cplusplus
+}
+#endif
+#endif
