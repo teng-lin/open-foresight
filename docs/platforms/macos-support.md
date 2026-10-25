@@ -158,11 +158,13 @@ identities and store notarization credentials in a named Keychain profile:
 
 ```sh
 security find-identity -v -p codesigning
-xcrun notarytool store-credentials open-foresight-release
+xcrun notarytool store-credentials open-foresight-release \
+  --apple-id 'you@example.com' --team-id 'YOURTEAMID'
 ```
 
-The second command prompts for your Apple ID, team ID and an app-specific
-password. Keep credentials in Keychain; supply only the profile name to the
+Replace the Apple ID and team ID placeholders with your account details. The
+second command securely prompts for an app-specific password. Keep credentials
+in Keychain; supply only the profile name to the
 packaging tools. See Apple's [notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow)
 for credential alternatives and provisioning details.
 
@@ -196,13 +198,16 @@ checks that the app and DMG use the same Developer ID team, submits the signed
 DMG to Apple, requires acceptance, staples and validates its ticket, then runs
 Gatekeeper assessment and verifies the final image with `hdiutil`. Checksums and
 build sidecars describe the final stapled bytes and are written only after those
-checks succeed. The `.notary.json`
-response and, on rejection when available, `.notary.log.json` retain submission
+checks succeed. The `.notary.submit.json` receipt saves the submission ID before
+waiting; the `.notary.json` response and, on rejection when available,
+`.notary.log.json` retain submission
 diagnostics. A log-download failure preserves the original notarization failure.
-Notarization waits up to 55 minutes in `notarytool`, within a one-hour process
-timeout, so a timed-out wait can return its submission ID for diagnosis. Other
-signing commands have five-minute timeouts. A failed command leaves its output for diagnosis;
-choose a new output path when retrying.
+Upload and waiting share a one-hour budget. Polling uses at most 55 minutes or
+the remaining budget minus five seconds, whichever is shorter. The submission
+receipt remains available even if waiting times out. Other signing commands
+have five-minute timeouts. A failed command leaves its output for diagnosis;
+choose a new output path when retrying. To inspect a saved submission, run
+`xcrun notarytool info <submission-id> --keychain-profile open-foresight-release`.
 
 The default DMG path remains available for ad-hoc development and previews by
 omitting both signing options. Hosted releases still use that path until their

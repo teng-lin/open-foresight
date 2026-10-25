@@ -195,6 +195,7 @@ def signing_command(arguments, *, timeout=300, check=True):
 
 
 def developer_id_team(path):
+    """Read the team only from a Developer ID Application signature."""
     result = signing_command(["codesign", "-dv", "--verbose=4", path])
     details = result.stdout + result.stderr
     team = re.search(r"^TeamIdentifier=([A-Z0-9]{10})$", details, re.M)
@@ -205,14 +206,30 @@ def developer_id_team(path):
     return team.group(1)
 
 
+def notary_response(result, report):
+    """Save raw diagnostics before validating JSON or propagating tool failures."""
+    report.write_text(result.stdout)
+    try:
+        response = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        result.check_returncode()
+        raise
+    if not isinstance(response, dict):
+        result.check_returncode()
+        raise ValueError("Notarization response must be a JSON object")
+    return response
+
+
 def sign_disk_image(destination, identity, notary_profile, app_team):
+    """Sign and assess the image, retaining its submission before bounded polling."""
     signing_command(
         ["codesign", "--force", "--sign", identity, "--timestamp", destination]
     )
     signing_command(["codesign", "--verify", "--strict", destination])
     if developer_id_team(destination) != app_team:
         raise ValueError("DMG and application signing teams differ")
-    result = signing_command(
+    deadline = time.monotonic() + 3600
+    uploaded = signing_command(
         [
             "xcrun",
             "notarytool",
@@ -220,25 +237,43 @@ def sign_disk_image(destination, identity, notary_profile, app_team):
             destination,
             "--keychain-profile",
             notary_profile,
-            "--wait",
-            "--timeout",
-            "55m",
+            "--no-wait",
             "--output-format",
             "json",
         ],
         timeout=3600,
         check=False,
     )
-    # Retain the submission ID and rejected response for release diagnostics.
-    Path(str(destination) + ".notary.json").write_text(result.stdout)
-    try:
-        submission = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        result.check_returncode()
-        raise
-    if not isinstance(submission, dict):
-        result.check_returncode()
-        raise ValueError("Notarization response must be a JSON object")
+    receipt = Path(str(destination) + ".notary.submit.json")
+    submission = notary_response(uploaded, receipt)
+    uploaded.check_returncode()
+    submission_id = submission.get("id")
+    if not isinstance(submission_id, str) or not submission_id:
+        raise ValueError("Notarization upload did not return a submission ID")
+    remaining = deadline - time.monotonic()
+    # Reserve time for notarytool to serialize its final response and exit.
+    polling = min(3300, int(remaining) - 5)
+    if polling <= 0:
+        raise TimeoutError(
+            f"Upload exhausted notarization budget; submission saved in {receipt}"
+        )
+    result = signing_command(
+        [
+            "xcrun",
+            "notarytool",
+            "wait",
+            submission_id,
+            "--keychain-profile",
+            notary_profile,
+            "--timeout",
+            f"{polling}s",
+            "--output-format",
+            "json",
+        ],
+        timeout=remaining,
+        check=False,
+    )
+    submission = notary_response(result, Path(str(destination) + ".notary.json"))
     if result.returncode or submission.get("status") != "Accepted":
         if submission.get("id"):
             try:

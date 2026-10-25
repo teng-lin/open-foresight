@@ -42,7 +42,12 @@ def signed_dmg(tmp_path, monkeypatch):
             Path(arguments[-1]).write_bytes(b"signed disk image")
         if arguments[:3] == ["xcrun", "notarytool", "submit"]:
             assert kwargs["timeout"] == 3600
-            assert arguments[arguments.index("--timeout") + 1] == "55m"
+            assert "--no-wait" in arguments
+            assert "--wait" not in arguments
+            return subprocess.CompletedProcess(
+                arguments, 0, '{"id": "submission-id"}', ""
+            )
+        if arguments[:3] == ["xcrun", "notarytool", "wait"]:
             return subprocess.CompletedProcess(
                 arguments,
                 0,
@@ -227,7 +232,7 @@ def test_nonzero_notary_rejection_retains_response_and_primary_failure(
     response = json.dumps({"status": "Invalid", "id": "rejected-id"})
 
     def run(arguments, **kwargs):
-        if arguments[:3] == ["xcrun", "notarytool", "submit"]:
+        if arguments[:3] == ["xcrun", "notarytool", "wait"]:
             return subprocess.CompletedProcess(
                 arguments, 69, response, "notary rejected"
             )
@@ -257,7 +262,7 @@ def test_nonobject_notary_response_fails_with_saved_diagnostics(
     original = create_dmg.subprocess.run
 
     def run(arguments, **kwargs):
-        if arguments[:3] == ["xcrun", "notarytool", "submit"]:
+        if arguments[:3] == ["xcrun", "notarytool", "wait"]:
             return subprocess.CompletedProcess(arguments, 0, response, "")
         return original(arguments, **kwargs)
 
@@ -267,6 +272,89 @@ def test_nonobject_notary_response_fails_with_saved_diagnostics(
     image = manifest.parent / "dist/Open-Foresight-0.1.2-macos-arm64.dmg"
     assert Path(str(image) + ".notary.json").read_text() == response
     assert not Path(str(image) + ".sha256").exists()
+
+
+def test_slow_upload_saves_submission_before_wait_and_shares_deadline(
+    signed_dmg, monkeypatch, clock
+):
+    create, _, _, manifest = signed_dmg
+    original = create_dmg.subprocess.run
+    observed = []
+
+    def run(arguments, **kwargs):
+        if arguments[:3] == ["xcrun", "notarytool", "submit"]:
+            clock.advance(600)
+        if arguments[:3] == ["xcrun", "notarytool", "wait"]:
+            receipt = next(manifest.parent.glob("dist/*.notary.submit.json"))
+            assert json.loads(receipt.read_text())["id"] == "submission-id"
+            assert arguments[3] == "submission-id"
+            polling = int(arguments[arguments.index("--timeout") + 1].removesuffix("s"))
+            assert 0 < polling < kwargs["timeout"]
+            assert 600 + kwargs["timeout"] <= 3600
+            observed.append(arguments)
+        return original(arguments, **kwargs)
+
+    monkeypatch.setattr(create_dmg.subprocess, "run", run)
+    create()
+    assert len(observed) == 1
+
+
+def test_wait_timeout_keeps_submission_id_for_recovery(signed_dmg, monkeypatch):
+    create, _, _, manifest = signed_dmg
+    original = create_dmg.subprocess.run
+
+    def run(arguments, **kwargs):
+        if arguments[:3] == ["xcrun", "notarytool", "wait"]:
+            raise subprocess.TimeoutExpired(
+                arguments, kwargs["timeout"], output=b"still processing"
+            )
+        return original(arguments, **kwargs)
+
+    monkeypatch.setattr(create_dmg.subprocess, "run", run)
+    with pytest.raises(subprocess.TimeoutExpired):
+        create()
+    receipt = next(manifest.parent.glob("dist/*.notary.submit.json"))
+    assert json.loads(receipt.read_text())["id"] == "submission-id"
+    assert not list(manifest.parent.glob("dist/*.sha256"))
+
+
+def test_upload_exhausting_budget_keeps_id_without_starting_wait(
+    signed_dmg, monkeypatch, clock
+):
+    create, commands, _, manifest = signed_dmg
+    original = create_dmg.subprocess.run
+
+    def run(arguments, **kwargs):
+        if arguments[:3] == ["xcrun", "notarytool", "submit"]:
+            clock.advance(3596)
+        return original(arguments, **kwargs)
+
+    monkeypatch.setattr(create_dmg.subprocess, "run", run)
+    with pytest.raises(TimeoutError, match="notarization budget"):
+        create()
+    receipt = next(manifest.parent.glob("dist/*.notary.submit.json"))
+    assert json.loads(receipt.read_text())["id"] == "submission-id"
+    assert not any(
+        command[:3] == ["xcrun", "notarytool", "wait"] for command in commands
+    )
+
+
+def test_submission_without_id_is_retained_and_never_waited(signed_dmg, monkeypatch):
+    create, commands, _, manifest = signed_dmg
+    original = create_dmg.subprocess.run
+
+    def run(arguments, **kwargs):
+        if arguments[:3] == ["xcrun", "notarytool", "submit"]:
+            return subprocess.CompletedProcess(arguments, 0, "{}", "")
+        return original(arguments, **kwargs)
+
+    monkeypatch.setattr(create_dmg.subprocess, "run", run)
+    with pytest.raises(ValueError, match="submission ID"):
+        create()
+    assert next(manifest.parent.glob("dist/*.notary.submit.json")).read_text() == "{}"
+    assert not any(
+        command[:3] == ["xcrun", "notarytool", "wait"] for command in commands
+    )
 
 
 def test_final_stapled_image_verification_failure_prevents_success_sidecars(
