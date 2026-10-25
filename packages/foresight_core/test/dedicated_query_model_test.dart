@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:convert';
 import 'dart:io';
@@ -71,6 +72,7 @@ class _LeaseCleanupFailureVault extends MacModelVault {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   final env = Platform.environment;
   test(
     'lease cleanup failure rejects acquisition before replacing registration',

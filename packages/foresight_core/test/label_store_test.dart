@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:convert';
 import 'package:foresight_core/src/graph_labels.dart';
 import 'package:foresight_core/src/store.dart';
@@ -6,6 +7,7 @@ import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
 import 'package:test/test.dart';
 
 void main() {
+  bootstrapSqlSupportFixture();
   test(
     'canonical label order survives metadata edits, reorder, VACUUM and reopen',
     () {

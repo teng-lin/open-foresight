@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:io';
 
 import 'package:foresight_core/src/persistence/backup_files.dart';
@@ -26,6 +27,7 @@ Database historical(String path) {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late String path;
   setUp(() {
     path = '${createTestTempDirectorySync('backup-').path}/application.db';

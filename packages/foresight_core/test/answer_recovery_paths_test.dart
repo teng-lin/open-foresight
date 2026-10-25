@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:io';
 import 'dart:convert';
 
@@ -64,6 +65,7 @@ class _Generator extends NativeRuntime {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Application app;
   late Store store;
   late Domain domain;

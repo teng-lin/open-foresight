@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:convert';
 import 'support/current_read.dart';
 
@@ -176,6 +177,7 @@ class _Workspace {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   test(
     'typed reader keeps source, model, label and note snapshots independent of later commits',
     () async {

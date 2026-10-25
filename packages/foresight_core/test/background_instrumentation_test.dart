@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:foresight_core/src/helper.dart';
@@ -15,6 +16,7 @@ import 'package:grpc/grpc.dart';
 import 'package:test/test.dart';
 
 void main() {
+  bootstrapSqlSupportFixture();
   test(
     'production query acquisition stays background busy until cancellation settles',
     () async {

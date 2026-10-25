@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/application.dart';
@@ -42,6 +43,7 @@ class RpcFailingExportAuth extends GoogleAuth {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   test(
     'Drive RPC export errors retain filename and internal wire code',
     () async {

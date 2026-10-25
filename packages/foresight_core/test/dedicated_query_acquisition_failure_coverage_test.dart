@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
@@ -49,6 +50,7 @@ class _Download implements ModelBlobDownloader {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory root;
   late Store store;
   setUp(() {

@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:io';
 
 import 'package:foresight_core/foresight_core.dart';
@@ -9,6 +10,7 @@ import 'package:test/test.dart';
 import 'application_operations_test.dart' show ArtifactGenerator;
 
 void main() {
+  bootstrapSqlSupportFixture();
   test(
     'registered detector is reused, replaced, and closed with its application',
     () async {

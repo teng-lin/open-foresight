@@ -268,6 +268,7 @@ def test_directory_symlink_is_refused(source):
 def test_unreviewed_default_worker_closure_is_not_a_production_identity():
     contract = identity.Contract(ROOT)
     with (
+        mock.patch.object(identity, "_exists", return_value=True),
         mock.patch.object(
             identity,
             "_read",
@@ -283,7 +284,9 @@ def test_missing_worker_entry_refuses_before_reading_other_runtime(source):
     (root / "app/worker.dart").unlink()
     contract = identity.Contract(root)
     with (
-        mock.patch.object(identity, "_read", side_effect=AssertionError("runtime read")),
+        mock.patch.object(
+            identity, "_read", side_effect=AssertionError("runtime read")
+        ),
         pytest.raises(identity.IdentityError, match="missing_worker_closure"),
     ):
         contract.worker_identity("a" * 64, "aot")
@@ -295,7 +298,7 @@ def test_present_stubs_cannot_promote_unreviewed_worker_closure(source):
     config["worker"]["status"] = "pending"
     save(root, config)
     with pytest.raises(identity.IdentityError, match="worker_closure_not_reviewed"):
-        worker(root)
+        worker(root, native_id="a" * 64)
 
 
 def test_new_runtime_file_requires_classification_or_reasoned_exception(source):
@@ -387,7 +390,7 @@ def test_real_native_components_match_closed_inventory():
     value = native(ROOT)
     assert value["kind"] == "native-components"
     assert value["record"]["scope"] == "components"
-    assert len(value["record"]["inputs"]) == 11  # Darwin C is classified, not selected.
+    assert len(value["record"]["inputs"]) == 13  # Darwin C is classified, not selected.
     assert "native/diagnostic_support.c" in value["record"]["inputs"]
 
 
@@ -854,3 +857,24 @@ def test_distinct_read_admissions_cannot_reuse_one_source_inode(source):
     assert identity._read(root, "app/runtime.dart", seen=seen)
     with pytest.raises(identity.IdentityError, match="duplicate_input"):
         identity._read(root, "app/runtime.dart", seen=seen)
+
+
+def test_production_native_id_binds_its_producer_recipe_without_worker_inputs(source):
+    root, config = source
+    config["scope"] = "components"
+    save(root, config)
+    for name in identity.NATIVE_RECIPE_INPUTS:
+        target = root / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((ROOT / name).read_bytes())
+    before = native(root)
+    assert set(before["record"]["producer_inputs"]) == set(
+        identity.NATIVE_RECIPE_INPUTS
+    )
+    (root / "app/worker.dart").write_text("void main() { print('changed worker'); }")
+    assert native(root) == before
+    recipe = root / "cmake/DiagnosticProducts/CMakeLists.txt"
+    recipe.write_text(recipe.read_text() + "\n# changed native compile recipe\n")
+    after = native(root)
+    assert after["native_id"] != before["native_id"]
+    assert after["record"]["inputs"] == before["record"]["inputs"]

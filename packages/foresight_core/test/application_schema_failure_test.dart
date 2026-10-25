@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:foresight_core/src/operation_requests.dart';
@@ -6,6 +7,7 @@ import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
 
 void main() {
+  bootstrapSqlSupportFixture();
   for (final withEpoch in [false, true]) {
     test(
       'future writer schema is actionable before dependent SQL ($withEpoch)',

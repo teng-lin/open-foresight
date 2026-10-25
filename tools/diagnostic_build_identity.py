@@ -20,7 +20,15 @@ import sys
 from typing import Never, Sequence
 
 DEFAULT_CONTRACT = "tools/diagnostic_build_inputs.json"
-NATIVE_ALGORITHM = "foresight-diagnostic-native-v1"
+NATIVE_ALGORITHM = "foresight-diagnostic-native-v2"
+NATIVE_RECIPE_INPUTS = (
+    "cmake/ForesightDiagnostics.cmake",
+    "cmake/DiagnosticProducts/CMakeLists.txt",
+    "cmake/VerifyDiagnosticToolchain.cmake",
+    "cmake/PublishDiagnosticProducts.cmake",
+    "cmake/ProduceRuntimeSupport.cmake",
+    "cmake/NormalizeRuntimeSupport.cmake",
+)
 WORKER_ALGORITHM = "foresight-diagnostic-worker-v1"
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 VERSION = re.compile(r"[0-9]{1,10}(?:\.[0-9]{1,10}){1,3}\Z")
@@ -60,9 +68,12 @@ NATIVE_FLAGS = frozenset(
         "-DNDEBUG",
         "-fPIC",
         "-fvisibility=hidden",
+        "-fvisibility=default",
         "-pthread",
         "-shared",
         "-mmacosx-version-min=15.0",
+        "-Wl,-search_paths_first",
+        "-Wl,-headerpad_max_install_names",
     }
 )
 TARGETS = {
@@ -92,6 +103,7 @@ NATIVE_DIRECTIVES = frozenset(
 SYSTEM_HEADERS = frozenset(
     {
         "atomic",
+        "CommonCrypto/CommonDigest.h",
         "errno.h",
         "fcntl.h",
         "libproc.h",
@@ -313,7 +325,61 @@ def _skip_space(text: str, offset: int) -> int:
     return offset
 
 
-def _dart_uris(data: bytes) -> list[str]:
+def _skip_metadata(text: str, offset: int) -> int:
+    """Consume one Dart annotation without treating its arguments as directives."""
+    match = re.match(
+        r"@[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*", text[offset:]
+    )
+    if match is None:
+        raise IdentityError("unsupported_worker_header")
+    offset += match.end()
+    offset = _skip_space(text, offset)
+    # Generic annotation constructors are deliberately refused until selected.
+    if offset < len(text) and text[offset] == "<":
+        raise IdentityError("unsupported_worker_header")
+    if offset >= len(text) or text[offset] != "(":
+        return offset
+    stack = [")"]
+    offset += 1
+    while stack:
+        offset = _skip_space(text, offset)
+        if offset >= len(text):
+            raise IdentityError("unsupported_worker_header")
+        character = text[offset]
+        if character in "rR" and offset + 1 < len(text) and text[offset + 1] in "'\"":
+            raw = True
+            offset += 1
+            character = text[offset]
+        else:
+            raw = False
+        if character in "'\"":
+            quote = character * (3 if text.startswith(character * 3, offset) else 1)
+            offset += len(quote)
+            while not text.startswith(quote, offset):
+                if offset >= len(text) or (len(quote) == 1 and text[offset] == "\n"):
+                    raise IdentityError("unsupported_worker_header")
+                if not raw and text[offset] == "$":
+                    # Interpolated annotation strings require expression parsing.
+                    raise IdentityError("unsupported_worker_header")
+                if not raw and text[offset] == "\\":
+                    offset += 1
+                    if offset >= len(text):
+                        raise IdentityError("unsupported_worker_header")
+                offset += 1
+            offset += len(quote)
+        elif character in "([{":
+            stack.append({"(": ")", "[": "]", "{": "}"}[character])
+            offset += 1
+        elif character in ")]}":
+            if character != stack.pop():
+                raise IdentityError("unsupported_worker_header")
+            offset += 1
+        else:
+            offset += 1
+    return offset
+
+
+def _dart_uris(data: bytes, *, declaration_metadata: bool = False) -> list[str]:
     # Dart3.9 directives precede declarations. Parse only that header, never
     # application strings, and reject escaped/interpolated URI spellings.
     try:
@@ -326,7 +392,10 @@ def _dart_uris(data: bytes) -> list[str]:
     while True:
         offset = _skip_space(text, offset)
         if text.startswith("@", offset):
-            raise IdentityError("unsupported_worker_header")
+            if not declaration_metadata:
+                raise IdentityError("unsupported_worker_header")
+            offset = _skip_metadata(text, offset)
+            continue
         directive = re.match(r"(?:import|export|part|library)\b", text[offset:])
         if directive is None:
             return result
@@ -541,7 +610,12 @@ class Contract:
             or any(f not in allowed for f in flags)
         ):
             raise IdentityError("invalid_flags")
-        if (target == "linux-x86_64" and "-mmacosx-version-min=15.0" in flags) or (
+        darwin_flags = {
+            "-mmacosx-version-min=15.0",
+            "-Wl,-search_paths_first",
+            "-Wl,-headerpad_max_install_names",
+        }
+        if (target == "linux-x86_64" and darwin_flags.intersection(flags)) or (
             target == "darwin-arm64" and "-mmacosx-version-min=15.0" not in flags
         ):
             raise IdentityError("invalid_flags")
@@ -597,6 +671,11 @@ class Contract:
             "flags": list(flags),
             "inputs": inputs,
         }
+        if self.scope == "components":
+            record["producer_inputs"] = {
+                name: hashlib.sha256(_read(self.root, name, seen=seen)).hexdigest()
+                for name in NATIVE_RECIPE_INPUTS
+            }
         return {
             "schema": 1,
             "kind": "native-components",

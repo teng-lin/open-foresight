@@ -13,6 +13,7 @@ import 'package:path/path.dart' as p;
 import 'configuration.dart';
 import 'storage_worker_launch.dart';
 import 'storage_worker_native.dart';
+import 'storage_worker_source.dart';
 
 enum DiagnosticHost { service, mcp, desktop, standaloneWorker }
 
@@ -82,7 +83,11 @@ bool _linuxInstallationEntry(String executable) {
   final directory = p.basename(p.dirname(executable));
   final name = p.basename(executable);
   return directory == 'bin' &&
-          const {'foresight-service', 'foresight-mcp'}.contains(name) ||
+          const {
+            'foresight-service',
+            'foresight-mcp',
+            'foresight-diagnostic-worker',
+          }.contains(name) ||
       directory == 'app' && name == 'open-foresight';
 }
 
@@ -391,7 +396,11 @@ final class RuntimeSupportSelection {
       final directory = p.basename(p.dirname(context.executable));
       final name = p.basename(context.executable);
       if (!((directory == 'bin' &&
-              const {'foresight-service', 'foresight-mcp'}.contains(name)) ||
+              const {
+                'foresight-service',
+                'foresight-mcp',
+                'foresight-diagnostic-worker',
+              }.contains(name)) ||
           (directory == 'app' && name == 'open-foresight'))) {
         _refuse();
       }
@@ -439,9 +448,7 @@ final class DiagnosticStartupSelection {
       );
       launcher = p.join(codeAnchor, 'native/foresight-diagnostic-launcher');
       if (context.workerMode == 'aot') {
-        worker = context.host == DiagnosticHost.service
-            ? context.executable
-            : p.join(codeAnchor, 'application/foresight-service');
+        worker = p.join(codeAnchor, 'application/foresight-diagnostic-worker');
         _candidate(codeAnchor, worker, executable: true);
       } else {
         worker = context.dartExecutable;
@@ -465,12 +472,7 @@ final class DiagnosticStartupSelection {
         final script = context.workerMode == 'kernel'
             ? context.kernelWorker
             : context.sourceWorker;
-        if (context.host == DiagnosticHost.service &&
-            script != context.script) {
-          _refuse();
-        }
-        if (context.host != DiagnosticHost.service &&
-            context.workerMode == 'jit' &&
+        if (context.workerMode == 'jit' &&
             script !=
                 p.join(
                   anchor,
@@ -478,7 +480,15 @@ final class DiagnosticStartupSelection {
                 )) {
           _refuse();
         }
-        _candidate(anchor, script);
+        if (context.workerMode == 'kernel' &&
+            script !=
+                p.join(codeAnchor, 'application/diagnostic-worker.dill')) {
+          _refuse();
+        }
+        _candidate(
+          context.workerMode == 'kernel' ? codeAnchor : anchor,
+          script,
+        );
         if (context.workerMode == 'jit') {
           final descriptor = base64Url.encode(
             utf8.encode(
@@ -510,10 +520,7 @@ final class DiagnosticStartupSelection {
       if (marker >= 0) {
         anchor = context.executable.substring(0, marker + 4);
         final contents = p.join(anchor, 'Contents');
-        worker = p.join(
-          contents,
-          'Library/Services/Open Foresight Service.app/Contents/MacOS/foresight-service',
-        );
+        worker = p.join(contents, 'Resources/bin/foresight-diagnostic-worker');
         support = p.join(
           contents,
           'Resources/lib/libforesight_diagnostic_support.dylib',
@@ -526,13 +533,9 @@ final class DiagnosticStartupSelection {
         final directory = p.basename(p.dirname(context.executable));
         if (!const {'bin', 'app'}.contains(directory)) _refuse();
         anchor = p.dirname(p.dirname(context.executable));
-        worker = p.join(anchor, 'bin/foresight-service');
+        worker = p.join(anchor, 'bin/foresight-diagnostic-worker');
         support = p.join(anchor, 'lib/libforesight_diagnostic_support.so');
         launcher = p.join(anchor, 'bin/foresight-diagnostic-launcher');
-      }
-      if (context.host == DiagnosticHost.service &&
-          context.executable != worker) {
-        _refuse();
       }
       _candidate(anchor, context.executable, executable: true);
       _candidate(anchor, worker, executable: true);
@@ -707,6 +710,37 @@ DiagnosticChildStartup loadDiagnosticChildStartup(
   if (invocation.kind != DiagnosticWorkerInvocationKind.valid) _refuse();
   final context = DiagnosticStartupContext.current(host);
   if (!context.identitiesAvailable) _refuse();
+  if (_sourceSelected(context)) {
+    if (context.workerMode == 'aot') {
+      if (context.executable !=
+          p.join(
+            context.selectedBuildRoot,
+            'application/foresight-diagnostic-worker',
+          )) {
+        _refuse();
+      }
+    } else {
+      final expectedScript = context.workerMode == 'jit'
+          ? p.join(
+              context.sourceAnchor,
+              'packages/foresight_core/bin/diagnostic_storage_worker.dart',
+            )
+          : p.join(
+              context.selectedBuildRoot,
+              'application/diagnostic-worker.dill',
+            );
+      if (context.executable != p.join(context.dartSdkRoot, 'bin/dart') ||
+          context.dartExecutable != context.executable ||
+          context.script != expectedScript ||
+          Platform.executableArguments
+                  .where((argument) => argument.startsWith('--packages'))
+                  .toList()
+                  .join('\n') !=
+              '--packages=${context.packageConfig}') {
+        _refuse();
+      }
+    }
+  }
   final location = _supportLocation(context);
   if (invocation.support != location.support) _refuse();
   // The sole pre-watch regular-file exception: trusted system DSO. Do not
@@ -721,13 +755,19 @@ DiagnosticChildStartup loadDiagnosticChildStartup(
     nativeId: context.nativeId,
     dartId: context.dartId,
     catalogId: context.catalogId,
-    verifyBeforeHello: context.workerMode == 'aot'
+    verifyBeforeHello: !_sourceSelected(context)
         ? null
-        : () async {
-            // A complete reviewed worker input manifest/verifier has not yet
-            // been activated. Declarative -D equality cannot certify source
-            // or SDK bytes; never admit a persistent sink using only it.
-            _refuse();
-          },
+        : () => verifyDiagnosticWorkerSources(
+            image: functions.image!,
+            sourceAnchor: context.sourceAnchor,
+            buildRoot: context.selectedBuildRoot,
+            sdkRoot: context.dartSdkRoot,
+            sdkId: context.dartSdkIdentity,
+            packageConfig: context.packageConfig,
+            nativeId: context.nativeId,
+            workerId: context.dartId,
+            catalogId: context.catalogId,
+            mode: context.workerMode,
+          ),
   );
 }

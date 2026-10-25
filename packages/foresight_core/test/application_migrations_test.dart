@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:io';
 import 'package:foresight_core/src/store.dart';
 import 'package:foresight_core/src/persistence/schema_migrations.dart';
@@ -6,6 +7,7 @@ import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
 import 'package:test/test.dart';
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory root;
   late String path;
   setUp(() {

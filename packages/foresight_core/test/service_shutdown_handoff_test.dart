@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -471,6 +472,7 @@ void ownerRuntimeVariants(
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   test(
     'ordinary ensureService retains one status probe and no desktop reservation',
     () async {

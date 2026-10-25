@@ -215,6 +215,14 @@ if(BUILD_TESTING)
   endif()
   add_test(NAME diagnostic_inherited COMMAND diagnostic_inherited_test "${CMAKE_CURRENT_BINARY_DIR}")
   set_tests_properties(diagnostic_inherited PROPERTIES TIMEOUT 20)
+  add_executable(diagnostic_sha256_test diagnostic_sha256.c
+    ../tests/native/diagnostic_sha256.c)
+  set_target_properties(diagnostic_sha256_test PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
+  target_compile_options(diagnostic_sha256_test PRIVATE -Wall -Wextra -Werror -Wpedantic)
+  target_include_directories(diagnostic_sha256_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  add_test(NAME diagnostic_sha256 COMMAND diagnostic_sha256_test)
+  set_tests_properties(diagnostic_sha256 PROPERTIES TIMEOUT 20)
   add_executable(diagnostic_support_test ${FS_DIAG_KERNEL_SOURCE}
     diagnostic_protocol.c diagnostic_endpoint.c diagnostic_inherited.c
     diagnostic_support.c ../tests/native/diagnostic_support.c)

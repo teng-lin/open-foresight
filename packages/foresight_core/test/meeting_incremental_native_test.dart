@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -12,6 +13,7 @@ import 'package:grpc/grpc.dart';
 import 'package:test/test.dart';
 
 void main() {
+  bootstrapSqlSupportFixture();
   final executable = Platform.environment['FORESIGHT_TEST_HELPER'];
   test(
     'application incremental producer survives real helper restart/reset and publishes parent citations',

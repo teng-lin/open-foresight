@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'dart:async';
@@ -46,6 +47,7 @@ class PurgeService extends RagServiceBase {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   for (final interruption in [
     'closed',
     'disposed',

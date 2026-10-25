@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -38,6 +39,7 @@ class ObservedAccountCleanup implements WorkspaceAccountCleanup {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory directory;
   late Store store;
   late Helper helper;

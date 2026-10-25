@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:convert';
 import 'dart:io';
@@ -7,6 +8,7 @@ import 'package:foresight_core/src/store.dart';
 import 'package:test/test.dart';
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory scratch;
   late Store store;
   late Map<String, String> previous;

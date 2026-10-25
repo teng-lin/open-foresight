@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:foresight_core/foresight_core.dart';
@@ -38,6 +39,7 @@ class HeldRetrieval extends AnswerGateway {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory directory;
   late Store store;
   late Helper helper;

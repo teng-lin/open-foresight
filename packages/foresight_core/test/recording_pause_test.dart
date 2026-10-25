@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/native_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/rpc_error.dart';
@@ -15,6 +16,7 @@ import 'package:foresight_core/src/remote_domain.dart' show RemoteRecording;
 import 'package:foresight_core/src/native_lifetime.dart';
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory directory;
   late String library, model;
   late DynamicLibrary fixture;

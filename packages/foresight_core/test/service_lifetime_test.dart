@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/transcript_index_service.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
@@ -137,6 +138,7 @@ class CleanupRuntime extends ArtifactGenerator {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory root;
   late ProfilePaths profile;
   late ApplicationService service;

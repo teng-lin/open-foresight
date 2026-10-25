@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -187,6 +188,7 @@ Future<Process> launchAtBarrier(
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   setUp(() {
     final saved = Map.of(runtimeConfiguration.environment);
     runtimeConfiguration.environment.remove('FORESIGHT_INSTALL_ROOT');

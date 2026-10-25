@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
@@ -26,6 +27,7 @@ Database _old(String path, [int version = 20]) {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late String path;
   setUp(() {
     path =
