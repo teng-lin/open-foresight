@@ -76,5 +76,26 @@ and independently initializes mandatory selected SQL support for service and
 desktop before application authority. MCP remains a client and opens no SQL.
 Session creation passes the early original function table to the native owner,
 with command selection retained as a lazy metadata-only callback. This adapter
-is not yet wired into product entrypoints; their early internal branches,
-shutdown and full qualification remain pending.
+is now wired into normal service/MCP/desktop entrypoints. Service dispatches
+internal diagnostic/model worker modes before it; MCP/desktop refuse internal
+modes before normal bootstrap. The service frontend uses the owned-isolate
+producer API, SQL original-code bootstrap at slot4, diagnostic bootstrap at slot5
+and independent profile-ownership reporter at slot6. Classification is reported
+at the actual profile-lock acquisition boundary; diagnostic close follows
+application/native cleanup. Startup-only desktop Quit retains explicit exit,
+while normal workspace lifetime keeps its existing owner. Full qualification
+and the frozen B2 event/error adoption integration remain pending.
+
+
+The normal composition checkpoint adds actual compiled current-service controls:
+invalid/internal-without-identity modes produce only closed exit codes64/65 with
+no stdout/stderr or profile/runtime directories, and the model worker retains
+its framed response without SQL/log bootstrap. A real frontend test serves a
+status request and proves the accepted Domain producer retires only with its
+actual application VM. It uses the explicitly reused, source-identical qualified
+SQL component, not a newly built application-native library. A mutation routing
+that production call through unadopted Isolate.spawn must fail the retained-slot
+oracle. Desktop tests prove early runtime failure remains visible and Retry
+runs its gate before profile/configuration/connection authority. These focused
+checks do not replace root CTest, full core/desktop/service/display or installed
+acceptance; production WorkerID and source verification are still pending.

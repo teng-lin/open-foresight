@@ -30,18 +30,23 @@ final class ApplicationRuntimeBootstrap {
     return ApplicationRuntimeBootstrap._(host, diagnostics);
   }
 
-  Future<LoggingSession> startDiagnostics({String? profilePath}) {
+  Future<LoggingSession> startDiagnostics({
+    String? profilePath,
+    bool transient = false,
+  }) {
     final functions = diagnostics.functions;
     final selection = diagnostics.selection;
     return LoggingSession.start(
       configuration: diagnostics.configuration,
       profilePath: profilePath,
-      role: switch (host) {
-        DiagnosticHost.service => DiagnosticRole.candidate,
-        DiagnosticHost.desktop => DiagnosticRole.desktop,
-        DiagnosticHost.mcp => DiagnosticRole.mcp,
-        DiagnosticHost.standaloneWorker => DiagnosticRole.transient,
-      },
+      role: transient
+          ? DiagnosticRole.transient
+          : switch (host) {
+              DiagnosticHost.service => DiagnosticRole.candidate,
+              DiagnosticHost.desktop => DiagnosticRole.desktop,
+              DiagnosticHost.mcp => DiagnosticRole.mcp,
+              DiagnosticHost.standaloneWorker => DiagnosticRole.transient,
+            },
       version: openForesightVersion,
       revision: const String.fromEnvironment(
         'FORESIGHT_RUNTIME_REVISION',
