@@ -143,6 +143,7 @@ class Recording implements RecordingStatus {
   @override
   DateTime lastAudioActivity = DateTime.now();
   int _epoch = 0, _transcriptCount = 0;
+  Completer<void>? _admissionCancelled;
   Object? _retirementFailure;
   StackTrace? _retirementStack;
   Object? _callbackFailure;
@@ -292,6 +293,24 @@ class Recording implements RecordingStatus {
     try {
       // Negotiate the complete lifetime suite before publishing any handle.
       _lifetime;
+      if (NativeLibrary.beforeAdmission != null) {
+        final cancelled = Completer<void>();
+        _admissionCancelled = cancelled;
+        try {
+          await Future.any<void>([
+            _bindings.prepareAdmission()!,
+            cancelled.future,
+          ]);
+          _requireEpoch(epoch);
+          if (finishing) {
+            throw RpcError(RpcErrorCode.cancelled, 'Recording start cancelled');
+          }
+        } finally {
+          if (identical(_admissionCancelled, cancelled)) {
+            _admissionCancelled = null;
+          }
+        }
+      }
       final probe = _speech();
       await _releaseSpeech(_speechOwners[probe]!);
       _requireEpoch(epoch);
@@ -919,6 +938,8 @@ class Recording implements RecordingStatus {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    final admission = _admissionCancelled;
+    if (admission != null && !admission.isCompleted) admission.complete();
     _epoch++;
     paused = false;
     timer?.cancel();

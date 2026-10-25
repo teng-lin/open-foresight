@@ -513,13 +513,33 @@ void configureNativeEnvironment() {
             entry.value.isNotEmpty,
       )
       .toList();
+  late final DynamicLibrary selected;
+  try {
+    selected = DynamicLibrary.open(runtimeConfiguration.nativeLibrary);
+  } on ArgumentError {
+    if (values.isNotEmpty || runtimeConfiguration['FORESIGHT_NATIVE'] != null) {
+      rethrow;
+    }
+    // A SQL-only development worker may have no native mapping available.
+    // A selected/mapped native-capable replacement still passes the gate below.
+    _nativeEnvironmentConfigured = true;
+    return;
+  }
+  final lib = NativeLibrary(selected).library;
+  // This runs after installation/profile ownership is acquired. A worker lost
+  // with native work cannot be replaced in the same mapped process, even from
+  // another frontend isolate. Base-only runtimes keep their optional contract.
+  if (lib.providesSymbol('fs_lifetime_admission') &&
+      lib.lookupFunction<Int32 Function(), int Function()>(
+            'fs_lifetime_admission',
+          )() !=
+          1) {
+    throw StateError('Native ownership is unconfirmed; restart the service');
+  }
   if (values.isEmpty) {
     _nativeEnvironmentConfigured = true;
     return;
   }
-  final lib = NativeLibrary(
-    DynamicLibrary.open(runtimeConfiguration.nativeLibrary),
-  ).library;
   final configure = lib
       .lookupFunction<
         Int32 Function(Pointer<Utf8>, Pointer<Utf8>),

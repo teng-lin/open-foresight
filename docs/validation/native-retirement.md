@@ -14,7 +14,11 @@ Each `NativeLibrary` retains the original `DynamicLibrary` mapping and shares
 one lifetime observer/admission state with other users of that actual mapping.
 Generation probe, event polling, operation status/release and retirement use that mapping.
 Loading and close never reopen its pathname or transfer an engine/conversation
-address to another Dart isolate. Consent workers create and free their own
+address to another Dart isolate. The service worker shares only immutable code
+capabilities with its frontend. The native admission query pins the original
+image before those capabilities are published; its first call can perform
+loader work. The frontend retains the original quarantine callback before
+acknowledging admission. Consent workers create and free their own
 native results within their own isolate; they transfer only ordinary data.
 
 ## Requests and actual completion
@@ -44,6 +48,14 @@ consumers sharing that mapping. Native atomic admission state and quarantine
 exports make this refusal visible to replacement isolates too. Cleanup remains available, but the owner must
 restart the service/application process; replacing an isolate cannot recover
 lost owner state. Capacity refusal is surfaced without automatic retry loops.
+
+The production worker waits for frontend admission before creating generation
+or recording owners. After service close joins actual cleanup it confirms this
+to the frontend and waits for acknowledgement before exiting. If it exits with
+admitted ownership but without that confirmation, the frontend marks the pinned
+mapping unconfirmed, including the gap before physical creation. New frontend
+objects and replacement isolates then require process restart. A worker that
+never requested native admission can still be replaced for SQL-only service.
 
 `NativeRuntime.close()` and `Recording.dispose()` synchronously detach handles
 and stop new work. Their `closed` futures join actual retirement. A generation

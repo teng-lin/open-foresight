@@ -124,6 +124,7 @@ class NativeRuntime implements GenerationStatus {
   int modelType = 0;
   final String libraryPath;
   int _epoch = 0;
+  Completer<void>? _admissionCancelled;
   _GenerationRequest? _active;
   final _callbacks = <Future<void>>{};
   void Function()? onOwnershipChanged;
@@ -233,6 +234,22 @@ class NativeRuntime implements GenerationStatus {
       _closed = null;
       final lifetime = _lifetime;
       lifetime.ensureAdmission();
+      if (NativeLibrary.beforeAdmission != null) {
+        final cancelled = Completer<void>();
+        _admissionCancelled = cancelled;
+        try {
+          await Future.any<void>([
+            _bindings.prepareAdmission()!,
+            cancelled.future,
+          ]);
+          _requireEpoch(epoch);
+          lifetime.ensureAdmission();
+        } finally {
+          if (identical(_admissionCancelled, cancelled)) {
+            _admissionCancelled = null;
+          }
+        }
+      }
       final a = runtime.toNativeUtf8(), b = model.toNativeUtf8();
       try {
         _engine = _nativeFsEngineCreate(
@@ -707,6 +724,8 @@ class NativeRuntime implements GenerationStatus {
 
   @override
   void close() {
+    final admission = _admissionCancelled;
+    if (admission != null && !admission.isCompleted) admission.complete();
     _epoch++;
     _phase = 'unconfigured';
     final previous = _closed;

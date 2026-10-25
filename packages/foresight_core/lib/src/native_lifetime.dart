@@ -5,6 +5,10 @@ import 'dart:ffi';
 /// symbol; optional diagnostic support is negotiated by its own consumer.
 final class NativeLibrary {
   NativeLibrary(this._library);
+
+  /// Installed only by the service worker's process owner. These are immutable
+  /// code capabilities in an already pinned mapping, never application handles.
+  static Future<void> Function(int admission, int quarantine)? beforeAdmission;
   final DynamicLibrary _library;
   bool _verified = false;
   DynamicLibrary get library {
@@ -29,6 +33,13 @@ final class NativeLibrary {
   );
   bool get restartRequired => _observedLifetime?.restartRequired ?? false;
   void checkAvailable() => _observedLifetime?.ensureAdmission();
+  Future<void>? prepareAdmission() {
+    final notify = beforeAdmission;
+    if (notify == null) return null;
+    final owner = lifetime;
+    owner.ensureAdmission(); // Success pins the original image before publish.
+    return notify(owner.admissionAddress, owner.quarantineAddress);
+  }
 }
 
 /// Completion tokens own native work independently of Dart task/isolate
@@ -83,12 +94,14 @@ final class NativeLifetime {
       _requests[name] = _library
           .lookupFunction<Uint64 Function(Uint64), int Function(int)>(name);
     }
-    _admission = _library.lookupFunction<Int32 Function(), int Function()>(
+    _admissionCode = _library.lookup<NativeFunction<Int32 Function()>>(
       'fs_lifetime_admission',
     );
-    _quarantine = _library.lookupFunction<Void Function(), void Function()>(
+    _admission = _admissionCode.asFunction<int Function()>();
+    _quarantineCode = _library.lookup<NativeFunction<Void Function()>>(
       'fs_lifetime_quarantine',
     );
+    _quarantine = _quarantineCode.asFunction<void Function()>();
     _releaseOwner = _library
         .lookupFunction<Int32 Function(Uint64), int Function(int)>(
           'fs_owner_release',
@@ -108,6 +121,10 @@ final class NativeLifetime {
   late final int Function(int) _status, _release, _releaseOwner;
   late final int Function() _admission;
   late final void Function() _quarantine;
+  late final Pointer<NativeFunction<Int32 Function()>> _admissionCode;
+  late final Pointer<NativeFunction<Void Function()>> _quarantineCode;
+  int get admissionAddress => _admissionCode.address;
+  int get quarantineAddress => _quarantineCode.address;
 
   bool _unconfirmed = false;
 

@@ -10,6 +10,7 @@ import 'dart:io';
 
 import 'package:foresight_core/src/model_setup.dart';
 import 'package:foresight_core/src/native.dart';
+import 'package:foresight_core/src/native_lifetime.dart';
 import 'package:foresight_core/src/platform_services.dart';
 import 'package:foresight_core/src/store.dart';
 import 'package:foresight_test_support/poll.dart';
@@ -343,6 +344,48 @@ int fs_owner_release(uint64_t owner) {
         );
         expect(store.model('generation'), before);
         expect(engines(), 0);
+      }
+    },
+  );
+
+  test(
+    'close cancels a held frontend admission before creating native owners',
+    () async {
+      final original = NativeLibrary.beforeAdmission;
+      final entered = Completer<void>(), release = Completer<void>();
+      final runtime = NativeRuntime(library);
+      NativeLibrary.beforeAdmission = (admission, quarantine) async {
+        expect(admission, greaterThan(0));
+        expect(quarantine, greaterThan(0));
+        entered.complete();
+        await release.future;
+      };
+      final loading = runtime.load('/candidate/runtime', model.path);
+      final failed = expectLater(
+        loading,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.cancelled,
+          ),
+        ),
+      );
+      try {
+        await entered.future.timeout(const Duration(seconds: 5));
+        expect(engines(), 0);
+        runtime.close();
+        await runtime.closed.timeout(const Duration(seconds: 5));
+        await failed.timeout(const Duration(seconds: 5));
+        expect(release.isCompleted, isFalse);
+        expect(engines(), 0);
+        expect(conversations(), 0);
+      } finally {
+        release.complete();
+        NativeLibrary.beforeAdmission = original;
+        runtime.close();
+        await runtime.closed;
+        await failed;
       }
     },
   );

@@ -661,8 +661,13 @@ int fs_lifetime_version() {
 int fs_lifetime_admission() {
   return foresight::ffi_barrier(
       [] {
-        return native_quarantine_state().load(std::memory_order_acquire) ? 0
-                                                                         : 1;
+        // The process owner can retain these code capabilities before allowing
+        // another Dart isolate to create physical work. Pin this exact image,
+        // independent of the worker isolate or a later pathname replacement.
+        return !native_quarantine_state().load(std::memory_order_acquire) &&
+                       pin_native_mapping()
+                   ? 1
+                   : 0;
       },
       0);
 }

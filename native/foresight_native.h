@@ -34,7 +34,9 @@ int fs_lifetime_version(void); /* currently 2 */
  * refusal before publication; uncertain Dart acknowledgements explicitly
  * quarantine. There is no reset. Poll/state/cancel/cleanup and legacy retry
  * remain available. Admission returns1 while healthy,0 when process restart is
- * required. */
+ * required. Its first successful call pins this exact loaded image and can
+ * perform loader work. Quarantine and status3 publication only set the atomic
+ * latch; neither performs that loader work or allocates. */
 int fs_lifetime_admission(void);
 void fs_lifetime_quarantine(void);
 uint64_t fs_owned_engine_create(const char *runtime, const char *model,

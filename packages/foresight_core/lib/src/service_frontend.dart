@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:ffi';
+import 'native_lifetime.dart';
 import 'application_service.dart';
 import 'platform_services.dart';
 import 'profile_paths.dart';
@@ -25,6 +27,7 @@ import 'unix_peer_identity.dart';
 /// frames and refusals before it closes their connections. Only a worker that
 /// exits unexpectedly leaves them with a bare EOF.
 class IsolatedApplicationService {
+  static bool _nativeRestartRequired = false;
   final String _dataPath;
   final ReceivePort _messages;
   final ReceivePort _errors;
@@ -35,6 +38,9 @@ class IsolatedApplicationService {
   final _refused = <Socket>{};
   final _bridges = <Future<void>>{};
   final DesktopPeerVerifier _verifyDesktopPeer;
+  final _nativeQuarantines = <int, void Function()>{};
+  bool _nativeAdmissionGranted = false, _nativeCleanupConfirmed = false;
+  bool _nativeOwnershipUnconfirmed = false;
   SendPort? _control;
   ServiceSocketBinding? _binding;
   Future<void>? _listening;
@@ -67,6 +73,9 @@ class IsolatedApplicationService {
     ProfilePaths profile, {
     DesktopPeerVerifier? desktopPeerVerifier,
   }) async {
+    if (_nativeRestartRequired) {
+      throw StateError('Native ownership is unconfirmed; restart the service');
+    }
     // The worker only gets the runtime path; check its parent here.
     privateRuntime(profile);
     final host = IsolatedApplicationService._(
@@ -79,7 +88,9 @@ class IsolatedApplicationService {
     host._messages.listen(host._message);
     host._errors.listen((dynamic error) {
       traceServiceTransport(() => 'worker uncaught error $error');
-      host._failure = StateError('Application worker failed: $error');
+      if (!host._nativeOwnershipUnconfirmed) {
+        host._failure = StateError('Application worker failed: $error');
+      }
       if (!host._ready.isCompleted) host._ready.completeError(host._failure!);
     });
     host._exits.listen((_) {
@@ -88,6 +99,18 @@ class IsolatedApplicationService {
       );
       final unexpected =
           host._ready.isCompleted && !host._closing && !host._workerClosing;
+      if (host._nativeAdmissionGranted && !host._nativeCleanupConfirmed) {
+        // The worker cannot acknowledge its own death. Mark the original
+        // pinned image before releasing this frontend or permitting a retry.
+        _nativeRestartRequired = true;
+        host._nativeOwnershipUnconfirmed = true;
+        for (final quarantine in host._nativeQuarantines.values) {
+          quarantine();
+        }
+        host._failure = StateError(
+          'Native ownership is unconfirmed; restart the service',
+        );
+      }
       if (!host._workerExited.isCompleted) host._workerExited.complete();
       if (!host._ready.isCompleted) {
         host._ready.completeError(
@@ -117,11 +140,16 @@ class IsolatedApplicationService {
       spawned = true;
       await host._ready.future;
       return host;
-    } catch (_) {
+    } catch (error, stack) {
       host._control?.send('close');
       if (spawned) await host._workerExited.future;
       await host._finish();
-      rethrow;
+      // onError and onExit use distinct ports. Startup can observe the first
+      // error before exit establishes that admitted native cleanup is unknown.
+      if (host._nativeOwnershipUnconfirmed) {
+        Error.throwWithStackTrace(host._failure!, stack);
+      }
+      Error.throwWithStackTrace(error, stack);
     }
   }
 
@@ -131,7 +159,12 @@ class IsolatedApplicationService {
       return;
     }
     final value = message as List;
-    if (value.first == 'ready') {
+    if (value.first == 'native_admission') {
+      unawaited(_admitNative(value[1] as int, value[2] as int));
+    } else if (value.first == 'native_cleanup_confirmed') {
+      _nativeCleanupConfirmed = true;
+      _control?.send('native_cleanup_ack');
+    } else if (value.first == 'ready') {
       _workerPath = value[1] as String;
       _publicPath = value[2] as String;
       final listening = _listen();
@@ -163,10 +196,47 @@ class IsolatedApplicationService {
       );
     } else if (value.first == 'failure') {
       traceServiceTransport(() => 'worker failure received ${value[1]}');
-      _failure = value.length > 2 && value[2] == true
-          ? ServiceOwnershipContended(value[1] as String)
-          : StateError(value[1] as String);
+      if (!_nativeOwnershipUnconfirmed) {
+        _failure = value.length > 2 && value[2] == true
+            ? ServiceOwnershipContended(value[1] as String)
+            : StateError(value[1] as String);
+      }
       if (!_ready.isCompleted) _ready.completeError(_failure!);
+    }
+  }
+
+  Future<void> _admitNative(int admissionAddress, int quarantineAddress) async {
+    try {
+      if (admissionAddress <= 0 || quarantineAddress <= 0) {
+        throw StateError('Invalid native admission capability');
+      }
+      // These are code capabilities from our own worker, not application
+      // object addresses. Calling admission pins/verifies that ORIGINAL image;
+      // no pathname is reopened to recover a callback after worker loss.
+      final admission = Pointer<NativeFunction<Int32 Function()>>.fromAddress(
+        admissionAddress,
+      ).asFunction<int Function()>();
+      if (admission() != 1) {
+        _control?.send(['native_admission_refused', admissionAddress]);
+        return;
+      }
+      final quarantine = Pointer<NativeFunction<Void Function()>>.fromAddress(
+        quarantineAddress,
+      ).asFunction<void Function()>();
+      _nativeQuarantines[admissionAddress] = quarantine;
+      if (serviceGatesEnabled) await serviceGate('frontend.native_before_ack');
+      if (_workerExited.isCompleted || _closing || _workerClosing) {
+        _control?.send([
+          'native_admission_refused',
+          admissionAddress,
+          'closing',
+        ]);
+        return;
+      }
+      _nativeAdmissionGranted = true;
+      _control?.send(['native_admission_ack', admissionAddress]);
+    } catch (_) {
+      _control?.send(['native_admission_refused', admissionAddress]);
     }
   }
 
@@ -488,12 +558,60 @@ Future<void> _runApplicationServiceWorker(List<Object?> configuration) async {
   );
   traceServiceTransport(() => 'worker starting');
   final control = ReceivePort();
+  final nativePermits = <int, Completer<void>>{};
+  final nativeCleanupAck = Completer<void>();
+  var nativeAdmissionsClosed = false;
+  void revokeNativeAdmission() {
+    nativeAdmissionsClosed = true;
+    for (final permit in nativePermits.values) {
+      if (!permit.isCompleted) permit.completeError(serviceClosingRefusal());
+    }
+  }
+
+  NativeLibrary.beforeAdmission = (admission, quarantine) async {
+    if (nativeAdmissionsClosed) throw serviceClosingRefusal();
+    final permit = nativePermits.putIfAbsent(admission, () {
+      final result = Completer<void>();
+      result.future.ignore();
+      parent.send(['native_admission', admission, quarantine]);
+      return result;
+    });
+    await permit.future;
+    if (serviceGatesEnabled) {
+      await serviceGate('worker.native_admission_granted');
+    }
+    if (nativeAdmissionsClosed) throw serviceClosingRefusal();
+  };
+  Future<void> confirmNativeCleanup() async {
+    if (nativePermits.isEmpty) return;
+    parent.send(['native_cleanup_confirmed']);
+    await nativeCleanupAck.future;
+  }
+
   parent.send(control.sendPort);
   ApplicationService? service;
   final stop = Completer<void>();
   final frontendClosed = Completer<void>();
   control.listen((message) {
-    if (message == 'frontend_closed') {
+    if (message is List && message.first == 'native_admission_ack') {
+      final permit = nativePermits[message[1] as int];
+      if (permit != null && !permit.isCompleted) permit.complete();
+    } else if (message is List && message.first == 'native_admission_refused') {
+      final permit = nativePermits[message[1] as int];
+      if (permit != null && !permit.isCompleted) {
+        permit.completeError(
+          message.length > 2 && message[2] == 'closing'
+              ? serviceClosingRefusal()
+              : StateError(
+                  'Native ownership is unconfirmed; restart the service',
+                ),
+        );
+      }
+    } else if (message == 'native_cleanup_ack') {
+      if (!nativeCleanupAck.isCompleted) {
+        nativeCleanupAck.complete();
+      }
+    } else if (message == 'frontend_closed') {
       if (!frontendClosed.isCompleted) frontendClosed.complete();
     } else if (message == 'frontend_failed') {
       if (!frontendClosed.isCompleted) {
@@ -502,6 +620,7 @@ Future<void> _runApplicationServiceWorker(List<Object?> configuration) async {
         );
       }
     } else if (!stop.isCompleted) {
+      revokeNativeAdmission();
       stop.complete();
     }
   });
@@ -513,7 +632,10 @@ Future<void> _runApplicationServiceWorker(List<Object?> configuration) async {
     service = await ApplicationService.start(
       profile,
       internalWorker: true,
-      onDraining: () => parent.send(['draining']),
+      onDraining: () {
+        revokeNativeAdmission();
+        parent.send(['draining']);
+      },
       beforeReleaseOwnership: () {
         parent.send(['closing']);
         return frontendClosed.future;
@@ -531,10 +653,12 @@ Future<void> _runApplicationServiceWorker(List<Object?> configuration) async {
     await Future.any([stop.future, service.closed]);
     traceServiceTransport(() => 'worker close begin');
     await service.close();
+    await confirmNativeCleanup();
     traceServiceTransport(() => 'worker close complete');
     // Let an idle-stop request flush its final acknowledgement after close.
     await Future<void>.delayed(Duration.zero);
   } catch (error, stack) {
+    revokeNativeAdmission();
     traceServiceTransport(() => 'worker main failed $error\n$stack');
     parent.send([
       'failure',
@@ -543,6 +667,7 @@ Future<void> _runApplicationServiceWorker(List<Object?> configuration) async {
     ]);
     try {
       await service?.close();
+      if (service != null) await confirmNativeCleanup();
     } catch (_) {}
   } finally {
     traceServiceTransport(() => 'worker main finally');

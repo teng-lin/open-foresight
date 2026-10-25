@@ -12,6 +12,7 @@ import 'package:ffi/ffi.dart';
 import 'package:test/test.dart';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/remote_domain.dart' show RemoteRecording;
+import 'package:foresight_core/src/native_lifetime.dart';
 
 void main() {
   late Directory directory;
@@ -85,6 +86,52 @@ void main() {
       'data': base64Encode(bytes.buffer.asUint8List()),
     });
   }
+
+  test(
+    'dispose cancels held frontend admission before speech or capture creation',
+    () async {
+      final original = NativeLibrary.beforeAdmission;
+      final entered = Completer<void>(), release = Completer<void>();
+      int count(String name) =>
+          fixture.lookupFunction<Int32 Function(), int Function()>(name)();
+      final speechBefore = count('fixture_speech_creations');
+      final captureBefore = count('fixture_capture_creations');
+      NativeLibrary.beforeAdmission = (admission, quarantine) async {
+        expect(admission, greaterThan(0));
+        expect(quarantine, greaterThan(0));
+        entered.complete();
+        await release.future;
+      };
+      final recording = Recording(library, (_) {}, (_, _, _, _) {});
+      final starting = recording.start('/usr/bin/true', model);
+      final failed = expectLater(
+        starting,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.cancelled,
+          ),
+        ),
+      );
+      try {
+        await entered.future.timeout(const Duration(seconds: 5));
+        recording.dispose();
+        await recording.closed.timeout(const Duration(seconds: 5));
+        await failed.timeout(const Duration(seconds: 5));
+        expect(release.isCompleted, isFalse);
+        expect(count('fixture_speech_creations'), speechBefore);
+        expect(count('fixture_capture_creations'), captureBefore);
+        expect(recording.captures, isEmpty);
+      } finally {
+        release.complete();
+        NativeLibrary.beforeAdmission = original;
+        recording.dispose();
+        await recording.closed;
+        await failed;
+      }
+    },
+  );
 
   test(
     'installed capture supplies the canonical runtime to its native ABI',

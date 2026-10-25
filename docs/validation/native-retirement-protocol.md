@@ -20,6 +20,9 @@ quarantine survives replacement isolates. Native workers latch it before
 publishing status3; Dart publishes it through `fs_lifetime_quarantine` when an
 acknowledgement or retirement admission is uncertain. `fs_lifetime_admission`
 reports refusal to every isolate opening that image. There is no reset.
+The first successful admission query also pins the exact loaded image with
+the existing loader helper; that query can perform loader work. Marking
+quarantine and publishing status3 remain allocation-free atomic operations.
 Creation, probes and new generation/speech work refuse after quarantine;
 status, poll, cancel, capture finish, speech join and retirement stay available. Owned result strings are
 separate caller-owned buffers, freed with `fs_string_free`.
@@ -146,8 +149,22 @@ process instead of waiting past its deadline on a permission dialog. Clients
 requiring observable physical completion use the owned v2 token API.
 
 Unacknowledged owned results and lost owner IDs are deliberately not evicted.
-The production Dart owner is the service main isolate; replacement isolates must
-not adopt that mapping after its ownership state is lost. For Dart, status3, an
+The service frontend owns the production Dart admission handshake. Before its
+worker creates the first generation or recording owner, it publishes only the
+original mapping's immutable admission/quarantine **code** capabilities. The
+mapping is pinned before publication, and the frontend verifies that same
+admission function and retains its quarantine callback before acknowledging.
+No application object pointer crosses isolates or is reconstructed by pathname.
+The worker waits for this acknowledgement before physical creation. Closing
+revokes pending admission without waiting for an acknowledgement to arrive.
+After service close has joined native owners and callbacks, the worker sends a
+cleanup confirmation and waits for the frontend acknowledgement before exiting.
+If an admitted worker exits without this confirmation, the frontend invokes
+the retained original quarantine callback and reports restart-required. A later
+frontend or fresh isolate opening that mapping cannot admit replacement work.
+Workers that never requested native admission retain SQL-only replacement.
+
+For Dart, status3, an
 unknown completion or lost acknowledgement requires surfacing unconfirmed ownership,
 stopping new native admissions and restarting the service/application process.
 Capacity refusal must be surfaced without automatic retry loops. Normal tracked
@@ -155,10 +172,14 @@ watchers acknowledge their own probe/join/finish results independently, even if
 their original subscriber cancels. This restart policy is a required Dart
 consumer contract. Cross-isolate controls cover known status3 and uncertain
 acknowledgements, including a native latch before an originating Dart watcher
-observes completion. They do not establish detection of an individual isolate
-which disappears before requesting cleanup; NativeFinalizer only guarantees
-callbacks by isolate-group shutdown. Native qualification alone does not
-establish complete frontend owner-loss recovery.
+observes completion. Production frontend controls also cover loss during actual
+native work and between the admission acknowledgement and physical creation,
+clean joined replacement, and SQL-only replacement. These controls use a real
+native library with controlled model workers; they do not qualify physical
+audio, GPU inference or model output. Arbitrary direct FFI users outside this
+frontend must retain their own process owner; NativeFinalizer does not detect
+an individual isolate's loss. Full application/native matrix qualification is
+still required for the complete source revision.
 Process exit keeps any still-live legacy registry intact for OS/ownership-pipe
 cleanup rather than destructing joinable workers from a static finalizer.
 Legacy callers must end API admission before process exit; exit is not a
