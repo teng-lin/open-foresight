@@ -47,6 +47,14 @@ if(BUILD_TESTING)
   target_include_directories(diagnostic_protocol_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   add_test(NAME diagnostic_protocol COMMAND diagnostic_protocol_test)
   set_tests_properties(diagnostic_protocol PROPERTIES TIMEOUT 15)
+  add_executable(diagnostic_endpoint_test diagnostic_protocol.c
+    diagnostic_endpoint.c ../tests/native/diagnostic_endpoint.c)
+  set_target_properties(diagnostic_endpoint_test PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
+  target_compile_options(diagnostic_endpoint_test PRIVATE -Wall -Wextra -Werror -Wpedantic)
+  target_include_directories(diagnostic_endpoint_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  add_test(NAME diagnostic_endpoint COMMAND diagnostic_endpoint_test)
+  set_tests_properties(diagnostic_endpoint PROPERTIES TIMEOUT 15)
   # Fixture identity only; these targets are never installed as products.
   set(FS_DIAG_TEST_NATIVE_ID
     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
