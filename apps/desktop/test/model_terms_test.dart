@@ -91,7 +91,7 @@ void main() {
           .widgetList<RadioListTile<GemmaModel>>(
             find.byType(RadioListTile<GemmaModel>),
           )
-          .every((tile) => tile.enabled == false),
+          .every((tile) => tile.enabled == true),
       true,
     );
     expect(

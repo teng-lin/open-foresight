@@ -60,6 +60,31 @@ Future<File?> localModelFile(
   return null;
 }
 
+/// Fast UI discovery only. A matching path and size do not authenticate bytes;
+/// callers must use [localModelFile] or the downloader before loading a model.
+Future<File?> localModelCandidate(
+  GemmaModel model,
+  Directory root, {
+  Map<String, Object?>? registration,
+}) async {
+  for (final file in [
+    if (registration?['digest'] == model.digest)
+      File(registration!['path'] as String),
+    File('${root.path}/${model.directory}/${model.filename}'),
+  ]) {
+    try {
+      if (FileSystemEntity.typeSync(file.path, followLinks: false) ==
+              FileSystemEntityType.file &&
+          file.lengthSync() == model.bytes) {
+        return file;
+      }
+    } on FileSystemException {
+      // Missing or inaccessible files are unavailable to the chooser.
+    }
+  }
+  return null;
+}
+
 /// Available bytes on the filesystem that owns the model cache. Unknown space
 /// is an error so an unbounded multi-GB download cannot start accidentally.
 Future<int> availableModelDiskBytes(Directory directory) async {

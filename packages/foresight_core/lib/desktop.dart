@@ -27,6 +27,7 @@ export 'src/gemma_download.dart'
         embeddingGemmaModel,
         modelFromPin,
         localModelFile,
+        localModelCandidate,
         verifyModelFile,
         availableModelDiskBytes,
         physicalMemoryGb;

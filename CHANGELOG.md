@@ -6,6 +6,11 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Changed
+
+- Fresh local model setup defaults to Gemma 4 E2B on all supported memory sizes, while preserving registered models and reusing compatible downloaded models.
+- Settings model choices remain selectable while saved files are discovered. Opening the Gemma chooser checks file metadata without hashing every model; local files are checksum-verified when activated.
+
 ### Added
 
 - Support opt-in Developer ID signing, notarization and stapling for macOS DMGs,
