@@ -18,6 +18,15 @@ macro(_diag_unavailable)
   message(STATUS "Diagnostic products unavailable: identity or recipe was refused")
   return()
 endmacro()
+# Existing CTest/dashboard launchers are unsupported optional recipes; refuse
+# qualification before creating scheduling targets. Only later mutations fail.
+foreach(_rule IN ITEMS RULE_LAUNCH_CUSTOM RULE_LAUNCH_COMPILE RULE_LAUNCH_LINK)
+  get_directory_property(_directory_rule ${_rule})
+  get_property(_global_rule GLOBAL PROPERTY ${_rule})
+  if(NOT "${_directory_rule}" STREQUAL "" OR NOT "${_global_rule}" STREQUAL "")
+    _diag_unavailable()
+  endif()
+endforeach()
 if(CMAKE_VERSION VERSION_LESS 3.24 OR
    NOT CMAKE_C_COMPILER_ID MATCHES "^(GNU|AppleClang|Clang)$")
   _diag_unavailable()

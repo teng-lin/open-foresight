@@ -76,12 +76,12 @@ keep parent generator/rule inputs outside this optional producer; missing make
 leaves diagnostics unavailable. The two small diagnostic products are actually rebuilt on each
 product invocation, independently of heavyweight application native targets.
 
-The current standalone CMake fixture has 49 controls, including configure-only
+The standalone CMake fixture includes configure-only
 unavailability, compile-failure state, omitted source/Threads-source refusal,
 late build-type refusal, byte equality under seven parent-rule changes, the
 export initializer, an injected inner-cache hook, hostile build environments,
 SQL output-directory/availability cases and umask-002 normalization. Linux GNU
-executes 48 and skips the Clang-only driver case; Darwin executes 48 and skips
+skips the Clang-only driver case; Darwin skips
 the GNU-ld-only `LD_RUN_PATH` case.
 Partial link failure may leave a newly linked launcher beside the old failed
 library; availability remains false until both matching products are verified.

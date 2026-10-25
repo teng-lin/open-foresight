@@ -116,7 +116,7 @@ c++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -O2 -Inative \
 
 ## Pending qualification
 
-The coordinator owns CMake/CTest registration, randomized comparison against
+The leaf is registered as the native `diagnostic_sha256` CTest. The coordinator owns randomized comparison against
 Python `hashlib`, strict C11 and sanitizer (ASan/UBSan) runs, and real macOS
 timing for both backends. The root benchmark hashes 171.6 MB against the
 existing 1 s complete source gate; pure Dart measured 1.332 s. The budget is not

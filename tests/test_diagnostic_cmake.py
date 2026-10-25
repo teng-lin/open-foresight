@@ -719,3 +719,23 @@ def test_sql_and_native_metadata_probes_share_the_isolated_environment(tmp_path)
     assert len(receipt["artifacts"]) == 3
     sql = json.loads((build / "diagnostic-sql-inputs.json").read_text())
     assert "fixture_selector" not in sql["record"]["toolchain"]["record"]
+
+
+@pytest.mark.parametrize("scope", ["GLOBAL", "DIRECTORY"])
+@pytest.mark.parametrize("rule", ["CUSTOM", "COMPILE", "LINK"])
+def test_preexisting_launcher_keeps_optional_native_unavailable(tmp_path, scope, rule):
+    source, build = fixture(tmp_path)
+    project = source / "CMakeLists.txt"
+    body = project.read_text()
+    body = body.replace(
+        'include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/ForesightDiagnostics.cmake")',
+        f'set_property({scope} PROPERTY RULE_LAUNCH_{rule} "OFF")\ninclude("${{CMAKE_CURRENT_SOURCE_DIR}}/cmake/ForesightDiagnostics.cmake")',
+    )
+    assert "RULE_LAUNCH_" in body
+    project.write_text(body)
+    result = configure(source, build)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (
+        json.loads((build / "diagnostic-products.json").read_bytes())["available"]
+        is False
+    )
