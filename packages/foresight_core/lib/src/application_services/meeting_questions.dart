@@ -1,6 +1,7 @@
+import '../text_budget.dart' show balancedTranscriptWindow;
 import 'dart:convert';
 
-import '../domain.dart';
+import 'service_workflow_ports.dart';
 import '../meeting_speakers.dart';
 import '../persistence/meeting_queries.dart';
 import '../persistence/workflow_queries.dart';
@@ -17,7 +18,7 @@ final class MeetingQuestions {
     required this.meetings,
     required this.modelDigest,
   }) : queries = WorkflowQueries(domain.store);
-  final Domain domain;
+  final MeetingGenerationPort domain;
   final GenerationCoordinator coordinator;
   final MeetingQueries meetings;
   final WorkflowQueries queries;

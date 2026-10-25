@@ -3,7 +3,7 @@ import 'dart:io';
 
 import 'package:grpc/grpc.dart';
 
-import '../domain.dart';
+import 'service_workflow_ports.dart';
 import '../read_models.dart';
 import '../generated/rag_service.pb.dart';
 import '../meeting_speakers.dart';
@@ -39,7 +39,7 @@ final class NoteEnhancementCoordinator {
     required this.indexSource,
     required this.modelDigest,
   }) : queries = NoteQueries(domain.store, meetings);
-  final Domain domain;
+  final NoteEnhancementPort domain;
   final GenerationCoordinator generation;
   final ProactiveQuestions proactive;
   final MeetingQueries meetings;

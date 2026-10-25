@@ -1,6 +1,6 @@
 import '../answer_source_scope.dart';
 import '../conversation_answer.dart';
-import '../domain.dart';
+import 'service_workflow_ports.dart';
 import '../native.dart';
 import '../operation_requests.dart';
 import '../proactive_questions.dart';
@@ -45,7 +45,7 @@ final class AnswerCoordinator extends AnswerGateway {
     required this.generation,
     required this.profileId,
   });
-  final Domain domain;
+  final ConversationWorkspacePort domain;
   final ProactiveQuestions proactive;
   final NoteEnhancementCoordinator notes;
   final GenerationCoordinator generation;

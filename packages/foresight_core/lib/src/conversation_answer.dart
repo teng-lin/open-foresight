@@ -7,7 +7,7 @@ import 'answer_generation_phase.dart';
 import 'dart:io';
 import 'profile_paths.dart';
 import 'package:grpc/grpc.dart' show CallOptions;
-import 'domain.dart';
+import 'application_services/service_workflow_ports.dart';
 import 'dart:convert';
 import 'store.dart';
 import 'persistence/conversation_queries.dart';
@@ -24,7 +24,7 @@ import 'generated/rag_service.pbgrpc.dart';
 
 /// One answer lifecycle, separate from workspace indexing and worker ownership.
 class ConversationAnswer {
-  final Domain domain;
+  final ConversationWorkspacePort domain;
   final String question;
   String conversation;
   final String? requestId;

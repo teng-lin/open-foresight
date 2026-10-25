@@ -2,7 +2,7 @@ import 'model_asset_acquisition.dart';
 import 'dart:io';
 import '../answer_contract.dart' show answerValidationFailures;
 import 'audio_operations.dart';
-import '../domain.dart';
+import 'service_workflow_ports.dart';
 import '../operation_registry.dart';
 import '../operation_requests.dart';
 import '../operations.dart';
@@ -36,7 +36,7 @@ final class RuntimeOperations {
     required this.accounts,
     required this.answers,
   });
-  final Domain domain;
+  final RuntimeOperationsPort domain;
   final ApplicationIdentity identity;
   final ModelAssetAcquisitionCoordinator assetDownloads;
   final GenerationCoordinator generation;
