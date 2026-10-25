@@ -1429,6 +1429,11 @@ final class _Writer {
         final reply = await _request(DiagnosticWorkerFrame.append, bytes);
         _inFlight = null;
         if (!_accepted(reply)) {
+          if (reply.result == DiagnosticWorkerResult.disabled) {
+            // This matching ACK definitively disposed of this failed append.
+            // Return exactly its charge; newer unsent records stay queued.
+            _complete(record, droppedRecord: true);
+          }
           _finishOrHealth();
           return;
         }
