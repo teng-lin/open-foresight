@@ -258,3 +258,54 @@ def test_boolean_looking_custom_launcher_is_still_a_nonempty_command(product):
     )
     assert result.returncode != 0
     assert "SQL isolated scheduling recipe changed" in result.stderr
+
+
+@pytest.mark.parametrize("scope", ["GLOBAL", "DIRECTORY"])
+def test_preexisting_custom_scheduler_keeps_generic_sql_available(product, scope):
+    source, build = product
+    configure(
+        source, build, before=f'set_property({scope} PROPERTY RULE_LAUNCH_CUSTOM "OFF")'
+    )
+    assert json.loads((build / "diagnostic-sql-inputs.json").read_text()) == {
+        "schema": 1,
+        "available": False,
+    }
+    result = subprocess.run(
+        ["cmake", "--build", str(build), "--target", "foresight_sql_support"],
+        text=True,
+        capture_output=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_existing_ctest_launchers_build_generic_mandatory_sql(product):
+    source, build = product
+    configure(source, build, before="set(CTEST_USE_LAUNCHERS ON)")
+    state = json.loads((build / "diagnostic-sql-inputs.json").read_text())
+    assert state == {"schema": 1, "available": False}
+    result = subprocess.run(
+        ["cmake", "--build", str(build), "--target", "foresight_sql_support"],
+        text=True,
+        capture_output=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("output", ["not-json", '{"schema":1}'])
+def test_malformed_identity_output_keeps_generic_sql_available(product, output):
+    source, build = product
+    (source / "tools/sql_support_identity.py").write_text(f"print({output!r})\n")
+    configure(source, build)
+    assert json.loads((build / "diagnostic-sql-inputs.json").read_text()) == {
+        "schema": 1,
+        "available": False,
+    }
+    result = subprocess.run(
+        ["cmake", "--build", str(build), "--target", "foresight_sql_support"],
+        text=True,
+        capture_output=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

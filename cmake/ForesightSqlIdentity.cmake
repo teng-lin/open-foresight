@@ -16,6 +16,14 @@ file(CHMOD "${_sql_temporary}" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE)
 set(_sql_clean_environment /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C
   "TMPDIR=${_sql_temporary}")
 function(_foresight_prepare_sql_identity)
+  # Existing CTest/custom schedulers are an unavailable qualified recipe, not
+  # a reason to break the ordinary mandatory SQL target. Late mutation remains
+  # a configuration error after an isolated recipe has been selected.
+  get_directory_property(_existing_directory_launcher RULE_LAUNCH_CUSTOM)
+  get_property(_existing_global_launcher GLOBAL PROPERTY RULE_LAUNCH_CUSTOM)
+  if(NOT "${_existing_directory_launcher}${_existing_global_launcher}" STREQUAL "")
+    return()
+  endif()
   if(CMAKE_VERSION VERSION_LESS "3.24" OR
      NOT CMAKE_BUILD_TYPE MATCHES "^(Debug|Release|RelWithDebInfo|MinSizeRel)$" OR
      CMAKE_CONFIGURATION_TYPES OR CMAKE_CROSSCOMPILING OR
@@ -94,8 +102,13 @@ function(_foresight_prepare_sql_identity)
   if(NOT _status STREQUAL "0")
     return()
   endif()
-  string(JSON _identity GET "${_record}" sql_source_id)
-  string(JSON _fingerprint GET "${_metadata}" fingerprint)
+  string(JSON _identity ERROR_VARIABLE _identity_error GET "${_record}" sql_source_id)
+  string(JSON _fingerprint ERROR_VARIABLE _fingerprint_error GET "${_metadata}" fingerprint)
+  string(LENGTH "${_identity}" _identity_length)
+  if(_identity_error OR _fingerprint_error OR NOT _identity_length EQUAL 64 OR
+     NOT _identity MATCHES "^[0-9a-f]+$")
+    return()
+  endif()
   file(WRITE "${_sql_record_path}" "${_record}\n")
   set(FORESIGHT_SQL_IDENTITY_AVAILABLE TRUE PARENT_SCOPE)
   set(FORESIGHT_SQL_SUPPORT_SOURCE_ID "${_identity}" PARENT_SCOPE)
