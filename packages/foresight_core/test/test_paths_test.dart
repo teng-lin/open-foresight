@@ -29,11 +29,11 @@ void main() {
     expect(synchronous.existsSync(), isFalse);
     expect(asynchronous.existsSync(), isFalse);
   });
-  test('default root keeps macOS socket paths short and honors overrides', () {
+  test('default root stays physical and short and honors overrides', () {
     final override = Platform.environment['FORESIGHT_TEST_TEMP_ROOT'];
     expect(
       shortTestTempRoot.path,
-      override ?? (Platform.isMacOS ? '/tmp' : Directory.systemTemp.path),
+      override ?? (Platform.isMacOS ? '/private/var/tmp' : '/var/tmp'),
     );
   });
   test('early explicit removal is safe', () async {
