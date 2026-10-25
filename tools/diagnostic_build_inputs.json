@@ -143,20 +143,25 @@
     "required": [
       "native/diagnostic_support.c",
       "native/diagnostic_support.h",
+      "packages/foresight_core/bin/diagnostic_storage_worker.dart",
+      "packages/foresight_core/lib/src/diagnostics/native_queue_adapter.dart",
       "packages/foresight_core/lib/src/diagnostics/storage_worker.dart",
+      "packages/foresight_core/lib/src/diagnostics/storage_worker_dispatch.dart",
       "packages/foresight_core/lib/src/diagnostics/storage_worker_native.dart",
       "packages/foresight_core/lib/src/diagnostics/storage_worker_protocol.dart",
-      "packages/foresight_core/lib/src/diagnostics/storage_worker_dispatch.dart",
-      "packages/foresight_core/bin/diagnostic_storage_worker.dart"
+      "packages/foresight_core/lib/src/native_diagnostics.dart",
+      "packages/foresight_core/lib/src/native_lifetime.dart"
     ],
     "roots": [
-      "packages/foresight_core/lib/src/diagnostics",
-      "packages/foresight_core/lib/src/persistence/backup_files.dart",
-      "packages/foresight_core/pubspec.yaml",
-      "packages/foresight_core/pubspec.lock",
       "native/diagnostic_support.c",
       "native/diagnostic_support.h",
-      "packages/foresight_core/bin/diagnostic_storage_worker.dart"
+      "packages/foresight_core/bin/diagnostic_storage_worker.dart",
+      "packages/foresight_core/lib/src/diagnostics",
+      "packages/foresight_core/lib/src/native_diagnostics.dart",
+      "packages/foresight_core/lib/src/native_lifetime.dart",
+      "packages/foresight_core/lib/src/persistence/backup_files.dart",
+      "packages/foresight_core/pubspec.lock",
+      "packages/foresight_core/pubspec.yaml"
     ],
     "inputs": [
       "native/diagnostic_support.c",
@@ -166,6 +171,7 @@
       "packages/foresight_core/lib/src/diagnostics/code_locations.g.dart",
       "packages/foresight_core/lib/src/diagnostics/configuration.dart",
       "packages/foresight_core/lib/src/diagnostics/events.dart",
+      "packages/foresight_core/lib/src/diagnostics/native_queue_adapter.dart",
       "packages/foresight_core/lib/src/diagnostics/operations.g.dart",
       "packages/foresight_core/lib/src/diagnostics/producer.dart",
       "packages/foresight_core/lib/src/diagnostics/producer_budget.dart",
@@ -180,6 +186,8 @@
       "packages/foresight_core/lib/src/diagnostics/storage_worker_native.dart",
       "packages/foresight_core/lib/src/diagnostics/storage_worker_protocol.dart",
       "packages/foresight_core/lib/src/diagnostics/storage_worker_source.dart",
+      "packages/foresight_core/lib/src/native_diagnostics.dart",
+      "packages/foresight_core/lib/src/native_lifetime.dart",
       "packages/foresight_core/lib/src/persistence/backup_files.dart",
       "packages/foresight_core/pubspec.lock",
       "packages/foresight_core/pubspec.yaml"

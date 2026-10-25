@@ -140,6 +140,7 @@ void main() {
     final root = createTestTempDirectorySync('startup-');
     for (final name in [
       'bin/foresight-service',
+      'bin/foresight-diagnostic-worker',
       'bin/foresight-mcp',
       'bin/foresight-diagnostic-launcher',
       'sdk/bin/dart',
@@ -206,33 +207,30 @@ void main() {
     },
   );
 
-  test(
-    'compiled service self-reexec and MCP service selection are immutable',
-    () async {
-      final root = await installation();
-      for (final host in [DiagnosticHost.service, DiagnosticHost.mcp]) {
-        final selection = DiagnosticStartupSelection.resolve(
-          context(root.path, host: host),
-        );
-        final command = selection.command(22);
-        expect(command.arguments, [
-          '${root.path}/bin/foresight-diagnostic-launcher',
-          'a' * 64,
-          '22',
-          '${root.path}/bin/foresight-service',
-          '--diagnostic-storage-worker',
-          '22',
-          '--diagnostic-native-support',
-          '${root.path}/lib/libforesight_diagnostic_support.so',
-        ]);
-        expect(
-          command.arguments,
-          isNot(contains('${root.path}/bin/foresight-mcp')),
-        );
-        expect(() => command.arguments.add('foreign'), throwsUnsupportedError);
-      }
-    },
-  );
+  test('compiled hosts select the standalone companion immutably', () async {
+    final root = await installation();
+    for (final host in [DiagnosticHost.service, DiagnosticHost.mcp]) {
+      final selection = DiagnosticStartupSelection.resolve(
+        context(root.path, host: host),
+      );
+      final command = selection.command(22);
+      expect(command.arguments, [
+        '${root.path}/bin/foresight-diagnostic-launcher',
+        'a' * 64,
+        '22',
+        '${root.path}/bin/foresight-diagnostic-worker',
+        '--diagnostic-storage-worker',
+        '22',
+        '--diagnostic-native-support',
+        '${root.path}/lib/libforesight_diagnostic_support.so',
+      ]);
+      expect(
+        command.arguments,
+        isNot(contains('${root.path}/bin/foresight-mcp')),
+      );
+      expect(() => command.arguments.add('foreign'), throwsUnsupportedError);
+    }
+  });
 
   test(
     'installed entrypoints ignore a compiled source-fixture selector',
@@ -248,7 +246,7 @@ void main() {
       expect(selected.prefix, isEmpty);
       expect(
         selected.command(22).arguments[3],
-        '${root.path}/bin/foresight-service',
+        '${root.path}/bin/foresight-diagnostic-worker',
       );
     },
   );
@@ -351,6 +349,7 @@ void main() {
       final build = createTestTempDirectorySync('startup-output-');
       for (final name in [
         'application/foresight-service',
+        'application/foresight-diagnostic-worker',
         'native/foresight-diagnostic-launcher',
       ]) {
         await file('${build.path}/$name', executable: true);
@@ -386,7 +385,7 @@ void main() {
       );
       expect(
         command.arguments[3],
-        '${build.path}/application/foresight-service',
+        '${build.path}/application/foresight-diagnostic-worker',
       );
       expect(
         command.arguments.last,

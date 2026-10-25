@@ -135,19 +135,26 @@ def complete_candidate(tmp_path):
     root = tmp_path / "source"
     root.mkdir()
     config = json.loads((ROOT / identity.DEFAULT_CONTRACT).read_text())
-    files = list(worker.EXACT)
+    files = [*worker.EXACT, *worker.PRODUCERS]
     files.extend(
         path.relative_to(ROOT).as_posix()
         for path in (ROOT / worker.DIAGNOSTICS).glob("*.dart")
     )
-    config["worker"]["inputs"] = sorted(files)
+    adapter = f"{worker.DIAGNOSTICS}/native_queue_adapter.dart"
+    if adapter not in files:
+        files.append(adapter)
+    config["worker"]["inputs"] = sorted(n for n in files if n not in worker.PRODUCERS)
     for name in files:
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes((ROOT / name).read_bytes())
+        path.write_bytes(
+            (ROOT / name).read_bytes()
+            if (ROOT / name).exists()
+            else b"// Synthetic pure bridge declaration; no product qualification.\n"
+        )
         path.chmod(0o644)
     contract = root / identity.DEFAULT_CONTRACT
-    contract.parent.mkdir()
+    contract.parent.mkdir(exist_ok=True)
     contract.write_text(json.dumps(config))
     sdk = tmp_path / "flutter/bin/cache/dart-sdk"
     for name, data in {
@@ -224,3 +231,28 @@ def test_package_import_cannot_escape_into_application_or_excluded_source(
         pytest.raises(identity.IdentityError, match="excluded_worker_package_import"),
     ):
         worker.collect(root, build, sdk, config, "jit")
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        "@pragma('vm:entry-point')",
+        "@Target({1, 2 /* ) */})",
+        "@Metadata(r')')",
+        "@First\n@Second('literal \")\"')",
+    ],
+)
+def test_annotated_export_after_import_cannot_escape_closure(annotation):
+    source = f"import 'src/local.dart';\n{annotation}\nexport 'package:foresight_core/src/service.dart';\n".encode()
+    with pytest.raises(identity.IdentityError):
+        worker.package_imports(
+            "lib/public.dart", source, "ffi", {"ffi": ["lib/src/local.dart"]}
+        )
+
+
+def test_annotation_balancing_preserves_following_owned_directives():
+    source = b"import 'local.dart'; @Meta({'value': r')'}, /* ) */ [1, (2)]) export 'local.dart'; @Target({1}) class C {}"
+    assert identity._dart_uris(source, declaration_metadata=True) == [
+        "local.dart",
+        "local.dart",
+    ]

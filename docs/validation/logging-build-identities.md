@@ -123,9 +123,9 @@ It refuses application, search-service and credential paths before opening any
 declared runtime input. Selected dependencies are exactly ffi, meta, path, crypto,
 typed_data and collection from public hosted/pub.dev roots. The collector binds
 all their library bytes and validates every declared import target. Core uses its
-actual language version 3.8 with the pinned Dart 3.9.2 VM. Library metadata is
-limited to the selected dependency's Deprecated spelling; metadata following a
-parsed directive ends the directive header at a Dart declaration.
+actual language version 3.8 with the pinned Dart 3.9.2 VM. The scanner consumes balanced annotation arguments with string/comment handling,
+then checks the following directive, including annotated imports and exports.
+Unsupported generic annotations and interpolated metadata strings refuse.
 
 The record binds all SDK bin/lib bytes. The child rechecks the actual VM,
 kernel-service snapshot and complete SDK lib inventory needed by its JIT mode.
@@ -147,3 +147,35 @@ The legacy generic worker generator remains pending. Kernel/AOT contexts from
 the new collector retain candidate status until compilation/byte receipts and
 the standalone installed companion are wired and qualified. This JIT checkpoint
 does not claim those paths, package adoption or complete application acceptance.
+
+## Compiled standalone companion
+
+`build_diagnostic_worker.py` builds JIT, kernel or AOT contexts. Kernel/AOT
+compilation uses a private snapshot of the sealed owned sources and six public
+packages, with a generated resolver containing only those packages and core.
+The selected SDK is fingerprinted before and after compilation. Compiler
+subprocesses receive a fixed environment and a 300-second deadline; failed
+output is retained. Previous availability and the worker byte receipt are
+invalidated before a new build begins.
+
+The worker record additionally binds the three exact producer Python files and
+the fixed public compilation recipe. It admits the two definition-only
+async/FFI modules `native_diagnostics.dart` and `native_lifetime.dart`; no
+application image is loaded by their import. The current inventory requires the
+repaired native adapter's `native_queue_adapter.dart` part and exact session
+bytes; the pre-adapter worktree cannot manufacture that missing closure.
+
+A successful build publishes `native/diagnostic-worker-inputs.json` and
+`application/diagnostic-worker-build.json`. The latter binds the fixed artifact
+path, mode, size and SHA-256, IDs and complete public Dart definitions.
+`verify_worker_build(root, build, sdk, config, mode)` recomputes all inputs and
+artifact bytes. The matching CLI `--verify --defines-output PATH` emits a sorted
+NUL-separated vector of exact `-Dkey=value` arguments only after verification.
+Service/MCP compilation consumes that vector without rebuilding or guessing IDs.
+
+AOT selects the standalone `foresight-diagnostic-worker` companion. Source
+contexts use `build/application`; installed Linux uses `bin`, and installed
+macOS uses `Contents/Resources/bin`. Recognized installed executable locations
+ignore the compiled source-fixture authority and use package-relative support
+paths. Installed-copy execution and final package-byte sealing require their
+own qualification; source execution alone does not establish that acceptance.

@@ -18,8 +18,15 @@ const _exactSources = {
   '$_core/lib/src/persistence/backup_files.dart',
   '$_core/pubspec.yaml',
   '$_core/pubspec.lock',
+  '$_core/lib/src/native_diagnostics.dart',
+  '$_core/lib/src/native_lifetime.dart',
   'native/diagnostic_support.c',
   'native/diagnostic_support.h',
+};
+const _producers = {
+  'tools/diagnostic_worker_context.py',
+  'tools/build_diagnostic_worker.py',
+  'tools/diagnostic_build_identity.py',
 };
 const _packages = {'ffi', 'meta', 'path', 'crypto', 'typed_data', 'collection'};
 const _external = {
@@ -449,7 +456,7 @@ Future<void> verifyDiagnosticWorkerSources({
       !_identity(workerId) ||
       !_identity(catalogId) ||
       !_identity(sdkId) ||
-      !const {'jit', 'kernel'}.contains(mode) ||
+      !const {'jit', 'kernel', 'aot'}.contains(mode) ||
       packageConfig !=
           p.join(sourceAnchor, _core, '.dart_tool/package_config.json')) {
     _refuse();
@@ -483,6 +490,7 @@ Future<void> verifyDiagnosticWorkerSources({
       'mode',
       'catalog_id',
       'inputs',
+      'producer_inputs',
       'sdk',
       'packages',
       'options',
@@ -496,12 +504,37 @@ Future<void> verifyDiagnosticWorkerSources({
         hash.bytes(_canonical(record)) != workerId) {
       _refuse();
     }
-    final options = _object(record['options'], {'record_schema', 'assertions'});
+    final options = _object(record['options'], {
+      'record_schema',
+      'assertions',
+      'compile',
+    });
     if (options['record_schema'] is! int ||
         options['record_schema'] != 2 ||
         options['assertions'] != false) {
       _refuse();
     }
+    final recipe = {
+      'entry': _entry,
+      'format': mode == 'jit'
+          ? 'source'
+          : mode == 'kernel'
+          ? 'kernel'
+          : 'exe',
+      'packages': mode == 'jit' ? 'selected-public-config' : 'closed-snapshot',
+      'environment': 'PATH=/usr/bin:/bin;LANG=C;LC_ALL=C;private-TMPDIR',
+      'defines': 'fixed-public-worker-context-v1',
+    };
+    if (utf8.decode(_canonical(options['compile'])) !=
+        utf8.decode(_canonical(recipe))) {
+      _refuse();
+    }
+    final producers = _hashes(record['producer_inputs'], (name) {
+      final path = _relative(name);
+      if (!_producers.contains(path)) _refuse();
+      return path;
+    });
+    if (producers.length != _producers.length) _refuse();
     final imports = record['external_imports'];
     if (imports is! List ||
         imports.length != _external.length ||
@@ -604,6 +637,9 @@ Future<void> verifyDiagnosticWorkerSources({
       }
     }
     if (!core || packageRoots.length != _packages.length) _refuse();
+    for (final entry in producers.entries) {
+      if (files.hash(sourceAnchor, entry.key, hash) != entry.value) _refuse();
+    }
     for (final entry in source.entries) {
       if (files.hash(sourceAnchor, entry.key, hash) != entry.value) _refuse();
     }

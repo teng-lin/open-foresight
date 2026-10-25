@@ -11,7 +11,6 @@ import argparse
 import hashlib
 import json
 import os
-import re
 from pathlib import Path, PurePosixPath
 import stat
 import sys
@@ -23,6 +22,23 @@ if __package__ in {None, ""}:
 
 from tools import diagnostic_build_identity as identity
 from tools import diagnostic_product_receipt as products
+
+PRODUCERS = (
+    "tools/diagnostic_worker_context.py",
+    "tools/build_diagnostic_worker.py",
+    "tools/diagnostic_build_identity.py",
+)
+
+
+def compile_recipe(mode: str) -> dict[str, Any]:
+    return {
+        "entry": ENTRY,
+        "format": {"jit": "source", "kernel": "kernel", "aot": "exe"}[mode],
+        "packages": "closed-snapshot" if mode != "jit" else "selected-public-config",
+        "environment": "PATH=/usr/bin:/bin;LANG=C;LC_ALL=C;private-TMPDIR",
+        "defines": "fixed-public-worker-context-v1",
+    }
+
 
 PACKAGES = frozenset({"ffi", "meta", "path", "crypto", "typed_data", "collection"})
 EXTERNAL = frozenset(
@@ -50,6 +66,8 @@ EXACT = frozenset(
         f"{CORE}/lib/src/persistence/backup_files.dart",
         f"{CORE}/pubspec.yaml",
         f"{CORE}/pubspec.lock",
+        f"{CORE}/lib/src/native_diagnostics.dart",
+        f"{CORE}/lib/src/native_lifetime.dart",
         "native/diagnostic_support.c",
         "native/diagnostic_support.h",
     }
@@ -245,9 +263,6 @@ def package_roots(config: Path, root: Path) -> tuple[dict[str, Path], dict[str, 
 def package_imports(
     name: str, data: bytes, package: str, inventories: dict[str, list[str]]
 ) -> None:
-    # The selected collection release annotates deprecated public libraries.
-    # Accept only that fixed single-string metadata spelling in directive headers.
-    data = re.sub(rb"(?m)^@Deprecated\('[A-Za-z0-9 ._-]+'\)\s*$", b"", data)
     for uri in identity._dart_uris(data, declaration_metadata=True):
         if any(
             word in uri.lower()
@@ -380,6 +395,7 @@ def collect(
         "mode": mode,
         "catalog_id": catalog_id,
         "inputs": source,
+        "producer_inputs": {name: digest_file(root, name) for name in PRODUCERS},
         "sdk": {
             "version": "3.9.2",
             "revision": "a29e08c72e2ce21813c1edf50cbcdfcac7a7acdd",
@@ -389,7 +405,11 @@ def collect(
             },
         },
         "packages": dependencies,
-        "options": {"record_schema": 2, "assertions": False},
+        "options": {
+            "record_schema": 2,
+            "assertions": False,
+            "compile": compile_recipe(mode),
+        },
         "external_imports": sorted(EXTERNAL),
     }
     return {

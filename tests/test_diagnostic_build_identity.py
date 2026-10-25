@@ -268,6 +268,7 @@ def test_directory_symlink_is_refused(source):
 def test_unreviewed_default_worker_closure_is_not_a_production_identity():
     contract = identity.Contract(ROOT)
     with (
+        mock.patch.object(identity, "_exists", return_value=True),
         mock.patch.object(
             identity,
             "_read",

@@ -10,7 +10,7 @@ void main() {
   setUpAll(() async {
     final root = createTestTempDirectorySync('source-hash-');
     final library = '${root.path}/hash.${Platform.isMacOS ? 'dylib' : 'so'}';
-    final result = await Process.run('cc', [
+    final compiler = await Process.start('cc', [
       '-std=c11',
       '-Wall',
       '-Wextra',
@@ -21,8 +21,19 @@ void main() {
       '../../native/diagnostic_sha256.c',
       '-o',
       library,
-    ]).timeout(const Duration(seconds: 45));
-    expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+    ]);
+    final stdout = utf8.decoder.bind(compiler.stdout).join();
+    final stderr = utf8.decoder.bind(compiler.stderr).join();
+    late final int result;
+    try {
+      result = await compiler.exitCode.timeout(const Duration(seconds: 45));
+    } catch (_) {
+      compiler.kill(ProcessSignal.sigkill);
+      await compiler.exitCode.timeout(const Duration(seconds: 5));
+      print('${await stdout}\n${await stderr}');
+      rethrow;
+    }
+    expect(result, 0, reason: '${await stdout}\n${await stderr}');
     image = DynamicLibrary.open(library);
   });
   test('child streaming hash binding matches standard vectors', () {
@@ -45,11 +56,18 @@ void main() {
     () async {
       final root = createTestTempDirectorySync('source-refuse-');
       final marker = 'a' * 64;
+      final manifest = File(
+        '${root.path}/build/native/diagnostic-worker-inputs.json',
+      );
+      manifest.parent.createSync(recursive: true);
+      manifest.writeAsBytesSync([
+        255,
+      ]); // Reading this would throw FormatException.
       await expectLater(
         verifyDiagnosticWorkerSources(
           image: image,
           sourceAnchor: root.path,
-          buildRoot: '${root.path}/absent',
+          buildRoot: '${root.path}/build',
           sdkRoot: '${root.path}/absent-sdk',
           sdkId: marker,
           packageConfig: '${root.path}/unowned-package-config.json',
@@ -60,7 +78,6 @@ void main() {
         ),
         throwsA(isA<DiagnosticSourceUnavailable>()),
       );
-      expect(Directory('${root.path}/absent').existsSync(), isFalse);
     },
   );
 }
