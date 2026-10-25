@@ -24,11 +24,7 @@ fi
 source "$task_root/tools/runtime_support_gate.sh"
 foresight_verify_runtime_support "$task_root" "$task_build" "$task_python"
 task_source_build=$(cd -- "$task_build" && pwd -P)
-task_source_defines=(
-  -DFORESIGHT_DIAGNOSTIC_TEST_CONTEXT=true
-  "-DFORESIGHT_DIAGNOSTIC_SOURCE_ANCHOR=$task_root"
-  "-DFORESIGHT_DIAGNOSTIC_BUILD_ROOT=$task_source_build"
-)
+
 export FORESIGHT_NATIVE_LIBRARY="$task_native"
 "$task_python" "$task_root/tools/verify_toolchain_pins.py" "$task_gate"
 if [[ "$task_gate" == core && -n "${FORESIGHT_DART:-}" && "$FORESIGHT_DART" != dart ]]; then
@@ -91,9 +87,21 @@ case "$task_gate" in
     fi
   )
   if [[ "$task_mode" != test-only ]]; then
-  mkdir -p "$task_build/application"
-  ci_timed "service compilation" dart compile exe "${task_source_defines[@]}" "$task_root/packages/foresight_core/bin/service.dart" -o "$task_build/application/foresight-service"
-  ci_timed "MCP compilation" dart compile exe "${task_source_defines[@]}" "$task_root/packages/foresight_core/bin/mcp.dart" -o "$task_build/application/foresight-mcp"
+  (
+    mkdir -p "$task_build/application"
+    task_worker_gate_temp=$(mktemp -d "$task_build/application/.diagnostic-defines.XXXXXX")
+    trap 'rm -rf -- "$task_worker_gate_temp"' EXIT
+    ci_timed "diagnostic worker compilation" foresight_diagnostic_worker \
+      "$task_root" "$task_source_build" "$task_python" \
+      --defines-output "$task_worker_gate_temp/defines"
+    task_source_defines=()
+    while IFS= read -r -d '' task_worker_define; do
+      task_source_defines+=("$task_worker_define")
+    done < "$task_worker_gate_temp/defines"
+    [[ ${#task_source_defines[@]} -gt 0 ]] || { echo 'Missing verified worker defines' >&2; exit 1; }
+    ci_timed "service compilation" dart compile exe "${task_source_defines[@]}" "$task_root/packages/foresight_core/bin/service.dart" -o "$task_build/application/foresight-service"
+    ci_timed "MCP compilation" dart compile exe "${task_source_defines[@]}" "$task_root/packages/foresight_core/bin/mcp.dart" -o "$task_build/application/foresight-mcp"
+  )
   fi
     ;;
   desktop)
