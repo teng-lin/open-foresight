@@ -23,7 +23,7 @@ allocate, format text, access native handles or invoke another runtime.
 
 The sole consumer uses a never-reused process-local numeric token. Its
 caller-owned buffer accepts 1–64 records, at most 4 KiB, plus a 32-byte batch
-receipt. Wrong ABI, sizes, token, flags, pointers or capacity fail without
+receipt. Wrong ABI, sizes, token, flags, null pointers or capacity fail without
 changing the queue or caller outputs. A busy operation similarly makes no
 progress and must be retried on a later existing consumer tick. Public
 operations neither configure severity nor access model/capture/Domain handles.
