@@ -213,6 +213,7 @@ const diagnosticCodeLocations = <String>[
   'src/persistence/model_store.dart',
   'src/persistence/note_queries.dart',
   'src/persistence/output_statistics.dart',
+  'src/persistence/preference_entities.dart',
   'src/persistence/proactive_question_queries.dart',
   'src/persistence/read_schema_guard.dart',
   'src/persistence/request_key_store.dart',
