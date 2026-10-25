@@ -332,10 +332,24 @@ int main() {
     std::atomic<bool> cancel{true};
     unsigned frames = 0;
     auto owner = fs_macos_capture_owner();
-    fs_macos_capture(
+    foresight::diagnostics::configure(foresight::diagnostics::Level::info);
+    uint64_t diagnostic_token = 0;
+    REQUIRE(fs_diagnostic_open(1, sizeof(fs_diagnostic_record),
+                               &diagnostic_token) == 0);
+    const auto outcome = fs_macos_capture(
         "missing-device", false, 48000, cancel, owner,
         [&](const auto &) { ++frames; }, [](const auto &) {});
     fs_macos_capture_close(owner);
+    REQUIRE(outcome == MacCaptureOutcome::failed);
+    fs_diagnostic_record diagnostic{};
+    fs_diagnostic_batch batch{};
+    REQUIRE(fs_diagnostic_drain(diagnostic_token, 1, sizeof(diagnostic),
+                                &diagnostic, 1, 0, &batch, sizeof(batch)) == 0);
+    REQUIRE(batch.count == 1);
+    REQUIRE(diagnostic.event == FS_DIAGNOSTIC_WORKER_FAILED);
+    REQUIRE(diagnostic.outcome == 3);
+    REQUIRE(diagnostic.category == 0 || diagnostic.category == 7);
+    REQUIRE(fs_diagnostic_close(diagnostic_token) == 0);
     REQUIRE(frames == 0);
     std::cout
         << "macOS audio buffer, discovery and cancellation contracts passed\n";

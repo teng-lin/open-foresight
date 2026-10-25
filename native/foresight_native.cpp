@@ -1759,14 +1759,22 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate,
               [&] {
 #ifdef __APPLE__
                 if (c->runtime.empty()) {
-                  fs_macos_capture(
+                  const auto outcome = fs_macos_capture(
                       c->target, c->playback, c->rate, c->cancel, c->macos,
                       [c](const auto &bytes) { audio_frame(*c, bytes); },
                       [c](const auto &event) { c->emit(event); },
                       &c->echoCancellation);
                   c->active = false;
-                  foresight::diagnostics::capture_state(
-                      c->cancel ? 2 : 0, c->cancel ? 4 : 2, 0, false);
+                  const bool failed = outcome == MacCaptureOutcome::failed;
+                  const bool cancelled =
+                      outcome == MacCaptureOutcome::cancelled;
+                  foresight::diagnostics::capture_state(failed      ? 9
+                                                        : cancelled ? 2
+                                                                    : 0,
+                                                        failed      ? 3
+                                                        : cancelled ? 4
+                                                                    : 2,
+                                                        0, false);
                   c->emit("{\"type\":\"state\",\"channel\":\"foresight.linux/"
                           "audio_state_v1\",\"state\":\"stopped\"}");
                   return;

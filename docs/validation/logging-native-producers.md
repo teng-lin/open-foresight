@@ -27,3 +27,13 @@ The existing fixtures that include the production C++ implementation link its
 hidden diagnostic queue into their own image. This component evidence does not
 replace full root native CTest, freshly matched Dart/desktop/service suites,
 coverage, real macOS execution or final product acceptance.
+
+The macOS worker returns a closed stopped/cancelled/failed outcome to its C++
+caller. Permission, purpose-string, startup and retry-exhaustion failures remain
+failed, even when the audio API returns normally. Numeric native failure records
+are emitted at their source without parsing the existing JSON business stream.
+The unbundled macOS audio unit asserts the failed result and its typed record
+before any permission request. This result still does not certify that an
+asynchronous Core Audio owner has retired; existing ownership gates remain.
+The producer fixture owns its supervisor and observes an actual nonzero
+false-executable child failure before cancelling and joining the capture thread.

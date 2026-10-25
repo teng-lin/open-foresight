@@ -1,4 +1,5 @@
 #include "macos_audio.h"
+#include "diagnostic_queue_internal.h"
 #include "owned_capture_work.h"
 #include "voice_processing.h"
 #import <AVFoundation/AVFoundation.h>
@@ -757,7 +758,7 @@ bool fs_macos_request_microphone() {
     return granted;
   }
 }
-void fs_macos_capture(
+MacCaptureOutcome fs_macos_capture(
     const std::string &target, bool playback, int rate,
     std::atomic<bool> &cancel, const std::shared_ptr<MacCaptureOwner> &owner,
     const std::function<void(const std::vector<unsigned char> &)> &pcm,
@@ -766,6 +767,10 @@ void fs_macos_capture(
   @autoreleasepool {
     if (!owner)
       throw std::invalid_argument("Missing native capture owner");
+    auto failed = [](uint16_t category, int32_t status = 0) {
+      foresight::diagnostics::worker_failed(category, 3, status, 0);
+      return MacCaptureOutcome::failed;
+    };
     auto event = [&](NSString *type, NSString *state, NSString *message,
                      NSString *code) {
       emit(json(@{
@@ -783,7 +788,7 @@ void fs_macos_capture(
           @"Microphone. If access has not been requested, request microphone "
           @"access through the application service setup operation.",
           @"microphone_permission_required");
-      return;
+      return failed(7);
     }
     if (![[NSBundle mainBundle]
             objectForInfoDictionaryKey:playback
@@ -793,7 +798,7 @@ void fs_macos_capture(
             @"The responsible service executable is missing its audio purpose "
             @"string. Launch the installed Open Foresight service bundle.",
             @"capture_bundle_misconfigured");
-      return;
+      return failed(0);
     }
     int attempt = 0;
     bool tapStartupFallback = false;
@@ -801,6 +806,7 @@ void fs_macos_capture(
       event(@"state", @"connecting", @"Connecting audio device", @"");
       AudioDeviceID device = resolve(target, playback);
       if (!device) {
+        foresight::diagnostics::worker_failed(9, 3, 0, 0);
         emit(json(@{
           @"type" : @"gap",
           @"reason" : @"selected_device_unavailable",
@@ -811,7 +817,7 @@ void fs_macos_capture(
                 @"Selected audio device is unavailable. Reconnect it or select "
                 @"another device.",
                 @"device_unavailable");
-          return;
+          return MacCaptureOutcome::failed;
         }
         for (int i = 0; i < attempt * 10 && !cancel; ++i)
           std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -840,14 +846,14 @@ void fs_macos_capture(
              std::chrono::steady_clock::now() < deadline)
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
       if (cancel)
-        return;
+        return MacCaptureOutcome::cancelled;
       if (!ownedSession->ready.load(std::memory_order_acquire)) {
         event(
             @"state", @"failed",
             [@"Core Audio is waiting for access. Answer the system permission "
              @"dialog. " stringByAppendingString:systemAudioInstructions],
             @"capture_permission_pending");
-        return;
+        return failed(7);
       }
       joinCaptureStartup(owner);
       auto &session = *ownedSession;
@@ -863,7 +869,7 @@ void fs_macos_capture(
                                        @"System Audio Recording Only"
                                      : @"Microphone"],
               @"core_audio_start_failed");
-        return;
+        return failed(9, static_cast<int32_t>(status));
       }
       event(@"state", @"capturing", @"Capturing audio", @"");
       bool appliedEcho = requested;
@@ -1054,15 +1060,18 @@ void fs_macos_capture(
       // and other health failures retain the port's separate retry backoff.
       if (configurationRestart)
         continue;
+      foresight::diagnostics::worker_failed(9, 3, 0, 0);
       if (++attempt >= 5) {
         event(@"state", @"failed",
               @"Audio device retries exhausted. Select a device and restart "
               @"recording.",
               @"device_unavailable");
-        break;
+        return MacCaptureOutcome::failed;
       }
       for (int i = 0; i < attempt * 10 && !cancel; ++i)
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
   }
+  return cancel.load() ? MacCaptureOutcome::cancelled
+                       : MacCaptureOutcome::stopped;
 }

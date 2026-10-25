@@ -9,8 +9,9 @@ std::shared_ptr<MacCaptureOwner> fs_macos_capture_owner();
 void fs_macos_capture_revoke(const std::shared_ptr<MacCaptureOwner> &) noexcept;
 void fs_macos_capture_close(const std::shared_ptr<MacCaptureOwner> &);
 bool fs_macos_capture_close_pending(const std::shared_ptr<MacCaptureOwner> &);
+enum class MacCaptureOutcome { stopped, cancelled, failed };
 // Invoked on the service worker, never on a Core Audio realtime callback.
-void fs_macos_capture(
+MacCaptureOutcome fs_macos_capture(
     const std::string &target, bool playback, int rate,
     std::atomic<bool> &cancel, const std::shared_ptr<MacCaptureOwner> &owner,
     const std::function<void(const std::vector<unsigned char> &)> &pcm,
