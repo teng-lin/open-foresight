@@ -14,6 +14,7 @@ import 'model_terms_dialog.dart';
 import 'usage_chart.dart';
 import 'read_model.dart';
 import 'stats_read_model.dart';
+import 'update_notice_view.dart';
 
 part 'models_view.dart';
 part 'stats_view.dart';

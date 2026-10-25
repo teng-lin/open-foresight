@@ -135,6 +135,14 @@ extension _SettingsView on SettingsController {
         const Text('Connected services', style: DesktopVisuals.sectionTitle),
         _connectedServices(),
         const SizedBox(height: 24),
+        const Text('Updates', style: DesktopVisuals.sectionTitle),
+        UpdateNoticeView(
+          enabled: _reads.preference('updateNoticeEnabled') == 'true',
+          setEnabled: (enabled) => runAction(
+            () => preference('updateNoticeEnabled', enabled ? 'true' : 'false'),
+          ),
+        ),
+        const SizedBox(height: 24),
         const Card(
           child: Padding(
             padding: EdgeInsets.all(24),
