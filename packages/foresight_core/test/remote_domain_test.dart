@@ -369,6 +369,43 @@ void main() {
     },
   );
 
+  test('model download status and changes survive capture telemetry', () async {
+    final downloading = <String, Object?>{
+      'request_id': 'download-request',
+      'digest': 'pinned-model-digest',
+      'active': true,
+      'phase': 'downloading',
+      'received': 2,
+      'total': 8,
+    };
+    f.status['model_asset_download'] = downloading;
+    f.remote.close();
+    await f.remote.closed;
+    f.remote = await RemoteDomain.connect(f.profile);
+    expect(f.remote.modelAssetDownload.requestId, 'download-request');
+    expect(f.remote.modelAssetDownload.received, 2);
+    expect(f.remote.modelAssetDownload.active, isTrue);
+
+    f.event({
+      'model_asset_download': {...downloading, 'received': 4},
+    });
+    await eventually(() => f.remote.modelAssetDownload.received == 4);
+    final progress = f.remote.modelAssetDownload;
+    final levels = f.remote.captureLevels.first;
+    f.event({
+      'event': 'capture_levels',
+      'volumes': [0.5, 0.0],
+    });
+    expect(await levels, [0.5, 0.0]);
+    expect(f.remote.modelAssetDownload, same(progress));
+
+    f.event({
+      'model_asset_download': {...downloading, 'active': false, 'received': 8},
+    });
+    await eventually(() => !f.remote.modelAssetDownload.active);
+    expect(f.remote.modelAssetDownload.received, 8);
+  });
+
   test('closing a paused workspace cancels its pending source wait', () async {
     f.event({'sources_paused': true});
     await eventually(() => f.remote.sourcesPaused);

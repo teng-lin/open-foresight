@@ -315,9 +315,6 @@ class RemoteDomain
       final volumes = (event['volumes'] as List)
           .map((n) => (n as num).toDouble())
           .toList();
-      modelAssetDownload = ModelAssetDownloadPresentation.fromWire(
-        event['model_asset_download'],
-      );
       capture = {...capture, 'volumes': volumes};
       _captureLevels.add(volumes);
       return;
@@ -354,6 +351,9 @@ class RemoteDomain
     }
     _webSearchAvailable = event['web_search_available'] == true;
     googleStatus = Map<String, dynamic>.from(event['google'] as Map? ?? {});
+    modelAssetDownload = ModelAssetDownloadPresentation.fromWire(
+      event['model_asset_download'],
+    );
     capture = Map<String, dynamic>.from(event['capture'] as Map? ?? {});
     _paused = event['sources_paused'] == true;
     _sourceControlRevision++;
