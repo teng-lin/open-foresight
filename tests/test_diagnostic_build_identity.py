@@ -878,3 +878,25 @@ def test_production_native_id_binds_its_producer_recipe_without_worker_inputs(so
     after = native(root)
     assert after["native_id"] != before["native_id"]
     assert after["record"]["inputs"] == before["record"]["inputs"]
+
+
+def test_application_queue_names_are_classified_without_read_or_hash(source):
+    root, _ = source
+    before = native(root)
+    for name in identity.NATIVE_APPLICATION_ONLY:
+        path = root / name
+        path.write_text("application-only fixture; not a system-support input")
+    original = identity._read
+
+    def guarded(selected_root, name, **kwargs):
+        assert name not in identity.NATIVE_APPLICATION_ONLY
+        return original(selected_root, name, **kwargs)
+
+    with mock.patch.object(identity, "_read", side_effect=guarded):
+        assert native(root) == before
+    (root / "native/diagnostic_unclassified.cpp").write_text("unclassified")
+    with (
+        mock.patch.object(identity, "_read", side_effect=guarded),
+        pytest.raises(identity.IdentityError, match="unclassified_native_input"),
+    ):
+        native(root)

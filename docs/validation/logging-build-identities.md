@@ -179,3 +179,11 @@ macOS uses `Contents/Resources/bin`. Recognized installed executable locations
 ignore the compiled source-fixture authority and use package-relative support
 paths. Installed-copy execution and final package-byte sealing require their
 own qualification; source execution alone does not establish that acceptance.
+
+The native prefix inventory explicitly classifies the three application-target
+`diagnostic_queue.cpp`, `diagnostic_queue.h` and `diagnostic_queue_internal.h`
+names separately. Their contents are neither opened nor hashed for the
+system-only support/launcher identity. Any include from a selected support source
+into those headers still refuses, and every other unclassified prefix source
+still refuses. The application-native producer has its own qualification; this
+component identity does not certify that target.

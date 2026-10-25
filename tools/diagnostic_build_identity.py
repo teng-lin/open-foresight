@@ -80,6 +80,14 @@ TARGETS = {
     "linux-x86_64": {"compiler": ["clang", "gcc"], "floor": "glibc-2.39-linux-x86_64"},
     "darwin-arm64": {"compiler": ["apple-clang"], "floor": "macos-15.0-arm64"},
 }
+# These exact files belong to the separately qualified application-native
+# producer target, never the system-only C support/launcher products. Their
+# names are classified without opening or hashing their contents here.
+NATIVE_APPLICATION_ONLY = {
+    "native/diagnostic_queue.cpp": "application_native_producer_target",
+    "native/diagnostic_queue.h": "application_native_producer_target",
+    "native/diagnostic_queue_internal.h": "application_native_producer_target",
+}
 C_EXTENSIONS = frozenset({".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".mm", ".m"})
 NATIVE_DIRECTIVES = frozenset(
     {
@@ -652,7 +660,9 @@ class Contract:
             for filename in files:
                 p = Path(base) / filename
                 if filename.startswith(prefix) and p.suffix in C_EXTENSIONS:
-                    discovered.add(p.relative_to(self.root).as_posix())
+                    name = p.relative_to(self.root).as_posix()
+                    if name not in NATIVE_APPLICATION_ONLY:
+                        discovered.add(name)
         if discovered != set(inventory):
             raise IdentityError("unclassified_native_input")
         selected = {name for name in inventory if target in inventory[name]}
