@@ -2,8 +2,6 @@ import 'dart:convert';
 
 import 'package:sqlite3/sqlite3.dart';
 
-import '../rpc_error.dart';
-
 enum _Kind {
   answerScope,
   webAnswer,
@@ -144,105 +142,172 @@ final class PreferenceEntities {
         as String?;
   }
 
+  void _quarantine(
+    String key,
+    String value,
+    _Key parsed,
+    String reason, {
+    int? answer,
+    int? meeting,
+  }) {
+    var removed = false;
+    switch (parsed.kind) {
+      case _Kind.answerScope:
+      case _Kind.webAnswer:
+        final column = parsed.kind == _Kind.answerScope
+            ? 'scope_identity'
+            : 'web_answer';
+        db.execute(
+          'UPDATE answer_metadata SET $column=NULL WHERE answer_id=?',
+          [parsed.answer],
+        );
+        removed = db.updatedRows > 0;
+        db.execute(
+          'DELETE FROM answer_metadata WHERE answer_id=? AND scope_identity IS NULL AND web_answer IS NULL',
+          [parsed.answer],
+        );
+      case _Kind.conversation:
+        db.execute('DELETE FROM conversation_scopes WHERE conversation=?', [
+          parsed.owner,
+        ]);
+        removed = db.updatedRows > 0;
+      case _Kind.proactive:
+        db.execute('DELETE FROM proactive_scopes WHERE meeting_id=?', [
+          parsed.meeting,
+        ]);
+        removed = db.updatedRows > 0;
+      case _Kind.selection:
+        db.execute(
+          'DELETE FROM source_selections WHERE purpose=? AND owner=?',
+          [parsed.purpose, parsed.owner],
+        );
+        removed = db.updatedRows > 0;
+      case _Kind.invalid:
+        break;
+    }
+    if (removed) {
+      db.execute(
+        "INSERT OR IGNORE INTO preferences(key,value) VALUES('internal.backupErasurePending','1')",
+      );
+    }
+    db.execute('DELETE FROM legacy_preference_entities WHERE key=?', [key]);
+    db.execute(
+      'INSERT INTO legacy_preference_entities(key,value,reason,created,answer_id,meeting_id) VALUES(?,?,?,?,?,?)',
+      [
+        key,
+        value,
+        reason,
+        DateTime.now().millisecondsSinceEpoch,
+        answer,
+        meeting,
+      ],
+    );
+  }
+
   bool write(String key, String value) {
     final parsed = _Key.parse(key);
     if (parsed == null) return false;
-    if (parsed.kind == _Kind.invalid) {
-      throw RpcError(
-        RpcErrorCode.invalidArgument,
-        'Invalid entity preference key',
-      );
-    }
     List<String>? selected;
     if (parsed.kind == _Kind.selection) {
-      Object? decoded;
       try {
-        decoded = jsonDecode(value);
+        final decoded = jsonDecode(value);
+        if (decoded is List && decoded.every((id) => id is String)) {
+          selected = decoded.cast<String>();
+        }
       } on FormatException {
-        /* Invalid below. */
+        // Preserve the public key/value API; its existing reader fails closed.
       }
-      if (decoded is! List || decoded.any((id) => id is! String)) {
-        throw RpcError(
-          RpcErrorCode.invalidArgument,
-          'Expected selected source IDs',
-        );
-      }
-      selected = decoded.cast<String>();
-    }
-    if (parsed.kind == _Kind.webAnswer && value != 'true' && value != 'false') {
-      throw RpcError(
-        RpcErrorCode.invalidArgument,
-        'Expected a web-answer flag',
-      );
     }
     db.execute('SAVEPOINT write_preference_entity');
     try {
-      if (parsed.answer != null &&
+      final hasAnswer =
+          parsed.answer == null ||
           db.select('SELECT 1 FROM answers WHERE id=?', [
             parsed.answer,
-          ]).isEmpty) {
-        throw RpcError(RpcErrorCode.notFound, 'Answer not found');
-      }
-      if (parsed.meeting != null &&
+          ]).isNotEmpty;
+      final hasMeeting =
+          parsed.meeting == null ||
           db.select('SELECT 1 FROM meetings WHERE id=?', [
             parsed.meeting,
-          ]).isEmpty) {
-        throw RpcError(RpcErrorCode.notFound, 'Meeting not found');
+          ]).isNotEmpty;
+      String? reason = parsed.kind == _Kind.invalid
+          ? 'invalid_key'
+          : !hasAnswer
+          ? 'orphan_answer'
+          : !hasMeeting
+          ? 'orphan_meeting'
+          : parsed.kind == _Kind.webAnswer &&
+                value != 'true' &&
+                value != 'false'
+          ? 'invalid_web_flag'
+          : parsed.kind == _Kind.selection && selected == null
+          ? 'invalid_source_selection'
+          : null;
+      if (reason == null &&
+          selected != null &&
+          selected.any(
+            (id) => db.select('SELECT 1 FROM sources WHERE id=?', [id]).isEmpty,
+          )) {
+        reason = 'missing_selected_source';
       }
-      switch (parsed.kind) {
-        case _Kind.answerScope:
-        case _Kind.webAnswer:
-          final column = parsed.kind == _Kind.answerScope
-              ? 'scope_identity'
-              : 'web_answer';
-          db.execute(
-            'INSERT INTO answer_metadata(answer_id,$column) VALUES(?,?) ON CONFLICT(answer_id) DO UPDATE SET $column=excluded.$column',
-            [
-              parsed.answer,
-              parsed.kind == _Kind.answerScope
-                  ? value
-                  : value == 'true'
-                  ? 1
-                  : 0,
-            ],
-          );
-        case _Kind.conversation:
-          db.execute(
-            'INSERT INTO conversation_scopes(conversation,meeting_id,mode) VALUES(?,?,?) ON CONFLICT(conversation) DO UPDATE SET mode=excluded.mode',
-            [parsed.owner, parsed.meeting, value],
-          );
-        case _Kind.proactive:
-          db.execute(
-            'INSERT INTO proactive_scopes(meeting_id,mode) VALUES(?,?) ON CONFLICT(meeting_id) DO UPDATE SET mode=excluded.mode',
-            [parsed.meeting, value],
-          );
-        case _Kind.selection:
-          for (final id in selected!) {
-            if (db.select('SELECT 1 FROM sources WHERE id=?', [id]).isEmpty) {
-              throw RpcError(
-                RpcErrorCode.notFound,
-                'Selected source not found',
+      if (reason != null) {
+        _quarantine(
+          key,
+          value,
+          parsed,
+          reason,
+          answer: hasAnswer ? parsed.answer : null,
+          meeting: hasMeeting ? parsed.meeting : null,
+        );
+      } else {
+        switch (parsed.kind) {
+          case _Kind.answerScope:
+          case _Kind.webAnswer:
+            final column = parsed.kind == _Kind.answerScope
+                ? 'scope_identity'
+                : 'web_answer';
+            db.execute(
+              'INSERT INTO answer_metadata(answer_id,$column) VALUES(?,?) ON CONFLICT(answer_id) DO UPDATE SET $column=excluded.$column',
+              [
+                parsed.answer,
+                parsed.kind == _Kind.answerScope
+                    ? value
+                    : value == 'true'
+                    ? 1
+                    : 0,
+              ],
+            );
+          case _Kind.conversation:
+            db.execute(
+              'INSERT INTO conversation_scopes(conversation,meeting_id,mode) VALUES(?,?,?) ON CONFLICT(conversation) DO UPDATE SET mode=excluded.mode',
+              [parsed.owner, parsed.meeting, value],
+            );
+          case _Kind.proactive:
+            db.execute(
+              'INSERT INTO proactive_scopes(meeting_id,mode) VALUES(?,?) ON CONFLICT(meeting_id) DO UPDATE SET mode=excluded.mode',
+              [parsed.meeting, value],
+            );
+          case _Kind.selection:
+            final ids = selected!;
+            db.execute(
+              'INSERT OR IGNORE INTO source_selections(purpose,owner,meeting_id) VALUES(?,?,?)',
+              [parsed.purpose, parsed.owner, parsed.meeting],
+            );
+            db.execute(
+              'DELETE FROM source_selection_items WHERE purpose=? AND owner=?',
+              [parsed.purpose, parsed.owner],
+            );
+            for (var position = 0; position < ids.length; position++) {
+              db.execute(
+                'INSERT INTO source_selection_items(purpose,owner,position,source_id) VALUES(?,?,?,?)',
+                [parsed.purpose, parsed.owner, position, ids[position]],
               );
             }
-          }
-          db.execute(
-            'INSERT OR IGNORE INTO source_selections(purpose,owner,meeting_id) VALUES(?,?,?)',
-            [parsed.purpose, parsed.owner, parsed.meeting],
-          );
-          db.execute(
-            'DELETE FROM source_selection_items WHERE purpose=? AND owner=?',
-            [parsed.purpose, parsed.owner],
-          );
-          for (var position = 0; position < selected.length; position++) {
-            db.execute(
-              'INSERT INTO source_selection_items(purpose,owner,position,source_id) VALUES(?,?,?,?)',
-              [parsed.purpose, parsed.owner, position, selected[position]],
-            );
-          }
-        case _Kind.invalid:
-          throw StateError('Unreachable invalid entity key');
+          case _Kind.invalid:
+            throw StateError('Unreachable invalid entity key');
+        }
+        db.execute('DELETE FROM legacy_preference_entities WHERE key=?', [key]);
       }
-      db.execute('DELETE FROM legacy_preference_entities WHERE key=?', [key]);
       db.execute('DELETE FROM preferences WHERE key=?', [key]);
       db.execute('RELEASE write_preference_entity');
     } catch (_) {

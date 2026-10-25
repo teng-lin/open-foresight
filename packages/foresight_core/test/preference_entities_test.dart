@@ -137,7 +137,7 @@ void main() {
   );
 
   test(
-    'atomic replacement rejects missing sources without damaging ordered values',
+    'quarantine replacement stays atomic on storage failure and outer rollback',
     () {
       ApplicationMigrations(db).run(23);
       final entities = PreferenceEntities(db);
@@ -145,14 +145,25 @@ void main() {
         entities.write('answerSources.chat', jsonEncode(['b', 'a'])),
         isTrue,
       );
+      db.execute(
+        "CREATE TRIGGER reject_quarantine BEFORE INSERT ON legacy_preference_entities BEGIN SELECT RAISE(ABORT,'storage failure'); END",
+      );
       expect(
         () => entities.write('answerSources.chat', '["a","missing"]'),
-        throwsA(anything),
+        throwsA(isA<SqliteException>()),
       );
+      db.execute('DROP TRIGGER reject_quarantine');
       expect(entities.read('answerSources.chat'), '["b","a"]');
       db.execute('BEGIN');
-      entities.write('answerSources.chat', '[]');
-      expect(entities.read('answerSources.chat'), '[]');
+      entities.write('answerSources.chat', '["a","missing"]');
+      expect(entities.read('answerSources.chat'), '["a","missing"]');
+      expect(db.select('SELECT * FROM source_selection_items'), isEmpty);
+      expect(
+        db
+            .select('SELECT reason FROM legacy_preference_entities')
+            .single['reason'],
+        'missing_selected_source',
+      );
       db.execute('ROLLBACK');
       expect(entities.read('answerSources.chat'), '["b","a"]');
       db.execute("DELETE FROM sources WHERE id='b'");
@@ -376,24 +387,38 @@ void main() {
   });
 
   test(
-    'compatibility writes reject missing parents and invalid web flags atomically',
+    'compatibility quarantine keeps invalid inputs outside strict relations and owner reuse erases them',
     () {
       ApplicationMigrations(db).run(23);
       final entities = PreferenceEntities(db);
-      expect(
-        () => entities.write('answerScope.v1.999', 'private'),
-        throwsA(anything),
-      );
-      expect(
-        () => entities.write('proactiveScope.999', 'selected'),
-        throwsA(anything),
-      );
+      expect(entities.write('answerScope.v1.999', 'private'), isTrue);
+      expect(entities.write('proactiveScope.999', 'selected'), isTrue);
+      expect(entities.read('answerScope.v1.999'), 'private');
+      expect(entities.read('proactiveScope.999'), 'selected');
       entities.write('webAnswer.v1.9', 'true');
-      expect(
-        () => entities.write('webAnswer.v1.9', 'invalid'),
-        throwsA(anything),
+      entities.write('webAnswer.v1.9', 'invalid');
+      expect(entities.read('webAnswer.v1.9'), 'invalid');
+      expect(db.select('SELECT * FROM answer_metadata'), isEmpty);
+      expect(db.select('SELECT * FROM proactive_scopes'), isEmpty);
+      db.execute('DELETE FROM answers WHERE id=9');
+      expect(entities.read('webAnswer.v1.9'), isNull);
+      db.execute(
+        "INSERT INTO answers(id,question,body,status,citations,model,created) VALUES(999,'New','New','completed','[]','model',0)",
       );
-      expect(entities.read('webAnswer.v1.9'), 'true');
+      db.execute(
+        "INSERT INTO meetings(id,title,state) VALUES(999,'New','idle')",
+      );
+      expect(db.select('SELECT * FROM legacy_preference_entities'), isEmpty);
+      expect(entities.read('answerScope.v1.999'), isNull);
+      expect(entities.read('proactiveScope.999'), isNull);
+      expect(
+        db
+            .select(
+              "SELECT value FROM preferences WHERE key='internal.backupErasurePending'",
+            )
+            .single['value'],
+        '1',
+      );
       expect(db.select('PRAGMA foreign_key_check'), isEmpty);
     },
   );

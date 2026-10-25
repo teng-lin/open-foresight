@@ -20,11 +20,15 @@ Selection rows have explicit positions and preserve ordering, duplicates and the
 meaning of an empty selection. Each item references a source; hard source deletion
 removes that item. Answer history, private-scope matching and web checkpoints read
 answer metadata directly. Answer save and its metadata stay in the existing
-savepoint. Compatibility writes reject missing owners/sources before replacing
-an existing selection.
+savepoint. Compatibility writes preserve the key/value command: malformed payloads or
+missing owners/sources replace the prior typed value atomically in bounded
+quarantine. Existing readers retain their original private-scope and fail-closed
+validation; invalid input never becomes an unrestricted workspace default.
+Storage failures still roll back the previous value.
 
 The ordered migration moves valid values and removes their old preference rows.
-Malformed keys/values and orphaned owners are preserved in
+Malformed keys/values and orphaned owners from migration or compatible writes
+are preserved in
 `legacy_preference_entities` with a reason and migration timestamp. The adapter
 retains their previous read value for at most seven days. Live answer/meeting
 parents remain foreign keys even when a value is malformed, so parent deletion
