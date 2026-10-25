@@ -13,6 +13,8 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Added
 
+- Add an opt-in manual update notice in Settings. Checks use public GitHub release
+  metadata and never download or execute installers.
 - Support opt-in Developer ID signing, notarization and stapling for macOS DMGs,
   with checksums calculated after Gatekeeper assessment of the final image.
 - Rename meetings from the workspace header. Manual names persist across restarts

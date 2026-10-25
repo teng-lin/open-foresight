@@ -27,6 +27,7 @@ export 'src/speech_model_catalog.dart' show speechModels;
 export 'src/granola_return_failure.dart';
 export 'src/desktop_google_sources.dart';
 export 'src/desktop_runtime_settings.dart';
+export 'src/update_notice.dart';
 export 'src/source_type.dart' show SourceType, sourceType;
 export 'src/graph_labels.dart'
     show DocumentLabel, graphLabelPalette, allocateGraphLabelColor;

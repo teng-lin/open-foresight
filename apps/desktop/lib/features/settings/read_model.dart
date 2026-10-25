@@ -12,6 +12,7 @@ class SettingsReadModel {
   final DesktopConnection Function() connection;
   final void Function() changed;
   static const defaults = {
+    'updateNoticeEnabled': 'false',
     'serviceIdleMinutes': '30',
     'googleReminders': '',
     'noteStyle': 'Standard',
