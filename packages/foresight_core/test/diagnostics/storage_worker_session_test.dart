@@ -158,8 +158,9 @@ void main() {
           if (owner != null && !owner!.classificationRelease.isCompleted) {
             owner!.classificationRelease.complete();
           }
-          if (owner != null && !owner!.release.isCompleted)
+          if (owner != null && !owner!.release.isCompleted) {
             owner!.release.complete();
+          }
           await session.close();
         });
         session.producer.emit(
