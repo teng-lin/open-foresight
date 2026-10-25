@@ -13,6 +13,9 @@ import sys
 
 from google_client_release import release_google_client, write_google_client
 from app_version import read_version
+from runtime_package_support import prepare as prepare_runtime_support
+from runtime_package_support import stage as stage_runtime_support
+from runtime_package_support import seal as seal_runtime_support
 from web_search_release import release_web_search_keys
 from macos_bundle import (
     audit_dependencies,
@@ -54,8 +57,9 @@ def write_litert_manifests(app, library, service):
         manifest.write_text(json.dumps({"gemma_runtime": runtime}, indent=2) + "\n")
 
 
-def seal_runtime_provenance(app, values, service):
+def seal_runtime_provenance(app, values, service, support):
     write_litert_manifests(app, values["FORESIGHT_LITERT_LIBRARY"], service)
+    seal_runtime_support(app / "Contents/Resources", support, transformed=True)
     resources = app / "Contents/Resources"
     provenance = resources / "licenses/sqlite-provenance.json"
     metadata = json.loads(provenance.read_text())
@@ -192,6 +196,7 @@ def main(argv=None):
     for path in [args.flutter_app, service, mcp, sqlite_provenance, *required.values()]:
         if not path.exists():
             parser.error(f"Build all components first: missing {path}")
+    support = prepare_runtime_support(ROOT, args.build / "native", "darwin-arm64")
     app = args.output.absolute()
     app.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(args.flutter_app, app, symlinks=True)
@@ -230,6 +235,7 @@ def main(argv=None):
     )
     library_directory = resources / "lib"
     library_directory.mkdir(exist_ok=True)
+    stage_runtime_support(resources, support)
     copy_macos_extension_dependencies(extensions, library_directory)
     values["FORESIGHT_LITERT_LIBRARY"] = library_directory / "liblitert-lm.dylib"
     notices = resources / "licenses"
@@ -287,7 +293,7 @@ def main(argv=None):
         app,
         args.identity,
         entitlements,
-        before_seal=lambda: seal_runtime_provenance(app, values, service_path),
+        before_seal=lambda: seal_runtime_provenance(app, values, service_path, support),
     )
     environment = dict(
         os.environ, FORESIGHT_LITERT_LIBRARY=str(values["FORESIGHT_LITERT_LIBRARY"])

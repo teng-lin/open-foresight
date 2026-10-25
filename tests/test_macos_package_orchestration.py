@@ -11,6 +11,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import package_macos as package
+import runtime_package_support as support
 
 
 def put(path, content=b"fixture"):
@@ -55,6 +56,35 @@ def packaging(tmp_path, monkeypatch):
     sdk = tmp_path / "sdk"
     put(sdk / "foresight-sdk.json", b'{"verified":"fixture"}')
     put(sdk / "share/foresight-sdk/licenses/grpc-LICENSE")
+    # These are orchestration fixtures, not compiler qualification. Only the
+    # source verifier is replaced; actual stage/final-byte sealing runs.
+    source_receipt = {
+        "target": "darwin-arm64",
+        "native_id": "a" * 64,
+        "sql_source_id": "b" * 64,
+        "artifacts": {},
+    }
+    artifacts = {}
+    for name in support._layout("darwin-arm64"):
+        artifact = put(
+            build / "native" / name,
+            b"synthetic package fixture" + support._marker(name, source_receipt),
+        )
+        artifact.chmod(0o755)
+        artifacts[name] = artifact.read_bytes()
+        source_receipt["artifacts"][name] = support._read(artifact)[1]
+    metadata = {
+        name: b'{"synthetic":"orchestration only"}' for name in support.METADATA
+    }
+    metadata["runtime-support-build.json"] = json.dumps(source_receipt).encode()
+    prepared = support.PreparedSupport(source_receipt, artifacts, metadata)
+
+    def prepare(root, native, target):
+        assert root == package.ROOT and native == build / "native"
+        assert target == "darwin-arm64"
+        return prepared
+
+    monkeypatch.setattr(package, "prepare_runtime_support", prepare)
     monkeypatch.setattr(package.sys, "platform", "darwin")
     monkeypatch.setattr(
         package,
@@ -110,7 +140,29 @@ def packaging(tmp_path, monkeypatch):
             app / "Contents/Resources/lib/libforesight_sqlite3.dylib",
             b"relocated signed sqlite",
         )
+        diagnostic = (
+            app / "Contents/Resources/lib/libforesight_diagnostic_support.dylib"
+        )
+        diagnostic.write_bytes(diagnostic.read_bytes() + b"synthetic signing change")
         before_seal()
+        final_support = json.loads(
+            (
+                app
+                / "Contents/Resources"
+                / support.METADATA_DIRECTORY
+                / support.PACKAGE_RECEIPT
+            ).read_text()
+        )
+        assert final_support["processing"] == "relocated-signed"
+        assert (
+            final_support["artifacts"]["lib/libforesight_diagnostic_support.dylib"][
+                "sha256"
+            ]
+            == hashlib.sha256(diagnostic.read_bytes()).hexdigest()
+        )
+        assert set(final_support["artifacts"]) == set(
+            support._layout("darwin-arm64").values()
+        )
         # Receipts describe the library bytes at sealing time.
         receipt = json.loads((app / "Contents/Resources/manifest.json").read_text())
         assert (
