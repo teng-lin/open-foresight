@@ -345,6 +345,58 @@ void main() {
   );
 
   test(
+    'explicit external build root preserves source and code authorities',
+    () async {
+      final source = createTestTempDirectorySync('startup-source-');
+      final build = createTestTempDirectorySync('startup-output-');
+      for (final name in [
+        'application/foresight-service',
+        'native/foresight-diagnostic-launcher',
+      ]) {
+        await file('${build.path}/$name', executable: true);
+      }
+      for (final name in [
+        'native/libforesight_diagnostic_support.so',
+        'native/libforesight_sql_support.so',
+      ]) {
+        await file('${build.path}/$name');
+      }
+      final c = DiagnosticStartupContext(
+        host: DiagnosticHost.service,
+        executable: '${build.path}/application/foresight-service',
+        script: '',
+        nativeId: 'a' * 64,
+        dartId: 'b' * 64,
+        catalogId: 'c' * 64,
+        workerMode: 'aot',
+        sourceContext: true,
+        sourceAnchor: source.path,
+        buildRoot: build.path,
+      );
+      expect(
+        RuntimeSupportSelection.resolve(c).sqlSupport,
+        '${build.path}/native/libforesight_sql_support.so',
+      );
+      final support = DiagnosticPreparedSupport.resolveEarly(c);
+      expect(support.anchor, build.path);
+      final command = support.command(22);
+      expect(
+        command.arguments.first,
+        '${build.path}/native/foresight-diagnostic-launcher',
+      );
+      expect(
+        command.arguments[3],
+        '${build.path}/application/foresight-service',
+      );
+      expect(
+        command.arguments.last,
+        '${build.path}/native/libforesight_diagnostic_support.so',
+      );
+      expect(command.arguments.any((s) => s.startsWith(source.path)), isFalse);
+    },
+  );
+
+  test(
     'source descriptor stays within16 entries and carries only reviewed public metadata',
     () async {
       final root = await installation();
@@ -377,6 +429,7 @@ void main() {
       expect(descriptor.keys.toSet(), {
         'schema',
         'anchor',
+        'build',
         'dart',
         'packages',
         'source',

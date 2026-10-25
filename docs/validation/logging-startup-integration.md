@@ -24,7 +24,10 @@ configuration. Command resolution selects the installed service, never MCP,
 the GUI or an environment wrapper. Source selection needs explicit public
 compile-time context, a selected SDK root/public identity, and a pinned
 Dart/package/script-or-kernel tuple; the executable cannot select its own trust
-anchor. Installed entries ignore embedded source-fixture selections.
+anchor. Installed entries ignore embedded source-fixture selections. Source/package files, the pinned SDK and an explicit
+selected build output directory have separate physical metadata anchors; custom
+`FORESIGHT_BUILD_DIR` outputs need not reside inside the repository. That build
+root is compile-time context, never an ambient child/support selector.
 
 Parent selection uses metadata only and walks every physical ancestor outside
 and within the selected anchor. Symlinks and foreign/writable directories are
@@ -53,7 +56,7 @@ The current source callback refuses: no reviewed source/SDK input-manifest
 verifier or production worker ID has been activated. Declarative `-D` equality
 does not establish source-byte identity.
 
-Linux selector tests executed twenty-one cases, zero skips, and targeted
+Linux selector tests executed twenty-two cases, zero skips, and targeted
 analysis/format passed. These include real symlink/hardlink/writable files,
 compiled service/MCP path selection, finite argv and SQL independence from off
 or missing diagnostic identity. One regression maps an actual controlled FFI
@@ -65,3 +68,13 @@ Darwin FFI, compiled service worker, native owner, shutdown or installed-package
 acceptance. Full startup/session wiring, native product identities, source
 verification, build/package/consumer integration and combined Linux/Mac gates
 remain pending.
+
+
+`src/diagnostic_bootstrap.dart` is the normal application composition adapter;
+worker code never imports it. It maps diagnostics only when enabled/available,
+and independently initializes mandatory selected SQL support for service and
+desktop before application authority. MCP remains a client and opens no SQL.
+Session creation passes the early original function table to the native owner,
+with command selection retained as a lazy metadata-only callback. This adapter
+is not yet wired into product entrypoints; their early internal branches,
+shutdown and full qualification remain pending.

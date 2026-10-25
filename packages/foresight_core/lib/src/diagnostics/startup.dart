@@ -108,6 +108,7 @@ final class DiagnosticStartupContext {
     required this.catalogId,
     required this.workerMode,
     this.sourceAnchor = '',
+    this.buildRoot = '',
     this.sourceContext = false,
     this.dartExecutable = '',
     this.dartSdkRoot = '',
@@ -121,6 +122,9 @@ final class DiagnosticStartupContext {
   });
   final DiagnosticHost host;
   final String executable, script, nativeId, dartId, catalogId, workerMode;
+  final String buildRoot;
+  String get selectedBuildRoot =>
+      buildRoot.isEmpty ? p.join(sourceAnchor, 'build') : buildRoot;
   final String sourceAnchor,
       dartExecutable,
       dartSdkRoot,
@@ -142,6 +146,7 @@ final class DiagnosticStartupContext {
         const keys = {
           'schema',
           'anchor',
+          'build',
           'dart',
           'packages',
           'source',
@@ -181,6 +186,9 @@ final class DiagnosticStartupContext {
       sourceAnchor:
           source?['anchor'] as String? ??
           const String.fromEnvironment('FORESIGHT_DIAGNOSTIC_SOURCE_ANCHOR'),
+      buildRoot:
+          source?['build'] as String? ??
+          const String.fromEnvironment('FORESIGHT_DIAGNOSTIC_BUILD_ROOT'),
       sourceContext:
           source != null ||
           const bool.fromEnvironment('FORESIGHT_DIAGNOSTIC_TEST_CONTEXT'),
@@ -368,9 +376,10 @@ final class RuntimeSupportSelection {
           marker >= 0 && !p.isWithin(anchor, context.executable)) {
         _refuse();
       }
+      anchor = context.selectedBuildRoot;
       support = p.join(
         anchor,
-        'build/native/libforesight_sql_support.${context.macOS ? 'dylib' : 'so'}',
+        'native/libforesight_sql_support.${context.macOS ? 'dylib' : 'so'}',
       );
     } else if (marker >= 0) {
       anchor = context.executable.substring(0, marker + 4);
@@ -414,6 +423,7 @@ final class DiagnosticStartupSelection {
       _refuse();
     }
     String anchor, worker, launcher, support;
+    String? codeAnchor;
     final prefix = <String>[];
     final marker = context.executable.indexOf('.app/Contents/');
     if (_sourceSelected(context)) {
@@ -422,16 +432,17 @@ final class DiagnosticStartupSelection {
           marker >= 0 && !p.isWithin(anchor, context.executable)) {
         _refuse();
       }
+      codeAnchor = context.selectedBuildRoot;
       support = p.join(
-        anchor,
-        'build/native/libforesight_diagnostic_support.${context.macOS ? 'dylib' : 'so'}',
+        codeAnchor,
+        'native/libforesight_diagnostic_support.${context.macOS ? 'dylib' : 'so'}',
       );
-      launcher = p.join(anchor, 'build/native/foresight-diagnostic-launcher');
+      launcher = p.join(codeAnchor, 'native/foresight-diagnostic-launcher');
       if (context.workerMode == 'aot') {
         worker = context.host == DiagnosticHost.service
             ? context.executable
-            : p.join(anchor, 'build/application/foresight-service');
-        _candidate(anchor, worker, executable: true);
+            : p.join(codeAnchor, 'application/foresight-service');
+        _candidate(codeAnchor, worker, executable: true);
       } else {
         worker = context.dartExecutable;
         // The explicit pinned SDK executable is metadata-checked under its
@@ -474,6 +485,7 @@ final class DiagnosticStartupSelection {
               jsonEncode({
                 'schema': 1,
                 'anchor': anchor,
+                'build': codeAnchor,
                 'dart': worker,
                 'packages': context.packageConfig,
                 'source': script,
@@ -525,8 +537,8 @@ final class DiagnosticStartupSelection {
       _candidate(anchor, context.executable, executable: true);
       _candidate(anchor, worker, executable: true);
     }
-    _candidate(anchor, launcher, executable: true);
-    _candidate(anchor, support);
+    _candidate(codeAnchor ?? anchor, launcher, executable: true);
+    _candidate(codeAnchor ?? anchor, support);
     return DiagnosticStartupSelection._(
       context,
       anchor,
@@ -577,10 +589,10 @@ final class DiagnosticStartupSelection {
       _refuse();
     }
     return (
-      anchor: anchor,
+      anchor: context.selectedBuildRoot,
       support: p.join(
-        anchor,
-        'build/native/libforesight_diagnostic_support.${context.macOS ? 'dylib' : 'so'}',
+        context.selectedBuildRoot,
+        'native/libforesight_diagnostic_support.${context.macOS ? 'dylib' : 'so'}',
       ),
     );
   }
