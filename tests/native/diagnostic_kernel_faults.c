@@ -8,6 +8,7 @@
 #endif
 
 #include "diagnostic_kernel.h"
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -103,6 +104,196 @@ static void joined(pid_t child, int expected) {
   int status;
   CHECK(child > 0 && waitpid(child, &status, 0) == child);
   CHECK(WIFEXITED(status) && WEXITSTATUS(status) == expected);
+}
+
+static int metadata_at(int parent, const char *name, struct stat *metadata) {
+  if (fstatat(parent, name, metadata, AT_SYMLINK_NOFOLLOW) == 0)
+    return 1;
+  CHECK(errno == ENOENT);
+  return 0;
+}
+
+static int fixture_directory(int parent, const char *name) {
+  int descriptor =
+      openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  CHECK(descriptor >= 0 && directory_metadata(descriptor, geteuid(), 0700));
+  CHECK(supported_mount(descriptor));
+  return descriptor;
+}
+
+static void only_known_entry(int descriptor, const char *allowed) {
+  int copied = fcntl(descriptor, F_DUPFD_CLOEXEC, 11);
+  CHECK(copied >= 0);
+  DIR *directory = fdopendir(copied);
+  CHECK(directory != NULL);
+  unsigned entries = 0;
+  for (;;) {
+    errno = 0;
+    struct dirent *entry = readdir(directory);
+    if (entry == NULL) {
+      CHECK(errno == 0);
+      break;
+    }
+    CHECK(++entries <= 3);
+    CHECK(strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0 ||
+          (allowed != NULL && strcmp(entry->d_name, allowed) == 0));
+  }
+  CHECK(closedir(directory) == 0);
+}
+
+static void unchanged(int parent, const char *name, const struct stat *prior) {
+  struct stat now;
+  CHECK(metadata_at(parent, name, &now));
+  CHECK(now.st_dev == prior->st_dev && now.st_ino == prior->st_ino &&
+        now.st_uid == prior->st_uid && now.st_mode == prior->st_mode);
+  if (!S_ISDIR(now.st_mode))
+    CHECK(now.st_size == prior->st_size);
+}
+
+static unsigned known_alias(int parent, const char *name,
+                            const struct stat *alias, const struct stat *held,
+                            int has_held, const char *target) {
+  CHECK(has_held && alias->st_uid == geteuid());
+  if (S_ISREG(alias->st_mode)) {
+    CHECK((alias->st_mode & 07777) == 0600 && alias->st_size == 0);
+    CHECK(alias->st_dev == held->st_dev && alias->st_ino == held->st_ino);
+    return 1;
+  }
+  CHECK(S_ISLNK(alias->st_mode) && alias->st_nlink == 1);
+  char bytes[1024];
+  ssize_t size = readlinkat(parent, name, bytes, sizeof(bytes));
+  CHECK(size >= 0 && (size_t)size == strlen(target));
+  CHECK(memcmp(bytes, target, (size_t)size) == 0);
+  return 0;
+}
+
+// A persistent private directory lease serializes all cooperating invocations.
+// Cleanup recognizes only the exact names and alias graph planted below; it
+// never recursively removes an entry or opens an ordinary candidate for data.
+static int prepare_fixture(const char *root_name, const char *name) {
+  CHECK(sizeof(kernel_prefix) >= 3 && sizeof(kernel_prefix) <= 13);
+  CHECK(kernel_prefix[0] == '/' && strcmp(kernel_prefix, "/ofdg1") != 0);
+  for (size_t i = 1; i != sizeof(kernel_prefix) - 1; ++i)
+    CHECK((kernel_prefix[i] >= 'a' && kernel_prefix[i] <= 'z') ||
+          (kernel_prefix[i] >= '0' && kernel_prefix[i] <= '9'));
+  CHECK(mkdir(FS_DIAG_FIXTURE_BASE, 0700) == 0 || errno == EEXIST);
+  int base = fixture_directory(AT_FDCWD, FS_DIAG_FIXTURE_BASE);
+  CHECK(flock(base, LOCK_EX | LOCK_NB) == 0);
+  struct stat held = {0}, root = {0}, slot = {0};
+  int has_held = metadata_at(base, "held-lock", &held);
+  if (has_held)
+    CHECK(S_ISREG(held.st_mode) && held.st_uid == geteuid() &&
+          (held.st_mode & 07777) == 0600 && held.st_size == 0);
+  char target[1024];
+  int length =
+      snprintf(target, sizeof(target), "%s/held-lock", FS_DIAG_FIXTURE_BASE);
+  CHECK(length > 0 && (size_t)length < sizeof(target));
+  int has_root = metadata_at(base, root_name, &root);
+  int root_fd = -1, slot_fd = -1, has_slot = 0;
+  unsigned aliases = 0;
+  if (has_root) {
+    if (S_ISDIR(root.st_mode)) {
+      root_fd = fixture_directory(base, root_name);
+      unchanged(base, root_name, &root);
+      only_known_entry(root_fd, "00");
+      has_slot = metadata_at(root_fd, "00", &slot);
+      if (has_slot) {
+        if (S_ISDIR(slot.st_mode)) {
+          slot_fd = fixture_directory(root_fd, "00");
+          unchanged(root_fd, "00", &slot);
+          only_known_entry(slot_fd, NULL);
+        } else {
+          aliases += known_alias(root_fd, "00", &slot, &held, has_held, target);
+        }
+      }
+    } else {
+      aliases += known_alias(base, root_name, &root, &held, has_held, target);
+    }
+  }
+  if (has_held)
+    CHECK(held.st_nlink == 1 + aliases);
+  int object = shm_open(name, O_RDONLY, 0);
+  if (object >= 0) {
+    struct stat metadata;
+    CHECK(fstat(object, &metadata) == 0 && (metadata.st_mode & S_IFMT) == 0);
+    CHECK(metadata.st_uid == geteuid() && metadata.st_nlink == 0);
+    CHECK((metadata.st_mode & 07777) == 0600 ||
+          (metadata.st_mode & 07777) == 0400);
+    CHECK(metadata.st_size == 0 || metadata.st_size == FS_DIAG_PAGE_BYTES);
+  } else {
+    CHECK(errno == ENOENT);
+  }
+  // All known candidates are validated before any destructive operation.
+  if (has_slot) {
+    unchanged(root_fd, "00", &slot);
+    CHECK(unlinkat(root_fd, "00", S_ISDIR(slot.st_mode) ? AT_REMOVEDIR : 0) ==
+          0);
+    if (slot_fd >= 0)
+      CHECK(close(slot_fd) == 0);
+  }
+  if (has_root) {
+    unchanged(base, root_name, &root);
+    CHECK(unlinkat(base, root_name, S_ISDIR(root.st_mode) ? AT_REMOVEDIR : 0) ==
+          0);
+    if (root_fd >= 0)
+      CHECK(close(root_fd) == 0);
+  }
+  if (has_held) {
+    unchanged(base, "held-lock", &held);
+    struct stat now;
+    CHECK(metadata_at(base, "held-lock", &now) && now.st_nlink == 1);
+    CHECK(unlinkat(base, "held-lock", 0) == 0);
+  }
+  if (object >= 0)
+    CHECK(shm_unlink(name) == 0 && close(object) == 0);
+  return base;
+}
+
+static void lease_excludes_contender(void) {
+  pid_t child = fork();
+  CHECK(child >= 0);
+  if (child == 0) {
+    int descriptor = fixture_directory(AT_FDCWD, FS_DIAG_FIXTURE_BASE);
+    errno = 0;
+    CHECK(flock(descriptor, LOCK_EX | LOCK_NB) == -1);
+    CHECK(errno == EWOULDBLOCK || errno == EAGAIN);
+    CHECK(close(descriptor) == 0);
+    _exit(0);
+  }
+  joined(child, 0);
+}
+
+static void leave_interrupted_fixture(int base, const char *root_name,
+                                      const char *name, const char *mode) {
+  int held =
+      openat(base, "held-lock", O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC, 0600);
+  CHECK(held >= 0);
+  char target[1024];
+  int length =
+      snprintf(target, sizeof(target), "%s/held-lock", FS_DIAG_FIXTURE_BASE);
+  CHECK(length > 0 && (size_t)length < sizeof(target));
+  int parent = base;
+  const char *alias = root_name;
+  if (strncmp(mode, "slot-", 5) == 0) {
+    CHECK(mkdirat(base, root_name, 0700) == 0);
+    parent = fixture_directory(base, root_name);
+    alias = "00";
+    mode += 5;
+  } else {
+    CHECK(strncmp(mode, "root-", 5) == 0);
+    mode += 5;
+  }
+  if (strcmp(mode, "hardlink") == 0)
+    CHECK(linkat(base, "held-lock", parent, alias, 0) == 0);
+  else {
+    CHECK(strcmp(mode, "symlink") == 0);
+    CHECK(symlinkat(target, parent, alias) == 0);
+  }
+  int object = shm_open(name, O_CREAT | O_EXCL | O_RDWR, 0600);
+  CHECK(object >= 0 && ftruncate(object, FS_DIAG_PAGE_BYTES) == 0);
+  // Emulate interruption without fixture teardown: the OS releases locks and
+  // descriptors, while exact planted names remain for the next invocation.
+  _exit(0);
 }
 
 static void release(fs_diag_kernel_page *page) {
@@ -256,10 +447,9 @@ static void crash_reclaim(const char *name) {
   CHECK(shm_open(name, O_RDWR, 0) == -1 && errno == ENOENT);
 }
 
-int main(void) {
+int main(int argc, char **argv) {
   alarm(20);
-  CHECK(kernel_prefix[0] == '/' && strcmp(kernel_prefix, "/ofdg1") != 0);
-  CHECK(mkdir(FS_DIAG_FIXTURE_BASE, 0700) == 0);
+  CHECK(argc == 1 || argc == 2);
   char root[1024], slot[1100], name[32];
   int length = snprintf(root, sizeof(root), "%s/of-diag-v1-%lu",
                         FS_DIAG_FIXTURE_BASE, (unsigned long)geteuid());
@@ -269,12 +459,27 @@ int main(void) {
   length = snprintf(name, sizeof(name), "%s.%lu.00", FS_DIAG_FIXTURE_PREFIX,
                     (unsigned long)geteuid());
   CHECK(length > 0 && (size_t)length < sizeof(name));
+  char root_name[48];
+  length = snprintf(root_name, sizeof(root_name), "of-diag-v1-%lu",
+                    (unsigned long)geteuid());
+  CHECK(length > 0 && (size_t)length < sizeof(root_name));
+  int fixture_lease = prepare_fixture(root_name, name);
+  if (argc == 2 && strcmp(argv[1], "cleanup-fixture") == 0) {
+    CHECK(close(fixture_lease) == 0);
+    return 0;
+  }
+  lease_excludes_contender();
+  if (argc == 2)
+    leave_interrupted_fixture(fixture_lease, root_name, name,
+                              strcmp(argv[1], "leave-interrupted-fixture") == 0
+                                  ? "slot-hardlink"
+                                  : argv[1]);
   reject_file_and_symlink(root, slot);
   low_descriptor_failures();
   failed_unlink_retains_one_lease(slot, name);
   crash_reclaim(name);
-  CHECK(rmdir(slot) == 0 && rmdir(root) == 0 &&
-        rmdir(FS_DIAG_FIXTURE_BASE) == 0);
+  CHECK(rmdir(slot) == 0 && rmdir(root) == 0);
+  CHECK(close(fixture_lease) == 0);
   puts("private allocator file/symlink, low-FD, retained-lease and "
        "crash-reclaim controls passed");
   return 0;
