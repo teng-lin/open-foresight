@@ -5,7 +5,7 @@ task_gate=${1:?core or desktop}
 task_platform=${2:?platform}
 task_build=${3:?absolute build directory}
 task_python=${4:?Python executable}
-task_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+task_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 source "$task_root/tools/ci_timing.sh"
 task_mode=${FORESIGHT_BUILD_MODE:-all}
 case "$task_mode" in all|build-only|test-only) ;; *) echo 'Unknown build mode' >&2; exit 2 ;; esac
@@ -23,6 +23,12 @@ if [[ "$task_platform" == macos ]]; then
 fi
 source "$task_root/tools/runtime_support_gate.sh"
 foresight_verify_runtime_support "$task_root" "$task_build" "$task_python"
+task_source_build=$(cd -- "$task_build" && pwd -P)
+task_source_defines=(
+  -DFORESIGHT_DIAGNOSTIC_TEST_CONTEXT=true
+  "-DFORESIGHT_DIAGNOSTIC_SOURCE_ANCHOR=$task_root"
+  "-DFORESIGHT_DIAGNOSTIC_BUILD_ROOT=$task_source_build"
+)
 export FORESIGHT_NATIVE_LIBRARY="$task_native"
 "$task_python" "$task_root/tools/verify_toolchain_pins.py" "$task_gate"
 if [[ "$task_gate" == core && -n "${FORESIGHT_DART:-}" && "$FORESIGHT_DART" != dart ]]; then
@@ -86,8 +92,8 @@ case "$task_gate" in
   )
   if [[ "$task_mode" != test-only ]]; then
   mkdir -p "$task_build/application"
-  ci_timed "service compilation" dart compile exe "$task_root/packages/foresight_core/bin/service.dart" -o "$task_build/application/foresight-service"
-  ci_timed "MCP compilation" dart compile exe "$task_root/packages/foresight_core/bin/mcp.dart" -o "$task_build/application/foresight-mcp"
+  ci_timed "service compilation" dart compile exe "${task_source_defines[@]}" "$task_root/packages/foresight_core/bin/service.dart" -o "$task_build/application/foresight-service"
+  ci_timed "MCP compilation" dart compile exe "${task_source_defines[@]}" "$task_root/packages/foresight_core/bin/mcp.dart" -o "$task_build/application/foresight-mcp"
   fi
     ;;
   desktop)

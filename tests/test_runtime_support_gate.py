@@ -67,3 +67,58 @@ def test_failed_receipt_preserves_failure_and_prevents_consumer(gate_tree):
     assert result.returncode == 23, result.stdout + result.stderr
     assert "receipt:" in result.stdout
     assert "consumer:" not in result.stdout
+
+
+def test_source_service_compilation_uses_receipt_verified_explicit_roots(
+    gate_tree, tmp_path
+):
+    import json
+
+    root, build = gate_tree
+    build.mkdir()
+    (root / "packages/foresight_core").mkdir(parents=True)
+    for name in ("build_dart_gates.sh", "ci_timing.sh"):
+        shutil.copyfile(ROOT / "tools" / name, root / "tools" / name)
+    (root / "tools/verify_toolchain_pins.py").write_text(
+        "print('fixture public pin verification')\n"
+    )
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    calls = tmp_path / "dart-calls.jsonl"
+    dart = binary / "dart"
+    dart.write_text(
+        "#!/usr/bin/env python3\nimport json,os,sys\n"
+        "with open(os.environ['FIXTURE_DART_CALLS'],'a') as stream: stream.write(json.dumps(sys.argv[1:])+'\\n')\n"
+    )
+    dart.chmod(0o755)
+    result = subprocess.run(
+        [
+            "bash",
+            str(root / "tools/build_dart_gates.sh"),
+            "core",
+            "linux",
+            str(build),
+            sys.executable,
+        ],
+        env={
+            **os.environ,
+            "PATH": f"{binary}:{os.environ['PATH']}",
+            "FORESIGHT_BUILD_MODE": "build-only",
+            "FIXTURE_DART_CALLS": str(calls),
+        },
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    compilations = [
+        args
+        for line in calls.read_text().splitlines()
+        if (args := json.loads(line))[:2] == ["compile", "exe"]
+    ]
+    assert len(compilations) == 2
+    for args in compilations:
+        assert "-DFORESIGHT_DIAGNOSTIC_TEST_CONTEXT=true" in args
+        assert f"-DFORESIGHT_DIAGNOSTIC_SOURCE_ANCHOR={root.resolve()}" in args
+        assert f"-DFORESIGHT_DIAGNOSTIC_BUILD_ROOT={build.resolve()}" in args
+        assert not any("WORKER_ID" in arg or "NATIVE_ID" in arg for arg in args)
