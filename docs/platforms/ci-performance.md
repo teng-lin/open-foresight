@@ -1493,10 +1493,11 @@ hour until the following poll, unless an event or manual run recovers it first:
   are no longer HEAD are not replayed; the coordinator always owns current HEAD.
 - **Cache reconciliation.** A missing exact cache key is dispatched at the next
   poll, so within 60 minutes of eviction. Consumers stay restore-only in the
-  meantime. A failed latest publisher is retried within 60 minutes. A publisher
-  still active after 30 minutes is replaced within 90 minutes of its start.
-  Successful registry maintenance is renewed between 24 and 25 hours after it
-  finished. If main advanced, the poll reports `current=false` and does nothing;
+  meantime. A retry for a failed latest publisher is dispatched within 60 minutes.
+  For a publisher still active after 30 minutes, a new run is dispatched within
+  90 minutes of its start. A renewal is dispatched between 24 and 25 hours after
+  the previous successful publisher finished. Queueing and execution add to
+  these dispatch bounds. If main advanced, the poll reports `current=false` and does nothing;
   the new source's push owns publication. Only `workflow_dispatch` jobs write,
   so the schedule itself never writes shared caches.
 - **Qualification index.** Polls and wakeups on a superseded HEAD fail with

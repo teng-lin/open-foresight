@@ -884,3 +884,45 @@ schema-version authority and rejects direct unprojected tool declarations.
 Full Python/before-push checks for the new combined head remain required.
 Logging, startup identities, SQL integration and the remaining ordinary audit
 scope remain in progress; no completion or merge-readiness claim is made.
+
+
+### Reviewed sanitizer and CI cadence integration, October 25
+
+Leak detection unit `b7a862a7` is integrated locally as `1c7ea8b8`.
+The shared gate settings enable ASan/UBSan/LSan for tests and children, preserve
+fatal report scanning, and permit only individually justified exact CPython
+retained-allocation suppressions. The six real controls include a deliberately
+unreachable native allocation through the same ctypes host. On the exact
+2026/10/18 Arch compiler/ABI profile, all six controls and freshly compiled root
+native CTest **38/38**, zero skips, passed without sanitizer reports. The
+published instrumented SDK artifact **12152408008** was reused after matching its
+pinned archive hash, recipe, compiler/runtime environment and complete **1,632**
+file inventory; its original compile provenance is retained. This is a new
+repository-native build, not a new SDK build. The earlier Ubuntu experiments
+with missing runtime/symbolizer, mixed sanitizer runtimes and an uninstrumented
+protobuf closure are failed, retained diagnostic attempts, not acceptance.
+
+Focused Python passed **56/56**, zero skips; Ruff, focused mypy and actionlint
+**1.7.7 with ShellCheck 0.9.0** passed. Full-unit coordinator and independent
+Claude reviews converged on the frozen unit. Evidence:
+`/var/tmp/of-extra-parallel/lsan/arch23/summary.json`, its reports/logs and
+`/var/tmp/of-extra-parallel/lsan/review-b7/`. No SDK cache-key input, TSan gate,
+workflow permission or publishing/trust selector changed.
+
+CI cadence unit `b148a216` is integrated locally as `fbba3301`. The only workflow
+body differences are three cron values: hourly qualification index at :11,
+main evidence at :17 and cache reconciliation at :41. Existing event/manual
+recovery, write guards and job bodies are retained. The structural scheduled
+invocation count falls from 192 to 96 per day, including the scheduled publisher's
+index wakeup; this is not a measured runner-minute saving. Recovery tests now
+exercise every minute-of-day phase and assert both suppression and dispatch
+bounds. Focused tests passed **120/120**, zero skips, with Ruff and matching
+workflow lint clean. Coordinator and repeated whole-unit Claude reviews
+converged. Documentation distinguishes delivered ticks, dropped schedules,
+dispatch timing, queue/execution time and required reviewed-main qualification
+renewal. Evidence: `/var/tmp/of-extra-parallel/ci-cadence/`.
+
+The integrated head still requires its full applicable before-push checks.
+Native coverage reporting, logging physical/performance acceptance, compiled
+worker/package adoption, restore and the other retained ordinary audit items
+remain open; these two merges do not establish whole-plan or hosted acceptance.
