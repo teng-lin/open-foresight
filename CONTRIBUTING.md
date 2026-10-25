@@ -39,6 +39,32 @@ Python unit tests, and retain real byte-level archive, receipt, checksum, and
 provenance assertions. Dedicated platform acceptance verifies the actual external
 tools. Lower coverage gates only with a reviewed explanation.
 
+### Acceptance evidence fixture
+
+The original CI failure evidence archive is not read from the source tree.
+`tests/fixtures/ci-acceptance-failures-20261020.json` (with its `.sha256`) pins
+its name and SHA-256, and `tools/evidence_fixture.py` pins the commit whose raw
+GitHub URL serves those bytes. Provision it once before running the full Python
+suite or its historical acceptance-evidence tests:
+
+```sh
+.venv/bin/python -m tools.evidence_fixture --fetch            # network, opt-in
+.venv/bin/python -m tools.evidence_fixture --archive PATH     # verified local copy
+.venv/bin/python -m tools.evidence_fixture --check            # verify only
+```
+
+The asset is cached at `$FORESIGHT_EVIDENCE_CACHE`, or
+`${XDG_CACHE_HOME:-~/.cache}/open-foresight/evidence` when that is unset (macOS
+included). The cache directory must not be a symlink or group/world-writable.
+Bytes are published atomically only after SHA-256 verification; symlinked,
+partial, or tampered assets are rejected. The offline tests never fetch or call
+Git; a missing asset fails with the provisioning command instead
+of skipping. For a Git-free source export or an offline Mac, copy the archive
+from a machine that has it (or download the pinned URL shown in the
+missing-asset error) and run `--archive PATH`, or point
+`FORESIGHT_EVIDENCE_CACHE` at an already provisioned cache. The selected platform
+contracts do not consume this archive and do not require it.
+
 Read [integration gates](docs/validation/integration-gates.md) for real model,
 virtual audio, service, and installed-package acceptance. A skipped test is not
 acceptance evidence. Never use or upload personal profiles, cloud credentials,
