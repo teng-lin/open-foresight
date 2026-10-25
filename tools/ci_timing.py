@@ -1,5 +1,6 @@
 """Report inclusive CI phase timings without changing results or cache policy."""
 
+from collections.abc import Iterator
 from contextlib import contextmanager
 import json
 import sys
@@ -7,7 +8,7 @@ import time
 
 
 @contextmanager
-def phase(label):
+def phase(label: str) -> Iterator[None]:
     started = time.monotonic()
     status = "error"
     try:

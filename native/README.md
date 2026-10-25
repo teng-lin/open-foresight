@@ -64,8 +64,12 @@ the capability contract, complete consumer dispositions and qualification limits
   probe-failure and inference tests; run those too, reusing verified dependency
   libraries and tools.
 - Point the Dart core and desktop suites at the freshly built library and helper
-  (`FORESIGHT_NATIVE_LIBRARY`, `FORESIGHT_HELPER`) so their native integration
-  tests run rather than skip.
+  (`FORESIGHT_NATIVE_LIBRARY`, `FORESIGHT_HELPER`) and set
+  `FORESIGHT_TEST_HELPER` to `build/services/helper/ForesightHelperTest` from
+  the same repository-root build, so the controlled indexing test also runs
+  rather than skips. The core build gate exports all three paths. The test
+  helper is separate from production-helper/model acceptance; use the normal
+  Release build with `BUILD_TESTING` enabled to produce it.
 - When data moves between argv and stdin, update and exercise every runner
   fixture and consumer, not only the C++ side.
 - Capture fixtures must honor the production output protocol: `pw-record` writes

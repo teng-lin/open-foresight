@@ -10,7 +10,7 @@ One file per decision, numbered in the order they were proposed. A record is nev
 | [0004](0004-workspace-epoch-for-stale-ids.md) | Workspace epoch protects editor-held IDs (D4) | Accepted |
 | [0005](0005-per-profile-linux-runtime.md) | Per-profile Linux runtime directory (D5) | Accepted |
 | [0006](0006-stop-recording-on-host-disconnect.md) | Stop recording when the host desktop disconnects (D6) | Accepted |
-| [0007](0007-service-lifetime-and-desktop-agent-boundary.md) | Service lifetime and the desktop/agent boundary (D7) | Proposed |
+| [0007](0007-service-lifetime-and-desktop-agent-boundary.md) | Service lifetime and the desktop/agent boundary (D7) | Accepted and implemented |
 
 Decisions 1–8 of the CI restructuring live in [its plan](../plans/2026-10-19-ci-restructure-plan.md#8-owner-decisions). Move them here only if they need to change.
 

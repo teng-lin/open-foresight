@@ -1,16 +1,13 @@
-import importlib.util
+from contextlib import closing
 from pathlib import Path
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
-spec = importlib.util.spec_from_file_location(
-    "migration", Path(__file__).parents[1] / "tools/migrate_profile.py"
-)
-migration = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(migration)
+from tools import migrate_profile as migration
 
 
 class ProfileMigrationTest(unittest.TestCase):
@@ -25,7 +22,7 @@ class ProfileMigrationTest(unittest.TestCase):
         self.asset = self.root / "shared/model.bin"
         self.asset.parent.mkdir()
         self.asset.write_bytes(b"unchanged shared embedding")
-        with sqlite3.connect(self.old / "application.db") as db:
+        with closing(sqlite3.connect(self.old / "application.db")) as db, db:
             db.executescript(
                 "CREATE TABLE meetings(state TEXT); CREATE TABLE models(kind TEXT,path TEXT,runtime TEXT,digest TEXT); CREATE TABLE source_details(source_id TEXT,source_uri TEXT); CREATE TABLE notes(body TEXT);"
             )
@@ -55,7 +52,7 @@ class ProfileMigrationTest(unittest.TestCase):
         (self.old / "google").mkdir()
         (self.old / "google/tokens.json").write_text("fixture-secret")
         (self.old / "helper").mkdir()
-        with sqlite3.connect(self.old / "helper/agent_metadata.db") as db:
+        with closing(sqlite3.connect(self.old / "helper/agent_metadata.db")) as db, db:
             db.execute("CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT)")
             db.execute(
                 "INSERT INTO settings VALUES(?,?)",
@@ -67,8 +64,54 @@ class ProfileMigrationTest(unittest.TestCase):
             self.old, self.new, self.backup, "/old/bundle", "/new/bundle", True
         )
 
+    def _assert_connections_closed(self, fail_write=False):
+        # Retain actual connections so GC cannot accidentally satisfy ownership.
+        connections = []
+        connect = sqlite3.connect
+        copytree = migration.shutil.copytree
+
+        def retain(*args, **kwargs):
+            connection = connect(*args, **kwargs)
+            connections.append(connection)
+            self.addCleanup(connection.close)
+            return connection
+
+        def require_closed():
+            self.assertTrue(connections)
+            for connection in connections:
+                with self.assertRaisesRegex(sqlite3.ProgrammingError, "closed"):
+                    connection.execute("SELECT 1")
+
+        def copy_after_close(*args, **kwargs):
+            require_closed()
+            return copytree(*args, **kwargs)
+
+        with (
+            patch.object(migration.sqlite3, "connect", side_effect=retain),
+            patch.object(migration.shutil, "copytree", side_effect=copy_after_close),
+        ):
+            if fail_write:
+                with (
+                    patch.object(
+                        migration, "replace_prefix", side_effect=RuntimeError("write failed")
+                    ),
+                    self.assertRaisesRegex(RuntimeError, "write failed"),
+                ):
+                    self.migrate()
+                self.assertTrue((self.old / "application.db").is_file())
+            else:
+                self.migrate()
+                self.assertTrue((self.new / "application.db").is_file())
+        require_closed()
+
+    def test_success_closes_all_owned_database_connections(self):
+        self._assert_connections_closed()
+
+    def test_write_failure_closes_connections_before_profile_recovery(self):
+        self._assert_connections_closed(fail_write=True)
+
     def test_future_helper_refuses_before_move_backup_or_lock_creation(self):
-        with sqlite3.connect(self.old / "helper/agent_metadata.db") as db:
+        with closing(sqlite3.connect(self.old / "helper/agent_metadata.db")) as db, db:
             db.execute("PRAGMA user_version=2")
         before = {
             str(path.relative_to(self.old)): path.read_bytes()
@@ -95,7 +138,7 @@ class ProfileMigrationTest(unittest.TestCase):
             (self.new / "google/tokens.json").read_text(), "fixture-secret"
         )
         self.assertEqual(self.backup.stat().st_mode & 0o777, 0o700)
-        with sqlite3.connect(self.new / "application.db") as db:
+        with closing(sqlite3.connect(self.new / "application.db")) as db, db:
             models = db.execute("SELECT * FROM models ORDER BY kind").fetchall()
             self.assertEqual(Path(models[0][1]).read_bytes(), self.asset.read_bytes())
             self.assertNotEqual(
@@ -113,14 +156,14 @@ class ProfileMigrationTest(unittest.TestCase):
                 db.execute("SELECT body FROM notes").fetchone()[0],
                 "Keep literal " + str(self.old),
             )
-        with sqlite3.connect(self.backup / "application.db") as db:
+        with closing(sqlite3.connect(self.backup / "application.db")) as db, db:
             self.assertEqual(
                 db.execute("SELECT path FROM models WHERE kind='embedding'").fetchone()[
                     0
                 ],
                 str(self.asset),
             )
-        with sqlite3.connect(self.new / "helper/agent_metadata.db") as db:
+        with closing(sqlite3.connect(self.new / "helper/agent_metadata.db")) as db, db:
             self.assertEqual(
                 db.execute("SELECT value FROM settings").fetchone()[0], models[0][1]
             )
@@ -150,7 +193,7 @@ class ProfileMigrationTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.migrate()
         self.new.rmdir()
-        with sqlite3.connect(self.old / "application.db") as db:
+        with closing(sqlite3.connect(self.old / "application.db")) as db, db:
             db.execute("UPDATE meetings SET state='recording'")
         with self.assertRaises(RuntimeError):
             self.migrate()
@@ -171,7 +214,7 @@ class ProfileMigrationTest(unittest.TestCase):
         failed = self.new.with_name(self.new.name + ".migration-failed")
         self.assertTrue((failed / "application.db").is_file())
         for profile in (self.old, self.backup, failed):
-            with sqlite3.connect(profile / "application.db") as db:
+            with closing(sqlite3.connect(profile / "application.db")) as db, db:
                 self.assertEqual(
                     db.execute(
                         "SELECT path FROM models WHERE kind='embedding'"
@@ -188,7 +231,7 @@ class ProfileMigrationTest(unittest.TestCase):
         migration.migrate(
             self.old, self.new, self.backup, "/old/bundle", "/new/bundle", False
         )
-        with sqlite3.connect(self.new / "application.db") as db:
+        with closing(sqlite3.connect(self.new / "application.db")) as db, db:
             self.assertEqual(
                 db.execute("SELECT path FROM models WHERE kind='embedding'").fetchone()[
                     0
@@ -196,7 +239,7 @@ class ProfileMigrationTest(unittest.TestCase):
                 str(self.asset),
             )
         self.assertFalse((self.new / "models/imported").exists())
-        with sqlite3.connect(self.new / "helper/agent_metadata.db") as db:
+        with closing(sqlite3.connect(self.new / "helper/agent_metadata.db")) as db, db:
             self.assertEqual(
                 db.execute("SELECT value FROM settings").fetchone()[0], str(self.asset)
             )

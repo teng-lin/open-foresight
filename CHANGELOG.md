@@ -15,6 +15,9 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Changed
 
+- Search waits only for actively owned stopped-transcript indexing; saved failed
+  backlog no longer blocks later searches of other indexed documents.
+
 - Bound retained content history to 20 revisions and 32 MiB per entity, with a
   90-day age limit. Total history grows with the number of entities. Upgrades
   prune excess history while preserving current content.
@@ -28,6 +31,9 @@ Notable changes to Open Foresight are recorded here. Versions follow
   Model replacement and service shutdown retain ownership until native cleanup
   and pending callbacks settle; recording preserves speech model reuse.
 
+- Let search wait briefly for already-stopped meeting transcripts to finish
+  indexing. Stop remains independent of the helper; paused or unconfigured
+  indexing keeps previously indexed documents available.
 - Update meeting transcript search incrementally and recover saved indexing work
   after restart. Preserve manual edits and deletion while indexing waits for a
   model to become ready.

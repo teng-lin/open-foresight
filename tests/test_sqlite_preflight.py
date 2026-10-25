@@ -1,5 +1,6 @@
 """Real SQLite profile-copy preflight, including WAL and crash-journal states."""
 
+from contextlib import closing
 import base64
 import gzip
 import hashlib
@@ -26,7 +27,7 @@ def profile(tmp_path):
     root = tmp_path / "profile"
     (root / "helper").mkdir(parents=True)
     for name in MEMBERS:
-        with sqlite3.connect(root / name) as db:
+        with closing(sqlite3.connect(root / name)) as db, db:
             db.execute("CREATE TABLE payload(body TEXT)")
     return root
 
@@ -57,7 +58,7 @@ def snapshot(root):
 
 @pytest.mark.parametrize("member", MEMBERS)
 def test_future_member_refusal_preserves_complete_original_set(profile, member):
-    with sqlite3.connect(profile / member) as db:
+    with closing(sqlite3.connect(profile / member)) as db, db:
         db.execute(
             "PRAGMA user_version=" + ("18" if member == "application.db" else "2")
         )
@@ -86,7 +87,7 @@ def test_empty_rollback_journals_preserve_nanosecond_metadata(profile):
 
 def test_real_hot_journal_is_qualified_without_recovery_or_metadata_changes(profile):
     path = profile / "helper/agent_metadata.db"
-    with sqlite3.connect(path) as db:
+    with closing(sqlite3.connect(path)) as db, db:
         db.execute("INSERT INTO payload VALUES ('committed')")
     subprocess.run(
         [
@@ -113,7 +114,7 @@ os._exit(0)
     preflight.verify_profile_unchanged(profile, gate)
     assert snapshot(profile) == before
     # SQLite, rather than qualification, still performs the original recovery.
-    with sqlite3.connect(path) as db:
+    with closing(sqlite3.connect(path)) as db, db:
         assert db.execute("SELECT body FROM payload").fetchall() == [("committed",)]
     assert not journal.exists()
 
@@ -242,7 +243,7 @@ def test_genuine_attached_commit_journal_future_page_one_is_refused(profile, bou
 
 def test_final_gate_rejects_external_writer(profile):
     gate = preflight.qualify_profile(profile)
-    with sqlite3.connect(profile / "helper/linux_state.db") as db:
+    with closing(sqlite3.connect(profile / "helper/linux_state.db")) as db, db:
         db.execute("PRAGMA user_version=2")
     with pytest.raises(RuntimeError, match="changed during"):
         preflight.verify_profile_unchanged(profile, gate)

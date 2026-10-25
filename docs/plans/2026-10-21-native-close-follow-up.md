@@ -9,7 +9,7 @@ repair acceptance still requires the actual matrices and measurements listed
 here. Implementing tokens alone does not close P2-4.
 
 This is the separately scoped follow-up required by
-[the core plan's native ownership audit](2026-10-20-core-desktop-refactor-plan.md#6c-keep-the-relay-isolate-persistence-and-address-measured-blocking-work).
+[the core plan's native ownership follow-up](2026-10-20-core-desktop-refactor-plan.md#core-follow-ups).
 The existing asynchronous 20 ms polling remains; its presence alone is not
 evidence of blocking. The observed synchronous destruction is a distinct path.
 

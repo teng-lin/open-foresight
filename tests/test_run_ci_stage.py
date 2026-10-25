@@ -237,6 +237,7 @@ def test_native_runner_publishes_distinct_runtime_and_compilation_archives(
     def build(*args):
         for name in (
             "build/services/helper/ForesightHelper",
+            "build/services/helper/ForesightHelperTest",
             "build/native/libforesight_native.so",
             "build/_deps/compiler/object.o",
         ):
@@ -288,4 +289,7 @@ def test_native_runner_publishes_distinct_runtime_and_compilation_archives(
         runtime["source_commit"],
     )
     assert (target / "build/services/helper/ForesightHelper").is_file()
+    assert (target / "build/services/helper/ForesightHelperTest").read_bytes() == (
+        tmp_path / "build/services/helper/ForesightHelperTest"
+    ).read_bytes()
     assert not (target / "build/_deps").exists()

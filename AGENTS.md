@@ -12,7 +12,8 @@ These rules add to it.
   - Native, protocol or service changes: the full native CTest from the
     repository-root CMake build, then the Dart core and desktop suites with Dart
     tests pointed at the freshly built library and helper
-    (`FORESIGHT_NATIVE_LIBRARY`, `FORESIGHT_HELPER`), plus the core coverage
+    (`FORESIGHT_NATIVE_LIBRARY`, `FORESIGHT_HELPER`, and the separate
+    `FORESIGHT_TEST_HELPER` pointing at `ForesightHelperTest`), plus the core coverage
     command (`FORESIGHT_CORE_COVERAGE_MIN=90 tools/coverage_core.sh`). See
     [native/README.md](native/README.md#verifying-native-changes).
   - Service, capture or desktop-boundary changes: also the compiled service/MCP

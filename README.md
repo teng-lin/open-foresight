@@ -77,7 +77,8 @@ Open Foresight reproduces the original's main workflows, and adds features the o
   You can also register model files you already have, and run Whisper on the GPU through Vulkan.
 - **Audio routing.** Choose which microphone and which system playback output to transcribe, and see live input levels.
 - **Auto-stop can be turned off.** Along with 5, 10, 15, and 30 minutes, inactivity auto-stop can be set to Never.
-- **Bring your own Google project.** Drive and Calendar can use an OAuth client configuration that you import.
+- **Choose your Google project for a build.** Distributors and developers can
+  supply a Desktop OAuth client configuration when packaging the application.
 - **Local and open.** Models are public LiteRT and whisper.cpp files, pinned by SHA-256 hash, and ordinary generation stays local; optional web mode uses remote search and website summaries. The source code is MIT-licensed.
 - **Isolated profiles.** You can run separate profiles side by side, and migrate an existing profile with a tool that keeps a verified backup.
 
@@ -319,10 +320,10 @@ To build reproducible distro packages inside containers, see [Linux packaging](d
 
 The profile is stored in `$XDG_DATA_HOME/open-foresight`, which is normally `~/.local/share/open-foresight`. Its sockets are in `$XDG_RUNTIME_DIR/open-foresight/<profile>`, where `<profile>` is 12 hexadecimal digits derived from the profile path, so each profile has its own. Set both `FORESIGHT_DATA` and `FORESIGHT_RUNTIME` to use an isolated profile. Legacy profiles are never selected automatically.
 
-To migrate a profile from the earlier `foresight-linux-desktop` build, stop its app and helper, then run:
+To migrate a profile from the earlier `foresight-linux-desktop` build, stop its app and helper, then run from this repository root:
 
 ```sh
-python3 tools/migrate_profile.py ~/.local/share/foresight-linux-desktop \
+python3.13 -m tools.migrate_profile ~/.local/share/foresight-linux-desktop \
   ~/.local/share/open-foresight --backup ~/.local/state/open-foresight/profile-backup \
   --old-bundle /path/to/old/dist/foresight \
   --new-bundle "$PWD/dist/open-foresight" --copy-external-models
@@ -350,7 +351,7 @@ Release builds bundle their Google application registration: choose a Drive impo
 
 After signing in, the sidebar shows your Google account photo or initial. Click it to switch between saved accounts, add another account, or sign out of an individual account. Every account shares the same local knowledge base; switching or signing out keeps imported sources, notes, meetings, and answers. Drive and Calendar operations use the selected account.
 
-Distributors supply the Desktop OAuth JSON through the `FORESIGHT_GOOGLE_CLIENT_JSON` repository secret or `--google-client /path/to/google-client.json` to either packager. Release workflows require it. Developer builds can omit it and import their own client through Advanced OAuth configuration. Packaging does not inspect other applications or copy account tokens. Keep OAuth configuration and tokens out of Git.
+Distributors supply the Desktop OAuth JSON through the `FORESIGHT_GOOGLE_CLIENT_JSON` repository secret or `--google-client /path/to/google-client.json` to either packager. Release workflows require it. For unpackaged developer runs, set `FORESIGHT_GOOGLE_CLIENT=/path/to/google-client.json`; an existing profile `google-client.json` takes precedence. Settings has no client-JSON import. Packaging does not inspect other applications or copy account tokens. Keep OAuth configuration and tokens out of Git.
 
 ## Verification
 
@@ -369,11 +370,11 @@ Run `tools/coverage.sh` after installing the development dependencies into `.ven
 
 Store, graph, Google adapter, and model installation suites now run in `packages/foresight_core/test` using pure Dart. Shared test helpers live under its `test/fixtures/` directory.
 
-Run `tools/coverage_core.sh` after `dart pub get --enforce-lockfile` in `packages/foresight_core` to collect core Dart line coverage into `coverage/core/lcov.info` (or set `FORESIGHT_DART` to the Dart executable). Generated bindings are excluded. The Dart VM reports loaded libraries; this is not a whole-repository denominator. Set `FORESIGHT_COVERAGE=1` when using `tools/build.sh` to collect this report during the normal core gate; macOS PR CI enables it and uploads a separate artifact.
+Run `tools/coverage_core.sh` after `dart pub get --enforce-lockfile` in `packages/foresight_core` to collect core Dart line coverage into `coverage/core/lcov.info` (or set `FORESIGHT_DART` to the Dart executable). Generated bindings are excluded. The Dart VM reports loaded libraries; this is not a whole-repository denominator. Set `FORESIGHT_COVERAGE=1` when using `tools/build.sh` to collect this report during the normal core gate. macOS coverage runs on selected non-PR workflows and is report-only; ordinary macOS PR runs do not collect it.
 
 MCP protocol tests launch the real Dart entry point against an isolated fake Unix-socket service; subprocess execution is not included in the parent Dart coverage report.
 
-Native-backed Dart coverage requires `FORESIGHT_NATIVE_LIBRARY` pointing to the built shared library and, on macOS, `FORESIGHT_HELPER` pointing to the built helper/process supervisor. `tools/build.sh` sets both for core tests, enabling controlled native generation, cancellation, and worker recovery suites without real models. macOS PR CI enforces 90% core Dart line coverage on the filtered LCOV artifact; set `FORESIGHT_CORE_COVERAGE_MIN=90` to apply the same gate locally with native tests enabled. The gate requires Python 3 (or `FORESIGHT_PYTHON`) and counts generated-code exclusions exactly as represented in that artifact. The desktop gate collects Flutter coverage and enforces 76.35%, one percentage point below the measured 77.35% baseline (4,301/5,560 lines). Native C++ line coverage remains follow-up work.
+Native-backed Dart coverage requires `FORESIGHT_NATIVE_LIBRARY` pointing to the built shared library and `FORESIGHT_HELPER` pointing to the built helper/process supervisor. `tools/build.sh` sets both for core tests, enabling controlled native generation, cancellation, and worker recovery suites without real models. Linux core and desktop gates enforce 90% line coverage. Set `FORESIGHT_CORE_COVERAGE_MIN=90` to apply the core gate locally with native tests enabled. The gate requires Python 3 (or `FORESIGHT_PYTHON`) and counts generated-code exclusions exactly as represented in that artifact. macOS coverage has no required percentage floor. Native C++ line coverage remains follow-up work.
 
 Native CTest also runs synthetic PCM contracts for 44.1/48 kHz to 16 kHz resampling, output capacity, invalid input, and RMS energy. macOS callback tests cover float and integer PCM conversion, short channel buffers, unsupported formats, and sample rate changes without starting capture.
 
@@ -385,14 +386,16 @@ For installable builds before an official release, see [nightly and manual previ
 
 The version is written in one place, `apps/desktop/pubspec.yaml`, as `version: X.Y.Z+N`. `X.Y.Z` is the release version, following [SemVer](https://semver.org). `N` is the local build number and the lower bound for CI builds. Main distribution candidates and nightly previews reserve higher numbers from the shared `ci/build-sequence` counter before compilation, so official installers remain newer than earlier previews on macOS. CMake, the helper's build ID, the packaging scripts, the MCP server, and the app all read this value. The app shows it under **Settings → Version**.
 
-To cut a release:
+Prepare the version change on a release branch:
 
 ```sh
 python3 tools/app_version.py --set 0.2.0   # updates the pubspec and its derived copies, bumps the build number
 git commit -am "chore: release v0.2.0"
-git push origin main
-gh workflow run release.yml --ref main -f tag=v0.2.0
 ```
+
+Open and merge a reviewed release PR after its required checks pass. Then follow
+[release preparation](RELEASING.md) to tag that exact reviewed commit, qualify
+the final installers, and publish through the guarded release workflow.
 
 `python3 tools/app_version.py` prints the current version, and `--check` fails if a derived copy is out of date. Release CI refuses a tag that does not match `v` plus the pubspec version.
 

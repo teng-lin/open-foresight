@@ -320,15 +320,30 @@ class DesktopHostPeer(Peer):
         self.writer = cast(BinaryIO, self.process.stdin)
         self.reader = cast(BinaryIO, self.process.stdout)
         try:
-            image = file_identity(Path(f"/proc/{self.process.pid}/exe"))
+            image = self._executed_image(identity)
             evidence["executed_image"] = image
-            if image["sha256"] != identity["sha256"]:
-                raise ValueError("Native desktop relay executed a different image")
             os.set_blocking(self.writer.fileno(), False)
             os.set_blocking(self.reader.fileno(), False)
         except BaseException:
             self.close()
             raise
+
+    def _executed_image(self, declared: dict[str, Any]) -> dict[str, Any]:
+        # Bound qualification while the sampled bytes match the invoking parent.
+        # Require the declared native bytes before using the relay, and reject
+        # every unrelated image immediately; this does not establish the cause
+        # of a mismatched initial procfs observation.
+        parent = file_identity(Path(f"/proc/{os.getpid()}/exe"))
+        deadline = time.monotonic() + min(self.timeout, 1.0)
+        while True:
+            image = file_identity(Path(f"/proc/{self.process.pid}/exe"))
+            if image["sha256"] == declared["sha256"]:
+                return image
+            if (image["sha256"] != parent["sha256"]
+                    or self.process.poll() is not None
+                    or time.monotonic() >= deadline):
+                raise ValueError("Native desktop relay executed a different image")
+            self.interrupted.wait(.001)
 
     def _check(self, deadline: float, method: str) -> float:
         if self.interrupted.is_set():
@@ -525,6 +540,8 @@ def environment(args: argparse.Namespace, run: Path) -> dict[str, str]:
 
 
 def host_state() -> dict[str, Any]:
+    if sys.platform != "linux":
+        raise RuntimeError("Native process measurement requires Linux")
     def read(path: str) -> str | None:
         file = Path(path)
         return file.read_text() if file.is_file() else None
@@ -573,6 +590,8 @@ def signal_session_members(session: int, kind: int, *,
     Open the pidfd before checking SID: if a numeric PID is recycled during the
     check, sending through the fd can only reach the original (now dead) task.
     """
+    if sys.platform != "linux":
+        raise RuntimeError("Native process measurement requires Linux")
     for member in session_members(session):
         try:
             descriptor = os.pidfd_open(member)
@@ -760,6 +779,8 @@ class RuntimeInventory:
                 stream.close()
 
     def capture(self, session: int, condition: str) -> None:
+        if sys.platform != "linux":
+            raise RuntimeError("Native process measurement requires Linux")
         self.seed(self.report.get("inputs", {}))
         started = time.perf_counter_ns()
         snapshot: dict[str, Any] = {"condition": condition, "session": session,

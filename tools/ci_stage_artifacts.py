@@ -50,6 +50,7 @@ NATIVE_RUNTIME_PATHS = (
     "build/native/libforesight_native.dylib",
     "build/native/foresight-audio",
     "build/services/helper/ForesightHelper",
+    "build/services/helper/ForesightHelperTest",
     "build/services/helper/model_worker_fixture",
     "build/services/inference/foresight-model",
     "build/services/inference/foresight-query",

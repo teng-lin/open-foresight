@@ -325,6 +325,7 @@ def test_native_runtime_payload_omits_compilers_and_retains_products_and_notices
     repository(root)
     products = [
         "build/services/helper/ForesightHelper",
+        "build/services/helper/ForesightHelperTest",
         "build/native/libforesight_native.dylib",
         "build/sdk/foresight-sdk.json",
         "build/sdk/share/foresight-sdk/licenses/LICENSE",
