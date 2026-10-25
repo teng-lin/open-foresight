@@ -317,3 +317,11 @@ class MeetingNotesToolbar extends StatelessWidget {
     ],
   );
 }
+
+/// The owner selects this state while its note snapshot is loading.
+class MeetingNotesLoading extends StatelessWidget {
+  const MeetingNotesLoading({super.key});
+  @override
+  Widget build(BuildContext context) =>
+      const Center(child: Text('Loading meeting notes…'));
+}

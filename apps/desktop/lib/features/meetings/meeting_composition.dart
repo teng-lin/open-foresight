@@ -11,13 +11,7 @@ extension _MeetingComposition on MeetingsController {
     final id = meetingId!;
     final meeting = _reads.meeting(id);
     if (meeting == null)
-      return Center(
-        child: Text(
-          _reads.meetingLoaded(id)
-              ? 'Meeting no longer exists.'
-              : 'Loading meeting…',
-        ),
-      );
+      return MeetingReadStatus(loaded: _reads.meetingLoaded(id));
     final start = meeting.starts ?? meeting.created ?? 0;
     final end =
         meeting.ends ?? start + const Duration(minutes: 30).inMilliseconds;
@@ -132,39 +126,17 @@ extension _MeetingComposition on MeetingsController {
   Widget meetingCollection() {
     final id = meetingPreviewId;
     if (id == null) return meetingList();
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final preview = meetingPreview(id);
-        if (constraints.maxWidth < 900) return preview;
-        return Column(
-          children: [
-            meetingListHeading(),
-            Expanded(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Expanded(flex: 6, child: meetingList(showHeading: false)),
-                  const SizedBox(width: 24),
-                  Expanded(flex: 4, child: preview),
-                ],
-              ),
-            ),
-          ],
-        );
-      },
+    return MeetingCollectionLayout(
+      previewBuilder: (_) => meetingPreview(id),
+      headingBuilder: (_) => meetingListHeading(),
+      listBuilder: (_) => meetingList(showHeading: false),
     );
   }
 
   Widget meetingPreview(int id) {
     final meeting = _reads.meeting(id, preview: true);
     if (meeting == null)
-      return Center(
-        child: Text(
-          _reads.meetingLoaded(id, preview: true)
-              ? 'Meeting no longer exists.'
-              : 'Loading meeting…',
-        ),
-      );
+      return MeetingReadStatus(loaded: _reads.meetingLoaded(id, preview: true));
     final start = meetingStart(meeting), end = meetingEnd(meeting);
     return MeetingPreviewCard(
       title: meeting.title,

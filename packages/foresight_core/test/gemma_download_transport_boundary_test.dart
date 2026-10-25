@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:foresight_core/src/gemma_download.dart';
-import 'package:foresight_core/src/model_asset_failure.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
 

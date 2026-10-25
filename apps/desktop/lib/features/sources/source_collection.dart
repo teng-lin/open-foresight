@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:foresight_core/desktop.dart';
 import '../../desktop_visuals.dart';
 import '../../presentation/workspace_presentation.dart';
-import 'typed_graph.dart';
+import 'source_type_view.dart';
 import 'source_painters.dart';
 import 'source_tiles.dart';
 

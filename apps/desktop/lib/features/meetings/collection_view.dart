@@ -369,3 +369,36 @@ class MeetingPreviewCard extends StatelessWidget {
     );
   }
 }
+
+/// Preserves lazy list composition when a narrow layout displays only preview.
+class MeetingCollectionLayout extends StatelessWidget {
+  const MeetingCollectionLayout({
+    super.key,
+    required this.previewBuilder,
+    required this.headingBuilder,
+    required this.listBuilder,
+  });
+  final WidgetBuilder previewBuilder, headingBuilder, listBuilder;
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final preview = previewBuilder(context);
+      if (constraints.maxWidth < 900) return preview;
+      return Column(
+        children: [
+          headingBuilder(context),
+          Expanded(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(flex: 6, child: listBuilder(context)),
+                const SizedBox(width: 24),
+                Expanded(flex: 4, child: preview),
+              ],
+            ),
+          ),
+        ],
+      );
+    },
+  );
+}

@@ -40,6 +40,86 @@ Iterable<String> _dependencies(CompilationUnit unit) sync* {
   }
 }
 
+Iterable<AstNode> _nodes(AstNode node) sync* {
+  yield node;
+  for (final child in node.childEntities.whereType<AstNode>()) {
+    yield* _nodes(child);
+  }
+}
+
+List<String> _rendererViolations(
+  File entry,
+  Directory desktop,
+  String Function(File) source,
+) {
+  final pending = [entry], visited = <String>{}, violations = <String>[];
+  while (pending.isNotEmpty) {
+    final file = pending.removeLast();
+    if (!visited.add(file.absolute.path)) continue;
+    final unit = parseString(content: source(file), path: file.path).unit;
+    if (unit.directives.any((node) => node is PartOfDirective)) {
+      violations.add('${file.path}: part of an owner');
+    }
+    for (final name in _nodes(unit).map(
+      (node) => switch (node) {
+        SimpleIdentifier() => node.name,
+        NamedType() => node.name.lexeme,
+        _ => '',
+      },
+    )) {
+      if (const {
+            'Domain',
+            'Store',
+            'StoreReader',
+            'StoreReadQueries',
+            'NativeRuntime',
+            'DesktopConnection',
+            'RemoteDomain',
+            'Operation',
+            'OperationDescriptor',
+            'ClientEnvelope',
+            'WireField',
+            'MeetingReadModel',
+            'FeatureHost',
+            'command',
+            'commandCurrent',
+            'send',
+            'sendCurrent',
+            'sendKeyed',
+          }.contains(name) ||
+          name.endsWith('Descriptor')) {
+        violations.add('${file.path}: business capability $name');
+      }
+    }
+    for (final uri in _dependencies(unit)) {
+      if (uri.endsWith('_controller.dart') ||
+          const {
+            'read_model.dart',
+            'domain.dart',
+            'store.dart',
+            'native.dart',
+            'application_service.dart',
+            'application.dart',
+            'client_command.dart',
+            'operation_descriptors.dart',
+            'foresight_core.dart',
+            'service_server.dart',
+          }.contains(uri.split('/').last)) {
+        violations.add('${file.path}: owner or business dependency $uri');
+        continue;
+      }
+      if (uri.startsWith('package:open_foresight/')) {
+        pending.add(
+          File('${desktop.path}/${uri.split('/').skip(1).join('/')}'),
+        );
+      } else if (!uri.contains(':')) {
+        pending.add(File.fromUri(file.uri.resolve(uri)));
+      }
+    }
+  }
+  return violations;
+}
+
 void main() {
   final desktop = Directory('../../apps/desktop/lib').absolute;
   final cache = <String, ({String source, CompilationUnit unit})>{};
@@ -120,40 +200,63 @@ void main() {
         'features/meetings/workspace_view.dart',
         'features/meetings/transcript_view.dart',
         'features/meetings/notes_widgets.dart',
+        'features/meetings/enhanced_notes_view.dart',
+        'features/meetings/assistant_widgets.dart',
+        'features/meetings/ai_panels.dart',
+        'features/meetings/ai_dialogs.dart',
         'features/sources/source_tiles.dart',
         'features/sources/note_widgets.dart',
         'features/sources/graph_widgets.dart',
         'features/sources/source_collection.dart',
       ]) {
-        final pending = [File('${desktop.path}/$renderer')];
-        final visited = <String>{};
-        while (pending.isNotEmpty) {
-          final file = pending.removeLast();
-          if (!visited.add(file.absolute.path)) continue;
-          final unit = read(file).unit;
-          expect(
-            unit.directives.whereType<PartOfDirective>(),
-            isEmpty,
-            reason: '$renderer must be an independent logical library',
-          );
-          for (final uri in _dependencies(unit)) {
-            expect(
-              uri.endsWith('_controller.dart') ||
-                  uri.endsWith('/read_model.dart') ||
-                  uri == 'read_model.dart',
-              isFalse,
-              reason: '$renderer -> ${file.path}: $uri',
-            );
-            if (uri.startsWith('package:open_foresight/')) {
-              pending.add(
-                File('${desktop.path}/${uri.split('/').skip(1).join('/')}'),
-              );
-            } else if (!uri.contains(':')) {
-              pending.add(File.fromUri(file.uri.resolve(uri)));
-            }
-          }
-        }
+        expect(
+          _rendererViolations(
+            File('${desktop.path}/$renderer'),
+            desktop,
+            (file) => read(file).source,
+          ),
+          isEmpty,
+          reason: renderer,
+        );
       }
     },
   );
+
+  test('renderer guard rejects transitive owner and business shortcuts', () {
+    final fixtures = <String, String>{
+      '/fixture/entry.dart': "export 'nested.dart';",
+      '/fixture/nested.dart': "export 'read_model.dart';",
+    };
+    List<String> violations() => _rendererViolations(
+      File('/fixture/entry.dart'),
+      Directory('/fixture'),
+      (file) => fixtures[file.path]!,
+    );
+    expect(violations(), contains(contains('read_model.dart')));
+    fixtures['/fixture/nested.dart'] =
+        "import 'safe.dart' if (dart.library.io) 'meetings_controller.dart';";
+    fixtures['/fixture/safe.dart'] = 'void render() {}';
+    expect(violations(), contains(contains('meetings_controller.dart')));
+    fixtures['/fixture/nested.dart'] = "part of 'meetings_controller.dart';";
+    expect(violations(), contains(contains('part of an owner')));
+    fixtures['/fixture/nested.dart'] =
+        "import 'package:foresight_core/service_server.dart';";
+    expect(violations(), contains(contains('service_server.dart')));
+    fixtures['/fixture/nested.dart'] =
+        "import 'package:foresight_core/desktop.dart'; "
+        'void action(DesktopConnection connection) { '
+        'meetingsGenerateDescriptor.send(connection, null); }';
+    expect(
+      violations(),
+      contains(contains('business capability DesktopConnection')),
+    );
+    expect(
+      violations(),
+      contains(contains('business capability meetingsGenerateDescriptor')),
+    );
+    expect(violations(), contains(contains('business capability send')));
+    fixtures['/fixture/nested.dart'] =
+        'void build(String snapshot, void Function() onRetry) { onRetry(); }';
+    expect(violations(), isEmpty);
+  });
 }

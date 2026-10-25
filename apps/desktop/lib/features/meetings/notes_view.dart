@@ -7,8 +7,7 @@ extension _NotesView on MeetingsController {
     bool preview = false,
     Widget? assistantToggle,
   }) {
-    if (loadedMeetingNotes != id)
-      return const Center(child: Text('Loading meeting notes…'));
+    if (loadedMeetingNotes != id) return const MeetingNotesLoading();
     final live = _reads.preference('liveEnhance', 'true') == 'true';
     return MeetingNotesLayout(
       wide: wide,
@@ -36,114 +35,47 @@ extension _NotesView on MeetingsController {
     final enhancedText = progress?.bodyProvided == true
         ? progress!.body
         : _reads.enhanced(id);
-    return Container(
-      margin: EdgeInsets.fromLTRB(preview ? 24 : 0, 24, 24, 24),
-      decoration: BoxDecoration(
-        color: MeetingVisuals.enhancedSurface,
-        borderRadius: MeetingVisuals.previewRadius,
+    return MeetingEnhancedPane(
+      preview: preview,
+      enhancedText: enhancedText,
+      hasArtifact: enhanced != null,
+      hasProgress: progress != null,
+      active: progress?.active == true,
+      cancelRequested: progress?.cancelRequested == true,
+      degraded: enhanced?.manifest['degraded'] == true,
+      status: progress?.status ?? '',
+      hasNotes: meetingNotesController.text.isNotEmpty,
+      body: _meetingEnhancedBody(
+        enhancedText,
+        preview: preview,
+        hasProgress: progress != null,
       ),
-      child: LayoutBuilder(
-        builder: (_, bounds) => SingleChildScrollView(
-          child: SizedBox(
-            height: math.max(preview ? 160 : 260, bounds.maxHeight),
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 8, 4),
-                  child: MeetingPanelHeading(
-                    title: preview ? 'Enhanced notes' : 'Live enhanced notes',
-                    actions: [
-                      IconButton(
-                        tooltip: 'Copy enhanced notes',
-                        onPressed:
-                            enhanced == null &&
-                                progress == null &&
-                                enhancedText.isEmpty
-                            ? null
-                            : () => Clipboard.setData(
-                                ClipboardData(text: enhancedText),
-                              ),
-                        icon: const Icon(Icons.copy_outlined, size: 19),
-                      ),
-                      if (enhanced != null)
-                        IconButton(
-                          tooltip: 'Edit enhanced notes',
-                          onPressed: () => unawaited(
-                            editArtifact(
-                              enhanced,
-                              initialText: enhancedText,
-                            ).catchError(_operations.reportAsyncError),
-                          ),
-                          icon: const Icon(Icons.edit_outlined, size: 18),
-                        ),
-                      IconButton(
-                        tooltip: 'Hide enhanced notes',
-                        onPressed: () =>
-                            update(() => meetingEnhancedVisible = false),
-                        icon: const Icon(Icons.keyboard_arrow_down, size: 20),
-                      ),
-                    ],
-                  ),
-                ),
-                if (enhanced?.manifest['degraded'] == true)
-                  const Padding(
-                    padding: EdgeInsets.all(12),
-                    child: Text(
-                      'Some notes were preserved without successful enhancement. Review or regenerate these notes.',
-                    ),
-                  ),
-                if (progress?.active == true) ...[
-                  const LinearProgressIndicator(),
-                  TextButton(
-                    key: const ValueKey('cancel-note-enhancement'),
-                    onPressed: progress?.cancelRequested == true
-                        ? null
-                        : () async {
-                            await meetingsCancelEnhanceDescriptor.send(
-                              d,
-                              MeetingsCancelEnhanceInput(
-                                id: id,
-                                requestId: WireField(
-                                  progress?.requestId.isNotEmpty == true
-                                      ? progress!.requestId
-                                      : null,
-                                ),
-                              ),
-                            );
-                          },
-                    child: Text(
-                      progress?.cancelRequested == true
-                          ? 'Cancelling…'
-                          : 'Cancel enhancement',
-                    ),
-                  ),
-                ],
-                if ((progress?.status ?? '').isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.all(8),
-                    child: Text(progress!.status),
-                  ),
-                Expanded(
-                  child: _meetingEnhancedBody(
-                    enhancedText,
-                    preview: preview,
-                    hasProgress: progress != null,
-                  ),
-                ),
-                if (meetingNotesController.text.isNotEmpty)
-                  TextButton.icon(
-                    onPressed:
-                        meetingEnhancing || _operations.busy || _chat.asking
-                        ? null
-                        : () => enhanceMeetingNotes(id),
-                    icon: const Icon(Icons.auto_awesome, size: 16),
-                    label: const Text('Enhance notes'),
-                  ),
-              ],
+      onCopy: () => Clipboard.setData(ClipboardData(text: enhancedText)),
+      onEdit: enhanced == null
+          ? null
+          : () => unawaited(
+              editArtifact(
+                enhanced,
+                initialText: enhancedText,
+              ).catchError(_operations.reportAsyncError),
+            ),
+      onHide: () => update(() => meetingEnhancedVisible = false),
+      onCancel: () async {
+        await meetingsCancelEnhanceDescriptor.send(
+          d,
+          MeetingsCancelEnhanceInput(
+            id: id,
+            requestId: WireField(
+              progress?.requestId.isNotEmpty == true
+                  ? progress!.requestId
+                  : null,
             ),
           ),
-        ),
-      ),
+        );
+      },
+      onEnhance: meetingEnhancing || _operations.busy || _chat.asking
+          ? null
+          : () => enhanceMeetingNotes(id),
     );
   }
 

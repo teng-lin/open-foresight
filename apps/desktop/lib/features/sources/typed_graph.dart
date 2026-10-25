@@ -1,11 +1,7 @@
 import 'dart:convert';
 import 'package:foresight_core/desktop.dart';
 
-SourceType typedSourceType(SourceSummary source, {String? originalMime}) =>
-    sourceType({
-      'mime': source.mime,
-      'provenance': source.provenance,
-    }, originalMime: originalMime);
+export 'source_type_view.dart' show typedSourceType;
 
 /// Only command inputs are serialized; persistence projections remain typed.
 List<Map<String, Object?>> graphSourceArguments(List<SourceSummary> sources) =>

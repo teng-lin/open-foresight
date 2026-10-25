@@ -254,3 +254,12 @@ class MeetingWorkspaceHeader extends StatelessWidget {
     ],
   );
 }
+
+class MeetingReadStatus extends StatelessWidget {
+  const MeetingReadStatus({super.key, required this.loaded});
+  final bool loaded;
+  @override
+  Widget build(BuildContext context) => Center(
+    child: Text(loaded ? 'Meeting no longer exists.' : 'Loading meeting…'),
+  );
+}

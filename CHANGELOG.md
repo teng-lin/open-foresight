@@ -15,6 +15,9 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Changed
 
+- Separate meeting and source renderers from feature commands while preserving
+  note saves, answer retries, generation cancellation and dialog ownership.
+
 - Use typed desktop operation requests and replies while retaining request keys,
   workspace checks and retry behavior when a reply is lost or malformed.
 - Search waits only for actively owned stopped-transcript indexing; saved failed
