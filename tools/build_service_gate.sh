@@ -23,6 +23,8 @@ for task_binary in "$task_build/application/foresight-service" "$task_build/appl
   [[ -x "$task_binary" ]] || { echo "Stage prerequisite is not executable: $task_binary" >&2; exit 1; }
 done
 [[ -f "$task_native" ]] || { echo "Missing stage prerequisite: $task_native" >&2; exit 1; }
+source "$task_root/tools/runtime_support_gate.sh"
+foresight_verify_runtime_support "$task_root" "$task_build" "$task_python"
 # Short sockets work on macOS too. Honor disk-backed local test storage.
 task_service_temp=$(mktemp -d "${FORESIGHT_TEST_TEMP_ROOT:-/tmp}/of-svc.XXXXXX")
 trap 'rm -rf -- "$task_service_temp"' EXIT

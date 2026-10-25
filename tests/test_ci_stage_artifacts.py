@@ -344,6 +344,8 @@ def test_native_runtime_payload_omits_compilers_and_retains_products_and_notices
         "build/native/diagnostic-native-inputs.json",
         "build/native/diagnostic-toolchain-metadata.json",
         "build/native/diagnostic-products.json",
+        "build/native/diagnostic-sql-inputs.json",
+        "build/native/runtime-support-build.json",
     ]
     excluded = [
         "build/_deps/compiler/big.o",

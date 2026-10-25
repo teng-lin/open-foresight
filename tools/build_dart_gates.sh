@@ -21,6 +21,9 @@ if [[ "$task_platform" == macos ]]; then
     exit 1
   }
 fi
+source "$task_root/tools/runtime_support_gate.sh"
+foresight_verify_runtime_support "$task_root" "$task_build" "$task_python"
+export FORESIGHT_NATIVE_LIBRARY="$task_native"
 "$task_python" "$task_root/tools/verify_toolchain_pins.py" "$task_gate"
 if [[ "$task_gate" == core && -n "${FORESIGHT_DART:-}" && "$FORESIGHT_DART" != dart ]]; then
   "$task_python" "$task_root/tools/verify_toolchain_pins.py" core --dart "$FORESIGHT_DART"

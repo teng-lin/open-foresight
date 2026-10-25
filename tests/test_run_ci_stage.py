@@ -247,6 +247,8 @@ def test_native_runner_publishes_distinct_runtime_and_compilation_archives(
             "build/native/diagnostic-native-inputs.json",
             "build/native/diagnostic-toolchain-metadata.json",
             "build/native/diagnostic-products.json",
+            "build/native/diagnostic-sql-inputs.json",
+            "build/native/runtime-support-build.json",
             "build/_deps/compiler/object.o",
         ):
             target = tmp_path / name
@@ -309,6 +311,8 @@ def test_native_runner_publishes_distinct_runtime_and_compilation_archives(
         "build/native/diagnostic-native-inputs.json",
         "build/native/diagnostic-toolchain-metadata.json",
         "build/native/diagnostic-products.json",
+        "build/native/diagnostic-sql-inputs.json",
+        "build/native/runtime-support-build.json",
     ):
         assert (target / relative).read_bytes() == (tmp_path / relative).read_bytes()
     assert not (target / "build/_deps").exists()

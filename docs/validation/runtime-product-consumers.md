@@ -46,7 +46,13 @@ The tool does not accept, create or review any WorkerID. The currently pending
 production worker closure must still refuse, including when all native products
 have a valid byte receipt. Synthetic test bytes qualify receipt mechanics only.
 
-Package/build/coverage/service consumer wiring and the production WorkerID
-contract remain under implementation. Existing artifact producer selection,
+Dart, compiled service and core-coverage gates verify the finished three-product
+receipt before consuming native bytes. They export the selected SQL test image
+and distinct production/test helper paths. The native-runtime payload retains
+both the SQL source record and finished byte receipt. These identity-qualified
+product gates refuse unavailable diagnostics or an unclosed recipe; the
+mandatory SQL mechanism itself remains independently usable with diagnostics
+disabled. Package consumer wiring and the production WorkerID contract remain
+under implementation. Existing artifact producer selection,
 publishing permissions and legacy trust selectors are unchanged. A complete
 combined product matrix and package/artifact-trust owner review are still needed.
