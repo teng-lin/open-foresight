@@ -89,6 +89,25 @@ class ServiceGates {
       File('${directory.path}/$name').writeAsStringSync('');
 }
 
+/// Source fixture authority is selected at compilation, before runtime lookups.
+/// It supplies no optional diagnostic identities; those require the producer.
+Future<List<String>> sourceServiceCompileDefines() async {
+  final library = await Isolate.resolvePackageUri(
+    Uri.parse('package:foresight_core/foresight_core.dart'),
+  );
+  if (library == null) throw StateError('Cannot locate foresight_core');
+  final root = File(library.toFilePath()).parent.parent.path;
+  final checkout = Directory('$root/../..').resolveSymbolicLinksSync();
+  final build = Directory(
+    Platform.environment['FORESIGHT_BUILD_DIR'] ?? '$checkout/build',
+  ).resolveSymbolicLinksSync();
+  return [
+    '-DFORESIGHT_DIAGNOSTIC_TEST_CONTEXT=true',
+    '-DFORESIGHT_DIAGNOSTIC_SOURCE_ANCHOR=$checkout',
+    '-DFORESIGHT_DIAGNOSTIC_BUILD_ROOT=$build',
+  ];
+}
+
 /// The real `bin/service.dart` compiled once, normally with
 /// `-DFORESIGHT_ENABLE_TEST_HOOKS=true`. `dart compile kernel` evaluates the
 /// define at compile time, so the child keeps its test hooks however the
@@ -121,6 +140,7 @@ class HookedServiceBuild {
       'compile',
       'kernel',
       if (testHooks) '-DFORESIGHT_ENABLE_TEST_HOOKS=true',
+      ...await sourceServiceCompileDefines(),
       '--packages=$packages',
       '$root/$entryPoint',
       '-o',

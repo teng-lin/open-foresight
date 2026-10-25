@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -38,6 +39,7 @@ bool lockHeld(ProfilePaths profile) {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   group('serviceGate in this isolate', () {
     late Map<String, String> saved;
     late Directory gates;

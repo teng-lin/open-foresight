@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -121,6 +122,7 @@ Uint8List _sectorSizedFooter(Uint8List original) {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   test(
     'valid maximum SQLite page size qualifies without rewriting its header',
     () {

@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -138,6 +139,7 @@ while True:
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late HookedServiceBuild build;
   setUpAll(() async => build = await HookedServiceBuild.compile());
   tearDownAll(() => build.dispose());

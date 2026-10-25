@@ -1,9 +1,11 @@
+import '../sql_support_test_bootstrap.dart';
 // Runs in a separate source-compiler process. exit deliberately bypasses SQLite
 // close/checkpoint; journals and WAL are produced by SQLite itself.
 import 'dart:io';
 import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
 
 void main(List<String> args) {
+  bootstrapSqlSupportFixture();
   final db = sqlite3.open(args[0]);
   final version = int.parse(args[2]);
   db.execute('CREATE TABLE payload(id INTEGER PRIMARY KEY,body TEXT)');

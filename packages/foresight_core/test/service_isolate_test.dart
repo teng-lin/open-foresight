@@ -1,9 +1,11 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'dart:isolate';
 import 'dart:io';
 import 'dart:convert';
-import 'package:foresight_test_support/hooked_service.dart' show ServiceGates;
+import 'package:foresight_test_support/hooked_service.dart'
+    show ServiceGates, sourceServiceCompileDefines;
 import 'package:foresight_test_support/poll.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/foresight_core.dart';
@@ -38,6 +40,7 @@ void diagnosticWorker(SendPort parent) {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   test(
     'recoverable worker diagnostics preserve operation and clean exit',
     () async {
@@ -147,6 +150,7 @@ void main() {
         'FORESIGHT_STARTUP_ENV': handoff.path,
       };
       final command = [
+        ...await sourceServiceCompileDefines(),
         '--packages=${File('.dart_tool/package_config.json').absolute.path}',
         'bin/service.dart',
       ];

@@ -1,3 +1,4 @@
+import '../sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
@@ -68,6 +69,7 @@ Future<void> main(List<String> args) async {
   Database? database;
   bool? before, after;
   if (mode == 'alias' || mode == 'unsafe-control') {
+    bootstrapSqlSupportFixture();
     final logs = Directory('$profile/logs')..createSync();
     final chmod = await run('chmod', ['700', logs.path]);
     require(chmod.exitCode == 0, 'Private logs directory');
