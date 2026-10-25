@@ -68,6 +68,32 @@ void main() {
     expect(parsed.support, '/owned/lib.so');
   });
 
+  test(
+    'system writable directory exceptions are exact owner/group/mode rules',
+    () {
+      bool allowed(String path, int permissions, int uid, int gid) =>
+          diagnosticDirectoryModeAllowed(
+            path: path,
+            mode: 0x4000 | permissions,
+            uid: uid,
+            gid: gid,
+            effectiveUid: 501,
+            macOS: true,
+          );
+      expect(allowed('/Applications', 0x1fd, 0, 80), isTrue);
+      expect(allowed('/Applications', 0x1fd, 0, 20), isFalse);
+      expect(allowed('/Applications', 0x1fd, 501, 80), isFalse);
+      expect(allowed('/Applications/other', 0x1fd, 0, 80), isFalse);
+      expect(allowed('/usr/local', 0x5fd, 0, 20), isTrue);
+      expect(allowed('/usr/local', 0x5fd, 0, 80), isFalse);
+      expect(allowed('/usr/local', 0x1fd, 0, 20), isFalse);
+      expect(allowed('/private/var/tmp', 0x3ff, 0, 0), isTrue);
+      expect(allowed('/var/tmp', 0x3ff, 0, 0), isFalse);
+      expect(allowed('/private/var/tmp', 0x1ff, 0, 0), isFalse);
+      expect(allowed('/private/var/tmp', 0x3ff, 501, 20), isFalse);
+    },
+  );
+
   DiagnosticStartupContext context(
     String root, {
     DiagnosticHost host = DiagnosticHost.service,
@@ -75,10 +101,12 @@ void main() {
     String nativeId = 'a',
     String dartId = 'b',
     String mode = 'aot',
+    String? dartOverride,
   }) => DiagnosticStartupContext(
     host: host,
-    executable:
-        '$root/bin/foresight-${host == DiagnosticHost.service ? 'service' : 'mcp'}',
+    executable: source && mode == 'jit'
+        ? '$root/sdk/bin/dart'
+        : '$root/bin/foresight-${host == DiagnosticHost.service ? 'service' : 'mcp'}',
     script: '$root/packages/foresight_core/bin/service.dart',
     nativeId: nativeId * 64,
     dartId: dartId * 64,
@@ -86,7 +114,9 @@ void main() {
     workerMode: mode,
     sourceAnchor: root,
     sourceContext: source,
-    dartExecutable: '$root/sdk/bin/dart',
+    dartExecutable: dartOverride ?? '$root/sdk/bin/dart',
+    dartSdkRoot: '$root/sdk',
+    dartSdkIdentity: 'd' * 64,
     packageConfig: '$root/.dart_tool/package_config.json',
     sourceWorker:
         '$root/packages/foresight_core/bin/diagnostic_storage_worker.dart',
@@ -175,6 +205,25 @@ void main() {
   );
 
   test(
+    'installed entrypoints ignore a compiled source-fixture selector',
+    () async {
+      final root = await installation();
+      final selected = DiagnosticStartupSelection.resolve(
+        context(root.path, source: true),
+      );
+      expect(
+        selected.support,
+        '${root.path}/lib/libforesight_diagnostic_support.so',
+      );
+      expect(selected.prefix, isEmpty);
+      expect(
+        selected.command(22).arguments[3],
+        '${root.path}/bin/foresight-service',
+      );
+    },
+  );
+
+  test(
     'metadata refuses symlink, hardlink and writable ordinary candidates',
     () async {
       final root = await installation();
@@ -221,6 +270,51 @@ void main() {
   });
 
   test(
+    'writable ancestor outside a private install anchor is refused',
+    () async {
+      final original = await installation();
+      final parent = createTestTempDirectorySync('ancestor-');
+      final shared = Directory('${parent.path}/untrusted')..createSync();
+      final relocated = original.renameSync('${shared.path}/application');
+      expect(
+        (await Process.run('/bin/chmod', ['777', shared.path])).exitCode,
+        0,
+      );
+      expect(
+        () => DiagnosticStartupSelection.resolve(context(relocated.path)),
+        throwsA(isA<DiagnosticStartupUnavailable>()),
+      );
+    },
+  );
+
+  test(
+    'source executable cannot choose its own alternative SDK anchor',
+    () async {
+      final root = await installation();
+      await file(
+        '${root.path}/build/native/foresight-diagnostic-launcher',
+        executable: true,
+      );
+      await file(
+        '${root.path}/build/native/libforesight_diagnostic_support.so',
+      );
+      await file('${root.path}/foreign-sdk/bin/dart', executable: true);
+      expect(
+        () => DiagnosticStartupSelection.resolve(
+          context(
+            root.path,
+            host: DiagnosticHost.mcp,
+            source: true,
+            mode: 'jit',
+            dartOverride: '${root.path}/foreign-sdk/bin/dart',
+          ),
+        ),
+        throwsA(isA<DiagnosticStartupUnavailable>()),
+      );
+    },
+  );
+
+  test(
     'source descriptor stays within16 entries and carries only reviewed public metadata',
     () async {
       final root = await installation();
@@ -258,6 +352,8 @@ void main() {
         'source',
         'kernel',
         'mode',
+        'sdk',
+        'sdk_id',
       });
       expect(descriptor['anchor'], root.path);
       expect(descriptor['mode'], 'jit');
