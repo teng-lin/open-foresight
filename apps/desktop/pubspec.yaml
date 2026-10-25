@@ -15,13 +15,13 @@ dependencies:
   crypto: 3.0.7
   ffi: 2.1.4
   fixnum: 1.1.1
-  file_selector: 1.0.3
-  dbus: 0.7.11
+  file_selector: 1.1.0
+  dbus: 0.8.0
   flutter_markdown_plus: 1.0.12
   intl: 0.20.2
 dev_dependencies:
   # Parse imports, exports, parts and constructor references for architecture guards.
-  analyzer: 10.0.1
+  analyzer: 14.6.0
   foresight_test_support:
     path: ../../packages/foresight_test_support
   fake_async: ^1.3.3
@@ -29,7 +29,7 @@ dev_dependencies:
     sdk: flutter
   flutter_test:
     sdk: flutter
-  flutter_lints: 5.0.0
+  flutter_lints: 6.0.0
 flutter:
   uses-material-design: true
   assets:

@@ -10,7 +10,7 @@ dependencies:
   crypto: 3.0.7
   grpc: 4.3.1
   sqlite3: 2.9.4
-  matcher: ^0.12.17
+  matcher: ^0.12.20
 dev_dependencies:
-  lints: ^5.1.1
-  test_api: ">=0.7.6 <0.8.0"
+  lints: ^6.1.0
+  test_api: ^0.7.15
