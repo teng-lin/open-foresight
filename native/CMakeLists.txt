@@ -131,6 +131,20 @@ if(BUILD_TESTING)
   if(APPLE)
     set_tests_properties(diagnostic_kernel PROPERTIES FIXTURES_REQUIRED diagnostic_kernel_stale)
   endif()
+  add_executable(diagnostic_inherited_test ${FS_DIAG_KERNEL_SOURCE}
+    diagnostic_protocol.c diagnostic_inherited.c ../tests/native/diagnostic_inherited.c)
+  set_target_properties(diagnostic_inherited_test PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
+  target_compile_options(diagnostic_inherited_test PRIVATE -Wall -Wextra -Werror -Wpedantic)
+  target_include_directories(diagnostic_inherited_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  if(APPLE)
+    target_compile_definitions(diagnostic_inherited_test PRIVATE
+      FS_DIAG_TEST_CONTEXT=1
+      FS_DIAG_FIXTURE_BASE="${CMAKE_CURRENT_BINARY_DIR}/diagnostic-inherited-namespace"
+      FS_DIAG_FIXTURE_PREFIX="/ofy${FS_DIAG_NAMESPACE_HASH}")
+  endif()
+  add_test(NAME diagnostic_inherited COMMAND diagnostic_inherited_test "${CMAKE_CURRENT_BINARY_DIR}")
+  set_tests_properties(diagnostic_inherited PROPERTIES TIMEOUT 20)
   add_executable(native_spawn_contract_test ../tests/native/spawn_contract.cpp)
   target_compile_features(native_spawn_contract_test PRIVATE cxx_std_20)
   target_link_libraries(native_spawn_contract_test PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
