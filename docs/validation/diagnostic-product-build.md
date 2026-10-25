@@ -47,3 +47,11 @@ Worker generation remains `pending` and refuses by default. No production worker
 ID, reviewed closure flag, source verifier or package acceptance is introduced
 here. The subsequent startup and packaging integration must preserve that refusal
 until the complete real runtime closure and selected SDK have been reviewed.
+
+The candidate native-runtime allowlists add only the two platform variants of
+SQL/diagnostic support, the diagnostic launcher and three public native identity/
+availability records. Real archive/unpack/repack and run-stage consumer tests
+verify all added bytes while continuing to exclude compiler/dependency trees.
+This path inventory change needs final owner review. Artifact producer selection,
+receipts, checksums, source identity, permissions and publication rules are
+unchanged. It does not authorize using an unreviewed worker or stale products.
