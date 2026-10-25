@@ -340,6 +340,30 @@ final class DiagnosticRecord {
   // It also bounds temporary UTF16/UTF8 encoding scratch across16 producers.
   static const maximumProducerRecordBytes = 2048;
 
+  /// Count wire bytes without allocating a second UTF8 encoding buffer.
+  /// Unpaired UTF16 surrogates use the standard encoder's replacement width.
+  static int utf8Length(String text) {
+    var length = 0;
+    for (var at = 0; at < text.length; at++) {
+      final unit = text.codeUnitAt(at);
+      if (unit <= 0x7f) {
+        length++;
+      } else if (unit <= 0x7ff) {
+        length += 2;
+      } else if (unit >= 0xd800 &&
+          unit <= 0xdbff &&
+          at + 1 < text.length &&
+          text.codeUnitAt(at + 1) >= 0xdc00 &&
+          text.codeUnitAt(at + 1) <= 0xdfff) {
+        length += 4;
+        at++;
+      } else {
+        length += 3;
+      }
+    }
+    return length;
+  }
+
   Map<String, Object?>? toWire() {
     if ((request != null && !_number(request!, signed: false)) ||
         (attempt != null && !_number(attempt!, signed: false))) {

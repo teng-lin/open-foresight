@@ -385,7 +385,7 @@ final class DiagnosticProducer {
         return false;
       }
       final encoded = jsonEncode(value);
-      final length = utf8.encode(encoded).length;
+      final length = DiagnosticRecord.utf8Length(encoded);
       if (length > ceiling) {
         _rejected = _sum(_rejected, 1);
         _pressure(priority);

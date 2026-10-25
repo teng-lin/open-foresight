@@ -1,11 +1,47 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:foresight_core/src/diagnostics/code_locations.g.dart';
 import 'package:foresight_core/src/diagnostics/events.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test('allocation-free wire byte count matches the standard UTF8 encoder', () {
+    final cases = <String>[
+      '',
+      'registered.ascii',
+      for (final unit in [
+        0x7f,
+        0x80,
+        0x7ff,
+        0x800,
+        0xd7ff,
+        0xd800,
+        0xdbff,
+        0xdc00,
+        0xdfff,
+        0xe000,
+        0xffff,
+      ])
+        String.fromCharCode(unit),
+      String.fromCharCodes([0xd800, 0xdc00, 0xdbff, 0xdfff]),
+      String.fromCharCodes([0xd800, 0xd800, 0xdc00, 0xdc00]),
+    ];
+    final random = Random(47941);
+    for (var sample = 0; sample < 1000; sample++) {
+      cases.add(
+        String.fromCharCodes(
+          List.generate(random.nextInt(128), (i) => random.nextInt(65536)),
+        ),
+      );
+    }
+    for (final text in cases) {
+      expect(DiagnosticRecord.utf8Length(text), utf8.encode(text).length);
+      final json = jsonEncode({'value': text});
+      expect(DiagnosticRecord.utf8Length(json), utf8.encode(json).length);
+    }
+  });
   test(
     'generated diagnostic catalogs match the current operation and source inventory',
     () async {

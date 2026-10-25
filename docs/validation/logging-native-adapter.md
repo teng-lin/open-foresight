@@ -52,6 +52,16 @@ schema 2 identity and sequence, protected failure classification, canonical
 configuration, and physical writer/child close. It needs no model, audio device,
 or permission prompt. It does not establish physical audio acceptance.
 
+Producer and writer byte accounting scans UTF16 code units without allocating a
+UTF8 output buffer. It matches the standard encoder, including replacement of
+unpaired surrogates. This avoids the SDK's three-times input-size temporary plus
+output copy merely to count bytes. An external VM-service probe pauses actual
+producer encoding inside SDK JSON and UTF8 phases and collects heap snapshots
+after GC. On pinned Linux Dart 3.9.2, all 15 event shapes with maximal registered
+fields/correlations/eight frames yielded 45 phase snapshots; the largest
+attributed phase was 7648 bytes, below the 8192-byte per-producer allowance.
+These measured encoder phases do not establish the complete process bound.
+
 Native queue storage is independently measured at 256072 bytes. The Dart traffic
 512 KiB physical bound, including encoding and control/object metadata, remains
 an explicit open acceptance item; logical ledger counters alone do not prove it.

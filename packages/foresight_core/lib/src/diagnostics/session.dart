@@ -1058,7 +1058,7 @@ final class _Writer {
         final priority = value[7] as bool;
         final producer = ledger.consume(value, cost, priority);
         if (producer == null) return;
-        final length = utf8.encode(encoded).length;
+        final length = DiagnosticRecord.utf8Length(encoded);
         if (length > DiagnosticRecord.maximumProducerRecordBytes ||
             _cost(length) != cost) {
           _producerCounters(0, 1);
