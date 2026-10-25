@@ -8,7 +8,7 @@ on:
     types: [completed]
     branches: [main]
   schedule:
-    - cron: '17,47 * * * *'
+    - cron: '17 * * * *'
   workflow_dispatch:
     inputs:
       exercise_sweep:
