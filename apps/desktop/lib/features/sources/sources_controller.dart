@@ -601,49 +601,63 @@ class SourcesController implements SourceCommands {
             identity.isCurrent(d, alive: mounted) &&
             noteId == originalId &&
             noteEditorGeneration == editorGeneration;
-        Map<String, dynamic> scoped(Map<String, dynamic> args) => {
-          ...args,
-          if (epoch != null) 'workspace_epoch': epoch,
-        };
-        final note = {'title': noteTitle.text, 'body': noteBody.text};
+        final sendEnvelope = ClientEnvelope(
+          workspaceEpoch: epoch != null
+              ? WireField(epoch)
+              : const WireField.absent(),
+        );
+        final note = NotesSaveInput(title: noteTitle.text, body: noteBody.text);
         void saved(int id) => setState(() {
           noteId = id;
-          noteBaseline = (note['title']!, note['body']!);
+          noteBaseline = (note.title, note.body);
           _acceptedNoteBody = (id, noteEditorGeneration);
           _noteLoadOwner = identity;
           _noteBodyNeedsReview = false;
           _noteLoadError = '';
-          if (noteBody.text == note['body'])
+          if (noteBody.text == note.body)
             _noteBodyLoadRevision = _noteDraftRevision;
         });
         final id = noteId;
         if (id != null) {
-          await d.command(Operation.notesSave, scoped({...note, 'id': id}));
+          await notesSaveDescriptor.send(
+            d,
+            NotesSaveInput(
+              id: WireField(id),
+              title: note.title,
+              body: note.body,
+              envelope: sendEnvelope,
+            ),
+          );
           if (current()) saved(id);
           return;
         }
-        final created =
-            await newNoteKey.run(
-                  note,
-                  (keyed) => d.command(Operation.notesSave, scoped(keyed)),
-                  // Edited after an unconfirmed save: the first save
-                  // is now known, so the edit updates that note.
-                  amend: (first, edited) async {
-                    final id = (first as Map)['id'] as int;
-                    if (current()) {
-                      setState(() {
-                        originalId = id;
-                        noteId = id;
-                      });
-                    }
-                    return d.command(
-                      Operation.notesSave,
-                      scoped({...edited, 'id': id}),
-                    );
-                  },
-                )
-                as Map;
-        if (current()) saved(created['id'] as int);
+        final created = await notesSaveDescriptor.sendKeyed(
+          newNoteKey,
+          d,
+          note,
+          sendEnvelope: sendEnvelope,
+          // Edited after an unconfirmed save: the first save is now known,
+          // so the edit updates that note under the existing retry owner.
+          amend: (first, edited) async {
+            final id = first.id;
+            if (current()) {
+              setState(() {
+                originalId = id;
+                noteId = id;
+              });
+            }
+            return notesSaveDescriptor.send(
+              d,
+              NotesSaveInput(
+                id: WireField(id),
+                title: edited.title,
+                body: edited.body,
+                envelope: sendEnvelope,
+              ),
+            );
+          },
+        );
+        if (current()) saved(created.id);
       }),
     );
   }

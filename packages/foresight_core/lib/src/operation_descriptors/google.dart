@@ -1,7 +1,12 @@
 import '../operation_descriptor.dart';
+import '../client_contract.dart';
+import '../client_results.dart';
+import '../client_requests/google.dart';
 import '../operation_argument_schema.dart';
 
 const googleStatusDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeGoogle),
+  requestEncoder: OperationInputEncoder<GoogleStatusInput>(),
   scope: OperationScope.application,
   readOnly: true,
   approval: ApprovalPolicy.never,
@@ -19,6 +24,8 @@ const googleStatusDescriptor = OperationDescriptor(
 );
 
 const googleConfigureDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeGoogle),
+  requestEncoder: OperationInputEncoder<GoogleConfigureInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -40,6 +47,8 @@ const googleConfigureDescriptor = OperationDescriptor(
 );
 
 const googleCompleteSignInDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeGoogle),
+  requestEncoder: OperationInputEncoder<GoogleCompleteSignInInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -60,6 +69,8 @@ const googleCompleteSignInDescriptor = OperationDescriptor(
 );
 
 const googleCancelSignInDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeGoogle),
+  requestEncoder: OperationInputEncoder<GoogleCancelSignInInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -77,6 +88,8 @@ const googleCancelSignInDescriptor = OperationDescriptor(
 );
 
 const googleDisconnectDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeGoogle),
+  requestEncoder: OperationInputEncoder<GoogleDisconnectInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -94,6 +107,8 @@ const googleDisconnectDescriptor = OperationDescriptor(
 );
 
 const googleSwitchAccountDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeGoogle),
+  requestEncoder: OperationInputEncoder<GoogleSwitchAccountInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -113,6 +128,8 @@ const googleSwitchAccountDescriptor = OperationDescriptor(
 );
 
 const googleSignOutAccountDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeGoogle),
+  requestEncoder: OperationInputEncoder<GoogleSignOutAccountInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -132,6 +149,8 @@ const googleSignOutAccountDescriptor = OperationDescriptor(
 );
 
 const googleDriveFilesDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeDriveFiles),
+  requestEncoder: OperationInputEncoder<GoogleDriveFilesInput>(),
   scope: OperationScope.application,
   readOnly: true,
   approval: ApprovalPolicy.desktop,
@@ -153,6 +172,8 @@ const googleDriveFilesDescriptor = OperationDescriptor(
 );
 
 const googleImportFileDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<GoogleImportFileInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -172,6 +193,8 @@ const googleImportFileDescriptor = OperationDescriptor(
 );
 
 const googleImportFolderDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<GoogleImportFolderInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -191,6 +214,8 @@ const googleImportFolderDescriptor = OperationDescriptor(
 );
 
 const googleImportYearDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<GoogleImportYearInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -208,6 +233,8 @@ const googleImportYearDescriptor = OperationDescriptor(
 );
 
 const googleRefreshDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeRefresh),
+  requestEncoder: OperationInputEncoder<GoogleRefreshInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -225,6 +252,8 @@ const googleRefreshDescriptor = OperationDescriptor(
 );
 
 const googleCalendarDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<GoogleCalendarInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -242,6 +271,8 @@ const googleCalendarDescriptor = OperationDescriptor(
 );
 
 const googleAttachmentsDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<GoogleAttachmentsInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -261,6 +292,8 @@ const googleAttachmentsDescriptor = OperationDescriptor(
 );
 
 const googleSignInDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(GoogleSignInResult.fromWire),
+  requestEncoder: OperationInputEncoder<GoogleSignInInput>(),
   scope: OperationScope.service,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -278,6 +311,8 @@ const googleSignInDescriptor = OperationDescriptor(
 );
 
 const googleAddAccountDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(GoogleSignInResult.fromWire),
+  requestEncoder: OperationInputEncoder<GoogleAddAccountInput>(),
   scope: OperationScope.service,
   readOnly: false,
   approval: ApprovalPolicy.desktop,

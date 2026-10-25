@@ -15,6 +15,8 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Changed
 
+- Use typed desktop operation requests and replies while retaining request keys,
+  workspace checks and retry behavior when a reply is lost or malformed.
 - Search waits only for actively owned stopped-transcript indexing; saved failed
   backlog no longer blocks later searches of other indexed documents.
 

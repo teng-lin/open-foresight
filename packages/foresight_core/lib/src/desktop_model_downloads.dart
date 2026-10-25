@@ -1,3 +1,7 @@
+import 'client_contract.dart';
+import 'operation_descriptors.dart';
+import 'client_requests.dart';
+import 'client_command.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -5,7 +9,6 @@ import 'desktop_connection.dart';
 import 'model_asset_status.dart';
 import 'model_catalog.dart';
 import 'model_download_contract.dart';
-import 'operations.dart';
 import 'speech_model_catalog.dart';
 
 String _kind(GemmaModel model) {
@@ -28,12 +31,12 @@ final class DesktopModelAssetClient {
     Directory root, {
     Map<String, Object?>? registration,
   }) async {
-    final result = await connection.commandCurrent(
-      Operation.modelsInspectAsset,
-      {'kind': _kind(model), 'digest': model.digest},
+    final result = await modelsInspectAssetDescriptor.sendCurrent(
+      connection,
+      ModelsInspectAssetInput(kind: _kind(model), digest: model.digest),
       current ?? () => true,
     );
-    final location = ModelAssetLocation.fromWire(result, requiredPath: false);
+    final location = result;
     return location.path == null ? null : File(location.path!);
   }
 }
@@ -65,7 +68,7 @@ final class RemoteModelDownloader implements ModelDownloader {
     final requestId =
         'model-asset-${DateTime.now().microsecondsSinceEpoch}-${++_next}';
     bool current() => !_cancelled && (ownerCurrent?.call() ?? true);
-    final callbackFailed = Completer<Object?>();
+    final callbackFailed = Completer<ModelAssetLocation>();
     Object? callbackFailure;
     final subscription = connection.changes.listen((_) {
       final source = connection;
@@ -84,18 +87,21 @@ final class RemoteModelDownloader implements ModelDownloader {
       }
     });
     try {
-      final result = await Future.any<Object?>([
-        connection.commandCurrent(Operation.modelsDownloadAsset, {
-          'kind': _kind(model),
-          'digest': model.digest,
-          'requestId': requestId,
-        }, current),
+      final result = await Future.any<ModelAssetLocation>([
+        modelsDownloadAssetDescriptor.sendCurrent(
+          connection,
+          ModelsDownloadAssetInput(
+            kind: _kind(model),
+            digest: model.digest,
+            requestId: requestId,
+            progressKey: WireField(requestId),
+          ),
+          current,
+        ),
         callbackFailed.future,
       ]);
       if (!current()) throw const ModelDownloadCancelled();
-      return File(
-        ModelAssetLocation.fromWire(result, requiredPath: true).path!,
-      );
+      return File(result.path!);
     } catch (error) {
       if (identical(error, callbackFailure)) rethrow;
       if (_cancelled || !(ownerCurrent?.call() ?? true)) {

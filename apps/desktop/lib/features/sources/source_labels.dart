@@ -4,13 +4,16 @@ extension _SourceLabels on SourcesController {
   List<String> _featureSourceLabels(SourceSummary s) => s.labels;
 
   Future<void> _featurePutDocumentLabel(DocumentLabel label) async {
-    await d.command(Operation.labelsPut, {
-      'id': label.documentId,
-      'name': label.name,
-      'source': label.source,
-      'color': label.colorHex,
-      'rationale': label.rationale,
-    });
+    await labelsPutDescriptor.send(
+      d,
+      LabelsPutInput(
+        id: label.documentId,
+        name: label.name,
+        source: label.source,
+        color: WireField(label.colorHex),
+        rationale: WireField(label.rationale),
+      ),
+    );
   }
 
   Future<bool> _featureSaveGraphLayout(
@@ -21,24 +24,17 @@ extension _SourceLabels on SourcesController {
     String? labelSet,
     List<GraphCluster> clusters = const [],
   }) async {
-    return await d.command(Operation.graphSave, {
-          'identity': identity,
-          'sources': graphSourceArguments(sources),
-          'vectors': vectors,
-          'points': points.map((k, v) => MapEntry(k, [v.x, v.y, v.z])),
-          'labelSet': labelSet,
-          'clusters': clusters
-              .map(
-                (c) => {
-                  'label': c.label,
-                  'center_proj_x': c.center.x,
-                  'center_proj_y': c.center.y,
-                  'radius': c.radius,
-                },
-              )
-              .toList(),
-        })
-        as bool;
+    return graphSaveDescriptor.send(
+      d,
+      GraphSaveInput(
+        identity: identity,
+        sources: graphSourceInputs(sources),
+        vectors: vectors,
+        points: points,
+        labelSet: WireField(labelSet),
+        clusters: WireField(clusters),
+      ),
+    );
   }
 
   Future<void> _featureAddSelectedGraphLabel(String id, String value) async {
@@ -58,11 +54,14 @@ extension _SourceLabels on SourcesController {
 
   Future<void> _featureRemoveSelectedGraphLabel(String id, String name) async {
     final source = _reads.sources.where((row) => row.id == id).single;
-    await d.command(Operation.labelsSet, {
-      'id': id,
-      'labels': sourceLabels(source).where((label) => label != name).toList(),
-    });
-    await d.command(Operation.graphAcknowledge);
+    await labelsSetDescriptor.send(
+      d,
+      LabelsSetInput(
+        id: id,
+        labels: sourceLabels(source).where((label) => label != name).toList(),
+      ),
+    );
+    await graphAcknowledgeDescriptor.send(d, GraphAcknowledgeInput());
     if (mounted) update(() {});
   }
 
@@ -106,7 +105,7 @@ extension _SourceLabels on SourcesController {
   }
 
   Future<void> _featureAutoAssignOrganizationLabel(String name) async {
-    await d.command(Operation.labelsAutoAssign, {'name': name});
+    await labelsAutoAssignDescriptor.send(d, LabelsAutoAssignInput(name: name));
     if (mounted)
       update(() {
         graphOrganizationRevision++;
@@ -141,8 +140,8 @@ extension _SourceLabels on SourcesController {
       ),
     );
     if (confirmed == true && mounted) {
-      await d.command(Operation.labelsDelete, {'name': name});
-      await d.command(Operation.graphAcknowledge);
+      await labelsDeleteDescriptor.send(d, LabelsDeleteInput(name: name));
+      await graphAcknowledgeDescriptor.send(d, GraphAcknowledgeInput());
       if (mounted)
         update(() {
           if (labelFilter == name) labelFilter = '';
@@ -185,13 +184,20 @@ extension _SourceLabels on SourcesController {
     input.dispose();
     if (ok != true || !mounted) return;
     for (final row in s == null ? filteredSources() : [s]) {
-      await d.command(Operation.labelsSet, {
-        'id': row.id,
-        'labels': s == null
-            ? {...sourceLabels(row), ...values}.toList()
-            : values,
-        if (epoch != null) 'workspace_epoch': epoch,
-      });
+      await labelsSetDescriptor.send(
+        d,
+        LabelsSetInput(
+          id: row.id,
+          labels: s == null
+              ? {...sourceLabels(row), ...values}.toList()
+              : values,
+          envelope: ClientEnvelope(
+            workspaceEpoch: epoch != null
+                ? WireField(epoch)
+                : const WireField.absent(),
+          ),
+        ),
+      );
     }
     if (mounted) update(() {});
   }

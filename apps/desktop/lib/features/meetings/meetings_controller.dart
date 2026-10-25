@@ -231,11 +231,16 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
 
   late final NoteSaveScheduler meetingNoteSaves = NoteSaveScheduler(
     (id, body, lastManualEdit) async {
-      await d.command(Operation.meetingsNotes, {
-        'id': id,
-        'body': body,
-        if (lastManualEdit != null) 'last_manual_edit': lastManualEdit,
-      });
+      await meetingsNotesDescriptor.send(
+        d,
+        MeetingsNotesInput(
+          id: id,
+          body: body,
+          lastManualEdit: lastManualEdit != null
+              ? WireField(lastManualEdit)
+              : const WireField.absent(),
+        ),
+      );
     },
     onSaved: (id) {
       if (mounted) {
@@ -328,11 +333,17 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
                 'The meeting view changed. Close this editor and try again.',
               );
             }
-            await d.commandCurrent(Operation.meetingsRename, {
-              'id': meeting.id,
-              'title': controller.text.trim(),
-              'workspace_epoch': identity.workspaceEpoch,
-            }, current);
+            await meetingsRenameDescriptor.sendCurrent(
+              d,
+              MeetingsRenameInput(
+                id: meeting.id,
+                title: controller.text.trim(),
+                envelope: ClientEnvelope(
+                  workspaceEpoch: WireField(identity.workspaceEpoch),
+                ),
+              ),
+              current,
+            );
           },
         ),
       );
@@ -381,17 +392,18 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
             ? null
             : () => _operations.run(() async {
                 final epoch = d.workspaceEpoch;
-                final created =
-                    await newMeetingKey.run(
-                          {'title': '[New Meeting]'},
-                          (keyed) => d.command(Operation.meetingsCreate, {
-                            ...keyed,
-                            if (epoch != null) 'workspace_epoch': epoch,
-                          }),
-                        )
-                        as Map;
+                final created = await meetingsCreateDescriptor.sendKeyed(
+                  newMeetingKey,
+                  d,
+                  const MeetingsCreateInput(title: '[New Meeting]'),
+                  sendEnvelope: ClientEnvelope(
+                    workspaceEpoch: epoch != null
+                        ? WireField(epoch)
+                        : const WireField.absent(),
+                  ),
+                );
                 if (mounted && d.workspaceEpoch == epoch)
-                  update(() => meetingId = created['id'] as int);
+                  update(() => meetingId = created.id);
               }),
         icon: Icons.add,
       ),
@@ -429,8 +441,8 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
               preview: fromPreview,
             ),
       onCancel: () => unawaited(
-        d
-            .command(Operation.meetingsCancelSummary, {'id': id})
+        meetingsCancelSummaryDescriptor
+            .send(d, MeetingsCancelSummaryInput(id: id))
             .catchError(_operations.reportAsyncError),
       ),
       onEdit: (artifact) => unawaited(
@@ -469,12 +481,17 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
       onPauseResume: _operations.busy || recording!.finishing
           ? null
           : () => _operations.run(() async {
-              await d.command(
-                recording!.paused
-                    ? Operation.meetingsResume
-                    : Operation.meetingsPause,
-                {'id': recordingMeeting},
-              );
+              if (recording!.paused) {
+                await meetingsResumeDescriptor.send(
+                  d,
+                  MeetingsResumeInput(id: WireField(recordingMeeting)),
+                );
+              } else {
+                await meetingsPauseDescriptor.send(
+                  d,
+                  MeetingsPauseInput(id: WireField(recordingMeeting)),
+                );
+              }
               if (mounted) update(syncCapture);
             }),
       onStop: recording!.finishing
@@ -492,19 +509,20 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
     int? modifiedAtMs,
     String? sourceUri,
   }) async {
-    final result =
-        await d.command(Operation.sourcesImport, {
-              'title': title,
-              'text': text,
-              'mime': mime,
-              'provenance': provenance,
-              'id': id,
-              'modifiedAtMs': modifiedAtMs,
-              'sourceUri': sourceUri,
-              'index': false,
-            })
-            as Map;
-    return result['id'] as String;
+    final result = await sourcesImportDescriptor.send(
+      d,
+      SourcesImportInput(
+        title: title,
+        text: text,
+        mime: WireField(mime),
+        provenance: WireField(provenance),
+        id: WireField(id),
+        modifiedAtMs: WireField(modifiedAtMs),
+        sourceUri: WireField(sourceUri),
+        index: WireField(false),
+      ),
+    );
+    return result.id;
   }
 
   Future<void> startRecording({bool accessReviewed = false}) async {
@@ -524,20 +542,20 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
         'Recording did not start: the meeting was closed while recording '
         'access was requested.',
       );
-    await d.command(Operation.meetingsStart, {'id': id});
+    await meetingsStartDescriptor.send(d, MeetingsStartInput(id: id));
     syncCapture();
     if (mounted) setState(() {});
   }
 
   Future<void> stopRecording() async {
-    await d.command(Operation.meetingsStop);
+    await meetingsStopDescriptor.send(d, MeetingsStopInput());
     syncCapture();
     if (mounted) setState(() {});
     await _integrationCommands.notify('Meeting transcription completed');
   }
 
   Future<void> indexMeeting(int id) async {
-    await d.command(Operation.meetingsIndex, {'id': id});
+    await meetingsIndexDescriptor.send(d, MeetingsIndexInput(id: id));
   }
 
   Future<void> generateMeeting(
@@ -546,15 +564,19 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
     String? workspaceEpoch,
     bool Function()? current,
   }) async {
-    final args = {
-      'id': id ?? meetingId!,
-      'kind': kind,
-      if (workspaceEpoch != null) 'workspace_epoch': workspaceEpoch,
-    };
+    final request = MeetingsGenerateInput(
+      id: id ?? meetingId!,
+      kind: kind,
+      envelope: ClientEnvelope(
+        workspaceEpoch: workspaceEpoch != null
+            ? WireField(workspaceEpoch)
+            : const WireField.absent(),
+      ),
+    );
     if (current == null) {
-      await d.command(Operation.meetingsGenerate, args);
+      await meetingsGenerateDescriptor.send(d, request);
     } else {
-      await d.commandCurrent(Operation.meetingsGenerate, args, current);
+      await meetingsGenerateDescriptor.sendCurrent(d, request, current);
     }
   }
 
@@ -580,12 +602,21 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
           }
         },
         onSave: () async {
-          await d.command(Operation.artifactsEdit, {
-            'id': a.id,
-            'text': controller.text,
-            if (lastManualEdit != null) 'last_manual_edit': lastManualEdit,
-            if (epoch != null) 'workspace_epoch': epoch,
-          });
+          await artifactsEditDescriptor.send(
+            d,
+            ArtifactsEditInput(
+              id: a.id,
+              text: controller.text,
+              lastManualEdit: lastManualEdit != null
+                  ? WireField(lastManualEdit)
+                  : const WireField.absent(),
+              envelope: ClientEnvelope(
+                workspaceEpoch: epoch != null
+                    ? WireField(epoch)
+                    : const WireField.absent(),
+              ),
+            ),
+          );
         },
       ),
     );
@@ -613,19 +644,21 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
         return;
       await _operations.run(() async {
         final epoch = d.workspaceEpoch;
-        final created =
-            await quickStartKey.run(
-                  {'title': '[New Meeting]'},
-                  (keyed) => d.commandCurrent(Operation.meetingsCreate, {
-                    ...keyed,
-                    if (epoch != null) 'workspace_epoch': epoch,
-                  }, current),
-                )
-                as Map;
+        final created = await meetingsCreateDescriptor.sendKeyed(
+          quickStartKey,
+          d,
+          const MeetingsCreateInput(title: '[New Meeting]'),
+          current: current,
+          sendEnvelope: ClientEnvelope(
+            workspaceEpoch: epoch != null
+                ? WireField(epoch)
+                : const WireField.absent(),
+          ),
+        );
         if (!current()) return;
         update(() {
           _navigation.navigate(WorkspaceTab.meetings);
-          meetingId = created['id'] as int;
+          meetingId = created.id;
         });
         await startRecording(accessReviewed: true);
       });
@@ -679,10 +712,17 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
     final epoch = d.workspaceEpoch;
     try {
       await flushMeetingNotesDraft();
-      await d.command(Operation.meetingsEnhance, {
-        'id': id,
-        if (epoch != null) 'workspace_epoch': epoch,
-      });
+      await meetingsEnhanceDescriptor.send(
+        d,
+        MeetingsEnhanceInput(
+          id: id,
+          envelope: ClientEnvelope(
+            workspaceEpoch: epoch != null
+                ? WireField(epoch)
+                : const WireField.absent(),
+          ),
+        ),
+      );
     } catch (e) {
       if (mounted) update(() => meetingEnhanceStatus = failureText(e));
     } finally {
@@ -711,12 +751,19 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
       transcriptImportKey.reset();
       transcriptImport = chosen;
     }
-    await transcriptImportKey.run(
-      {'id': id, 'text': text, 'source': 'imported transcript'},
-      (keyed) => d.command(Operation.meetingsTranscript, {
-        ...keyed,
-        if (epoch != null) 'workspace_epoch': epoch,
-      }),
+    await meetingsTranscriptDescriptor.sendKeyed(
+      transcriptImportKey,
+      d,
+      MeetingsTranscriptInput(
+        id: id,
+        text: text,
+        source: const WireField('imported transcript'),
+      ),
+      sendEnvelope: ClientEnvelope(
+        workspaceEpoch: epoch != null
+            ? WireField(epoch)
+            : const WireField.absent(),
+      ),
     );
     transcriptImport = null;
   }

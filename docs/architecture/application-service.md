@@ -484,3 +484,47 @@ Desktop setup imports model/catalog values, read-only cache helpers and the
 remote downloader interface. Its compile closure excludes the HTTP download
 engine and model transport worker. Tests inject explicit local download doubles;
 production composition supplies the service proxy.
+
+
+### Typed client calls
+
+The existing operation descriptor constants own both request encoders and result
+decoders. Each descriptor infers its concrete input and result types; its `send`
+and `sendCurrent` extensions resolve the original `Operation` by descriptor
+identity. There is no second wire-method registry. For example:
+
+```dart
+final created = await meetingsCreateDescriptor.send(
+  connection,
+  const MeetingsCreateInput(title: 'Planning'),
+);
+// created.id is an int; a source-deletion input cannot compile for this call.
+```
+
+`WireField.absent()` differs from `WireField(null)`. Encoders retain original
+field presence, false/zero/null values, envelope spellings and date strings;
+schema validation does not insert defaults before request fingerprinting. The
+existing transport still owns workspace scoping, reconnect/resend policy,
+current predicates and operation lifetime. Raw transport methods remain for v1
+compatibility; production desktop/proxy callers use typed descriptors.
+
+`sendKeyed` delegates to the existing `PendingRequestKey`. Its send-only captured
+workspace envelope stays outside the original argument-comparison ledger. A
+malformed data-bearing reply becomes `internal/outcomeUnknown` before that ledger
+can release the key; retry therefore reuses the same key, and edited retries
+learn the first result before amendment. Transport errors retain their identity,
+code and reason. This layer adds no automatic retry or application ownership.
+
+Data-bearing replies expose concrete immutable values. Partial Drive metadata
+and optional capability fields retain presence. V1 void acknowledgement metadata
+is deliberately discarded, and refresh status remains optional when the caller
+only requires acknowledgement. This preserves old clear-after-disconnect and
+ignored-result behavior without returning unchecked maps to consumers. Actual
+application capture replies and cancellation booleans are decoded by their
+corresponding contracts, rather than treated as void acknowledgements.
+
+
+Model download progress uses an explicit optional `progress_key`, separate from
+RPC-authoritative request IDs and cancellation. The typed desktop bridge sends
+its local correlation key there; the server-owned progress implementation and
+its real-wire acceptance remain part of the separately reviewed acquisition unit.

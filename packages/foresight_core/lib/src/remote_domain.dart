@@ -1,3 +1,7 @@
+import 'client_command.dart';
+import 'client_requests.dart';
+import 'operation_descriptors.dart';
+import 'operation_requests/graph_inputs.dart';
 import 'model_asset_status.dart';
 import 'desktop_status.dart';
 import 'cancellation.dart';
@@ -859,12 +863,12 @@ class RemoteDomain
 
   @override
   Future<void> index(String id) async {
-    await command(Operation.sourcesIndex, {'id': id});
+    await sourcesIndexDescriptor.send(this, SourcesIndexInput(id: id));
   }
 
   @override
   Future<void> delete(String id) async {
-    await command(Operation.sourcesDelete, {'id': id});
+    await sourcesDeleteDescriptor.send(this, SourcesDeleteInput(id: id));
   }
 
   @override
@@ -873,7 +877,10 @@ class RemoteDomain
 
   @override
   Future<void> resume() async {
-    await command(Operation.applicationResume);
+    await applicationResumeDescriptor.send(
+      this,
+      const ApplicationResumeInput(),
+    );
   }
 
   @override
@@ -892,14 +899,16 @@ class RemoteDomain
     final previous = _paused;
     final revision = ++_sourceControlRevision;
     _paused = paused;
+    final work = operation == Operation.sourcesPause
+        ? sourcesPauseDescriptor.send(this, const SourcesPauseInput())
+        : sourcesResumeDescriptor.send(this, const SourcesResumeInput());
     unawaited(
-      command(operation).catchError((Object error) {
+      work.catchError((Object error) {
         if (!_disposed) {
           if (revision == _sourceControlRevision) _paused = previous;
           _helper.state = 'Source control failed: $error';
           _notifyChanges();
         }
-        return null;
       }),
     );
   }
@@ -967,13 +976,9 @@ class RemoteDomain
   Future<Map<String, List<double>>> graphEmbeddings(
     List<Map<String, Object?>> sources,
   ) async {
-    final result =
-        await command(Operation.graphEmbeddings, {'sources': sources}) as Map;
-    return result.map(
-      (k, v) => MapEntry(
-        k as String,
-        (v as List).map((n) => (n as num).toDouble()).toList(),
-      ),
+    return graphEmbeddingsDescriptor.send(
+      this,
+      GraphEmbeddingsInput(sources: decodeGraphSources(sources, 'sources')),
     );
   }
 

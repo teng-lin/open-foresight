@@ -152,12 +152,18 @@ extension _ModelViews on SettingsController {
                         openUri: _host.environment.openUri,
                       ))
                         return;
-                      await d.command(Operation.preferencesSet, {
-                        'key': dedicatedQueryTermsKey,
-                        'value': 'accepted',
-                      });
+                      await preferencesSetDescriptor.send(
+                        d,
+                        PreferencesSetInput(
+                          key: dedicatedQueryTermsKey,
+                          value: 'accepted',
+                        ),
+                      );
                     }
-                    await d.command(Operation.modelsAcquireQuery, {});
+                    await modelsAcquireQueryDescriptor.send(
+                      d,
+                      ModelsAcquireQueryInput(),
+                    );
                     modelState = 'Automatic question model ready';
                   });
                 } finally {
@@ -174,7 +180,10 @@ extension _ModelViews on SettingsController {
         TextButton(
           onPressed: () async {
             try {
-              await d.command(Operation.modelsCancelQueryAcquisition, {});
+              await modelsCancelQueryAcquisitionDescriptor.send(
+                d,
+                ModelsCancelQueryAcquisitionInput(),
+              );
             } catch (failure) {
               if (mounted)
                 setState(() => _operations.setError(failure.toString()));
@@ -189,27 +198,51 @@ extension _ModelViews on SettingsController {
     onPressed: _operations.busy
         ? null
         : () => _operations.run(() async {
-            await d.command(
-              modelKind == 'embedding'
-                  ? Operation.modelsEmbedding
-                  : modelKind == 'generation'
-                  ? Operation.modelsGeneration
-                  : Operation.modelsRegister,
-              {
-                'kind': modelKind,
-                'path': modelPath.text,
-                'runtime': modelKind == 'query-detection' && !portableQuery
-                    ? ''
-                    : runtimePath.text,
-                if (modelKind == 'query-detection')
-                  'backend': portableQuery
-                      ? 'raw_query_jsonl_v1'
-                      : 'legacy_query_cpu',
-                if (modelKind == 'query-detection' && portableQuery)
-                  'digest': queryDigest.trim(),
-                'gpu': embeddingGpu,
-              },
-            );
+            final path = modelPath.text;
+            final runtime = modelKind == 'query-detection' && !portableQuery
+                ? ''
+                : runtimePath.text;
+            if (modelKind == 'embedding') {
+              await modelsEmbeddingDescriptor.send(
+                d,
+                ModelsEmbeddingInput(
+                  path: path,
+                  runtime: WireField(runtime),
+                  kind: WireField(modelKind),
+                  gpu: WireField(embeddingGpu),
+                ),
+              );
+            } else if (modelKind == 'generation') {
+              await modelsGenerationDescriptor.send(
+                d,
+                ModelsGenerationInput(
+                  path: path,
+                  runtime: runtime,
+                  kind: WireField(modelKind),
+                  gpu: WireField(embeddingGpu),
+                ),
+              );
+            } else {
+              await modelsRegisterDescriptor.send(
+                d,
+                ModelsRegisterInput(
+                  kind: modelKind,
+                  path: path,
+                  runtime: WireField(runtime),
+                  gpu: WireField(embeddingGpu),
+                  backend: modelKind == 'query-detection'
+                      ? WireField(
+                          portableQuery
+                              ? 'raw_query_jsonl_v1'
+                              : 'legacy_query_cpu',
+                        )
+                      : const WireField.absent(),
+                  digest: modelKind == 'query-detection' && portableQuery
+                      ? WireField(queryDigest.trim())
+                      : const WireField.absent(),
+                ),
+              );
+            }
             modelState = modelKind == 'query-detection'
                 ? 'Automatic question model ready'
                 : '$modelKind ready';

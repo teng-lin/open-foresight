@@ -66,8 +66,10 @@ void main() {
     expect(connection.arguments['kind'], 'generation');
     expect(connection.arguments['digest'], model.digest);
     expect(connection.arguments.containsKey('root'), isFalse);
-    final id = connection.arguments['requestId'] as String;
+    final id = connection.arguments['progress_key'] as String;
+    expect(connection.arguments['requestId'], id);
     connection.progress('other-request', model.digest);
+    connection.progress('rpc-authoritative-request', model.digest);
     connection.progress(id, 'other-digest');
     expect(progress, isEmpty);
     connection.progress(id, model.digest);
@@ -107,7 +109,7 @@ void main() {
       );
       final rejected = expectLater(work, throwsA(same(failure)));
       connection.progress(
-        connection.arguments['requestId'] as String,
+        connection.arguments['progress_key'] as String,
         model.digest,
       );
       await rejected;

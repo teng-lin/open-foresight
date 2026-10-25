@@ -178,13 +178,17 @@ extension _NotesView on MeetingsController {
                     onPressed: progress?.cancelRequested == true
                         ? null
                         : () async {
-                            await d.command(Operation.meetingsCancelEnhance, {
-                              'id': id,
-                              'request_id':
+                            await meetingsCancelEnhanceDescriptor.send(
+                              d,
+                              MeetingsCancelEnhanceInput(
+                                id: id,
+                                requestId: WireField(
                                   progress?.requestId.isNotEmpty == true
-                                  ? progress!.requestId
-                                  : null,
-                            });
+                                      ? progress!.requestId
+                                      : null,
+                                ),
+                              ),
+                            );
                           },
                     child: Text(
                       progress?.cancelRequested == true
