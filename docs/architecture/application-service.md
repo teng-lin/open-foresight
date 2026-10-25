@@ -20,6 +20,15 @@ The desktop accepts `DesktopConnection`; production connects `RemoteDomain` to t
 
 `_WorkspaceState` coordinates navigation, lifecycle, and the shared update boundary. Sources and graph, chat, meetings, settings and models, and integrations each have a controller that owns their mutable state and screen widgets. SQL lives behind named core `Store` queries. Saved output statistics cache their text scan by database revision and are labelled as words because historical records do not contain tokenizer usage.
 
+Application composition supplies explicit workspace ports to source, meeting,
+Google, answer, indexing, note and status workflows. These ports retain the
+existing store, cancellation, queue and generation owners while limiting each
+consumer's available methods. `application_ports_test.dart` guards the migrated
+constructor dependencies. Summary, recording and model-registry ports belong to
+the separate native lifetime conversion and are not qualified by that test yet.
+The pure balanced-transcript excerpt helper lives in `text_budget.dart`; it does
+not require a service owner import.
+
 `labels.auto_assign` acquires any missing embeddings, validates the source snapshot, then plans propagation and publishes all associations, the label cluster, and graph invalidation in one write transaction. A failed label write rolls back the entire publication. `Application` composes explicit business-service owners and the application operation registry. `AnswerCoordinator` admits answers, and each `ConversationAnswer` passes immutable retrieval, prompt and generation results between phases. Conversation queries own the atomic answer, memory checkpoint and meeting-link transaction. `Domain` owns lower-level source and model services and receives a `ModelGate`; it never constructs or looks up an `Application`. Callers, including fixtures, bind their application explicitly.
 
 ## Ownership inside the service
@@ -320,6 +329,13 @@ Service startup stderr is retained in the private runtime directory as
 attribution. Profile content and downloaded models
 remain outside the bundle. With no HOME environment variable on macOS, the system
 user directory is obtained from Directory Services.
+
+Audio enumeration runs through the service audio operation. Application composition
+may inject an `AudioOperations` provider; the production default uses the host
+adapter. Desktop environment process runners do not enumerate devices. Enumeration
+returns device rows without requesting microphone or system access. The desktop
+environment fixture exercises this operation with an injected service provider;
+it does not qualify physical devices.
 
 The Mac audio discovery adapter uses `FORESIGHT_AUDIO_DEVICES --list-devices` and
 returns a JSON array of `{ "id": "stable-device-id", "label": "Device", "playback": false }`.

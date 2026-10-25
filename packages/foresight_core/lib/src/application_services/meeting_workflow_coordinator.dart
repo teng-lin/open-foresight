@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import '../domain.dart';
+import 'service_workflow_ports.dart';
 import '../read_models.dart';
 import '../meeting_actions.dart';
 import '../meeting_preparation.dart';
@@ -67,7 +67,7 @@ final class MeetingWorkflowCoordinator {
     required this.wakeAutomatic,
   }) : queries = WorkflowQueries(domain.store),
        sources = SourceAdmissionQueries(domain.store);
-  final Domain domain;
+  final MeetingWorkflowPort domain;
   final GenerationCoordinator generation;
   final String Function() modelDigest;
   final void Function() changed, wakeAutomatic;

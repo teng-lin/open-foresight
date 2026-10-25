@@ -1,8 +1,8 @@
+import 'application_services/service_workflow_ports.dart';
 import 'application_services/service_workspace_ports.dart';
 import 'cancellation.dart';
 export 'cancellation.dart' show CancellationWatch;
-import 'text_budget.dart' show boundUtf8;
-export 'text_budget.dart' show boundUtf8;
+export 'text_budget.dart' show boundUtf8, balancedTranscriptWindow;
 import 'rpc_error.dart';
 import 'package:clock/clock.dart';
 import 'model_setup.dart';
@@ -11,7 +11,6 @@ import 'platform_services.dart';
 import 'dart:async';
 import 'dart:developer' as developer;
 import 'model_gate.dart';
-import 'dart:convert';
 import 'dart:typed_data';
 import 'package:grpc/grpc.dart';
 import 'package:grpc/service_api.dart' as grpc_api;
@@ -36,15 +35,23 @@ class Domain
         SourceOperationsPort,
         GoogleWorkspacePort,
         MeetingMutationPort,
-        WorkspaceResetPort {
+        WorkspaceResetPort,
+        ConversationWorkspacePort,
+        MeetingGenerationPort,
+        MeetingWorkflowPort,
+        NoteEnhancementPort,
+        RuntimeOperationsPort,
+        MeetingIndexingPort {
   @override
   final Store store;
   @override
   final Helper helper;
   late final _queries = DomainQueries(store);
+  @override
   NativeRuntime? generator;
   @override
   final Clock clock;
+  @override
   final Timer Function(Duration, void Function()) createTimer;
   final GenerationRuntimeDiscovery _discoverGeneration;
   Domain(
@@ -62,15 +69,18 @@ class Domain
        _discoverGeneration = discoverGeneration ?? discoverGenerationRuntime;
   Future<void> Function(int, {bool Function()? current})?
   indexMeetingTranscript;
+  @override
   ModelGate modelGate;
   SearchCallbacks? _webSearch;
   WebContentService? _ownedWebContent;
+  @override
   bool get webSearchAvailable =>
       _webSearch != null ||
       ((runtimeConfiguration['FORESIGHT_SEARCH_API_KEY'] ?? '').isNotEmpty &&
           (runtimeConfiguration['FORESIGHT_WEB_CONTENT_API_KEY'] ?? '')
               .isNotEmpty);
 
+  @override
   SearchCallbacks searchCallbacks() {
     if (!webSearchAvailable) {
       throw RpcError(
@@ -124,6 +134,7 @@ class Domain
     return watch;
   }
 
+  @override
   void checkCancellations() {
     for (final watch in _cancellations.toList()) {
       watch.check();
@@ -355,6 +366,7 @@ class Domain
 
   /// Read the helper's committed incremental cursor after any durable purge.
   /// The cursor is advisory; ApplyDelta checks it atomically before mutation.
+  @override
   Future<transcript.TranscriptCursor> transcriptCursor(
     String id, {
     bool Function()? current,
@@ -387,6 +399,7 @@ class Domain
   /// Send only changed immutable transcript segments. No full source body is
   /// read, concatenated or tokenized on this path. Cancellation retains the
   /// mutation reservation until the actual helper RPC has settled.
+  @override
   Future<transcript.TranscriptDeltaResult> applyTranscriptDelta(
     transcript.TranscriptDelta delta, {
     bool Function()? current,
@@ -539,6 +552,7 @@ class Domain
 
   /// The note producer's lazy service getter shares an initialization future.
   /// Readiness policy and the single reset/reacquisition live in its caller.
+  @override
   Future<NativeRuntime?> noteEnhancementService() async {
     _checkOpen();
     if (generator?.loaded == true) return generator;
@@ -605,6 +619,7 @@ class Domain
     }
   }
 
+  @override
   Future<void> resetNoteEnhancementService() async {
     _checkOpen();
     generator?.close();
@@ -630,6 +645,7 @@ class Domain
   }
 
   bool get restoring => _resuming != null || _initialization != null;
+  @override
   Future<void> resume() => _resuming ??= _resume().whenComplete(() {
     _resuming = null;
     onBackgroundSettled?.call();
@@ -733,27 +749,4 @@ class Domain
 
   bool citationCurrent(Map<String, Object?> citation) =>
       _queries.citationCurrent(citation['document_id'], citation['revision']);
-}
-
-/// UTF-8 bytes conservatively bound tokenizer input. Select the beginning,
-/// midpoint and ending rather than silently discarding the end of a meeting.
-String balancedTranscriptWindow(String text, int budget) {
-  if (utf8.encode(text).length <= budget) return text;
-  const omitted =
-      '\n[Transcript abridged: balanced beginning, middle and ending excerpts; omitted passages are not evidence.]\n';
-  final share = (budget - utf8.encode(omitted).length - 20) ~/ 3;
-  if (share < 1) {
-    throw StateError('Model context is too small for transcript excerpts');
-  }
-  final runes = text.runes.toList();
-  final head = boundUtf8(text, share);
-  final middle = boundUtf8(
-    String.fromCharCodes(runes.skip(runes.length ~/ 2)),
-    share,
-  );
-  final reverse = String.fromCharCodes(runes.reversed);
-  final tail = String.fromCharCodes(
-    boundUtf8(reverse, share).runes.toList().reversed,
-  );
-  return '$omitted$head\n[… ]\n$middle\n[… ]\n$tail';
 }

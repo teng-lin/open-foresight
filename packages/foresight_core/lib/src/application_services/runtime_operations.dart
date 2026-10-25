@@ -2,7 +2,7 @@ import 'model_asset_acquisition.dart';
 import 'dart:io';
 import '../answer_contract.dart' show answerValidationFailures;
 import 'audio_operations.dart';
-import '../domain.dart';
+import 'service_workflow_ports.dart';
 import '../operation_registry.dart';
 import '../operation_requests.dart';
 import '../operations.dart';
@@ -25,6 +25,7 @@ final class ApplicationIdentity {
 final class RuntimeOperations {
   RuntimeOperations({
     required this.domain,
+    required this.audio,
     required this.identity,
     required this.assetDownloads,
     required this.generation,
@@ -36,7 +37,8 @@ final class RuntimeOperations {
     required this.accounts,
     required this.answers,
   });
-  final Domain domain;
+  final RuntimeOperationsPort domain;
+  final AudioOperations audio;
   final ApplicationIdentity identity;
   final ModelAssetAcquisitionCoordinator assetDownloads;
   final GenerationCoordinator generation;
@@ -95,7 +97,7 @@ final class RuntimeOperations {
       Operation.notificationsRequestPermission,
       (request, {current}) => notificationCapabilities(requestPermission: true),
     ),
-    ...AudioOperations().handlers,
+    ...audio.handlers,
     TypedOperationHandler<StatusRequest>(
       Operation.status,
       (request, {current}) => status(),

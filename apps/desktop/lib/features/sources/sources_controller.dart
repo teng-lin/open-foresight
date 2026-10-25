@@ -1,3 +1,5 @@
+import 'source_collection.dart';
+import 'graph_widgets.dart';
 import 'note_widgets.dart';
 import 'source_tiles.dart';
 import 'dart:async';
@@ -18,25 +20,23 @@ import '../../presentation/workspace_presentation.dart';
 import '../../shell/ports.dart';
 import '../../shell/workspace_tab.dart';
 import 'file_discovery_sheet.dart';
-import 'graph_label_controls.dart';
 import 'graph_rendering.dart';
 import 'cluster_rendering.dart';
-import 'source_painters.dart';
 
+part 'source_composition.dart';
 part 'source_actions.dart';
 part 'source_labels.dart';
-part 'source_collection.dart';
 part 'graph_layout_owner.dart';
 part 'graph_interaction.dart';
-part 'graph_widgets.dart';
-
-const _blue = workspaceBlue;
-const _ink = workspaceInk;
 
 // Each graph.embeddings reply must fit the service's 16 MiB frame limit.
 const _graphEmbeddingBatch = 128;
 
 class SourcesController implements SourceCommands {
+  Widget sourceTile(SourceSummary source, {String? originalMime}) =>
+      _composeSourceTile(source, originalMime: originalMime);
+  void syncGraphMotion() => _composeSyncGraphMotion();
+  void tickGraphMotion(Duration elapsed) => _composeTickGraphMotion(elapsed);
   SourcesController({
     required FeatureHost host,
     required WorkspaceNavigation navigation,
@@ -282,46 +282,6 @@ class SourcesController implements SourceCommands {
     if (graphView) _queueGraphScene();
   }
 
-  void syncGraphMotion() {
-    final enabled =
-        mounted &&
-        _navigation.selectedTab == WorkspaceTab.sources &&
-        graphView &&
-        _reads.sources.isNotEmpty &&
-        !graphAnimationPaused &&
-        graphMousePointer == null &&
-        !graphModalOpen &&
-        !MediaQuery.disableAnimationsOf(context);
-    if (enabled && !graphMotionTicker.isActive) {
-      graphLastTick = null;
-      // The callback intentionally schedules work owned by its controller.
-      // ignore: discarded_futures
-      graphMotionTicker.start();
-    } else if (!enabled && graphMotionTicker.isActive) {
-      graphMotionTicker.stop();
-      graphLastTick = null;
-    }
-  }
-
-  void tickGraphMotion(Duration elapsed) {
-    final previous = graphLastTick;
-    graphLastTick = elapsed;
-    if (!mounted ||
-        previous == null ||
-        graphMousePointer != null ||
-        graphAnimationPaused ||
-        graphModalOpen ||
-        _navigation.selectedTab != WorkspaceTab.sources ||
-        !graphView)
-      return;
-    final seconds = (elapsed - previous).inMicroseconds / 1000000;
-    if (seconds <= 0) return;
-    // Keep idle graph motion slow, with gentler motion while a source is selected.
-    graphYaw += seconds * .025 * (graphSelectedDocument == null ? 1 : .05);
-    if (!graphManualPitch) graphPitch = .4 + math.sin(graphYaw * .4) * .08;
-    graphMotionFrames.value++;
-  }
-
   Future<void> importFolderPath(String path) => _featureImportFolderPath(path);
 
   @override
@@ -454,54 +414,6 @@ class SourcesController implements SourceCommands {
 
   String sourceTimeLabel(Object? stamp) =>
       stamp == null || stamp == 0 ? '--' : timeLabel(stamp);
-
-  Widget sourceCells(SourceSummary? source, {String? originalMime}) =>
-      SourceCells(
-        source: source,
-        icon: source == null
-            ? null
-            : sourceIcon(source, originalMime: originalMime),
-        color: source == null
-            ? null
-            : sourceColor(typedSourceType(source, originalMime: originalMime)),
-        imported: source == null ? '' : sourceTimeLabel(source.imported),
-        changed: source == null ? '' : sourceTimeLabel(source.changed),
-        labels: source == null ? '' : sourceLabels(source).join(', '),
-        ascending: ascending,
-        onSort: () => update(() => ascending = !ascending),
-        onEditLabels: source == null || _operations.busy
-            ? null
-            : () => editLabels(source),
-        onIndex: source == null || _operations.busy
-            ? null
-            : () => _operations.run(() => d.index(source.id)),
-        onDelete: source == null || _operations.busy
-            ? null
-            : () => _operations.run(() => d.delete(source.id)),
-      );
-
-  Widget sourceTile(SourceSummary source, {String? originalMime}) => gridView
-      ? sourceCardTile(source, originalMime: originalMime)
-      : SourceRow(
-          source: source,
-          cells: sourceCells(source, originalMime: originalMime),
-          onOpen: () => showSource(source.id),
-        );
-
-  Widget sourceCardTile(SourceSummary s, {String? originalMime}) => SourceCard(
-    s: s,
-    icon: sourceIcon(s, originalMime: originalMime),
-    color: sourceColor(typedSourceType(s, originalMime: originalMime)),
-    labels: sourceLabels(s).join(', '),
-    onOpen: () => showSource(s.id),
-    onEditLabels: _operations.busy ? null : () => editLabels(s),
-    onIndex: _operations.busy
-        ? null
-        : () => _operations.run(() => d.index(s.id)),
-    onDelete: _operations.busy
-        ? null
-        : () => _operations.run(() => d.delete(s.id)),
-  );
 
   void scheduleGraphLayout(List<SourceSummary> all) =>
       _featureScheduleGraphLayout(all);
