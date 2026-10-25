@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
@@ -12,6 +13,7 @@ import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Store store;
   late String path;
   late ReadIdentity identity;
@@ -305,6 +307,34 @@ SELECT key, CASE WHEN key='slow' THEN (
       expect(reader.activeReads, 0);
       await running;
       await reader.close();
+    },
+  );
+
+  test(
+    'native deadline settles actual SQL after immediate main VM return',
+    () async {
+      plantLongRead();
+      final child = await Process.start(Platform.resolvedExecutable, [
+        'test/fixtures/sqlite_reader_owner_exit.dart',
+        path,
+        'immediate-main-return',
+      ]);
+      final stdout = child.stdout.transform(utf8.decoder).join();
+      final stderr = child.stderr.transform(utf8.decoder).join();
+      int? status;
+      try {
+        status = await child.exitCode.timeout(const Duration(seconds: 10));
+      } finally {
+        if (status == null) {
+          child.kill(ProcessSignal.sigkill);
+          await child.exitCode;
+        }
+        final output = await stdout;
+        final errors = await stderr;
+        expect(status, 0, reason: '$output\n$errors');
+        expect(output, contains('owner dispatched and exited'));
+        expect(errors, isEmpty);
+      }
     },
   );
 

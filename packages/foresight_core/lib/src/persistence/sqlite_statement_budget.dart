@@ -1,72 +1,62 @@
 import 'dart:ffi';
 
 import '../rpc_error.dart';
+import 'sql_support.dart';
 import 'sqlite_runtime.dart';
 
-typedef _Progress = Int Function(Pointer<Void>);
-typedef _InstallNative =
-    Void Function(
-      Pointer<Void>,
-      Int,
-      Pointer<NativeFunction<_Progress>>,
-      Pointer<Void>,
-    );
-typedef _Install =
-    void Function(
-      Pointer<Void>,
-      int,
-      Pointer<NativeFunction<_Progress>>,
-      Pointer<Void>,
-    );
-
-/// Synchronous, owner-isolate control for one connection and one read job.
-/// SQLite calls back on its invoking thread; package:sqlite3's step/prepare
-/// calls are non-leaf. No timer or borrowed connection pointer is involved.
+/// One synchronous read on its owner connection. The C monotonic progress
+/// callback never enters Dart and remains valid if the entire VM disappears.
+/// Normal cleanup unregisters only after the actual statement has returned.
 final class SqliteStatementBudget {
   final Database _database;
-  final _Install _install;
+  final SqlSupportBinding _support;
+  final Pointer<NativeFunction<SqliteProgressInstall>> _install;
   bool _running = false;
 
   SqliteStatementBudget(this._database)
-    : _install = applicationSqliteLibrary
-          .lookupFunction<_InstallNative, _Install>('sqlite3_progress_handler');
+    : _support = currentSqlSupport,
+      _install = applicationSqliteProgressInstaller;
 
   T run<T>(Duration limit, T Function() read) {
-    if (limit <= Duration.zero) throw ArgumentError.value(limit, 'limit');
+    if (limit <= Duration.zero || limit > const Duration(seconds: 30)) {
+      throw ArgumentError.value(limit, 'limit');
+    }
     if (_running) throw StateError('Nested SQLite statement budget');
-    final watch = Stopwatch()..start();
-    var expired = false;
-    final callback = NativeCallable<_Progress>.isolateLocal((Pointer<Void> _) {
-      if (watch.elapsed >= limit) expired = true;
-      return expired ? 1 : 0;
-    }, exceptionalReturn: 1);
+    final lease = _support.begin(
+      _database.handle.cast<Void>(),
+      _install,
+      limit,
+    );
     _running = true;
+    Object? failure;
+    StackTrace? failureStack;
+    T? result;
+    bool expired;
     try {
-      _install(
-        _database.handle.cast<Void>(),
-        1000,
-        callback.nativeFunction,
-        nullptr,
-      );
       try {
-        final result = read();
+        result = read();
         if (result is Future) {
           throw ArgumentError('A statement budget must finish synchronously');
         }
-        return result;
-      } on SqliteException {
-        if (expired) {
-          throw RpcError(RpcErrorCode.busy, 'Read execution budget exhausted');
-        }
-        rethrow;
+      } catch (error, stack) {
+        failure = error;
+        failureStack = stack;
       }
     } finally {
-      // Remove before closing the callback and before the snapshot owner rolls
-      // back. A late interrupt can never affect a replacement job/connection.
-      _install(_database.handle.cast<Void>(), 0, nullptr, nullptr);
-      callback.close();
-      watch.stop();
-      _running = false;
+      // A lost VM may never reach here. Its static C slot/code remain retained
+      // until process death, rather than being freed while SQL can still run.
+      try {
+        expired = _support.end(lease);
+      } finally {
+        _running = false;
+      }
     }
+    if (failure != null) {
+      if (failure is SqliteException && expired) {
+        throw RpcError(RpcErrorCode.busy, 'Read execution budget exhausted');
+      }
+      Error.throwWithStackTrace(failure, failureStack!);
+    }
+    return result as T;
   }
 }

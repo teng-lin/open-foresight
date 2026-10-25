@@ -15,6 +15,9 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Changed
 
+- Keep background SQLite execution deadlines active during VM teardown through
+  a small, separately initialized native support image.
+
 - Bound background SQLite read admission and execution, restart failed readers
   after actual exit, and retain cancelled work until its statement settles.
 

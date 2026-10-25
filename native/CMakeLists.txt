@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/MacOSDeploymentTarget.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ForesightTestHooks.cmake")
-project(foresight_native LANGUAGES CXX)
+project(foresight_native LANGUAGES C CXX)
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ForesightSanitizers.cmake")
 set(CMAKE_CXX_EXTENSIONS OFF)
 add_compile_options(-Wall -Wextra)
@@ -9,6 +9,8 @@ if(APPLE)
   enable_language(OBJCXX)
 endif()
 find_package(Threads REQUIRED)
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ForesightSqlSupport.cmake")
+
 add_library(foresight_native SHARED foresight_native.cpp)
 if(DEFINED FORESIGHT_PW_RECORD_EXECUTABLE AND
    NOT IS_ABSOLUTE "${FORESIGHT_PW_RECORD_EXECUTABLE}")

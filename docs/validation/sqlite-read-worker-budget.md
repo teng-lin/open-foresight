@@ -1,78 +1,117 @@
-# SQLite read-worker checkpoint
+# SQLite read-worker ownership and native deadline seam
 
-The service owns one lazy read isolate per `SqliteReadWorker`. Only that
-isolate opens and uses its read-only SQLite connection. The parent retains at
-most 16 requests including the running request, dispatches only one at a time,
-and refuses excess requests with `busy`. An internal constructor can lower or
-raise that count within 1–64; it is not a production RPC setting.
+This seam is not yet wired into service/desktop entrypoints, package runtime
+selection or every direct-Store test. Those owners must establish the explicit
+startup gate before adoption. A missed gate intentionally fails closed.
 
-Each owned query has a five-second monotonic execution budget, configurable
-internally within (0, 30 seconds]. SQLite's progress handler checks every 1,000
-VM instructions. It also covers preparation on SQLite versions supporting
-preparation callbacks. This bounds ordinary SQLite VM execution, not arbitrary
-blocked filesystem calls, native extensions, or Dart projection work. The
-existing 50ms SQLite busy timeout remains separate.
+## Explicit early owner gate
 
-The application runtime retains the original `DynamicLibrary` supplied to
-`package:sqlite3` at initialization. A budget never reopens a path or resolves a
-new mapping. If another caller initialized the package before the application
-loader could retain its actual mapping, owner-local controls refuse to proceed.
-The pinned sqlite3 2.9.4 public `Database.handle` is used only in its owning
-isolate. Its generated step/preparation calls are non-leaf, allowing a
-`NativeCallable.isolateLocal` synchronous callback. No connection pointer,
-callback pointer, or borrowed database travels through a port.
+Embeddings call the startup-only public capability:
 
-The handler returns an interrupt after the monotonic budget expires. The
-statement unwinds before its actual reply is published. A `finally` unregisters
-the handler before closing the callback and before the snapshot owner performs
-rollback. A previous deadline has no timer or interrupt left to affect the next
-job or a different connection.
+```dart
+initializeSqliteRuntime(supportLibrary: validatedAbsoluteRuntimeSupportPath);
+```
 
-Subscriber cancellation and subscriber timeouts are not SQL cancellation. The
-coordinator continues retaining its actual future/reservation until the current
-job settles. Cancellation latency can therefore include the current job's
-remaining execution budget. The coordinator withdraws an undispatched queued
-request when its last subscriber cancels, its subscriber deadline expires, or
-the coordinator closes. Withdrawal matches the exact owner-local request object,
-not a copied sequence or later job. Running requests cannot be withdrawn by
-that interface and remain tracked. Undispatched queued reads are also cancelled
-on worker close; the running read is not killed. Close sends shutdown only after its actual
-reply, then joins actual worker EOF. Its execution-budget-plus-five-second
-join bound reports a failure if the worker does not retire; it does not clear
-physical work or claim success on that timeout.
+The embedding must already have validated that exact runtime artifact through
+its ownership/package trust contract. The SQL seam does not invent a selector,
+consult an environment override, search a basename, inherit a preload variable
+or load the heavyweight application native image. It requires an absolute
+selection and remembers that exact selection/original mapping. Repeating it
+reuses the same pinned code; a changed selection is refused. Package and
+entrypoint owner review is required before integration.
 
-Worker generation identity includes a fresh inbox, command port, queue, active
-request and exit completer. Error notifications latch a failure, but requests
-remain reserved until actual EOF. A subsequent read may then start a new
-generation; old-port messages and unmatched request IDs cannot complete it.
+The separate `foresight_sql_support` image has only system dependencies.
+Diagnostics-off does not remove the SQL deadline requirement and does not make
+SQL load the diagnostic DSO/child. Its sole exported startup operation uses
+`pthread_once` to join concurrent early callers, checks ABI/size and every code
+entry's image base, and retains the already mapped image. This loader-owner
+operation must precede any application connection/locks and worker creation.
+Failure is permanent for that image. Worker handoffs include no initializer.
 
-Owner-exit monitoring is installed before dispatch. The owner self-pings after
-the exit-listener request to acknowledge the SDK's ordered control-message
-processing. The child accepts work only after attachment; a five-second attach
-deadline closes a child whose owner disappeared during startup. Owner-exit
-shutdown uses the command inbox, so it cannot dispose a live SQL callback.
+Each private handoff contains only the validated ready/begin/end code addresses,
+not a SQLite connection, database pointer or native context pointer. Binding in
+a worker performs only the pure atomic ready check; it never loads a path or
+performs a fallback lookup. Missing handoff and changed-image binding refuse
+before application SQLite is opened. Direct library/Store users must bootstrap
+explicitly too. The gate is not hidden in a generic temp-directory helper.
 
-## Executed evidence and remaining limitation
+## Statement and context lifetime
 
-Linux fixtures execute a real billion-row recursive query through both a direct
-connection-local budget and a private synthetic preference view used by the
-existing typed read projection. They cover deadline interruption, following
-job/other-connection independence, queue refusal, real startup EOF/restart,
-startup/close races, unsendable-request reservation cleanup, and retention after
-subscriber cancellation/timeout. A subprocess proves owner-isolate exit while
-the supervising VM remains running retires its reader after settlement.
+One lazy read isolate owns its read-only connection. The original
+`package:sqlite3`2.9.4 mapping and its progress-installer address are retained and
+resolved before any application database opens. A foreign prior initialization
+that prevents capturing that actual mapping refuses owner-local controls.
+Owned sessions construct their budget eagerly. No read snapshot/BEGIN performs
+a support-image or SQLite-symbol lookup. `Database.handle` stays in its owning
+isolate and is supplied only to this synchronous native registration.
 
-The supervising main-isolate/whole-VM teardown case remains **open**. An
-immediate-main-return negative control printed owner exit but stopped making
-Dart callback progress while native `sqlite3_step` remained active; the process
-required the private harness's bounded kill. Keeping the main event loop alive
-allowed the identical statement to interrupt, unregister its callback, consume
-owner exit and close normally. Native stacks and complete failed output are
-retained under `/var/tmp/of-sql-worker`. The fixture's
-`immediate-main-return` mode preserves this separate negative control. Normal
-application shutdown must await reader close before terminating the VM. This
-checkpoint does not establish a native-independent deadline during VM teardown
-or close the whole F23 lifetime requirement.
+The native callback checks `CLOCK_MONOTONIC` every1,000 SQLite VM instructions,
+without entering Dart, allocating, locking, calling SQLite, or using the loader.
+The default job budget is5s, internally configurable in(0,30s]. Suspend accounting
+follows the platform monotonic clock; this is not a wall-clock SLA. The existing
+50ms busy timeout is separate. SQLite instruction callbacks do not bound blocked
+VFS/filesystem calls, native extensions, or Dart projection CPU.
 
-Mac execution, full package/desktop gates and integration review remain pending
-for this checkpoint. No minimum-macOS or full-product acceptance is implied.
+The C image has64 process-lifetime static slots, no per-job heap allocation and
+unique positive leases that refuse rather than wrap. A slot is reserved before
+its fields are initialized, and its usable lease is published only after
+registration. Only the connection owner calls begin/end, with no concurrent use
+of that same SQLite connection. Tokens are internal ownership IDs, not security
+capabilities or production RPC arguments. Distinct owners may use distinct
+connections concurrently.
+
+Normal end happens only after actual synchronous SQL returns. It unregisters
+before releasing the slot; a stale token cannot affect a replacement at the same
+address. The snapshot owner then rolls back on failure. Retirement refusal
+quarantines its Dart owner instead of resetting admission. A lost VM may skip
+Dart finally: the pure C deadline remains usable and its context/code stay
+retained until process death. An embedding surviving repeated VM destruction
+may eventually refuse new jobs instead of reusing uncertain context; independent
+reclamation of those connections is not implemented by this seam.
+
+## Queue, cancellation and shutdown
+
+A worker retains at most16 requests including its running job, internally
+configurable in1–64. It dispatches exactly one command. Excess admission returns
+busy. Exact owner-local request identity can withdraw an undispatched request
+on last-subscriber cancellation, subscriber deadline, or coordinator close.
+Running SQL cannot be withdrawn by that interface and stays reserved until its
+actual future settles. Cancellation can include the running job's remaining
+budget. It is not a promise of immediate SQL interruption.
+
+Each replacement generation has fresh ports, queue, active request and exit
+completer. Errors latch failure; actual reservations are not cleared until real
+reply/EOF. Old ports and unmatched request IDs cannot complete a new job.
+Normal close cancels queued reads, lets active SQL settle, sends shutdown, and
+joins real EOF. Its budget+5s timeout reports failure while retaining physical
+state, never a successful kill. Owner-exit monitoring is acknowledged before
+SQL admission; a5s attach deadline closes a child whose owner disappeared before
+that monitor was installed. Owner-exit shutdown waits behind synchronous SQL.
+
+## Evidence and unfinished adoption gates
+
+The unchanged earlier e5/972 immediate-main-return negative remains retained.
+The independent CLI review of prototype972 read all56 packet files, with a
+separate audited ledger. It found the C mechanism sound within its owner
+contract and required the early/pure-ready split, complete original-image table,
+eager SQLite symbol resolution, diagnostics-independent image and NDEBUG-safe
+native fixture implemented in this seam.
+
+Focused seam tests explicitly bootstrap their native fixture in test main
+before the first DB/spawn. The fresh-isolate missing-handoff oracle remains a
+refusal even though native code is already mapped in the process. The same
+private code-only handoff succeeds with the application-native path absent.
+Tests preserve the earlier generation/queue/cancel/close oracles and add actual
+immediate-main teardown with no production preload.
+
+Native fixture checks are explicit CHECK calls, including in Release/NDEBUG.
+They cover eight concurrent early initializers, retained/no-pin NOLOAD controls
+before DB creation,64slots/65th refusal, actual long SQL expiry, stale-lease ABA,
+next-job/other-connection independence and four concurrent distinct owners.
+
+Root full CTest, broad direct-Store/core/desktop test bootstrap, service/Desktop
+entrypoints, validated runtime selection, install/sign/package receipts and
+owner review are still required. Compiled/AOT startup/teardown, full coverage,
+compiled service, oldest/macOS15 and embedding hot-restart/reclamation lanes
+remain distinct acceptance gates. No full-product or whole-F23 completion is
+claimed by a focused SQL/native seam fixture.

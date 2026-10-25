@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:isolate';
 
 import 'persistence/read_schema_guard.dart';
+import 'persistence/sql_support.dart';
 import 'platform_services.dart';
 import 'read_coordinator.dart';
 import 'rpc_error.dart';
@@ -14,6 +15,7 @@ const _ownerAttachTimeout = Duration(seconds: 5);
 final class SqliteReadWorker implements ReadWorker, ReadQueueCancellation {
   final String _path;
   final Map<String, String> _environment;
+  final SqlSupportBootstrap _sqlSupport;
   final Duration executionBudget;
   final int maxQueuedReads;
   _ReaderGeneration? _generation;
@@ -23,12 +25,14 @@ final class SqliteReadWorker implements ReadWorker, ReadQueueCancellation {
   SqliteReadWorker(
     String path, {
     Map<String, String>? environment,
+    SqlSupportBootstrap? sqlSupport,
     this.executionBudget = const Duration(seconds: 5),
     this.maxQueuedReads = 16,
   }) : _path = path,
        _environment = Map.unmodifiable(
          environment ?? runtimeConfiguration.environment,
-       ) {
+       ),
+       _sqlSupport = sqlSupport ?? currentSqlSupportBootstrap {
     if (executionBudget <= Duration.zero ||
         executionBudget > const Duration(seconds: 30)) {
       throw ArgumentError.value(executionBudget, 'executionBudget');
@@ -88,7 +92,13 @@ final class SqliteReadWorker implements ReadWorker, ReadQueueCancellation {
     try {
       await Isolate.spawn(
         _runReader,
-        (_path, _environment, generation.messages.sendPort, executionBudget),
+        (
+          _path,
+          _environment,
+          generation.messages.sendPort,
+          executionBudget,
+          _sqlSupport,
+        ),
         onError: generation.messages.sendPort,
         onExit: generation.messages.sendPort,
       );
@@ -230,13 +240,17 @@ final class _ReadStartupFailure {
   const _ReadStartupFailure(this.error);
 }
 
-void _runReader((String, Map<String, String>, SendPort, Duration) startup) {
-  final (path, environment, results, executionBudget) = startup;
+void _runReader(
+  (String, Map<String, String>, SendPort, Duration, SqlSupportBootstrap)
+  startup,
+) {
+  final (path, environment, results, executionBudget, sqlSupport) = startup;
   // The process handoff may already have been consumed. Resolve once in the
   // owner and install exactly that map before model/runtime projections run.
   installServiceWorkerEnvironment(environment);
   SqliteReadSession session;
   try {
+    bindSqlSupportBootstrap(sqlSupport);
     session = SqliteReadSession.open(path, executionBudget: executionBudget);
   } catch (error) {
     results.send(_ReadStartupFailure(_sendableFailure(error)));

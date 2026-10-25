@@ -5,6 +5,7 @@ import 'package:sqlite3/open.dart' as loader;
 import 'package:sqlite3/sqlite3.dart' as upstream;
 
 import '../platform_services.dart';
+import 'sql_support.dart';
 
 export 'package:sqlite3/sqlite3.dart' hide sqlite3;
 
@@ -19,6 +20,18 @@ const applicationSqliteSourceId =
 final upstream.Sqlite3 sqlite3 = _loadSqlite();
 
 DynamicLibrary? _sqliteLibrary;
+Pointer<NativeFunction<SqliteProgressInstall>>? _progressInstaller;
+
+/// Resolved from the original package mapping before a database can open.
+/// Budget construction/read transactions perform no dlsym or loader operation.
+Pointer<NativeFunction<SqliteProgressInstall>>
+get applicationSqliteProgressInstaller {
+  sqlite3;
+  return _progressInstaller ??
+      (throw StateError(
+        'SQLite was initialized outside the application loader',
+      ));
+}
 
 /// Only for owner-isolate connection controls; no handle leaves that isolate.
 DynamicLibrary get applicationSqliteLibrary {
@@ -59,6 +72,7 @@ DynamicLibrary _openLinuxBundleSqlite(String root) {
 }
 
 upstream.Sqlite3 _loadSqlite() {
+  requireSqlSupportBeforeConnection();
   if (Platform.isMacOS) {
     loader.open.overrideFor(loader.OperatingSystem.macOS, _openMacSqlite);
   } else if (Platform.isLinux) {
@@ -76,6 +90,9 @@ upstream.Sqlite3 _loadSqlite() {
   final library = loader.open.openSqlite();
   loader.open.overrideForAll(() {
     _sqliteLibrary = library;
+    _progressInstaller = library.lookup<NativeFunction<SqliteProgressInstall>>(
+      'sqlite3_progress_handler',
+    );
     return library;
   });
   final api = upstream.sqlite3;
@@ -96,6 +113,7 @@ upstream.Database openApplicationDatabase(
   String path, {
   upstream.OpenMode mode = upstream.OpenMode.readWriteCreate,
 }) {
+  requireSqlSupportBeforeConnection();
   // Enable URI selection for controlled ATTACH/VACUUM destinations. The main
   // filename is always an absolute filesystem path (or :memory:), so an input
   // beginning with file: cannot bypass profile/path qualification.

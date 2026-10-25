@@ -1,3 +1,5 @@
+import 'package:foresight_core/src/persistence/sql_support.dart';
+import 'sql_support_test_bootstrap.dart';
 import 'dart:isolate';
 
 import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
@@ -14,12 +16,15 @@ WITH RECURSIVE counter(x) AS (
 ''';
 
 void main() {
+  bootstrapSqlSupportFixture();
   test(
     'owner-isolate deadline interrupts real SQL and leaves both connections usable',
     () async {
       final environment = runtimeConfiguration.environment;
+      final support = currentSqlSupportBootstrap;
       final result = await Isolate.run(() {
         installServiceWorkerEnvironment(environment);
+        bindSqlSupportBootstrap(support);
         final db = openApplicationDatabase(':memory:');
         final unrelated = openApplicationDatabase(':memory:');
         try {
