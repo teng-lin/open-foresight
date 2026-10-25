@@ -8,9 +8,13 @@ import 'package:meta/meta.dart';
 
 import 'events.dart';
 import 'storage.dart';
+import 'storage_worker.dart';
+import 'storage_worker_native.dart';
+import 'storage_worker_protocol.dart';
 
 export 'configuration.dart';
 export 'events.dart';
+export 'storage_worker.dart';
 export 'storage.dart'
     show DiagnosticRole, OwnershipDecision, DiagnosticHealthReason;
 
@@ -52,9 +56,13 @@ final class DiagnosticHealth {
 }
 
 final class LoggingCloseResult {
-  const LoggingCloseResult({required this.writerExited, required this.flushed});
-  final bool writerExited, flushed;
-  bool get requiresExplicitExit => !writerExited;
+  const LoggingCloseResult({
+    required this.writerExited,
+    required this.flushed,
+    this.ownerSettled = true,
+  });
+  final bool writerExited, flushed, ownerSettled;
+  bool get requiresExplicitExit => !writerExited || !ownerSettled;
 }
 
 DiagnosticLevel _severity(Map value) {
@@ -139,6 +147,7 @@ final class LoggingSession {
       _flushed = false,
       _closeAcknowledged = false;
   Future<LoggingCloseResult>? _close;
+  _DiagnosticCoordinator? _coordinator;
 
   static Future<LoggingSession> start({
     required DiagnosticConfiguration configuration,
@@ -146,12 +155,14 @@ final class LoggingSession {
     DiagnosticRole role = DiagnosticRole.candidate,
     String version = 'unknown',
     String revision = 'unknown',
+    DiagnosticWorkerFactory? workerFactory,
   }) => _processSession ??= _start(
     configuration,
     profilePath,
     role == DiagnosticRole.service ? DiagnosticRole.candidate : role,
     version,
     revision,
+    workerFactory: workerFactory,
   );
   @visibleForTesting
   static Future<LoggingSession> startForTesting({
@@ -159,6 +170,7 @@ final class LoggingSession {
     String? profilePath,
     DiagnosticRole role = DiagnosticRole.candidate,
     DiagnosticSinkFactory? sinkFactory,
+    DiagnosticWorkerFactory? workerFactory,
     DateTime Function()? clock,
     int generationSeed = 0,
   }) => _start(
@@ -168,6 +180,7 @@ final class LoggingSession {
     'unknown',
     'unknown',
     sinkFactory: sinkFactory,
+    workerFactory: workerFactory,
     clock: clock,
     generationSeed: generationSeed,
   );
@@ -179,9 +192,13 @@ final class LoggingSession {
     String version,
     String revision, {
     DiagnosticSinkFactory? sinkFactory,
+    DiagnosticWorkerFactory? workerFactory,
     DateTime Function()? clock,
     int generationSeed = 0,
   }) async {
+    if (sinkFactory != null && workerFactory != null) {
+      throw ArgumentError('Select one explicit diagnostic test sink or worker');
+    }
     if (generationSeed < 0 || generationSeed >= _maximumGeneration) {
       throw ArgumentError.value(generationSeed, 'generationSeed');
     }
@@ -222,6 +239,7 @@ final class LoggingSession {
     final status = RawReceivePort((dynamic value) {
       if (value == null) {
         if (!exited.isCompleted) exited.complete();
+        currentSession?._coordinator?.writerDidExit();
         final active = currentSession;
         if (active == null || !active._closed || !active._closeAcknowledged) {
           health.reason = DiagnosticHealthReason.writerFailed;
@@ -234,6 +252,10 @@ final class LoggingSession {
         return;
       }
       if (value is! List || value.isEmpty) return;
+      if (value.first == 'worker_request' && value.length == 4) {
+        currentSession?._coordinator?.request(value);
+        return;
+      }
       if (value.first == 'retired' && value.length == 4 && value[3] == 0) {
         currentSession?._retired(value[1] as int, value[2] as int);
         return;
@@ -311,6 +333,15 @@ final class LoggingSession {
         throw StateError('Diagnostic writer context is already active');
       }
       currentSession = session;
+      session._coordinator = _DiagnosticCoordinator(
+        factory: workerFactory,
+        writer: port,
+        configuration: configuration,
+        identity: identity,
+        version: version,
+        revision: revision,
+        writerExited: exited.future,
+      );
       session._generations.fillRange(0, maximumProducers, generationSeed);
       session.producer = session
           .reserveProducer(DiagnosticProducerKind.entrypoint)
@@ -326,20 +357,25 @@ final class LoggingSession {
       return session;
     } catch (_) {
       isolate?.kill(priority: Isolate.immediate);
-      status.close();
-      errors.close();
-      if (!exited.isCompleted) exited.complete();
+      // Once a VM was created, a kill request is not its exit barrier. Retain
+      // the non-keepalive observer and actual handle for final bounded close.
+      if (isolate == null || exited.isCompleted) {
+        status.close();
+        errors.close();
+      }
+      if (isolate == null && !exited.isCompleted) exited.complete();
       health.reason = DiagnosticHealthReason.writerFailed;
       session = LoggingSession._(
         configuration,
         identity,
         null,
-        null,
-        null,
-        null,
+        isolate,
+        isolate == null ? null : status,
+        isolate == null ? null : errors,
         exited,
         health,
       );
+      currentSession = session;
       session.producer = session
           .reserveProducer(DiagnosticProducerKind.entrypoint)
           .connect();
@@ -508,6 +544,7 @@ final class LoggingSession {
       return const LoggingCloseResult(writerExited: true, flushed: true);
     }
     final elapsed = Stopwatch()..start();
+    _coordinator?.beginClose(elapsed);
     for (final slot in _slots) {
       slot?.local?.close();
     }
@@ -528,15 +565,51 @@ final class LoggingSession {
       health.reason = DiagnosticHealthReason.writerFailed;
       _isolate?.kill(priority: Isolate.immediate);
     }
-    _status?.close();
-    _errors?.close();
+    DiagnosticWorkerCloseResult? ownerResult;
+    final coordinator = _coordinator;
+    if (coordinator != null) {
+      try {
+        ownerResult = await coordinator.finish().timeout(
+          Duration(
+            microseconds:
+                (closeDeadline.inMicroseconds - elapsed.elapsedMicroseconds)
+                    .clamp(0, closeDeadline.inMicroseconds),
+          ),
+        );
+      } on TimeoutException {
+        coordinator.force();
+      }
+      if (ownerResult != null &&
+          coordinator.ownerCreated &&
+          !ownerResult.retired &&
+          health.reason == DiagnosticHealthReason.healthy) {
+        health.reason = ownerResult.reason;
+      }
+    }
+    if (_exited.isCompleted) {
+      _status?.close();
+      _errors?.close();
+    } else {
+      // Retain the non-keepalive exit observation through a late native return;
+      // a kill request or the external deadline is not an actual VM exit.
+      unawaited(
+        _exited.future.then((_) {
+          _status?.close();
+          _errors?.close();
+        }),
+      );
+    }
     health.closed = true;
     if (health.reason == DiagnosticHealthReason.healthy) {
       health.reason = DiagnosticHealthReason.closed;
     }
     return LoggingCloseResult(
       writerExited: writerExited,
-      flushed: _flushed || _writer == null,
+      flushed:
+          (_flushed || _writer == null) &&
+          (coordinator?.ownerCreated != true || ownerResult?.retired == true),
+      ownerSettled:
+          ownerResult?.ownerSettled ?? coordinator?.ownerSettled ?? true,
     );
   }
 
@@ -545,6 +618,222 @@ final class LoggingSession {
     final session = _processSession;
     if (session != null) await (await session).close();
     _processSession = null;
+  }
+}
+
+/// The application coordinator never blocks in file/prepare/spawn FFI. Its
+/// ports do not keep the VM alive; the native owner observes actual parent work
+/// separately from child-only unknown health.
+final class _DiagnosticCoordinator {
+  _DiagnosticCoordinator({
+    required this.factory,
+    required this.writer,
+    required this.configuration,
+    required this.identity,
+    required this.version,
+    required this.revision,
+    required this.writerExited,
+  });
+  final DiagnosticWorkerFactory? factory;
+  final SendPort writer;
+  final DiagnosticConfiguration configuration;
+  final DiagnosticIdentity identity;
+  final String version, revision;
+  final Future<void> writerExited;
+  DiagnosticWorkerOwner? _owner;
+  bool _attempted = false, _forced = false, _writerGone = false;
+  int? _pending;
+  bool _notified = false;
+  Stopwatch? _closing;
+  Timer? _forceDeadline;
+  Future<DiagnosticWorkerCloseResult>? _finish;
+  DiagnosticHealthReason _failure =
+      DiagnosticHealthReason.storageWorkerUnconfigured;
+  bool get ownerCreated => _owner != null;
+  DiagnosticWorkerSnapshot get _snapshot {
+    try {
+      return _owner?.snapshot ?? const DiagnosticWorkerSnapshot();
+    } catch (_) {
+      return const DiagnosticWorkerSnapshot(
+        parentSettled: false,
+        reason: DiagnosticHealthReason.storageWorkerUnknown,
+      );
+    }
+  }
+
+  bool get ownerSettled => _snapshot.parentSettled;
+
+  Future<int> _prepare(List<int> addresses, int generation) async {
+    final done = Completer<int>();
+    final port = RawReceivePort((dynamic result) {
+      if (!done.isCompleted) {
+        if (result is int) {
+          done.complete(result);
+        } else {
+          done.completeError(
+            const DiagnosticWorkerFailure(
+              DiagnosticHealthReason.storageWorkerProtocolFailed,
+            ),
+          );
+        }
+      }
+    })..keepIsolateAlive = false;
+    // One attempt only; this single exit listener is bounded for the process.
+    unawaited(
+      writerExited.then((_) {
+        if (!done.isCompleted) {
+          done.completeError(
+            const DiagnosticWorkerFailure(
+              DiagnosticHealthReason.writerFailed,
+              disposed: true,
+            ),
+          );
+        }
+      }),
+    );
+    try {
+      if (_writerGone || _forced) {
+        throw const DiagnosticWorkerFailure(
+          DiagnosticHealthReason.writerFailed,
+          disposed: true,
+        );
+      }
+      writer.send(['native_prepare', addresses, generation, port.sendPort]);
+      return await done.future;
+    } finally {
+      port.close();
+    }
+  }
+
+  void request(List message) {
+    final id = message[1] as int;
+    if (_forced || _pending != null) {
+      writer.send([
+        'worker_failure',
+        id,
+        DiagnosticHealthReason.storageWorkerUnknown.index,
+        _owner == null || _snapshot.childNotLive,
+      ]);
+      return;
+    }
+    if (!_attempted) {
+      _attempted = true;
+      try {
+        _owner = factory?.call(
+          DiagnosticStorageLaunchContext(
+            configuration: configuration,
+            session: identity,
+            applicationPid: pid,
+            version: version,
+            revision: revision,
+            prepare: _prepare,
+            writerExited: writerExited,
+          ),
+        );
+      } on DiagnosticWorkerFailure catch (error) {
+        _failure = error.reason;
+      } catch (_) {
+        _failure = DiagnosticHealthReason.storageWorkerLaunchFailed;
+      }
+    }
+    final owner = _owner;
+    if (owner == null) {
+      writer.send(['worker_failure', id, _failure.index, true]);
+      return;
+    }
+    _pending = id;
+    _notified = false;
+    Future<void> run() async {
+      try {
+        final reply = await owner.request(
+          DiagnosticWorkerRequest(message[2] as int, message[3] as Uint8List),
+        );
+        if (!_notified && !_writerGone) {
+          final encoded = reply.encode();
+          final buildId = _snapshot.buildId;
+          _notified = true;
+          writer.send(['worker_reply', id, encoded, buildId]);
+        }
+      } catch (error) {
+        final failure = error is DiagnosticWorkerFailure
+            ? error
+            : const DiagnosticWorkerFailure(
+                DiagnosticHealthReason.storageWorkerUnknown,
+              );
+        if (!_notified && !_writerGone) {
+          _notified = true;
+          writer.send([
+            'worker_failure',
+            id,
+            failure.reason.index,
+            failure.disposed || _snapshot.childNotLive,
+          ]);
+        }
+      } finally {
+        if (_pending == id) _pending = null;
+      }
+    }
+
+    unawaited(run());
+  }
+
+  void beginClose(Stopwatch elapsed) {
+    if (_closing != null) return;
+    _closing = elapsed;
+    _forceDeadline = Timer(const Duration(milliseconds: 300), force);
+  }
+
+  void force() {
+    _forced = true;
+    try {
+      _owner?.force();
+    } catch (_) {
+      _failure = DiagnosticHealthReason.storageWorkerUnknown;
+    }
+    final id = _pending;
+    if (id != null && !_notified && !_writerGone) {
+      _notified = true;
+      writer.send([
+        'worker_failure',
+        id,
+        DiagnosticHealthReason.storageWorkerUnknown.index,
+        _owner == null || _snapshot.childNotLive,
+      ]);
+    }
+  }
+
+  void writerDidExit() {
+    _writerGone = true;
+    if (_closing == null) force();
+  }
+
+  Future<DiagnosticWorkerCloseResult> finish() => _finish ??= _finishOwner();
+  Future<DiagnosticWorkerCloseResult> _finishOwner() async {
+    final owner = _owner;
+    if (owner == null) {
+      _forceDeadline?.cancel();
+      return const DiagnosticWorkerCloseResult();
+    }
+    final elapsed = _closing?.elapsed ?? const Duration(milliseconds: 300);
+    final normal = Duration(
+      microseconds: (300000 - elapsed.inMicroseconds).clamp(0, 300000),
+    );
+    final total = Duration(
+      microseconds: (500000 - elapsed.inMicroseconds).clamp(0, 500000),
+    );
+    try {
+      return await owner.close(normalBudget: normal, totalBudget: total);
+    } catch (_) {
+      force();
+      return DiagnosticWorkerCloseResult(
+        ownerSettled: _snapshot.parentSettled,
+        childNotLive: _snapshot.childNotLive,
+        reaped: _snapshot.reaped,
+        reason: DiagnosticHealthReason.storageWorkerUnknown,
+      );
+    } finally {
+      _forceDeadline?.cancel();
+    }
   }
 }
 
@@ -628,10 +917,10 @@ void _writerMain(List<Object?> arguments) {
     const Duration(milliseconds: 100),
     (_) => state.ledger.rebalance(),
   );
-  state.timer = Timer.periodic(
-    const Duration(milliseconds: 250),
-    (_) => state.flush(),
-  );
+  state.timer = Timer.periodic(const Duration(milliseconds: 250), (_) {
+    state.heartbeat();
+    state.flush();
+  });
 }
 
 final class _Writer {
@@ -681,6 +970,7 @@ final class _Writer {
 
   void handle(dynamic value) {
     if (value is! List || value.isEmpty) return;
+    if (workerControl(value)) return;
     if (ledger.handle(value)) {
       _captureLedgerHighWater();
       return;
@@ -757,7 +1047,9 @@ final class _Writer {
             ? records.length
             : highRecords;
         admitted = _sum(admitted, 1);
-        if (storage == null && reason == DiagnosticHealthReason.healthy) {
+        if (storage == null &&
+            !_admitted &&
+            reason == DiagnosticHealthReason.healthy) {
           reason = DiagnosticHealthReason.bootstrapOnly;
         }
         if (severity.index <= DiagnosticLevel.warn.index) hadPriority = true;
@@ -856,22 +1148,14 @@ final class _Writer {
       false,
     );
     if (pendingDrops > 0) {
-      yield summary(
-        DiagnosticEvent.recordsDropped,
-        pendingDrops,
-        firstDrop,
-        lastDrop,
-      );
+      final count = pendingDrops;
       pendingDrops = 0;
+      yield summary(DiagnosticEvent.recordsDropped, count, firstDrop, lastDrop);
     }
     if (pendingRejected > 0) {
-      yield summary(
-        DiagnosticEvent.recordRejected,
-        pendingRejected,
-        firstDrop,
-        lastDrop,
-      );
+      final count = pendingRejected;
       pendingRejected = 0;
+      yield summary(DiagnosticEvent.recordRejected, count, firstDrop, lastDrop);
     }
     for (final event in DiagnosticEvent.values) {
       final count = rate.offsets[event.index + 1] - rate.offsets[event.index];
@@ -879,6 +1163,7 @@ final class _Writer {
         final at = (rate.offsets[event.index] + category) * 4;
         final suppressed = rate.values[at + 1];
         if (suppressed == 0) continue;
+        rate.values[at + 1] = 0;
         yield summary(
           DiagnosticEvent.recordsDropped,
           suppressed,
@@ -889,7 +1174,6 @@ final class _Writer {
               ? DiagnosticCategory.unknown
               : DiagnosticCategory.values[category],
         );
-        rate.values[at + 1] = 0;
       }
     }
   }
@@ -921,23 +1205,333 @@ final class _Writer {
       rejected,
       highBytes,
       highRecords,
-      storage?.slot,
+      storage?.slot ?? _remoteSlot,
       ledger.quarantined,
     ]);
   }
 
   Uint8List _encode(_QueuedRecord record) {
+    if (sequence >= 0x7fffffffffffffff) {
+      throw StateError('Diagnostic sequence exhausted');
+    }
     final value = jsonDecode(record.encoded) as Map<String, dynamic>;
     final producer = record.producer;
     final severity = _severity(value);
     return Uint8List.fromList(
       utf8.encode(
-        '${jsonEncode({'schema': 1, 'timestamp': clock().toUtc().toIso8601String(), 'sequence': ++sequence, 'level': severity.name, 'version': version, 'revision': revision, 'session': session, 'pid': pid, 'producer': '${producer.kind.name}:${producer.slot}', ...value})}\n',
+        '${jsonEncode({'schema': sinkFactory == null ? 2 : 1, 'timestamp': clock().toUtc().toIso8601String(), 'sequence': ++sequence, 'level': severity.name, 'version': version, 'revision': revision, 'session': session, 'pid': pid, 'producer': sinkFactory == null ? '${producer.kind.name}:${producer.slot}:${producer.generation}' : '${producer.kind.name}:${producer.slot}', if (sinkFactory == null) 'build_id': _buildId, ...value})}\n',
       ),
     );
   }
 
+  DiagnosticNativeFunctions? _nativeFunctions;
+  int _nativeGeneration = 0;
+  int _workerRequestId = 0;
+  Completer<DiagnosticWorkerReply>? _reply;
+  String? _buildId;
+  int? _remoteSlot;
+  bool _flushing = false,
+      _finished = false,
+      _initialized = false,
+      _admitted = false,
+      _remoteDisabled = false,
+      _unknown = false;
+  _QueuedRecord? _inFlight, _pendingSummary;
+  (DiagnosticRole, bool, bool)? _classification;
+
+  void heartbeat() {
+    // Only the existing writer tick supplies the native child lease. The
+    // coordinator/spawn owners never keep an idle writer alive for it.
+    if (_nativeGeneration != 0) _nativeFunctions?.heartbeat(_nativeGeneration);
+  }
+
+  bool workerControl(List value) {
+    switch (value.first) {
+      case 'native_prepare':
+        final functions = DiagnosticNativeFunctions.fromCodeAddresses(
+          (value[1] as List).cast<int>(),
+        );
+        final generation = value[2] as int;
+        var result = DiagnosticNativeFunctions.error;
+        try {
+          // Synchronous/blocking preparation is isolated from the application
+          // coordinator, which already owns this native context and can FORCE.
+          result = functions.prepare(generation);
+          if (result == DiagnosticNativeFunctions.prepared) {
+            _nativeFunctions = functions;
+            _nativeGeneration = generation;
+          }
+        } catch (_) {
+          // No arbitrary exception or native text crosses the control channel.
+        } finally {
+          (value[3] as SendPort).send(result);
+        }
+        return true;
+      case 'worker_reply':
+        if (value.length == 4 &&
+            value[1] == _workerRequestId &&
+            _reply?.isCompleted == false) {
+          try {
+            final reply = DiagnosticWorkerReply.decode(value[2] as Uint8List);
+            final build = value[3];
+            if (build != null) {
+              if (build is! String ||
+                  !RegExp(r'^[0-9a-f]{64}$').hasMatch(build) ||
+                  (_buildId != null && build != _buildId)) {
+                throw const DiagnosticWorkerFailure(
+                  DiagnosticHealthReason.storageWorkerProtocolFailed,
+                );
+              }
+              _buildId = build;
+            }
+            _reply!.complete(reply);
+          } catch (_) {
+            _reply!.completeError(
+              const DiagnosticWorkerFailure(
+                DiagnosticHealthReason.storageWorkerProtocolFailed,
+              ),
+            );
+          }
+        }
+        return true;
+      case 'worker_failure':
+        if (value.length == 4 &&
+            value[1] == _workerRequestId &&
+            _reply?.isCompleted == false) {
+          _reply!.completeError(
+            DiagnosticWorkerFailure(
+              DiagnosticHealthReason.values[value[2] as int],
+              disposed: value[3] as bool,
+            ),
+          );
+        }
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  Future<DiagnosticWorkerReply> _request(int type, Uint8List payload) async {
+    if (_reply != null) {
+      throw StateError('Overlapping diagnostic writer request');
+    }
+    final reply = _reply = Completer<DiagnosticWorkerReply>();
+    final id = ++_workerRequestId;
+    owner.send(['worker_request', id, type, payload]);
+    try {
+      // No Future timeout releases a request/ticket. Only a matching reply or
+      // an owner-observed physical disposal can do so.
+      return await reply.future;
+    } finally {
+      if (identical(_reply, reply)) _reply = null;
+    }
+  }
+
+  bool _accepted(DiagnosticWorkerReply reply) {
+    _remoteSlot = reply.slot ?? _remoteSlot;
+    reason = reply.reason;
+    if (reply.result == DiagnosticWorkerResult.disabled) _remoteDisabled = true;
+    return reply.result == DiagnosticWorkerResult.ok;
+  }
+
   void flush() {
+    if (sinkFactory != null) {
+      _flushSynchronousForTesting();
+    } else if (!_flushing && !_finished) {
+      _flushing = true;
+      unawaited(_flushAsync().whenComplete(() => _flushing = false));
+    }
+  }
+
+  Future<void> _flushAsync() async {
+    try {
+      if (decisionExpected && !decisionReceived) {
+        _health();
+        return;
+      }
+      if (role == DiagnosticRole.transient) {
+        _discard();
+        if (closing) _finish();
+        return;
+      }
+      final eligible =
+          hadPriority ||
+          _hasSummaries ||
+          records.length >= 100 ||
+          started.elapsedMilliseconds >= 5000;
+      if (!eligible || profile == null || _remoteDisabled) {
+        if (closing) {
+          _discardUnsent();
+          _finish();
+        } else {
+          _health();
+        }
+        return;
+      }
+      if (!_initialized) {
+        final reply = await _request(
+          DiagnosticWorkerFrame.init,
+          DiagnosticWorkerInit(
+            profile: profile!,
+            session: DiagnosticIdentity.parse(session)!,
+            role: role,
+          ).encode(),
+        );
+        if (!_accepted(reply)) {
+          _finishOrHealth();
+          return;
+        }
+        if (_buildId == null) {
+          throw const DiagnosticWorkerFailure(
+            DiagnosticHealthReason.storageWorkerProtocolFailed,
+          );
+        }
+        _initialized = true;
+      }
+      if (decisionExpected && !decisionReceived) {
+        _health();
+        return;
+      }
+      if (!_admitted) {
+        if (attempts >= 5 || started.elapsedMilliseconds < nextAttempt) {
+          _finishOrHealth();
+          return;
+        }
+        attempts++;
+        nextAttempt =
+            started.elapsedMilliseconds +
+            [100, 500, 2000, 5000, 5000][attempts - 1];
+        if (!_accepted(
+          await _request(DiagnosticWorkerFrame.admit, Uint8List(0)),
+        )) {
+          _finishOrHealth();
+          return;
+        }
+        _admitted = true;
+      }
+      while (records.isNotEmpty) {
+        if (decisionExpected && !decisionReceived) {
+          _health();
+          return;
+        }
+        if (!await _classify()) {
+          _finishOrHealth();
+          return;
+        }
+        final record = records.first;
+        final bytes = _encode(record);
+        if (bytes.length > 4096) {
+          _complete(record, droppedRecord: true);
+          reason = DiagnosticHealthReason.sinkFailed;
+          continue;
+        }
+        _inFlight = record;
+        final reply = await _request(DiagnosticWorkerFrame.append, bytes);
+        _inFlight = null;
+        if (!_accepted(reply)) {
+          _finishOrHealth();
+          return;
+        }
+        _complete(record);
+      }
+      while (_pendingSummary != null || _hasSummaries) {
+        final summary = _pendingSummary ??= _summaries().firstOrNull;
+        if (summary == null) break;
+        if (!await _classify(priority: true)) {
+          _finishOrHealth();
+          return;
+        }
+        final reply = await _request(
+          DiagnosticWorkerFrame.append,
+          _encode(summary),
+        );
+        if (!_accepted(reply)) {
+          _finishOrHealth();
+          return;
+        }
+        _pendingSummary = null;
+      }
+      _health();
+      if (closing) _finish();
+    } on DiagnosticWorkerFailure catch (error) {
+      reason = error.reason;
+      _remoteDisabled = true;
+      if (error.disposed) {
+        _inFlight = null;
+        dropped = _sum(dropped, records.length);
+        _discard();
+      } else {
+        // Never refund an unknown APPEND or replay it under a new request ID.
+        // Later records remain a bounded in-memory suffix. Close can discard
+        // that unsent suffix, but the unknown prefix lives until writer exit.
+        _unknown = _inFlight != null;
+      }
+      _finishOrHealth();
+    } catch (_) {
+      reason = DiagnosticHealthReason.sinkFailed;
+      _remoteDisabled = true;
+      _unknown = _inFlight != null;
+      _finishOrHealth();
+    }
+  }
+
+  Future<bool> _classify({bool priority = false}) async {
+    while (true) {
+      if (decisionExpected && !decisionReceived) return false;
+      final state = (role, hadPriority || priority, hadFailure);
+      if (_classification == state) return true;
+      final reply = await _request(
+        DiagnosticWorkerFrame.classify,
+        DiagnosticWorkerClassification(
+          state.$1,
+          error: state.$2,
+          genuineFailure: state.$3,
+        ).encode(),
+      );
+      if (!_accepted(reply)) return false;
+      _classification = state;
+      // A promotion or newer failure can arrive while the old classification
+      // is in flight. Publish the newest protection before any following data.
+      if (_classification == (role, hadPriority || priority, hadFailure)) {
+        return true;
+      }
+    }
+  }
+
+  void _complete(_QueuedRecord record, {bool droppedRecord = false}) {
+    if (!identical(records.firstOrNull, record)) {
+      throw StateError('Diagnostic ACK prefix changed');
+    }
+    records.removeAt(0);
+    charge -= record.charge;
+    ledger.completed(record.charge, record.priority);
+    if (droppedRecord) dropped = _sum(dropped, 1);
+    ledger.rebalance();
+  }
+
+  void _discardUnsent() {
+    final keep = _unknown ? _inFlight : null;
+    for (var i = records.length - 1; i >= 0; i--) {
+      final record = records[i];
+      if (identical(record, keep)) continue;
+      records.removeAt(i);
+      charge -= record.charge;
+      ledger.completed(record.charge, record.priority);
+      dropped = _sum(dropped, 1);
+    }
+    ledger.rebalance();
+  }
+
+  void _finishOrHealth() {
+    if (closing) {
+      _discardUnsent();
+      _finish();
+    } else {
+      _health();
+    }
+  }
+
+  void _flushSynchronousForTesting() {
     if (decisionExpected && !decisionReceived) {
       _health();
       return;
@@ -970,14 +1564,11 @@ final class _Writer {
           started.elapsedMilliseconds +
           [100, 500, 2000, 5000, 5000][attempts - 1];
       try {
-        storage = sinkFactory == null
-            ? DiagnosticStorage.admit(
-                profile!,
-                DiagnosticIdentity.parse(session)!,
-                role,
-                clock: clock,
-              )
-            : sinkFactory!(profile!, DiagnosticIdentity.parse(session)!, role);
+        storage = sinkFactory!(
+          profile!,
+          DiagnosticIdentity.parse(session)!,
+          role,
+        );
         reason = storage == null
             ? DiagnosticHealthReason.storageUnavailable
             : DiagnosticHealthReason.healthy;
@@ -1048,6 +1639,8 @@ final class _Writer {
   }
 
   void _finish() {
+    if (_finished) return;
+    _finished = true;
     _captureLedgerHighWater();
     timer?.cancel();
     timer = null;
@@ -1055,7 +1648,7 @@ final class _Writer {
     creditTimer = null;
     ownershipCloseDeadline?.cancel();
     ownershipCloseDeadline = null;
-    final slot = storage?.slot;
+    final slot = storage?.slot ?? _remoteSlot;
     try {
       storage?.close();
     } catch (_) {

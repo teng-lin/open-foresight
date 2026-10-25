@@ -54,6 +54,7 @@ const diagnosticCodeLocations = <String>[
   'src/diagnostics/producer_owner.dart',
   'src/diagnostics/session.dart',
   'src/diagnostics/storage.dart',
+  'src/diagnostics/storage_worker.dart',
   'src/diagnostics/storage_worker_dispatch.dart',
   'src/diagnostics/storage_worker_launch.dart',
   'src/diagnostics/storage_worker_native.dart',
