@@ -183,6 +183,21 @@ void main() {
       await server.shutdown();
       store.close();
     });
+    // Warm the actual Domain/client/server cursor path before any operation
+    // clock. Domain still opens a fresh owned channel for each subsequent RPC.
+    // The unused ID cannot project a meeting or change durable indexing state.
+    final jobsBefore = store.rows('SELECT * FROM meeting_index_jobs');
+    final sourcesBefore = store.rows('SELECT * FROM sources');
+    final warmup = await domain
+        .transcriptCursor('readiness-warmup')
+        .timeout(const Duration(seconds: 5));
+    expect(warmup.exists, false);
+    expect(peer.cursorReads, 1);
+    expect(peer.requests, isEmpty);
+    expect(peer.cursors, isEmpty);
+    expect(peer.pieces, isEmpty);
+    expect(store.rows('SELECT * FROM meeting_index_jobs'), jobsBefore);
+    expect(store.rows('SELECT * FROM sources'), sourcesBefore);
   });
   test(
     'Stop returns independently while immediate Search waits for the accepted final delta',
