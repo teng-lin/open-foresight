@@ -231,6 +231,84 @@ SELECT key, CASE WHEN key='slow' THEN (
   });
 
   test(
+    'queue cancellation removes only exact undispatched request identity',
+    () async {
+      plantLongRead();
+      final worker = SqliteReadWorker(
+        path,
+        executionBudget: const Duration(milliseconds: 100),
+      );
+      addTearDown(worker.close);
+      await worker.read(request('workspaceEpoch'));
+      final runningRequest = request('slow', 2);
+      final running = expectLater(
+        worker.read(runningRequest),
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.busy),
+        ),
+      );
+      final queuedRequest = request('workspaceEpoch', 3);
+      final queued = expectLater(
+        worker.read(queuedRequest),
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+        ),
+      );
+      expect(worker.cancelQueued(request('workspaceEpoch', 3)), isFalse);
+      expect(worker.cancelQueued(runningRequest), isFalse);
+      expect(worker.cancelQueued(queuedRequest), isTrue);
+      expect(worker.cancelQueued(queuedRequest), isFalse);
+      await queued;
+      await running;
+      expect(
+        (await worker.read(request('workspaceEpoch', 4))).value,
+        identity.epoch,
+      );
+    },
+  );
+
+  test(
+    'subscriber cancellation withdraws queued work before running SQL settles',
+    () async {
+      plantLongRead();
+      final worker = SqliteReadWorker(
+        path,
+        executionBudget: const Duration(milliseconds: 150),
+      );
+      await worker.read(request('workspaceEpoch'));
+      final running = expectLater(
+        worker.read(request('slow', 2)),
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.busy),
+        ),
+      );
+      final reader = ReadCoordinator(identity: () => identity, worker: worker);
+      addTearDown(reader.close);
+      final subscription = reader
+          .watch<String>(
+            ReadQuery(
+              projection: 'preference',
+              arguments: {'key': 'workspaceEpoch'},
+              decode: (value) => value as String,
+            ),
+          )
+          .listen((_) {});
+      while (!reader.busy) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      await subscription.cancel();
+      if (reader.busy) {
+        await reader.activityChanges.firstWhere((_) => !reader.busy);
+      }
+      // The coordinator's queued reservation has settled; the separate first
+      // job still owns its actual future until SQLite interrupts normally.
+      expect(reader.activeReads, 0);
+      await running;
+      await reader.close();
+    },
+  );
+
+  test(
     'subscriber deadline retains SQL reservation and next job remains independent',
     () async {
       plantLongRead();

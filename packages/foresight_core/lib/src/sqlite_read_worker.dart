@@ -11,7 +11,7 @@ const _ownerWatchReady = 'read-worker-owner-watch-ready';
 const _ownerAttachTimeout = Duration(seconds: 5);
 
 /// Lazy, long-lived core-owned read isolate. No SQLite handle crosses ports.
-final class SqliteReadWorker implements ReadWorker {
+final class SqliteReadWorker implements ReadWorker, ReadQueueCancellation {
   final String _path;
   final Map<String, String> _environment;
   final Duration executionBudget;
@@ -161,6 +161,21 @@ final class SqliteReadWorker implements ReadWorker {
     generation.queue.add(pending);
     _dispatch(generation);
     return pending.result.future;
+  }
+
+  @override
+  bool cancelQueued(ReadWorkerRequest request) {
+    final generation = _generation;
+    if (generation == null) return false;
+    final index = generation.queue.indexWhere(
+      (pending) => identical(pending.request, request),
+    );
+    if (index < 0) return false;
+    final pending = generation.queue.removeAt(index);
+    pending.result.completeError(
+      RpcError(RpcErrorCode.cancelled, 'Queued read cancelled'),
+    );
+    return true;
   }
 
   @override

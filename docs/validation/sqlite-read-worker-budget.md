@@ -31,8 +31,12 @@ job or a different connection.
 Subscriber cancellation and subscriber timeouts are not SQL cancellation. The
 coordinator continues retaining its actual future/reservation until the current
 job settles. Cancellation latency can therefore include the current job's
-remaining execution budget. Undispatched queued reads are cancelled on close;
-the running read is not killed. Close sends shutdown only after its actual
+remaining execution budget. The coordinator withdraws an undispatched queued
+request when its last subscriber cancels, its subscriber deadline expires, or
+the coordinator closes. Withdrawal matches the exact owner-local request object,
+not a copied sequence or later job. Running requests cannot be withdrawn by
+that interface and remain tracked. Undispatched queued reads are also cancelled
+on worker close; the running read is not killed. Close sends shutdown only after its actual
 reply, then joins actual worker EOF. Its execution-budget-plus-five-second
 join bound reports a failure if the worker does not retire; it does not clear
 physical work or claim success on that timeout.
