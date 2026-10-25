@@ -20,7 +20,7 @@ class EvidenceWorkflowTests(unittest.TestCase):
             "github.event.workflow_run.event != 'pull_request'", observer["if"]
         )
         self.assertIn(
-            "17,47 * * * *",
+            "17 * * * *",
             [row["cron"] for row in workflow.get("on", workflow.get(True))["schedule"]],
         )
         writer = workflow["jobs"]["coordinate"]
