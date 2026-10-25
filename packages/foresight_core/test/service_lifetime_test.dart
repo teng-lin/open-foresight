@@ -1631,6 +1631,19 @@ while True:
         20,
         'imported',
       );
+      // Settle this fixture's cold HTTP/2 connection before firing the timer.
+      // The five-second production embedding deadline remains unchanged.
+      final savedNotes = service.domain.store.meetingNoteRows(id);
+      final savedTranscript = service.domain.store.meetingTranscript(id);
+      final ready = await service.domain.helper.client.indexDocument(
+        IndexRequest(),
+      );
+      expect(ready.success, isTrue);
+      expect(rag.embeddingEntered.isCompleted, isFalse);
+      expect(rag.texts, isEmpty);
+      expect(service.domain.store.meetingNoteRows(id), savedNotes);
+      expect(service.domain.store.meetingTranscript(id), savedTranscript);
+      expect(service.domain.store.sources, isEmpty);
       editingNotes = true;
       await service.application.call('meetings.notes', {
         'id': id,
