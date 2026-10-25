@@ -5,8 +5,10 @@
 #include "diagnostic_inherited.h"
 #include "diagnostic_kernel.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,6 +27,30 @@
       abort();                                                                 \
     }                                                                          \
   } while (0)
+
+// CTest versions may inherit their own log FD without CLOEXEC. Establish the
+// fixture's clean exec baseline before creating intentional foreign-FD cases.
+static void isolate_harness_descriptors(void) {
+#ifdef __linux__
+  DIR *directory = opendir("/proc/self/fd");
+#else
+  DIR *directory = opendir("/dev/fd");
+#endif
+  CHECK(directory != NULL);
+  struct dirent *entry;
+  while ((entry = readdir(directory)) != NULL) {
+    char *end = NULL;
+    errno = 0;
+    long descriptor = strtol(entry->d_name, &end, 10);
+    if (errno != 0 || end == entry->d_name || *end != '\0' || descriptor < 3 ||
+        descriptor > INT_MAX)
+      continue;
+    int flags = fcntl((int)descriptor, F_GETFD);
+    CHECK(flags >= 0 &&
+          fcntl((int)descriptor, F_SETFD, flags | FD_CLOEXEC) == 0);
+  }
+  CHECK(closedir(directory) == 0);
+}
 
 static void raise_soft_limit(rlim_t required) {
   struct rlimit limit;
@@ -162,6 +188,7 @@ int main(int argc, char **argv) {
   // The backend is compiled with a separate, explicit nonproduct namespace.
   CHECK(mkdir(FS_DIAG_FIXTURE_BASE, 0700) == 0 || errno == EEXIST);
 #endif
+  isolate_harness_descriptors();
   ordinary_candidate(argv[1]);
   fs_diag_kernel_page page;
   CHECK(fs_diag_kernel_page_create(&page) == FS_DIAG_KERNEL_OK);
