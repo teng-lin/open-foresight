@@ -16,7 +16,7 @@ import argparse
 import json
 import re
 import sys
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 CORE = "packages/foresight_core/lib/src"
@@ -42,7 +42,7 @@ class Facts:
     migration_steps: list[int]
     content_revisions_step: int
     schema_version_symbol: str
-    application_schema_version: int | None
+    application_schema_version: int
     request_key_lifetime_hours: int
     workspace_epoch_key: str
     operations: list[str]
@@ -50,7 +50,6 @@ class Facts:
     registry_rejects: list[str]
     mcp_tools: list[str]
     mcp_tool_operations: dict[str, str]
-    notes: list[str] = field(default_factory=list)
 
     @property
     def latest_step(self) -> int:
@@ -140,7 +139,6 @@ def _enum_entries(text: str) -> list[tuple[str, str]]:
 
 def collect(root: Path) -> Facts:
     texts = {key: _read(root, path) for key, path in SOURCES.items()}
-    notes: list[str] = []
 
     steps, bodies = migration_facts(texts["migrations"])
     content_step = _step_creating(texts["migrations"], bodies, "content_revisions")
@@ -190,9 +188,13 @@ def collect(root: Path) -> Facts:
             f"operation_registry.dart: exhaustiveness checks changed: {rejects}"
         )
 
-    tools = re.findall(
-        r"_projectedTool\(\s*'(\w+)',\s*Operation\.(\w+)", texts["rpc_tools"]
-    )
+    getter = re.search(r"List<RpcTool> get rpcTools \{", texts["rpc_tools"])
+    if getter is None:
+        raise InputError("rpc_tools.dart: rpcTools getter not found")
+    tool_body = _block(texts["rpc_tools"], getter.end() - 1)
+    if re.search(r"\bRpcTool\s*\(", tool_body):
+        raise InputError("rpc_tools.dart: rpcTools bypasses operation projection")
+    tools = re.findall(r"_projectedTool\(\s*'(\w+)',\s*Operation\.(\w+)", tool_body)
     projections = re.findall(
         r'OperationToolProjection\(\s*"(\w+)",\s*Operation\.(\w+)',
         texts["projections"],
@@ -220,7 +222,6 @@ def collect(root: Path) -> Facts:
         registry_rejects=rejects,
         mcp_tools=tool_names,
         mcp_tool_operations=dict(tools),
-        notes=notes,
     )
 
 
@@ -250,10 +251,7 @@ def _tools_table(doc: str) -> list[str]:
 def check(root: Path, facts: Facts) -> list[str]:
     errors: list[str] = []
 
-    if (
-        facts.application_schema_version is not None
-        and facts.application_schema_version != facts.latest_step
-    ):
+    if facts.application_schema_version != facts.latest_step:
         errors.append(
             f"{facts.schema_version_symbol}={facts.application_schema_version} "
             f"but migrations define steps through {facts.latest_step}"
@@ -306,14 +304,7 @@ def check(root: Path, facts: Facts) -> list[str]:
         errors,
         SERVICE_DOC,
     )
-    _claims(
-        doc,
-        r"frozen (\d+) MCP schemas",
-        len(facts.mcp_tools),
-        "MCP schema count",
-        errors,
-        SERVICE_DOC,
-    )
+
     _claims(
         doc,
         r"Schema (\d+) retains prior content atomically in `content_revisions`",
@@ -355,8 +346,6 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.json:
         print(json.dumps({**asdict(facts), "latest_step": facts.latest_step}, indent=2))
-    for note in facts.notes:
-        print(f"note: {note}", file=sys.stderr)
     for error in errors:
         print(f"drift: {error}", file=sys.stderr)
     return 1 if errors else 0

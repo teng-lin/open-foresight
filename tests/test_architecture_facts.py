@@ -60,7 +60,6 @@ class CurrentFactsTest(PacketTest):
         self.assertEqual(
             sorted(facts.registry_rejects), ["cross-scope", "duplicate", "missing"]
         )
-        self.assertEqual(facts.notes, [])
 
     def test_corrected_docs_match(self) -> None:
         self.assertEqual(self.errors(), [])
@@ -133,10 +132,20 @@ class DriftTest(PacketTest):
         self.assertTrue(any("applicationSchemaVersion=21" in e for e in self.errors()))
         path.write_text("const applicationSchemaVersion = 22;\n", encoding="utf-8")
         self.assertEqual(self.errors(), [])
-        self.assertEqual(facts_tool.collect(self.root).notes, [])
 
 
 class InputShapeTest(PacketTest):
+    def test_direct_tool_cannot_bypass_projection(self) -> None:
+        self.replace(
+            facts_tool.SOURCES["rpc_tools"],
+            "  return [\n",
+            "  return [\n    RpcTool('extra', Operation.answer, '', {}, []),\n",
+        )
+        with self.assertRaisesRegex(
+            facts_tool.InputError, "bypasses operation projection"
+        ):
+            facts_tool.collect(self.root)
+
     def test_missing_schema_authority_exits_2(self) -> None:
         (self.root / facts_tool.SOURCES["schema"]).unlink()
         with redirect_stderr(io.StringIO()) as err:
