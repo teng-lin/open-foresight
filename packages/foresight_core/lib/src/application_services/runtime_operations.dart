@@ -25,6 +25,7 @@ final class ApplicationIdentity {
 final class RuntimeOperations {
   RuntimeOperations({
     required this.domain,
+    required this.audio,
     required this.identity,
     required this.assetDownloads,
     required this.generation,
@@ -37,6 +38,7 @@ final class RuntimeOperations {
     required this.answers,
   });
   final RuntimeOperationsPort domain;
+  final AudioOperations audio;
   final ApplicationIdentity identity;
   final ModelAssetAcquisitionCoordinator assetDownloads;
   final GenerationCoordinator generation;
@@ -95,7 +97,7 @@ final class RuntimeOperations {
       Operation.notificationsRequestPermission,
       (request, {current}) => notificationCapabilities(requestPermission: true),
     ),
-    ...AudioOperations().handlers,
+    ...audio.handlers,
     TypedOperationHandler<StatusRequest>(
       Operation.status,
       (request, {current}) => status(),

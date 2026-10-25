@@ -1,3 +1,4 @@
+import 'application_services/audio_operations.dart';
 import 'application_services/model_asset_acquisition.dart';
 import 'operations.dart';
 import 'operation_requests.dart';
@@ -117,6 +118,7 @@ class Application implements ModelGate, GenerationReservationGate {
       );
   final GoogleAuth? _auth;
   final AnswerGateway? _providedAnswers;
+  final AudioOperations _audioOperations;
   late final ModelRegistry _models;
 
   Application(
@@ -124,8 +126,10 @@ class Application implements ModelGate, GenerationReservationGate {
     GoogleAuth? auth,
     QueryCompletionRuntime? queryRuntime,
     AnswerGateway? answers,
+    AudioOperations? audioOperations,
   }) : _auth = auth,
-       _providedAnswers = answers {
+       _providedAnswers = answers,
+       _audioOperations = audioOperations ?? AudioOperations() {
     _models = ModelRegistry(
       domain: domain,
       queryRuntime: queryRuntime,
@@ -258,6 +262,7 @@ class Application implements ModelGate, GenerationReservationGate {
   late final ModelAssetAcquisitionCoordinator _assetDownloads =
       ModelAssetAcquisitionCoordinator(store: store, changed: changed);
   late final RuntimeOperations _runtime = RuntimeOperations(
+    audio: _audioOperations,
     domain: domain,
     identity: _identity,
     assetDownloads: _assetDownloads,

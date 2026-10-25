@@ -330,6 +330,13 @@ attribution. Profile content and downloaded models
 remain outside the bundle. With no HOME environment variable on macOS, the system
 user directory is obtained from Directory Services.
 
+Audio enumeration runs through the service audio operation. Application composition
+may inject an `AudioOperations` provider; the production default uses the host
+adapter. Desktop environment process runners do not enumerate devices. Enumeration
+returns device rows without requesting microphone or system access. The desktop
+environment fixture exercises this operation with an injected service provider;
+it does not qualify physical devices.
+
 The Mac audio discovery adapter uses `FORESIGHT_AUDIO_DEVICES --list-devices` and
 returns a JSON array of `{ "id": "stable-device-id", "label": "Device", "playback": false }`.
 The Mac notification adapter uses `FORESIGHT_NOTIFICATIONS --title TITLE --message MESSAGE`;

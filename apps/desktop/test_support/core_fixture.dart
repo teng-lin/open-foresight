@@ -5,6 +5,7 @@ library;
 export 'package:foresight_core/src/agent_access.dart';
 export 'package:foresight_core/src/answer_source_scope.dart';
 export 'package:foresight_core/src/application.dart';
+export 'package:foresight_core/src/application_services/audio_operations.dart';
 export 'package:foresight_core/src/audio_devices.dart';
 export 'package:foresight_core/src/domain.dart';
 export 'package:foresight_core/src/gemma_download.dart';
