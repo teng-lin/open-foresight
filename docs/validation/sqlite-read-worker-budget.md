@@ -61,16 +61,22 @@ symlink, search a basename or discover another image. Before its first database,
 it requires the frozen canonical name to succeed with `RTLD_NOLOAD` and match the
 original anchor/image. Only then may the Dart FFI loader acquire its reference to
 that exact already mapped canonical image. The entrypoint has already opened
-this exact canonical name before connections; [Dart's library-open contract](https://api.dart.dev/dart-ffi/DynamicLibrary/DynamicLibrary.open.html)
-guarantees one process load for repeated use of the same path across isolates.
+this exact canonical name before connections. The glibc/dyld loader name match
+is verified with NOLOAD and physical replacement tests. Dart's documented
+same-file open guarantee alone does not cover a replaced file. A loader that
+matched only file identity would leave a NOLOAD-to-open window and is outside
+this supported recipe.
 The package's function bindings and source identity must match before a
 connection opens. These startup refcounts
-are retained until process death. The AOT regression changes a real installed
+are retained until process death. The AOT regression changes a fixture-built installation
 SQLite alias to a loadable non-SQLite image while a parent write transaction is
 held; a second case also renames and replaces the frozen physical file itself.
 The replacement bytes are checked independently. An explicit reverse control
-proves the discovery alias changed, and both a fresh bound isolate and the real
-read worker keep the original mapped image in both cases.
+proves the discovery alias changed, and a fresh bound isolate reports the original anchor in both cases. The real
+read worker returns the committed snapshot while the parent retains its write
+transaction; its mapping identity follows from the shared checked loader path,
+rather than a separately reported worker anchor. Negative oracles refuse an
+unloaded copy without mapping it and reject a mismatched anchor.
 
 Owned sessions construct their budget eagerly. No read snapshot/BEGIN performs
 a support-image or SQLite-symbol lookup. `Database.handle` stays in its owning
@@ -189,9 +195,20 @@ coordinator, store reader, Store, runtime configuration, schema/backup helpers,
 and the owner-exit fixture. Those 37 hashes match across hosts; this does not
 claim identity of the wider application/credential graph. Linux focused 55 pass
 / 4 macOS-only skips and Mac focused 59 pass / 0 skips. Analyze passed on both;
-Linux formatted the package, while Mac checked the three changed overlaid Dart
-files. Native C/header/recipe bytes were unchanged and the preceding verified
+Linux checked package formatting, while Mac checked the three changed
+overlaid Dart files. Native C/header/recipe bytes were unchanged and the preceding verified
 unmarked components were explicitly reused, with no fresh-compile claim.
+
+The subsequent refusal follow-up binds 54 named SQL/persistence inputs,
+including the query/store helpers and snapshot VFS omitted from the earlier
+37-file binding. These hashes match before/after and across both hosts. This
+is an explicit allowlist, not an import-closed application graph: application,
+service and other wider imports remain outside this binding. Linux again passed
+55 focused tests with four macOS-only skips; Mac passed 59 with zero skips.
+Both AOT replacement scenarios also assert that an unloaded SQLite copy is
+refused and remains unmapped according to a second NOLOAD probe, and that a
+mismatched progress anchor is refused. Analysis/format scope and explicit reuse
+of unchanged native artifacts remain as described above.
 
 Two Linux-only prior-resolver negatives use the exact 1ba public bootstrap,
 support and SQLite resolver: one reaches the direct-isolate oracle, and one

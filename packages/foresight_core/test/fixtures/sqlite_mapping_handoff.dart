@@ -2,6 +2,7 @@ import 'dart:ffi';
 import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
+import 'package:ffi/ffi.dart';
 import 'dart:io';
 import 'dart:isolate';
 
@@ -18,6 +19,45 @@ import '../sql_support_test_bootstrap.dart';
 
 void check(bool condition, String message) {
   if (!condition) throw StateError(message);
+}
+
+bool alreadyMapped(String filename) {
+  final path = filename.toNativeUtf8();
+  try {
+    return DynamicLibrary.process().lookupFunction<
+          Pointer<Void> Function(Pointer<Utf8>, Int),
+          Pointer<Void> Function(Pointer<Utf8>, int)
+        >('dlopen')(path, 2 | (Platform.isMacOS ? 0x10 : 4)) !=
+        nullptr;
+  } finally {
+    calloc.free(path);
+  }
+}
+
+void checkMappingRefusal(SqliteMappingBootstrap mapping, String path) {
+  check(!alreadyMapped(path), 'negative copy was already mapped');
+  var refused = false;
+  try {
+    openOriginalSqliteMapping(
+      SqliteMappingBootstrap.forTesting(original: mapping, path: path),
+    );
+  } on StateError catch (error) {
+    refused = error.message == 'The original SQLite mapping is unavailable';
+  }
+  check(refused, 'an unloaded mapping was not refused');
+  check(!alreadyMapped(path), 'refusal mapped the unloaded replacement');
+  refused = false;
+  try {
+    openOriginalSqliteMapping(
+      SqliteMappingBootstrap.forTesting(
+        original: mapping,
+        progressAddress: mapping.progressAddress + 1,
+      ),
+    );
+  } on StateError catch (error) {
+    refused = error.message == 'The original SQLite mapping is unavailable';
+  }
+  check(refused, 'a changed mapping anchor was not refused');
 }
 
 Future<void> main(List<String> arguments) async {
@@ -57,6 +97,10 @@ Future<void> main(List<String> arguments) async {
       boundSqliteMapping!.path == original.resolveSymbolicLinksSync(),
       'the selected physical SQLite file is not owned by this fixture',
     );
+  }
+  if (!scenario.startsWith('legacy-')) {
+    final unloaded = original.copySync('${lib.path}/unloaded-sqlite');
+    checkMappingRefusal(boundSqliteMapping!, unloaded.path);
   }
   final anchor = applicationSqliteProgressInstaller.address;
   final source = sqlite3.version.sourceId;
@@ -143,7 +187,7 @@ Future<void> main(List<String> arguments) async {
     );
     check(
       reply.value == 'committed',
-      'real reader did not use original mapping',
+      'real reader did not preserve the committed snapshot',
     );
     check(
       store.db

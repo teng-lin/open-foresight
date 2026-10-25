@@ -2,6 +2,7 @@ import 'dart:ffi';
 import 'dart:io';
 
 import 'package:ffi/ffi.dart';
+import 'package:meta/meta.dart';
 
 final class _DlInfo extends Struct {
   external Pointer<Utf8> filename;
@@ -23,6 +24,20 @@ final class SqliteMappingBootstrap {
     this.imageAddress,
     this.sourceId,
   );
+
+  /// Negative loader oracle only; never used by the public bootstrap API.
+  @visibleForTesting
+  factory SqliteMappingBootstrap.forTesting({
+    required SqliteMappingBootstrap original,
+    String? path,
+    int? progressAddress,
+  }) => SqliteMappingBootstrap._(
+    path ?? original.path,
+    progressAddress ?? original.progressAddress,
+    original.imageAddress,
+    original.sourceId,
+  );
+
   final String path, sourceId;
   final int progressAddress, imageAddress;
 
@@ -142,8 +157,10 @@ SqliteMappingBootstrap captureSqliteMapping(
 DynamicLibrary openOriginalSqliteMapping(SqliteMappingBootstrap mapping) {
   _retainOriginal(mapping);
   // The entrypoint already opened this exact canonical name before DB locks.
-  // Dart's DynamicLibrary.open contract loads a given path only once across
-  // isolates; this acquires that registered original, never a discovery alias.
+  // glibc/dyld match this registered loader name, as checked above and tested
+  // with physical-file replacement. Dart's same-file API contract alone does
+  // not specify replacement-path behavior. A loader matching only file identity
+  // would leave a NOLOAD-to-open window and is outside this supported recipe.
   final library = DynamicLibrary.open(mapping.path);
   if (library.lookup<Void>('sqlite3_progress_handler').address !=
           mapping.progressAddress ||
