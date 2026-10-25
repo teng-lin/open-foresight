@@ -75,6 +75,8 @@ struct PollWaitBoundary {
   std::atomic<bool> pause{false}, entered{false}, release{false};
 };
 PollWaitBoundary poll_wait_boundary;
+std::atomic<bool> capture_start_lock_probe{false},
+    capture_start_lock_observed{false};
 #endif
 struct Events {
   const std::shared_ptr<PollLifetime> poll_lifetime =
@@ -150,6 +152,15 @@ struct Worker : Events {
 template <class Fn>
 std::thread start_worker_thread(Worker &worker, const char *operation, Fn run) {
 #if FORESIGHT_ENABLE_TEST_HOOKS
+  if (capture_start_lock_probe && std::strcmp(operation, "capture") == 0) {
+    std::thread probe([&] {
+      const bool acquired = worker.life.try_lock();
+      capture_start_lock_observed = !acquired;
+      if (acquired)
+        worker.life.unlock();
+    });
+    probe.join();
+  }
   const char *failure = std::getenv("FORESIGHT_TEST_THREAD_FAILURE");
   if (failure && std::string(failure) == operation)
     throw std::system_error(EAGAIN, std::generic_category(),
@@ -1735,6 +1746,7 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate,
         // physical capture. Thread creation failure rolls back this owner.
         foresight::ScopeExit rollback_capture(
             [&] { rollback_unpublished_native(c); });
+        std::lock_guard life(c->life);
         c->active = true;
         c->thread = start_worker_thread(*c, "capture", [c] {
           foresight::guarded_worker(

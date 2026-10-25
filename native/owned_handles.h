@@ -68,8 +68,8 @@ void finalize_legacy_threads(NativeHandles &state) noexcept {
       if (!life.owns_lock() || !worker->thread_finished.load() ||
           !worker->thread.joinable())
         continue;
-      control->closing = true;
       worker->thread.detach();
+      control->closing = true;
     }
   } catch (...) {
     // Retain all authority if the platform refuses the bookkeeping release.

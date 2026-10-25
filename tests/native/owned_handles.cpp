@@ -118,7 +118,8 @@ void held_legacy_finalization(const char *executable) {
   // thread wrapper's terminal publication, without waiting for held work.
   worker.active = false;
   finalize_legacy_threads(native_handles());
-  check(worker.thread.joinable(),
+  check(worker.thread.joinable() &&
+            !native_handles().handles.at(conversation)->closing,
         "finalization retains unfinished legacy work");
   held.release();
   worker.join();
@@ -140,6 +141,37 @@ void owned_finalization(const char *executable) {
         "process finalization cannot acknowledge owned-v2 cleanup");
   release_owner(conversation, fs_conversation_retire(conversation));
   release_owner(engine, fs_engine_retire(engine));
+}
+void completed_legacy_finalization(const char *executable) {
+  auto *engine = fs_engine_create(executable, "/dev/null");
+  auto *conversation = fs_conversation_create(engine);
+  check(conversation, "completed legacy finalization fixture admitted");
+  auto owner = native_handles().handles.at(conversation);
+  auto &worker = *static_cast<Conversation *>(conversation);
+  worker.thread = start_worker_thread(worker, "finalization-fixture", [] {});
+  until([&] { return worker.thread_finished.load(); });
+  finalize_legacy_threads(native_handles());
+  check(!worker.thread.joinable() && owner->closing && owner->object &&
+            native_handles().handles.at(conversation) == owner,
+        "completed legacy finalization retains actual object and graph");
+  check(fs_conversation_destroy(conversation, 1) == 0 &&
+            fs_engine_destroy(engine) == 0,
+        "completed legacy authority still supports actual cleanup");
+}
+void capture_start_finalization(const char *executable) {
+  setenv("FORESIGHT_CAPTURE_RUNTIME", executable, 1);
+  setenv("FORESIGHT_TEST_THREAD_FAILURE", "capture", 1);
+  capture_start_lock_probe = true;
+  foresight::ScopeExit cleanup([] {
+    capture_start_lock_probe = false;
+    unsetenv("FORESIGHT_CAPTURE_RUNTIME");
+    unsetenv("FORESIGHT_TEST_THREAD_FAILURE");
+  });
+  check(fs_capture_start("fixture", 0, 16000) == nullptr,
+        "capture thread construction failure rolls back publication");
+  check(
+      capture_start_lock_observed,
+      "capture publication serializes its thread assignment with finalization");
 }
 void retirement_admission_failure(const char *executable) {
   run_owner_subprocess(executable, "--retire-admission-failure");
@@ -763,6 +795,10 @@ int main(int argc, char **argv) {
     legacy_failure(argv[0]);
     std::cerr << "CASE owned_finalization\n";
     owned_finalization(argv[0]);
+    std::cerr << "CASE completed_legacy_finalization\n";
+    completed_legacy_finalization(argv[0]);
+    std::cerr << "CASE capture_start_finalization\n";
+    capture_start_finalization(argv[0]);
     std::cerr << "CASE generation\n";
     generation(argv[0]);
     std::cerr << "CASE independent_speech\n";
