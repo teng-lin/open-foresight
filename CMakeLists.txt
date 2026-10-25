@@ -44,3 +44,4 @@ if(APPLE)
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/integration/test_file_parser.py"
       "${MACOS_TOOLS}/foresight-file-parser")
 endif()
+include(cmake/ForesightNativeReports.cmake)
