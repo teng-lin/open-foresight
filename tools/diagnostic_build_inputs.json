@@ -74,6 +74,20 @@
         ]
       },
       {
+        "path": "native/diagnostic_sha256.c",
+        "targets": [
+          "linux-x86_64",
+          "darwin-arm64"
+        ]
+      },
+      {
+        "path": "native/diagnostic_sha256.h",
+        "targets": [
+          "linux-x86_64",
+          "darwin-arm64"
+        ]
+      },
+      {
         "path": "native/diagnostic_support.c",
         "targets": [
           "linux-x86_64",
@@ -158,11 +172,14 @@
       "packages/foresight_core/lib/src/diagnostics/producer_ledger.dart",
       "packages/foresight_core/lib/src/diagnostics/producer_owner.dart",
       "packages/foresight_core/lib/src/diagnostics/session.dart",
+      "packages/foresight_core/lib/src/diagnostics/startup.dart",
       "packages/foresight_core/lib/src/diagnostics/storage.dart",
       "packages/foresight_core/lib/src/diagnostics/storage_worker.dart",
       "packages/foresight_core/lib/src/diagnostics/storage_worker_dispatch.dart",
+      "packages/foresight_core/lib/src/diagnostics/storage_worker_launch.dart",
       "packages/foresight_core/lib/src/diagnostics/storage_worker_native.dart",
       "packages/foresight_core/lib/src/diagnostics/storage_worker_protocol.dart",
+      "packages/foresight_core/lib/src/diagnostics/storage_worker_source.dart",
       "packages/foresight_core/lib/src/persistence/backup_files.dart",
       "packages/foresight_core/pubspec.lock",
       "packages/foresight_core/pubspec.yaml"

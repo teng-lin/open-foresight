@@ -103,6 +103,7 @@ NATIVE_DIRECTIVES = frozenset(
 SYSTEM_HEADERS = frozenset(
     {
         "atomic",
+        "CommonCrypto/CommonDigest.h",
         "errno.h",
         "fcntl.h",
         "libproc.h",
@@ -324,7 +325,7 @@ def _skip_space(text: str, offset: int) -> int:
     return offset
 
 
-def _dart_uris(data: bytes) -> list[str]:
+def _dart_uris(data: bytes, *, declaration_metadata: bool = False) -> list[str]:
     # Dart3.9 directives precede declarations. Parse only that header, never
     # application strings, and reject escaped/interpolated URI spellings.
     try:
@@ -334,13 +335,19 @@ def _dart_uris(data: bytes) -> list[str]:
     text = text.removeprefix("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
     offset = text.find("\n") + 1 if text.startswith("#!") else 0
     result: list[str] = []
+    seen_directive = False
     while True:
         offset = _skip_space(text, offset)
         if text.startswith("@", offset):
+            if declaration_metadata and seen_directive:
+                # Dart declarations may have metadata, but directives cannot
+                # occur after declarations. Library metadata remains refused.
+                return result
             raise IdentityError("unsupported_worker_header")
         directive = re.match(r"(?:import|export|part|library)\b", text[offset:])
         if directive is None:
             return result
+        seen_directive = True
         offset += directive.end()
         while True:
             offset = _skip_space(text, offset)

@@ -13,6 +13,7 @@ import 'package:path/path.dart' as p;
 import 'configuration.dart';
 import 'storage_worker_launch.dart';
 import 'storage_worker_native.dart';
+import 'storage_worker_source.dart';
 
 enum DiagnosticHost { service, mcp, desktop, standaloneWorker }
 
@@ -465,12 +466,7 @@ final class DiagnosticStartupSelection {
         final script = context.workerMode == 'kernel'
             ? context.kernelWorker
             : context.sourceWorker;
-        if (context.host == DiagnosticHost.service &&
-            script != context.script) {
-          _refuse();
-        }
-        if (context.host != DiagnosticHost.service &&
-            context.workerMode == 'jit' &&
+        if (context.workerMode == 'jit' &&
             script !=
                 p.join(
                   anchor,
@@ -723,11 +719,17 @@ DiagnosticChildStartup loadDiagnosticChildStartup(
     catalogId: context.catalogId,
     verifyBeforeHello: context.workerMode == 'aot'
         ? null
-        : () async {
-            // A complete reviewed worker input manifest/verifier has not yet
-            // been activated. Declarative -D equality cannot certify source
-            // or SDK bytes; never admit a persistent sink using only it.
-            _refuse();
-          },
+        : () => verifyDiagnosticWorkerSources(
+            image: functions.image!,
+            sourceAnchor: context.sourceAnchor,
+            buildRoot: context.selectedBuildRoot,
+            sdkRoot: context.dartSdkRoot,
+            sdkId: context.dartSdkIdentity,
+            packageConfig: context.packageConfig,
+            nativeId: context.nativeId,
+            workerId: context.dartId,
+            catalogId: context.catalogId,
+            mode: context.workerMode,
+          ),
   );
 }

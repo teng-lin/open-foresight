@@ -183,6 +183,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 
 set(_diag_support_sources
   "${_diag_root}/native/diagnostic_support.c"
+  "${_diag_root}/native/diagnostic_sha256.c"
   "${_diag_root}/native/diagnostic_endpoint.c"
   "${_diag_root}/native/diagnostic_inherited.c"
   "${_diag_root}/native/diagnostic_protocol.c"
@@ -216,11 +217,21 @@ function(_diag_validate_products)
      NOT "${_options}" STREQUAL "${_diag_directory_flags}")
     _diag_recipe_failed()
   endif()
-  foreach(_property IN ITEMS RULE_LAUNCH_COMPILE RULE_LAUNCH_LINK LINK_DIRECTORIES)
+  foreach(_property IN ITEMS RULE_LAUNCH_COMPILE RULE_LAUNCH_LINK RULE_LAUNCH_CUSTOM LINK_DIRECTORIES)
     get_directory_property(_value ${_property})
     get_property(_global GLOBAL PROPERTY ${_property})
-    if(_value OR _global)
+    if(NOT "${_value}" STREQUAL "" OR NOT "${_global}" STREQUAL "")
       _diag_recipe_failed()
+    endif()
+  endforeach()
+  foreach(_target IN ITEMS foresight_diagnostic_support foresight-diagnostic-launcher
+      foresight_diagnostic_identity_check foresight_diagnostic_compile
+      foresight_diagnostic_products foresight_runtime_support_products)
+    if(TARGET ${_target})
+      get_target_property(_custom ${_target} RULE_LAUNCH_CUSTOM)
+      if(NOT "${_custom}" MATCHES "-NOTFOUND$" AND NOT "${_custom}" STREQUAL "")
+        _diag_recipe_failed()
+      endif()
     endif()
   endforeach()
   foreach(_product IN ITEMS foresight_diagnostic_support foresight-diagnostic-launcher)
@@ -354,6 +365,8 @@ function(_diag_add_runtime_products)
 endfunction()
 # SQL's earlier deferred decision must precede creation of its optional receipt.
 cmake_language(DEFER CALL _diag_add_runtime_products)
+# Validate after the optional aggregate scheduling target has been created.
+cmake_language(DEFER CALL _diag_validate_products)
 
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${_diag_root}/cmake/ForesightDiagnostics.cmake"

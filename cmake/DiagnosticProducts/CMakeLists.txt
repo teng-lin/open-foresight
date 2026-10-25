@@ -16,7 +16,7 @@ else()
   set(_kernel diagnostic_kernel_linux.c)
 endif()
 add_library(foresight_diagnostic_support SHARED
-  "${_native}/diagnostic_support.c" "${_native}/diagnostic_endpoint.c"
+  "${_native}/diagnostic_support.c" "${_native}/diagnostic_sha256.c" "${_native}/diagnostic_endpoint.c"
   "${_native}/diagnostic_inherited.c" "${_native}/diagnostic_protocol.c"
   "${_native}/${_kernel}")
 add_executable(foresight-diagnostic-launcher

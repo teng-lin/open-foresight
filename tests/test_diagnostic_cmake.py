@@ -68,12 +68,14 @@ def fixture(tmp_path, *, sql=False):
             "native/sql_support.h",
             "cmake/ForesightSqlSupport.cmake",
             "cmake/ForesightSqlIdentity.cmake",
+            "cmake/SqlSupportProduct/CMakeLists.txt",
             "cmake/NormalizeRuntimeSupport.cmake",
             "cmake/ProduceRuntimeSupport.cmake",
             "tools/sql_support_identity.py",
             "tools/diagnostic_product_receipt.py",
             "tools/__init__.py",
         ):
+            (source / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(ROOT / name, source / name)
     (source / "CMakeLists.txt").write_text(
         "cmake_minimum_required(VERSION 3.20)\n"
@@ -247,6 +249,13 @@ def test_metadata_change_refuses_even_when_objects_need_no_rebuild(tmp_path):
         "target_link_directories(foresight_diagnostic_support PRIVATE /foreign)",
         "set_property(TARGET Threads::Threads APPEND PROPERTY INTERFACE_COMPILE_OPTIONS -fno-builtin)",
         "set_property(DIRECTORY PROPERTY RULE_LAUNCH_COMPILE foreign)",
+        'set_property(DIRECTORY PROPERTY RULE_LAUNCH_CUSTOM "OFF")',
+        'set_property(GLOBAL PROPERTY RULE_LAUNCH_CUSTOM "0")',
+        'set_property(TARGET foresight_diagnostic_identity_check PROPERTY RULE_LAUNCH_CUSTOM "OFF")',
+        'set_property(TARGET foresight_diagnostic_compile PROPERTY RULE_LAUNCH_CUSTOM "foreign")',
+        'set_property(TARGET foresight_diagnostic_products PROPERTY RULE_LAUNCH_CUSTOM "foreign")',
+        'set_property(TARGET foresight_diagnostic_support PROPERTY RULE_LAUNCH_CUSTOM "foreign")',
+        'set_property(TARGET foresight-diagnostic-launcher PROPERTY RULE_LAUNCH_CUSTOM "foreign")',
         "set_target_properties(foresight_diagnostic_support PROPERTIES INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)",
         'set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/native/diagnostic_inherited.c" PROPERTIES HEADER_FILE_ONLY ON)',
         "set_property(TARGET Threads::Threads APPEND PROPERTY INTERFACE_SOURCES foreign.c)",
@@ -599,7 +608,14 @@ def test_runtime_receipt_tracks_actual_sql_target_instead_of_stale_output(tmp_pa
     old_bytes = old_sql.read_bytes()
     assert (build / "runtime-support-build.json").exists()
     elsewhere = tmp_path / "elsewhere"
-    result = configure(source, build, f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={elsewhere}")
+    elsewhere.mkdir()
+    (elsewhere / old_sql.name).write_bytes(old_bytes)
+    project = source / "CMakeLists.txt"
+    project.write_text(
+        project.read_text()
+        + f'\nset_property(TARGET foresight_sql_support PROPERTY FORESIGHT_SQL_SUPPORT_FILE "{elsewhere / old_sql.name}")\n'
+    )
+    result = configure(source, build)
     assert result.returncode == 0, result.stdout + result.stderr
     second = subprocess.run(
         command, capture_output=True, text=True, timeout=90, check=False
@@ -659,3 +675,47 @@ def test_combined_sql_product_is_normalized_before_receipt_under_umask002(tmp_pa
     receipt = json.loads((build / "runtime-support-build.json").read_text())
     assert len(receipt["artifacts"]) == 3
     assert all(artifact["mode"] == 0o755 for artifact in receipt["artifacts"].values())
+
+
+def test_sql_and_native_metadata_probes_share_the_isolated_environment(tmp_path):
+    source, build = fixture(tmp_path, sql=True)
+    tool = source / "tools/diagnostic_toolchain_metadata.py"
+    tool.write_text(
+        "import hashlib,json,os\nfrom pathlib import Path\n"
+        "value=json.loads(Path(__file__).with_name('fixture-metadata.json').read_text())\n"
+        "if os.environ.get('FIXTURE_TOOLCHAIN_SELECTOR'):\n"
+        " value['record']['fixture_selector']='ambient'\n"
+        " value['fingerprint']=hashlib.sha256(json.dumps(value['record'],sort_keys=True,separators=(',',':')).encode()).hexdigest()\n"
+        "print(json.dumps(value))\n"
+    )
+    environment = {**os.environ, "FIXTURE_TOOLCHAIN_SELECTOR": "ambient"}
+    result = subprocess.run(
+        [
+            "cmake",
+            "-S",
+            str(source),
+            "-B",
+            str(build),
+            "-DCMAKE_BUILD_TYPE=Release",
+            f"-DPython3_EXECUTABLE={sys.executable}",
+        ],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    result = subprocess.run(
+        ["cmake", "--build", str(build), "--parallel", "2"],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=90,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    receipt = json.loads((build / "runtime-support-build.json").read_text())
+    assert len(receipt["artifacts"]) == 3
+    sql = json.loads((build / "diagnostic-sql-inputs.json").read_text())
+    assert "fixture_selector" not in sql["record"]["toolchain"]["record"]

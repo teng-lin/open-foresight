@@ -389,7 +389,7 @@ def test_real_native_components_match_closed_inventory():
     value = native(ROOT)
     assert value["kind"] == "native-components"
     assert value["record"]["scope"] == "components"
-    assert len(value["record"]["inputs"]) == 11  # Darwin C is classified, not selected.
+    assert len(value["record"]["inputs"]) == 13  # Darwin C is classified, not selected.
     assert "native/diagnostic_support.c" in value["record"]["inputs"]
 
 
