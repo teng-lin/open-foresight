@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/MacOSDeploymentTarget.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ForesightTestHooks.cmake")
-project(foresight_native LANGUAGES CXX)
+project(foresight_native LANGUAGES C CXX)
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ForesightSanitizers.cmake")
 set(CMAKE_CXX_EXTENSIONS OFF)
 add_compile_options(-Wall -Wextra)
@@ -91,6 +91,150 @@ if(BUILD_TESTING)
   target_compile_features(native_capture_temp_test PRIVATE cxx_std_20)
   add_test(NAME native_capture_temp COMMAND native_capture_temp_test)
   set_tests_properties(native_capture_temp PROPERTIES TIMEOUT 10)
+  add_executable(diagnostic_protocol_test diagnostic_protocol.c
+    ../tests/native/diagnostic_protocol.c
+    ../tests/native/diagnostic_protocol_cpp.cpp)
+  target_compile_features(diagnostic_protocol_test PRIVATE c_std_11 cxx_std_20)
+  target_compile_options(diagnostic_protocol_test PRIVATE -Werror -Wpedantic)
+  target_include_directories(diagnostic_protocol_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  add_test(NAME diagnostic_protocol COMMAND diagnostic_protocol_test)
+  set_tests_properties(diagnostic_protocol PROPERTIES TIMEOUT 15)
+  add_executable(diagnostic_endpoint_test diagnostic_protocol.c
+    diagnostic_endpoint.c ../tests/native/diagnostic_endpoint.c)
+  set_target_properties(diagnostic_endpoint_test PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
+  target_compile_options(diagnostic_endpoint_test PRIVATE -Wall -Wextra -Werror -Wpedantic)
+  target_include_directories(diagnostic_endpoint_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  add_test(NAME diagnostic_endpoint COMMAND diagnostic_endpoint_test)
+  set_tests_properties(diagnostic_endpoint PROPERTIES TIMEOUT 15)
+  # Fixture identity only; these targets are never installed as products.
+  set(FS_DIAG_TEST_NATIVE_ID
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+  add_executable(diagnostic_launcher_fixture diagnostic_launcher.c diagnostic_protocol.c)
+  add_executable(diagnostic_launcher_test ../tests/native/diagnostic_launcher.c)
+  foreach(target diagnostic_launcher_fixture diagnostic_launcher_test)
+    target_compile_features(${target} PRIVATE c_std_11)
+    target_compile_options(${target} PRIVATE -Werror -Wpedantic)
+    target_compile_definitions(${target} PRIVATE
+      FORESIGHT_DIAGNOSTIC_NATIVE_ID="${FS_DIAG_TEST_NATIVE_ID}")
+    target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  endforeach()
+  add_test(NAME diagnostic_launcher COMMAND diagnostic_launcher_test
+    $<TARGET_FILE:diagnostic_launcher_fixture> $<TARGET_FILE:diagnostic_launcher_test>)
+  set_tests_properties(diagnostic_launcher PROPERTIES TIMEOUT 15)
+  if(APPLE)
+    set(FS_DIAG_KERNEL_SOURCE diagnostic_kernel_darwin.c)
+  else()
+    set(FS_DIAG_KERNEL_SOURCE diagnostic_kernel_linux.c)
+  endif()
+  add_executable(diagnostic_kernel_test ${FS_DIAG_KERNEL_SOURCE}
+    diagnostic_protocol.c ../tests/native/diagnostic_kernel.c)
+  set_target_properties(diagnostic_kernel_test PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
+  target_compile_options(diagnostic_kernel_test PRIVATE -Wall -Wextra -Werror -Wpedantic)
+  target_include_directories(diagnostic_kernel_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  if(APPLE)
+    # Separate build roots cannot reclaim each other's private test objects.
+    string(SHA256 FS_DIAG_NAMESPACE_HASH "${CMAKE_CURRENT_BINARY_DIR}")
+    string(SUBSTRING "${FS_DIAG_NAMESPACE_HASH}" 0 8 FS_DIAG_NAMESPACE_HASH)
+    target_compile_definitions(diagnostic_kernel_test PRIVATE
+      FS_DIAG_TEST_CONTEXT=1
+      FS_DIAG_FIXTURE_BASE="${CMAKE_CURRENT_BINARY_DIR}/diagnostic-kernel-namespace"
+      FS_DIAG_FIXTURE_PREFIX="/oft${FS_DIAG_NAMESPACE_HASH}")
+    add_test(NAME diagnostic_kernel_interruption COMMAND diagnostic_kernel_test
+      "${CMAKE_CURRENT_BINARY_DIR}" leave-interrupted-fixture)
+    set_tests_properties(diagnostic_kernel_interruption PROPERTIES
+      TIMEOUT 20 FIXTURES_SETUP diagnostic_kernel_stale
+      FIXTURES_REQUIRED diagnostic_kernel_cleanup_guard)
+    add_test(NAME diagnostic_kernel_cleanup COMMAND diagnostic_kernel_test
+      "${CMAKE_CURRENT_BINARY_DIR}" cleanup-fixture)
+    set_tests_properties(diagnostic_kernel_cleanup PROPERTIES
+      TIMEOUT 20 FIXTURES_CLEANUP
+      "diagnostic_kernel_stale;diagnostic_kernel_cleanup_guard")
+    add_executable(diagnostic_kernel_faults_test diagnostic_protocol.c
+      ../tests/native/diagnostic_kernel_faults.c)
+    set_target_properties(diagnostic_kernel_faults_test PROPERTIES
+      C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
+    target_compile_options(diagnostic_kernel_faults_test PRIVATE
+      -Wall -Wextra -Werror -Wpedantic)
+    target_include_directories(diagnostic_kernel_faults_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(diagnostic_kernel_faults_test PRIVATE
+      FS_DIAG_TEST_CONTEXT=1
+      FS_DIAG_FIXTURE_BASE="${CMAKE_CURRENT_BINARY_DIR}/diagnostic-kernel-fault-namespace"
+      FS_DIAG_FIXTURE_PREFIX="/ofx${FS_DIAG_NAMESPACE_HASH}")
+    add_test(NAME diagnostic_kernel_faults_interruption
+      COMMAND diagnostic_kernel_faults_test leave-interrupted-fixture)
+    # A separately required cleanup guard also covers setup-only filtering.
+    set_tests_properties(diagnostic_kernel_faults_interruption PROPERTIES
+      TIMEOUT 25 FIXTURES_SETUP diagnostic_kernel_faults_stale
+      FIXTURES_REQUIRED diagnostic_kernel_faults_cleanup_guard)
+    add_test(NAME diagnostic_kernel_faults COMMAND diagnostic_kernel_faults_test)
+    set_tests_properties(diagnostic_kernel_faults PROPERTIES
+      TIMEOUT 25 FIXTURES_REQUIRED diagnostic_kernel_faults_stale)
+    add_test(NAME diagnostic_kernel_faults_cleanup
+      COMMAND diagnostic_kernel_faults_test cleanup-fixture)
+    set_tests_properties(diagnostic_kernel_faults_cleanup PROPERTIES
+      TIMEOUT 25 FIXTURES_CLEANUP
+      "diagnostic_kernel_faults_stale;diagnostic_kernel_faults_cleanup_guard")
+  endif()
+  add_test(NAME diagnostic_kernel COMMAND diagnostic_kernel_test "${CMAKE_CURRENT_BINARY_DIR}")
+  set_tests_properties(diagnostic_kernel PROPERTIES TIMEOUT 20)
+  if(APPLE)
+    set_tests_properties(diagnostic_kernel PROPERTIES FIXTURES_REQUIRED diagnostic_kernel_stale)
+  endif()
+  add_executable(diagnostic_inherited_test ${FS_DIAG_KERNEL_SOURCE}
+    diagnostic_protocol.c diagnostic_inherited.c ../tests/native/diagnostic_inherited.c)
+  set_target_properties(diagnostic_inherited_test PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
+  target_compile_options(diagnostic_inherited_test PRIVATE -Wall -Wextra -Werror -Wpedantic)
+  target_include_directories(diagnostic_inherited_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  if(APPLE)
+    target_compile_definitions(diagnostic_inherited_test PRIVATE
+      FS_DIAG_TEST_CONTEXT=1
+      FS_DIAG_FIXTURE_BASE="${CMAKE_CURRENT_BINARY_DIR}/diagnostic-inherited-namespace"
+      FS_DIAG_FIXTURE_PREFIX="/ofy${FS_DIAG_NAMESPACE_HASH}")
+  endif()
+  add_test(NAME diagnostic_inherited COMMAND diagnostic_inherited_test "${CMAKE_CURRENT_BINARY_DIR}")
+  set_tests_properties(diagnostic_inherited PROPERTIES TIMEOUT 20)
+  add_executable(diagnostic_support_test ${FS_DIAG_KERNEL_SOURCE}
+    diagnostic_protocol.c diagnostic_endpoint.c diagnostic_inherited.c
+    diagnostic_support.c ../tests/native/diagnostic_support.c)
+  set_target_properties(diagnostic_support_test PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
+  target_compile_options(diagnostic_support_test PRIVATE -Wall -Wextra -Werror -Wpedantic)
+  target_compile_definitions(diagnostic_support_test PRIVATE
+    FORESIGHT_DIAGNOSTIC_NATIVE_ID="${FS_DIAG_TEST_NATIVE_ID}")
+  target_include_directories(diagnostic_support_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(diagnostic_support_test PRIVATE Threads::Threads)
+  if(APPLE)
+    target_compile_definitions(diagnostic_support_test PRIVATE
+      FS_DIAG_TEST_CONTEXT=1
+      FS_DIAG_FIXTURE_BASE="${CMAKE_CURRENT_BINARY_DIR}/diagnostic-support-namespace"
+      FS_DIAG_FIXTURE_PREFIX="/ofz${FS_DIAG_NAMESPACE_HASH}")
+  endif()
+  add_test(NAME diagnostic_support COMMAND diagnostic_support_test
+    $<TARGET_FILE:diagnostic_launcher_fixture> $<TARGET_FILE:diagnostic_support_test>)
+  set_tests_properties(diagnostic_support PROPERTIES TIMEOUT 20)
+  add_executable(diagnostic_support_races_test ${FS_DIAG_KERNEL_SOURCE}
+    diagnostic_protocol.c diagnostic_endpoint.c diagnostic_inherited.c
+    ../tests/native/diagnostic_support_races.c)
+  set_target_properties(diagnostic_support_races_test PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
+  target_compile_options(diagnostic_support_races_test PRIVATE -Wall -Wextra -Werror -Wpedantic)
+  target_compile_definitions(diagnostic_support_races_test PRIVATE
+    FORESIGHT_DIAGNOSTIC_NATIVE_ID="${FS_DIAG_TEST_NATIVE_ID}")
+  target_include_directories(diagnostic_support_races_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(diagnostic_support_races_test PRIVATE Threads::Threads)
+  if(APPLE)
+    target_compile_definitions(diagnostic_support_races_test PRIVATE
+      FS_DIAG_TEST_CONTEXT=1
+      FS_DIAG_FIXTURE_BASE="${CMAKE_CURRENT_BINARY_DIR}/diagnostic-support-races-namespace"
+      FS_DIAG_FIXTURE_PREFIX="/ofr${FS_DIAG_NAMESPACE_HASH}")
+  endif()
+  add_test(NAME diagnostic_support_races COMMAND diagnostic_support_races_test
+    $<TARGET_FILE:diagnostic_launcher_fixture> $<TARGET_FILE:diagnostic_support_test>)
+  set_tests_properties(diagnostic_support_races PROPERTIES TIMEOUT 15)
   add_executable(native_spawn_contract_test ../tests/native/spawn_contract.cpp)
   target_compile_features(native_spawn_contract_test PRIVATE cxx_std_20)
   target_link_libraries(native_spawn_contract_test PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
