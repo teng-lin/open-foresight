@@ -8,12 +8,18 @@
 // successful cleanup or change the application/storage implementation.
 extern "C" int diagnostic_cleanup_unlinkat(int directory, const char *name,
                                            int flags) {
+#ifdef __APPLE__
+  // dyld keeps the interposing image's own import bound to the original.
+  // Looking it up with RTLD_NEXT is interposed again and recurses on Darwin.
+  const int status = unlinkat(directory, name, flags);
+#else
   using Unlink = int (*)(int, const char *, int);
   static const auto real_unlink =
       reinterpret_cast<Unlink>(dlsym(RTLD_NEXT, "unlinkat"));
   if (!real_unlink)
     _exit(72);
   const int status = real_unlink(directory, name, flags);
+#endif
   if (status == 0 && std::getenv("FORESIGHT_CLEANUP_CRASH_GATE") &&
       std::strcmp(name, "0.jsonl") == 0) {
     constexpr char ready[] = "cleanup-stopped\n";
