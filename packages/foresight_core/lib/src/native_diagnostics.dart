@@ -73,6 +73,94 @@ typedef _Drain =
       int,
     );
 
+/// Process-local code capabilities from one already loaded, verified image.
+/// Only an owned isolate handoff may reconstruct these; never decode addresses
+/// from files, environment, a socket or worker IPC.
+final class NativeDiagnosticQueueFunctions {
+  NativeDiagnosticQueueFunctions._(this.codeAddresses, this.image);
+  static const _symbols = [
+    'fs_diagnostic_abi_version',
+    'fs_diagnostic_open',
+    'fs_diagnostic_drain',
+    'fs_diagnostic_close',
+    'fs_lifetime_version',
+    'fs_lifetime_admission',
+  ];
+  final List<int> codeAddresses;
+  final DynamicLibrary? image;
+
+  static NativeDiagnosticQueueFunctions? fromLoaded(NativeLibrary loaded) {
+    final image = loaded.library;
+    if (_symbols.any((name) => !image.providesSymbol(name))) return null;
+    final functions = NativeDiagnosticQueueFunctions._(
+      List<int>.unmodifiable(
+        _symbols.map((name) => image.lookup<Void>(name).address),
+      ),
+      image,
+    );
+    return functions._compatible ? functions : null;
+  }
+
+  factory NativeDiagnosticQueueFunctions.fromPinnedCodeAddresses(
+    List<int> values,
+  ) {
+    if (values.length != _symbols.length ||
+        values.any((value) => value <= 0 || value > 0x7fffffffffffffff)) {
+      throw ArgumentError('Invalid owned native diagnostic capabilities');
+    }
+    return NativeDiagnosticQueueFunctions._(
+      List<int>.unmodifiable(values),
+      null,
+    );
+  }
+
+  int _constant(int at) =>
+      Pointer<NativeFunction<Int32 Function()>>.fromAddress(
+        codeAddresses[at],
+      ).asFunction<int Function()>()();
+  int get _queueVersion =>
+      Pointer<NativeFunction<Uint32 Function()>>.fromAddress(
+        codeAddresses[0],
+      ).asFunction<int Function()>()();
+  bool get _compatible =>
+      _queueVersion == 1 &&
+      _constant(4) == 2 &&
+      sizeOf<_Record>() == 64 &&
+      sizeOf<_Batch>() == 32;
+  bool pin() => _compatible && _constant(5) == 1;
+  bool configureLevel(String level) {
+    final selected = image;
+    if (selected == null ||
+        !selected.providesSymbol('fs_set_runtime_environment')) {
+      return false;
+    }
+    final configure = selected
+        .lookupFunction<
+          Int32 Function(Pointer<Utf8>, Pointer<Utf8>),
+          int Function(Pointer<Utf8>, Pointer<Utf8>)
+        >('fs_set_runtime_environment');
+    final key = 'FORESIGHT_LOG_LEVEL'.toNativeUtf8();
+    final value = level.toNativeUtf8();
+    try {
+      return configure(key, value) == 0;
+    } finally {
+      calloc.free(key);
+      calloc.free(value);
+    }
+  }
+
+  late final open = Pointer<NativeFunction<_OpenNative>>.fromAddress(
+    codeAddresses[1],
+  ).asFunction<_Open>();
+  late final drain = Pointer<NativeFunction<_DrainNative>>.fromAddress(
+    codeAddresses[2],
+  ).asFunction<_Drain>();
+  late final close =
+      Pointer<NativeFunction<Int32 Function(Uint64)>>.fromAddress(
+        codeAddresses[3],
+      ).asFunction<int Function(int)>();
+}
+
 /// Closed numeric native values, validated before a diagnostic catalog adapter
 /// may encode them. No raw strings, application handles or native pointers.
 /// [sequence] carries unsigned 64-bit bits in a Dart int and can be negative;
@@ -126,18 +214,14 @@ final class NativeDiagnosticBatch {
 /// retains its token and fixed buffers and must be retried on a later tick.
 final class NativeDiagnosticQueue {
   NativeDiagnosticQueue._(
-    this._image,
-    this._drain,
-    this._close,
+    this._functions,
     this._token,
     this._records,
     this._batch,
   );
 
   static const maximumRecords = 64, nativeBufferBytes = 4096 + 32;
-  final DynamicLibrary _image;
-  final _Drain _drain;
-  final int Function(int) _close;
+  final NativeDiagnosticQueueFunctions _functions;
   final Pointer<_Record> _records;
   final Pointer<_Batch> _batch;
   int _token, _normalSequence = 0, _prioritySequence = 0;
@@ -148,35 +232,17 @@ final class NativeDiagnosticQueue {
   /// Unsupported optional diagnostics disable only this consumer. They do not
   /// alter the required runtime's pre-logging configuration/startup contract.
   static NativeDiagnosticQueue? tryOpen(NativeLibrary loaded) {
-    final image = loaded.library;
-    const symbols = [
-      'fs_diagnostic_abi_version',
-      'fs_diagnostic_open',
-      'fs_diagnostic_drain',
-      'fs_diagnostic_close',
-      'fs_lifetime_version',
-      'fs_lifetime_admission',
-    ];
-    if (symbols.any((name) => !image.providesSymbol(name))) return null;
-    final version = image.lookupFunction<Uint32 Function(), int Function()>(
-      symbols[0],
-    );
-    final lifetimeVersion = image
-        .lookupFunction<Int32 Function(), int Function()>(symbols[4]);
-    if (version() != 1 ||
-        lifetimeVersion() != 2 ||
-        sizeOf<_Record>() != 64 ||
-        sizeOf<_Batch>() != 32) {
-      return null;
-    }
-    final open = image.lookupFunction<_OpenNative, _Open>(symbols[1]);
-    final drain = image.lookupFunction<_DrainNative, _Drain>(symbols[2]);
-    final close = image
-        .lookupFunction<Int32 Function(Uint64), int Function(int)>(symbols[3]);
-    final pin = image.lookupFunction<Int32 Function(), int Function()>(
-      symbols[5],
-    );
-    if (pin() != 1) return null;
+    final functions = NativeDiagnosticQueueFunctions.fromLoaded(loaded);
+    if (functions == null || !functions.pin()) return null;
+    return tryOpenPinned(functions);
+  }
+
+  /// The owner pins the original image BEFORE publishing its code addresses.
+  /// The writer does not enter the native resource registry or loader here.
+  static NativeDiagnosticQueue? tryOpenPinned(
+    NativeDiagnosticQueueFunctions functions,
+  ) {
+    if (!functions._compatible) return null;
     final token = calloc<Uint64>();
     Pointer<_Record> records = nullptr;
     Pointer<_Batch> batch = nullptr;
@@ -184,11 +250,9 @@ final class NativeDiagnosticQueue {
     try {
       records = calloc<_Record>(maximumRecords);
       batch = calloc<_Batch>();
-      if (open(1, 64, token) != 0 || token.value == 0) return null;
+      if (functions.open(1, 64, token) != 0 || token.value == 0) return null;
       final owner = NativeDiagnosticQueue._(
-        image,
-        drain,
-        close,
+        functions,
         token.value,
         records,
         batch,
@@ -219,7 +283,7 @@ final class NativeDiagnosticQueue {
     if (closed || _polling || _invalid) return null;
     _polling = true;
     try {
-      final result = _drain(
+      final result = _functions.drain(
         _token,
         1,
         64,
@@ -309,7 +373,7 @@ final class NativeDiagnosticQueue {
     if (closed) return true;
     if (_polling) return false;
     // Keep the original mapped image strongly owned through the final call.
-    if (!_image.providesSymbol('fs_diagnostic_close') || _close(_token) != 0) {
+    if (_functions.close(_token) != 0) {
       return false;
     }
     _token = 0;

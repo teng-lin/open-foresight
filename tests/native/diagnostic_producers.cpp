@@ -8,10 +8,24 @@
 #include <cstdio>
 
 int main(int argc, char **argv) {
+  const int supervised = foresight::supervise_worker(argc, argv);
+  if (supervised >= 0)
+    return supervised;
   assert(argc >= 1);
+  if (argc == 2 && std::strcmp(argv[1], "--late-logging") == 0) {
+    assert(setenv("FORESIGHT_LOG_LEVEL", "info", 1) == 0);
+    auto *engine = fs_engine_create("/fixture-runtime-never-started", argv[0]);
+    assert(engine != nullptr);
+    assert(fs_set_runtime_environment("FORESIGHT_LOG_LEVEL", "info") == -1);
+    assert(fs_engine_destroy(engine) == 0);
+    std::puts("inherited level cannot impersonate sealed native logging "
+              "configuration");
+    return 0;
+  }
   // Fixture-only executable route, installed before any native worker starts.
   // This exercises actual capture-thread lifecycle, not audio/device access.
   assert(setenv("FORESIGHT_CAPTURE_RUNTIME", "/usr/bin/false", 1) == 0);
+  assert(setenv("FORESIGHT_HELPER", argv[0], 1) == 0);
   uint64_t token = 0;
   assert(fs_diagnostic_open(1, sizeof(fs_diagnostic_record), &token) == 0);
   std::array<fs_diagnostic_record, 64> records{};
@@ -62,10 +76,26 @@ int main(int argc, char **argv) {
   assert(fs_engine_destroy(engine) == 0);
   auto *capture = fs_capture_start("auto", 0, 8000);
   assert(capture != nullptr);
+  bool capture_started = false, capture_stopped = false, retry_failed = false;
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (!retry_failed && std::chrono::steady_clock::now() < deadline) {
+    drain();
+    for (uint32_t at = 0; at < batch.count; ++at) {
+      const auto &record = records[at];
+      capture_started |= record.event == FS_DIAGNOSTIC_CAPTURE_STATE &&
+                         record.outcome == 0 && record.active == 1;
+      retry_failed |= record.event == FS_DIAGNOSTIC_WORKER_FAILED &&
+                      record.category == 10 && record.outcome == 3 &&
+                      record.status != 0;
+    }
+    if (!retry_failed)
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  assert(capture_started && retry_failed);
   fs_capture_finish(capture);
   fs_capture_stop(capture);
   drain();
-  bool capture_started = false, capture_stopped = false;
   for (uint32_t at = 0; at < batch.count; ++at) {
     const auto &record = records[at];
     if (record.event != FS_DIAGNOSTIC_CAPTURE_STATE)

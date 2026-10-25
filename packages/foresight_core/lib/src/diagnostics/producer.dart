@@ -70,6 +70,8 @@ final class DiagnosticProducer {
     _connectionWriter = writer;
     _connections.fillRange(0, 16, null);
     _latestGenerations.fillRange(0, 16, 0);
+    _nativeAnnounced = false;
+    NativeLibrary.diagnosticConfigurationAccepted = false;
     return true;
   }
 
@@ -90,8 +92,15 @@ final class DiagnosticProducer {
       return _inactive(bootstrap.configuration);
     }
     _latestGenerations[slot] = bootstrap.generation;
-    return _connections[slot] = DiagnosticProducer._(bootstrap);
+    final connected = _connections[slot] = DiagnosticProducer._(bootstrap);
+    NativeLibrary.diagnosticLevel = bootstrap.configuration.level.name;
+    NativeLibrary.diagnosticImageLoaded = _nativeImageLoaded;
+    NativeLibrary.diagnosticConfigurationUnavailable =
+        _nativeConfigurationUnavailable;
+    return connected;
   }
+
+  static bool _nativeAnnounced = false;
 
   static void _denyConnection(
     SendPort? writer,
@@ -376,7 +385,7 @@ final class DiagnosticProducer {
         return false;
       }
       final encoded = jsonEncode(value);
-      final length = utf8.encode(encoded).length;
+      final length = DiagnosticRecord.utf8Length(encoded);
       if (length > ceiling) {
         _rejected = _sum(_rejected, 1);
         _pressure(priority);

@@ -1,10 +1,35 @@
 import 'dart:async';
 import 'dart:ffi';
 
+/// Launch-specific override for the C++ helper only. Dart isolate bootstraps
+/// keep their original raw environment and explicit resolved configuration.
+Map<String, String> nativeHelperEnvironment(Map<String, String> environment) {
+  final level = NativeLibrary.diagnosticLevel;
+  if (!NativeLibrary.diagnosticConfigurationAccepted || level == null) {
+    return environment;
+  }
+  return {...environment, 'FORESIGHT_LOG_LEVEL': level};
+}
+
 /// Pins one actual native mapping. Validate ABI before resolving any dependent
 /// symbol; optional diagnostic support is negotiated by its own consumer.
 final class NativeLibrary {
-  NativeLibrary(this._library);
+  NativeLibrary(this._library) {
+    _notifyDiagnostics();
+  }
+
+  void _notifyDiagnostics() {
+    try {
+      diagnosticImageLoaded?.call(this);
+    } catch (_) {
+      // Optional logging cannot change required runtime startup semantics.
+    }
+  }
+
+  static String? diagnosticLevel;
+  static bool diagnosticConfigurationAccepted = false;
+  static void Function(NativeLibrary image)? diagnosticImageLoaded;
+  static void Function()? diagnosticConfigurationUnavailable;
 
   /// Installed only by the service worker's process owner. These are immutable
   /// code capabilities in an already pinned mapping, never application handles.
@@ -27,10 +52,14 @@ final class NativeLibrary {
 
   static final _lifetimes = <DynamicLibrary, NativeLifetime>{};
   NativeLifetime? _observedLifetime;
-  NativeLifetime get lifetime => _observedLifetime ??= _lifetimes.putIfAbsent(
-    library,
-    () => NativeLifetime._(library),
-  );
+  NativeLifetime get lifetime {
+    _notifyDiagnostics();
+    return _observedLifetime ??= _lifetimes.putIfAbsent(
+      library,
+      () => NativeLifetime._(library),
+    );
+  }
+
   bool get restartRequired => _observedLifetime?.restartRequired ?? false;
   void checkAvailable() => _observedLifetime?.ensureAdmission();
   Future<void>? prepareAdmission() {

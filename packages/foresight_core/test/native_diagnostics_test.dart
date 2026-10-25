@@ -286,6 +286,44 @@ void main() {
     expect(batch.precisionLost, isFalse);
   });
 
+  test(
+    'producer contention preserves precision loss until one successful drain',
+    () {
+      final queue = NativeDiagnosticQueue.tryOpen(loaded)!;
+      final gate = image
+          .lookupFunction<Void Function(Int32), void Function(int)>(
+            'fs_test_gate',
+          );
+      addTearDown(() {
+        gate(0);
+        expect(queue.close(), isTrue);
+      });
+      configure();
+      gate(1);
+      expect(enqueue(1), 0);
+      expect(
+        queue.poll(capacity: 1, priorityOnly: true, onRecord: (_) => true),
+        isNull,
+      );
+      gate(0);
+      final batch = queue.poll(
+        capacity: 1,
+        priorityOnly: true,
+        onRecord: (_) => true,
+      )!;
+      expect(batch.count, 0);
+      expect(batch.droppedPriority, 0);
+      expect(batch.precisionLost, isTrue);
+      expect(batch.counterSaturated, isFalse);
+      expect(
+        queue
+            .poll(capacity: 1, priorityOnly: true, onRecord: (_) => true)!
+            .precisionLost,
+        isFalse,
+      );
+    },
+  );
+
   for (final priority in [0, 1]) {
     for (final mode in [0, 1, 2]) {
       test(

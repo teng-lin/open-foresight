@@ -233,10 +233,13 @@ class Helper {
       if (!live) {
         _launchingNow = true;
         try {
-          process = await (_launching = Process.start(executable, [
-            socket,
-            storage,
-          ], environment: runtimeConfiguration.environment));
+          process = await (_launching = Process.start(
+            executable,
+            [socket, storage],
+            environment: nativeHelperEnvironment(
+              runtimeConfiguration.environment,
+            ),
+          ));
         } finally {
           _launchingNow = false;
         }
