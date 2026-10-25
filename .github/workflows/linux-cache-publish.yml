@@ -32,7 +32,7 @@ jobs:
       arch_needed: ${{ steps.source.outputs.arch_needed }}
       arch_stages: ${{ steps.source.outputs.arch_stages }}
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ github.sha }}
@@ -45,7 +45,7 @@ jobs:
         UI_LOCK_HASH: ${{ hashFiles('packages/foresight_core/pubspec.lock', 'apps/desktop/pubspec.lock') }}
         MODEL_INPUT_HASH: ${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
       run: python3 tools/ci_cache_reconcile.py
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: cache-reconciliation-${{ github.run_id }}-${{ github.run_attempt }}
         path: build/cache-reconciliation.json
@@ -82,11 +82,11 @@ jobs:
       actions: read
       packages: write
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ github.sha }}
-    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+    - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
       with:
         python-version: '3.13'
     - name: Require current reviewed main before cache work
@@ -104,7 +104,7 @@ jobs:
         GH_TOKEN: ${{ github.token }}
         QUALIFY_CONSUMERS: ${{ inputs.qualify_consumers && 'true' || 'false' }}
       run: python3 tools/ci_cache_reconcile.py --publisher-recheck --output test-results/cache-maintenance/recheck.json
-    - uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
+    - uses: docker/setup-docker-action@7ec28a010822b4626af4874f9448a4b05ac6f3e5
       if: steps.readiness.outputs.publish == 'true'
       with:
         daemon-config: '{"features":{"containerd-snapshotter":true}}'
@@ -143,7 +143,7 @@ jobs:
         task_snapshot=$(python3 -c 'import json; print(json.load(open("tools/pins.json"))["ubuntu_snapshot"])')
         python3 tools/ci_tooling_image.py --repository "$GITHUB_REPOSITORY" \
           --sdk-image "$SDK_IMAGE" --snapshot "$task_snapshot" --output build/cache-tooling --publish
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       if: steps.readiness.outputs.publish == 'true' && steps.tooling.outputs.tooling_reused != 'true'
       with:
         name: ci-tooling-${{ steps.tooling.outputs.tooling_identity }}
@@ -177,7 +177,7 @@ jobs:
             'publication_executed': os.environ['PUBLICATION_EXECUTED'] == 'true',
         }) + '\n')
         PY
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       if: always()
       with:
         name: cache-maintenance-${{ github.run_id }}-${{ github.run_attempt }}
@@ -195,14 +195,14 @@ jobs:
       contents: read
       actions: read
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ github.sha }}
-    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+    - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
       with:
         python-version: '3.13'
-    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       if: needs.reconcile.outputs.formatter == 'true' || needs.reconcile.outputs.document == 'true'
       id: quality-flutter
       with:
@@ -222,12 +222,12 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
       run: python3 tools/ci_cache_publish_guard.py
-    - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+    - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       if: needs.reconcile.outputs.formatter == 'true' && steps.formatter-current.outputs.current == 'true' && steps.quality-flutter.outputs.cache-hit != 'true'
       with:
         path: ${{ runner.temp }}/flutter
         key: quality-flutter-linux-3.35.7
-    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       if: needs.reconcile.outputs.document == 'true'
       id: document-flutter
       with:
@@ -250,12 +250,12 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
       run: python3 tools/ci_cache_publish_guard.py
-    - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+    - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       if: needs.reconcile.outputs.document == 'true' && steps.document-current.outputs.current == 'true' && steps.document-flutter.outputs.cache-hit != 'true'
       with:
         path: ${{ runner.temp }}/foresight-document-flutter
         key: flutter-linux-document-host-3.35.7-v2
-    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       if: needs.reconcile.outputs.models_linux == 'true'
       id: models
       with:
@@ -271,7 +271,7 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
       run: python3 tools/ci_cache_publish_guard.py
-    - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+    - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       if: needs.reconcile.outputs.models_linux == 'true' && steps.models-current.outputs.current == 'true' && steps.models.outputs.cache-hit != 'true'
       with:
         path: build/acceptance-models
@@ -297,7 +297,7 @@ jobs:
     steps:
     - name: Bootstrap Git in the pinned Arch container
       run: pacman -Syu --noconfirm git
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ github.sha }}
@@ -322,12 +322,12 @@ jobs:
       actions: read
       packages: read
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ github.sha }}
         fetch-depth: 0
-    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+    - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
       with:
         python-version: '3.13'
     - name: Verify the current reviewed qualification source
@@ -342,7 +342,7 @@ jobs:
       run: python -m pip install --require-hashes -r requirements-dev.lock
     - name: Allow isolated document namespaces in qualification containers
       run: bash tools/ci_package_sandbox.sh
-    - uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
+    - uses: docker/setup-docker-action@7ec28a010822b4626af4874f9448a4b05ac6f3e5
       with:
         daemon-config: '{"features":{"containerd-snapshotter":true}}'
     - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
@@ -382,7 +382,7 @@ jobs:
         python -m tools.ci_rollout --source "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" \
           --attempt "$GITHUB_RUN_ATTEMPT" --producer-job qualification-consumers \
           --exercise-record build/qualification/publisher.json --output build/qualification/qualification.json
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: ci-rollout-qualification
         path: build/qualification/qualification.json
@@ -390,7 +390,7 @@ jobs:
         if-no-files-found: error
     - name: Retain consumer execution evidence and failed command output
       if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: qualification-consumers-${{ github.run_id }}-${{ github.run_attempt }}
         path: |

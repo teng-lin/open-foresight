@@ -39,7 +39,7 @@ jobs:
     steps:
       - name: Bootstrap Git in the pinned Arch container
         run: pacman -Syu --noconfirm git
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -64,7 +64,7 @@ jobs:
             --platform linux --stage native --event "$STAGE_EVENT" --own-pr "$OWN_PR" \
             --parents-json "$STAGE_PARENTS" --cmake-arg=-G --cmake-arg=Ninja "${args[@]}"
       - name: Retain the independently qualified native stage
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ${{ steps.stage.outputs.artifact_name }}
           path: |
@@ -75,7 +75,7 @@ jobs:
           overwrite: true
           compression-level: 0
       - name: Retain the small native compilation receipt
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: receipt-${{ steps.stage.outputs.artifact_name }}
           path: build/ci-stage/linux-native/identity.json
@@ -83,7 +83,7 @@ jobs:
           retention-days: 14
           overwrite: true
       - name: Retain the slim native runtime prerequisite
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ${{ steps.stage.outputs.runtime_artifact_name }}
           path: |
@@ -95,7 +95,7 @@ jobs:
           compression-level: 0
       - name: Retain native diagnostics
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: linux-native-evidence
           path: |
@@ -116,7 +116,7 @@ jobs:
     steps:
       - name: Bootstrap Git in the pinned Arch container
         run: pacman -Syu --noconfirm git
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -147,7 +147,7 @@ jobs:
             --parents-json "$STAGE_PARENTS" --cmake-arg=-G --cmake-arg=Ninja \
             --input native=build/ci-input/native "${args[@]}"
       - name: Retain the independently qualified core stage
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ${{ steps.stage.outputs.artifact_name }}
           path: |
@@ -159,7 +159,7 @@ jobs:
           compression-level: 0
       - name: Retain core diagnostics
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: linux-core-evidence
           path: |
@@ -180,7 +180,7 @@ jobs:
     steps:
       - name: Bootstrap Git in the pinned Arch container
         run: pacman -Syu --noconfirm git
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -211,7 +211,7 @@ jobs:
       - name: Fresh fast integration against the current native prerequisite
         run: xvfb-run -a dbus-run-session -- .venv/bin/python tools/integration_gates.py --suite fast --native build/native/libforesight_native.so --output test-results/fast-integration
       - name: Retain the independently qualified desktop stage
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ${{ steps.stage.outputs.artifact_name }}
           path: |
@@ -223,7 +223,7 @@ jobs:
           compression-level: 0
       - name: Retain desktop diagnostics
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: linux-desktop-evidence
           path: |
@@ -245,7 +245,7 @@ jobs:
     steps:
       - name: Bootstrap Git in the pinned Arch container
         run: pacman -Syu --noconfirm git
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -280,7 +280,7 @@ jobs:
             --input native=build/ci-input/native \
             --input core=build/ci-input/core "${args[@]}"
       - name: Retain the independently qualified service stage
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ${{ steps.stage.outputs.artifact_name }}
           path: |
@@ -292,7 +292,7 @@ jobs:
           compression-level: 0
       - name: Retain service diagnostics
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: linux-service-evidence
           path: |
