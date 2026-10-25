@@ -126,11 +126,16 @@ void main() {
       expect(producer.active, isTrue);
       producer.close();
       expect(producer.active, isFalse);
+      await producer.retired.timeout(const Duration(seconds: 2));
+      var active = 1; // The entrypoint still owns one live slot.
       for (var i = 0; i < 20; i++) {
         final extra = session.registerProducer(DiagnosticProducerKind.domain);
         await extra.ready;
-        if (i >= 14) expect(extra.active, isFalse);
+        expect(extra.active, i < 15);
+        if (extra.active) active++;
       }
+      expect(active, LoggingSession.maximumProducers);
+      expect(session.health.producerRegistrationRefused, 5);
       await session.close();
       expect(session.producer.active, isFalse);
       final off = await LoggingSession.startForTesting(
