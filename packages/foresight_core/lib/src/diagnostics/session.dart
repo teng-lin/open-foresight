@@ -14,10 +14,14 @@ export 'events.dart';
 export 'storage.dart'
     show DiagnosticRole, OwnershipDecision, DiagnosticHealthReason;
 
-const _normalBytes = 12 * 1024, _priorityBytes = 4 * 1024;
-// Keep sixteen record positions for sequential writer summaries/control. The
-// remaining240 producer records still reserve more than one quarter for priority.
-const _normalRecords = 11, _priorityRecords = 4;
+part 'producer.dart';
+part 'producer_owner.dart';
+part 'producer_ledger.dart';
+part 'producer_budget.dart';
+
+const _normalBytes = 4 * 1024, _priorityBytes = 8 * 1024;
+// 224 producer tickets plus32 sequential writer/internal tickets.
+const _normalRecords = 10, _priorityRecords = 4;
 const _maximumCounter = 0x7fffffff;
 int _sum(int a, int b) => (a + b).clamp(0, _maximumCounter);
 int _cost(int length) => length * 4 + 256;
@@ -30,6 +34,7 @@ final class DiagnosticHealth {
       rejected = 0,
       highWaterBytes = 0,
       highWaterRecords = 0;
+  int producerRegistrationRefused = 0, quarantinedProducers = 0;
   int? slot;
   bool closed = false;
   Map<String, Object?> toJson() => {
@@ -41,6 +46,8 @@ final class DiagnosticHealth {
     'high_water_bytes': highWaterBytes,
     'high_water_records': highWaterRecords,
     'slot': slot,
+    'producer_registration_refused': producerRegistrationRefused,
+    'producer_quarantined': quarantinedProducers,
   };
 }
 
@@ -48,246 +55,6 @@ final class LoggingCloseResult {
   const LoggingCloseResult({required this.writerExited, required this.flushed});
   final bool writerExited, flushed;
   bool get requiresExplicitExit => !writerExited;
-}
-
-/// Pass this through isolate bootstrap explicitly. Connecting registers at most
-/// once; duplicate copies do not receive a second grant. It conveys no profile,
-/// file descriptor, application ownership or session-close capability.
-final class DiagnosticProducerBootstrap {
-  DiagnosticProducerBootstrap._(
-    this._writer,
-    this.id,
-    this.kind,
-    this.configuration,
-  );
-  final SendPort? _writer;
-  final int id;
-  final DiagnosticProducerKind kind;
-  final DiagnosticConfiguration configuration;
-  DiagnosticProducer connect() => DiagnosticProducer._(this);
-}
-
-/// Closed producer-side loss causes, never arbitrary caller error text.
-enum DiagnosticDropReason { correlationCapacity }
-
-final class DiagnosticProducer {
-  DiagnosticProducer._(DiagnosticProducerBootstrap bootstrap)
-    : _writer = bootstrap._writer,
-      _id = bootstrap.id,
-      configuration = bootstrap.configuration {
-    if (_writer == null) {
-      _ready.complete();
-      return;
-    }
-    final port = RawReceivePort(_receive);
-    _registrationDeadline = Timer(LoggingSession.closeDeadline, _shutdown);
-    _credits = port;
-    _writer.send(['register', _id, bootstrap.kind.index, port.sendPort]);
-  }
-  final SendPort? _writer;
-  final int _id;
-  final DiagnosticConfiguration configuration;
-  final _ready = Completer<void>();
-  Future<void> get ready => _ready.future;
-  RawReceivePort? _credits;
-  Timer? _registrationDeadline;
-  int _bytes = 0, _records = 0, _priority = 0, _priorityCount = 0;
-  int _dropped = 0, _rejected = 0, _correlationRefused = 0;
-  bool _closed = false, _accepted = false, _emitting = false;
-
-  /// Registration/lifetime availability; transient credit exhaustion is separate.
-  bool get active => !_closed && _accepted && configuration.enabled;
-  int get dropped => _dropped;
-  int get rejected => _rejected;
-  int get correlationRefused => _correlationRefused;
-
-  /// Report bounded diagnostic work refused before encoding. Counters travel
-  /// only with existing grant/record/completion messages, never per refusal.
-  void noteDropped(DiagnosticDropReason reason) {
-    if (!active) return;
-    switch (reason) {
-      case DiagnosticDropReason.correlationCapacity:
-        _correlationRefused = _sum(_correlationRefused, 1);
-    }
-    _dropped = _sum(_dropped, 1);
-  }
-
-  void _receive(dynamic value) {
-    if (_closed || value is! List || value.isEmpty) return;
-    if (value.first == 'stop') {
-      _shutdown();
-      return;
-    }
-    if (value.first == 'credits' && value.length == 5) {
-      _registrationDeadline?.cancel();
-      _registrationDeadline = null;
-      _accepted = true;
-      _credits?.keepIsolateAlive = false;
-      _bytes = (_bytes + (value[1] as int)).clamp(0, _normalBytes);
-      _records = (_records + (value[2] as int)).clamp(0, _normalRecords);
-      _priority = (_priority + (value[3] as int)).clamp(0, _priorityBytes);
-      _priorityCount = (_priorityCount + (value[4] as int)).clamp(
-        0,
-        _priorityRecords,
-      );
-      if (!_ready.isCompleted) _ready.complete();
-      if (_dropped + _rejected > 0) {
-        _writer?.send(['producer_counters', _id, _dropped, _rejected]);
-        _dropped = 0;
-        _rejected = 0;
-      }
-    }
-  }
-
-  /// Allocation of caller fields follows level filtering. Logging never throws,
-  /// awaits, retries a business operation, writes fd2 or waits on file locks.
-  bool emit(
-    DiagnosticEvent event,
-    DiagnosticComponent component, {
-    Map<DiagnosticField, Object> Function()? fields,
-    DiagnosticIdentity? connection,
-    int? request,
-    int? attempt,
-    DiagnosticIdentity? job,
-    SafeDiagnosticStack? stack,
-    SafeDiagnosticStack Function()? stackBuilder,
-  }) {
-    if (_closed ||
-        _writer == null ||
-        !configuration.permits(
-          event.severity,
-          transport: event == DiagnosticEvent.transportActivity,
-        )) {
-      return false;
-    }
-    if (_emitting) {
-      _dropped = _sum(_dropped, 1);
-      return false;
-    }
-    if (stack != null && stackBuilder != null) {
-      _rejected = _sum(_rejected, 1);
-      return false;
-    }
-    // Reserve a record and byte credit before any caller-controlled builder.
-    // Full encoded cost is settled before send; the reentrancy guard ensures
-    // only one bounded encoder can use this producer's scratch at a time.
-    const reservation = 256;
-    var priority = false;
-    if (_records > 0 && _bytes >= reservation) {
-      _records--;
-      _bytes -= reservation;
-    } else if (event.severity.index <= DiagnosticLevel.warn.index &&
-        _priorityCount > 0 &&
-        _priority >= reservation) {
-      priority = true;
-      _priorityCount--;
-      _priority -= reservation;
-    } else {
-      _dropped = _sum(_dropped, 1);
-      return false;
-    }
-    var sent = false;
-    var reservedCharge = reservation;
-    _emitting = true;
-    try {
-      final record = DiagnosticRecord(
-        event,
-        component,
-        fields: fields?.call() ?? const {},
-        connection: connection,
-        request: request,
-        attempt: attempt,
-        job: job,
-        stack: stack ?? stackBuilder?.call(),
-      );
-      final value = record.toWire();
-      if (value == null) {
-        _rejected = _sum(_rejected, 1);
-        return false;
-      }
-      final severity = _severity(value);
-      if (!configuration.permits(
-        severity,
-        transport: event == DiagnosticEvent.transportActivity,
-      )) {
-        return false;
-      }
-      final encoded = jsonEncode(value);
-      final length = utf8.encode(encoded).length;
-      if (length > DiagnosticRecord.maximumProducerRecordBytes) {
-        _rejected = _sum(_rejected, 1);
-        return false;
-      }
-      final charge = _cost(length);
-      final remaining = charge - reservation;
-      if (priority ? _priority >= remaining : _bytes >= remaining) {
-        if (priority) {
-          _priority -= remaining;
-        } else {
-          _bytes -= remaining;
-        }
-      } else if (!priority &&
-          severity.index <= DiagnosticLevel.warn.index &&
-          _priorityCount > 0 &&
-          _priority >= charge) {
-        _bytes += reservation;
-        _records++;
-        priority = true;
-        _priorityCount--;
-        _priority -= charge;
-      } else {
-        _dropped = _sum(_dropped, 1);
-        return false;
-      }
-      reservedCharge = charge;
-      _writer.send([
-        'record',
-        _id,
-        encoded,
-        charge,
-        priority,
-        _dropped,
-        _rejected,
-      ]);
-      sent = true;
-      _dropped = 0;
-      _rejected = 0;
-      return true;
-    } catch (_) {
-      _rejected = _sum(_rejected, 1);
-      return false;
-    } finally {
-      _emitting = false;
-      if (!sent && !_closed) {
-        if (priority) {
-          _priority += reservedCharge;
-          _priorityCount++;
-        } else {
-          _bytes += reservedCharge;
-          _records++;
-        }
-      }
-    }
-  }
-
-  void close() {
-    if (_closed) return;
-    _writer?.send(['producer_done', _id, _dropped, _rejected]);
-    _shutdown();
-  }
-
-  void _shutdown() {
-    _closed = true;
-    _registrationDeadline?.cancel();
-    _registrationDeadline = null;
-    _bytes = 0;
-    _priority = 0;
-    _records = 0;
-    _priorityCount = 0;
-    _credits?.close();
-    _credits = null;
-    if (!_ready.isCompleted) _ready.complete();
-  }
 }
 
 DiagnosticLevel _severity(Map value) {
@@ -335,6 +102,13 @@ final class LoggingSession {
   static const maximumProducers = 16;
   static const maximumOutstandingBytes = 512 * 1024;
   static const maximumOutstandingRecords = 256;
+  static const maximumProducerEventBytes =
+      _normalPoolBytes + _priorityPoolBytes;
+  static const maximumProducerEventRecords =
+      _normalPoolRecords + _priorityPoolRecords;
+  static const maximumEncodingScratchBytes = 144 * 1024;
+  static const maximumIpcBytes = 160 * 1024;
+  static const maximumControlBytes = 16 * 1024;
   static const closeDeadline = Duration(milliseconds: 500);
   final DiagnosticConfiguration configuration;
   final DiagnosticIdentity identity;
@@ -344,11 +118,22 @@ final class LoggingSession {
   final Completer<void> _exited;
   final DiagnosticHealth health;
   late final DiagnosticProducer producer;
-  final List<DiagnosticProducer> _localProducers = [];
-  DiagnosticProducer? _noOpProducer;
+  final _slots = List<_OwnedProducer?>.filled(maximumProducers, null);
+  final _generations = Uint64List(maximumProducers);
+  late final _inactiveBootstrap = DiagnosticProducerBootstrap._(
+    null,
+    -1,
+    0,
+    DiagnosticProducerKind.entrypoint,
+    configuration,
+  );
+  late final _inactiveReservation = DiagnosticProducerReservation._(this, null);
+  bool _registrationPending = false;
+  int _registrationSent = 0;
   @visibleForTesting
-  int get retainedProducerCount => _localProducers.length;
-  int _nextProducer = 0;
+  int get retainedProducerCount => _slots.where((s) => s?.local != null).length;
+  @visibleForTesting
+  int get retainedSlotCount => _slots.where((s) => s != null).length;
   bool _ownershipExpected = false,
       _closed = false,
       _flushed = false,
@@ -375,6 +160,7 @@ final class LoggingSession {
     DiagnosticRole role = DiagnosticRole.candidate,
     DiagnosticSinkFactory? sinkFactory,
     DateTime Function()? clock,
+    int generationSeed = 0,
   }) => _start(
     configuration,
     profilePath,
@@ -383,6 +169,7 @@ final class LoggingSession {
     'unknown',
     sinkFactory: sinkFactory,
     clock: clock,
+    generationSeed: generationSeed,
   );
 
   static Future<LoggingSession> _start(
@@ -393,7 +180,11 @@ final class LoggingSession {
     String revision, {
     DiagnosticSinkFactory? sinkFactory,
     DateTime Function()? clock,
+    int generationSeed = 0,
   }) async {
+    if (generationSeed < 0 || generationSeed >= _maximumGeneration) {
+      throw ArgumentError.value(generationSeed, 'generationSeed');
+    }
     final identity = DiagnosticIdentity.random();
     final health = DiagnosticHealth();
     if (!configuration.enabled) {
@@ -436,17 +227,32 @@ final class LoggingSession {
           health.reason = DiagnosticHealthReason.writerFailed;
         }
         if (active != null) {
-          for (final producer in active._localProducers) {
-            producer._shutdown();
+          for (final slot in active._slots) {
+            slot?.local?._shutdown();
           }
         }
         return;
       }
       if (value is! List || value.isEmpty) return;
-      if (value.first == 'closed' && value.length == 9) {
+      if (value.first == 'retired' && value.length == 4 && value[3] == 0) {
+        currentSession?._retired(value[1] as int, value[2] as int);
+        return;
+      }
+      if (value.first == 'registration_refused_ack' && value.length == 2) {
+        final active = currentSession;
+        if (active != null && value[1] == active._registrationSent) {
+          active._registrationPending = false;
+          if (health.producerRegistrationRefused > (value[1] as int)) {
+            active._registrationEdge();
+          }
+        }
+        return;
+      }
+      if (value.first == 'closed' && value.length == 10) {
         session._closeAcknowledged = true;
         session._flushed = value[1] as bool;
         health.reason = DiagnosticHealthReason.values[value[8] as int];
+        health.quarantinedProducers = value[9] as int;
         health.admitted = value[2] as int;
         health.dropped = value[3] as int;
         health.rejected = value[4] as int;
@@ -455,7 +261,7 @@ final class LoggingSession {
         health.slot = value[7] as int?;
         return;
       }
-      if (value.first == 'health' && value.length == 8) {
+      if (value.first == 'health' && value.length == 9) {
         health.reason = DiagnosticHealthReason.values[value[1] as int];
         health.admitted = value[2] as int;
         health.dropped = value[3] as int;
@@ -463,6 +269,7 @@ final class LoggingSession {
         health.highWaterBytes = value[5] as int;
         health.highWaterRecords = value[6] as int;
         health.slot = value[7] as int?;
+        health.quarantinedProducers = value[8] as int;
         session._writer?.send(['health_ack']);
       }
       // onError carries arbitrary exception text/stack. Ignore it entirely;
@@ -501,10 +308,11 @@ final class LoggingSession {
         health,
       );
       currentSession = session;
+      session._generations.fillRange(0, maximumProducers, generationSeed);
       session.producer = session
           .reserveProducer(DiagnosticProducerKind.entrypoint)
           .connect();
-      session._localProducers.add(session.producer);
+      session._slots[session.producer.slot]!.local = session.producer;
       await session.producer.ready.timeout(closeDeadline);
       if (configuration.invalidLevel) {
         session.producer.emit(
@@ -538,33 +346,92 @@ final class LoggingSession {
     }
   }
 
-  DiagnosticProducerBootstrap reserveProducer(DiagnosticProducerKind kind) {
-    if (_closed || _writer == null || _nextProducer >= maximumProducers) {
-      return DiagnosticProducerBootstrap._(null, -1, kind, configuration);
-    }
-    return DiagnosticProducerBootstrap._(
-      _writer,
-      _nextProducer++,
-      kind,
-      configuration,
-    );
+  DiagnosticProducerBootstrap reserveProducer(DiagnosticProducerKind kind) =>
+      _reserve(kind)?.bootstrap ?? _inactiveBootstrap;
+
+  DiagnosticProducerReservation reserveProducerForSpawn(
+    DiagnosticProducerKind kind,
+  ) {
+    final slot = _reserve(kind);
+    return slot == null
+        ? _inactiveReservation
+        : DiagnosticProducerReservation._(this, slot);
   }
 
-  /// The isolate owner calls this from its onExit observer. Outstanding records
-  /// still flush, but no further grants target the dead endpoint. Tickets are
-  /// never reused, so stale bootstrap copies cannot create another budget.
+  /// Legacy owner observation is deliberately not a VM exit/unwind barrier.
   void producerExited(DiagnosticProducerBootstrap bootstrap) {
-    if (!_closed && bootstrap._writer == _writer) {
-      _writer?.send(['producer_done', bootstrap.id, 0, 0]);
-    }
+    if (_closed || !_current(bootstrap)) return;
+    final slot = _slots[bootstrap.id]!;
+    if (slot.ownerExitSent) return;
+    slot.ownerExitSent = true;
+    _writer?.send(['owner_exit', bootstrap.id, bootstrap.generation, 0]);
   }
 
   DiagnosticProducer registerProducer(DiagnosticProducerKind kind) {
     final bootstrap = reserveProducer(kind);
-    if (bootstrap._writer == null) return _noOpProducer ??= bootstrap.connect();
     final producer = bootstrap.connect();
-    _localProducers.add(producer);
+    if (_current(bootstrap)) _slots[bootstrap.id]!.local = producer;
     return producer;
+  }
+
+  /// The entrypoint is paused until its direct writer exit listener is installed.
+  /// Diagnostics refusal never prevents application worker startup.
+  Future<DiagnosticOwnedIsolate> spawnProducer<T>(
+    DiagnosticProducerKind kind,
+    void Function((DiagnosticProducerBootstrap, T)) entrypoint,
+    T message, {
+    SendPort? onError,
+    SendPort? onExit,
+    bool errorsAreFatal = true,
+    String? debugName,
+  }) async {
+    final slot = _reserve(kind);
+    final bootstrap = slot?.bootstrap ?? _inactiveBootstrap;
+    Isolate? isolate;
+    try {
+      isolate = await Isolate.spawn(
+        entrypoint,
+        (bootstrap, message),
+        paused: true,
+        onError: onError,
+        onExit: onExit,
+        errorsAreFatal: errorsAreFatal,
+        debugName: debugName,
+      );
+      if (!bootstrap.observeExit(isolate)) producerExited(bootstrap);
+      isolate.resume(isolate.pauseCapability!);
+      return DiagnosticOwnedIsolate._(
+        isolate,
+        bootstrap,
+        slot?.retired ?? _inactiveBootstrap.connect().retired,
+      );
+    } catch (_) {
+      if (isolate == null) {
+        // Paused spawn never exposed the capability to executing Dart code.
+        _cancelNeverExposed(bootstrap);
+      } else {
+        // Once a VM exists, only its ordered exit or terminal may refund.
+        isolate.kill(priority: Isolate.immediate);
+        producerExited(bootstrap);
+      }
+      rethrow;
+    }
+  }
+
+  @visibleForTesting
+  Future<DiagnosticBudgetSnapshot> inspectBudgetForTesting() async {
+    if (_closed || _writer == null) {
+      return DiagnosticBudgetSnapshot._([0, 0, 0, 0, 0, 0, const []]);
+    }
+    final reply = ReceivePort();
+    try {
+      _writer.send(['inspect_budget', reply.sendPort]);
+      return DiagnosticBudgetSnapshot._(
+        await reply.first.timeout(closeDeadline) as List,
+      );
+    } finally {
+      reply.close();
+    }
   }
 
   void selectProfile(String canonicalProfile) {
@@ -592,13 +459,26 @@ final class LoggingSession {
   Future<LoggingCloseResult> close() => _close ??= _finishClose();
   Future<LoggingCloseResult> _finishClose() async {
     _closed = true;
-    for (final producer in _localProducers) {
-      producer.close();
+    if (!configuration.enabled) {
+      health.closed = true;
+      return const LoggingCloseResult(writerExited: true, flushed: true);
     }
+    final elapsed = Stopwatch()..start();
+    for (final slot in _slots) {
+      slot?.local?.close();
+    }
+    // Local terminal microtasks must run after any synchronous encoder unwinds.
+    await Future<void>.delayed(Duration.zero);
     _writer?.send(['close']);
     var writerExited = _exited.isCompleted;
     try {
-      await _exited.future.timeout(closeDeadline);
+      await _exited.future.timeout(
+        Duration(
+          microseconds:
+              (closeDeadline.inMicroseconds - elapsed.elapsedMicroseconds)
+                  .clamp(0, closeDeadline.inMicroseconds),
+        ),
+      );
       writerExited = true;
     } on TimeoutException {
       health.reason = DiagnosticHealthReason.writerFailed;
@@ -622,14 +502,6 @@ final class LoggingSession {
     if (session != null) await (await session).close();
     _processSession = null;
   }
-}
-
-final class _WriterProducer {
-  _WriterProducer(this.kind, this.port);
-  final DiagnosticProducerKind kind;
-  final SendPort port;
-  int bytes = 0, records = 0, priority = 0, priorityCount = 0;
-  bool active = true;
 }
 
 // Dense closed-schema state: no per-key objects, allocation or eviction. Summary
@@ -685,9 +557,10 @@ final class _RateState {
 }
 
 final class _QueuedRecord {
-  _QueuedRecord(this.value, this.producer, this.charge, this.priority);
-  final Map<String, dynamic> value;
-  final int producer, charge;
+  _QueuedRecord(this.encoded, this.producer, this.charge, this.priority);
+  final String encoded;
+  final DiagnosticProducerSnapshot producer;
+  final int charge;
   final bool priority;
 }
 
@@ -707,6 +580,10 @@ void _writerMain(List<Object?> arguments) {
     arguments[9] as DateTime Function()?,
   );
   receive.listen(state.handle);
+  state.creditTimer = Timer.periodic(
+    const Duration(milliseconds: 100),
+    (_) => state.ledger.rebalance(),
+  );
   state.timer = Timer.periodic(
     const Duration(milliseconds: 250),
     (_) => state.flush(),
@@ -734,13 +611,12 @@ final class _Writer {
   final DateTime Function() clock;
   String? profile;
   DiagnosticRole role;
-  final producers = <int, _WriterProducer>{};
-  final exitedTickets = <int>{};
+  late final ledger = _ProducerLedger(owner, _producerCounters);
   final records = <_QueuedRecord>[];
   final started = Stopwatch()..start();
   final rate = _RateState();
   int pendingDrops = 0, pendingRejected = 0, firstDrop = 0, lastDrop = 0;
-  Timer? timer, ownershipCloseDeadline;
+  Timer? timer, creditTimer, ownershipCloseDeadline;
   DiagnosticSink? storage;
   DiagnosticHealthReason reason = DiagnosticHealthReason.healthy;
   int dropped = 0,
@@ -761,48 +637,54 @@ final class _Writer {
 
   void handle(dynamic value) {
     if (value is! List || value.isEmpty) return;
+    if (ledger.handle(value)) {
+      _captureLedgerHighWater();
+      return;
+    }
     switch (value.first) {
-      case 'register':
-        final id = value[1] as int;
-        final port = value[3] as SendPort;
-        if (closing ||
-            id < 0 ||
-            id >= LoggingSession.maximumProducers ||
-            producers.containsKey(id) ||
-            exitedTickets.contains(id)) {
-          port.send(['stop']);
-          return;
-        }
-        producers[id] = _WriterProducer(
-          DiagnosticProducerKind.values[value[2] as int],
-          port,
-        );
-        port.send([
-          'credits',
-          _normalBytes,
-          _normalRecords,
-          _priorityBytes,
-          _priorityRecords,
+      case 'inspect_budget':
+        _captureLedgerHighWater();
+        (value[1] as SendPort).send([
+          ledger.normalUsed,
+          ledger.priorityUsed,
+          ledger.normalTickets,
+          ledger.priorityTickets,
+          charge,
+          records.length,
+          [
+            for (final p in ledger.slots)
+              if (p != null)
+                [
+                  p.snapshot.slot,
+                  p.snapshot.generation,
+                  p.normalEpoch,
+                  p.priorityEpoch,
+                  p.bytes,
+                  p.records,
+                  p.priority,
+                  p.priorityCount,
+                  p.quarantined,
+                ],
+          ],
         ]);
       case 'record':
         if (closing) return;
-        final id = value[1] as int,
-            encoded = value[2] as String,
-            cost = value[3] as int;
-        final producer = producers[id];
+        final encoded = value[5] as String, cost = value[6] as int;
+        final priority = value[7] as bool;
+        final producer = ledger.consume(value, cost, priority);
         if (producer == null) return;
         final length = utf8.encode(encoded).length;
         if (length > DiagnosticRecord.maximumProducerRecordBytes ||
             _cost(length) != cost) {
           _producerCounters(0, 1);
+          ledger.completed(cost, priority);
           return;
         }
         final map = jsonDecode(encoded);
-        final priority = value[4] as bool;
-        _producerCounters(value[5] as int, value[6] as int);
+        _producerCounters(value[8] as int, value[9] as int);
         if (!DiagnosticRecord.validWire(map)) {
           _producerCounters(0, 1);
-          _credit(id, cost, priority);
+          ledger.completed(cost, priority);
           return;
         }
         final wire = map as Map<String, dynamic>;
@@ -814,17 +696,17 @@ final class _Writer {
           severity,
           transport: event == DiagnosticEvent.transportActivity,
         )) {
-          _credit(id, cost, priority);
+          ledger.completed(cost, priority);
           return;
         }
         if (!_admitRate(event, wire) ||
-            records.length >= LoggingSession.maximumOutstandingRecords ||
-            charge + cost > 256 * 1024) {
+            records.length >= _normalPoolRecords + _priorityPoolRecords ||
+            charge + cost > _normalPoolBytes + _priorityPoolBytes) {
           dropped = _sum(dropped, 1);
-          _credit(id, cost, priority);
+          ledger.completed(cost, priority);
           return;
         }
-        records.add(_QueuedRecord(wire, id, cost, priority));
+        records.add(_QueuedRecord(encoded, producer, cost, priority));
         charge += cost;
         highBytes = highBytes < charge ? charge : highBytes;
         highRecords = highRecords < records.length
@@ -837,22 +719,6 @@ final class _Writer {
         if (severity.index <= DiagnosticLevel.warn.index) hadPriority = true;
         if (severity == DiagnosticLevel.error) hadFailure = true;
         if (severity == DiagnosticLevel.error) scheduleMicrotask(flush);
-      case 'producer_counters':
-        _producerCounters(value[2] as int, value[3] as int);
-      case 'producer_done':
-        final id = value[1] as int;
-        if (id < 0 || id >= LoggingSession.maximumProducers) return;
-        exitedTickets.add(id);
-        _producerCounters(value[2] as int, value[3] as int);
-        final producer = producers[id];
-        if (producer != null) {
-          producer.port.send(['stop']);
-          producer.active = false;
-          producer.bytes = 0;
-          producer.records = 0;
-          producer.priority = 0;
-          producer.priorityCount = 0;
-        }
       // Keep session-owned ownership metadata even after producer completion.
       case 'profile':
         profile ??= value[1] as String;
@@ -873,6 +739,7 @@ final class _Writer {
         healthPending = false;
       case 'close':
         closing = true;
+        ledger.close();
         if (decisionExpected && !decisionReceived) {
           ownershipCloseDeadline ??= Timer(
             const Duration(milliseconds: 100),
@@ -927,7 +794,7 @@ final class _Writer {
       DiagnosticEvent? original,
       DiagnosticCategory? category,
     }) => _QueuedRecord(
-      Map<String, dynamic>.from(
+      jsonEncode(
         DiagnosticRecord(
           event,
           DiagnosticComponent.logging,
@@ -940,7 +807,7 @@ final class _Writer {
           },
         ).toWire()!,
       ),
-      -1,
+      const DiagnosticProducerSnapshot.writer(),
       0,
       false,
     );
@@ -983,41 +850,23 @@ final class _Writer {
     }
   }
 
-  void _credit(int id, int cost, bool priority) {
-    final producer = producers[id];
-    if (producer == null || !producer.active) return;
-    if (priority) {
-      producer.priority += cost;
-      producer.priorityCount++;
-    } else {
-      producer.bytes += cost;
-      producer.records++;
+  void _captureLedgerHighWater() {
+    if (ledger.normalUsed < 0 ||
+        ledger.normalUsed > _normalPoolBytes ||
+        ledger.priorityUsed < 0 ||
+        ledger.priorityUsed > _priorityPoolBytes ||
+        ledger.normalTickets < 0 ||
+        ledger.normalTickets > _normalPoolRecords ||
+        ledger.priorityTickets < 0 ||
+        ledger.priorityTickets > _priorityPoolRecords) {
+      throw StateError('Diagnostic credit ledger invariant failed');
     }
-  }
-
-  void _returnCredits() {
-    for (final producer in producers.values) {
-      if (!producer.active) continue;
-      if (closing) {
-        producer.port.send(['stop']);
-        continue;
-      }
-      if (producer.records + producer.priorityCount == 0) continue;
-      producer.port.send([
-        'credits',
-        producer.bytes,
-        producer.records,
-        producer.priority,
-        producer.priorityCount,
-      ]);
-      producer.bytes = 0;
-      producer.records = 0;
-      producer.priority = 0;
-      producer.priorityCount = 0;
-    }
+    if (ledger.usedBytes > highBytes) highBytes = ledger.usedBytes;
+    if (ledger.usedRecords > highRecords) highRecords = ledger.usedRecords;
   }
 
   void _health() {
+    _captureLedgerHighWater();
     if (healthPending || closing) return;
     healthPending = true;
     owner.send([
@@ -1029,15 +878,17 @@ final class _Writer {
       highBytes,
       highRecords,
       storage?.slot,
+      ledger.quarantined,
     ]);
   }
 
   Uint8List _encode(_QueuedRecord record) {
-    final producer = producers[record.producer];
-    final severity = _severity(record.value);
+    final value = jsonDecode(record.encoded) as Map<String, dynamic>;
+    final producer = record.producer;
+    final severity = _severity(value);
     return Uint8List.fromList(
       utf8.encode(
-        '${jsonEncode({'schema': 1, 'timestamp': clock().toUtc().toIso8601String(), 'sequence': ++sequence, 'level': severity.name, 'version': version, 'revision': revision, 'session': session, 'pid': pid, 'producer': '${producer?.kind.name ?? DiagnosticProducerKind.writer.name}:${record.producer < 0 ? 0 : record.producer}', ...record.value})}\n',
+        '${jsonEncode({'schema': 1, 'timestamp': clock().toUtc().toIso8601String(), 'sequence': ++sequence, 'level': severity.name, 'version': version, 'revision': revision, 'session': session, 'pid': pid, 'producer': '${producer.kind.name}:${producer.slot}', ...value})}\n',
       ),
     );
   }
@@ -1145,16 +996,19 @@ final class _Writer {
 
   void _discard() {
     for (final record in records) {
-      _credit(record.producer, record.charge, record.priority);
+      ledger.completed(record.charge, record.priority);
     }
     records.clear();
     charge = 0;
-    _returnCredits();
+    ledger.rebalance();
   }
 
   void _finish() {
+    _captureLedgerHighWater();
     timer?.cancel();
     timer = null;
+    creditTimer?.cancel();
+    creditTimer = null;
     ownershipCloseDeadline?.cancel();
     ownershipCloseDeadline = null;
     final slot = storage?.slot;
@@ -1174,6 +1028,7 @@ final class _Writer {
       highRecords,
       slot,
       reason.index,
+      ledger.quarantined,
     ]);
     receive.close();
   }
