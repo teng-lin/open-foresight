@@ -21,6 +21,16 @@ enum {
   FS_DIAG_SUPPORT_FAILED = 128,
   FS_DIAG_SUPPORT_WATCH_BOUND = 256
 };
+enum {
+  FS_DIAG_EXIT_UNKNOWN = 0,
+  FS_DIAG_EXIT_NORMAL = 1,
+  FS_DIAG_EXIT_INVOCATION = 64,
+  FS_DIAG_EXIT_BOOTSTRAP = 65,
+  FS_DIAG_EXIT_RETIREMENT = 66,
+  FS_DIAG_EXIT_UNSAFE = 67,
+  FS_DIAG_EXIT_OTHER = 68,
+  FS_DIAG_EXIT_SIGNAL = 69
+};
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,7 +47,10 @@ uint64_t fs_diag_parent_reserve(const char *native_id, const char *dart_id,
                                 uint32_t argc);
 int fs_diag_parent_prepare(uint64_t id);
 int fs_diag_parent_spawn(uint64_t id);
+// Sole coordinator owns poll. Concurrent misuse returns the last published
+// status without touching the handle. Check negative ERROR before status bits.
 int fs_diag_parent_poll(uint64_t id);
+int fs_diag_parent_exit_class(uint64_t id);
 int fs_diag_parent_force(uint64_t id);
 int fs_diag_parent_heartbeat(uint64_t id);
 
@@ -47,6 +60,8 @@ int fs_diag_parent_heartbeat(uint64_t id);
 // arm.
 uint64_t fs_diag_child_arm(int64_t expected_parent, const char *native_id,
                            const char *dart_id, const char *catalog_id);
+// Sole watcher owns local heartbeat/deadline snapshots. Concurrent misuse is
+// refused without waiting. No file/main-isolate endpoint ownership crosses it.
 int fs_diag_child_watch(uint64_t id);
 int fs_diag_child_map(uint64_t id);
 int fs_diag_child_operation(uint64_t id, int active);

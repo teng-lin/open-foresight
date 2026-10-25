@@ -41,12 +41,17 @@ typedef struct support_context {
   atomic_int spawned_once;
   atomic_int mapped_once;
   atomic_int watcher_seen;
+  atomic_int control_ready;
+  atomic_int init_received;
+  atomic_int exit_class;
+  atomic_flag poll_busy;
+  atomic_flag watch_busy;
   atomic_uint_fast64_t operation_deadline;
   _Atomic(fs_diag_page *) page;
   int role;
   pid_t parent;
   int page_fd;
-  int process_fd;
+  atomic_int process_fd;
 #ifdef __APPLE__
   pid_t birth_pid;
   int exit_event;
@@ -65,7 +70,8 @@ typedef struct support_context {
   char *argv[17];
 } support_context;
 
-static support_context context;
+static support_context context = {.poll_busy = ATOMIC_FLAG_INIT,
+                                  .watch_busy = ATOMIC_FLAG_INIT};
 _Static_assert(sizeof(support_context) < 4096, "bounded native context");
 
 static uint64_t monotonic_ms(void) {
@@ -112,12 +118,12 @@ static int reserve(int role, const char *native_id, const char *dart_id,
     atomic_store(&context.status, FS_DIAG_SUPPORT_FAILED);
     return 0;
   }
-  atomic_store(&context.status, FS_DIAG_SUPPORT_RESERVED);
   return 1;
 }
 
 static int valid(uint64_t id, int role) {
-  return id == 1 && atomic_load(&context.status) != 0 && context.role == role;
+  return id == 1 && (atomic_load(&context.status) & FS_DIAG_SUPPORT_RESERVED) &&
+         context.role == role;
 }
 
 static int fail(void) {
@@ -154,6 +160,7 @@ uint64_t fs_diag_parent_reserve(const char *native_id, const char *dart_id,
       strcmp(context.argv[2], parent) != 0)
     goto bad;
   context.argv[argc] = NULL;
+  atomic_store(&context.status, FS_DIAG_SUPPORT_RESERVED);
   return 1;
 bad:
   fail();
@@ -179,7 +186,7 @@ int fs_diag_parent_prepare(uint64_t id) {
     close(kernel.descriptor);
     return fail();
   }
-  context.probe = FS_DIAG_PROBE | ((random & (FS_DIAG_CHALLENGE_MASK - 1)) + 1);
+  context.probe = FS_DIAG_PROBE | (random % (FS_DIAG_CHALLENGE_MASK - 1) + 1);
   context.force =
       FS_DIAG_FORCE_RETIRE | ((context.probe & FS_DIAG_CHALLENGE_MASK) + 1);
   fs_diag_page *page = kernel.mapping;
@@ -272,6 +279,7 @@ static int process_exited(int descriptor) {
 int fs_diag_parent_spawn(uint64_t id) {
   int unused = 0;
   if (!valid(id, FS_DIAG_ENDPOINT_PARENT) ||
+      (atomic_load(&context.status) & FS_DIAG_SUPPORT_FAILED) ||
       !(atomic_load(&context.status) & FS_DIAG_SUPPORT_PREPARED) ||
       !atomic_compare_exchange_strong(&context.spawned_once, &unused, 1))
     return FS_DIAG_SUPPORT_ERROR;
@@ -346,12 +354,26 @@ int fs_diag_parent_spawn(uint64_t id) {
 finish:
   close(context.page_fd);
   context.page_fd = -1;
-  if (error)
+  if (error) {
+    // Private FORCE can retire an unbound child after watch registration fails.
+    // Without SPAWNED, that ACK never binds a failed watch or grants PID
+    // rights.
+    atomic_store(&atomic_load(&context.page)->header.control_command,
+                 context.force);
     return fail();
+  }
   // Publish a fresh challenge only AFTER the Darwin watch exists. A missing
   // watch/ACK never grants authority against a guessed or reused PID.
-  atomic_store(&atomic_load(&context.page)->header.control_command,
-               atomic_load(&context.cancel) ? context.force : context.probe);
+  atomic_store(&context.control_ready, 1);
+  uint64_t empty_command = 0;
+  atomic_compare_exchange_strong(
+      &atomic_load(&context.page)->header.control_command, &empty_command,
+      context.probe);
+  // FORCE on either side of publication must be the final command. A request
+  // before control_ready sets cancel only, preventing pre-registration ACKs.
+  if (atomic_load(&context.cancel))
+    atomic_store(&atomic_load(&context.page)->header.control_command,
+                 context.force);
   atomic_fetch_or(&context.status, FS_DIAG_SUPPORT_SPAWNED);
   return FS_DIAG_SUPPORT_SPAWNED;
 }
@@ -360,8 +382,9 @@ int fs_diag_parent_force(uint64_t id) {
   if (!valid(id, FS_DIAG_ENDPOINT_PARENT))
     return FS_DIAG_SUPPORT_ERROR;
   atomic_store(&context.cancel, 1);
+  atomic_fetch_or(&context.status, FS_DIAG_SUPPORT_CANCELLED);
   fs_diag_page *page = atomic_load(&context.page);
-  if (page != NULL)
+  if (page != NULL && atomic_load(&context.control_ready))
     atomic_store(&page->header.control_command, context.force);
   return FS_DIAG_SUPPORT_CANCELLED;
 }
@@ -380,9 +403,7 @@ int fs_diag_parent_heartbeat(uint64_t id) {
   return 0;
 }
 
-int fs_diag_parent_poll(uint64_t id) {
-  if (!valid(id, FS_DIAG_ENDPOINT_PARENT))
-    return FS_DIAG_SUPPORT_ERROR;
+static int parent_poll(void) {
   int status = atomic_load(&context.status);
   if (!(status & FS_DIAG_SUPPORT_SPAWNED) ||
       (status & FS_DIAG_SUPPORT_NOT_LIVE))
@@ -400,8 +421,18 @@ int fs_diag_parent_poll(uint64_t id) {
     siginfo_t information = {0};
     if (waitid(P_PIDFD, (id_t)context.process_fd, &information,
                WEXITED | WNOHANG) == 0 &&
-        information.si_pid != 0)
+        information.si_pid != 0) {
+      int classification = FS_DIAG_EXIT_SIGNAL;
+      if (information.si_code == CLD_EXITED) {
+        classification =
+            information.si_status == 0 ? FS_DIAG_EXIT_NORMAL
+            : information.si_status >= 64 && information.si_status <= 67
+                ? information.si_status
+                : FS_DIAG_EXIT_OTHER;
+      }
+      atomic_store(&context.exit_class, classification);
       atomic_fetch_or(&context.status, FS_DIAG_SUPPORT_REAPED);
+    }
     // ECHILD may mean another actual VM reaper consumed it. NOT_LIVE comes
     // from the birth handle, never ECHILD or an inferred PID status.
     close(context.process_fd);
@@ -425,6 +456,21 @@ int fs_diag_parent_poll(uint64_t id) {
   return atomic_load(&context.status);
 }
 
+int fs_diag_parent_poll(uint64_t id) {
+  if (!valid(id, FS_DIAG_ENDPOINT_PARENT))
+    return FS_DIAG_SUPPORT_ERROR;
+  if (atomic_flag_test_and_set(&context.poll_busy))
+    return atomic_load(&context.status);
+  int result = parent_poll();
+  atomic_flag_clear(&context.poll_busy);
+  return result;
+}
+
+int fs_diag_parent_exit_class(uint64_t id) {
+  return valid(id, FS_DIAG_ENDPOINT_PARENT) ? atomic_load(&context.exit_class)
+                                            : FS_DIAG_SUPPORT_ERROR;
+}
+
 uint64_t fs_diag_child_arm(int64_t expected_parent, const char *native_id,
                            const char *dart_id, const char *catalog_id) {
   if (!reserve(FS_DIAG_ENDPOINT_CHILD, native_id, dart_id, catalog_id))
@@ -443,6 +489,7 @@ uint64_t fs_diag_child_arm(int64_t expected_parent, const char *native_id,
 #endif
   if (context.process_fd < 0 || getppid() != context.parent)
     goto bad;
+  atomic_store(&context.status, FS_DIAG_SUPPORT_RESERVED);
   return 1;
 bad:
   if (context.process_fd >= 0) {
@@ -506,6 +553,8 @@ int fs_diag_child_watch(uint64_t id) {
     return FS_DIAG_SUPPORT_ERROR;
   if (atomic_load(&context.status) & FS_DIAG_SUPPORT_FAILED)
     _exit(67);
+  if (atomic_flag_test_and_set(&context.watch_busy))
+    return FS_DIAG_SUPPORT_ERROR;
   uint64_t now = monotonic_ms();
   if (now == 0 || getppid() != context.parent)
     _exit(66);
@@ -517,10 +566,13 @@ int fs_diag_child_watch(uint64_t id) {
   if (exited != 0)
     _exit(66);
   atomic_store(&context.watcher_seen, 1);
+  if (!atomic_load(&context.init_received) && now >= context.bootstrap_deadline)
+    _exit(65);
   fs_diag_page *page = atomic_load(&context.page);
   if (page == NULL) {
     if (now >= context.bootstrap_deadline)
       _exit(65);
+    atomic_flag_clear(&context.watch_busy);
     return 0;
   }
   if (!header_valid(page) || memcmp(page->header.nonce, context.nonce, 32) != 0)
@@ -546,6 +598,7 @@ int fs_diag_child_watch(uint64_t id) {
   if (child_beat >= FS_DIAG_MAX_SEQUENCE)
     _exit(67);
   atomic_store(&page->header.child_heartbeat, child_beat + 1);
+  atomic_flag_clear(&context.watch_busy);
   return 0;
 }
 
@@ -561,8 +614,12 @@ static int endpoint_valid(uint64_t id) {
 int fs_diag_support_send(uint64_t id, uint8_t type, uint64_t request_id,
                          uint32_t total_length, const uint8_t *chunk,
                          uint32_t chunk_length) {
-  if (!endpoint_valid(id) || chunk_length > FS_DIAG_CHUNK_BYTES)
+  if (id != 1 || chunk_length > FS_DIAG_CHUNK_BYTES)
+    return FS_DIAG_SUPPORT_ERROR;
+  if (!endpoint_valid(id))
     return fail();
+  if (context.role == FS_DIAG_ENDPOINT_PARENT && atomic_load(&context.cancel))
+    return FS_DIAG_CHANNEL_ERROR;
   if (context.role == FS_DIAG_ENDPOINT_PARENT && type == FS_DIAG_INIT &&
       !(atomic_load(&context.status) & FS_DIAG_SUPPORT_WATCH_BOUND))
     return FS_DIAG_CHANNEL_EMPTY;
@@ -575,12 +632,14 @@ int fs_diag_support_receive(uint64_t id, uint8_t *output, uint32_t capacity,
                             uint64_t *request_id, uint32_t *total_length) {
   if (copied == NULL || type == NULL || request_id == NULL ||
       total_length == NULL)
-    return fail();
+    return FS_DIAG_SUPPORT_ERROR;
   *copied = 0;
   *type = 0;
   *request_id = 0;
   *total_length = 0;
-  if (!endpoint_valid(id) || capacity > FS_DIAG_CHUNK_BYTES)
+  if (id != 1 || capacity > FS_DIAG_CHUNK_BYTES)
+    return FS_DIAG_SUPPORT_ERROR;
+  if (!endpoint_valid(id))
     return fail();
   int result =
       fs_diag_endpoint_receive(&context.endpoint, output, capacity, copied);
@@ -588,6 +647,8 @@ int fs_diag_support_receive(uint64_t id, uint8_t *output, uint32_t capacity,
     *type = context.endpoint.receive.type;
     *request_id = context.endpoint.receive.request_id;
     *total_length = context.endpoint.receive.length;
+    if (context.role == FS_DIAG_ENDPOINT_CHILD && *type == FS_DIAG_INIT)
+      atomic_store(&context.init_received, 1);
   }
   return result;
 }

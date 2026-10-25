@@ -1,5 +1,9 @@
 #define _POSIX_C_SOURCE 200809L
 #include "diagnostic_support.h"
+
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include "diagnostic_protocol.h"
 
 #include <assert.h>
@@ -77,8 +81,11 @@ static int worker(const char *parent_text, const char *mode) {
     for (;;)
       pause();
   int mapped = fs_diag_child_map(1);
-  if (wrong_identity)
-    _exit(mapped == FS_DIAG_SUPPORT_ERROR ? 67 : 91);
+  if (wrong_identity) {
+    assert(mapped == FS_DIAG_SUPPORT_ERROR);
+    for (;;)
+      pause();
+  }
   assert(mapped == FS_DIAG_SUPPORT_PREPARED);
   assert(fs_diag_support_send(1, FS_DIAG_HELLO, 0, 0, NULL, 0) ==
          FS_DIAG_CHANNEL_COMPLETE);
@@ -170,6 +177,7 @@ static void run_case(const char *launcher, const char *self, const char *mode) {
   int polls = strcmp(mode, "deadline") == 0 ? 650 : unbound_case ? 120 : 100;
   for (int i = 0; i != polls; ++i) {
     status = fs_diag_parent_poll(1);
+    assert(status >= 0);
     if (status & FS_DIAG_SUPPORT_NOT_LIVE)
       break;
     // Expiry must work while the parent/heartbeat remain responsive, so this
@@ -196,6 +204,12 @@ static void run_case(const char *launcher, const char *self, const char *mode) {
 #else
   assert(status & FS_DIAG_SUPPORT_NOT_LIVE);
   assert(status & FS_DIAG_SUPPORT_REAPED);
+  int expected = strcmp(mode, "bootstrap") == 0 ? FS_DIAG_EXIT_BOOTSTRAP
+                 : strcmp(mode, "hold") == 0 || strcmp(mode, "deadline") == 0
+                     ? FS_DIAG_EXIT_RETIREMENT
+                 : strcmp(mode, "wrong-identity") == 0 ? FS_DIAG_EXIT_UNSAFE
+                                                       : FS_DIAG_EXIT_NORMAL;
+  assert(fs_diag_parent_exit_class(1) == expected);
 #endif
 }
 

@@ -164,6 +164,25 @@ if(BUILD_TESTING)
   add_test(NAME diagnostic_support COMMAND diagnostic_support_test
     $<TARGET_FILE:diagnostic_launcher_fixture> $<TARGET_FILE:diagnostic_support_test>)
   set_tests_properties(diagnostic_support PROPERTIES TIMEOUT 20)
+  add_executable(diagnostic_support_races_test ${FS_DIAG_KERNEL_SOURCE}
+    diagnostic_protocol.c diagnostic_endpoint.c diagnostic_inherited.c
+    ../tests/native/diagnostic_support_races.c)
+  set_target_properties(diagnostic_support_races_test PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
+  target_compile_options(diagnostic_support_races_test PRIVATE -Wall -Wextra -Werror -Wpedantic)
+  target_compile_definitions(diagnostic_support_races_test PRIVATE
+    FORESIGHT_DIAGNOSTIC_NATIVE_ID="${FS_DIAG_TEST_NATIVE_ID}")
+  target_include_directories(diagnostic_support_races_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(diagnostic_support_races_test PRIVATE Threads::Threads)
+  if(APPLE)
+    target_compile_definitions(diagnostic_support_races_test PRIVATE
+      FS_DIAG_TEST_CONTEXT=1
+      FS_DIAG_FIXTURE_BASE="${CMAKE_CURRENT_BINARY_DIR}/diagnostic-support-races-namespace"
+      FS_DIAG_FIXTURE_PREFIX="/ofr${FS_DIAG_NAMESPACE_HASH}")
+  endif()
+  add_test(NAME diagnostic_support_races COMMAND diagnostic_support_races_test
+    $<TARGET_FILE:diagnostic_launcher_fixture> $<TARGET_FILE:diagnostic_support_test>)
+  set_tests_properties(diagnostic_support_races PROPERTIES TIMEOUT 15)
   add_executable(native_spawn_contract_test ../tests/native/spawn_contract.cpp)
   target_compile_features(native_spawn_contract_test PRIVATE cxx_std_20)
   target_link_libraries(native_spawn_contract_test PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
