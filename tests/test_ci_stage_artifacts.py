@@ -420,3 +420,32 @@ def test_invalid_output_timestamp_inventory_is_rejected(tmp_path, value):
                 "output_times": {"build/native/file.o": value},
             },
         )
+
+
+@pytest.mark.parametrize("platform", ["linux", "macos"])
+def test_core_stage_retains_companion_and_its_native_context(tmp_path, platform):
+    root = tmp_path / "original"
+    repository(root)
+    expected = {
+        "build/application/foresight-diagnostic-worker": b"compiled companion",
+        "build/application/diagnostic-worker-build.json": b"public byte receipt",
+        "build/native/diagnostic-worker-inputs.json": b"public worker context",
+    }
+    for name, blob in expected.items():
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(blob)
+    (root / "build/application/foresight-diagnostic-worker").chmod(0o755)
+    # Adjacent native outputs still belong to the independently restored stage.
+    (root / "build/native/unrelated-object.o").write_bytes(b"not a core artifact")
+    output = tmp_path / "artifact"
+    manifest = module.pack(root, platform, "core", output)
+    assert set(manifest["files"]) == {*expected, "build/application"}
+    target = tmp_path / "restored"
+    module.unpack(target, platform, "core", output / "payload.tar.gz", manifest)
+    for name, blob in expected.items():
+        assert (target / name).read_bytes() == blob
+    assert (
+        target / "build/application/foresight-diagnostic-worker"
+    ).stat().st_mode & 0o777 == 0o755
+    assert not (target / "build/native/unrelated-object.o").exists()

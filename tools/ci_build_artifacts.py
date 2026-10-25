@@ -76,6 +76,7 @@ def roots(platform, stage):
     if stage == "core":
         return (
             "build/application",
+            "build/native/diagnostic-worker-inputs.json",
             "coverage/core",
             "test-results/build-gates/core.log",
             f"test-results/{platform}/core",
