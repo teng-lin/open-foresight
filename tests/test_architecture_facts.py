@@ -46,10 +46,10 @@ class PacketTest(unittest.TestCase):
 class CurrentFactsTest(PacketTest):
     def test_supplied_registries_yield_expected_facts(self) -> None:
         facts = facts_tool.collect(self.root)
-        self.assertEqual(facts.migration_steps, list(range(1, 23)))
+        self.assertEqual(facts.migration_steps, list(range(1, 24)))
         self.assertEqual(facts.content_revisions_step, 18)
         self.assertEqual(facts.schema_version_symbol, "applicationSchemaVersion")
-        self.assertEqual(facts.application_schema_version, 22)
+        self.assertEqual(facts.application_schema_version, 23)
         self.assertEqual(facts.request_key_lifetime_hours, 24)
         self.assertEqual(facts.workspace_epoch_key, "workspaceEpoch")
         self.assertEqual(len(facts.operations), 87)
@@ -76,22 +76,22 @@ class DriftTest(PacketTest):
         kept = [
             line
             for line in lines
-            if not any(line.startswith(f"| {n} |") for n in range(18, 23))
+            if not any(line.startswith(f"| {n} |") for n in range(18, 24))
         ]
         doc.write_text("".join(kept), encoding="utf-8")
         errors = self.errors()
         self.assertTrue(
-            any("missing [18, 19, 20, 21, 22]" in e for e in errors), errors
+            any("missing [18, 19, 20, 21, 22, 23]" in e for e in errors), errors
         )
 
     def test_new_migration_step_requires_doc_update(self) -> None:
         self.replace(
             facts_tool.SOURCES["migrations"],
             "      default:",
-            "      case 23:\n        db.execute('SELECT 1');\n      default:",
+            "      case 24:\n        db.execute('SELECT 1');\n      default:",
         )
         errors = self.errors()
-        self.assertTrue(any("missing [23]" in e for e in errors), errors)
+        self.assertTrue(any("missing [24]" in e for e in errors), errors)
         self.assertTrue(any("latest migration step" in e for e in errors), errors)
 
     def test_old_operation_count_is_rejected(self) -> None:
@@ -130,7 +130,7 @@ class DriftTest(PacketTest):
         path = self.root / facts_tool.SOURCES["schema"]
         path.write_text("const applicationSchemaVersion = 21;\n", encoding="utf-8")
         self.assertTrue(any("applicationSchemaVersion=21" in e for e in self.errors()))
-        path.write_text("const applicationSchemaVersion = 22;\n", encoding="utf-8")
+        path.write_text("const applicationSchemaVersion = 23;\n", encoding="utf-8")
         self.assertEqual(self.errors(), [])
 
 
