@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'package:foresight_core/src/helper_protocol_version.dart';
 import 'package:foresight_test_support/test_recording.dart';
@@ -14,6 +15,7 @@ import 'package:foresight_core/src/service.dart';
 import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory directory;
   late ProfilePaths profile;
   late ApplicationService service;

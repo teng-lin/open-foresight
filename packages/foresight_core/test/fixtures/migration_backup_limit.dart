@@ -1,3 +1,4 @@
+import '../sql_support_test_bootstrap.dart';
 // A real per-process filesystem size limit makes VACUUM INTO fail midway,
 // without exhausting the host filesystem or touching any unrelated cache.
 import 'dart:ffi';
@@ -10,6 +11,7 @@ import 'package:foresight_core/src/store.dart';
 import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
 
 void main(List<String> arguments) {
+  bootstrapSqlSupportFixture();
   final storeVacuum = arguments.length > 1 && arguments[1] == 'store-vacuum';
   final storeLevel =
       storeVacuum || (arguments.length > 1 && arguments[1] == 'store');

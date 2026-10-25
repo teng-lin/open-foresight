@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -29,6 +30,7 @@ Future<bool> controlAlive(int child, String path) async {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   final library = Platform.environment['FORESIGHT_NATIVE_LIBRARY'];
   for (final mode in ['work_loss', 'ack_loss', 'clean', 'sql_loss']) {
     test(

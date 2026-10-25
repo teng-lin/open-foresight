@@ -1,3 +1,4 @@
+import '../sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -10,6 +11,7 @@ import 'package:foresight_core/src/store.dart';
 // Keep an unsafe native-handle regression in a child process: an old resume
 // path can crash in SQLite rather than reporting a catchable Dart exception.
 Future<void> main(List<String> arguments) async {
+  bootstrapSqlSupportFixture();
   final root = arguments.single;
   final store = Store('$root/app.db');
   final helper = Helper(

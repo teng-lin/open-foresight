@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -62,6 +63,7 @@ class _AfterRecordRename implements File {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory root;
   late ProfilePaths profile;
   setUp(() async {
