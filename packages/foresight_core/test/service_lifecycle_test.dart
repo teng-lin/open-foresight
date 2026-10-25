@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -70,6 +71,7 @@ Future<Object> failureOf(Future<Object?> request) => request
     .timeout(const Duration(seconds: 120));
 
 void main() {
+  bootstrapSqlSupportFixture();
   late HookedServiceBuild build;
   late Map<String, String> saved;
   setUpAll(() async => build = await HookedServiceBuild.compile());

@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/poll.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
@@ -105,6 +106,7 @@ with os.fdopen(os.open(sys.argv[1],os.O_RDWR|os.O_CREAT,0o600),'a') as lease:
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   test(
     'two runtimes and canonical aliases share a profile owner and committed writes',
     () async {

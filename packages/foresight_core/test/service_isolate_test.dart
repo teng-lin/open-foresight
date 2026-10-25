@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'dart:isolate';
@@ -38,6 +39,7 @@ void diagnosticWorker(SendPort parent) {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   test(
     'recoverable worker diagnostics preserve operation and clean exit',
     () async {

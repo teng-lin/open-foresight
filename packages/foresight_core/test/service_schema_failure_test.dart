@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'dart:io';
@@ -14,6 +15,7 @@ import 'package:grpc/grpc.dart';
 import 'package:test/test.dart';
 
 void main() {
+  bootstrapSqlSupportFixture();
   for (final withEpoch in [false, true]) {
     test('streamed future schema is actionable ($withEpoch)', () async {
       final root = createTestTempDirectorySync('stream-schema-');
