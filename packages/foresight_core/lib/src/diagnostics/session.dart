@@ -1536,6 +1536,13 @@ final class _Writer {
           return;
         }
       }
+      // Ownership may change during the last APPEND, or after an earlier
+      // flush emptied the queue. Publish its protection even without new data;
+      // _classify also retains a pending decision's close deadline.
+      if (!await _classify()) {
+        _finishOrHealth();
+        return;
+      }
       _health();
       if (closing) _finish();
     } on DiagnosticWorkerFailure catch (error) {

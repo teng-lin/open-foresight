@@ -18,6 +18,7 @@ const _build =
 final class _Sink implements DiagnosticSink {
   final records = <Map>[];
   final classifications = <DiagnosticRole>[];
+  final protections = <(bool, bool)>[];
   bool closed = false, failFirstAppend = false;
   @override
   int get slot => 4;
@@ -30,6 +31,7 @@ final class _Sink implements DiagnosticSink {
     bool genuineFailure = false,
   }) {
     classifications.add(role);
+    protections.add((error, genuineFailure));
     return true;
   }
 
@@ -137,52 +139,95 @@ final class _Owner implements DiagnosticWorkerOwner {
 }
 
 void main() {
+  for (final duringAppend in [false, true]) {
+    test(
+      'late ownership during ${duringAppend ? 'append' : 'classification'} survives close until its decision',
+      () async {
+        final profile = createTestTempDirectorySync('late-classify-');
+        _Owner? owner;
+        final session = await LoggingSession.startForTesting(
+          configuration: const DiagnosticConfiguration(),
+          profilePath: profile.path,
+          workerFactory: (context) => owner = _Owner(
+            context,
+            holdFirstClassification: !duringAppend,
+            holdFirstAppend: duringAppend,
+          ),
+        );
+        addTearDown(() async {
+          if (owner != null && !owner!.classificationRelease.isCompleted) {
+            owner!.classificationRelease.complete();
+          }
+          if (owner != null && !owner!.release.isCompleted)
+            owner!.release.complete();
+          await session.close();
+        });
+        session.producer.emit(
+          DiagnosticEvent.runtimeFailed,
+          DiagnosticComponent.service,
+        );
+        await eventually(() => owner != null);
+        final entered = duringAppend
+            ? owner!.entered
+            : owner!.classificationEntered;
+        final release = duringAppend
+            ? owner!.release
+            : owner!.classificationRelease;
+        await entered.future.timeout(const Duration(seconds: 2));
+        final ownership = session.expectOwnershipDecision();
+        // A mailbox barrier proves expect_ownership was received during held RPC.
+        await session.inspectBudgetForTesting();
+        final closing = session.close();
+        var closed = false;
+        unawaited(closing.then((_) => closed = true));
+        // close posts through its existing zero-duration encoder-unwind turn.
+        // Its send must precede the classifier ACK on the same writer mailbox.
+        await Future<void>.delayed(Duration.zero);
+        release.complete();
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        ownership.report(OwnershipDecision.acquired);
+        expect(
+          closed,
+          isFalse,
+          reason: 'Close discarded the pending ownership decision',
+        );
+        final result = await closing.timeout(const Duration(seconds: 1));
+        expect(result.flushed, isTrue);
+        expect(owner!.sink.records, hasLength(1));
+        expect(owner!.sink.classifications.last, DiagnosticRole.service);
+        expect(owner!.sink.protections.last, (true, true));
+      },
+    );
+  }
+
   test(
-    'late ownership during classification survives close until its decision',
+    'ownership after emptying queue still protects already appended failure',
     () async {
-      final profile = createTestTempDirectorySync('late-classify-');
+      final profile = createTestTempDirectorySync('late-empty-');
       _Owner? owner;
       final session = await LoggingSession.startForTesting(
         configuration: const DiagnosticConfiguration(),
         profilePath: profile.path,
-        workerFactory: (context) =>
-            owner = _Owner(context, holdFirstClassification: true),
+        workerFactory: (context) => owner = _Owner(context),
       );
-      addTearDown(() async {
-        if (owner != null && !owner!.classificationRelease.isCompleted) {
-          owner!.classificationRelease.complete();
-        }
-        await session.close();
-      });
+      addTearDown(session.close);
       session.producer.emit(
         DiagnosticEvent.runtimeFailed,
         DiagnosticComponent.service,
       );
-      await eventually(() => owner != null);
-      await owner!.classificationEntered.future.timeout(
-        const Duration(seconds: 2),
+      await eventually(() => owner?.sink.records.length == 1);
+      await eventually(
+        () async =>
+            (await session.inspectBudgetForTesting()).queuedRecords == 0,
       );
       final ownership = session.expectOwnershipDecision();
-      // A mailbox barrier proves expect_ownership was received during held RPC.
       await session.inspectBudgetForTesting();
-      final closing = session.close();
-      var closed = false;
-      unawaited(closing.then((_) => closed = true));
-      // close posts through its existing zero-duration encoder-unwind turn.
-      // Its send must precede the classifier ACK on the same writer mailbox.
-      await Future<void>.delayed(Duration.zero);
-      owner!.classificationRelease.complete();
-      await Future<void>.delayed(const Duration(milliseconds: 20));
       ownership.report(OwnershipDecision.acquired);
-      expect(
-        closed,
-        isFalse,
-        reason: 'Close discarded the pending ownership decision',
+      await eventually(
+        () => owner!.sink.classifications.last == DiagnosticRole.service,
       );
-      final result = await closing.timeout(const Duration(seconds: 1));
-      expect(result.flushed, isTrue);
+      expect(owner!.sink.protections.last, (true, true));
       expect(owner!.sink.records, hasLength(1));
-      expect(owner!.sink.classifications.last, DiagnosticRole.service);
     },
   );
 

@@ -219,3 +219,9 @@ decision, and deferred close retains its existing 100 ms ownership deadline.
 It cannot flush/discard the candidate failure or cancel that deadline early.
 The acquired decision promotes/protects service records before their append;
 the regression retains the premature-close failure and the corrected result.
+
+The same ownership boundary is rechecked after the final APPEND. An empty queue
+still publishes a changed service/failure classification, including when an
+ownership decision arrives after the previous flush completed. The closing and
+non-closing regressions retain both reproduced failures and assert genuine
+failure protection in addition to the service role.
