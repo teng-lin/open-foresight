@@ -7,7 +7,15 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 import 'native.dart';
+import 'native_lifetime.dart';
 import 'runtime_execution_policy.dart';
+
+class _RecordingNativeOwner {
+  _RecordingNativeOwner(this.handle);
+  final int handle;
+  Future<void>? retired;
+  Future<int>? finished;
+}
 
 class _AudioSegment {
   final int channel, startSamples, sampleRate;
@@ -27,61 +35,48 @@ class _AudioSegment {
 /// Continuous capture with bounded real Whisper jobs. Rolling hypotheses are
 /// ephemeral; completed speech segments are committed while capture continues.
 class Recording implements RecordingStatus {
-  // Resolve each optional native symbol lazily once per loaded library.
   late final _nativeFsCaptureSetEchoCancellation = lib
-      .lookupFunction<
-        Int32 Function(Pointer<Void>, Int32),
-        int Function(Pointer<Void>, int)
-      >('fs_capture_set_echo_cancellation');
+      .lookupFunction<Int32 Function(Uint64, Int32), int Function(int, int)>(
+        'fs_owned_capture_set_echo_cancellation',
+      );
   late final _nativeFsEventPoll = lib
       .lookupFunction<
-        Pointer<Utf8> Function(Pointer<Void>, Int32),
-        Pointer<Utf8> Function(Pointer<Void>, int)
-      >('fs_event_poll');
+        Pointer<Utf8> Function(Uint64, Int32),
+        Pointer<Utf8> Function(int, int)
+      >('fs_owned_event_poll');
   late final _nativeFsStringFree = lib
       .lookupFunction<
         Void Function(Pointer<Utf8>),
         void Function(Pointer<Utf8>)
       >('fs_string_free');
   late final _nativeFsSpeechCreate = lib
-      .lookupFunction<CreateNative, CreateDart>('fs_speech_create');
-  late final _nativeFsSpeechDestroy = lib
-      .lookupFunction<
-        Void Function(Pointer<Void>),
-        void Function(Pointer<Void>)
-      >('fs_speech_destroy');
-  late final _nativeFsCaptureStartWithOptions = lib
-      .lookupFunction<
-        Pointer<Void> Function(Pointer<Utf8>, Int32, Int32, Int32),
-        Pointer<Void> Function(Pointer<Utf8>, int, int, int)
-      >('fs_capture_start_with_options');
+      .lookupFunction<CreateNative, CreateDart>('fs_owned_speech_create');
   late final _nativeFsCaptureStart = lib
       .lookupFunction<
-        Pointer<Void> Function(Pointer<Utf8>, Int32, Int32),
-        Pointer<Void> Function(Pointer<Utf8>, int, int)
-      >('fs_capture_start');
-  late final _nativeFsCaptureStop = lib
-      .lookupFunction<
-        Void Function(Pointer<Void>),
-        void Function(Pointer<Void>)
-      >('fs_capture_stop');
-  late final _nativeFsCaptureFinish = lib
-      .lookupFunction<
-        Void Function(Pointer<Void>),
-        void Function(Pointer<Void>)
-      >('fs_capture_finish');
+        Uint64 Function(Pointer<Utf8>, Int32, Int32, Int32),
+        int Function(Pointer<Utf8>, int, int, int)
+      >('fs_owned_capture_start');
   late final _nativeFsSpeechPush = lib
       .lookupFunction<
-        Int32 Function(Pointer<Void>, Pointer<Int16>, Size, Int32),
-        int Function(Pointer<Void>, Pointer<Int16>, int, int)
-      >('fs_speech_push');
+        Int32 Function(Uint64, Pointer<Int16>, Size, Int32),
+        int Function(int, Pointer<Int16>, int, int)
+      >('fs_owned_speech_push');
   late final _nativeFsSpeechFinish = lib
       .lookupFunction<
-        Int32 Function(Pointer<Void>, Pointer<Utf8>),
-        int Function(Pointer<Void>, Pointer<Utf8>)
-      >('fs_speech_finish');
+        Int32 Function(Uint64, Pointer<Utf8>),
+        int Function(int, Pointer<Utf8>)
+      >('fs_owned_speech_finish');
 
-  final DynamicLibrary lib;
+  final NativeLibrary _bindings;
+  DynamicLibrary get lib => _bindings.library;
+  NativeLifetime get _lifetime => _bindings.lifetime;
+  final _captureOwners = <int, _RecordingNativeOwner>{};
+  final _speechOwners = <int, _RecordingNativeOwner>{};
+  final _retirements = <Future<void>>{};
+  Future<void>? _closed;
+  bool _disposed = false, _starting = false;
+  bool get starting => _starting;
+  Future<void> get closed => _closed ?? Future<void>.value();
   final Duration speechTimeout, speechQueueTimeout, stopTimeout;
   final void Function(String) state;
   final void Function(String, int, int, String) transcript;
@@ -91,8 +86,8 @@ class Recording implements RecordingStatus {
   @override
   final currentVolumes = <double>[];
   int _lastLevels = 0;
-  final captures = <Pointer<Void>>[], speeches = <Pointer<Void>>[];
-  final _idleSpeeches = <int, Pointer<Void>>{};
+  final captures = <int>[], speeches = <int>[];
+  final _idleSpeeches = <int, int>{};
   @override
   final sampleCounts = <int>[];
   @override
@@ -119,7 +114,7 @@ class Recording implements RecordingStatus {
 
   void setEchoCancellation(bool enabled) {
     var pending = false;
-    if (!lib.providesSymbol('fs_capture_set_echo_cancellation')) {
+    if (!lib.providesSymbol('fs_owned_capture_set_echo_cancellation')) {
       if (enabled) {
         throw StateError(
           'Echo cancellation requires an updated native audio runtime',
@@ -147,6 +142,8 @@ class Recording implements RecordingStatus {
   @override
   DateTime lastAudioActivity = DateTime.now();
   int _epoch = 0, _transcriptCount = 0;
+  Object? _retirementFailure;
+  StackTrace? _retirementStack;
   Object? _callbackFailure;
   StackTrace? _callbackStack;
   Recording(
@@ -159,9 +156,9 @@ class Recording implements RecordingStatus {
     this.speechTimeout = const Duration(seconds: 60),
     this.speechQueueTimeout = const Duration(seconds: 60),
     this.stopTimeout = const Duration(seconds: 90),
-  }) : lib = DynamicLibrary.open(path);
+  }) : _bindings = NativeLibrary(DynamicLibrary.open(path));
 
-  Map<String, dynamic>? poll(Pointer<Void> handle) {
+  Map<String, dynamic>? poll(int handle) {
     final result = _nativeFsEventPoll(handle, 0);
     if (result == nullptr) return null;
     try {
@@ -171,13 +168,16 @@ class Recording implements RecordingStatus {
     }
   }
 
-  Pointer<Void> _speech() {
+  int _speech() {
+    _lifetime.ensureAdmission();
+    _requireEpoch(_epoch);
     final runtime = _runtime.toNativeUtf8(), model = _model.toNativeUtf8();
     try {
       final handle = _nativeFsSpeechCreate(runtime, model);
-      if (handle == nullptr) {
+      if (handle == 0) {
         throw StateError('Speech runtime/model unavailable');
       }
+      _speechOwners[handle] = _RecordingNativeOwner(handle);
       speeches.add(handle);
       return handle;
     } finally {
@@ -186,28 +186,62 @@ class Recording implements RecordingStatus {
     }
   }
 
-  void _releaseSpeech(Pointer<Void> handle) {
-    final active = speeches.remove(handle);
-    final idle = _idleSpeeches.values.contains(handle);
-    _idleSpeeches.removeWhere((_, value) => value == handle);
-    if (!active && !idle) return;
-    _nativeFsSpeechDestroy(handle);
+  Future<void> _retire(_RecordingNativeOwner owner, String operation) {
+    final existing = owner.retired;
+    if (existing != null) return existing;
+    final completion = owner.retired = _lifetime.retire(
+      operation,
+      owner.handle,
+    );
+    _retirements.add(completion);
+    unawaited(
+      completion.then<void>(
+        (_) {
+          _retirements.remove(completion);
+        },
+        onError: (Object error, StackTrace stack) {
+          _retirements.remove(completion);
+          _retirementFailure ??= error;
+          _retirementStack ??= stack;
+          _rememberCallbackFailure(error, stack);
+        },
+      ),
+    );
+    return completion;
   }
 
-  void start(
+  Future<void> _releaseSpeech(_RecordingNativeOwner owner) {
+    final handle = owner.handle;
+    if (identical(_speechOwners[handle], owner)) {
+      _speechOwners.remove(handle);
+      speeches.remove(handle);
+      _idleSpeeches.removeWhere((_, value) => value == handle);
+    }
+    return _retire(owner, 'fs_speech_retire');
+  }
+
+  void _requireEpoch(int epoch) {
+    if (epoch != _epoch || _disposed) {
+      throw RpcError(RpcErrorCode.cancelled, 'Recording cancelled');
+    }
+  }
+
+  Future<void> start(
     String runtime,
     String model, {
     bool playback = true,
     String microphoneTarget = 'auto',
     String playbackTarget = 'auto',
     bool echoCancellation = false,
-  }) {
+  }) async {
     runtime = requireInstalledRuntime(runtime);
     if (captures.isNotEmpty ||
         speeches.isNotEmpty ||
         paused ||
         finishing ||
-        _workers.isNotEmpty) {
+        _workers.isNotEmpty ||
+        _starting ||
+        _retirements.isNotEmpty) {
       throw RpcError(RpcErrorCode.busy, 'A recording is already active');
     }
     if (!File(model).existsSync()) {
@@ -217,11 +251,24 @@ class Recording implements RecordingStatus {
         File(runtime).statSync().mode & 0x49 == 0) {
       throw StateError('Speech runner is missing or not executable: $runtime');
     }
+    _starting = true;
+    final epoch = ++_epoch;
+    try {
+      await closed;
+    } catch (_) {
+      _starting = false;
+      rethrow;
+    }
+    if (epoch != _epoch) {
+      _starting = false;
+      throw RpcError(RpcErrorCode.cancelled, 'Recording start cancelled');
+    }
+    _disposed = false;
+    _closed = null;
     _runtime = runtime;
     _model = model;
     _echoCancellation = echoCancellation;
     _echoState.clear();
-    _epoch++;
     _transcriptCount = 0;
     lastError = '';
     _callbackFailure = null;
@@ -242,8 +289,11 @@ class Recording implements RecordingStatus {
       ..clear()
       ..addAll([microphoneTarget, if (playback) playbackTarget]);
     try {
+      // Negotiate the complete lifetime suite before publishing any handle.
+      _lifetime;
       final probe = _speech();
-      _releaseSpeech(probe);
+      await _releaseSpeech(_speechOwners[probe]!);
+      _requireEpoch(epoch);
       for (var channel = 0; channel < (playback ? 2 : 1); channel++) {
         final capture = _startCapture(channel);
         captures.add(capture);
@@ -260,35 +310,47 @@ class Recording implements RecordingStatus {
         _queues.add([]);
       }
       state('Listening · live transcription');
+      _requireEpoch(epoch);
+      if (finishing) {
+        throw RpcError(RpcErrorCode.cancelled, 'Recording start cancelled');
+      }
       timer = Timer.periodic(const Duration(milliseconds: 20), (_) => drain());
     } catch (_) {
       try {
         dispose();
+        await closed;
       } catch (_) {
         // Preserve startup's failure after attempting every owned resource.
       }
       rethrow;
+    } finally {
+      _starting = false;
     }
   }
 
-  Pointer<Void> _startCapture(int channel) {
+  int _startCapture(int channel) {
+    _lifetime.ensureAdmission();
     final target = _targets[channel].toNativeUtf8();
     try {
       if (channel == 0 &&
           _echoCancellation &&
-          !lib.providesSymbol('fs_capture_start_with_options')) {
+          !lib.providesSymbol('fs_owned_capture_start')) {
         throw StateError(
           'Echo cancellation requires an updated native audio runtime',
         );
       }
-      final capture = channel == 0 && _echoCancellation
-          ? _nativeFsCaptureStartWithOptions(target, channel, 48000, 1)
-          : _nativeFsCaptureStart(target, channel, 48000);
-      if (capture == nullptr) {
+      final capture = _nativeFsCaptureStart(
+        target,
+        channel,
+        48000,
+        channel == 0 && _echoCancellation ? 1 : 0,
+      );
+      if (capture == 0) {
         throw StateError(
           'Audio capture unavailable; check device and microphone/system-audio permissions.',
         );
       }
+      _captureOwners[capture] = _RecordingNativeOwner(capture);
       return capture;
     } finally {
       calloc.free(target);
@@ -297,7 +359,7 @@ class Recording implements RecordingStatus {
 
   /// Stop acquisition, retain and finalize pre-pause PCM, and release devices.
   /// Speech workers may finish their existing segments while capture is paused.
-  void pause() {
+  Future<void> pause() async {
     if (finishing) {
       throw RpcError(RpcErrorCode.busy, 'Transcription is finalizing');
     }
@@ -305,8 +367,13 @@ class Recording implements RecordingStatus {
     if (captures.isEmpty) {
       throw RpcError(RpcErrorCode.notFound, 'No active recording');
     }
+    final epoch = _epoch;
     timer?.cancel();
-    _finishCapture();
+    await _finishCapture();
+    _requireEpoch(epoch);
+    if (finishing) {
+      throw RpcError(RpcErrorCode.cancelled, 'Recording is stopping');
+    }
     for (var channel = 0; channel < _buffers.length; channel++) {
       _flush(channel);
       currentVolumes[channel] = 0;
@@ -315,14 +382,17 @@ class Recording implements RecordingStatus {
     }
     paused = true;
     state('Transcription paused');
+    _requireEpoch(epoch);
     levels?.call();
   }
 
-  void resume() {
+  Future<void> resume() async {
     if (finishing) {
       throw RpcError(RpcErrorCode.busy, 'Transcription is finalizing');
     }
     if (!paused) throw StateError('Recording is not paused');
+    final epoch = _epoch;
+    _requireEpoch(epoch);
     _echoState
       ..clear()
       ..['active'] = false
@@ -333,7 +403,7 @@ class Recording implements RecordingStatus {
       }
     } catch (_) {
       try {
-        _stopCaptures();
+        await _stopCaptures();
       } catch (_) {
         // Cleanup cannot replace the failed route's original error.
       }
@@ -347,23 +417,42 @@ class Recording implements RecordingStatus {
     paused = false;
     lastAudioActivity = DateTime.now();
     state('Listening · live transcription');
+    _requireEpoch(epoch);
+    if (finishing) {
+      throw RpcError(RpcErrorCode.cancelled, 'Recording resume cancelled');
+    }
     timer = Timer.periodic(const Duration(milliseconds: 20), (_) => drain());
   }
 
-  void _finishCapture() {
+  Future<void> _finishCapture() async {
+    final epoch = _epoch;
+    final owned = _captureOwners.values.toList();
+    final finishedCaptures = owned.map((owner) => owner.handle).toList();
+    captures.clear();
     Object? failure;
     StackTrace? stack;
     try {
-      for (final capture in captures) {
-        _nativeFsCaptureFinish(capture);
-      }
-      drain(flushAll: true);
+      await Future.wait(
+        owned.map(
+          (owner) =>
+              (owner.finished ??= _lifetime.request(
+                'fs_capture_finish_async',
+                owner.handle,
+              )).then<void>((status) {
+                if (status != 1) {
+                  throw StateError('Native capture finish failed');
+                }
+              }),
+        ),
+      );
+      _requireEpoch(epoch);
+      _drain(finishedCaptures, flushAll: true);
     } catch (error, trace) {
       failure = error;
       stack = trace;
     }
     try {
-      _stopCaptures();
+      await Future.wait(owned.map(_releaseCapture));
     } catch (error, trace) {
       failure ??= error;
       stack ??= trace;
@@ -371,21 +460,17 @@ class Recording implements RecordingStatus {
     if (failure != null) Error.throwWithStackTrace(failure, stack!);
   }
 
-  void _stopCaptures() {
-    // Detach before cleanup so a failing observer cannot release a handle twice.
-    final owned = captures.toList();
-    captures.clear();
-    Object? failure;
-    StackTrace? stack;
-    for (final capture in owned) {
-      try {
-        _nativeFsCaptureStop(capture);
-      } catch (error, trace) {
-        failure ??= error;
-        stack ??= trace;
-      }
+  Future<void> _releaseCapture(_RecordingNativeOwner owner) {
+    if (identical(_captureOwners[owner.handle], owner)) {
+      _captureOwners.remove(owner.handle);
+      captures.remove(owner.handle);
     }
-    if (failure != null) Error.throwWithStackTrace(failure, stack!);
+    return _retire(owner, 'fs_capture_retire');
+  }
+
+  Future<void> _stopCaptures() {
+    final owned = _captureOwners.values.toList();
+    return Future.wait(owned.map(_releaseCapture)).then<void>((_) {});
   }
 
   void _rememberCallbackFailure(Object error, StackTrace stack) {
@@ -394,23 +479,32 @@ class Recording implements RecordingStatus {
     if (lastError.isEmpty) lastError = 'Recording callback failed';
     timer?.cancel();
     try {
-      _stopCaptures();
+      unawaited(
+        _stopCaptures().then<void>(
+          (_) {},
+          onError: (Object _, StackTrace _) {},
+        ),
+      );
     } catch (_) {
       // Keep the original callback failure after attempting every capture.
     }
   }
 
-  void drain({bool flushAll = false}) {
-    if (polling) return;
+  void drain({bool flushAll = false}) => _drain(captures, flushAll: flushAll);
+
+  void _drain(List<int> captureHandles, {bool flushAll = false}) {
+    if (polling || _disposed) return;
     polling = true;
     try {
-      for (var channel = 0; channel < captures.length; channel++) {
+      for (var channel = 0; channel < captureHandles.length; channel++) {
         for (
           var n = 0;
-          (flushAll || n < 50) && channel < captures.length;
+          (flushAll || n < 50) && channel < captureHandles.length;
           n++
         ) {
-          final event = poll(captures[channel]);
+          final handle = captureHandles[channel];
+          if (!_captureOwners.containsKey(handle)) break;
+          final event = poll(handle);
           if (event == null) break;
           if (event['type'] == 'echo_cancellation' && channel == 0) {
             _echoState
@@ -555,6 +649,7 @@ class Recording implements RecordingStatus {
   }
 
   void _enqueue(_AudioSegment segment) {
+    if (_disposed) return;
     final queue = _queues[segment.channel];
     if (queue.length >= 4) {
       lastError =
@@ -562,32 +657,38 @@ class Recording implements RecordingStatus {
       state(lastError);
       // Preserve the new segment in memory; stop acquisition instead of losing speech.
       timer?.cancel();
-      for (final capture in captures) {
-        _nativeFsCaptureStop(capture);
-      }
-      captures.clear();
+      _stopCaptures().ignore();
     }
     queue.add(segment);
     if (_workers.containsKey(segment.channel)) return;
     final epoch = _epoch;
     final future = _processChannel(segment.channel, epoch);
     _workers[segment.channel] = future;
+    void settled() {
+      // Stop/closed retain the original producer future. Observe its failure
+      // independently so a live owner never leaks an unhandled cleanup error.
+      if (epoch == _epoch) _workers.remove(segment.channel)?.ignore();
+    }
+
     unawaited(
-      future.whenComplete(() {
-        // Removing the map entry returns the task already observed by this worker.
-        // ignore: discarded_futures
-        if (epoch == _epoch) _workers.remove(segment.channel);
-      }),
+      future.then<void>(
+        (_) => settled(),
+        onError: (Object error, StackTrace stack) {
+          _rememberCallbackFailure(error, stack);
+          settled();
+        },
+      ),
     );
   }
 
   Future<void> _processChannel(int channel, int epoch) async {
     // Deferring prevents synchronous failure from racing worker registration.
     await Future<void>.delayed(Duration.zero);
-    while (epoch == _epoch && _queues[channel].isNotEmpty) {
+    while (epoch == _epoch && !_disposed && _queues[channel].isNotEmpty) {
       final segment = _queues[channel].removeAt(0);
-      Pointer<Void>? handle;
+      int? handle;
       var reusable = false;
+      _RecordingNativeOwner? speechOwner;
       try {
         handle = _idleSpeeches.remove(channel);
         if (handle == null) {
@@ -595,12 +696,14 @@ class Recording implements RecordingStatus {
         } else {
           speeches.add(handle);
         }
+        speechOwner = _speechOwners[handle]!;
         final samples = calloc<Int16>(segment.pcm.length ~/ 2);
         try {
           final bytes = ByteData.sublistView(segment.pcm);
           for (var i = 0; i < segment.pcm.length ~/ 2; i++) {
             samples[i] = bytes.getInt16(i * 2, Endian.little);
           }
+          _lifetime.ensureAdmission();
           final rc = _nativeFsSpeechPush(
             handle,
             samples,
@@ -611,9 +714,11 @@ class Recording implements RecordingStatus {
         } finally {
           calloc.free(samples);
         }
+        speechOwner.finished = null;
         final request = 'live-$channel-${DateTime.now().microsecondsSinceEpoch}'
             .toNativeUtf8();
         try {
+          _lifetime.ensureAdmission();
           if (_nativeFsSpeechFinish(handle, request) != 0) {
             throw StateError('Speech request rejected');
           }
@@ -672,7 +777,9 @@ class Recording implements RecordingStatus {
               } else {
                 _transcriptCount++;
                 transcript(text, start, end, source);
-                provisional?.call('', start, end, source);
+                if (epoch == _epoch && !_disposed) {
+                  provisional?.call('', start, end, source);
+                }
               }
             }
           }
@@ -682,6 +789,14 @@ class Recording implements RecordingStatus {
                 'ASR ${event['status']}: ${failure ?? 'runner failed'}',
               );
             }
+            // Receipt of done does not prove the worker thread has exited.
+            // Join natively before returning this same handle to the idle pool.
+            final joined = await (speechOwner.finished ??= _lifetime.request(
+              'fs_speech_join_async',
+              handle,
+            ));
+            if (joined != 1) throw StateError('Native speech join failed');
+            _requireEpoch(epoch);
             reusable = true;
             break;
           }
@@ -706,12 +821,12 @@ class Recording implements RecordingStatus {
           }
         }
       } finally {
-        if (handle != null) {
+        if (speechOwner != null) {
           if (reusable && epoch == _epoch) {
-            speeches.remove(handle);
-            _idleSpeeches[channel] = handle;
+            speeches.remove(speechOwner.handle);
+            _idleSpeeches[channel] = speechOwner.handle;
           } else {
-            _releaseSpeech(handle);
+            await _releaseSpeech(speechOwner);
           }
         }
       }
@@ -734,7 +849,8 @@ class Recording implements RecordingStatus {
     try {
       // All acquisition, drain and observer calls belong inside the cleanup
       // boundary, including failures before the first await.
-      _finishCapture();
+      await _finishCapture();
+      _requireEpoch(epoch);
       for (var channel = 0; channel < _buffers.length; channel++) {
         _flush(channel);
       }
@@ -786,6 +902,7 @@ class Recording implements RecordingStatus {
       final producers = _workers.values.toList();
       try {
         if (epoch == _epoch) dispose();
+        await closed;
       } catch (error, stack) {
         failure ??= error;
         failureStack ??= stack;
@@ -806,24 +923,20 @@ class Recording implements RecordingStatus {
 
   @override
   void dispose() {
+    if (_disposed) return;
+    _disposed = true;
     _epoch++;
     paused = false;
     timer?.cancel();
-    Object? failure;
-    StackTrace? stack;
-    void release(void Function() operation) {
-      try {
-        operation();
-      } catch (error, trace) {
-        failure ??= error;
-        stack ??= trace;
-      }
+    final producers = _workers.values.toList();
+    // All requests happen synchronously before returning; completion is native
+    // owned and remains observable even if this Dart consumer disappears.
+    final pending = <Future<void>>[_stopCaptures()];
+    for (final speech in _speechOwners.values.toList()) {
+      pending.add(_releaseSpeech(speech));
     }
-
-    release(_stopCaptures);
-    for (final speech in {...speeches, ..._idleSpeeches.values}) {
-      release(() => _releaseSpeech(speech));
-    }
+    pending.addAll(_retirements);
+    pending.addAll(producers);
     _workers.clear();
     for (final queue in _queues) {
       queue.clear();
@@ -831,6 +944,15 @@ class Recording implements RecordingStatus {
     for (final buffer in _buffers) {
       buffer.clear();
     }
-    if (failure != null) Error.throwWithStackTrace(failure!, stack!);
+    final completion = Future.wait(pending).then<void>((_) {
+      final failure = _retirementFailure;
+      if (failure != null) {
+        Error.throwWithStackTrace(failure, _retirementStack!);
+      }
+    });
+    unawaited(
+      completion.then<void>((_) {}, onError: (Object _, StackTrace _) {}),
+    );
+    _closed = completion;
   }
 }

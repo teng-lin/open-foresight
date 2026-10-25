@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <map>
 #include <string>
 struct Handle {
   bool speech;
@@ -12,11 +13,25 @@ struct Handle {
   bool processed = false;
 };
 static Handle *channels[2] = {};
+static uint64_t next_owner = 1;
+static std::map<uint64_t, Handle *> owners;
+static std::map<uint64_t, uint64_t> retirements;
+static Handle *resolve(uint64_t owner) {
+  const auto found = owners.find(owner);
+  return found == owners.end() ? nullptr : found->second;
+}
+static uint64_t publish(void *pointer) {
+  if (!pointer)
+    return 0;
+  const auto owner = next_owner++;
+  owners.emplace(owner, static_cast<Handle *>(pointer));
+  return owner;
+}
 static int fail_channel = -1;
 static std::string speech_event;
 static bool hold_speech = false;
 static bool queue_speech = false;
-static int speech_creations = 0;
+static int speech_creations = 0, speech_requests = 0, capture_creations = 0;
 static int speech_admissions_polled = 0;
 static std::string speech_runtime;
 extern "C" {
@@ -25,6 +40,9 @@ const char *fixture_speech_runtime() {
 }
 int fixture_speech_creations() {
   return speech_creations;
+}
+int fixture_speech_requests() {
+  return speech_requests;
 }
 int fixture_speech_admissions_polled() {
   return speech_admissions_polled;
@@ -35,8 +53,10 @@ void fixture_hold_speech(int hold) {
 void fixture_queue_speech(int queued) {
   queue_speech = queued != 0;
 }
-void fixture_admit_speech(void *pointer, int complete) {
-  auto *handle = static_cast<Handle *>(pointer);
+void fixture_admit_speech(uint64_t owner, int complete) {
+  auto *handle = resolve(owner);
+  if (!handle)
+    return;
   handle->events.push_back("{\"type\":\"state\",\"phase\":\"speech_running\"}");
   if (complete) {
     handle->events.push_back("{\"type\":\"transcript\",\"text\":\"marker_" +
@@ -59,6 +79,7 @@ int fixture_emit(int channel, const char *event) {
 void *fs_capture_start(const char *, int channel, int) {
   if (channel == fail_channel)
     return nullptr;
+  ++capture_creations;
   auto *handle = new Handle{false, channel};
   channels[channel] = handle;
   return handle;
@@ -107,6 +128,7 @@ int fs_speech_push(void *pointer, const int16_t *samples, size_t count, int) {
   return 0;
 }
 int fs_speech_finish(void *pointer, const char *) {
+  ++speech_requests;
   auto *handle = static_cast<Handle *>(pointer);
   if (queue_speech) {
     handle->events.push_back(
@@ -135,5 +157,172 @@ char *fs_event_poll(void *pointer, int) {
 }
 void fs_string_free(char *text) {
   free(text);
+}
+}
+
+// Controlled completion capability for Dart owner/ordering tests. These tokens
+// emulate the public contract only; actual worker/poll/reap semantics are
+// tested against native/foresight_native.cpp in native_owned_handles.
+#include <map>
+struct FixtureOperation {
+  Handle *handle;
+  int kind;
+  bool completed = false;
+};
+static uint64_t next_operation = 1;
+static std::map<uint64_t, FixtureOperation> operations;
+static bool unconfirmed_retirement = false;
+static bool hold_retirement = false, hold_finish = false,
+            hold_speech_join = false;
+extern "C" {
+int fs_abi_version() {
+  return 1;
+}
+int fs_lifetime_version() {
+  return 2;
+}
+int fixture_capture_creations() {
+  return capture_creations;
+}
+int fixture_pending_retirements() {
+  int count = 0;
+  for (const auto &[token, operation] : operations)
+    if (!operation.completed && (operation.kind == 1 || operation.kind == 3))
+      ++count;
+  return count;
+}
+void fixture_unconfirmed_retirement(int value) {
+  unconfirmed_retirement = value != 0;
+}
+void fixture_hold_retirement(int value) {
+  hold_retirement = value != 0;
+}
+void fixture_hold_finish(int value) {
+  hold_finish = value != 0;
+}
+void fixture_hold_speech_join(int value) {
+  hold_speech_join = value != 0;
+}
+uint64_t fs_owned_engine_create(const char *, const char *, int, int) {
+  return 0;
+}
+uint64_t fs_owned_conversation_create(uint64_t) {
+  return 0;
+}
+char *fs_owned_engine_state(uint64_t) {
+  return nullptr;
+}
+int fs_owned_generate_options(uint64_t, const char *, const char *,
+                              const char *, int) {
+  return -1;
+}
+int fs_owned_generate_tools(uint64_t, const char *, const char *, const char *,
+                            int) {
+  return -1;
+}
+int fs_owned_generation_tool_reply(uint64_t, const char *, const char *) {
+  return -1;
+}
+int fs_owned_generation_cancel(uint64_t) {
+  return -1;
+}
+uint64_t fs_owned_capture_start(const char *target, int channel, int rate,
+                                int echo) {
+  return publish(fs_capture_start_with_options(target, channel, rate, echo));
+}
+uint64_t fs_owned_speech_create(const char *runtime, const char *model) {
+  return publish(fs_speech_create(runtime, model));
+}
+int fs_owned_capture_set_echo_cancellation(uint64_t owner, int value) {
+  return fs_capture_set_echo_cancellation(resolve(owner), value);
+}
+int fs_owned_speech_push(uint64_t owner, const int16_t *samples, size_t count,
+                         int rate) {
+  return fs_speech_push(resolve(owner), samples, count, rate);
+}
+int fs_owned_speech_finish(uint64_t owner, const char *id) {
+  return fs_speech_finish(resolve(owner), id);
+}
+int fs_owned_speech_cancel(uint64_t) {
+  return 0;
+}
+char *fs_owned_event_poll(uint64_t owner, int timeout) {
+  auto *handle = resolve(owner);
+  return handle ? fs_event_poll(handle, timeout) : nullptr;
+}
+uint64_t fs_engine_probe_async(uint64_t) {
+  return 0;
+}
+uint64_t fs_engine_retire(uint64_t) {
+  return 0;
+}
+uint64_t fs_conversation_retire(uint64_t) {
+  return 0;
+}
+uint64_t fixture_operation(uint64_t owner, int kind) {
+  auto *handle = resolve(owner);
+  if (!handle)
+    return 0;
+  if (kind == 1 || kind == 3) {
+    const auto found = retirements.find(owner);
+    if (found != retirements.end())
+      return found->second;
+  }
+  const auto token = next_operation++;
+  operations.emplace(token, FixtureOperation{handle, kind});
+  if (kind == 1 || kind == 3)
+    retirements.emplace(owner, token);
+  return token;
+}
+uint64_t fs_speech_retire(uint64_t owner) {
+  return fixture_operation(owner, 1);
+}
+uint64_t fs_speech_join_async(uint64_t owner) {
+  return fixture_operation(owner, 4);
+}
+uint64_t fs_capture_finish_async(uint64_t owner) {
+  return fixture_operation(owner, 2);
+}
+uint64_t fs_capture_retire(uint64_t owner) {
+  return fixture_operation(owner, 3);
+}
+int fs_operation_status(uint64_t token) {
+  auto found = operations.find(token);
+  if (found == operations.end())
+    return -1;
+  auto &operation = found->second;
+  if (operation.completed)
+    return 1;
+  if (unconfirmed_retirement && (operation.kind == 1 || operation.kind == 3))
+    return 3;
+  if (operation.kind == 2 ? hold_finish : hold_retirement)
+    return 0;
+  if ((operation.kind == 4 || operation.kind == 1) && hold_speech_join)
+    return 0;
+  if (operation.kind == 1)
+    fs_speech_destroy(operation.handle);
+  if (operation.kind == 3)
+    fs_capture_stop(operation.handle);
+  operation.completed = true;
+  return 1;
+}
+int fs_owner_release(uint64_t owner) {
+  const auto found = retirements.find(owner);
+  if (found == retirements.end())
+    return -1;
+  auto operation = operations.find(found->second);
+  if (operation == operations.end() || !operation->second.completed)
+    return -1;
+  operations.erase(operation);
+  retirements.erase(found);
+  owners.erase(owner);
+  return 0;
+}
+int fs_operation_release(uint64_t token) {
+  const auto found = operations.find(token);
+  if (found == operations.end() || !found->second.completed)
+    return -1;
+  operations.erase(found);
+  return 0;
 }
 }

@@ -1051,7 +1051,6 @@ class ApplicationService {
     });
     await attempt(domain.close);
     await attempt(domain.drain);
-    await attempt(() => domain.generator?.close());
     await attempt(domain.helper.close);
     if (serviceGatesEnabled) await serviceGate('close.helper_closed');
     // Stop accepting first, so every connection is flushed and closed below.

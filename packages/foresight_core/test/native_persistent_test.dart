@@ -165,9 +165,11 @@ for line in sys.stdin:
         );
         expect(starts.readAsLinesSync(), hasLength(3));
         runtime.close();
+        await runtime.closed;
         expect(File('${runner.path}.closed').readAsStringSync(), 'closed');
       } finally {
         runtime.close();
+        await runtime.closed;
         directory.deleteSync(recursive: true);
       }
     },

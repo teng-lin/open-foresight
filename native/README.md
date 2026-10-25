@@ -48,6 +48,15 @@ worker has exited.
 
 Live speech uses `foresight-whisper-worker`, installed beside the diagnostic Whisper CLI. Recording retains native speech handles across segments; microphone and playback handles share one serialized model worker. The final handle releases the worker at recording shutdown. Explicit external installations can set `FORESIGHT_WHISPER_WORKER`; CLI-only installations retain compatibility with the per-request diagnostic path.
 
+## Asynchronous application cleanup
+
+Generation and recording use native-owned completion tokens for probe, worker
+join and retirement. Their synchronous Dart close/dispose methods revoke work;
+await `closed` for actual cleanup before releasing dependent resources. The
+legacy C destroy/probe entrypoints remain synchronous for C++/Python callers.
+See [native retirement ownership](../docs/validation/native-retirement.md) for
+the capability contract, complete consumer dispositions and qualification limits.
+
 ## Verifying native changes
 
 - Build and test through the repository-root CMake project. The standalone

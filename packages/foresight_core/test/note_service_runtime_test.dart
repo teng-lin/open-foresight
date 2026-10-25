@@ -19,6 +19,7 @@ class FixtureRuntime extends NativeRuntime {
   final Object? loadFailure;
   final loadStarted = Completer<void>();
   bool _ready = false;
+  int epoch = 0;
   int loads = 0;
   int closes = 0;
   int conversations = 0;
@@ -41,6 +42,7 @@ class FixtureRuntime extends NativeRuntime {
     String model, {
     String backend = 'llama_cpp',
   }) async {
+    final owner = epoch;
     loads++;
     loadedRuntime = runtime;
     loadedModel = model;
@@ -48,12 +50,16 @@ class FixtureRuntime extends NativeRuntime {
     loadStarted.complete();
     if (loadFailure case final failure?) throw failure;
     if (loadGate case final gate?) await gate.future;
+    if (owner != epoch) {
+      throw RpcError(RpcErrorCode.cancelled, 'Fixture load cancelled');
+    }
     _ready = readyAfterLoad;
   }
 
   @override
   void close() {
     closes++;
+    epoch++;
     _ready = false;
   }
 
@@ -128,7 +134,7 @@ void main() {
     addTearDown(() async {
       await app.close();
       domain.close();
-      domain.generator?.close();
+      await domain.drain();
       await helper.close();
       store.close();
       directory.deleteSync(recursive: true);

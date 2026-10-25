@@ -38,12 +38,13 @@ void main() {
         final domain = Domain(
           store,
           helper,
-          discoverGeneration: (receivedStore, library, {current}) {
-            expect(receivedStore, same(store));
-            stillCurrent = current;
-            entered.complete();
-            return release.future;
-          },
+          discoverGeneration:
+              (receivedStore, library, {current, onCandidate, retire}) {
+                expect(receivedStore, same(store));
+                stillCurrent = current;
+                entered.complete();
+                return release.future;
+              },
         );
         try {
           final pending = domain.resume();
@@ -93,7 +94,7 @@ void main() {
     final domain = Domain(
       store,
       helper,
-      discoverGeneration: (_, _, {current}) {
+      discoverGeneration: (_, _, {current, onCandidate, retire}) {
         expect(current!(), isTrue);
         entered.complete();
         return release.future;

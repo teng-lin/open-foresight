@@ -24,6 +24,10 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Fixed
 
+- Keep model and recording cleanup responsive while native workers finish.
+  Model replacement and service shutdown retain ownership until native cleanup
+  and pending callbacks settle; recording preserves speech model reuse.
+
 - Update meeting transcript search incrementally and recover saved indexing work
   after restart. Preserve manual edits and deletion while indexing waits for a
   model to become ready.

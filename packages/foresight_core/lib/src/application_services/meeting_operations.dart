@@ -324,15 +324,15 @@ final class MeetingOperations {
     TypedOperationHandler<MeetingsPauseRequest>(Operation.meetingsPause, (
       request, {
       current,
-    }) {
-      recording.pauseRecording(request.id);
+    }) async {
+      await domain.awaitCurrent(recording.pauseRecording(request.id), current);
       return runtime.captureState;
     }),
     TypedOperationHandler<MeetingsResumeRequest>(Operation.meetingsResume, (
       request, {
       current,
-    }) {
-      recording.resumeRecording(request.id);
+    }) async {
+      await domain.awaitCurrent(recording.resumeRecording(request.id), current);
       return runtime.captureState;
     }),
   ];

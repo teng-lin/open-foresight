@@ -91,7 +91,7 @@ void main() {
       Process? player;
       try {
         await addDevices();
-        recorder.start(
+        await recorder.start(
           env['FORESIGHT_SPEECH_RUNNER']!,
           env['FORESIGHT_SPEECH_MODEL']!,
           playback: false,
@@ -157,6 +157,7 @@ void main() {
         );
       } finally {
         recorder.dispose();
+        await recorder.closed;
         player?.kill();
         await removeDevices();
       }

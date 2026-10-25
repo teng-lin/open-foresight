@@ -6,7 +6,7 @@ import 'package:grpc/grpc.dart';
 
 import '../dedicated_query_acquisition.dart';
 import '../dedicated_query_runtime.dart';
-import '../domain.dart';
+import 'service_runtime_ports.dart';
 import '../encrypted_query_runtime.dart';
 import '../gemma_download.dart' show ModelDownloadCancelled;
 import '../generated/rag_service.pb.dart';
@@ -37,7 +37,7 @@ final class ModelRegistry {
   }) : _queryRuntime = queryRuntime,
        providedQueryRuntime = queryRuntime != null;
 
-  final Domain domain;
+  final ModelWorkspace domain;
   final void Function() changed, wakeDetection, invalidateEmbeddings;
   final bool Function(String) ownsDetection;
   final bool providedQueryRuntime;
@@ -230,17 +230,22 @@ final class ModelRegistry {
     ModelsGenerationRequest request, {
     bool Function()? current,
   }) async {
-    final candidate = await configureGeneration(
-      store,
-      runtimeConfiguration.nativeLibrary,
-      request.path,
-      request.runtime,
-      backend: request.backend,
-      modelType: request.modelType,
-      current: () => _current(current),
+    final workspace = domain.workspaceGeneration;
+    await domain.generationRuntimes.replace(
+      (attempt) => configureGeneration(
+        store,
+        runtimeConfiguration.nativeLibrary,
+        request.path,
+        request.runtime,
+        backend: request.backend,
+        modelType: request.modelType,
+        current: attempt.current,
+        onCandidate: attempt.own,
+        retire: attempt.retire,
+      ),
+      current: () =>
+          _current(current) && workspace == domain.workspaceGeneration,
     );
-    domain.generator?.close();
-    domain.generator = candidate;
   }
 
   Future<void> configureEmbeddingModel(

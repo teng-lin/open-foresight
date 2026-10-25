@@ -88,6 +88,7 @@ static char values[4096];
 void set_mode(int value) { mode = value; }
 int get_calls(void) { return calls; }
 const char *get_values(void) { return values; }
+int fs_abi_version(void) { return 1; }
 int fs_set_runtime_environment(const char *key, const char *value) {
   calls++;
   if (mode) return -1;

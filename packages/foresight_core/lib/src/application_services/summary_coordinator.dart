@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import '../domain.dart';
+import 'service_runtime_ports.dart';
 import '../native.dart';
 import '../persistence/meeting_queries.dart';
 import '../reference_note_transcript_format.dart';
@@ -45,7 +45,7 @@ final class SummaryCoordinator {
     required this.modelDigest,
     required this.changed,
   });
-  final Domain domain;
+  final SummaryWorkspace domain;
   final GenerationCoordinator generation;
   final MeetingQueries meetings;
   final String Function() modelDigest;

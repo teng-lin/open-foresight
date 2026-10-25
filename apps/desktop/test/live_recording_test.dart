@@ -43,7 +43,7 @@ void main() {
         },
       );
       try {
-        recorder.start(
+        await recorder.start(
           env['FORESIGHT_SPEECH_RUNNER']!,
           env['FORESIGHT_SPEECH_MODEL']!,
           playback: false,
@@ -101,6 +101,7 @@ void main() {
           );
       } finally {
         recorder.dispose();
+        await recorder.closed;
       }
     },
     skip: Platform.environment['FORESIGHT_LIVE_TEST'] != '1',

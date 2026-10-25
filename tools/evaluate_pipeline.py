@@ -39,6 +39,13 @@ def main():
         library = None
         try:
             library = ctypes.CDLL(str(args.native.resolve()))
+            abi = getattr(library, "fs_abi_version", None)
+            if abi is None:
+                raise RuntimeError("Incompatible native ABI")
+            abi.argtypes = []
+            abi.restype = ctypes.c_int
+            if abi() != 1:
+                raise RuntimeError("Incompatible native ABI")
             library.fs_engine_create.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
             library.fs_engine_create.restype = ctypes.c_void_p
             library.fs_conversation_create.argtypes = [ctypes.c_void_p]

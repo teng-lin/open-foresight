@@ -45,6 +45,7 @@ void main() {
           );
         } finally {
           runtime?.close();
+          await runtime?.closed;
         }
       } finally {
         store.close();

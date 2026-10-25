@@ -199,7 +199,7 @@ void main() {
     addTearDown(() async {
       await app.close();
       domain.close();
-      domain.generator?.close();
+      await domain.drain();
       await domain.helper.close();
       domain.store.close();
       await server.shutdown();

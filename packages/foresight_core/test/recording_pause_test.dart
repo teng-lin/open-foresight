@@ -55,11 +55,10 @@ void main() {
       fixture.lookupFunction<Void Function(Int32), void Function(int)>(
         'fixture_queue_speech',
       )(queued ? 1 : 0);
-  void admitSpeech(Pointer<Void> handle, {bool complete = true}) =>
-      fixture.lookupFunction<
-        Void Function(Pointer<Void>, Int32),
-        void Function(Pointer<Void>, int)
-      >('fixture_admit_speech')(handle, complete ? 1 : 0);
+  void admitSpeech(int handle, {bool complete = true}) => fixture
+      .lookupFunction<Void Function(Uint64, Int32), void Function(int, int)>(
+        'fixture_admit_speech',
+      )(handle, complete ? 1 : 0);
   int admissionsPolled() =>
       fixture.lookupFunction<Int32 Function(), int Function()>(
         'fixture_speech_admissions_polled',
@@ -104,8 +103,11 @@ void main() {
       final alias = Link('${directory.path}/speech-alias')
         ..createSync(runner.path);
       final recording = Recording(library, (_) {}, (_, _, _, _) {});
-      addTearDown(recording.dispose);
-      recording.start(alias.path, model, playback: false);
+      addTearDown(() async {
+        recording.dispose();
+        await recording.closed;
+      });
+      await recording.start(alias.path, model, playback: false);
       final selected = fixture
           .lookupFunction<Pointer<Utf8> Function(), Pointer<Utf8> Function()>(
             'fixture_speech_runtime',
@@ -120,16 +122,19 @@ void main() {
     holdSpeech(true);
     addTearDown(() => holdSpeech(false));
     final recording = Recording(library, (_) {}, (_, _, _, _) {});
-    addTearDown(recording.dispose);
-    expect(
-      recording.pause,
+    addTearDown(() async {
+      recording.dispose();
+      await recording.closed;
+    });
+    await expectLater(
+      recording.pause(),
       throwsA(
         isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.notFound),
       ),
     );
-    recording.start('/usr/bin/true', model, playback: false);
-    expect(
-      () => recording.start('/usr/bin/true', model, playback: false),
+    await recording.start('/usr/bin/true', model, playback: false);
+    await expectLater(
+      recording.start('/usr/bin/true', model, playback: false),
       throwsA(isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.busy)),
     );
     emit(0, 222, count: 20000);
@@ -145,17 +150,149 @@ void main() {
       recording.stop(),
       throwsA(isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.busy)),
     );
-    expect(
-      recording.pause,
+    await expectLater(
+      recording.pause(),
       throwsA(isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.busy)),
     );
-    expect(
-      recording.resume,
+    await expectLater(
+      recording.resume(),
       throwsA(isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.busy)),
     );
     recording.dispose();
+    await recording.closed;
     await rejected;
   });
+
+  test(
+    'startup observer disposal cannot create a late capture timer',
+    () async {
+      fail(-1);
+      late Recording recording;
+      recording = Recording(library, (state) {
+        if (state.startsWith('Listening')) recording.dispose();
+      }, (_, _, _, _) {});
+      try {
+        await expectLater(
+          recording.start('/usr/bin/true', model),
+          throwsA(
+            isA<RpcError>().having(
+              (error) => error.code,
+              'code',
+              RpcErrorCode.cancelled,
+            ),
+          ),
+        );
+        await recording.closed;
+        expect(recording.timer, isNull);
+        expect(recording.captures, isEmpty);
+        expect(recording.speeches, isEmpty);
+        expect(emit(0, 999), 0);
+        expect(emit(1, 999), 0);
+      } finally {
+        recording.timer?.cancel();
+        recording.dispose();
+        await recording.closed;
+      }
+    },
+  );
+
+  test(
+    'done cannot reuse a speech handle before its actual worker join',
+    () async {
+      fail(-1);
+      holdSpeech(false);
+      queueSpeech(false);
+      final holdJoin = fixture
+          .lookupFunction<Void Function(Int32), void Function(int)>(
+            'fixture_hold_speech_join',
+          );
+      final requests = fixture.lookupFunction<Int32 Function(), int Function()>(
+        'fixture_speech_requests',
+      );
+      final before = requests();
+      final rows = <String>[];
+      final recording = Recording(
+        library,
+        (_) {},
+        (text, _, _, _) => rows.add(text),
+      );
+      try {
+        await recording.start('/usr/bin/true', model, playback: false);
+        holdJoin(1);
+        expect(emit(0, 111, count: 20000), 1);
+        recording.drain();
+        await until(() => rows.length == 1);
+        expect(recording.speeches, hasLength(1));
+        expect(emit(0, 222, count: 20000), 1);
+        recording.drain();
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+        expect(
+          requests() - before,
+          1,
+          reason: 'A done frame cannot admit the next request',
+        );
+        holdJoin(0);
+        await until(() => rows.length == 2);
+        expect(requests() - before, 2);
+        expect(rows, ['marker_111', 'marker_222']);
+        await recording.stop();
+      } finally {
+        holdJoin(0);
+        recording.dispose();
+        await recording.closed;
+      }
+    },
+  );
+
+  test(
+    'dispose returns promptly but closed joins a held speech worker',
+    () async {
+      fail(-1);
+      holdSpeech(false);
+      queueSpeech(false);
+      final holdJoin = fixture
+          .lookupFunction<Void Function(Int32), void Function(int)>(
+            'fixture_hold_speech_join',
+          );
+      final rows = <String>[];
+      final recording = Recording(
+        library,
+        (_) {},
+        (text, _, _, _) => rows.add(text),
+      );
+      try {
+        await recording.start('/usr/bin/true', model, playback: false);
+        holdJoin(1);
+        expect(emit(0, 333, count: 20000), 1);
+        recording.drain();
+        await until(() => rows.length == 1);
+        final elapsed = Stopwatch()..start();
+        recording.dispose();
+        expect(elapsed.elapsed, lessThan(const Duration(milliseconds: 100)));
+        final completion = recording.closed;
+        recording.dispose();
+        expect(recording.closed, same(completion));
+        expect(recording.captures, isEmpty);
+        expect(recording.speeches, isEmpty);
+        var joined = false;
+        final settled = completion.then((_) => joined = true);
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+        expect(
+          joined,
+          isFalse,
+          reason: 'Retirement still owns the held native worker',
+        );
+        holdJoin(0);
+        await settled;
+        expect(rows, ['marker_333']);
+        expect(emit(0, 999), 0);
+      } finally {
+        holdJoin(0);
+        recording.dispose();
+        await recording.closed;
+      }
+    },
+  );
 
   for (final stopLimit in [Duration.zero, const Duration(milliseconds: 60)]) {
     test(
@@ -173,7 +310,7 @@ void main() {
           (text, _, __, ___) => rows.add(text),
         );
         try {
-          recording.start('/usr/bin/true', model, playback: false);
+          await recording.start('/usr/bin/true', model, playback: false);
           for (var segment = 0; segment < 3; segment++) {
             emit(0, 100 + segment, count: 20000);
             recording.drain();
@@ -192,6 +329,7 @@ void main() {
           await recording.stop();
         } finally {
           recording.dispose();
+          await recording.closed;
         }
       },
     );
@@ -211,7 +349,7 @@ void main() {
           interruption: gaps.add,
         );
         try {
-          recording.start('/usr/bin/true', model, playback: false);
+          await recording.start('/usr/bin/true', model, playback: false);
           emit(0, 111, count: 20000);
           recording.drain();
           final deadline = DateTime.now().add(const Duration(seconds: 2));
@@ -231,6 +369,7 @@ void main() {
         } finally {
           holdSpeech(false);
           recording.dispose();
+          await recording.closed;
         }
       },
     );
@@ -251,7 +390,7 @@ void main() {
         interruption: gaps.add,
       );
       try {
-        recording.start('/usr/bin/true', model, playback: false);
+        await recording.start('/usr/bin/true', model, playback: false);
         emit(0, 333, count: 20000);
         recording.drain();
         final deadline = DateTime.now().add(const Duration(seconds: 2));
@@ -264,6 +403,7 @@ void main() {
       } finally {
         holdSpeech(false);
         recording.dispose();
+        await recording.closed;
       }
     },
   );
@@ -285,8 +425,11 @@ void main() {
         speechQueueTimeout: const Duration(seconds: 2),
         interruption: gaps.add,
       );
-      addTearDown(recording.dispose);
-      recording.start('/usr/bin/true', model);
+      addTearDown(() async {
+        recording.dispose();
+        await recording.closed;
+      });
+      await recording.start('/usr/bin/true', model);
       emit(0, 111, count: 20000);
       emit(1, 222, count: 20000);
       recording.drain();
@@ -328,8 +471,11 @@ void main() {
       speechQueueTimeout: const Duration(milliseconds: 40),
       interruption: gaps.add,
     );
-    addTearDown(recording.dispose);
-    recording.start('/usr/bin/true', model, playback: false);
+    addTearDown(() async {
+      recording.dispose();
+      await recording.closed;
+    });
+    await recording.start('/usr/bin/true', model, playback: false);
     emit(0, 333, count: 20000);
     recording.drain();
     await until(() => gaps.isNotEmpty);
@@ -358,8 +504,11 @@ void main() {
           if (!interrupted.isCompleted) interrupted.complete(true);
         },
       );
-      addTearDown(recording.dispose);
-      recording.start('/usr/bin/true', model, playback: false);
+      addTearDown(() async {
+        recording.dispose();
+        await recording.closed;
+      });
+      await recording.start('/usr/bin/true', model, playback: false);
       emit(0, 444, count: 20000);
       recording.drain();
       await until(() => recording.speeches.isNotEmpty);
@@ -426,7 +575,7 @@ void main() {
           provisional: (text, _, _, _) => provisional.add(text),
         );
         try {
-          recording.start('/usr/bin/true', model, playback: false);
+          await recording.start('/usr/bin/true', model, playback: false);
           emit(0, 123, count: 5000);
           recording.drain();
           final deadline = DateTime.now().add(const Duration(seconds: 2));
@@ -436,8 +585,8 @@ void main() {
           }
           expect(recording.speeches, hasLength(1));
           if (pause) {
-            recording.pause();
-            recording.resume();
+            await recording.pause();
+            await recording.resume();
           } else {
             emitEvent(0, {'type': 'gap', 'reason': 'audio_device_changed'});
             recording.drain();
@@ -449,6 +598,7 @@ void main() {
         } finally {
           holdSpeech(false);
           recording.dispose();
+          await recording.closed;
         }
       },
     );
@@ -468,7 +618,7 @@ void main() {
         provisional: (text, _, _, source) => provisional.add('$source:$text'),
       );
       try {
-        recording.start('/usr/bin/true', model, echoCancellation: true);
+        await recording.start('/usr/bin/true', model, echoCancellation: true);
         emit(0, 123);
         emit(1, 456);
         recording.drain();
@@ -510,6 +660,7 @@ void main() {
         expect(rows, unorderedEquals(['marker_123', 'marker_456']));
       } finally {
         recording.dispose();
+        await recording.closed;
       }
     },
   );
@@ -520,7 +671,7 @@ void main() {
       fail(-1);
       final recording = Recording(library, (_) {}, (_, _, _, _) {});
       try {
-        recording.start('/usr/bin/true', model, echoCancellation: true);
+        await recording.start('/usr/bin/true', model, echoCancellation: true);
         recording.drain();
         expect(recording.echoCancellationState['active'], true);
         recording.setEchoCancellation(false);
@@ -529,9 +680,9 @@ void main() {
         recording.setEchoCancellation(true);
         recording.drain();
         expect(recording.echoCancellationState['active'], true);
-        recording.pause();
+        await recording.pause();
         expect(recording.echoCancellationState['active'], false);
-        recording.resume();
+        await recording.resume();
         expect(recording.echoCancellationState['active'], false);
         expect(recording.echoCancellationState['pending'], true);
         recording.drain();
@@ -540,6 +691,7 @@ void main() {
         expect(recording.echoCancellationState['active'], false);
       } finally {
         recording.dispose();
+        await recording.closed;
       }
     },
   );
@@ -551,7 +703,7 @@ void main() {
       final states = <String>[];
       final recording = Recording(library, states.add, (_, _, _, _) {});
       try {
-        recording.start('/usr/bin/true', model);
+        await recording.start('/usr/bin/true', model);
         recording.setEchoCancellation(true);
         recording.drain();
         expect(recording.echoCancellationState['requested'], true);
@@ -592,6 +744,7 @@ void main() {
         await recording.stop();
       } finally {
         recording.dispose();
+        await recording.closed;
       }
     },
   );
@@ -612,18 +765,18 @@ void main() {
         }),
       );
       try {
-        recording.start('/usr/bin/true', model);
+        await recording.start('/usr/bin/true', model);
         emit(0, 100);
         emit(1, 200);
-        recording
+        await recording
             .pause(); // Deliberately leave PCM queued until Pause drains it.
         expect(recording.paused, true);
         expect(recording.captures, isEmpty);
         expect(recording.currentVolumes, [0, 0]);
         expect(emit(0, 999), 0);
         expect(emit(1, 999), 0);
-        expect(
-          () => recording.start('/usr/bin/true', model),
+        await expectLater(
+          recording.start('/usr/bin/true', model),
           throwsA(
             isA<RpcError>().having(
               (error) => error.code,
@@ -632,8 +785,8 @@ void main() {
             ),
           ),
         );
-        recording.pause(); // Idempotent pause preserves pending work.
-        recording.resume();
+        await recording.pause(); // Idempotent pause preserves pending work.
+        await recording.resume();
         expect(recording.paused, false);
         expect(recording.captures, hasLength(2));
         emit(0, 300);
@@ -674,6 +827,7 @@ void main() {
         expect(recording.paused, false);
       } finally {
         recording.dispose();
+        await recording.closed;
       }
     },
   );
@@ -688,26 +842,27 @@ void main() {
         (value, _, _, _) => text.add(value),
       );
       try {
-        recording.start('/usr/bin/true', model);
+        await recording.start('/usr/bin/true', model);
         emit(0, 123);
-        recording.pause();
+        await recording.pause();
         fail(1);
-        expect(recording.resume, throwsStateError);
+        await expectLater(recording.resume(), throwsStateError);
         expect(recording.paused, true);
         expect(recording.captures, isEmpty);
         expect(emit(0, 999), 0);
         fail(-1);
-        recording.resume();
+        await recording.resume();
         emit(0, 456);
-        recording.pause();
+        await recording.pause();
         await recording.stop();
         expect(text, ['marker_123', 'marker_456']);
         expect(recording.captures, isEmpty);
         expect(recording.speeches, isEmpty);
-        expect(recording.resume, throwsStateError);
+        await expectLater(recording.resume(), throwsStateError);
       } finally {
         fail(-1);
         recording.dispose();
+        await recording.closed;
       }
     },
   );
@@ -734,7 +889,7 @@ void main() {
         (_, _, _, _) {},
       );
       try {
-        recording.start('/usr/bin/true', model, echoCancellation: true);
+        await recording.start('/usr/bin/true', model, echoCancellation: true);
         app.recording = recording;
         app.recordingMeeting = id;
         app.recordingBegan = now;
@@ -896,6 +1051,7 @@ void main() {
         domain.close();
         await domain.helper.close();
         recording.dispose();
+        await recording.closed;
         store.close();
       }
     },

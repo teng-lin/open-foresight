@@ -4,7 +4,6 @@ import '../test_support/reader_admissions.dart';
 import 'store_reader_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
-import 'dart:ffi' show Pointer, Void;
 import 'package:foresight_core/remote.dart' show CaptureLevelEvents;
 import 'desktop_connection_fixture.dart';
 import '../test_support/core_fixture.dart';
@@ -18,9 +17,13 @@ import 'meeting_setup_test.dart' show OfflineHelper;
 
 class _Recording implements Recording {
   @override
-  final captures = <Pointer<Void>>[];
+  final captures = <int>[];
   @override
   bool paused = false;
+  @override
+  bool get starting => false;
+  @override
+  Future<void> get closed => Future<void>.value();
   @override
   bool finishing = false;
   bool failResume = false;
@@ -40,12 +43,12 @@ class _Recording implements Recording {
   @override
   DateTime get lastAudioActivity => DateTime.now();
   @override
-  void pause() {
+  Future<void> pause() async {
     paused = true;
   }
 
   @override
-  void resume() {
+  Future<void> resume() async {
     if (failResume) throw StateError('Fixture device unavailable');
     paused = false;
   }

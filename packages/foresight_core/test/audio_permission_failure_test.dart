@@ -26,6 +26,7 @@ int balance(void) { return outstanding; }
 int microphone_calls(void) { return microphones; }
 int system_calls(void) { return systems; }
 static char *owned(const char *value) { outstanding++; return strdup(value); }
+int fs_abi_version(void) { return 1; }
 char *fs_audio_capabilities(void) {
   if (mode == 1) return NULL;
   if (mode == 2) return owned("{broken");

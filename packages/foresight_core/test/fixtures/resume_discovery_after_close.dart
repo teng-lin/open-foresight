@@ -22,7 +22,7 @@ Future<void> main(List<String> arguments) async {
   final domain = Domain(
     store,
     helper,
-    discoverGeneration: (_, _, {current}) {
+    discoverGeneration: (_, _, {current, onCandidate, retire}) {
       entered.complete();
       return release.future;
     },

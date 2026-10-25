@@ -59,6 +59,13 @@ def main():
     os.environ["FORESIGHT_WHISPER_DEVICE"] = str(args.device)
     os.environ["FORESIGHT_WHISPER_RUNTIME"] = str(args.runner.resolve())
     lib = C.CDLL(str(args.native.resolve()))
+    abi = getattr(lib, "fs_abi_version", None)
+    if abi is None:
+        raise RuntimeError("Incompatible native ABI")
+    abi.argtypes = []
+    abi.restype = C.c_int
+    if abi() != 1:
+        raise RuntimeError("Incompatible native ABI")
     for name, inputs, output in (
         ("fs_speech_create", [C.c_char_p, C.c_char_p], C.c_void_p),
         (

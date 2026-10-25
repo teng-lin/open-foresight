@@ -84,7 +84,7 @@ void main() {
       } finally {
         await app.close();
         domain.close();
-        domain.generator?.close();
+        await domain.drain();
         await helper.close();
         await server.shutdown();
         store.close();

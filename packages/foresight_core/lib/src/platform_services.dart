@@ -1,3 +1,4 @@
+import 'native_lifetime.dart';
 import 'profile_paths.dart';
 import 'installation_lock.dart';
 export 'installation_lock.dart' show InstallationLock;
@@ -516,7 +517,9 @@ void configureNativeEnvironment() {
     _nativeEnvironmentConfigured = true;
     return;
   }
-  final lib = DynamicLibrary.open(runtimeConfiguration.nativeLibrary);
+  final lib = NativeLibrary(
+    DynamicLibrary.open(runtimeConfiguration.nativeLibrary),
+  ).library;
   final configure = lib
       .lookupFunction<
         Int32 Function(Pointer<Utf8>, Pointer<Utf8>),

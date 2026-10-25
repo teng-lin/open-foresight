@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
@@ -201,6 +202,78 @@ void main() {
   });
 
   test(
+    'Stop during a held recording start joins cleanup and prevents late device admission',
+    () async {
+      final holdRetirement = fixture
+          .lookupFunction<Void Function(Int32), void Function(int)>(
+            'fixture_hold_retirement',
+          );
+      final pendingRetirements = fixture
+          .lookupFunction<Int32 Function(), int Function()>(
+            'fixture_pending_retirements',
+          );
+      final captureCreations = fixture
+          .lookupFunction<Int32 Function(), int Function()>(
+            'fixture_capture_creations',
+          );
+      final before = captureCreations();
+      holdRetirement(1);
+      Future<void>? stopped;
+      try {
+        final starting = app.startRecording(meeting);
+        final cancelled = expectLater(
+          starting,
+          throwsA(
+            isA<RpcError>().having(
+              (error) => error.code,
+              'code',
+              RpcErrorCode.cancelled,
+            ),
+          ),
+        );
+        await eventually(() => pendingRetirements() == 1);
+        final owner = app.recording!;
+        expect(owner.starting, isTrue);
+        var complete = false;
+        stopped = app.stopRecording().then((_) => complete = true);
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+        expect(
+          complete,
+          isFalse,
+          reason: 'The native startup owner has not actually retired',
+        );
+        expect(captureCreations(), before);
+        holdRetirement(0);
+        await cancelled;
+        await stopped;
+        expect(owner.captures, isEmpty);
+        expect(owner.speeches, isEmpty);
+        expect(
+          owner.timer,
+          isNull,
+          reason: 'The cancelled start never admitted a capture timer',
+        );
+        expect(app.recording, isNull);
+        expect(app.captureState['active'], isFalse);
+        for (final channel in [0, 1]) {
+          expect(emit(channel, {'type': 'state', 'state': 'late'}), 0);
+        }
+        expect(
+          captureCreations(),
+          before,
+          reason: 'The obsolete start must not open devices after Stop',
+        );
+        await app.startRecording(meeting);
+        expect(captureCreations(), before + 2);
+        await app.stopRecording();
+      } finally {
+        holdRetirement(0);
+        await stopped;
+      }
+    },
+  );
+
+  test(
     'initial state failure stops physical capture and preserves original error',
     () async {
       reject(
@@ -246,7 +319,7 @@ void main() {
       );
       expect(app.stopRecording(), same(first));
       expect(owner.captures, isEmpty);
-      expect(emit(0, {'type': 'state', 'state': 'late'}), 0);
+      await eventually(() => emit(0, {'type': 'state', 'state': 'late'}) == 0);
       expect(
         app.recording,
         same(owner),
@@ -427,15 +500,15 @@ void main() {
       () async {
         await app.startRecording(meeting);
         final owner = app.recording!;
-        if (resume) app.pauseRecording();
+        if (resume) await app.pauseRecording();
         reject(
           'fault_control',
           'UPDATE OF state ON meetings',
           "NEW.state='${resume ? 'recording' : 'paused'}'",
           'control storage fault',
         );
-        expect(
-          () => resume ? app.resumeRecording() : app.pauseRecording(),
+        await expectLater(
+          resume ? app.resumeRecording() : app.pauseRecording(),
           throwsA(storageError('control storage fault')),
         );
         expect(owner.captures, isEmpty);
@@ -586,8 +659,14 @@ void main() {
         (_, _, _, _) => throw original,
         interruption: (_) => throw StateError('secondary interruption failure'),
       );
-      owner.start('/usr/bin/true', store.sourceQueries.model('speech')!.path);
-      addTearDown(owner.dispose);
+      await owner.start(
+        '/usr/bin/true',
+        store.sourceQueries.model('speech')!.path,
+      );
+      addTearDown(() async {
+        owner.dispose();
+        await owner.closed;
+      });
       final bytes = ByteData(40000);
       expect(
         emit(0, {
@@ -620,8 +699,14 @@ void main() {
           (_, _, _, _) {},
           interruption: (_) => throw original,
         );
-        owner.start('/usr/bin/true', store.sourceQueries.model('speech')!.path);
-        addTearDown(owner.dispose);
+        await owner.start(
+          '/usr/bin/true',
+          store.sourceQueries.model('speech')!.path,
+        );
+        addTearDown(() async {
+          owner.dispose();
+          await owner.closed;
+        });
         if (duringDrain) {
           expect(
             emit(0, {

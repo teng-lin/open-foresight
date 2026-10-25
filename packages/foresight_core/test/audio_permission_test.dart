@@ -20,6 +20,7 @@ void main() {
 static int calls = 0, mode = 0;
 int request_count(void) { return calls; }
 void set_mode(int value) { mode = value; }
+int fs_abi_version(void) { return 1; }
 char *fs_audio_capabilities(void) {
   return strdup(mode == 3 ? "{\"system_audio_purpose_present\":false}" :
     "{\"system_audio_purpose_present\":true,\"system_audio\":\"unknown\"}");

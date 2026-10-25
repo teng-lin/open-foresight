@@ -40,6 +40,7 @@ class NativeNoteEnhancementConversation implements NoteEnhancementConversation {
   final NoteEnhancementConversationSettings settings;
   final bool Function()? current;
   bool _started = false, _closed = false;
+  Future<void>? _closing;
 
   @override
   Stream<String> sendMessageStream(String prompt) async* {
@@ -88,14 +89,12 @@ class NativeNoteEnhancementConversation implements NoteEnhancementConversation {
   }
 
   @override
-  Future<void> cancelProcess() async {
-    runtime.cancel(requestId: requestId);
-  }
+  Future<void> cancelProcess() => runtime.cancelAndDrain(requestId: requestId);
 
   @override
-  Future<void> close() async {
-    if (_closed) return;
+  Future<void> close() {
+    if (_closing case final closing?) return closing;
     _closed = true;
-    runtime.cancel(requestId: requestId);
+    return _closing = runtime.cancelAndDrain(requestId: requestId);
   }
 }

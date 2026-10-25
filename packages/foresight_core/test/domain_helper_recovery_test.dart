@@ -237,7 +237,7 @@ void main() {
       await domain.resume();
       expect(domain.generator, isNot(same(acquired)));
       expect(domain.generator!.loaded, isTrue);
-      domain.generator!.close();
+      await domain.resetNoteEnhancementService();
     },
     skip: native == null
         ? 'Requires the native runtime supplied by the core CI gate'

@@ -31,7 +31,9 @@ class EvaluationChannel:
             self.requests.append((method, request, timeout))
             if method == "Ping":
                 return SimpleNamespace(
-                    version="wrong" if self.failure == "ping" else HELPER_PROTOCOL_VERSION
+                    version="wrong"
+                    if self.failure == "ping"
+                    else HELPER_PROTOCOL_VERSION
                 )
             if method == "UpdateModelPaths":
                 return SimpleNamespace(
@@ -174,6 +176,7 @@ def test_model_evaluation_rejects_missing_assets_and_hashes_directory(
         "quality",
         "shutdown",
         "native-load",
+        "abi",
     ],
 )
 def test_pipeline_evaluation_enforces_event_order_quality_and_cleanup(
@@ -190,6 +193,7 @@ def test_pipeline_evaluation_enforces_event_order_quality_and_cleanup(
         **{
             name: Mock()
             for name in (
+                "fs_abi_version",
                 "fs_engine_create",
                 "fs_conversation_create",
                 "fs_generate",
@@ -200,6 +204,7 @@ def test_pipeline_evaluation_enforces_event_order_quality_and_cleanup(
             )
         }
     )
+    library.fs_abi_version.return_value = 2 if failure == "abi" else 1
     library.fs_engine_create.return_value = 0 if failure == "engine" else 10
     library.fs_conversation_create.return_value = 0 if failure == "conversation" else 20
     library.fs_generate.return_value = 1 if failure == "generate" else 0
@@ -264,7 +269,14 @@ def test_pipeline_evaluation_enforces_event_order_quality_and_cleanup(
         assert report["runner_sha256"] == hashlib.sha256(b"runner").hexdigest()
     else:
         assert not output.exists()
-    if failure not in ("configuration", "index", "retrieval", "engine", "native-load"):
+    if failure not in (
+        "configuration",
+        "index",
+        "retrieval",
+        "engine",
+        "native-load",
+        "abi",
+    ):
         library.fs_engine_destroy.assert_called_once_with(10)
     if failure not in (
         "configuration",
@@ -273,10 +285,17 @@ def test_pipeline_evaluation_enforces_event_order_quality_and_cleanup(
         "engine",
         "conversation",
         "native-load",
+        "abi",
     ):
         library.fs_conversation_destroy.assert_called_once_with(20, 1)
     if failure in (None, "terminal", "sequence", "after-done", "quality", "shutdown"):
         assert library.fs_string_free.call_count == 2
+    if failure == "abi":
+        library.fs_abi_version.assert_called_once_with()
+        library.fs_engine_create.assert_not_called()
+        library.fs_conversation_create.assert_not_called()
+        library.fs_engine_destroy.assert_not_called()
+        library.fs_conversation_destroy.assert_not_called()
     channel.close.assert_called_once()
     process.terminate.assert_called_once()
     assert process.kill.called == (failure == "shutdown")

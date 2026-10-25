@@ -1,3 +1,4 @@
+import 'native_lifetime.dart';
 import 'helper_protocol_version.dart';
 import 'platform_services.dart';
 import 'version.dart';
@@ -330,7 +331,9 @@ class Helper {
       return AdoptedIdentity.unknown;
     }
     try {
-      final library = DynamicLibrary.open(runtimeConfiguration.nativeLibrary);
+      final library = NativeLibrary(
+        DynamicLibrary.open(runtimeConfiguration.nativeLibrary),
+      ).library;
       final matches = library
           .lookupFunction<
             Int32 Function(Int64, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>),

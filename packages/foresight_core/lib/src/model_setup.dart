@@ -26,21 +26,29 @@ Future<NativeRuntime> configureGeneration(
   bool Function()? current,
   void Function(NativeRuntime)? onCandidate,
   void Function()? onRegister,
+  Future<void> Function(NativeRuntime)? retire,
+  bool Function()? registrationAllowed,
 }) async {
+  bool valid() =>
+      (current?.call() ?? true) && (registrationAllowed?.call() ?? true);
+  if (!valid()) throw RpcError(RpcErrorCode.cancelled, 'Model setup cancelled');
   if (backend == 'litert_lm') runner = liteRtRunner(runner);
   final candidate = NativeRuntime(library);
   try {
     onCandidate?.call(candidate);
-    if (current != null && !current()) {
+    if (!valid()) {
       throw RpcError(RpcErrorCode.cancelled, 'Model setup cancelled');
     }
     final digest = backend == 'litert_lm'
         ? (await sha256.bind(File(model).openRead()).first).toString()
         : null;
+    if (!valid()) {
+      throw RpcError(RpcErrorCode.cancelled, 'Model setup cancelled');
+    }
     candidate.modelType =
         modelType ?? referenceGenerationModelType(digest ?? '');
     await candidate.load(runner, model, backend: backend);
-    if (current != null && !current()) {
+    if (!valid()) {
       throw RpcError(RpcErrorCode.cancelled, 'Model setup cancelled');
     }
     onRegister?.call();
@@ -51,12 +59,25 @@ Future<NativeRuntime> configureGeneration(
       backend: backend,
       expectedDigest: digest,
       modelType: candidate.modelType,
-      current: current,
+      current: valid,
     );
+    if (current != null && !current()) {
+      throw RpcError(RpcErrorCode.cancelled, 'Model setup cancelled');
+    }
     return candidate;
-  } catch (_) {
-    candidate.close();
-    rethrow;
+  } catch (error, stack) {
+    try {
+      if (retire != null) {
+        await retire(candidate);
+      } else {
+        candidate.close();
+        await candidate.closed;
+      }
+    } catch (_) {
+      // Keep the original setup error primary. The lifetime owner retains its
+      // cleanup failure independently through the same retirement future.
+    }
+    Error.throwWithStackTrace(error, stack);
   }
 }
 
@@ -68,6 +89,8 @@ Future<NativeRuntime?> discoverGenerationRuntime(
   String library, {
   String? runner,
   bool Function()? current,
+  void Function(NativeRuntime)? onCandidate,
+  Future<void> Function(NativeRuntime)? retire,
 }) async {
   if (store.model('generation') != null) return null;
   final catalog = ModelAssetLifecycle(
@@ -89,8 +112,10 @@ Future<NativeRuntime?> discoverGenerationRuntime(
         runtime,
         backend: 'litert_lm',
         modelType: type,
-        current: () =>
-            (current?.call() ?? true) && store.model('generation') == null,
+        onCandidate: onCandidate,
+        retire: retire,
+        current: current,
+        registrationAllowed: () => store.model('generation') == null,
       );
     }
     return null;

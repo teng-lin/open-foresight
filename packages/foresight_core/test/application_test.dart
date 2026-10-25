@@ -75,7 +75,7 @@ void main() {
     addTearDown(() async {
       if (ownsApp) await app.close();
       domain.close();
-      domain.generator?.close();
+      await domain.drain();
       await domain.helper.close();
       domain.store.close();
       directory.deleteSync(recursive: true);

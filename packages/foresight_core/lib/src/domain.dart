@@ -1,3 +1,6 @@
+import 'generation_runtime_slot.dart';
+import 'application_services/service_runtime_ports.dart';
+import 'package:meta/meta.dart';
 import 'cancellation.dart';
 export 'cancellation.dart' show CancellationWatch;
 import 'text_budget.dart' show boundUtf8;
@@ -28,14 +31,34 @@ typedef GenerationRuntimeDiscovery =
       Store store,
       String library, {
       bool Function()? current,
+      void Function(NativeRuntime)? onCandidate,
+      Future<void> Function(NativeRuntime)? retire,
     });
 
-class Domain {
+class Domain implements RecordingWorkspace, SummaryWorkspace, ModelWorkspace {
+  @override
   final Store store;
+  @override
   final Helper helper;
   late final _queries = DomainQueries(store);
-  NativeRuntime? generator;
+  @override
+  late final generationRuntimes = GenerationRuntimeSlot<NativeRuntime>(
+    closeRuntime: (runtime) => runtime.close(),
+    runtimeClosed: (runtime) => runtime.closed,
+    runtimeBusy: (runtime) => runtime.generating,
+    watchRuntime: (runtime, changed) => runtime.onOwnershipChanged = changed,
+    changed: () => onBackgroundSettled?.call(),
+  );
+  @override
+  NativeRuntime? get generator => generationRuntimes.visible;
+  @visibleForTesting
+  set generator(NativeRuntime? runtime) =>
+      generationRuntimes.installForTesting(runtime);
+  bool get generationBusy => generationRuntimes.busy;
+  void stopGeneration() => generationRuntimes.stop();
+  @override
   final Clock clock;
+  @override
   final Timer Function(Duration, void Function()) createTimer;
   final GenerationRuntimeDiscovery _discoverGeneration;
   Domain(
@@ -80,10 +103,13 @@ class Domain {
   }
 
   bool _closed = false;
+  @override
   bool get closed => _closed;
   int _workspaceGeneration = 0;
+  @override
   int get workspaceGeneration => _workspaceGeneration;
 
+  @override
   void checkWorkspace(int generation) {
     _checkOpen();
     if (generation != _workspaceGeneration) {
@@ -209,6 +235,7 @@ class Domain {
 
   void close() {
     _closed = true;
+    stopGeneration();
     indexMeetingTranscript = null;
     checkCancellations();
     if (_ownedWebContent != null) unawaited(_ownedWebContent!.close());
@@ -220,7 +247,7 @@ class Domain {
   Future<void> drain() async {
     if (!_closed) throw StateError('Close Domain before draining its work');
     checkCancellations();
-    await _mutationTail;
+    await Future.wait<void>([_mutationTail, generationRuntimes.drain()]);
   }
 
   void _checkOpen() {
@@ -395,6 +422,7 @@ class Domain {
     }
   }
 
+  @override
   Future<void> index(String id, {bool Function()? current}) async {
     _checkOpen();
     checkCancellations();
@@ -548,46 +576,36 @@ class Domain {
       NativeRuntime(runtimeConfiguration.nativeLibrary);
 
   Future<void> _initializeNoteEnhancementService() async {
-    final model = _queries.generationRegistration();
-    if (model == null) {
-      final candidate = await discoverGenerationRuntime(
-        store,
-        runtimeConfiguration.nativeLibrary,
-        current: () => !_closed,
-      );
-      if (_closed) {
-        candidate?.close();
-        _checkOpen();
+    final workspace = workspaceGeneration;
+    await generationRuntimes.replace((attempt) async {
+      final model = _queries.generationRegistration();
+      if (model == null) {
+        return discoverGenerationRuntime(
+          store,
+          runtimeConfiguration.nativeLibrary,
+          current: attempt.current,
+          onCandidate: attempt.own,
+          retire: attempt.retire,
+        );
       }
-      if (candidate != null) generator = candidate;
-      return;
-    }
-    final candidate = createNoteEnhancementRuntime();
-    candidate.modelType =
-        model.modelType ?? referenceGenerationModelType(model.digest);
-    generator?.close();
-    generator = candidate;
-    try {
+      final candidate = createNoteEnhancementRuntime();
+      attempt.own(candidate);
+      candidate.modelType =
+          model.modelType ?? referenceGenerationModelType(model.digest);
       await candidate.load(
         model.runtime,
         model.path,
         backend: model.backend ?? 'llama_cpp',
       );
-      if (_closed || !identical(generator, candidate)) {
-        candidate.close();
-        _checkOpen();
-      }
-    } catch (_) {
-      if (_closed || !identical(generator, candidate)) candidate.close();
-      rethrow;
-    }
+      attempt.check();
+      return candidate;
+    }, current: () => !_closed && workspace == workspaceGeneration);
   }
 
   Future<void> resetNoteEnhancementService() async {
     _checkOpen();
-    generator?.close();
-    generator = null;
     _noteServiceInitialization = null;
+    await generationRuntimes.reset();
   }
 
   Future<void>? _resuming;
@@ -645,30 +663,37 @@ class Domain {
         if (!result.success) throw StateError(result.errorMessage);
       }
     }
-    if (generator == null && !_queries.hasModel('generation')) {
-      final candidate = await _discoverGeneration(
-        store,
-        runtimeConfiguration.nativeLibrary,
-        current: () => !_closed,
-      );
-      if (_closed) {
-        candidate?.close();
-        _checkOpen();
-      }
-      generator = candidate;
-    }
     if (generator == null) {
-      final gen = _queries.generationRegistration();
-      if (gen != null) {
-        generator = NativeRuntime(runtimeConfiguration.nativeLibrary);
-        generator!.modelType =
+      final workspace = workspaceGeneration;
+      await generationRuntimes.replace((attempt) async {
+        if (!_queries.hasModel('generation')) {
+          final candidate = await _discoverGeneration(
+            store,
+            runtimeConfiguration.nativeLibrary,
+            current: attempt.current,
+            onCandidate: attempt.own,
+            retire: attempt.retire,
+          );
+          if (candidate != null) {
+            attempt.own(candidate);
+            return candidate;
+          }
+          attempt.check();
+        }
+        final gen = _queries.generationRegistration();
+        if (gen == null) return null;
+        final candidate = createNoteEnhancementRuntime();
+        attempt.own(candidate);
+        candidate.modelType =
             gen.modelType ?? referenceGenerationModelType(gen.digest);
-        await generator!.load(
+        await candidate.load(
           gen.runtime,
           gen.path,
           backend: gen.backend ?? 'llama_cpp',
         );
-      }
+        attempt.check();
+        return candidate;
+      }, current: () => !_closed && workspace == workspaceGeneration);
     }
     _checkOpen();
     await reconcile();
@@ -676,6 +701,7 @@ class Domain {
     schedulePendingSources();
   }
 
+  @override
   void schedulePendingSources() {
     unawaited(
       indexPendingSources().catchError((Object error) {

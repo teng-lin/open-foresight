@@ -80,7 +80,7 @@ class Application implements ModelGate, GenerationReservationGate {
   bool get _clearingWorkspace => _workspace.clearing;
   late final GenerationCoordinator _generation = GenerationCoordinator(
     restoring: () => domain.restoring,
-    generating: () => domain.generator?.generating ?? false,
+    generating: () => domain.generationBusy,
     recording: () => recording != null,
     closed: () => _closed,
     yieldAutomatic: () async {
@@ -325,7 +325,7 @@ class Application implements ModelGate, GenerationReservationGate {
       _notes.computing > 0 ||
       domain.mutating > 0 ||
       _models.acquiring ||
-      (domain.generator?.generating ?? false);
+      domain.generationBusy;
 
   void changed() {
     if (!_closed) changes.add(null);
@@ -514,8 +514,10 @@ class Application implements ModelGate, GenerationReservationGate {
   Future<void> startRecording(int id) =>
       _recordingController.startRecording(id);
   Future<void> stopRecording() => _recordingController.stopRecording();
-  void pauseRecording([int? id]) => _recordingController.pauseRecording(id);
-  void resumeRecording([int? id]) => _recordingController.resumeRecording(id);
+  Future<void> pauseRecording([int? id]) =>
+      _recordingController.pauseRecording(id);
+  Future<void> resumeRecording([int? id]) =>
+      _recordingController.resumeRecording(id);
 
   Future<void> recoverMeetingIndexes() => _meetingIndexer.recover();
   @visibleForTesting
@@ -550,6 +552,7 @@ class Application implements ModelGate, GenerationReservationGate {
     attempt(_summary.stop);
     attempt(_workflow.stop);
     attempt(_googleMaintenance.stop);
+    attempt(domain.stopGeneration);
     attempt(_models.stop);
     attempt(_recordingController.stopScheduling);
     // Stop physical capture now. Canceled/paused index producers must already

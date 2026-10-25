@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
-import '../domain.dart';
+import 'service_runtime_ports.dart';
 import '../persistence/capture_queries.dart';
 import '../persistence/meeting_queries.dart';
 import '../platform_services.dart';
@@ -29,7 +29,7 @@ final class RecordingController {
     required this.changed,
     required this.levelsChanged,
   }) : queries = CaptureQueries(domain.store, meetings);
-  final Domain domain;
+  final RecordingWorkspace domain;
   final GenerationCoordinator generation;
   final ProactiveQuestions proactive;
   final NoteEnhancementCoordinator notes;
@@ -40,7 +40,7 @@ final class RecordingController {
   final void Function() changed, levelsChanged;
   Store get store => domain.store;
   bool get modelBusy => generation.modelBusy;
-  bool _closed = false;
+  bool _closed = false, _controlling = false;
   Future<void>? _closing, _stopping;
   Recording? _recording;
   Recording? get recording => _recording;
@@ -200,7 +200,7 @@ final class RecordingController {
     recordingMeeting = id;
     var started = false;
     try {
-      active.start(
+      await active.start(
         speech.runtime,
         speech.path,
         microphoneTarget:
@@ -213,6 +213,9 @@ final class RecordingController {
             Platform.isMacOS &&
             store.preference('echoCancellation', 'false') == 'true',
       );
+      if (_closed || session != _session || !identical(recording, active)) {
+        throw RpcError(RpcErrorCode.cancelled, 'Recording start cancelled');
+      }
       started = true;
       proactive.begin(id);
       notes.scheduleLiveTranscript(id);
@@ -254,12 +257,15 @@ final class RecordingController {
       } else {
         try {
           active.dispose();
+          await active.closed;
         } catch (_) {
           // Retain the original start failure.
         } finally {
-          _releaseRecording();
+          if (identical(recording, active) && session == _session) {
+            _releaseRecording();
+            if (identical(_persistence, persistence)) _persistence = null;
+          }
           persistence.dispose();
-          _persistence = null;
         }
       }
       Error.throwWithStackTrace(error, stack);
@@ -279,68 +285,83 @@ final class RecordingController {
     if (active == null || (id != null && id != recordingMeeting)) {
       throw RpcError(RpcErrorCode.notFound, 'No matching active recording');
     }
-    if (active.finishing || _stopping != null) {
+    if (active.finishing ||
+        active.starting ||
+        _stopping != null ||
+        _controlling) {
       throw RpcError(RpcErrorCode.busy, 'Transcription is finalizing');
     }
     return active;
   }
 
-  void pauseRecording([int? id]) {
+  Future<void> pauseRecording([int? id]) async {
     final active = _activeRecording(id);
-    _controlCapture(() {
-      active.pause();
-      _recordingPausedAt ??= domain.clock.now();
-      provisionalTranscript.clear();
-      proactive.clearInterim(recordingMeeting!);
-      queries.setState(recordingMeeting!, 'paused');
-      changed();
-    });
+    _controlling = true;
+    try {
+      await _controlCapture(active, () async {
+        await active.pause();
+        if (!identical(recording, active) || _stopping != null) {
+          throw RpcError(RpcErrorCode.cancelled, 'Recording pause cancelled');
+        }
+        _recordingPausedAt ??= domain.clock.now();
+        provisionalTranscript.clear();
+        proactive.clearInterim(recordingMeeting!);
+        queries.setState(recordingMeeting!, 'paused');
+        changed();
+      });
+    } finally {
+      _controlling = false;
+    }
   }
 
-  void resumeRecording([int? id]) {
+  Future<void> resumeRecording([int? id]) async {
     final active = _activeRecording(id);
     if (!active.paused) throw StateError('Recording is not paused');
+    _controlling = true;
     try {
-      active.resume();
-    } catch (error, stack) {
-      // A refused route already releases partial acquisition and stays paused.
-      // A failed observer after resuming requires full capture teardown.
-      if (!active.paused || active.captures.isNotEmpty) {
-        unawaited(
-          _beginStop(
-            initialFailure: error,
-            initialStack: stack,
-          ).catchError((Object _) {}),
-        );
+      try {
+        await active.resume();
+      } catch (error, stack) {
+        if (identical(recording, active) &&
+            (!active.paused || active.captures.isNotEmpty)) {
+          try {
+            await _beginStop(initialFailure: error, initialStack: stack);
+          } catch (_) {}
+        }
+        Error.throwWithStackTrace(error, stack);
       }
-      rethrow;
+      await _controlCapture(active, () {
+        if (!identical(recording, active) || _stopping != null) {
+          throw RpcError(RpcErrorCode.cancelled, 'Recording resume cancelled');
+        }
+        if (_recordingPausedAt != null) {
+          _recordingPausedMs += domain.clock
+              .now()
+              .difference(_recordingPausedAt!)
+              .inMilliseconds;
+          _recordingPausedAt = null;
+        }
+        queries.setState(recordingMeeting!, 'recording');
+        changed();
+      });
+    } finally {
+      _controlling = false;
     }
-    _controlCapture(() {
-      if (_recordingPausedAt != null) {
-        _recordingPausedMs += domain.clock
-            .now()
-            .difference(_recordingPausedAt!)
-            .inMilliseconds;
-        _recordingPausedAt = null;
-      }
-      queries.setState(recordingMeeting!, 'recording');
-      changed();
-    });
   }
 
-  void _controlCapture(void Function() operation) {
+  Future<void> _controlCapture(
+    Recording owner,
+    FutureOr<void> Function() operation,
+  ) async {
     try {
-      operation();
+      await operation();
     } catch (error, stack) {
-      // Admission checks precede this boundary. A failed write or observer after
-      // admission must not leave resumed devices live.
-      unawaited(
-        _beginStop(
-          initialFailure: error,
-          initialStack: stack,
-        ).catchError((Object _) {}),
-      );
-      rethrow;
+      if (identical(recording, owner)) {
+        try {
+          await _beginStop(initialFailure: error, initialStack: stack);
+        } catch (_) {}
+      }
+      Error.throwWithStackTrace(error, stack);
     }
   }
 
@@ -438,6 +459,12 @@ final class RecordingController {
       }
     } finally {
       attempt(active.dispose);
+      try {
+        await active.closed;
+      } catch (error, stack) {
+        failure ??= speechFailure ?? error;
+        failureStack ??= speechStack ?? stack;
+      }
       _unsavedSegments = persistence?.pending ?? 0;
       final interrupted =
           failure != null ||

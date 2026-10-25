@@ -1,3 +1,4 @@
+import 'native_lifetime.dart';
 import 'dart:ffi';
 import 'dart:isolate';
 import 'package:ffi/ffi.dart';
@@ -71,7 +72,9 @@ Future<List<AudioDevice>> audioDevices({
 
 /// Querying capabilities never asks for protected resources or starts capture.
 Map<String, dynamic> audioCapabilities() {
-  final lib = DynamicLibrary.open(runtimeConfiguration.nativeLibrary);
+  final lib = NativeLibrary(
+    DynamicLibrary.open(runtimeConfiguration.nativeLibrary),
+  ).library;
   final result = lib
       .lookupFunction<Pointer<Utf8> Function(), Pointer<Utf8> Function()>(
         'fs_audio_capabilities',
@@ -98,7 +101,7 @@ Future<Map<String, dynamic>> requestMicrophonePermission() async {
   }
   final path = runtimeConfiguration.nativeLibrary;
   final granted = await Isolate.run(() {
-    final lib = DynamicLibrary.open(path);
+    final lib = NativeLibrary(DynamicLibrary.open(path)).library;
     return lib.lookupFunction<Int32 Function(), int Function()>(
           'fs_audio_request_microphone',
         )() ==
@@ -120,7 +123,7 @@ Future<Map<String, dynamic>> requestSystemAudioPermission() async {
   }
   final path = runtimeConfiguration.nativeLibrary;
   return await Isolate.run(() {
-    final lib = DynamicLibrary.open(path);
+    final lib = NativeLibrary(DynamicLibrary.open(path)).library;
     final result = lib
         .lookupFunction<
           Pointer<Utf8> Function(Int32),

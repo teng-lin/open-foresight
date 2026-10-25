@@ -33,6 +33,7 @@ void main() {
       await native.load(runner, model, backend: backend);
       expect(native.effectiveState['state'], 'ready');
       native.close();
+      await native.closed;
     },
     skip: Platform.environment['FORESIGHT_INTEGRATION'] != '1',
     timeout: const Timeout(Duration(minutes: 2)),

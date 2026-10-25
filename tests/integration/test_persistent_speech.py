@@ -67,6 +67,13 @@ for line in sys.stdin:
     monkeypatch.setenv("FORESIGHT_WHISPER_BACKEND", "cpu")
     monkeypatch.setenv("FORESIGHT_DATA", str(tmp_path))
     library = ctypes.CDLL(LIBRARY)
+    abi = getattr(library, "fs_abi_version", None)
+    if abi is None:
+        raise RuntimeError("Incompatible native ABI")
+    abi.argtypes = []
+    abi.restype = ctypes.c_int
+    if abi() != 1:
+        raise RuntimeError("Incompatible native ABI")
     library.fs_speech_create.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
     library.fs_speech_create.restype = ctypes.c_void_p
     library.fs_speech_push.argtypes = [
@@ -110,7 +117,8 @@ for line in sys.stdin:
                 event["text"] for event in events if event["type"] == "transcript"
             ] == (["segment λ\ncontinued"] if valid else [])
             assert [event["phase"] for event in events if "phase" in event] == [
-                "speech_queued", "speech_running",
+                "speech_queued",
+                "speech_running",
             ]
             assert [event["sequence"] for event in events] == list(range(len(events)))
         if valid:
@@ -141,7 +149,8 @@ for line in sys.stdin:
                 finally:
                     library.fs_string_free(pointer)
             assert [event.get("phase") for event in active_events] == [
-                "speech_queued", "speech_running",
+                "speech_queued",
+                "speech_running",
             ], "Active sibling must retain ownership without a terminal event"
             assert library.fs_speech_cancel(speech) == 0
             active_terminal = events_until_done(library, speech, timeout=1)
@@ -154,6 +163,13 @@ for line in sys.stdin:
 
 def speech_library():
     library = ctypes.CDLL(LIBRARY)
+    abi = getattr(library, "fs_abi_version", None)
+    if abi is None:
+        raise RuntimeError("Incompatible native ABI")
+    abi.argtypes = []
+    abi.restype = ctypes.c_int
+    if abi() != 1:
+        raise RuntimeError("Incompatible native ABI")
     library.fs_speech_create.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
     library.fs_speech_create.restype = ctypes.c_void_p
     library.fs_speech_push.argtypes = [
@@ -253,7 +269,8 @@ else:
         assert events and events[-1]["type"] == "done", events
         assert events[-1]["status"] == ("cancelled" if cancel else "completed")
         assert [event["phase"] for event in events if "phase" in event] == [
-            "speech_queued", "speech_running",
+            "speech_queued",
+            "speech_running",
         ], "CPU fallback must not grant a second execution deadline"
         transcripts = [e["text"] for e in events if e["type"] == "transcript"]
         assert transcripts == ([] if cancel else ["CPU transcript only"])
