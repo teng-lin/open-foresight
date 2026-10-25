@@ -384,7 +384,10 @@ final class DiagnosticProducer {
       )) {
         return false;
       }
-      final encoded = jsonEncode(value);
+      final encoded = diagnosticAsciiJsonString(
+        value,
+        maximumBytes: DiagnosticRecord.maximumProducerRecordBytes,
+      );
       final length = DiagnosticRecord.utf8Length(encoded);
       if (length > ceiling) {
         _rejected = _sum(_rejected, 1);

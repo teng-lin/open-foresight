@@ -9,6 +9,7 @@ import 'package:meta/meta.dart';
 import '../native_diagnostics.dart';
 import '../native_lifetime.dart';
 
+import 'bounded_json.dart';
 import 'events.dart';
 import 'storage.dart';
 import 'storage_worker.dart';
@@ -1293,11 +1294,21 @@ final class _Writer {
     final value = jsonDecode(record.encoded) as Map<String, dynamic>;
     final producer = record.producer;
     final severity = _severity(value);
-    return Uint8List.fromList(
-      utf8.encode(
-        '${jsonEncode({'schema': sinkFactory == null ? 2 : 1, 'timestamp': clock().toUtc().toIso8601String(), 'sequence': ++sequence, 'level': severity.name, 'version': version, 'revision': revision, 'session': session, 'pid': pid, 'producer': sinkFactory == null ? '${producer.kind.name}:${producer.slot}:${producer.generation}' : '${producer.kind.name}:${producer.slot}', if (sinkFactory == null) 'build_id': _buildId, ...value})}\n',
-      ),
-    );
+    return diagnosticAsciiJsonBytes({
+      'schema': sinkFactory == null ? 2 : 1,
+      'timestamp': clock().toUtc().toIso8601String(),
+      'sequence': ++sequence,
+      'level': severity.name,
+      'version': version,
+      'revision': revision,
+      'session': session,
+      'pid': pid,
+      'producer': sinkFactory == null
+          ? '${producer.kind.name}:${producer.slot}:${producer.generation}'
+          : '${producer.kind.name}:${producer.slot}',
+      if (sinkFactory == null) 'build_id': _buildId,
+      ...value,
+    }, maximumBytes: DiagnosticRecord.maximumRecordBytes);
   }
 
   DiagnosticNativeFunctions? _nativeFunctions;

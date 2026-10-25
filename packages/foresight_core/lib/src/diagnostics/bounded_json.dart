@@ -1,5 +1,116 @@
 import 'dart:typed_data';
 
+/// Encodes an already validated closed diagnostic schema in one fixed buffer.
+/// Catalog strings and headers are printable ASCII without JSON escapes. This
+/// is deliberately narrower than general JSON and fails closed on other input.
+String diagnosticAsciiJsonString(
+  Map<String, Object?> value, {
+  required int maximumBytes,
+}) {
+  final encoder = _DiagnosticJsonEncoder(maximumBytes)..encode(value);
+  return String.fromCharCodes(encoder.bytes, 0, encoder.length);
+}
+
+Uint8List diagnosticAsciiJsonBytes(
+  Map<String, Object?> value, {
+  required int maximumBytes,
+}) {
+  final encoder = _DiagnosticJsonEncoder(maximumBytes)
+    ..encode(value, newline: true);
+  return encoder.bytes.sublist(0, encoder.length);
+}
+
+final class _DiagnosticJsonEncoder {
+  _DiagnosticJsonEncoder(int capacity) : _maximumBytes = _capacity(capacity);
+
+  static int _capacity(int value) {
+    if (value < 1 || value > 4096) {
+      throw const FormatException('Invalid diagnostic JSON capacity');
+    }
+    return value;
+  }
+
+  int _maximumBytes;
+  Uint8List? _buffer;
+  Uint8List get bytes => _buffer!;
+  int length = 0, _keys = 0, _tokens = 0;
+
+  void encode(Map<String, Object?> value, {bool newline = false}) {
+    // Both traversals are synchronous over the logger's validated plain maps.
+    // The first bounds and counts bytes without an output allocation; the
+    // second fills exactly that capacity, including the writer's newline.
+    write(value, 0);
+    if (newline) byte(10);
+    _buffer = Uint8List(length);
+    _maximumBytes = length;
+    length = _keys = _tokens = 0;
+    write(value, 0);
+    if (newline) byte(10);
+  }
+
+  Never _invalid() =>
+      throw const FormatException('Invalid diagnostic JSON value');
+
+  void byte(int value) {
+    if (length == _maximumBytes) _invalid();
+    _buffer?[length] = value;
+    ++length;
+  }
+
+  void _literal(String value) {
+    for (var i = 0; i < value.length; ++i) {
+      byte(value.codeUnitAt(i));
+    }
+  }
+
+  void _string(String value) {
+    if (value.length > 128) _invalid();
+    byte(34);
+    for (var i = 0; i < value.length; ++i) {
+      final unit = value.codeUnitAt(i);
+      if (unit < 32 || unit > 126 || unit == 34 || unit == 92) _invalid();
+      byte(unit);
+    }
+    byte(34);
+  }
+
+  void write(Object? value, int depth) {
+    if (++_tokens > 256) _invalid();
+    if (value == null) {
+      _literal('null');
+    } else if (value is bool) {
+      _literal(value ? 'true' : 'false');
+    } else if (value is int) {
+      _literal(value.toString());
+    } else if (value is String) {
+      _string(value);
+    } else if (value is List) {
+      if (depth == 4) _invalid();
+      byte(91);
+      for (var i = 0; i < value.length; ++i) {
+        if (i != 0) byte(44);
+        write(value[i], depth + 1);
+      }
+      byte(93);
+    } else if (value is Map) {
+      if (depth == 4) _invalid();
+      byte(123);
+      var first = true;
+      value.forEach((key, element) {
+        if (key is! String || ++_keys > 64) _invalid();
+        if (!first) byte(44);
+        first = false;
+        _string(key);
+        byte(58);
+        write(element, depth + 1);
+      });
+      byte(125);
+    } else {
+      _invalid();
+    }
+  }
+}
+
 /// Closed ASCII JSON preflight before decoding. This bounds nesting, tokens,
 /// strings and object keys and rejects duplicate keys in the original buffer.
 /// It is not a JSON decoder: callers must still decode and validate their exact

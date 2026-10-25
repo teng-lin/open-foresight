@@ -57,13 +57,23 @@ or permission prompt. It does not establish physical audio acceptance.
 
 Producer and writer byte accounting scans UTF16 code units without allocating a
 UTF8 output buffer. It matches the standard encoder, including replacement of
-unpaired surrogates. This avoids the SDK's three-times input-size temporary plus
-output copy merely to count bytes. An external VM-service probe pauses actual
-producer encoding inside SDK JSON and UTF8 phases and collects heap snapshots
-after GC. On pinned Linux Dart 3.9.2, all 15 event shapes with maximal registered
-fields/correlations/eight frames yielded 45 phase snapshots; the largest
-attributed phase was 7648 bytes, below the 8192-byte per-producer allowance.
-These measured encoder phases do not establish the complete process bound.
+unpaired surrogates. An independent resource audit rejected the initial SDK
+phase-only proof: partial field sets can retain the JSON string buffer's large
+parts array, and intermediate compaction/copy allocations were not measured.
+A permitted partial RPC record measured 8032 attributed bytes before its final
+498-character string allocation, exceeding the 8192-byte scratch allowance once
+that output is included. The original Linux/Mac phase measurements remain
+historical component evidence, not proof of the process bound.
+
+Closed producer records and writer headers now use a fixed-capacity ASCII JSON
+encoder. Their strings have already passed the registered schema/build-header
+validation. It rejects escapes, non-ASCII, other value types, excess nesting,
+keys, tokens or bytes; it does not replace general application JSON encoding.
+The producer buffer is capped at2048 bytes and the writer at4096 including its
+newline. The byte oracle checks every subset of every registered event's fields,
+maximal correlations/numeric stacks and schema2 headers against standard JSON.
+The complete physical process bound still needs independent attribution of all
+live encoding, message, control and IPC resources, including compiled builds.
 
 Native queue storage is independently measured at 256072 bytes. The Dart traffic
 512 KiB physical bound, including encoding and control/object metadata, remains
