@@ -60,9 +60,12 @@ NATIVE_FLAGS = frozenset(
         "-DNDEBUG",
         "-fPIC",
         "-fvisibility=hidden",
+        "-fvisibility=default",
         "-pthread",
         "-shared",
         "-mmacosx-version-min=15.0",
+        "-Wl,-search_paths_first",
+        "-Wl,-headerpad_max_install_names",
     }
 )
 TARGETS = {
@@ -541,7 +544,12 @@ class Contract:
             or any(f not in allowed for f in flags)
         ):
             raise IdentityError("invalid_flags")
-        if (target == "linux-x86_64" and "-mmacosx-version-min=15.0" in flags) or (
+        darwin_flags = {
+            "-mmacosx-version-min=15.0",
+            "-Wl,-search_paths_first",
+            "-Wl,-headerpad_max_install_names",
+        }
+        if (target == "linux-x86_64" and darwin_flags.intersection(flags)) or (
             target == "darwin-arm64" and "-mmacosx-version-min=15.0" not in flags
         ):
             raise IdentityError("invalid_flags")

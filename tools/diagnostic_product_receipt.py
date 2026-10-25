@@ -54,7 +54,7 @@ def _digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _artifact(build: Path, name: str) -> dict[str, Any]:
+def _artifact(build: Path, name: str, marker: bytes | None = None) -> dict[str, Any]:
     directory = os.open(
         build, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
     )
@@ -76,9 +76,12 @@ def _artifact(build: Path, name: str) -> dict[str, Any]:
         ):
             raise ProductError("unsafe_product_artifact")
         digest = hashlib.sha256()
+        contents = bytearray()
         with os.fdopen(descriptor, "rb", closefd=False) as stream:
             for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                 digest.update(chunk)
+                if marker is not None:
+                    contents.extend(chunk)
         after = os.fstat(descriptor)
         if (before.st_size, before.st_mtime_ns, before.st_ctime_ns, before.st_mode) != (
             after.st_size,
@@ -87,6 +90,10 @@ def _artifact(build: Path, name: str) -> dict[str, Any]:
             after.st_mode,
         ):
             raise ProductError("product_changed_during_read")
+        if marker is not None:
+            prefix = marker.split(b":v1:", 1)[0] + b":v1:"
+            if contents.count(marker) != 1 or contents.count(prefix) != 1:
+                raise ProductError("product_embedded_identity_mismatch")
         return {
             "sha256": digest.hexdigest(),
             "size": before.st_size,
@@ -143,7 +150,13 @@ def collect(root: Path, build: Path) -> dict[str, Any]:
         raise ProductError("toolchain_metadata_mismatch")
     suffix = {"linux-x86_64": "so", "darwin-arm64": "dylib"}[record["target"]]
     artifacts = {
-        name: _artifact(build, name)
+        name: _artifact(
+            build, name,
+            None if "sql_support" in name else (
+                b"\0FORESIGHT_DIAGNOSTIC_NATIVE_ID:v1:"
+                + native["native_id"].encode("ascii") + b":end\0"
+            ),
+        )
         for name in (
             f"libforesight_sql_support.{suffix}",
             f"libforesight_diagnostic_support.{suffix}",

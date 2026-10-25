@@ -51,7 +51,11 @@ def built(tmp_path):
         "foresight-diagnostic-launcher",
     ):
         path = build / name
-        path.write_bytes(b"synthetic fixture bytes: " + name.encode())
+        marker = b"" if "sql_support" in name else (
+            b"\0FORESIGHT_DIAGNOSTIC_NATIVE_ID:v1:"
+            + native["native_id"].encode("ascii") + b":end\0"
+        )
+        path.write_bytes(b"synthetic fixture bytes: " + name.encode() + marker)
         path.chmod(0o755)
     return root, build
 
@@ -74,6 +78,24 @@ def test_finished_bytes_receipt_and_exact_verification(built):
         identity.Contract(root).worker_identity(receipt["native_id"], "aot")
 
 
+@pytest.mark.parametrize("alteration", ["missing", "duplicate", "stale"])
+def test_embedded_native_identity_must_match_exactly_once(built, alteration):
+    root, build = built
+    path = build / "foresight-diagnostic-launcher"
+    native_id = json.loads((build / "diagnostic-products.json").read_text())["native_id"]
+    marker = b"\0FORESIGHT_DIAGNOSTIC_NATIVE_ID:v1:" + native_id.encode() + b":end\0"
+    data = path.read_bytes()
+    if alteration == "missing":
+        data = data.replace(marker, b"")
+    elif alteration == "duplicate":
+        data += marker
+    else:
+        data = data.replace(marker, marker.replace(native_id.encode(), b"0" * 64))
+    path.write_bytes(data)
+    with pytest.raises(products.ProductError, match="product_embedded_identity_mismatch"):
+        products.write(root, build)
+
+
 @pytest.mark.parametrize(
     "name",
     [
@@ -86,7 +108,7 @@ def test_changed_or_missing_artifact_refuses_existing_receipt(built, name):
     root, build = built
     products.write(root, build)
     path = build / name
-    path.write_bytes(b"older or changed bytes")
+    path.write_bytes(b"older or changed bytes" + path.read_bytes())
     with pytest.raises(products.ProductError, match="receipt_mismatch"):
         products.verify(root, build)
     path.unlink()

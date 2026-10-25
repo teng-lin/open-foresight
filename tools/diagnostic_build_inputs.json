@@ -116,9 +116,12 @@
       "-DNDEBUG",
       "-fPIC",
       "-fvisibility=hidden",
+      "-fvisibility=default",
       "-pthread",
       "-shared",
-      "-mmacosx-version-min=15.0"
+      "-mmacosx-version-min=15.0",
+      "-Wl,-search_paths_first",
+      "-Wl,-headerpad_max_install_names"
     ]
   },
   "worker": {

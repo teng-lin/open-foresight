@@ -1,5 +1,9 @@
 # Build-time recipe verification only. Values are explicit public CMake inputs;
 # this code never selects runtime images or interprets application environment.
+cmake_minimum_required(VERSION 3.20)
+# Every attempted build starts unavailable, including a later compile/link
+# failure. Only the aggregate's verification of both real products publishes.
+file(WRITE "${DIAGNOSTIC_STATE}" "{\"schema\":1,\"available\":false}\n")
 set(_sdk_arguments)
 if(IS_ABSOLUTE "${DIAGNOSTIC_SDK}")
   list(APPEND _sdk_arguments --sdk-root "${DIAGNOSTIC_SDK}")

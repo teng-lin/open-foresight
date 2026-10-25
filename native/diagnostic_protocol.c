@@ -3,6 +3,16 @@
 #include <string.h>
 #include <unistd.h>
 
+/* Public compiled identity, retained without adding an exported ABI. The
+ * generator hashes this source spelling; its generated macro value remains
+ * outside the source inventory, avoiding an identity cycle. */
+#ifdef FORESIGHT_DIAGNOSTIC_NATIVE_ID
+_Static_assert(sizeof(FORESIGHT_DIAGNOSTIC_NATIVE_ID) == 65,
+               "diagnostic native identity length");
+static const char diagnostic_build_identity_marker[] __attribute__((used)) =
+    "\0FORESIGHT_DIAGNOSTIC_NATIVE_ID:v1:" FORESIGHT_DIAGNOSTIC_NATIVE_ID ":end";
+#endif
+
 typedef struct channel_view {
   uint8_t *cell;
   uint32_t limit;

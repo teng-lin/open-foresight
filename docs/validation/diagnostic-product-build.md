@@ -8,14 +8,17 @@ outside that source hash. Native identity remains independent of worker identity
 
 The compiler family profiles include GNU as well as Clang, and AppleClang on
 macOS. They record the selected version; the actual qualified Ubuntu build uses
-GNU13.3.0. This records the
+GNU 13.3.0. This records the
 selected compiler; it changes neither the compiler nor SDK version. CMake passes
 its selected compiler family/version, actual compiler SHA, public system metadata
 fingerprint and actual closed compile options to the generator. Unknown compile
 or additional link options, unsupported targets, missing metadata and mismatched
 expected fingerprints refuse diagnostic products. Configure writes an unavailable
-state before selection, so a failed reconfigure cannot advertise stale artifacts
-as current. Existing artifacts are retained. Product packaging must check that
+state before selection and at the start of every product build. Configure alone
+never advertises available products. Only `foresight_diagnostic_products`, after
+both links and exact embedded NativeID marker checks succeed, publishes available
+state. A compile/link failure leaves old artifacts unavailable. Existing artifacts
+are retained. Product packaging must check that
 state and the final reviewed worker identity; it must not infer availability from
 an old library's existence.
 
@@ -35,7 +38,7 @@ Actual read-only probes of the existing qualified toolchains observed GNU
 26A425 on HanSolo. These are public metadata observations, not fresh application
 builds or an endorsement of pending diagnostic products.
 
-The focused build and identity Python batch runs 130 tests with no skips, including deterministic
+The focused build and identity Python batch includes deterministic
 identity changes, invalid compiler-family combinations, exact metadata inventory,
 closed CLI errors, actual standalone CMake compilation and unavailable-state
 refusal after reconfiguration without deleting old bytes. The standalone CMake
@@ -64,6 +67,13 @@ CTest interpreter selection. Both product targets recheck actual compiler/OS
 metadata before each build; a changed fingerprint invalidates availability and
 fails until an explicit reconfigure. Deferred end-of-directory validation checks
 the final target/global compile/link recipe, including late definitions/includes,
-IPO, launchers and sysroot changes. Seven actual old-candidate negative controls
-fail before these repairs; all eleven CMake fixture controls pass afterward.
+configuration-specific IPO, visibility, RPATH, source lists and source properties,
+Threads usage requirements, launchers, link directories and sysroot changes.
+The current standalone CMake fixture has 27 controls, including configure-only
+unavailability and a real compile failure after source-change reconfiguration.
 This is a build-unit regression result, not whole native/application acceptance.
+
+When SQL support is present, `foresight_runtime_support_products` depends on both
+finished diagnostic products and SQL support before publishing their byte receipt.
+The receipt verifier also requires each diagnostic product's exact embedded ID
+marker. Receipt mechanics and real compilation remain separately reported evidence.
