@@ -60,7 +60,7 @@ function(_foresight_sql_identity)
       CMAKE_C_LINKER_LAUNCHER CMAKE_SYSROOT CMAKE_C_COMPILER_TARGET
       CMAKE_C_COMPILER_EXTERNAL_TOOLCHAIN CMAKE_C_STANDARD_INCLUDE_DIRECTORIES
       CMAKE_C_STANDARD_LIBRARIES CMAKE_UNITY_BUILD CMAKE_C_COMPILER_ARG1
-      CMAKE_C_LINK_FLAGS CMAKE_LINKER_TYPE)
+      CMAKE_LINKER_TYPE)
     if(${_variable})
       return()
     endif()
@@ -110,6 +110,9 @@ function(_foresight_sql_identity)
     return()
   endif()
   if(APPLE)
+    if(NOT CMAKE_C_LINK_FLAGS STREQUAL "-Wl,-search_paths_first -Wl,-headerpad_max_install_names")
+      return()
+    endif()
     if(NOT CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64" OR
        (CMAKE_OSX_ARCHITECTURES AND NOT CMAKE_OSX_ARCHITECTURES STREQUAL "arm64") OR
        NOT CMAKE_OSX_DEPLOYMENT_TARGET STREQUAL "15.0")
@@ -118,6 +121,9 @@ function(_foresight_sql_identity)
     set(_target darwin-arm64)
     set(_family apple-clang)
   elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
+    if(CMAKE_C_LINK_FLAGS)
+      return()
+    endif()
     set(_target linux-x86_64)
     if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
       set(_family gcc)

@@ -86,6 +86,11 @@ def identity(root: Path, metadata: dict[str, Any], flags: list[str]) -> dict[str
             "ipo": False,
             "unity": False,
             "link": ["Threads::Threads", *([] if target == "darwin-arm64" else ["dl"])],
+            "link_flags": (
+                ["-Wl,-search_paths_first", "-Wl,-headerpad_max_install_names"]
+                if target == "darwin-arm64"
+                else []
+            ),
             "build_rpath": "",
             "install_rpath": "",
         },
