@@ -6,8 +6,9 @@ SQLite or Dart link dependency. The native identity generator inventories every
 owned diagnostic C/H source before creating an ID; its generated outputs remain
 outside that source hash. Native identity remains independent of worker identity.
 
-The reviewed compiler profiles now include the actual qualified Ubuntu GNU
-13.3.0 compiler as well as Clang, and AppleClang on macOS. This records the
+The compiler family profiles include GNU as well as Clang, and AppleClang on
+macOS. They record the selected version; the actual qualified Ubuntu build uses
+GNU13.3.0. This records the
 selected compiler; it changes neither the compiler nor SDK version. CMake passes
 its selected compiler family/version, actual compiler SHA, public system metadata
 fingerprint and actual closed compile options to the generator. Unknown compile
@@ -34,7 +35,7 @@ Actual read-only probes of the existing qualified toolchains observed GNU
 26A425 on HanSolo. These are public metadata observations, not fresh application
 builds or an endorsement of pending diagnostic products.
 
-The focused Python batch runs 122 tests with no skips, including deterministic
+The focused build and identity Python batch runs 130 tests with no skips, including deterministic
 identity changes, invalid compiler-family combinations, exact metadata inventory,
 closed CLI errors, actual standalone CMake compilation and unavailable-state
 refusal after reconfiguration without deleting old bytes. The standalone CMake
@@ -55,3 +56,14 @@ verify all added bytes while continuing to exclude compiler/dependency trees.
 This path inventory change needs final owner review. Artifact producer selection,
 receipts, checksums, source identity, permissions and publication rules are
 unchanged. It does not authorize using an unreviewed worker or stale products.
+
+
+The first whole external build review required three repairs. Optional products
+now probe an explicit/module-local Python3.13 without changing the root native
+CTest interpreter selection. Both product targets recheck actual compiler/OS
+metadata before each build; a changed fingerprint invalidates availability and
+fails until an explicit reconfigure. Deferred end-of-directory validation checks
+the final target/global compile/link recipe, including late definitions/includes,
+IPO, launchers and sysroot changes. Seven actual old-candidate negative controls
+fail before these repairs; all eleven CMake fixture controls pass afterward.
+This is a build-unit regression result, not whole native/application acceptance.

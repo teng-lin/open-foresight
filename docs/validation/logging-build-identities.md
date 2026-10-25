@@ -101,3 +101,10 @@ per-target build/compile definitions, source/compiled dispatch evidence and all
 consumer/package/cache wiring remain separate work. Owner review of that wiring
 is still required at final integration; a deterministic fixture identity does
 not satisfy it.
+
+
+The subsequent diagnostic product build candidate binds the native generator to
+actual CMake recipes and selected public compiler/OS metadata; see
+[the build candidate](diagnostic-product-build.md). Its review and qualification
+are separate from this original generator-only checkpoint. Worker generation
+remains pending until the real closure and selected SDK byte inventory converge.

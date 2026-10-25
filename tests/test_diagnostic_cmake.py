@@ -20,6 +20,7 @@ def fixture(tmp_path):
     (source / "tools").mkdir()
     (source / "native").mkdir()
     shutil.copy(ROOT / "cmake/ForesightDiagnostics.cmake", source / "cmake")
+    shutil.copy(ROOT / "cmake/VerifyDiagnosticToolchain.cmake", source / "cmake")
     for name in ("diagnostic_build_identity.py", "diagnostic_build_inputs.json"):
         shutil.copy(ROOT / "tools" / name, source / "tools")
     for path in (ROOT / "native").glob("diagnostic_*"):
@@ -27,9 +28,12 @@ def fixture(tmp_path):
             shutil.copy(path, source / "native")
     # This deliberate synthetic metadata isolates CMake identity/plumbing from
     # the independently tested actual selected-system metadata recipe.
+    (source / "tools/fixture-metadata.json").write_text(json.dumps({
+        "fingerprint": "b" * 64, "record": {"compiler": {"sha256": "a" * 64}}
+    }))
     (source / "tools/diagnostic_toolchain_metadata.py").write_text(
-        'import json\nprint(json.dumps({"fingerprint":"' + "b" * 64
-        + '","record":{"compiler":{"sha256":"' + "a" * 64 + '"}}}))\n'
+        "from pathlib import Path\n"
+        "print(Path(__file__).with_name('fixture-metadata.json').read_text())\n"
     )
     (source / "CMakeLists.txt").write_text(
         "cmake_minimum_required(VERSION 3.20)\n"
@@ -90,4 +94,54 @@ def test_selected_public_fingerprint_mismatch_refuses_products(tmp_path):
     source, build = fixture(tmp_path)
     result = configure(source, build, "-DFORESIGHT_DIAGNOSTIC_TOOLCHAIN_SHA256=" + "c" * 64)
     assert result.returncode != 0
+    assert json.loads((build / "diagnostic-products.json").read_text())["available"] is False
+
+
+def test_optional_missing_interpreter_keeps_native_configure_available(tmp_path):
+    source, build = fixture(tmp_path)
+    result = configure(source, build, "-DPython3_EXECUTABLE=/bin/false")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads((build / "diagnostic-products.json").read_text()) == {
+        "schema": 1, "available": False,
+    }
+    assert "Python3_EXECUTABLE:UNINITIALIZED=/bin/false" in (build / "CMakeCache.txt").read_text()
+
+
+def test_metadata_change_refuses_even_when_objects_need_no_rebuild(tmp_path):
+    source, build = fixture(tmp_path)
+    configured = configure(source, build, "-DFORESIGHT_REQUIRE_DIAGNOSTIC_PRODUCTS=ON")
+    assert configured.returncode == 0, configured.stdout + configured.stderr
+    command = ["cmake", "--build", str(build), "--target", "foresight_diagnostic_support"]
+    first = subprocess.run(command, capture_output=True, text=True, timeout=90, check=False)
+    assert first.returncode == 0, first.stdout + first.stderr
+    metadata = source / "tools/fixture-metadata.json"
+    value = json.loads(metadata.read_text())
+    value["fingerprint"] = "c" * 64
+    metadata.write_text(json.dumps(value))
+    second = subprocess.run(command, capture_output=True, text=True, timeout=90, check=False)
+    assert second.returncode != 0
+    assert "toolchain changed" in second.stderr
+    assert json.loads((build / "diagnostic-products.json").read_text())["available"] is False
+
+
+@pytest.mark.parametrize("late", [
+    "add_compile_definitions(UNREVIEWED_RECIPE=1)",
+    'include_directories("${CMAKE_CURRENT_SOURCE_DIR}/foreign")',
+    'set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DUNREVIEWED_RECIPE=1")',
+    'target_link_libraries(foresight_diagnostic_support PRIVATE m)',
+])
+def test_late_effective_product_recipe_changes_refuse(tmp_path, late):
+    source, build = fixture(tmp_path)
+    project = source / "CMakeLists.txt"
+    project.write_text(project.read_text() + late + "\n")
+    result = configure(source, build)
+    assert result.returncode != 0
+    assert "effective product recipe changed" in result.stderr
+    assert json.loads((build / "diagnostic-products.json").read_text())["available"] is False
+
+
+def test_ambient_ipo_is_not_silently_added_to_native_identity(tmp_path):
+    source, build = fixture(tmp_path)
+    result = configure(source, build, "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON")
+    assert result.returncode == 0, result.stdout + result.stderr
     assert json.loads((build / "diagnostic-products.json").read_text())["available"] is False

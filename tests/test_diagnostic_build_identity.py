@@ -265,14 +265,25 @@ def test_directory_symlink_is_refused(source):
         native(root)
 
 
-def test_missing_default_worker_closure_is_not_a_production_identity():
+def test_unreviewed_default_worker_closure_is_not_a_production_identity():
     contract = identity.Contract(ROOT)
     with (
         mock.patch.object(
             identity,
             "_read",
-            side_effect=AssertionError("must not read incomplete runtime"),
+            side_effect=AssertionError("must not read unreviewed runtime"),
         ),
+        pytest.raises(identity.IdentityError, match="worker_closure_not_reviewed"),
+    ):
+        contract.worker_identity("a" * 64, "aot")
+
+
+def test_missing_worker_entry_refuses_before_reading_other_runtime(source):
+    root, _ = source
+    (root / "app/worker.dart").unlink()
+    contract = identity.Contract(root)
+    with (
+        mock.patch.object(identity, "_read", side_effect=AssertionError("runtime read")),
         pytest.raises(identity.IdentityError, match="missing_worker_closure"),
     ):
         contract.worker_identity("a" * 64, "aot")
