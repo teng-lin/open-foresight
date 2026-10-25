@@ -106,6 +106,25 @@ Download a package for your distribution, or the macOS DMG, from the [releases p
 
 The macOS CI DMG includes its inference and speech runtimes; users install model weights separately through setup. Runtime bundling is complete, and signed distribution is blocked on Developer ID signing and notarization. The artifact remains ad-hoc signed. See [Mac runtime packaging](docs/platforms/macos-support.md#local-assembly-and-signed-distribution) and the per-release [acceptance gates](docs/platforms/macos-support.md#release-gates).
 
+### macOS installation and Gatekeeper
+
+1. Open the downloaded DMG and drag **Open Foresight.app** into **Applications**.
+2. Open **Open Foresight** from Applications.
+3. The current release is ad-hoc signed and not notarized, so macOS Gatekeeper
+   may block it with a message that the developer cannot be verified or Apple
+   cannot check it for malicious software. If you trust the release you downloaded,
+   dismiss the alert, then open **System Settings → Privacy & Security**.
+4. Scroll to **Security**, click **Open Anyway** for Open Foresight, and confirm
+   with **Open**. Authenticate if prompted. macOS saves an exception for the app,
+   allowing subsequent launches normally.
+
+These steps follow [Apple's Gatekeeper instructions](https://support.apple.com/en-us/102445).
+If macOS reports that the app is damaged or will damage your computer, stop and
+report the exact message on the [issue tracker](https://github.com/teng-lin/open-foresight/issues).
+
+Distributors can [build a signed and notarized DMG](docs/platforms/macos-support.md#build-a-signed-and-notarized-dmg)
+with a Developer ID certificate and notarization credentials.
+
 ### First launch
 
 On first launch, setup offers three Gemma 4 generation models: **12B**, **E4B**, and **E2B**, which need about 30, 15, and 6 GB of memory respectively. It downloads the selected model and the **EmbeddingGemma 2** source-search model, checks their pinned sizes and SHA-256 hashes, and registers each model only after it loads successfully. You can cancel safely, and completed downloads are kept if setup is interrupted. Meeting transcription offers multilingual Whisper models from Tiny to Large v3 Turbo, under **Settings → Transcription Model**.
