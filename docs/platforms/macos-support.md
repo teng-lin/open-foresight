@@ -149,6 +149,72 @@ sealed app. Release builds require both model runtimes and dependency licenses.
 A local full-runtime development bundle does not show that the CI DMG can run
 inference.
 
+### Build a signed and notarized DMG
+
+Run this on macOS after building the app, SDK and both runtimes above. You need
+an Apple Developer Program account and a **Developer ID Application** certificate
+with its private key installed in your login Keychain. List available signing
+identities and store notarization credentials in a named Keychain profile:
+
+```sh
+security find-identity -v -p codesigning
+xcrun notarytool store-credentials open-foresight-release \
+  --apple-id 'you@example.com' --team-id 'YOURTEAMID'
+```
+
+Replace the Apple ID and team ID placeholders with your account details. The
+second command securely prompts for an app-specific password. Keep credentials
+in Keychain; supply only the profile name to the packaging tools. See Apple's
+[notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow)
+for credential alternatives and provisioning details.
+
+Set the signing identity to the exact name reported by `security`, then package
+the app into a new output path. This signs its nested code, notarizes it, staples
+the app ticket and checks Gatekeeper acceptance:
+
+```sh
+export FORESIGHT_SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)'
+.venv/bin/python tools/package_macos.py \
+  --sdk "$PWD/build/macos-sdk" \
+  --litert-extensions-manifest "$PWD/build/macos-runtimes/litert-extensions/build-manifest.json" \
+  --whisper-runtime "$PWD/build/macos-runtimes/whisper/whisper-cli" \
+  --whisper-license "$PWD/build/macos-vendor/whisper/LICENSE" \
+  --identity "$FORESIGHT_SIGNING_IDENTITY" \
+  --notary-profile open-foresight-release \
+  --output "$PWD/dist/signed/Open Foresight.app"
+
+# Replace 0.1.2 with the version in the generated application manifest.
+.venv/bin/python tools/create_dmg.py \
+  --app "$PWD/dist/signed/Open Foresight.app" \
+  --manifest "$PWD/dist/signed/Open Foresight.manifest.json" \
+  --name Open-Foresight-0.1.2-macos-arm64.dmg \
+  --output "$PWD/dist/signed" \
+  --identity "$FORESIGHT_SIGNING_IDENTITY" \
+  --notary-profile open-foresight-release
+```
+
+DMG signing requires both options and a signed, notarized, stapled app. The tool
+checks that the app and DMG use the same Developer ID team, submits the signed
+DMG to Apple, requires acceptance, staples and validates its ticket, then runs
+Gatekeeper assessment and verifies the final image with `hdiutil`. Checksums and
+build sidecars describe the final stapled bytes and are written only after those
+checks succeed. The `.notary.submit.json` receipt saves the submission ID before
+waiting; the `.notary.json` response and, on rejection when available,
+`.notary.log.json` retain submission diagnostics. A log-download failure
+preserves the original notarization failure.
+Upload and waiting share a one-hour budget. Polling uses at most 55 minutes or
+the remaining budget minus five seconds, whichever is shorter. The submission
+receipt remains available even if waiting times out. Other signing commands
+have five-minute timeouts. A failed command leaves its output for diagnosis;
+choose a new output path when retrying. To inspect a saved submission, run
+`xcrun notarytool info <submission-id> --keychain-profile open-foresight-release`.
+
+The default DMG path remains available for ad-hoc development and previews by
+omitting both signing options. Hosted releases still use that path until their
+signing credentials and workflow changes receive owner review. Local signing
+does not establish release acceptance: test the final downloaded, quarantined
+DMG on a separate Mac and complete the release gates below before publishing.
+
 The AOT exception follows Dart 3.9.2's
 [Mach-O snapshot loader](https://github.com/dart-lang/sdk/blob/3.9.2/runtime/bin/macho_loader.cc)
 and [Mac memory mapping implementation](https://github.com/dart-lang/sdk/blob/3.9.2/runtime/bin/file_macos.cc):

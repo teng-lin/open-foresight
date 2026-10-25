@@ -20,6 +20,7 @@ import 'package:open_foresight/features/settings/gemma_setup_view.dart';
 import 'package:open_foresight/features/settings/speech_setup_view.dart';
 import 'package:open_foresight/features/settings/model_terms_dialog.dart';
 import 'package:open_foresight/main.dart';
+import 'package:open_foresight/shell/workspace_tab.dart';
 import 'package:open_foresight/features/onboarding/onboarding_view.dart';
 
 import 'desktop_connection_fixture.dart';
@@ -439,6 +440,52 @@ void main() {
       expect(domain.operations, isNot(contains('google.sign_in')));
       await tester.pumpWidget(const SizedBox());
       await tester.runAsync(() => eventually(() => commands.isClosed));
+    }),
+  );
+
+  testWidgets(
+    'skipped model setup can be opened and selected in Settings',
+    (tester) async => withDesktopFixtures(tester, () async {
+      final (store, _, _) = await mount(tester);
+      await finishOnboarding(tester);
+      expect(store.model('generation'), isNull);
+      final shell = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
+      shell.update(() => shell.tab = WorkspaceTab.settings);
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('Choose a local model'));
+      await tester.tap(find.text('Choose a local model'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(find.byType(GemmaSetupDialog), findsOneWidget);
+      final group = find.byType(RadioGroup<GemmaModel>);
+      expect(
+        tester.widget<RadioGroup<GemmaModel>>(group).groupValue,
+        gemmaModels.last,
+      );
+      final larger = tester.widget<RadioListTile<GemmaModel>>(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is RadioListTile<GemmaModel> &&
+              widget.value == gemmaModels[1],
+        ),
+      );
+      expect(larger.enabled, isTrue);
+      await tester.tap(find.text('Gemma 4 E4B'));
+      await tester.pump();
+      expect(
+        tester.widget<RadioGroup<GemmaModel>>(group).groupValue,
+        gemmaModels[1],
+      );
+      await tester.tap(find.text('Gemma 4 E2B'));
+      await tester.pump();
+      expect(
+        tester.widget<RadioGroup<GemmaModel>>(group).groupValue,
+        gemmaModels.last,
+      );
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(store.model('generation'), isNull);
     }),
   );
 
