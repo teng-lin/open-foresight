@@ -176,7 +176,7 @@ def verify_image(destination, *, created_image=False):
             result.check_returncode()
 
 
-def signing_command(arguments, *, timeout=300):
+def signing_command(arguments, *, timeout=300, check=True):
     """Retain signing diagnostics, including partial output on timeout."""
     try:
         result = subprocess.run(
@@ -189,7 +189,8 @@ def signing_command(arguments, *, timeout=300):
         print_output(error.stdout, error.stderr)
         raise
     print_output(result.stdout, result.stderr)
-    result.check_returncode()
+    if check:
+        result.check_returncode()
     return result
 
 
@@ -224,23 +225,40 @@ def sign_disk_image(destination, identity, notary_profile, app_team):
             "json",
         ],
         timeout=3600,
+        check=False,
     )
     # Retain the submission ID and rejected response for release diagnostics.
     Path(str(destination) + ".notary.json").write_text(result.stdout)
-    submission = json.loads(result.stdout)
-    if submission.get("status") != "Accepted":
+    try:
+        submission = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        result.check_returncode()
+        raise
+    if result.returncode or submission.get("status") != "Accepted":
         if submission.get("id"):
-            signing_command(
-                [
-                    "xcrun",
-                    "notarytool",
-                    "log",
-                    submission["id"],
-                    "--keychain-profile",
-                    notary_profile,
-                    Path(str(destination) + ".notary.log.json"),
-                ]
-            )
+            try:
+                signing_command(
+                    [
+                        "xcrun",
+                        "notarytool",
+                        "log",
+                        submission["id"],
+                        "--keychain-profile",
+                        notary_profile,
+                        Path(str(destination) + ".notary.log.json"),
+                    ]
+                )
+            except (
+                subprocess.CalledProcessError,
+                subprocess.TimeoutExpired,
+                OSError,
+            ) as error:
+                print(
+                    f"Notarization log unavailable: {error}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+        result.check_returncode()
         raise ValueError(f"DMG notarization failed: {submission}")
     signing_command(["xcrun", "stapler", "staple", destination])
     signing_command(["xcrun", "stapler", "validate", destination])

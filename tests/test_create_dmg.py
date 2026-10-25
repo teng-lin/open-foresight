@@ -216,6 +216,37 @@ def test_signing_timeout_preserves_partial_output(capsys, monkeypatch):
     assert output.err == "failed\n"
 
 
+@pytest.mark.parametrize("log_failure", [False, True])
+def test_nonzero_notary_rejection_retains_response_and_primary_failure(
+    signed_dmg, monkeypatch, log_failure, capsys
+):
+    create, _, _, manifest = signed_dmg
+    original = create_dmg.subprocess.run
+    response = json.dumps({"status": "Invalid", "id": "rejected-id"})
+
+    def run(arguments, **kwargs):
+        if arguments[:3] == ["xcrun", "notarytool", "submit"]:
+            return subprocess.CompletedProcess(
+                arguments, 69, response, "notary rejected"
+            )
+        if arguments[:3] == ["xcrun", "notarytool", "log"] and log_failure:
+            return subprocess.CompletedProcess(arguments, 1, "", "log unavailable")
+        return original(arguments, **kwargs)
+
+    monkeypatch.setattr(create_dmg.subprocess, "run", run)
+    with pytest.raises(subprocess.CalledProcessError) as error:
+        create()
+    assert error.value.returncode == 69
+    assert error.value.output == response
+    image = manifest.parent / "dist/Open-Foresight-0.1.2-macos-arm64.dmg"
+    assert Path(str(image) + ".notary.json").read_text() == response
+    if log_failure:
+        assert "log unavailable" in capsys.readouterr().err
+    else:
+        assert Path(str(image) + ".notary.log.json").is_file()
+    assert not Path(str(image) + ".sha256").exists()
+
+
 def test_development_certificate_is_rejected_even_with_team_identifier(monkeypatch):
     monkeypatch.setattr(
         create_dmg.subprocess,
