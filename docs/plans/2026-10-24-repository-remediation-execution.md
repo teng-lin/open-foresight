@@ -663,3 +663,53 @@ in `/var/tmp/of-pr180-deb/job-a8.log`. A green sanitizer workflow is not being
 substituted for completed platform or installed-package acceptance. Logging,
 native lifecycle and client/service architecture work remain unintegrated and
 must still complete review and full qualification.
+
+### Installed startup observation and hosted default-path oracle
+
+The reviewed installed-GUI repair `a2b77878` is locally applied as `afad64eb`.
+An actual historical source-47 Debian package reproduced an empty command-line
+observation between two Bash-image observations on attempt **372** after **371**
+successful native-exec transitions. A first repair also encountered the owned
+child's pre-exec Python image and inherited parent arguments. Both failed outputs
+remain. The final repair accepts those exact incomplete observations only while
+waiting for the same owned child to exec, within the original startup deadline.
+Parent image/argument matching uses a bounded private snapshot; argument values
+are not persisted. Incomplete observations never grant wrapper cleanup or GUI
+approval. Exact native executable, effective-user, coherent wrapper-argument,
+approval and termination checks remain required.
+
+Native-peer and whole-candidate Claude reviews converged. Full Python passed
+**5,623 / 31 skipped / 95.85%**, enforcing 95%; ruff, mypy (**168** files) and the
+subprocess-timeout guard passed. Focused installed-GUI/document tooling passed
+**124/124**, zero skips, on Linux and HanSolo, and from a complete Git-free export
+under PR, main and unset-ref environments. The Mac source archive hash matched
+the frozen export and reused an environment whose development locks matched.
+These offline tests are not actual macOS GUI/TCC acceptance.
+
+The final production startup-wait helper passed **500/500** actual installed
+native-exec transitions on the historical package, including seven retained last
+observations with empty argv. One actual MCP-first GUI onboarding/approval plus
+PDF/RTF document probe also passed with the repaired tooling. This is current
+tooling against old package bytes, not current-head installed acceptance. The
+requested Docker AppArmor profile was not enforced by this host; no host policy
+was changed, and these runs do not establish CI AppArmor equivalence. Evidence:
+`/var/tmp/of-installed-fix`; original investigation `/var/tmp/fs-inst-t/handoff.md`.
+
+Hosted head `353ee7c7` passed its Debian packaging job but failed both Linux core
+and Mac core on one stale test expectation: `test_paths_test.dart` still expected
+`/tmp` although reviewed helper `753a53c5` selected physical disk-backed defaults.
+Local runs had supplied the explicit override, leaving that branch unexercised.
+Fixture-only `68fafd3e` updates the expectation to `/var/tmp` on Linux and
+`/private/var/tmp` on Mac, retaining explicit overrides and cleanup assertions.
+The original unset-override test failed first; the corrected module passed
+**4/4 unset plus 4/4 overridden on each platform**, zero skips. Native-peer review
+converged. Repeating the failed full Linux core lane at frozen `68fafd3e` passed
+**2,288 / 17 skipped / 95.06%**, enforcing 90%; analysis and formatting passed.
+That lane explicitly reused the fresh a8 native products after all **58** native,
+CMake, helper and inference source inputs matched. It is not a new native build.
+Evidence: `/var/tmp/of-test-root-oracle` and `/var/tmp/of-root-oracle-qa`.
+
+The next hosted head must verify these changes. Logging, native lifecycle and
+client/service architecture candidate branches remain separate and unaccepted
+by this draft until their remaining implementation, reviews and combined gates
+finish. This follow-up does not close the deferred security findings.
