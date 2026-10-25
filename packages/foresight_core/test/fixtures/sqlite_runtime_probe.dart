@@ -8,7 +8,6 @@ import 'package:sqlite3/sqlite3.dart' as upstream;
 import 'package:foresight_core/src/persistence/sqlite_runtime.dart' as selected;
 
 void main(List<String> arguments) {
-  bootstrapSqlSupportFixture();
   if (arguments.contains('preload-system')) {
     loader.open.overrideFor(
       loader.OperatingSystem.macOS,
@@ -16,6 +15,7 @@ void main(List<String> arguments) {
     );
     stdout.writeln('Preloaded ${upstream.sqlite3.version}');
   }
+  bootstrapSqlSupportFixture();
   final db = selected.sqlite3.openInMemory();
   try {
     stdout.writeln(

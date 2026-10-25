@@ -6,6 +6,7 @@ import 'package:sqlite3/sqlite3.dart' as upstream;
 
 import '../platform_services.dart';
 import 'sql_support.dart';
+import 'sqlite_mapping.dart';
 
 export 'package:sqlite3/sqlite3.dart' hide sqlite3;
 
@@ -73,7 +74,10 @@ DynamicLibrary _openLinuxBundleSqlite(String root) {
 
 upstream.Sqlite3 _loadSqlite() {
   requireSqlSupportBeforeConnection();
-  if (Platform.isMacOS) {
+  final inherited = boundSqliteMapping;
+  if (inherited != null) {
+    loader.open.overrideForAll(() => openOriginalSqliteMapping(inherited));
+  } else if (Platform.isMacOS) {
     loader.open.overrideFor(loader.OperatingSystem.macOS, _openMacSqlite);
   } else if (Platform.isLinux) {
     final root = runtimeConfiguration.linuxBundleRoot;
@@ -102,7 +106,29 @@ upstream.Sqlite3 _loadSqlite() {
       '$applicationSqliteVersion; rebuild or reinstall Open Foresight.',
     );
   }
+  if (_sqliteLibrary == null || _progressInstaller == null) {
+    throw StateError('SQLite was initialized outside the application loader');
+  }
+  if (inherited != null) {
+    if (_progressInstaller!.address != inherited.progressAddress ||
+        api.version.sourceId != inherited.sourceId) {
+      throw StateError('Cannot replace the original SQLite mapping');
+    }
+  } else {
+    final mapping = captureSqliteMapping(library, api.version.sourceId);
+    bindSqliteMapping(mapping);
+    attachOriginalSqliteMapping(mapping);
+  }
   return api;
+}
+
+/// The process entrypoint eagerly selects and freezes SQLite before connections
+/// or owned isolates. This performs no database open.
+void prepareSqliteRuntimeEarly() {
+  sqlite3;
+  if (boundSqliteMapping == null) {
+    throw StateError('Original SQLite mapping handoff was missed');
+  }
 }
 
 /// A short lock wait applies equally to writable and read-only connections.

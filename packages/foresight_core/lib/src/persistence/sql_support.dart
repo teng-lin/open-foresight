@@ -2,6 +2,7 @@ import 'dart:ffi';
 import 'dart:io';
 
 import '../rpc_error.dart';
+import 'sqlite_mapping.dart';
 
 typedef SqliteProgressCheck = Int Function(Pointer<Void>);
 typedef SqliteProgressInstall =
@@ -51,7 +52,13 @@ String? _selectedLibrary;
 /// Instances originate only from the trusted early mapping owner below.
 final class SqlSupportBootstrap {
   final int _ready, _begin, _end;
-  const SqlSupportBootstrap._(this._ready, this._begin, this._end);
+  final SqliteMappingBootstrap? _sqlite;
+  const SqlSupportBootstrap._(
+    this._ready,
+    this._begin,
+    this._end, [
+    this._sqlite,
+  ]);
 
   bool _same(SqlSupportBootstrap other) =>
       _ready == other._ready && _begin == other._begin && _end == other._end;
@@ -117,13 +124,40 @@ SqlSupportBootstrap _initializeSqlSupportEarly(DynamicLibrary ownedImage) {
     api.begin.address,
     api.end.address,
   );
-  bindSqlSupportBootstrap(bootstrap);
+  _bindSqlSupportFunctions(bootstrap);
   return bootstrap;
 }
 
 /// Bind only already validated original code. There is no loader operation in
 /// this worker path: ready() is a pure native atomic read.
 void bindSqlSupportBootstrap(SqlSupportBootstrap bootstrap) {
+  final sqlite = bootstrap._sqlite;
+  if (sqlite == null) {
+    throw StateError('Original SQLite mapping handoff was missed');
+  }
+  bindSqliteMapping(sqlite);
+  _bindSqlSupportFunctions(bootstrap);
+}
+
+/// Complete only during the process entrypoint's eager SQLite initialization.
+void attachOriginalSqliteMapping(SqliteMappingBootstrap mapping) {
+  final original = _bootstrap;
+  if (original == null) throw StateError('SQL support early gate was missed');
+  if (original._sqlite case final existing?) {
+    if (!existing.same(mapping)) {
+      throw StateError('Cannot replace the original SQLite mapping');
+    }
+    return;
+  }
+  _bootstrap = SqlSupportBootstrap._(
+    original._ready,
+    original._begin,
+    original._end,
+    mapping,
+  );
+}
+
+void _bindSqlSupportFunctions(SqlSupportBootstrap bootstrap) {
   final existing = _bootstrap;
   if (existing != null) {
     if (!existing._same(bootstrap)) {

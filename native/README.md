@@ -7,8 +7,12 @@ SQLite read deadlines. It does not link SQLite, models, audio, the application
 native image, or optional diagnostics. Embeddings must call the startup-only
 `initializeSqliteRuntime(supportLibrary: validatedAbsolutePath)` capability before
 any application SQLite connection or worker. It pins the originally selected
-image and validates its complete versioned code table. Read owners receive only
-that original code handoff; they cannot initialize or load a replacement image.
+image and validates its complete versioned code table. The entrypoint also
+freezes SQLite's resolved physical path, code anchor and source identity before
+connections. Read owners bind that original handoff and refuse path selection;
+their SQLite loader requires the frozen mapping to be already present. The Dart
+guard is isolate-local, so embedding owners must pass the handoff to every owned
+isolate and prohibit path initialization in arbitrary unbound isolates.
 See [SQL worker ownership](../docs/validation/sqlite-read-worker-budget.md).
 
 Generation supports explicit llama.cpp and LiteRT-LM workers. Local Gemma grounded requests use the versioned `x-foresight-grounded-request` schema annotation, consumed by `services/inference/main.cpp` and the citation checker in `services/inference/grounded.h`. It selects evidence units, composes text, checks source citations and numeric fidelity, and performs a separate support check. The configured context is 4096 tokens with a token-aware output reserve. Verification is fallible; failed drafts get one repair attempt followed by a labelled source fallback.

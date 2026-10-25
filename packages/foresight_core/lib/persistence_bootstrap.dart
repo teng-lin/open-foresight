@@ -3,6 +3,7 @@
 library;
 
 import 'src/persistence/sql_support.dart';
+import 'src/persistence/sqlite_runtime.dart' show prepareSqliteRuntimeEarly;
 
 /// Opaque original-code handoff from the process entrypoint to its isolates.
 /// Contains no database or native context pointer and exposes no code addresses.
@@ -27,6 +28,7 @@ SqliteRuntimeBootstrap initializeSqliteRuntime({
   required String supportLibrary,
 }) {
   initializeSelectedSqlSupport(supportLibrary);
+  prepareSqliteRuntimeEarly();
   return SqliteRuntimeBootstrap._(currentSqlSupportBootstrap);
 }
 

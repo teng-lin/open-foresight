@@ -9,6 +9,11 @@ if(APPLE)
   enable_language(OBJCXX)
 endif()
 find_package(Threads REQUIRED)
+# Standalone native/ builds need the same application-owned SQLite fixture as
+# the root project before SQL support registers its macOS tests.
+if(APPLE AND NOT TARGET foresight_sqlite3)
+  include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ForesightSqlite.cmake")
+endif()
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ForesightSqlSupport.cmake")
 
 add_library(foresight_native SHARED foresight_native.cpp diagnostic_queue.cpp)

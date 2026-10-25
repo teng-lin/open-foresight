@@ -47,22 +47,38 @@ explicitly too. The gate is not hidden in a generic temp-directory helper.
 
 ## Statement and context lifetime
 
-One lazy read isolate owns its read-only connection. The original
-`package:sqlite3`2.9.4 mapping and its progress-installer address are retained and
-resolved before any application database opens. A foreign prior initialization
-that prevents capturing that actual mapping refuses owner-local controls.
+One lazy read isolate owns its read-only connection. The process entrypoint
+eagerly initializes `package:sqlite3` 2.9.4 before connections or workers. It
+captures the actual mapping's physical absolute path, image base, progress
+installer address and SQLite source identity, retains it with `RTLD_NOLOAD`,
+and registers that canonical loader name before any database locks. A foreign
+prior package initialization that prevents capturing the actual mapping refuses.
+The opaque original-code handoff includes this SQLite mapping, never a database
+or native context pointer.
+
+A fresh worker does not re-read the SQLite environment, resolve an installation
+symlink, search a basename or discover another image. Before its first database,
+it requires the frozen canonical name to succeed with `RTLD_NOLOAD` and match the
+original anchor/image. Only then may the Dart FFI loader acquire its reference to
+that exact already mapped canonical image. The package's function bindings and
+source identity must match before a connection opens. These startup refcounts
+are retained until process death. The AOT regression changes a real installed
+SQLite alias to a loadable non-SQLite image while a parent write transaction is
+held; an explicit reverse control proves the alias changed, and both a fresh
+bound isolate and the real read worker keep the original mapping.
+
 Owned sessions construct their budget eagerly. No read snapshot/BEGIN performs
 a support-image or SQLite-symbol lookup. `Database.handle` stays in its owning
 isolate and is supplied only to this synchronous native registration.
 
-The native callback checks `CLOCK_MONOTONIC` every1,000 SQLite VM instructions,
+The native callback checks `CLOCK_MONOTONIC` every 1,000 SQLite VM instructions,
 without entering Dart, allocating, locking, calling SQLite, or using the loader.
-The default job budget is5s, internally configurable in(0,30s]. Suspend accounting
+The default job budget is 5s, internally configurable in (0,30s]. Suspend accounting
 follows the platform monotonic clock; this is not a wall-clock SLA. The existing
 50ms busy timeout is separate. SQLite instruction callbacks do not bound blocked
 VFS/filesystem calls, native extensions, or Dart projection CPU.
 
-The C image has64 process-lifetime static slots, no per-job heap allocation and
+The C image has 64 process-lifetime static slots, no per-job heap allocation and
 unique positive leases that refuse rather than wrap. A slot is reserved before
 its fields are initialized, and its usable lease is published only after
 registration. Only the connection owner calls begin/end, with no concurrent use
@@ -81,8 +97,8 @@ reclamation of those connections is not implemented by this seam.
 
 ## Queue, cancellation and shutdown
 
-A worker retains at most16 requests including its running job, internally
-configurable in1–64. It dispatches exactly one command. Excess admission returns
+A worker retains at most 16 requests including its running job, internally
+configurable in 1–64. It dispatches exactly one command. Excess admission returns
 busy. Exact owner-local request identity can withdraw an undispatched request
 on last-subscriber cancellation, subscriber deadline, or coordinator close.
 Running SQL cannot be withdrawn by that interface and stays reserved until its
@@ -95,7 +111,7 @@ reply/EOF. Old ports and unmatched request IDs cannot complete a new job.
 Normal close cancels queued reads, lets active SQL settle, sends shutdown, and
 joins real EOF. Its budget+5s timeout reports failure while retaining physical
 state, never a successful kill. Owner-exit monitoring is acknowledged before
-SQL admission; a5s attach deadline closes a child whose owner disappeared before
+SQL admission; a 5s attach deadline closes a child whose owner disappeared before
 that monitor was installed. Owner-exit shutdown waits behind synchronous SQL.
 
 ## Evidence and unfinished adoption gates
@@ -152,6 +168,20 @@ before immediate shutdown can race, so these exact snapshots are individual
 observations, not a deterministic teardown count guarantee. Counter snapshots
 are inspected at quiescence/process exit; independently sampled totals are not
 transactional while jobs concurrently start/end. No environment preload was used.
+
+The later frozen-SQLite-mapping follow-up has matching, independently recorded
+source hashes on Linux and Mac: Linux focused 54 pass / 4 macOS-only skips and
+Mac focused 58 pass / 0 skips, with analyze and format clean. Both hosts freshly
+built the exact current unmarked direct SQL C component and passed its two CTest
+cases. Mac also freshly built the application-owned SQLite from its verified
+archive as part of a real standalone `native/` configure; the earlier standalone
+configure's missing-SQLite-target failure was reproduced first. The same AOT
+installed-layout changed-alias fixture fails against the exact prior 1ba public
+bootstrap/support/SQLite resolver and passes the new mapping handoff. These
+hash-bound runs qualify this seam and its AOT fixture, not the full application.
+The optional marked product/recipe qualification is separate from these direct
+unmarked C proofs, and the historical private counter observations above retain
+their original source/host labels.
 
 Root full CTest, broad direct-Store/core/desktop test bootstrap, service/Desktop
 entrypoints, validated runtime selection, install/sign/package receipts and
