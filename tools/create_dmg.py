@@ -176,7 +176,95 @@ def verify_image(destination, *, created_image=False):
             result.check_returncode()
 
 
-def create(app, manifest, name, output):
+def signing_command(arguments, *, timeout=300):
+    """Retain signing diagnostics, including partial output on timeout."""
+    try:
+        result = subprocess.run(
+            [str(argument) for argument in arguments],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as error:
+        print_output(error.stdout, error.stderr)
+        raise
+    print_output(result.stdout, result.stderr)
+    result.check_returncode()
+    return result
+
+
+def developer_id_team(path):
+    result = signing_command(["codesign", "-dv", "--verbose=4", path])
+    details = result.stdout + result.stderr
+    team = re.search(r"^TeamIdentifier=([A-Z0-9]{10})$", details, re.M)
+    if not team or not re.search(
+        r"^Authority=Developer ID Application: .+$", details, re.M
+    ):
+        raise ValueError(f"Developer ID Application signature required: {path}")
+    return team.group(1)
+
+
+def sign_disk_image(destination, identity, notary_profile, app_team):
+    signing_command(
+        ["codesign", "--force", "--sign", identity, "--timestamp", destination]
+    )
+    signing_command(["codesign", "--verify", "--strict", destination])
+    if developer_id_team(destination) != app_team:
+        raise ValueError("DMG and application signing teams differ")
+    result = signing_command(
+        [
+            "xcrun",
+            "notarytool",
+            "submit",
+            destination,
+            "--keychain-profile",
+            notary_profile,
+            "--wait",
+            "--output-format",
+            "json",
+        ],
+        timeout=3600,
+    )
+    # Retain the submission ID and rejected response for release diagnostics.
+    Path(str(destination) + ".notary.json").write_text(result.stdout)
+    submission = json.loads(result.stdout)
+    if submission.get("status") != "Accepted":
+        if submission.get("id"):
+            signing_command(
+                [
+                    "xcrun",
+                    "notarytool",
+                    "log",
+                    submission["id"],
+                    "--keychain-profile",
+                    notary_profile,
+                    Path(str(destination) + ".notary.log.json"),
+                ]
+            )
+        raise ValueError(f"DMG notarization failed: {submission}")
+    signing_command(["xcrun", "stapler", "staple", destination])
+    signing_command(["xcrun", "stapler", "validate", destination])
+    signing_command(
+        [
+            "spctl",
+            "--assess",
+            "--type",
+            "open",
+            "--context",
+            "context:primary-signature",
+            "--verbose=2",
+            destination,
+        ]
+    )
+
+
+def create(app, manifest, name, output, *, identity=None, notary_profile=None):
+    if (identity is not None or notary_profile is not None) and (
+        not identity or not notary_profile or identity == "-"
+    ):
+        raise ValueError(
+            "Signed DMGs require both a Developer ID --identity and --notary-profile"
+        )
     if not re.fullmatch(r"Open-Foresight-[A-Za-z0-9.+_-]+-macos-arm64\.dmg", name):
         raise ValueError("Invalid DMG filename")
     metadata = json.loads(manifest.read_text())
@@ -197,6 +285,18 @@ def create(app, manifest, name, output):
         check=True,
         timeout=300,
     )
+    app_team = None
+    if identity:
+        if (
+            metadata.get("signing") != "developer-id"
+            or metadata.get("notarized") is not True
+        ):
+            raise ValueError(
+                "Signed DMGs require a Developer ID signed and notarized application"
+            )
+        app_team = developer_id_team(app)
+        signing_command(["xcrun", "stapler", "validate", app])
+        signing_command(["spctl", "--assess", "--type", "execute", "--verbose=2", app])
     with tempfile.TemporaryDirectory(prefix="foresight-dmg-") as directory:
         staging = Path(directory)
         subprocess.run(
@@ -225,6 +325,8 @@ def create(app, manifest, name, output):
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
         image_diagnostics(destination)
         raise
+    if identity:
+        sign_disk_image(destination, identity, notary_profile, app_team)
     with destination.open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
     Path(str(destination) + ".sha256").write_text(f"{digest}  {name}\n")
@@ -252,8 +354,24 @@ def main():
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--name", required=True)
     parser.add_argument("--output", type=Path, default=Path("dist"))
+    parser.add_argument(
+        "--identity", help="Developer ID Application identity for the DMG"
+    )
+    parser.add_argument(
+        "--notary-profile",
+        help="Existing notarytool Keychain profile; requires --identity",
+    )
     args = parser.parse_args()
-    print(create(args.app, args.manifest, args.name, args.output))
+    print(
+        create(
+            args.app,
+            args.manifest,
+            args.name,
+            args.output,
+            identity=args.identity,
+            notary_profile=args.notary_profile,
+        )
+    )
 
 
 if __name__ == "__main__":

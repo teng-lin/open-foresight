@@ -8,6 +8,8 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Added
 
+- Support opt-in Developer ID signing, notarization and stapling for macOS DMGs,
+  with checksums calculated after Gatekeeper assessment of the final image.
 - Rename meetings from the workspace header. Manual names persist across restarts
   and calendar refreshes.
 

@@ -13,6 +13,249 @@ import pytest
 from tools import create_dmg
 
 
+@pytest.fixture
+def signed_dmg(tmp_path, monkeypatch):
+    app = tmp_path / "Open Foresight.app"
+    app.mkdir()
+    manifest = tmp_path / "app.manifest.json"
+    metadata = {
+        "revision": "a" * 40,
+        "architecture": "arm64",
+        "version": "0.1.2",
+        "build_number": 42,
+        "signing": "developer-id",
+        "notarized": True,
+    }
+    manifest.write_text(json.dumps(metadata))
+    commands = []
+    state = {"status": "Accepted", "app_team": "ABCDEFGHIJ", "dmg_team": "ABCDEFGHIJ"}
+
+    def run(arguments, **kwargs):
+        commands.append(arguments)
+        if arguments[:2] == ["hdiutil", "create"]:
+            Path(arguments[-1]).write_bytes(b"disk image")
+        if arguments[:2] == ["codesign", "-dv"]:
+            team = state["app_team" if Path(arguments[-1]) == app else "dmg_team"]
+            details = f"Authority=Developer ID Application: Example ({team})\nTeamIdentifier={team}\n"
+            return subprocess.CompletedProcess(arguments, 0, "", details)
+        if arguments[:2] == ["codesign", "--force"]:
+            Path(arguments[-1]).write_bytes(b"signed disk image")
+        if arguments[:3] == ["xcrun", "notarytool", "submit"]:
+            assert kwargs["timeout"] == 3600
+            return subprocess.CompletedProcess(
+                arguments,
+                0,
+                json.dumps({"status": state["status"], "id": "submission-id"}),
+                "",
+            )
+        if arguments[:3] == ["xcrun", "notarytool", "log"]:
+            Path(arguments[-1]).write_text('{"issues": ["rejected fixture"]}')
+        if arguments[:3] == ["xcrun", "stapler", "staple"]:
+            Path(arguments[-1]).write_bytes(b"signed and stapled disk image")
+        return subprocess.CompletedProcess(arguments, 0, "", "")
+
+    monkeypatch.setattr(create_dmg.subprocess, "run", run)
+
+    def create(**options):
+        return create_dmg.create(
+            app,
+            manifest,
+            "Open-Foresight-0.1.2-macos-arm64.dmg",
+            tmp_path / "dist",
+            **(
+                {
+                    "identity": "Developer ID Application: Example (ABCDEFGHIJ)",
+                    "notary_profile": "release",
+                }
+                | options
+            ),
+        )
+
+    return create, commands, state, manifest
+
+
+def test_signed_dmg_hashes_final_stapled_bytes_after_gatekeeper_acceptance(signed_dmg):
+    create, commands, _, manifest = signed_dmg
+    image = create()
+    assert image.read_bytes() == b"signed and stapled disk image"
+    digest = hashlib.sha256(image.read_bytes()).hexdigest()
+    assert json.loads(Path(str(image) + ".build.json").read_text())["sha256"] == digest
+    assert Path(str(image) + ".sha256").read_text() == f"{digest}  {image.name}\n"
+    assert Path(str(image) + ".manifest.json").read_bytes() == manifest.read_bytes()
+    assert (
+        json.loads(Path(str(image) + ".notary.json").read_text())["status"]
+        == "Accepted"
+    )
+    assert commands[-3:] == [
+        ["xcrun", "stapler", "staple", str(image)],
+        ["xcrun", "stapler", "validate", str(image)],
+        [
+            "spctl",
+            "--assess",
+            "--type",
+            "open",
+            "--context",
+            "context:primary-signature",
+            "--verbose=2",
+            str(image),
+        ],
+    ]
+    assert commands.index(
+        ["xcrun", "stapler", "validate", str(manifest.parent / "Open Foresight.app")]
+    ) < next(
+        i for i, command in enumerate(commands) if command[:2] == ["hdiutil", "create"]
+    )
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"identity": None},
+        {"notary_profile": None},
+        {"identity": "-"},
+        {"identity": "", "notary_profile": ""},
+    ],
+)
+def test_signed_dmg_requires_identity_and_notary_profile_together(signed_dmg, options):
+    create, commands, _, _ = signed_dmg
+    with pytest.raises(ValueError, match="require both"):
+        create(**options)
+    assert not commands
+
+
+@pytest.mark.parametrize(
+    "field,value", [("signing", "ad-hoc-development"), ("notarized", False)]
+)
+def test_signed_dmg_rejects_unnotarized_or_adhoc_app(signed_dmg, field, value):
+    create, commands, _, manifest = signed_dmg
+    metadata = json.loads(manifest.read_text())
+    metadata[field] = value
+    manifest.write_text(json.dumps(metadata))
+    with pytest.raises(ValueError, match="notarized application"):
+        create()
+    assert not any(command[:2] == ["hdiutil", "create"] for command in commands)
+
+
+@pytest.mark.parametrize(
+    "field,team", [("app_team", "not-a-team"), ("dmg_team", "ZYXWVUTSRQ")]
+)
+def test_signed_dmg_rejects_invalid_or_mismatched_team(signed_dmg, field, team):
+    create, _, state, manifest = signed_dmg
+    state[field] = team
+    with pytest.raises(ValueError, match="signature required|teams differ"):
+        create()
+    assert not list(manifest.parent.glob("dist/*.sha256"))
+
+
+def test_rejected_dmg_retains_notary_response_and_log_without_success_sidecars(
+    signed_dmg,
+):
+    create, _, state, manifest = signed_dmg
+    state["status"] = "Invalid"
+    with pytest.raises(ValueError, match="DMG notarization failed"):
+        create()
+    image = manifest.parent / "dist/Open-Foresight-0.1.2-macos-arm64.dmg"
+    assert (
+        json.loads(Path(str(image) + ".notary.json").read_text())["id"]
+        == "submission-id"
+    )
+    assert "rejected fixture" in Path(str(image) + ".notary.log.json").read_text()
+    assert not Path(str(image) + ".build.json").exists()
+    assert not Path(str(image) + ".sha256").exists()
+
+
+@pytest.mark.parametrize("failure", ["sign", "submit", "staple", "validate", "assess"])
+def test_failed_dmg_signing_does_not_write_success_sidecars(
+    signed_dmg, monkeypatch, failure
+):
+    create, _, _, manifest = signed_dmg
+    original = create_dmg.subprocess.run
+
+    def run(arguments, **kwargs):
+        is_image = any(str(argument).endswith(".dmg") for argument in arguments)
+        should_fail = (
+            (failure == "sign" and arguments[:2] == ["codesign", "--force"])
+            or (
+                failure == "submit"
+                and arguments[:3] == ["xcrun", "notarytool", "submit"]
+            )
+            or (
+                failure in ("staple", "validate")
+                and arguments[:3] == ["xcrun", "stapler", failure]
+            )
+            or (failure == "assess" and arguments[0] == "spctl")
+        )
+        if is_image and should_fail:
+            return subprocess.CompletedProcess(
+                arguments, 1, "partial signing output", "signing failed"
+            )
+        return original(arguments, **kwargs)
+
+    monkeypatch.setattr(create_dmg.subprocess, "run", run)
+    with pytest.raises(subprocess.CalledProcessError) as error:
+        create()
+    assert error.value.output == "partial signing output"
+    assert error.value.stderr == "signing failed"
+    assert not list(manifest.parent.glob("dist/*.sha256"))
+    assert not list(manifest.parent.glob("dist/*.build.json"))
+
+
+def test_signing_timeout_preserves_partial_output(capsys, monkeypatch):
+    timeout = subprocess.TimeoutExpired(
+        ["codesign"], 300, output=b"partial\n", stderr=b"failed\n"
+    )
+
+    def run(*args, **kwargs):
+        raise timeout
+
+    monkeypatch.setattr(create_dmg.subprocess, "run", run)
+    with pytest.raises(subprocess.TimeoutExpired):
+        create_dmg.signing_command(["codesign"])
+    output = capsys.readouterr()
+    assert output.out == "partial\n"
+    assert output.err == "failed\n"
+
+
+def test_development_certificate_is_rejected_even_with_team_identifier(monkeypatch):
+    monkeypatch.setattr(
+        create_dmg.subprocess,
+        "run",
+        lambda arguments, **kwargs: subprocess.CompletedProcess(
+            arguments,
+            0,
+            "",
+            "Authority=Apple Development: Example\nTeamIdentifier=ABCDEFGHIJ\n",
+        ),
+    )
+    with pytest.raises(ValueError, match="Developer ID Application signature required"):
+        create_dmg.developer_id_team(Path("App.app"))
+
+
+def test_cli_forwards_signing_options(signed_dmg, monkeypatch):
+    _, _, _, manifest = signed_dmg
+    monkeypatch.setattr(
+        create_dmg.sys,
+        "argv",
+        [
+            "create_dmg.py",
+            "--app",
+            str(manifest.parent / "Open Foresight.app"),
+            "--manifest",
+            str(manifest),
+            "--name",
+            "Open-Foresight-0.1.2-macos-arm64.dmg",
+            "--output",
+            str(manifest.parent / "dist"),
+            "--identity",
+            "Developer ID Application: Example (ABCDEFGHIJ)",
+            "--notary-profile",
+            "release",
+        ],
+    )
+    create_dmg.main()
+    assert list(manifest.parent.glob("dist/*.sha256"))
+
+
 @pytest.mark.parametrize("leaked_attachment", [False, True])
 def test_shared_dmg_sidecar_binds_bytes_source_version_architecture_and_build(
     tmp_path, leaked_attachment
