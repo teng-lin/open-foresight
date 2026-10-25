@@ -962,3 +962,63 @@ remaining Python import conversion. Runtime accounting also reproduced an
 unbounded health-message mailbox with a paused coordinator; a bounded ACK repair
 is undergoing its own review/platform checks before integration. These are real
 remaining implementation/acceptance gates, not a whole-plan completion claim.
+
+
+### Reviewed local candidate checkpoint, 2026-10-25
+
+The next candidate integrates accepted branch `6a3a815a` with the closed logging,
+SQL and application checkpoints. It remains local: PR #180 is still a draft at
+`66c23c9e`. Neither this integration nor the following component results establish
+full-plan acceptance or permission to publish installers.
+
+- Preference compatibility repair `36e8f5c0` is integrated as `ed300b86`.
+  The nine reproduced regressions now pass; 87 existing focused cases pass with
+  no skips. The original malformed-selection/privacy oracles remain unchanged.
+  Follow-up `8017005c`, integrated as `069ceac7`, adds all six entity tables to
+  the exact service/external-writer revision inventory. Two additional workspace
+  clear/rollback cases pass unchanged. Historical migrations and fixtures stay
+  frozen. Schema-23 documentation and drift tests are updated in `c4737ae3`:
+  the actual registry check succeeds and all 17 tests pass.
+- Logging control repair `ab7df69d`, integrated as `d1cf2e77`, passes 105 tests
+  each on Linux and HanSolo. Holding the actual writer in controlled C++ prepare
+  changes 1,000 profile plus 1,000 ownership messages to zero plus one. This
+  proves those control bounds, not the aggregate 512 KiB memory requirement.
+- Reader admission and fixture-lifecycle repair `46ca1f28` passed a second whole
+  independent review. Its final bytes pass 112 core and 58 desktop-adjacent
+  cases, with no skips/failures. The earlier full desktop result, 591 passed,
+  17 skipped and zero failed, belongs to the preceding source revision; the
+  final reentrant-registration repair still needs the combined full suite.
+- Native reporting `6935e924`, integrated as `2c87ccb7`, passed whole review
+  after correcting the false unflushed-profile detection claim and adding LLVM
+  total-consistency and timeout-output controls. Its 58 focused Python tests
+  pass. The actual Clang-23 report retains original build provenance: root CTest
+  38/38 and line coverage 7,962/11,140 (71.47%). This is the older native scope;
+  current SQL/logging target classification and actual Mac coverage remain open.
+- The wire-only closing launcher omission is repaired in `2f114dc8`.
+  Accepted updater `c50b2f28` is present as `c8f7643d`; its Linux and Mac results
+  remain 39 core plus seven widget cases each, without a live GitHub TLS or
+  installed-product acceptance claim.
+
+The accepted branch `6a3a815a` separately passed its complete Python gate:
+5,781 passed, 31 skipped, 52 retained warnings and 95.75% combined coverage.
+Ruff, mypy (171 files) and the timeout guard passed. Evidence and actual skip
+reasons are in `/var/tmp/of-push6a3/report.json`; this does not qualify the
+unmerged Python import batch or final combined candidate.
+
+The immutable `2c4bcda2` plus catalog run finished with 2,620 core passes,
+17 skips and 13 failures. Its full output and skip metadata remain in
+`/var/tmp/of-coherent-final/`. Repairs are staged separately; no passing full
+core/coverage claim is made from that failed run. Five skips emitted no reason
+and are explicitly recorded that way rather than given invented prerequisites.
+
+Required work remains: production logging readiness and safe transport adoption;
+aggregate physical memory and bounded producer capability/health controls;
+Step-4 support UI/docs; restore race repairs, shipping bootstrap and Mac cases;
+current configuration-port injection; correct-toolchain Python import/caller
+qualification; pin/builder/ICU/reproducibility qualification and owner-reviewed
+workflow wiring; final first-run review/freshness/Mac cases; actual Keychain
+execution (currently Security -25308, user interaction disallowed); and the
+complete frozen-source matrix, CI/reviews and verified merge. The synthetic
+first-run journey is not real-model, GPU, physical-audio, minimum-Mac-runtime or
+final signed-installer acceptance. The scope amendment's deferred security work
+remains deferred; existing gates and owner-review requirements remain intact.
