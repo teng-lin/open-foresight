@@ -750,3 +750,42 @@ its component results do not establish the storage child or application
 integration. Native lifecycle/client candidates also remain unaccepted while
 their remaining review findings are repaired. This follow-up keeps one draft PR
 and does not claim completion of either combined plan.
+
+### Runtime/client integration and parallel work, October 25
+
+The local remediation branch now includes qualified candidate `9199c5fe` by
+conflict-free fast-forward from `b0c02559`. This accepts the native lifecycle,
+typed client contracts, renderer boundaries, bounded model acquisition and
+model-transport cancellation repairs into the local integration branch. The
+notes timer fixture also warms its existing fake transport before measuring the
+production timer; hosted Mac verification of that fixture remains pending.
+
+Exact-candidate Linux core passed **2,421 / 17 skipped**, with **92.79%** coverage;
+desktop passed **583 / 17 skipped**, with **93.48%** coverage. Both enforce 90%.
+Mac core passed **2,422 / 14 skipped**, with **93.11%** report-only coverage;
+desktop passed **585 / 13 skipped**, with **93.43%** report-only coverage.
+Compiled service/MCP passed **37/37** on Linux and **35 / 2 skipped** on Mac;
+the two Mac skips require Linux package layouts. Actual desktop integration
+passed **1/1 on each host**, with Linux using an isolated display. Fast suites
+passed **2/2 Linux** and **1/1 Mac**. Linux Python passed **5,641 / 31 skipped**,
+with **95.856%** combined coverage against the 95% gate; ruff, mypy (168 files)
+and the subprocess-timeout guard passed.
+
+The application products were freshly compiled for this candidate. Native
+products explicitly reuse qualified `c77b6649` after verifying all **137**
+native/CMake/helper/protocol inputs and exact product hashes. That earlier fresh
+root CTest passed **38/38 Linux** and **42/42 Mac**, zero skips. This is not a
+claim of a new native build at `9199c5fe`. Exact skip inventories, commands,
+coverage and product provenance are retained in
+`/var/tmp/of-c1/919-qualification/final-matrix-report.json`. Model cancellation
+peer and repeated Claude reviews converged through `868e17c5`; the complementary
+native/client review evidence remains applicable to unchanged source, and the
+notes fixture's separate Claude review converged.
+
+Logging identities, socket peer/Claude review and a native-independent SQL
+deadline prototype now run in parallel while root owns logging worker
+implementation and integration. The storage child/application adoption and SQL
+whole-VM teardown gap remain unfinished. Real weights, GPU, physical audio,
+cloud credentials and signed installed distributions were not accepted by these
+offline suites. This remains one draft PR; these local results do not establish
+whole-plan completion or hosted acceptance of the new head.
