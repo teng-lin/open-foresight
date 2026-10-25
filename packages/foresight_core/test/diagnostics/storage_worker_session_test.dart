@@ -174,6 +174,78 @@ Future<void> _lateNativeCounters(
 
 void main() {
   test(
+    'native health remains bounded while its coordinator cannot acknowledge',
+    () async {
+      final profile = createTestTempDirectorySync('native-health-bound-');
+      final imagePath =
+          '${profile.path}/runtime.${Platform.isMacOS ? 'dylib' : 'so'}';
+      await native_fixture.compile(imagePath);
+      _Owner? owner;
+      final session = await LoggingSession.startForTesting(
+        configuration: const DiagnosticConfiguration(),
+        profilePath: profile.path,
+        workerFactory: (context) =>
+            owner = _Owner(context, holdFirstAppend: true),
+      );
+      addTearDown(() async {
+        if (owner != null && !owner!.release.isCompleted) {
+          owner!.release.complete();
+        }
+        await session.close();
+      });
+      final runtime = NativeRuntime(imagePath);
+      runtime.lib.lookupFunction<Void Function(), void Function()>(
+        'fs_test_configure',
+      )();
+      final enqueue = runtime.lib
+          .lookupFunction<Int32 Function(Int32), int Function(int)>(
+            'fs_test_enqueue',
+          );
+      expect(enqueue(1), 1);
+      await eventually(() => owner != null);
+      await owner!.entered.future;
+      final extras = [
+        for (var i = 2; i < LoggingSession.maximumProducers; i++)
+          session.registerProducer(DiagnosticProducerKind.domain),
+      ];
+      await Future.wait(extras.map((p) => p.ready));
+      final before =
+          (await session.inspectBudgetForTesting()).nativeHealthMessages;
+      for (var at = 0; at < extras.length; at++) {
+        for (var n = 0; n < 100; n++) {
+          extras[at].emit(
+            DiagnosticEvent.rpcCompleted,
+            DiagnosticComponent.domain,
+            fields: () => {
+              DiagnosticField.category: DiagnosticCategory
+                  .values[at % DiagnosticCategory.values.length],
+            },
+          );
+        }
+      }
+      for (var n = 0; n < 1000; n++) {
+        enqueue(0);
+      }
+      // This VM owns the coordinator/status port. Its writer keeps polling while
+      // the held APPEND and all native-health acknowledgements remain pending.
+      sleep(const Duration(seconds: 4));
+      final after =
+          (await session.inspectBudgetForTesting()).nativeHealthMessages;
+      expect(
+        after - before,
+        lessThanOrEqualTo(2),
+        reason:
+            'native health must coalesce behind one outstanding coordinator acknowledgement',
+      );
+      owner!.release.complete();
+      for (final p in extras) {
+        p.close();
+      }
+      final closed = await session.close();
+      expect(closed.writerExited, isTrue);
+    },
+  );
+  test(
     'busy native close cannot overtake a held late summary acknowledgement',
     () async {
       final profile = createTestTempDirectorySync('native-summary-');
