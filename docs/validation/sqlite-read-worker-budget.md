@@ -9,16 +9,26 @@ startup gate before adoption. A missed gate intentionally fails closed.
 Embeddings call the startup-only public capability:
 
 ```dart
-initializeSqliteRuntime(supportLibrary: validatedAbsoluteRuntimeSupportPath);
+final bootstrap = initializeSqliteRuntime(
+  supportLibrary: validatedAbsoluteRuntimeSupportPath,
+);
+// Pass bootstrap to each owned isolate; bind before its first database access.
+// bindSqliteRuntime(bootstrap);
 ```
 
 The embedding must already have validated that exact runtime artifact through
 its ownership/package trust contract. The SQL seam does not invent a selector,
 consult an environment override, search a basename, inherit a preload variable
 or load the heavyweight application native image. It requires an absolute
-selection and remembers that exact selection/original mapping. Repeating it
-reuses the same pinned code; a changed selection is refused. Package and
-entrypoint owner review is required before integration.
+selection and remembers that exact selection/original mapping in its isolate.
+Repeating it there reuses the same pinned code; a changed selection or a worker
+binding refuses before path loading. The process entrypoint owns all path-based
+initialization and passes the opaque public bootstrap to every owned isolate.
+Those workers call `bindSqliteRuntime`, which uses only the inherited original
+code. The Dart latch is not process-global: an arbitrary unbound isolate can
+violate the embedding contract by calling path initialization itself. This seam
+does not claim to prevent arbitrary embedding code from doing so. Package and
+entrypoint owner review must establish the real process-entrypoint/worker order.
 
 The separate `foresight_sql_support` image has only system dependencies.
 Diagnostics-off does not remove the SQL deadline requirement and does not make
@@ -97,8 +107,13 @@ contract and required the early/pure-ready split, complete original-image table,
 eager SQLite symbol resolution, diagnostics-independent image and NDEBUG-safe
 native fixture implemented in this seam.
 
-Focused seam tests explicitly bootstrap their native fixture in test main
-before the first DB/spawn. The fresh-isolate missing-handoff oracle remains a
+Focused seam tests explicitly bootstrap their native fixture in each test main
+before that suite's first DB/spawn. A multi-suite test runner may run those mains
+in separate isolates while another suite already owns a database; that batch is
+not proof of a process-wide pre-lock loading order. The public embedding regression
+holds a real parent transaction while a fresh worker binds the inherited opaque
+record, refuses an alternate existing absolute support image before loading and
+executes SQL through the original code. The fresh-isolate missing-handoff oracle remains a
 refusal even though native code is already mapped in the process. The same
 private code-only handoff succeeds with the application-native path absent.
 Tests preserve the earlier generation/queue/cancel/close oracles and add actual
@@ -108,6 +123,35 @@ Native fixture checks are explicit CHECK calls, including in Release/NDEBUG.
 They cover eight concurrent early initializers, retained/no-pin NOLOAD controls
 before DB creation,64slots/65th refusal, actual long SQL expiry, stale-lease ABA,
 next-job/other-connection independence and four concurrent distinct owners.
+
+The separate test-only `sql_support_proof.c` image includes the exact production
+C implementation and forwards its original installer/callback through native
+witnesses. It does not change the production ABI or add a production hook.
+Its CTest case requires observed registrations/interrupts and zero retained
+contexts after normal completion. For private actual-VM-loss evidence, compile
+the reporter with an already open controller-owned regular descriptor and its
+exact device/inode. The initializer marks that descriptor CLOEXEC; the exit
+report writes only if its identity still matches, without opening/closing a
+pathname or printing to application stderr. Nested helpers cannot inherit it.
+The ordinary test image has no report descriptor or exit output.
+
+Linux source8c focused52pass/4macOS-only skips and Mac sourceaeee focused56pass/0skips
+execute the native path. Linux standalone component CTest passed2/2; the Mac
+sourceaeee component run passed1/1, and the second witness CTest was not executed
+on Mac. These are component results, not root native/application qualification.
+Independent private native counters on each host recorded normal
+`started=39 ended=39 expired=7 live=0`. The normal counters exclude the separate
+owner-exit child processes: their reporter descriptor is close-on-exec and
+identity-checked. Each host's separate immediate-main fixture recorded
+`started=2 ended=1 expired=1 live=1` once and exited0. The warm request was awaited
+successfully, so the expired retained registration is inferred to be the
+subsequent long request. This proves an observed expiry callback and a retained
+registration at process exit; statement return before exit was not independently
+witnessed. It does not prove normal unregister or that Dart finally ran. Dispatch
+before immediate shutdown can race, so these exact snapshots are individual
+observations, not a deterministic teardown count guarantee. Counter snapshots
+are inspected at quiescence/process exit; independently sampled totals are not
+transactional while jobs concurrently start/end. No environment preload was used.
 
 Root full CTest, broad direct-Store/core/desktop test bootstrap, service/Desktop
 entrypoints, validated runtime selection, install/sign/package receipts and

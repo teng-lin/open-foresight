@@ -59,7 +59,9 @@ final class SqlSupportBootstrap {
 
 /// Explicit embedding startup, using the artifact path already selected and
 /// validated by its owner. No environment selector, basename or fallback search.
-/// Call before ANY application database/worker, not from an individual read.
+/// The process entrypoint calls this before ANY application database/worker.
+/// This library's Dart latch is isolate-local, not a process-wide loader guard.
+/// Owned workers bind the inherited original-code record instead of calling it.
 void initializeSelectedSqlSupport(String selectedLibrary) {
   if (_bootstrap != null) {
     if (_selectedLibrary != selectedLibrary) {
@@ -79,7 +81,7 @@ void initializeSelectedSqlSupport(String selectedLibrary) {
     );
   }
   final original = DynamicLibrary.open(selectedLibrary);
-  initializeSqlSupportEarly(original);
+  _initializeSqlSupportEarly(original);
   _selectedLibrary = selectedLibrary;
 }
 
@@ -87,7 +89,7 @@ void initializeSelectedSqlSupport(String selectedLibrary) {
 /// The caller supplies its original trusted mapping; this does not select a
 /// pathname, consult an environment override, or load the heavyweight library.
 /// Entry-point/package ownership must establish that mapping before calling.
-SqlSupportBootstrap initializeSqlSupportEarly(DynamicLibrary ownedImage) {
+SqlSupportBootstrap _initializeSqlSupportEarly(DynamicLibrary ownedImage) {
   if (_openedConnection) {
     throw StateError('SQL support must be initialized before database access');
   }
