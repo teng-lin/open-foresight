@@ -60,12 +60,17 @@ A fresh worker does not re-read the SQLite environment, resolve an installation
 symlink, search a basename or discover another image. Before its first database,
 it requires the frozen canonical name to succeed with `RTLD_NOLOAD` and match the
 original anchor/image. Only then may the Dart FFI loader acquire its reference to
-that exact already mapped canonical image. The package's function bindings and
-source identity must match before a connection opens. These startup refcounts
+that exact already mapped canonical image. The entrypoint has already opened
+this exact canonical name before connections; [Dart's library-open contract](https://api.dart.dev/dart-ffi/DynamicLibrary/DynamicLibrary.open.html)
+guarantees one process load for repeated use of the same path across isolates.
+The package's function bindings and source identity must match before a
+connection opens. These startup refcounts
 are retained until process death. The AOT regression changes a real installed
 SQLite alias to a loadable non-SQLite image while a parent write transaction is
-held; an explicit reverse control proves the alias changed, and both a fresh
-bound isolate and the real read worker keep the original mapping.
+held; a second case also renames and replaces the frozen physical file itself.
+The replacement bytes are checked independently. An explicit reverse control
+proves the discovery alias changed, and both a fresh bound isolate and the real
+read worker keep the original mapped image in both cases.
 
 Owned sessions construct their budget eagerly. No read snapshot/BEGIN performs
 a support-image or SQLite-symbol lookup. `Database.handle` stays in its owning
@@ -169,19 +174,34 @@ observations, not a deterministic teardown count guarantee. Counter snapshots
 are inspected at quiescence/process exit; independently sampled totals are not
 transactional while jobs concurrently start/end. No environment preload was used.
 
-The later frozen-SQLite-mapping follow-up has matching, independently recorded
-source hashes on Linux and Mac: Linux focused 54 pass / 4 macOS-only skips and
-Mac focused 58 pass / 0 skips, with analyze and format clean. Both hosts freshly
-built the exact current unmarked direct SQL C component and passed its two CTest
-cases. Mac also freshly built the application-owned SQLite from its verified
-archive as part of a real standalone `native/` configure; the earlier standalone
-configure's missing-SQLite-target failure was reproduced first. The same AOT
-installed-layout changed-alias fixture fails against the exact prior 1ba public
-bootstrap/support/SQLite resolver and passes the new mapping handoff. These
-hash-bound runs qualify this seam and its AOT fixture, not the full application.
-The optional marked product/recipe qualification is separate from these direct
-unmarked C proofs, and the historical private counter observations above retain
-their original source/host labels.
+The initial frozen-mapping follow-up (46b) binds only its 23 listed inputs:
+Linux focused 54 pass / 4 macOS-only skips and Mac focused 58 pass / 0 skips.
+Both hosts built the current unmarked direct SQL C component and passed its two
+CTest cases. Linux used a synthetic module-only CMake project. Mac used the
+real standalone `native/` project, freshly compiled SQL and application-owned
+SQLite from the verified archive, after reconfiguring a cache left by a missing
+SDK dependency. The original missing-SQLite-target configure failure was
+reproduced first. These are component results, not a fresh full native build.
+
+The later physical-file follow-up binds 37 explicitly allowlisted SQL code and
+dependency files before and after both hosts' runs, including budget, snapshot,
+coordinator, store reader, Store, runtime configuration, schema/backup helpers,
+and the owner-exit fixture. Those 37 hashes match across hosts; this does not
+claim identity of the wider application/credential graph. Linux focused 55 pass
+/ 4 macOS-only skips and Mac focused 59 pass / 0 skips. Analyze passed on both;
+Linux formatted the package, while Mac checked the three changed overlaid Dart
+files. Native C/header/recipe bytes were unchanged and the preceding verified
+unmarked components were explicitly reused, with no fresh-compile claim.
+
+Two Linux-only prior-resolver negatives use the exact 1ba public bootstrap,
+support and SQLite resolver: one reaches the direct-isolate oracle, and one
+runs the real reader without an injected package-loader override. Both fail
+against the changed alias; both use the same unmarked support image as the
+positive follow-up. The optional marked product/recipe qualification remains
+separate. Historical counter and sanitizer logs retain their original
+source/host labels; old sanitizer output without recorded flags/hashes is not
+current qualification. These runs qualify the seam and its AOT fixture, not the
+full application.
 
 Root full CTest, broad direct-Store/core/desktop test bootstrap, service/Desktop
 entrypoints, validated runtime selection, install/sign/package receipts and

@@ -64,6 +64,9 @@ int _imageFor(int address) {
 /// A NOLOAD-only reference never maps a replacement image. It is retained for
 /// process lifetime, including VM loss. No ordinary dlclose accompanies it.
 void _retainOriginal(SqliteMappingBootstrap mapping) {
+  if (!Platform.isLinux && !Platform.isMacOS) {
+    throw UnsupportedError('Original SQLite mapping requires glibc or dyld');
+  }
   final system = DynamicLibrary.process();
   final dlopen = system
       .lookupFunction<_Dlopen, Pointer<Void> Function(Pointer<Utf8>, int)>(
@@ -138,6 +141,9 @@ SqliteMappingBootstrap captureSqliteMapping(
 /// Refuse before a normal open unless the frozen original is already mapped.
 DynamicLibrary openOriginalSqliteMapping(SqliteMappingBootstrap mapping) {
   _retainOriginal(mapping);
+  // The entrypoint already opened this exact canonical name before DB locks.
+  // Dart's DynamicLibrary.open contract loads a given path only once across
+  // isolates; this acquires that registered original, never a discovery alias.
   final library = DynamicLibrary.open(mapping.path);
   if (library.lookup<Void>('sqlite3_progress_handler').address !=
           mapping.progressAddress ||
