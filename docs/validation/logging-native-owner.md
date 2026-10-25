@@ -203,3 +203,19 @@ execution environment separately.
 Worker requests validate their closed type and byte limit before making a copy;
 the owned byte view is read-only so later caller mutation cannot change an
 in-flight command. Its regression retains the formerly mutable-view failure.
+
+Implementation clarification: the coordinator drives the bounded nonblocking
+native request/reply cells at 1 ms only while its single request/bootstrap is
+pending. The writer owns queue/credit ordering and initiates those requests;
+it runs the existing 250 ms heartbeat/flush tick and coalesced 100 ms status
+edge. This supersedes the earlier design draft's statement that the writer
+itself pumps the cells. Neither idle coordinator polling nor another keepalive
+is added. Active-pump CPU/wakeup and physical allocation measurements remain
+part of B4 acceptance; cadence alone proves no scheduler latency bound.
+
+A held CLASSIFY acknowledgement can overlap a newly expected ownership decision
+and close. After that acknowledgement, classification rechecks the pending
+decision, and deferred close retains its existing 100 ms ownership deadline.
+It cannot flush/discard the candidate failure or cancel that deadline early.
+The acquired decision promotes/protects service records before their append;
+the regression retains the premature-close failure and the corrected result.

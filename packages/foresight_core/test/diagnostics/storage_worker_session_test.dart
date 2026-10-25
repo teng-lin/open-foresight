@@ -48,7 +48,11 @@ final class _Sink implements DiagnosticSink {
 /// Deliberately injected protocol/ownership control, not OS/file acceptance.
 /// Root's actual child dispatch validates every schema2 payload even here.
 final class _Owner implements DiagnosticWorkerOwner {
-  _Owner(this.context, {this.holdFirstAppend = false}) {
+  _Owner(
+    this.context, {
+    this.holdFirstAppend = false,
+    this.holdFirstClassification = false,
+  }) {
     dispatch = DiagnosticStorageWorkerState.forTesting(
       parentPid: context.applicationPid,
       buildId: _build,
@@ -56,7 +60,9 @@ final class _Owner implements DiagnosticWorkerOwner {
     );
   }
   final DiagnosticStorageLaunchContext context;
-  final bool holdFirstAppend;
+  final bool holdFirstAppend, holdFirstClassification;
+  final classificationEntered = Completer<void>(),
+      classificationRelease = Completer<void>();
   final sink = _Sink();
   late final DiagnosticStorageWorkerState dispatch;
   final entered = Completer<void>(), release = Completer<void>();
@@ -82,6 +88,11 @@ final class _Owner implements DiagnosticWorkerOwner {
     if (active > maximumActive) maximumActive = active;
     try {
       final reply = dispatch.handle(request.type, request.payload);
+      if (request.type == DiagnosticWorkerFrame.classify &&
+          !classificationEntered.isCompleted) {
+        classificationEntered.complete();
+        if (holdFirstClassification) await classificationRelease.future;
+      }
       if (request.type == DiagnosticWorkerFrame.append &&
           !entered.isCompleted) {
         entered.complete();
@@ -126,6 +137,55 @@ final class _Owner implements DiagnosticWorkerOwner {
 }
 
 void main() {
+  test(
+    'late ownership during classification survives close until its decision',
+    () async {
+      final profile = createTestTempDirectorySync('late-classify-');
+      _Owner? owner;
+      final session = await LoggingSession.startForTesting(
+        configuration: const DiagnosticConfiguration(),
+        profilePath: profile.path,
+        workerFactory: (context) =>
+            owner = _Owner(context, holdFirstClassification: true),
+      );
+      addTearDown(() async {
+        if (owner != null && !owner!.classificationRelease.isCompleted) {
+          owner!.classificationRelease.complete();
+        }
+        await session.close();
+      });
+      session.producer.emit(
+        DiagnosticEvent.runtimeFailed,
+        DiagnosticComponent.service,
+      );
+      await eventually(() => owner != null);
+      await owner!.classificationEntered.future.timeout(
+        const Duration(seconds: 2),
+      );
+      final ownership = session.expectOwnershipDecision();
+      // A mailbox barrier proves expect_ownership was received during held RPC.
+      await session.inspectBudgetForTesting();
+      final closing = session.close();
+      var closed = false;
+      unawaited(closing.then((_) => closed = true));
+      // close posts through its existing zero-duration encoder-unwind turn.
+      // Its send must precede the classifier ACK on the same writer mailbox.
+      await Future<void>.delayed(Duration.zero);
+      owner!.classificationRelease.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      ownership.report(OwnershipDecision.acquired);
+      expect(
+        closed,
+        isFalse,
+        reason: 'Close discarded the pending ownership decision',
+      );
+      final result = await closing.timeout(const Duration(seconds: 1));
+      expect(result.flushed, isTrue);
+      expect(owner!.sink.records, hasLength(1));
+      expect(owner!.sink.classifications.last, DiagnosticRole.service);
+    },
+  );
+
   test('worker request owns immutable bounded bytes', () {
     final bytes = Uint8List.fromList([1]);
     final request = DiagnosticWorkerRequest(
