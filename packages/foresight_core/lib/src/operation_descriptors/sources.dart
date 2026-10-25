@@ -1,7 +1,12 @@
 import '../operation_descriptor.dart';
+import '../client_contract.dart';
+import '../client_results.dart';
+import '../client_requests/sources.dart';
 import '../operation_argument_schema.dart';
 
 const sourcesListDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeSources),
+  requestEncoder: OperationInputEncoder<SourcesListInput>(),
   scope: OperationScope.application,
   readOnly: true,
   approval: ApprovalPolicy.never,
@@ -19,6 +24,8 @@ const sourcesListDescriptor = OperationDescriptor(
 );
 
 const sourcesGetDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeSource),
+  requestEncoder: OperationInputEncoder<SourcesGetInput>(),
   scope: OperationScope.application,
   readOnly: true,
   approval: ApprovalPolicy.never,
@@ -38,6 +45,8 @@ const sourcesGetDescriptor = OperationDescriptor(
 );
 
 const sourcesImportDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(SourceIdentityResult.fromWire),
+  requestEncoder: OperationInputEncoder<SourcesImportInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -65,6 +74,8 @@ const sourcesImportDescriptor = OperationDescriptor(
 );
 
 const sourcesImportUrlDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(SourceIdentityResult.fromWire),
+  requestEncoder: OperationInputEncoder<SourcesImportUrlInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -85,6 +96,8 @@ const sourcesImportUrlDescriptor = OperationDescriptor(
 );
 
 const sourcesImportDirectoryDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<SourcesImportDirectoryInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -104,6 +117,8 @@ const sourcesImportDirectoryDescriptor = OperationDescriptor(
 );
 
 const sourcesRefreshDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<SourcesRefreshInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -123,6 +138,8 @@ const sourcesRefreshDescriptor = OperationDescriptor(
 );
 
 const sourcesImportFileDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(SourceIdentityResult.fromWire),
+  requestEncoder: OperationInputEncoder<SourcesImportFileInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -142,6 +159,8 @@ const sourcesImportFileDescriptor = OperationDescriptor(
 );
 
 const sourcesIndexDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<SourcesIndexInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.never,
@@ -161,6 +180,8 @@ const sourcesIndexDescriptor = OperationDescriptor(
 );
 
 const sourcesDeleteDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<SourcesDeleteInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -180,6 +201,8 @@ const sourcesDeleteDescriptor = OperationDescriptor(
 );
 
 const sourcesPauseDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<SourcesPauseInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -197,6 +220,8 @@ const sourcesPauseDescriptor = OperationDescriptor(
 );
 
 const sourcesResumeDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<SourcesResumeInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -214,6 +239,8 @@ const sourcesResumeDescriptor = OperationDescriptor(
 );
 
 const sourcesSearchDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeSearch),
+  requestEncoder: OperationInputEncoder<SourcesSearchInput>(),
   scope: OperationScope.application,
   readOnly: true,
   approval: ApprovalPolicy.never,

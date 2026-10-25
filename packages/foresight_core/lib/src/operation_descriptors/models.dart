@@ -1,7 +1,12 @@
 import '../operation_descriptor.dart';
+import '../client_contract.dart';
+import '../client_results.dart';
+import '../client_requests/models.dart';
 import '../operation_argument_schema.dart';
 
 const modelsDownloadAssetDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeDownloadLocation),
+  requestEncoder: OperationInputEncoder<ModelsDownloadAssetInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -17,6 +22,13 @@ const modelsDownloadAssetDescriptor = OperationDescriptor(
   createsLease: true,
   arguments: OperationArgumentSchema([
     ArgumentField(
+      'progress_key',
+      ArgumentKind.string,
+      nullable: true,
+      minimumLength: 1,
+      maximumLength: 256,
+    ),
+    ArgumentField(
       'kind',
       ArgumentKind.string,
       choices: ['generation', 'embedding', 'speech'],
@@ -31,6 +43,8 @@ const modelsDownloadAssetDescriptor = OperationDescriptor(
 );
 
 const modelsInspectAssetDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeInspectionLocation),
+  requestEncoder: OperationInputEncoder<ModelsInspectAssetInput>(),
   scope: OperationScope.application,
   readOnly: true,
   approval: ApprovalPolicy.never,
@@ -60,6 +74,8 @@ const modelsInspectAssetDescriptor = OperationDescriptor(
 );
 
 const modelsCancelQueryAcquisitionDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<ModelsCancelQueryAcquisitionInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -77,6 +93,8 @@ const modelsCancelQueryAcquisitionDescriptor = OperationDescriptor(
 );
 
 const modelsAcquireQueryDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<ModelsAcquireQueryInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -94,6 +112,8 @@ const modelsAcquireQueryDescriptor = OperationDescriptor(
 );
 
 const modelsSpeechDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<ModelsSpeechInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -115,6 +135,8 @@ const modelsSpeechDescriptor = OperationDescriptor(
 );
 
 const modelsRegisterDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<ModelsRegisterInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -139,6 +161,8 @@ const modelsRegisterDescriptor = OperationDescriptor(
 );
 
 const modelsGenerationDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<ModelsGenerationInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -161,6 +185,8 @@ const modelsGenerationDescriptor = OperationDescriptor(
 );
 
 const modelsEmbeddingDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<ModelsEmbeddingInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,

@@ -92,7 +92,10 @@ extension _AssistantViews on MeetingsController {
             title: Text(detectionError),
             trailing: TextButton(
               onPressed: () => _operations.run(() async {
-                await d.command(Operation.meetingsRetryDetection, {'id': id});
+                await meetingsRetryDetectionDescriptor.send(
+                  d,
+                  MeetingsRetryDetectionInput(id: id),
+                );
               }),
               child: const Text('Retry detection'),
             ),
@@ -219,9 +222,10 @@ extension _AssistantViews on MeetingsController {
           ].contains(item.state))
             TextButton(
               onPressed: () => _operations.run(() async {
-                await d.command(Operation.meetingsRetryQuestion, {
-                  'id': item.id,
-                });
+                await meetingsRetryQuestionDescriptor.send(
+                  d,
+                  MeetingsRetryQuestionInput(id: item.id),
+                );
               }),
               child: const Text('Try again'),
             ),

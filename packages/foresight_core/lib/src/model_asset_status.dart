@@ -40,12 +40,13 @@ final class ModelAssetDownloadPresentation {
     this.requestId = '',
     this.digest = '',
     this.active = false,
+    this.restartRequired = false,
     this.phase = ModelDownloadPhase.checkingCache,
     this.received = 0,
     this.total = 0,
   });
   final String requestId, digest;
-  final bool active;
+  final bool active, restartRequired;
   final ModelDownloadPhase phase;
   final int received, total;
   factory ModelAssetDownloadPresentation.fromWire(Object? value) {
@@ -55,6 +56,7 @@ final class ModelAssetDownloadPresentation {
       requestId: state['request_id'] as String? ?? '',
       digest: state['digest'] as String? ?? '',
       active: state['active'] == true,
+      restartRequired: state['restart_required'] == true,
       phase:
           ModelDownloadPhase.values
               .where((phase) => phase.wire == state['phase'])
@@ -68,6 +70,7 @@ final class ModelAssetDownloadPresentation {
     'request_id': requestId,
     'digest': digest,
     'active': active,
+    'restart_required': restartRequired,
     'phase': phase.wire,
     'received': received,
     'total': total,

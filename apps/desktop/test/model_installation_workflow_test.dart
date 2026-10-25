@@ -165,16 +165,23 @@ void main() {
       testWidgets('load failure remains visible and retry can complete', (
         tester,
       ) async {
-        loadFailure = StateError('Model adoption failed');
+        loadFailure = StateError(
+          'Model adoption failed /private/model-canary?token=secret-canary',
+        );
         await mount(tester);
         await start(tester);
         await pumpUntil(
           tester,
           () => find
-              .textContaining('Model adoption failed')
+              .text(
+                'Unable to download or load this model. Retry or use local model setup.',
+              )
               .evaluate()
               .isNotEmpty,
         );
+        expect(find.textContaining('Model adoption failed'), findsNothing);
+        expect(find.textContaining('model-canary'), findsNothing);
+        expect(find.textContaining('secret-canary'), findsNothing);
         expect(installed, 0);
         expect(finished, 0);
         loadFailure = null;

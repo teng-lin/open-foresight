@@ -61,3 +61,25 @@ export 'src/version.dart'
         openForesightVersion,
         openForesightBuildNumber,
         openForesightBuildLabel;
+
+export 'src/client_contract.dart';
+export 'src/client_command.dart';
+export 'src/client_requests.dart';
+export 'src/operation_descriptors.dart';
+export 'src/client_results.dart'
+    show
+        IntegerIdentityResult,
+        SourceIdentityResult,
+        AnswerTextResult,
+        MeetingDetailResult,
+        SourceSearchResult,
+        NotificationResult,
+        AudioCapabilityResult,
+        DriveFileResult,
+        DriveCapabilitiesResult,
+        GoogleSignInResult,
+        ServiceStatusResult,
+        ServiceStopResult;
+export 'src/operation_requests/graph_inputs.dart' show GraphSourceInput;
+export 'src/operation_descriptor.dart' show OperationDescriptor;
+export 'src/model_asset_failure.dart';

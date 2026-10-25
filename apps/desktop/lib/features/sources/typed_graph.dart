@@ -19,6 +19,22 @@ List<Map<String, Object?>> graphSourceArguments(List<SourceSummary> sources) =>
         },
     ];
 
+List<GraphSourceInput> graphSourceInputs(List<SourceSummary> sources) => [
+  for (final source in sources)
+    GraphSourceInput(
+      id: source.id,
+      revision: source.revision,
+      title: source.title,
+      content: null,
+      projection: {
+        'id': source.id,
+        'revision': source.revision,
+        'title': source.title,
+        'state': source.state,
+      },
+    ),
+];
+
 String typedGraphDocumentSet(List<SourceSummary> sources) {
   final revisions = sources.map((s) => (s.id, s.revision)).toList()
     ..sort((a, b) => a.$1.compareTo(b.$1));

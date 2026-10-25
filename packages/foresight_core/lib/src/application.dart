@@ -346,6 +346,8 @@ class Application implements ModelGate, GenerationReservationGate {
 
   Map<String, Object?>? get generationState => _runtime.generationState;
   Map<String, Object?> get captureState => _runtime.captureState;
+  Map<String, Object?> get modelAssetDownloadState =>
+      _assetDownloads.state.toWire();
 
   Future<Object?> call(
     String method,

@@ -59,24 +59,46 @@ extension _MeetingAiViews on MeetingsController {
                         );
                         if (ids == null) return;
                         if (!current()) return;
-                        await d.commandCurrent(Operation.preferencesSet, {
-                          'key': 'answerSources.meeting:$id',
-                          'value': jsonEncode(ids),
-                          'workspace_epoch': identity.workspaceEpoch,
-                        }, current);
+                        await preferencesSetDescriptor.sendCurrent(
+                          d,
+                          PreferencesSetInput(
+                            key: 'answerSources.meeting:$id',
+                            value: jsonEncode(ids),
+                            envelope: ClientEnvelope(
+                              workspaceEpoch: WireField(
+                                identity.workspaceEpoch,
+                              ),
+                            ),
+                          ),
+                          current,
+                        );
                         if (!current()) return;
-                        await d.commandCurrent(Operation.preferencesSet, {
-                          'key': 'answerSourcesSelection.$id',
-                          'value': jsonEncode(ids),
-                          'workspace_epoch': identity.workspaceEpoch,
-                        }, current);
+                        await preferencesSetDescriptor.sendCurrent(
+                          d,
+                          PreferencesSetInput(
+                            key: 'answerSourcesSelection.$id',
+                            value: jsonEncode(ids),
+                            envelope: ClientEnvelope(
+                              workspaceEpoch: WireField(
+                                identity.workspaceEpoch,
+                              ),
+                            ),
+                          ),
+                          current,
+                        );
                       }
                       if (!current()) return;
-                      await d.commandCurrent(Operation.preferencesSet, {
-                        'key': key,
-                        'value': value!,
-                        'workspace_epoch': identity.workspaceEpoch,
-                      }, current);
+                      await preferencesSetDescriptor.sendCurrent(
+                        d,
+                        PreferencesSetInput(
+                          key: key,
+                          value: value!,
+                          envelope: ClientEnvelope(
+                            workspaceEpoch: WireField(identity.workspaceEpoch),
+                          ),
+                        ),
+                        current,
+                      );
                     }),
             ),
           ),
@@ -116,11 +138,14 @@ extension _MeetingAiViews on MeetingsController {
             ),
             TextButton(
               onPressed: () => unawaited(
-                d
-                    .command(Operation.meetingsCancelGeneration, {
-                      'id': id,
-                      'kind': kind,
-                    })
+                meetingsCancelGenerationDescriptor
+                    .send(
+                      d,
+                      MeetingsCancelGenerationInput(
+                        id: id,
+                        kind: WireField(kind),
+                      ),
+                    )
                     .catchError(_operations.reportAsyncError),
               ),
               child: const Text('Cancel'),
@@ -150,11 +175,19 @@ extension _MeetingAiViews on MeetingsController {
                 onPressed: identity == null || active || _operations.busy
                     ? null
                     : () => _runMeetingAction(id, identity, (current) async {
-                        await d.commandCurrent(Operation.meetingsGenerate, {
-                          'id': id,
-                          'kind': 'actions',
-                          'workspace_epoch': identity.workspaceEpoch,
-                        }, current);
+                        await meetingsGenerateDescriptor.sendCurrent(
+                          d,
+                          MeetingsGenerateInput(
+                            id: id,
+                            kind: 'actions',
+                            envelope: ClientEnvelope(
+                              workspaceEpoch: WireField(
+                                identity.workspaceEpoch,
+                              ),
+                            ),
+                          ),
+                          current,
+                        );
                       }),
                 icon: const Icon(Icons.auto_awesome),
               ),
@@ -204,23 +237,12 @@ extension _MeetingAiViews on MeetingsController {
                                             active ||
                                             _operations.busy
                                         ? null
-                                        : (value) =>
-                                              _runMeetingAction(id, identity, (
-                                                current,
-                                              ) async {
-                                                await d.commandCurrent(
-                                                  Operation.meetingsEditTask,
-                                                  {
-                                                    'id': task.id,
-                                                    'status': value == true
-                                                        ? 'completed'
-                                                        : 'open',
-                                                    'workspace_epoch':
-                                                        identity.workspaceEpoch,
-                                                  },
-                                                  current,
-                                                );
-                                              }),
+                                        : (value) => _setTaskCompletion(
+                                            id,
+                                            task.id,
+                                            identity,
+                                            value == true,
+                                          ),
                                   ),
                                   Expanded(child: SelectableText(task.task)),
                                   IconButton(
@@ -275,6 +297,25 @@ extension _MeetingAiViews on MeetingsController {
       ],
     );
   }
+
+  Future<void> _setTaskCompletion(
+    int meeting,
+    int task,
+    FeatureRequestIdentity identity,
+    bool completed,
+  ) => _runMeetingAction(meeting, identity, (current) async {
+    await meetingsEditTaskDescriptor.sendCurrent(
+      d,
+      MeetingsEditTaskInput(
+        id: task,
+        status: WireField(completed ? 'completed' : 'open'),
+        envelope: ClientEnvelope(
+          workspaceEpoch: WireField(identity.workspaceEpoch),
+        ),
+      ),
+      current,
+    );
+  });
 
   Widget _taskEvidence(MeetingTask task) => ExpansionTile(
     title: const Text('Supporting evidence'),
@@ -337,13 +378,21 @@ extension _MeetingAiViews on MeetingsController {
         ),
       );
       if (save == true && current())
-        await d.commandCurrent(Operation.meetingsEditTask, {
-          'id': task.id,
-          'task': text.text,
-          'owner': owner.text.trim().isEmpty ? null : owner.text.trim(),
-          'due': due.text.trim().isEmpty ? null : due.text.trim(),
-          'workspace_epoch': identity.workspaceEpoch,
-        }, current);
+        await meetingsEditTaskDescriptor.sendCurrent(
+          d,
+          MeetingsEditTaskInput(
+            id: task.id,
+            task: WireField(text.text),
+            owner: WireField(
+              owner.text.trim().isEmpty ? null : owner.text.trim(),
+            ),
+            due: WireField(due.text.trim().isEmpty ? null : due.text.trim()),
+            envelope: ClientEnvelope(
+              workspaceEpoch: WireField(identity.workspaceEpoch),
+            ),
+          ),
+          current,
+        );
     } catch (_) {
       if (current()) rethrow;
     } finally {
@@ -429,17 +478,29 @@ extension _MeetingAiViews on MeetingsController {
   ) async {
     final sources = await selectMeetingSources(id, 'preparationSources');
     if (sources == null || !current()) return;
-    await d.commandCurrent(Operation.preferencesSet, {
-      'key': 'preparationSources.$id',
-      'value': jsonEncode(sources),
-      'workspace_epoch': identity.workspaceEpoch,
-    }, current);
+    await preferencesSetDescriptor.sendCurrent(
+      d,
+      PreferencesSetInput(
+        key: 'preparationSources.$id',
+        value: jsonEncode(sources),
+        envelope: ClientEnvelope(
+          workspaceEpoch: WireField(identity.workspaceEpoch),
+        ),
+      ),
+      current,
+    );
     if (!current()) return;
-    await d.commandCurrent(Operation.meetingsPrepare, {
-      'id': id,
-      'source_ids': sources,
-      'workspace_epoch': identity.workspaceEpoch,
-    }, current);
+    await meetingsPrepareDescriptor.sendCurrent(
+      d,
+      MeetingsPrepareInput(
+        id: id,
+        sourceIds: sources,
+        envelope: ClientEnvelope(
+          workspaceEpoch: WireField(identity.workspaceEpoch),
+        ),
+      ),
+      current,
+    );
   }
 
   Widget meetingPreparationPanel(int id) {

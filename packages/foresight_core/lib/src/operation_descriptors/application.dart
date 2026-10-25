@@ -1,7 +1,12 @@
 import '../operation_descriptor.dart';
+import '../client_contract.dart';
+import '../client_results.dart';
+import '../client_requests/application.dart';
 import '../operation_argument_schema.dart';
 
 const notificationsCapabilitiesDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(NotificationResult.fromWire),
+  requestEncoder: OperationInputEncoder<NotificationsCapabilitiesInput>(),
   scope: OperationScope.application,
   readOnly: true,
   approval: ApprovalPolicy.never,
@@ -19,6 +24,8 @@ const notificationsCapabilitiesDescriptor = OperationDescriptor(
 );
 
 const notificationsRequestPermissionDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(NotificationResult.fromWire),
+  requestEncoder: OperationInputEncoder<NotificationsRequestPermissionInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -36,6 +43,8 @@ const notificationsRequestPermissionDescriptor = OperationDescriptor(
 );
 
 const audioCapabilitiesDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(AudioCapabilityResult.fromWire),
+  requestEncoder: OperationInputEncoder<AudioCapabilitiesInput>(),
   scope: OperationScope.application,
   readOnly: true,
   approval: ApprovalPolicy.never,
@@ -55,6 +64,8 @@ const audioCapabilitiesDescriptor = OperationDescriptor(
 );
 
 const audioRequestSystemDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(AudioCapabilityResult.fromWire),
+  requestEncoder: OperationInputEncoder<AudioRequestSystemInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -72,6 +83,8 @@ const audioRequestSystemDescriptor = OperationDescriptor(
 );
 
 const audioRequestMicrophoneDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(AudioCapabilityResult.fromWire),
+  requestEncoder: OperationInputEncoder<AudioRequestMicrophoneInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -89,6 +102,8 @@ const audioRequestMicrophoneDescriptor = OperationDescriptor(
 );
 
 const statusDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(ServiceStatusResult.fromWire),
+  requestEncoder: OperationInputEncoder<StatusInput>(),
   scope: OperationScope.application,
   readOnly: true,
   approval: ApprovalPolicy.never,
@@ -110,6 +125,8 @@ const statusDescriptor = OperationDescriptor(
 );
 
 const answerDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(AnswerTextResult.fromWire),
+  requestEncoder: OperationInputEncoder<AnswerInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.webSearch,
@@ -131,6 +148,8 @@ const answerDescriptor = OperationDescriptor(
 );
 
 const notesListDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNotes),
+  requestEncoder: OperationInputEncoder<NotesListInput>(),
   scope: OperationScope.application,
   readOnly: true,
   approval: ApprovalPolicy.never,
@@ -148,6 +167,8 @@ const notesListDescriptor = OperationDescriptor(
 );
 
 const notesSaveDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(IntegerIdentityResult.fromWire),
+  requestEncoder: OperationInputEncoder<NotesSaveInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.overwrite,
@@ -169,6 +190,8 @@ const notesSaveDescriptor = OperationDescriptor(
 );
 
 const preferencesSetDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<PreferencesSetInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -189,6 +212,8 @@ const preferencesSetDescriptor = OperationDescriptor(
 );
 
 const workspaceClearDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<WorkspaceClearInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -206,6 +231,8 @@ const workspaceClearDescriptor = OperationDescriptor(
 );
 
 const artifactsEditDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<ArtifactsEditInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.overwrite,
@@ -227,6 +254,8 @@ const artifactsEditDescriptor = OperationDescriptor(
 );
 
 const applicationResumeDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<ApplicationResumeInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.never,
@@ -244,6 +273,8 @@ const applicationResumeDescriptor = OperationDescriptor(
 );
 
 const answerStreamDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeString),
+  requestEncoder: OperationInputEncoder<AnswerStreamInput>(),
   scope: OperationScope.service,
   readOnly: false,
   approval: ApprovalPolicy.webSearch,
@@ -265,6 +296,8 @@ const answerStreamDescriptor = OperationDescriptor(
 );
 
 const serviceStopIfIdleDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(ServiceStopResult.fromWire),
+  requestEncoder: OperationInputEncoder<ServiceStopIfIdleInput>(),
   scope: OperationScope.service,
   readOnly: false,
   approval: ApprovalPolicy.desktop,

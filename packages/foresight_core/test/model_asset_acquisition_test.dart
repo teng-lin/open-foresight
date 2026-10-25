@@ -1,3 +1,6 @@
+import 'package:foresight_core/src/model_acquisition.dart'
+    show ModelTransportException;
+import 'package:foresight_core/src/model_asset_failure.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -39,6 +42,23 @@ class HeldDownload implements ModelDownloader {
     entered.complete();
     return result.future;
   }
+}
+
+class NeverSettledPreflight implements Process {
+  final entered = Completer<void>();
+  final outcome = Completer<int>();
+  @override
+  Future<int> get exitCode {
+    if (!entered.isCompleted) entered.complete();
+    return outcome.future;
+  }
+
+  @override
+  Stream<List<int>> get stdout => const Stream.empty();
+  @override
+  Stream<List<int>> get stderr => const Stream.empty();
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 void main() {
@@ -97,6 +117,130 @@ void main() {
           as ModelsDownloadAssetRequest;
   void consent() =>
       store.setPreference('modelTerms.fixture/model.revision', 'accepted');
+
+  test(
+    'unknown physical preflight settlement latches restart and settles close',
+    () async {
+      consent();
+      final process = NeverSettledPreflight();
+      var starts = 0, stops = 0;
+      runtimeConfiguration.environment['FORESIGHT_LITERT_RUNNER'] =
+          '/fixture/runner';
+      owner = ModelAssetAcquisitionCoordinator(
+        store: store,
+        changed: () {},
+        catalog: (_) => [model],
+        startPreflight: (_) async {
+          starts++;
+          return process;
+        },
+        stopPreflight: (_) async {
+          stops++;
+          throw TimeoutException('fixture stop timeout');
+        },
+        createDownloader: () => downloader,
+      );
+      var current = true;
+      final work = owner.download(request(), current: () => current);
+      final failure = expectLater(
+        work,
+        throwsA(
+          isA<RpcError>().having(
+            (e) => e.message,
+            'message',
+            modelAcquisitionRestartMessage,
+          ),
+        ),
+      );
+      await process.entered.future;
+      current = false;
+      await failure.timeout(const Duration(seconds: 2));
+      expect(owner.busy, false);
+      expect(owner.restartRequired, true);
+      expect(owner.state.restartRequired, true);
+      expect(owner.state.active, false);
+      await expectLater(
+        owner.download(request('replacement')),
+        throwsA(
+          isA<RpcError>().having(
+            (e) => e.message,
+            'message',
+            modelAcquisitionRestartMessage,
+          ),
+        ),
+      );
+      expect(starts, 1);
+      expect(stops, 1, reason: 'never re-await the same failed stop');
+      await owner.close().timeout(const Duration(seconds: 1));
+      expect(downloader.calls, 0);
+      // No fake claim of physical reaping: the process future is still pending.
+      expect(process.outcome.isCompleted, false);
+    },
+  );
+
+  test(
+    'known public asset failures become safe actionable RpcErrors',
+    () async {
+      consent();
+      final work = owner.download(request());
+      final failure = expectLater(
+        work,
+        throwsA(
+          isA<RpcError>().having(
+            (e) => e.message,
+            'message',
+            contains('Not enough free disk space'),
+          ),
+        ),
+      );
+      await downloader.entered.future;
+      downloader.result.completeError(
+        ModelAssetFailure(
+          ModelAssetFailureCode.diskSpace,
+          requiredBytes: 2000000000,
+        ),
+      );
+      await failure;
+      expect(owner.busy, false);
+    },
+  );
+
+  test(
+    'unknown worker retirement blocks replacement downloads and settles close',
+    () async {
+      consent();
+      final work = owner.download(request());
+      final rejected = expectLater(
+        work,
+        throwsA(
+          isA<RpcError>().having(
+            (e) => e.message,
+            'message',
+            modelAcquisitionRestartMessage,
+          ),
+        ),
+      );
+      await downloader.entered.future;
+      downloader.result.completeError(
+        const ModelTransportException('worker_exit_unknown'),
+      );
+      await rejected;
+      expect(owner.busy, false);
+      expect(owner.restartRequired, true);
+      await expectLater(
+        owner.download(request('replacement')),
+        throwsA(
+          isA<RpcError>().having(
+            (e) => e.message,
+            'message',
+            modelAcquisitionRestartMessage,
+          ),
+        ),
+      );
+      await owner.close().timeout(const Duration(seconds: 1));
+      expect(downloader.calls, 1);
+    },
+  );
 
   test('terms are checked before preflight or transfer', () async {
     await expectLater(
@@ -195,7 +339,16 @@ void main() {
       );
       final work = owner.download(request());
       if (runner.endsWith('/false')) {
-        await expectLater(work, throwsStateError);
+        await expectLater(
+          work,
+          throwsA(
+            isA<RpcError>().having(
+              (e) => e.message,
+              'message',
+              modelRuntimeNotReadyMessage,
+            ),
+          ),
+        );
         expect(downloader.calls, 0);
       } else {
         await downloader.entered.future;

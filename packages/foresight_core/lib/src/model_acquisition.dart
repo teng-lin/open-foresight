@@ -1,3 +1,4 @@
+import 'public_model_budget.dart';
 import 'gemma_download.dart';
 import 'dart:async';
 import 'dart:io';
@@ -357,17 +358,27 @@ class ModelBlobDownloader {
 /// returns to the parent; multi-gigabyte model contents never enter its buffer.
 class PublicModelFileDownloader implements ModelDownloader {
   PublicModelFileDownloader({
-    this.deadlines = const ModelTransportDeadlines(),
+    ModelTransportDeadlines? deadlines,
     ModelDownloadRetryPolicy? retryPolicy,
-  }) : retryPolicy = retryPolicy ?? ModelDownloadRetryPolicy.reference() {
-    deadlines.validate();
+  }) : _testDeadlines = deadlines,
+       retryPolicy = retryPolicy ?? ModelDownloadRetryPolicy.reference() {
+    deadlines?.validate();
     if (this.retryPolicy.maxAttempts <= 0 ||
         this.retryPolicy.maxAttempts > 20) {
       throw ArgumentError.value(this.retryPolicy.maxAttempts, 'maxAttempts');
     }
   }
-  final ModelTransportDeadlines deadlines;
+  final ModelTransportDeadlines? _testDeadlines;
   final ModelDownloadRetryPolicy retryPolicy;
+  ModelTransportDeadlines deadlinesFor(GemmaModel model) {
+    if (_testDeadlines case final deadlines?) return deadlines;
+    final attempt = publicModelAttemptBudget(model);
+    return ModelTransportDeadlines(
+      attempt: attempt,
+      total: attempt * retryPolicy.maxAttempts + const Duration(minutes: 1),
+    );
+  }
+
   _ModelTransportProcess? _worker;
   final _cancelledSignal = Completer<void>();
   bool _cancelled = false, _active = false;
@@ -376,7 +387,7 @@ class PublicModelFileDownloader implements ModelDownloader {
   void cancel() {
     _cancelled = true;
     if (!_cancelledSignal.isCompleted) _cancelledSignal.complete();
-    unawaited(_worker?.cancel());
+    _worker?.cancel().ignore();
   }
 
   void _check() {
@@ -396,6 +407,7 @@ class PublicModelFileDownloader implements ModelDownloader {
       throw StateError('Download is active or cancelled');
     }
     _active = true;
+    final deadlines = deadlinesFor(model);
     final elapsed = Stopwatch()..start();
     try {
       for (var attempt = 1; ; attempt++) {
@@ -432,13 +444,14 @@ class PublicModelFileDownloader implements ModelDownloader {
           );
           _check();
           return File(utf8.decode(path));
-        } on ModelTransportException catch (error) {
+        } catch (error) {
           _check();
-          if (!{
-                'total_timeout',
-                'public_interrupted',
-              }.contains(error.failureType) ||
-              attempt >= retryPolicy.maxAttempts) {
+          final retryable =
+              error is ModelTransportException &&
+                  error.failureType == 'total_timeout' ||
+              error is ModelAssetFailure &&
+                  error.code == ModelAssetFailureCode.interrupted;
+          if (!retryable || attempt >= retryPolicy.maxAttempts) {
             rethrow;
           }
           final left = deadlines.total - elapsed.elapsed;
@@ -451,8 +464,13 @@ class PublicModelFileDownloader implements ModelDownloader {
             _cancelledSignal.future,
           ]);
         } finally {
-          await worker.cancel();
-          if (identical(_worker, worker)) _worker = null;
+          try {
+            await worker.cancel();
+          } catch (_) {
+            throw const ModelTransportException('worker_exit_unknown');
+          } finally {
+            if (identical(_worker, worker)) _worker = null;
+          }
         }
       }
     } finally {
@@ -869,6 +887,24 @@ class _ModelTransportProcess {
             continue;
           }
           if (value['ok'] == false) {
+            if (value['kind'] == 'public_failure') {
+              final code = ModelAssetFailureCode.values
+                  .where((code) => code.name == value['code'])
+                  .firstOrNull;
+              final requiredBytes = value['required_bytes'];
+              if (code == null ||
+                  requiredBytes != null &&
+                      (code != ModelAssetFailureCode.diskSpace ||
+                          requiredBytes is! int ||
+                          requiredBytes <= 0 ||
+                          requiredBytes > 1024 * 1024 * 1024 * 1024)) {
+                throw const ModelTransportException('invalid_worker_frame');
+              }
+              throw ModelAssetFailure(
+                code,
+                requiredBytes: requiredBytes as int?,
+              );
+            }
             if (value['kind'] == 'public_interrupted') {
               throw const ModelTransportException('public_interrupted');
             }
@@ -1015,14 +1051,17 @@ Future<void> runModelTransportWorker() async {
           phase: (phase) => stdout.writeln(jsonEncode({'phase': phase.name})),
         );
         result = Uint8List.fromList(utf8.encode(file.path));
-      } on StateError catch (error) {
-        final interrupted =
-            error.message ==
-            'Model transfer interrupted. Retry to resume the saved download.';
+      } catch (error) {
+        final failure = error is ModelAssetFailure
+            ? error
+            : ModelAssetFailure(ModelAssetFailureCode.invalid);
         stdout.writeln(
           jsonEncode({
             'ok': false,
-            'kind': interrupted ? 'public_interrupted' : 'public_invalid',
+            'kind': 'public_failure',
+            'code': failure.code.name,
+            if (failure.requiredBytes != null)
+              'required_bytes': failure.requiredBytes,
           }),
         );
         await stdout.flush();

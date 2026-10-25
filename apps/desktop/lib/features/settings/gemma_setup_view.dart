@@ -165,7 +165,7 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
     } catch (failure) {
       if (active)
         setState(() {
-          error = failure.toString();
+          error = modelSetupFailureMessage(failure);
           checkingCache = false;
         });
     }
@@ -286,9 +286,7 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
     } catch (failure) {
       if (active && !cancelled)
         setState(() {
-          error = failure is StateError
-              ? failure.message.toString()
-              : 'Unable to download or load this model. Retry or use local model setup.';
+          error = modelSetupFailureMessage(failure);
         });
     } finally {
       clock.stop();

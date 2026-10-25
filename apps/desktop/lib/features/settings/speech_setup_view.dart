@@ -74,7 +74,7 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
     } catch (failure) {
       if (active)
         setState(() {
-          error = failure.toString();
+          error = modelSetupFailureMessage(failure);
           checkingCache = false;
         });
     }
@@ -193,7 +193,8 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
     } on ModelDownloadCancelled {
       // Closing this dialog leaves the previous registration intact.
     } catch (failure) {
-      if (active && !cancelled) setState(() => error = failure.toString());
+      if (active && !cancelled)
+        setState(() => error = modelSetupFailureMessage(failure));
     } finally {
       if (active) setState(() => working = false);
     }

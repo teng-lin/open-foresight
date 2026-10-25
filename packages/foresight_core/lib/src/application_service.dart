@@ -443,6 +443,7 @@ class ApplicationService {
       message = {
         'event': 'changed',
         'capture': application.captureState,
+        'model_asset_download': application.modelAssetDownloadState,
         'revision': domain.store.dataRevision,
         'sources_paused': domain.sourcesPaused,
         'generation': application.generationState,

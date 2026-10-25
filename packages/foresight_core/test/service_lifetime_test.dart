@@ -1,11 +1,14 @@
 import 'package:foresight_test_support/transcript_index_service.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 import 'dart:io';
 import 'package:clock/clock.dart';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/service.dart';
 import 'package:foresight_test_support/poll.dart';
+import 'package:foresight_test_support/capture_process.dart';
 import 'package:foresight_test_support/hooked_service.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_test_support/test_paths.dart';
@@ -1430,38 +1433,102 @@ void main() {
         'FORESIGHT_QUERY_TERMS_URL': 'https://example.invalid/terms',
       });
       service.domain.store.setPreference(dedicatedQueryTermsKey, 'accepted');
-      final connecting = Completer<void>(), socket = Completer<Socket>();
-      socket.future.ignore();
-      addTearDown(() {
-        if (!socket.isCompleted) {
-          socket.completeError(
-            const SocketException('fixture metadata stopped'),
-          );
-        }
-      });
-      // Hold only the distribution metadata transport. This exercises the real
-      // acquisition factory without contacting the model server or downloading.
-      final work = IOOverrides.runZoned(
-        () => service.application.call('models.acquire_query', {}),
-        socketConnect:
-            (
-              host,
-              port, {
-              sourceAddress,
-              int sourcePort = 0,
-              Duration? timeout,
-            }) {
-              if (!connecting.isCompleted) connecting.complete();
-              return socket.future;
-            },
+      final metadata = await ServerSocket.bind(
+        InternetAddress(
+          '${root.path}/metadata.sock',
+          type: InternetAddressType.unix,
+        ),
+        0,
       );
+      final started = Completer<Map<String, dynamic>>();
+      final retired = Completer<void>();
+      final header = BytesBuilder(copy: false);
+      Socket? metadataPeer;
+      var accepted = 0;
+      final subscription = metadata.listen((peer) {
+        accepted++;
+        metadataPeer = peer;
+        peer.listen(
+          (chunk) {
+            if (started.isCompleted || header.length + chunk.length > 256) {
+              fail('Invalid metadata worker fixture handoff');
+            }
+            header.add(chunk);
+            if (!chunk.contains(10)) return;
+            started.complete(
+              Map<String, dynamic>.from(
+                jsonDecode(utf8.decode(header.takeBytes())) as Map,
+              ),
+            );
+          },
+          onDone: () {
+            if (!retired.isCompleted) retired.complete();
+            peer.destroy();
+          },
+          onError: (Object error) {
+            expect(error, isA<SocketException>());
+            if (!retired.isCompleted) retired.complete();
+            peer.destroy();
+          },
+        );
+      });
+      addTearDown(() async {
+        await service.application.call('models.cancel_query_acquisition', {});
+        metadataPeer?.destroy();
+        await subscription.cancel();
+        await metadata.close();
+      });
+      final python =
+          Platform.environment['FORESIGHT_PYTHON'] ?? '/usr/bin/python3';
+      expect(File(python).existsSync(), true);
+      final transport = File('${root.path}/metadata-peer')
+        ..writeAsStringSync('''#!$python
+import json, os, signal, socket, sys
+raw = sys.stdin.buffer.read(16385)
+if len(raw) > 16384:
+    sys.exit(91)
+try:
+    config = json.loads(raw)
+except Exception:
+    sys.exit(92)
+if config.get('kind') != 'metadata' or config.get('appVersion') != '1.0.0':
+    sys.exit(93)
+peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+peer.connect(${jsonEncode(metadata.address.address)})
+peer.sendall((json.dumps({'kind': 'metadata', 'version': '1.0.0', 'pid': os.getpid()}) + '\\n').encode())
+while True:
+    signal.pause()
+''');
+      final executableMode = await runCaptureProcess('/bin/chmod', [
+        '700',
+        transport.path,
+      ], timeout: const Duration(seconds: 5));
+      expect(executableMode.exitCode, 0);
+      runtimeConfiguration.environment['FORESIGHT_SERVICE'] = transport.path;
+      // Hold the actual owned metadata child after its bounded stdin handoff.
+      // This keeps the real distribution acquisition owner, without contacting
+      // the metadata service, inspecting credentials or fabricating model data.
+      final work = service.application.call('models.acquire_query', {});
       final cancelled = expectLater(
         work,
         throwsA(
           isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
         ),
       );
-      await connecting.future;
+      cancelled.ignore();
+      final handoff = await started.future.timeout(const Duration(seconds: 5));
+      expect(accepted, 1);
+      expect(handoff.keys.toSet(), {'kind', 'version', 'pid'});
+      expect(handoff['kind'], 'metadata');
+      expect(handoff['version'], '1.0.0');
+      final childPid = handoff['pid'] as int;
+      expect(childPid, greaterThan(1));
+      expect(childPid, isNot(pid));
+      final alive = await runCaptureProcess('/bin/kill', [
+        '-0',
+        '$childPid',
+      ], timeout: const Duration(seconds: 5));
+      expect(alive.exitCode, 0);
       expect(service.application.queryAcquiring, true);
       expect(service.application.backgroundBusy, true);
       await backgroundRefusal();
@@ -1469,9 +1536,19 @@ void main() {
         'models.cancel_query_acquisition',
         {},
       );
-      socket.completeError(const SocketException('fixture metadata stopped'));
-      await cancellation;
+      await cancellation.timeout(const Duration(seconds: 5));
       await cancelled;
+      await retired.future.timeout(const Duration(seconds: 2));
+      final reaped = await runCaptureProcess('/bin/kill', [
+        '-0',
+        '$childPid',
+      ], timeout: const Duration(seconds: 5));
+      expect(
+        reaped.exitCode,
+        isNot(0),
+        reason: 'owned metadata child must be reaped',
+      );
+      expect(accepted, 1);
       expect(service.application.queryAcquiring, false);
       expect((await lifetime())['busy'], false);
     },

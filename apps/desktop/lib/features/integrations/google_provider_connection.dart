@@ -19,10 +19,14 @@ Future<bool> selectGoogleProvider(
   if (!throughGranola) {
     if (!current()) return false;
     // Validate the target before asking to sign out the working connection.
-    await connection.commandCurrent(Operation.googleConfigure, {
-      'provider': 'google',
-      'checkOnly': true,
-    }, current);
+    await googleConfigureDescriptor.sendCurrent(
+      connection,
+      GoogleConfigureInput(
+        provider: WireField('google'),
+        checkOnly: WireField(true),
+      ),
+      current,
+    );
     if (!current()) return false;
   }
   final accounts = googleAuth.accounts;
@@ -62,9 +66,13 @@ Future<bool> selectGoogleProvider(
   }
   // The service publishes provider status before returning the reply.
   if (!current()) return false;
-  await connection.commandCurrent(Operation.googleConfigure, {
-    'provider': throughGranola ? 'granola' : 'google',
-  }, current);
+  await googleConfigureDescriptor.sendCurrent(
+    connection,
+    GoogleConfigureInput(
+      provider: WireField(throughGranola ? 'granola' : 'google'),
+    ),
+    current,
+  );
   if (!current()) return false;
   return true;
 }
@@ -93,10 +101,10 @@ Future<GoogleSignInOutcome?> signInGoogleProvider(
       calendarThroughGranola: throughGranola,
       completeSignIn: throughGranola
           ? (url) async {
-              await connection.command(Operation.googleCompleteSignIn, {
-                'url': url,
-                'manual': true,
-              });
+              await googleCompleteSignInDescriptor.send(
+                connection,
+                GoogleCompleteSignInInput(url: url, manual: WireField(true)),
+              );
             }
           : null,
     ),

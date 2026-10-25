@@ -3,7 +3,13 @@ import 'request_context.dart';
 import '../operation_argument_schema.dart';
 
 class ModelsDownloadAssetRequest extends OperationRequest {
-  ModelsDownloadAssetRequest._(super.context, this.kind, this.digest);
+  ModelsDownloadAssetRequest._(
+    super.context,
+    this.kind,
+    this.digest,
+    this.progressKey,
+  );
+  final String? progressKey;
   final String kind, digest;
   @override
   Operation get operation => Operation.modelsDownloadAsset;
@@ -18,6 +24,7 @@ class ModelsDownloadAssetRequest extends OperationRequest {
       context,
       values.value<String>('kind'),
       values.value<String>('digest'),
+      values.value<String?>('progress_key'),
     );
   }
 }

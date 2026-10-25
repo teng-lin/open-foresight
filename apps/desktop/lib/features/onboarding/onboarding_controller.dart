@@ -262,9 +262,10 @@ class OnboardingController implements OnboardingActivity {
                         onPressed: working
                             ? null
                             : () => perform(() async {
-                                await d.command(Operation.sourcesDelete, {
-                                  'id': source.id,
-                                });
+                                await sourcesDeleteDescriptor.send(
+                                  d,
+                                  SourcesDeleteInput(id: source.id),
+                                );
                                 _lifecycle.serviceChanged();
                               }),
                         icon: const Icon(Icons.delete_outline),
@@ -300,7 +301,10 @@ class OnboardingController implements OnboardingActivity {
 
   Future<void> _preference(String key, String value) async {
     final identity = FeatureRequestIdentity.capture(d);
-    await d.command(Operation.preferencesSet, {'key': key, 'value': value});
+    await preferencesSetDescriptor.send(
+      d,
+      PreferencesSetInput(key: key, value: value),
+    );
     if (!identity.isCurrent(d, alive: mounted)) {
       throw RpcError(RpcErrorCode.cancelled, 'Setup owner changed');
     }

@@ -180,7 +180,7 @@ Peer verification protects the desktop approval connection against bearer-token 
 
 Tool failures return `isError: true` with a useful message and a structured `error` containing a stable `code` and `message`. Codes distinguish invalid arguments, missing resources, busy workers, cancellation, unavailable services, denied access, and internal failures. An `unavailable` error may also carry a `reason`: `closing` (the service refused the request before running it, so retrying is safe), `outcomeUnknown` (the request was sent and may have committed), or `notSent` (it never reached the service). A `denied` error may carry `reason: needsDesktop` when the operation needs the desktop's approval and no desktop is attached. Invalid protocol requests are handled by the SDK. Tools expose their input schemas and effect annotations. Clients may supply a progress token for started/ongoing/completed notifications. `ask` returns the final checked answer; provisional generation remains internal to the service/desktop stream.
 
-The operation identities live in `packages/foresight_core/lib/src/operations.dart`. Required descriptors define argument shape, access, helper readiness, model admission, activity and MCP projection. The wire adapter decodes one immutable typed request before access checks, leases, activity stamps or dispatch. The application and service registries own 75 and eight handlers respectively; runtime tests assert their disjoint, exhaustive union. Desktop command interfaces and remote facades accept operation identities and convert them to wire names at the transport. The RPC contracts check the frozen 32 MCP schemas, reject raw operation names outside approved declarations, and invoke every MCP tool over stdio against a controlled service socket. Request fingerprints retain the original argument field presence and JSON number representations.
+The operation identities live in `packages/foresight_core/lib/src/operations.dart`. Required descriptors define argument shape, access, helper readiness, model admission, activity and MCP projection. The wire adapter decodes one immutable typed request before access checks, leases, activity stamps or dispatch. The application and service registries own 78 and nine handlers respectively; runtime tests assert their disjoint, exhaustive union. Desktop command interfaces and remote facades accept operation identities and convert them to wire names at the transport. The RPC contracts check the frozen 32 MCP schemas, reject raw operation names outside approved declarations, and invoke every MCP tool over stdio against a controlled service socket. Request fingerprints retain the original argument field presence and JSON number representations.
 
 The owned helper API is `foresight.helper.v1.RagService`; all failures use non-OK gRPC statuses. Legacy success acknowledgement fields retain their wire tags, but carry no error channel. The immutable recovered descriptor preserves historical message presence and edition features. `tools/generate_bindings.py` versions its package and source name for production. To regenerate Dart bindings, activate `protoc_plugin 24.0.0` and run `python tools/check_dart_bindings.py --write`. CI regenerates all three schemas and rejects drift; descriptor snapshots also check the control and web-content RPC shapes, defaults, and reserved tags.
 
@@ -468,19 +468,93 @@ source/JIT total-deadline case. Question-model downloads retain their existing
 buffered-byte semantics. Public
 Gemma and speech assets reuse that worker ownership and deadline policy while
 retaining their disk-backed resumable parts, bounded-memory assembly and final
-checksum verification. Only the final path returns to the service parent.
+checksum verification. Public-file whole-attempt budgets derive from independently
+pinned catalog byte counts: five minutes of headroom, transfer at 256 KiB/s, and
+five full disk passes at 1 MiB/s. The total allows the configured finite retry
+count plus one minute for retry delays. Caller-asserted sizes do not set these
+bounds. Connect/header/body-idle limits remain 30 seconds; question-model budgets
+remain five/15 minutes. Only the final path returns to the service parent.
 
 `models.inspect_asset` verifies a pinned model's existing cache/registration and
 returns its path or null. `models.download_asset` requires a pinned kind/digest
 and request ID, verifies publisher consent before network work, and performs
 Gemma runtime preflight in the service. Progress is published in the normal
-`model_asset_download` status value. A desktop owns its subscription/current
+`model_asset_download` status value and each normal changed broadcast. The
+validated optional `progress_key` (1–256 characters) correlates that presentation
+with the desktop subscription independently of the service's authoritative
+request ID and cancellation envelope. A desktop owns its subscription/current
 predicate; the service retains its busy owner until download and worker cleanup
 settle. Shutdown revokes new work synchronously and joins that producer before
 model/runtime teardown. Existing model install operations keep their separate
-configuration reservation and native ownership.
+configuration reservation and native ownership. If bounded preflight or transfer
+termination cannot confirm child exit, the job's bookkeeping still settles and
+a `restart_required` state blocks replacement downloads until service restart;
+it does not claim the unknown child was reaped.
+
+Public workers return closed failure codes (`diskSpace`, `interrupted`, `hash`,
+`https`, `invalid`) and an optional bounded required-byte count. The service maps
+those to safe model-setup RpcErrors; model dialogs allow only known model error
+messages and never display arbitrary exception, path or authenticated URL text.
+Service cache hashing checks cancellation between streamed file chunks.
+Audio discovery shares one in-flight adapter child and kills and reaps it on
+timeout before admitting another enumeration.
 
 Desktop setup imports model/catalog values, read-only cache helpers and the
 remote downloader interface. Its compile closure excludes the HTTP download
 engine and model transport worker. Tests inject explicit local download doubles;
 production composition supplies the service proxy.
+
+
+### Typed client calls
+
+The existing operation descriptor constants own both request encoders and result
+decoders. Each descriptor infers its concrete input and result types; its `send`
+and `sendCurrent` extensions resolve the original `Operation` by descriptor
+identity. There is no second wire-method registry. For example:
+
+```dart
+final created = await meetingsCreateDescriptor.send(
+  connection,
+  const MeetingsCreateInput(title: 'Planning'),
+);
+// created.id is an int; a source-deletion input cannot compile for this call.
+```
+
+`WireField.absent()` differs from `WireField(null)`. Encoders retain original
+field presence, false/zero/null values, envelope spellings and date strings;
+schema validation does not insert defaults before request fingerprinting. The
+existing transport still owns workspace scoping, reconnect/resend policy,
+current predicates and operation lifetime. Raw transport methods remain for v1
+compatibility; production desktop/proxy callers use typed descriptors.
+
+`sendKeyed` delegates to the existing `PendingRequestKey`. Its send-only captured
+workspace envelope stays outside the original argument-comparison ledger. A
+malformed data-bearing reply becomes `internal/outcomeUnknown` before that ledger
+can release the key; retry therefore reuses the same key, and edited retries
+learn the first result before amendment. Transport errors retain their identity,
+code and reason. This layer adds no automatic retry or application ownership.
+
+Data-bearing replies expose concrete immutable values. Partial Drive metadata
+and optional capability fields retain presence. V1 void acknowledgement metadata
+is deliberately discarded, and refresh status remains optional when the caller
+only requires acknowledgement. This preserves old clear-after-disconnect and
+ignored-result behavior without returning unchecked maps to consumers. Actual
+application capture replies and cancellation booleans are decoded by their
+corresponding contracts, rather than treated as void acknowledgements.
+
+
+Model download progress uses an explicit optional `progress_key`, separate from
+RPC-authoritative request IDs and cancellation. The typed desktop bridge sends
+its local correlation key there. The acquisition owner publishes it through both
+startup status and normal changed snapshots; capture-level telemetry leaves that
+progress untouched. The real service-to-proxy fixture verifies checking phase,
+correlation and terminal state without downloading a model or claiming installed
+runtime acceptance.
+
+Answer streams decode each chunk through `answerStreamDescriptor`, so malformed
+chunks receive the same safe `internal/outcomeUnknown` classification as other
+data replies. The client AST guard rejects direct command calls and method
+tear-offs. Its exact RemoteDomain transport-leaf inventory permits the existing
+desktop attach/visibility/detach, import-root consent, request/resend, clear-status,
+Google sign-in and answer stream adapters, and separately records callback calls.
+An extra operation, duplicate leaf or transport tear-off fails that inventory.

@@ -97,10 +97,10 @@ class _AgentApprovalSurfaceState extends State<AgentApprovalSurface>
     _queued.remove(id);
     if (!mounted || _closed.remove(id)) return;
     if (!widget.allowAgentRequests) {
-      await widget.domain.command(Operation.securityDecide, {
-        'approval_id': id,
-        'allow': false,
-      });
+      await securityDecideDescriptor.send(
+        widget.domain,
+        SecurityDecideInput(approvalId: id, allow: WireField(false)),
+      );
       return;
     }
     _activeId = id;
@@ -203,10 +203,10 @@ class _AgentApprovalSurfaceState extends State<AgentApprovalSurface>
     _activeId = null;
     _route = null;
     if (!mounted || _closed.remove(id)) return;
-    await widget.domain.command(Operation.securityDecide, {
-      'approval_id': id,
-      'allow': allow,
-    });
+    await securityDecideDescriptor.send(
+      widget.domain,
+      SecurityDecideInput(approvalId: id, allow: WireField(allow)),
+    );
   }
 
   @override

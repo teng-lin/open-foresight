@@ -15,6 +15,8 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Changed
 
+- Use typed desktop operation requests and replies while retaining request keys,
+  workspace checks and retry behavior when a reply is lost or malformed.
 - Search waits only for actively owned stopped-transcript indexing; saved failed
   backlog no longer blocks later searches of other indexed documents.
 
@@ -26,6 +28,8 @@ Notable changes to Open Foresight are recorded here. Versions follow
   snapshots and prepared restore copies; failed cleanup remains pending.
 
 ### Fixed
+
+- Deliver public model progress across the real service connection, scale finite download budgets to pinned asset sizes, preserve actionable setup errors and retire model/audio subprocesses before replacing their owners.
 
 - Keep public model downloads, cache verification and runtime preflight in the application service. Setup dialogs retain publisher consent and receive progress while cancellation joins the owned transfer.
 

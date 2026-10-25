@@ -197,7 +197,10 @@ class IntegrationsController implements IntegrationsPort {
   }
 
   Future<void> completeCalendarSignIn(String url) async {
-    await d.command(Operation.googleCompleteSignIn, {'url': url});
+    await googleCompleteSignInDescriptor.send(
+      d,
+      GoogleCompleteSignInInput(url: url),
+    );
     await activateWindow(null);
   }
 
@@ -357,12 +360,15 @@ class IntegrationsController implements IntegrationsPort {
       );
       globalShortcutState = globalShortcuts!.state;
     }
-    await d.command(Operation.preferencesSet, {
-      'key': 'globalShortcut',
-      'value': 'true',
-    });
+    await _writePreference('globalShortcut', 'true');
     if (mounted) setState(() {});
   }
+
+  Future<void> _writePreference(String key, String value) =>
+      preferencesSetDescriptor.send(
+        d,
+        PreferencesSetInput(key: key, value: value),
+      );
 
   @override
   Future<void> disableGlobalShortcuts() async {
@@ -371,10 +377,7 @@ class IntegrationsController implements IntegrationsPort {
         hyprShortcuts.installed)
       await hyprShortcuts.remove();
     await globalShortcuts?.disable();
-    await d.command(Operation.preferencesSet, {
-      'key': 'globalShortcut',
-      'value': 'false',
-    });
+    await _writePreference('globalShortcut', 'false');
     if (mounted) setState(() => globalShortcutState = 'disabled');
   }
 
@@ -401,8 +404,8 @@ class IntegrationsController implements IntegrationsPort {
   @override
   Future<void> refreshCaptureCapabilities() async {
     try {
-      final result = AudioAccessPresentation.fromWire(
-        await d.command(Operation.audioCapabilities) as Map,
+      final result = AudioAccessPresentation.fromResult(
+        await audioCapabilitiesDescriptor.send(d, AudioCapabilitiesInput()),
       );
       if (mounted)
         setState(() {
@@ -419,8 +422,11 @@ class IntegrationsController implements IntegrationsPort {
   @override
   Future<void> requestMicrophoneAccess() async {
     try {
-      final result = AudioAccessPresentation.fromWire(
-        await d.command(Operation.audioRequestMicrophone) as Map,
+      final result = AudioAccessPresentation.fromResult(
+        await audioRequestMicrophoneDescriptor.send(
+          d,
+          AudioRequestMicrophoneInput(),
+        ),
       );
       if (mounted)
         setState(() {
@@ -438,8 +444,8 @@ class IntegrationsController implements IntegrationsPort {
   @override
   Future<bool> ensureRecordingAccess() async {
     if (!environment.capabilities.requiresAudioPermissions) return true;
-    final capabilities = AudioAccessPresentation.fromWire(
-      await d.command(Operation.audioCapabilities) as Map,
+    final capabilities = AudioAccessPresentation.fromResult(
+      await audioCapabilitiesDescriptor.send(d, AudioCapabilitiesInput()),
     );
     if (!mounted || !context.mounted) return false;
     if (capabilities.purposeMissing) {
@@ -480,12 +486,14 @@ class IntegrationsController implements IntegrationsPort {
       barrierDismissible: false,
       builder: (_) => SystemAudioSetupDialog(
         forRecording: forRecording,
-        requestAccess: () async => Map<String, dynamic>.from(
-          await d.command(Operation.audioRequestSystem) as Map,
-        ),
-        readCapabilities: () async => Map<String, dynamic>.from(
-          await d.command(Operation.audioCapabilities) as Map,
-        ),
+        requestAccess: () async => (await audioRequestSystemDescriptor.send(
+          d,
+          AudioRequestSystemInput(),
+        )).toWire(),
+        readCapabilities: () async => (await audioCapabilitiesDescriptor.send(
+          d,
+          AudioCapabilitiesInput(),
+        )).toWire(),
         openSettings: (uri) =>
             openSystemAudioSettings(uri, environment: environment),
         capabilitiesChanged: (result) {
@@ -497,10 +505,7 @@ class IntegrationsController implements IntegrationsPort {
       ),
     );
     if (proceed == true && mounted) {
-      await d.command(Operation.preferencesSet, {
-        'key': 'audio.systemSetupReviewed',
-        'value': 'true',
-      });
+      await _writePreference('audio.systemSetupReviewed', 'true');
       if (!mounted) return false;
       setState(() => _meetingCommands.setSystemAudioSetupReviewed(true));
       return true;
@@ -592,9 +597,11 @@ class IntegrationsController implements IntegrationsPort {
   @override
   Future<void> setMeetingReminders(bool value) async {
     if (value && environment.capabilities.requiresNotificationPermission) {
-      final result =
-          await d.command(Operation.notificationsRequestPermission) as Map;
-      if (result['granted'] != true) {
+      final result = await notificationsRequestPermissionDescriptor.send(
+        d,
+        NotificationsRequestPermissionInput(),
+      );
+      if (!result.granted) {
         throw StateError(
           'Meeting reminders need notification access. Enable Open Foresight in System Settings > Notifications.',
         );
@@ -606,11 +613,13 @@ class IntegrationsController implements IntegrationsPort {
 
   Future<void> refreshNotifications() async {
     try {
-      final result =
-          await d.command(Operation.notificationsCapabilities) as Map;
+      final result = await notificationsCapabilitiesDescriptor.send(
+        d,
+        NotificationsCapabilitiesInput(),
+      );
       if (mounted)
         setState(
-          () => notificationState = result['available'] == true
+          () => notificationState = result.available
               ? 'Notifications available'
               : environment.capabilities.requiresNotificationPermission
               ? 'Notification permission required; enable to request access'
@@ -624,9 +633,11 @@ class IntegrationsController implements IntegrationsPort {
   @override
   Future<void> setNotifications(bool value) async {
     if (value && environment.capabilities.requiresNotificationPermission) {
-      final result =
-          await d.command(Operation.notificationsRequestPermission) as Map;
-      if (result['granted'] != true) {
+      final result = await notificationsRequestPermissionDescriptor.send(
+        d,
+        NotificationsRequestPermissionInput(),
+      );
+      if (!result.granted) {
         if (mounted)
           setState(
             () => notificationState =
@@ -635,10 +646,7 @@ class IntegrationsController implements IntegrationsPort {
         return;
       }
     }
-    await d.command(Operation.preferencesSet, {
-      'key': 'notifications',
-      'value': value.toString(),
-    });
+    await _writePreference('notifications', value.toString());
     if (mounted) setState(() => notifications = value);
     await refreshNotifications();
   }

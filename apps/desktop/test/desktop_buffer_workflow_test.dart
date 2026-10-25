@@ -631,7 +631,9 @@ void main() {
         // Exercise an alias on every host so path expectations stay portable.
         final selected = Link('${f.root.path}/selected-documents')
           ..createSync(folder.path);
-        f.connection.replies[Operation.sourcesImportFile] = {};
+        f.connection.replies[Operation.sourcesImportFile] = {
+          'id': 'fixture-import',
+        };
         if (partial)
           f.connection.fileFailures[paths[1]] = StateError(
             'Parser rejected file',
