@@ -304,6 +304,19 @@ class McpPeer:
 @pytest.mark.parametrize("entrypoint", ["service", "mcp"])
 def test_direct_packaged_entrypoints_enforce_identity_without_launcher(tmp_path, entrypoint):
     from package import write_runtime_configuration
+    from runtime_package_support import (
+        METADATA_DIRECTORY,
+        prepare as prepare_support,
+        prepare_worker,
+        seal as seal_support,
+        seal_worker,
+        stage as stage_support,
+        stage_worker,
+    )
+
+    support = prepare_support(ROOT, NATIVE.parent, "linux-x86_64")
+    worker = prepare_worker(ROOT, SERVICE.parent.parent)
+    assert support.receipt["native_id"] == worker.receipt["native_id"]
 
     bundle = tmp_path / "package"
     for name in ("app", "bin", "lib", "share/open-foresight"):
@@ -311,6 +324,8 @@ def test_direct_packaged_entrypoints_enforce_identity_without_launcher(tmp_path,
     for source, name in ((SERVICE, "bin/foresight-service"), (MCP, "bin/foresight-mcp"),
                          (NATIVE, "lib/libforesight_native.so"), (HELPER, "bin/ForesightHelper")):
         shutil.copy2(source, bundle / name)
+    stage_support(bundle, support)
+    stage_worker(bundle, worker)
     sqlite = Path(subprocess.run(["ldd", str(HELPER)], check=True, capture_output=True,
                                  text=True, timeout=30).stdout.split("libsqlite3.so.0 => ", 1)[1].split()[0])
     shutil.copy2(sqlite, bundle / "lib/libsqlite3.so.0")
@@ -322,6 +337,8 @@ def test_direct_packaged_entrypoints_enforce_identity_without_launcher(tmp_path,
     impostor = tmp_path / "untrusted-desktop"
     shutil.copy2(desktop, impostor)
     write_runtime_configuration(bundle, "a" * 40, "cpu", 0)
+    seal_support(bundle, support, transformed=False)
+    seal_worker(bundle, worker, transformed=False)
     # No launcher-selected resources, code paths, installation root or revision.
     env = {key: value for key, value in os.environ.items() if not key.startswith("FORESIGHT_")}
     env.pop("LD_LIBRARY_PATH", None)
@@ -388,6 +405,7 @@ def test_direct_packaged_entrypoints_enforce_identity_without_launcher(tmp_path,
                                  env=env, capture_output=True, text=True, timeout=30)
         assert missing.returncode != 0
         assert "runtime configuration is missing" in missing.stderr
+        shutil.rmtree(bundle / METADATA_DIRECTORY)
         (bundle / "share/open-foresight").rmdir()
         no_directory = subprocess.run([str(bundle / "bin/foresight-service"), "--status"],
                                       env=env, capture_output=True, text=True, timeout=30)
