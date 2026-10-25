@@ -23,7 +23,7 @@ DEFAULT_CONTRACT = "tools/diagnostic_build_inputs.json"
 NATIVE_ALGORITHM = "foresight-diagnostic-native-v1"
 WORKER_ALGORITHM = "foresight-diagnostic-worker-v1"
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
-VERSION = re.compile(r"[0-9]{1,6}(?:\.[0-9]{1,6}){1,3}\Z")
+VERSION = re.compile(r"[0-9]{1,10}(?:\.[0-9]{1,10}){1,3}\Z")
 RUNTIME_EXTENSIONS = frozenset(
     {
         ".dart",
@@ -66,8 +66,8 @@ NATIVE_FLAGS = frozenset(
     }
 )
 TARGETS = {
-    "linux-x86_64": {"compiler": "clang", "floor": "glibc-2.39-linux-x86_64"},
-    "darwin-arm64": {"compiler": "apple-clang", "floor": "macos-15.0-arm64"},
+    "linux-x86_64": {"compiler": ["clang", "gcc"], "floor": "glibc-2.39-linux-x86_64"},
+    "darwin-arm64": {"compiler": ["apple-clang"], "floor": "macos-15.0-arm64"},
 }
 C_EXTENSIONS = frozenset({".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".mm", ".m"})
 NATIVE_DIRECTIVES = frozenset(
@@ -529,7 +529,9 @@ class Contract:
         if targets != TARGETS or target not in TARGETS:
             raise IdentityError("invalid_target")
         profile = _object(targets[target], {"compiler", "floor"})
-        compiler_record = compiler.record(str(profile["compiler"]))
+        if compiler.family not in _strings(profile["compiler"]):
+            raise IdentityError("invalid_toolchain")
+        compiler_record = compiler.record(compiler.family)
         allowed = _strings(self.native["flags"])
         if not set(allowed) <= NATIVE_FLAGS:
             raise IdentityError("invalid_flags")
@@ -764,7 +766,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--target", choices=("linux-x86_64", "darwin-arm64"), required=True
     )
     native_parser.add_argument(
-        "--compiler-family", choices=("clang", "apple-clang"), required=True
+        "--compiler-family", choices=("clang", "gcc", "apple-clang"), required=True
     )
     native_parser.add_argument("--compiler-version", required=True)
     native_parser.add_argument("--compiler-sha256", required=True)

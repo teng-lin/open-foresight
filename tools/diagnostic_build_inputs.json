@@ -90,11 +90,16 @@
     ],
     "targets": {
       "linux-x86_64": {
-        "compiler": "clang",
+        "compiler": [
+          "clang",
+          "gcc"
+        ],
         "floor": "glibc-2.39-linux-x86_64"
       },
       "darwin-arm64": {
-        "compiler": "apple-clang",
+        "compiler": [
+          "apple-clang"
+        ],
         "floor": "macos-15.0-arm64"
       }
     },

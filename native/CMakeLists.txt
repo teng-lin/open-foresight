@@ -38,6 +38,7 @@ if(APPLE)
 endif()
 install(TARGETS foresight_native LIBRARY DESTINATION lib)
 install(FILES foresight_native.h DESTINATION include)
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ForesightDiagnostics.cmake")
 
 include(CTest)
 if(BUILD_TESTING)
