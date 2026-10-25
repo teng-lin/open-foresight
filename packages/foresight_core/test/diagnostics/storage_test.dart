@@ -534,7 +534,7 @@ void main() {
       final profile = _profile();
       // Root admission creates logs; an unexpected entry would be found only
       // by enumeration (storageUnavailable), never by the bound refusal.
-      Directory('$profile/logs').createSync();
+      BackupDirectory('$profile/logs').close();
       File('$profile/logs/unexpected').writeAsStringSync('x');
       final seen = <int>[];
       expect(
