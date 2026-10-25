@@ -468,14 +468,13 @@ void main() {
             widget.value == gemmaModels[1],
       ),
     );
-    if (larger.enabled == true) {
-      await tester.tap(find.text('Gemma 4 E4B'));
-      await tester.pump();
-      expect(
-        tester.widget<RadioGroup<GemmaModel>>(group).groupValue,
-        gemmaModels[1],
-      );
-    }
+    expect(larger.enabled, isTrue);
+    await tester.tap(find.text('Gemma 4 E4B'));
+    await tester.pump();
+    expect(
+      tester.widget<RadioGroup<GemmaModel>>(group).groupValue,
+      gemmaModels[1],
+    );
     await tester.tap(find.text('Gemma 4 E2B'));
     await tester.pump();
     expect(

@@ -236,13 +236,13 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
 
   Future<void> install() async {
     if (working || checkingCache) return;
-    if (done) {
+    if (done && !widget.needsGeneration) {
       finish();
       return;
     }
-    final installGeneration = widget.needsGeneration && !isCurrent(selected);
     final model = selected;
-    if (installGeneration && !enoughMemory(model)) return;
+    if (widget.needsGeneration && !isCurrent(model) && !enoughMemory(model))
+      return;
     setState(() {
       working = true;
       cancelled = false;
@@ -256,6 +256,33 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
       ..start();
     lastUpdate = 0;
     try {
+      File? verifiedGeneration;
+      if (widget.needsGeneration && isCurrent(model)) {
+        reportPhase(model, ModelDownloadPhase.verifyingCache);
+        verifiedGeneration = await widget.findLocalModel(
+          model,
+          widget.directory,
+          registration: cacheRegistration(registeredGeneration),
+        );
+        if (!active || cancelled) return;
+        setState(() {
+          if (verifiedGeneration == null) {
+            localFiles.remove(model);
+            downloaded[model] = false;
+          } else {
+            localFiles[model] = verifiedGeneration;
+          }
+        });
+        if (done) {
+          finish();
+          return;
+        }
+        if (!enoughMemory(model))
+          throw StateError(
+            'The configured model could not be verified. Choose a model that fits the detected device memory or use local model setup.',
+          );
+      }
+      final installGeneration = widget.needsGeneration && !isCurrent(model);
       download = widget.createDownload?.call() ?? GemmaDownload();
       final process = preflight = await widget.environment.start(
         widget.runner,
@@ -304,7 +331,8 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
         received = 0;
         total = 0;
       });
-      final asset = await acquireModel(model, widget.directory);
+      final asset =
+          verifiedGeneration ?? await acquireModel(model, widget.directory);
       if (!active || cancelled) return;
       setState(() {
         downloaded[model] = true;

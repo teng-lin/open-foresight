@@ -13,6 +13,73 @@ import 'package:open_foresight/features/settings/gemma_setup_view.dart';
 
 void main() {
   testWidgets(
+    'Done rejects a corrupt registered candidate and requires download consent',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1000, 1100));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final root = createTestTempDirectorySync('gemma-current-corrupt-');
+      final store = Store('${root.path}/app.db');
+      addTearDown(store.close);
+      final model = gemmaModels.last;
+      final file = File('${root.path}/registered.litertlm')..createSync();
+      file.openSync(mode: FileMode.write)
+        ..truncateSync(model.bytes)
+        ..closeSync();
+      store.db.execute(
+        'INSERT INTO models(kind,path,digest,runtime,backend) VALUES(?,?,?,?,?)',
+        ['generation', file.path, model.digest, '/usr/bin/true', 'litert_lm'],
+      );
+      final before = store.rows('SELECT * FROM models').single;
+      var verifications = 0, finished = false;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: GemmaSetupDialog(
+              environment: setupEnvironment(),
+              store: fixtureReader(store),
+              savePreference: (key, value) async =>
+                  store.setPreference(key, value),
+              directory: root,
+              library: '',
+              runner: '/usr/bin/true',
+              memoryGb: 64,
+              findLocalModel: (model, directory, {registration}) async {
+                verifications++;
+                return null;
+              },
+              createDownload: () => GemmaDownload(
+                createClient: () => throw StateError(
+                  'Must obtain consent before downloading a replacement',
+                ),
+              ),
+              onDone: () => finished = true,
+              installed: (_, _) =>
+                  fail('A corrupt registered file must not be loaded'),
+              localSetup: () {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(verifications, 0);
+      await tester.tap(find.widgetWithText(FilledButton, 'Done'));
+      await tester.pump(const Duration(milliseconds: 300));
+      await pumpUntil(
+        tester,
+        () => find.text('${model.name} terms').evaluate().isNotEmpty,
+      );
+      expect(verifications, 1);
+      expect(finished, isFalse);
+      expect(find.textContaining('Current model'), findsNothing);
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pumpAndSettle();
+      expect(finished, isFalse);
+      expect(store.rows('SELECT * FROM models').single, before);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
     'activation verifies a local model once and reuses it without downloading',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(1000, 1100));
@@ -404,7 +471,7 @@ void main() {
     }
   });
   testWidgets(
-    'current E4B closes with Done without verification, loading or download',
+    'current E4B waits for Done verification without loading or downloading',
     (tester) async {
       final root = createTestTempDirectorySync('gemma-current-');
       addTearDown(() {
@@ -423,6 +490,8 @@ void main() {
         ['generation', file.path, model.digest, '/usr/bin/true', 'litert_lm'],
       );
       final before = store.rows('SELECT * FROM models').single;
+      final verification = Completer<File?>();
+      var verifications = 0;
       try {
         await tester.pumpWidget(
           MaterialApp(
@@ -433,7 +502,10 @@ void main() {
                     context: context,
                     builder: (_) => GemmaSetupDialog(
                       environment: setupEnvironment(),
-                      findLocalModel: verifiedFixtureModelFile,
+                      findLocalModel: (model, directory, {registration}) {
+                        verifications++;
+                        return verification.future;
+                      },
                       store: fixtureReader(store),
                       savePreference: (key, value) async =>
                           store.setPreference(key, value),
@@ -465,8 +537,14 @@ void main() {
         expect(current.secondary, isNull);
         expect(find.text('Click to download'), findsNWidgets(2));
         final done = find.widgetWithText(FilledButton, 'Done');
+        expect(verifications, 0);
         expect(tester.widget<FilledButton>(done).onPressed, isNotNull);
         await tester.tap(done);
+        await tester.pump();
+        expect(verifications, 1);
+        expect(find.byType(GemmaSetupDialog), findsOneWidget);
+        expect(tester.widget<FilledButton>(done).onPressed, isNull);
+        verification.complete(file);
         await tester.pumpAndSettle();
         expect(find.byType(GemmaSetupDialog), findsNothing);
         expect(store.rows('SELECT * FROM models').single, before);
