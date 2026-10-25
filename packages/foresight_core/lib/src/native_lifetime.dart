@@ -22,10 +22,13 @@ final class NativeLibrary {
   }
 
   static final _lifetimes = <DynamicLibrary, NativeLifetime>{};
-  late final lifetime = _lifetimes.putIfAbsent(
+  NativeLifetime? _observedLifetime;
+  NativeLifetime get lifetime => _observedLifetime ??= _lifetimes.putIfAbsent(
     library,
     () => NativeLifetime._(library),
   );
+  bool get restartRequired => _observedLifetime?.restartRequired ?? false;
+  void checkAvailable() => _observedLifetime?.ensureAdmission();
 }
 
 /// Completion tokens own native work independently of Dart task/isolate
@@ -42,6 +45,8 @@ final class NativeLifetime {
     // Resolve the capability as a complete suite before any handle is created.
     const ownedSymbols = [
       'fs_owner_release',
+      'fs_lifetime_admission',
+      'fs_lifetime_quarantine',
       'fs_owned_engine_create',
       'fs_owned_conversation_create',
       'fs_owned_speech_create',
@@ -78,6 +83,12 @@ final class NativeLifetime {
       _requests[name] = _library
           .lookupFunction<Uint64 Function(Uint64), int Function(int)>(name);
     }
+    _admission = _library.lookupFunction<Int32 Function(), int Function()>(
+      'fs_lifetime_admission',
+    );
+    _quarantine = _library.lookupFunction<Void Function(), void Function()>(
+      'fs_lifetime_quarantine',
+    );
     _releaseOwner = _library
         .lookupFunction<Int32 Function(Uint64), int Function(int)>(
           'fs_owner_release',
@@ -95,20 +106,26 @@ final class NativeLifetime {
   final _requests = <String, int Function(int)>{};
   final _pending = <int, Future<int>>{};
   late final int Function(int) _status, _release, _releaseOwner;
+  late final int Function() _admission;
+  late final void Function() _quarantine;
 
   bool _unconfirmed = false;
 
   /// A lost native completion cannot safely be transferred to another isolate.
   /// Retain the original mapping for cleanup, refuse new physical admissions,
   /// and make the required process restart visible to the owner.
+  bool get restartRequired => _unconfirmed || _admission() != 1;
+
   void ensureAdmission() {
-    if (_unconfirmed) {
+    if (restartRequired) {
+      _unconfirmed = true;
       throw StateError('Native ownership is unconfirmed; restart the service');
     }
   }
 
   StateError _unconfirmedError(String message) {
     _unconfirmed = true;
+    _quarantine();
     return StateError('$message; restart the service');
   }
 
@@ -116,7 +133,11 @@ final class NativeLifetime {
     if (name == 'fs_engine_probe_async') ensureAdmission();
     final token = _requests[name]!(owner);
     if (token == 0) {
-      return Future.error(StateError('Native operation was not admitted'));
+      return Future.error(
+        name.endsWith('_retire')
+            ? _unconfirmedError('Native retirement was not admitted')
+            : StateError('Native operation was not admitted'),
+      );
     }
     return _pending.putIfAbsent(token, () {
       final future = _watch(token, name.endsWith('_retire') ? owner : null);

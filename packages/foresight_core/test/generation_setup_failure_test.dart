@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'package:foresight_test_support/test_paths.dart';
+import 'package:foresight_core/src/operations.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:foresight_core/src/domain.dart';
@@ -12,6 +14,20 @@ import 'package:foresight_core/src/platform_services.dart';
 import 'package:foresight_core/src/store.dart';
 import 'package:foresight_test_support/poll.dart';
 import 'package:test/test.dart';
+
+class HeldRetirementRuntime extends NativeRuntime {
+  HeldRetirementRuntime(super.path);
+  final entered = Completer<void>(), release = Completer<void>();
+  var closes = 0;
+  @override
+  void close() {
+    closes++;
+    if (!entered.isCompleted) entered.complete();
+  }
+
+  @override
+  Future<void> get closed => release.future;
+}
 
 void main() {
   late Directory root;
@@ -50,6 +66,9 @@ static uint64_t publish(void *pointer) {
 int fs_abi_version(void) { return 1; }
 int fs_lifetime_version(void) { return 2; }
 static atomic_int probe_entered, probe_released;
+static atomic_int quarantined;
+int fs_lifetime_admission(void) { return !atomic_load(&quarantined); }
+void fs_lifetime_quarantine(void) { atomic_store(&quarantined,1); }
 void set_mode(int value) {
   mode = value;
   atomic_store(&probe_entered, 0);
@@ -409,4 +428,77 @@ int fs_owner_release(uint64_t owner) {
       await invalid.closed;
     },
   );
+  for (final invalidation in ['subscriber', 'workspace', 'close']) {
+    test(
+      'committed model adoption ignores subscriber cancellation but honors $invalidation ownership',
+      () async {
+        final helper = Helper(
+          '${root.path}/unused-$invalidation.sock',
+          '${root.path}/unused-$invalidation',
+          manageProcess: false,
+        );
+        final domain = Domain(store, helper);
+        final old = HeldRetirementRuntime(library);
+        domain.generator = old;
+        final app = Application(domain);
+        final previousLibrary =
+            runtimeConfiguration.environment['FORESIGHT_NATIVE'];
+        runtimeConfiguration.environment['FORESIGHT_NATIVE'] = library;
+        var current = true;
+        final work = app.call(Operation.modelsGeneration.wire, {
+          'path': model.path,
+          'runtime': '/committed/runtime',
+          'backend': 'llama_cpp',
+        }, current: () => current);
+        final result = work.then<Object?>(
+          (value) => value,
+          onError: (Object e) => e,
+        );
+        Future<void>? closing;
+        try {
+          await old.entered.future.timeout(const Duration(seconds: 5));
+          expect(store.model('generation')!['runtime'], '/committed/runtime');
+          current = false;
+          if (invalidation == 'workspace') domain.invalidateWorkspace();
+          if (invalidation == 'close') {
+            closing = app.close();
+            closing.ignore();
+          }
+          old.release.complete();
+          final outcome = await result;
+          if (invalidation == 'subscriber') {
+            expect(outcome, isNull);
+            expect(domain.generator, isNotNull);
+            expect(domain.generator!.loaded, isTrue);
+            expect(engines(), 1);
+            expect(conversations(), 1);
+          } else {
+            expect(
+              outcome,
+              isA<RpcError>().having(
+                (e) => e.code,
+                'code',
+                RpcErrorCode.cancelled,
+              ),
+            );
+            expect(domain.generator, isNull);
+          }
+          expect(old.closes, 1);
+        } finally {
+          if (!old.release.isCompleted) old.release.complete();
+          await result;
+          await (closing ?? app.close());
+          domain.close();
+          await domain.drain();
+          await helper.close();
+          if (previousLibrary == null) {
+            runtimeConfiguration.environment.remove('FORESIGHT_NATIVE');
+          } else {
+            runtimeConfiguration.environment['FORESIGHT_NATIVE'] =
+                previousLibrary;
+          }
+        }
+      },
+    );
+  }
 }

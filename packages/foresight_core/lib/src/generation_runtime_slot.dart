@@ -2,23 +2,34 @@ import 'dart:async';
 import 'dart:collection';
 
 import 'cancellation.dart';
+import 'rpc_error.dart';
 
 /// One owner for candidate, installed and retiring native runtime generations.
 /// Revocation is synchronous; [drain] joins the actual producer and native close
 /// completions, including candidates that return after losing their epoch.
-final class GenerationRuntimeSlot<T extends Object> {
+abstract interface class GenerationRuntimeReplacement<T extends Object> {
+  Future<T?> replace(
+    Future<T?> Function(GenerationRuntimeAttempt<T>) produce, {
+    bool Function()? current,
+  });
+}
+
+final class GenerationRuntimeSlot<T extends Object>
+    implements GenerationRuntimeReplacement<T> {
   GenerationRuntimeSlot({
     required this.closeRuntime,
     required this.runtimeClosed,
     required this.runtimeBusy,
     required this.changed,
     this.watchRuntime,
+    this.checkRuntime,
   });
   final void Function(T) closeRuntime;
   final Future<void> Function(T) runtimeClosed;
   final bool Function(T) runtimeBusy;
   final void Function() changed;
   final void Function(T, void Function())? watchRuntime;
+  final void Function(T)? checkRuntime;
   final _retirement = Expando<Future<void>>();
   final _candidates = HashSet<T>.identity();
   final _retiring = <Future<void>>{};
@@ -26,7 +37,7 @@ final class GenerationRuntimeSlot<T extends Object> {
   T? _installed, _visibleCandidate;
   int _epoch = 0;
   bool _closed = false;
-  Object? _failure;
+  Object? _failure, _lastLoadFailure;
   StackTrace? _failureStack;
   void _rememberFailure(Object error, StackTrace stack) {
     _failure ??= error;
@@ -48,8 +59,18 @@ final class GenerationRuntimeSlot<T extends Object> {
 
   T? get installed => _installed;
   T? get visible => _installed ?? _visibleCandidate;
+  Object? get failure => _failure ?? _lastLoadFailure;
+  bool get restartRequired => _failure != null;
+  void checkAvailable() {
+    if (restartRequired) {
+      throw StateError(
+        'Generation ownership is unconfirmed; restart the service',
+      );
+    }
+    if (_installed case final runtime?) checkRuntime?.call(runtime);
+  }
+
   bool get busy =>
-      _failure != null ||
       _producers.isNotEmpty ||
       _retiring.isNotEmpty ||
       (_installed != null && runtimeBusy(_installed!));
@@ -93,6 +114,7 @@ final class GenerationRuntimeSlot<T extends Object> {
     }
   }
 
+  @override
   Future<T?> replace(
     Future<T?> Function(GenerationRuntimeAttempt<T>) produce, {
     bool Function()? current,
@@ -137,6 +159,7 @@ final class GenerationRuntimeSlot<T extends Object> {
         attempt.check();
         _checkFailure();
         _installed = candidate;
+        _lastLoadFailure = null;
         if (identical(_visibleCandidate, candidate)) _visibleCandidate = null;
         owned.remove(candidate);
         _candidates.remove(candidate);
@@ -144,6 +167,9 @@ final class GenerationRuntimeSlot<T extends Object> {
     } catch (error, stack) {
       failure = error;
       failureStack = stack;
+      if (error is! RpcError || error.code != RpcErrorCode.cancelled) {
+        _lastLoadFailure = error;
+      }
     } finally {
       for (final runtime in owned) {
         try {

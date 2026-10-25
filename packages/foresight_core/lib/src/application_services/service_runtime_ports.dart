@@ -29,11 +29,11 @@ abstract interface class SummaryWorkspace {
 }
 
 /// Registration adopts through the one runtime slot and uses the helper only
-/// for embedding configuration. It cannot mutate unrelated workspace features.
+/// for embedding configuration. Other workspace controllers stay separate.
 abstract interface class ModelWorkspace {
   Store get store;
   Helper get helper;
   int get workspaceGeneration;
-  GenerationRuntimeSlot<NativeRuntime> get generationRuntimes;
+  GenerationRuntimeReplacement<NativeRuntime> get generationRuntimes;
   void schedulePendingSources();
 }

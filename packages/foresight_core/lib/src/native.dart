@@ -113,6 +113,8 @@ class NativeRuntime implements GenerationStatus {
   late final NativeLibrary _bindings;
   DynamicLibrary get lib => _bindings.library;
   NativeLifetime get _lifetime => _bindings.lifetime;
+  bool get restartRequired => _bindings.restartRequired;
+  void checkAvailable() => _bindings.checkAvailable();
   int _engine = 0, _conversation = 0;
   int get engine => _engine;
   int get conversation => _conversation;
@@ -181,6 +183,13 @@ class NativeRuntime implements GenerationStatus {
   }
   @override
   Map<String, dynamic> get effectiveState {
+    if (restartRequired) {
+      return {
+        'state': 'failed',
+        'restart_required': true,
+        'error': 'Native ownership is unconfirmed; restart the service',
+      };
+    }
     if (engine == 0) return {'state': _phase, 'error': _lastError};
     final p = _nativeFsEngineState(engine);
     if (p == nullptr) return {'state': 'failed'};
@@ -650,9 +659,12 @@ class NativeRuntime implements GenerationStatus {
         if (event['type'] == 'done') break;
       }
     } finally {
-      await _release(owner);
-      if (identical(_active, owner)) _active = null;
-      _notifyOwnership();
+      try {
+        await _release(owner);
+      } finally {
+        if (identical(_active, owner)) _active = null;
+        _notifyOwnership();
+      }
     }
   }
 
@@ -687,7 +699,7 @@ class NativeRuntime implements GenerationStatus {
     if (owner == null || (requestId != null && owner.id != requestId)) {
       return Future<void>.value();
     }
-    return _release(owner).then<void>((_) {
+    return _release(owner).whenComplete(() {
       if (identical(_active, owner)) _active = null;
       _notifyOwnership();
     });

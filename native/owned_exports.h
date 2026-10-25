@@ -17,7 +17,7 @@ uint64_t fs_owned_engine_create(const char *runtime, const char *model,
 uint64_t fs_owned_conversation_create(uint64_t engine) {
   return foresight::ffi_barrier(
       [&]() -> uint64_t {
-        NativeOwnerUse use(engine, NativeKind::engine);
+        NativeOwnerUse use(engine, NativeKind::engine, false, true);
         if (!use)
           return 0;
         NativeCreation creation;
@@ -65,7 +65,7 @@ int fs_owned_generate_options(uint64_t owner, const char *id,
                               int max_output_tokens) {
   return foresight::ffi_barrier(
       [&]() -> int {
-        NativeOwnerUse use(owner, NativeKind::conversation);
+        NativeOwnerUse use(owner, NativeKind::conversation, false, true);
         return use ? fs_generate_options(use.get(), id, prompt, schema,
                                          max_output_tokens)
                    : -1;
@@ -76,7 +76,7 @@ int fs_owned_generate_tools(uint64_t owner, const char *id, const char *prompt,
                             const char *tools, int max_output_tokens) {
   return foresight::ffi_barrier(
       [&]() -> int {
-        NativeOwnerUse use(owner, NativeKind::conversation);
+        NativeOwnerUse use(owner, NativeKind::conversation, false, true);
         return use ? fs_generate_tools(use.get(), id, prompt, tools,
                                        max_output_tokens)
                    : -1;
@@ -87,7 +87,7 @@ int fs_owned_generation_tool_reply(uint64_t owner, const char *id,
                                    const char *message) {
   return foresight::ffi_barrier(
       [&]() -> int {
-        NativeOwnerUse use(owner, NativeKind::conversation);
+        NativeOwnerUse use(owner, NativeKind::conversation, false, true);
         return use ? fs_generation_tool_reply(use.get(), id, message) : -1;
       },
       -1);
@@ -104,7 +104,7 @@ int fs_owned_speech_push(uint64_t owner, const int16_t *samples, size_t count,
                          int rate) {
   return foresight::ffi_barrier(
       [&]() -> int {
-        NativeOwnerUse use(owner, NativeKind::speech);
+        NativeOwnerUse use(owner, NativeKind::speech, false, true);
         return use ? fs_speech_push(use.get(), samples, count, rate) : -1;
       },
       -1);
@@ -112,7 +112,7 @@ int fs_owned_speech_push(uint64_t owner, const int16_t *samples, size_t count,
 int fs_owned_speech_finish(uint64_t owner, const char *id) {
   return foresight::ffi_barrier(
       [&]() -> int {
-        NativeOwnerUse use(owner, NativeKind::speech);
+        NativeOwnerUse use(owner, NativeKind::speech, false, true);
         return use ? fs_speech_finish(use.get(), id) : -1;
       },
       -1);
@@ -128,7 +128,7 @@ int fs_owned_speech_cancel(uint64_t owner) {
 int fs_owned_capture_set_echo_cancellation(uint64_t owner, int enabled) {
   return foresight::ffi_barrier(
       [&]() -> int {
-        NativeOwnerUse use(owner, NativeKind::capture);
+        NativeOwnerUse use(owner, NativeKind::capture, false, true);
         return use ? fs_capture_set_echo_cancellation(use.get(), enabled) : -1;
       },
       -1);

@@ -2,6 +2,12 @@
 // Internal resource addresses stay in this mapping. Only the separately
 // negotiated owned API exposes non-reused integer identities to new callers.
 using NativeOperation = foresight::OwnedOperation;
+// Mapping-local, constant initialized and allocation-free. It survives every
+// Dart isolate that opens this same image and is never reset by cleanup.
+std::atomic<bool> &native_quarantine_state() noexcept {
+  static std::atomic<bool> value{false};
+  return value;
+}
 enum class NativeKind { engine, conversation, speech, capture };
 struct NativeControl {
   NativeKind kind;
@@ -23,7 +29,8 @@ struct NativeControl {
       : kind(type), object(std::move(value)) {}
 };
 struct NativeHandles {
-  foresight::OwnedOperations operations{4096, false};
+  foresight::OwnedOperations operations{4096, false,
+                                        &native_quarantine_state()};
   std::mutex mutex;
   std::unordered_map<void *, std::shared_ptr<NativeControl>> handles;
   std::unordered_map<uint64_t, std::shared_ptr<NativeControl>> owners;
@@ -68,7 +75,8 @@ bool pin_native_mapping() {
 
 #ifdef __APPLE__
 foresight::OwnedOperations &legacy_capture_operations() {
-  static auto *value = new foresight::OwnedOperations(64, false);
+  static auto *value =
+      new foresight::OwnedOperations(64, false, &native_quarantine_state());
   return *value;
 }
 #endif
@@ -81,6 +89,8 @@ thread_local NativeControl *owned_native_bridge = nullptr;
 struct NativeCreation {
   bool previous = creating_owned_native;
   NativeCreation() {
+    if (native_quarantine_state().load(std::memory_order_acquire))
+      throw std::runtime_error("Native ownership unconfirmed; restart process");
     if (!pin_native_mapping())
       throw std::runtime_error("Native mapping identity unavailable");
     native_handles().process_lifetime = true;
@@ -122,9 +132,12 @@ struct NativeUse {
 struct NativeOwnerUse {
   std::shared_ptr<NativeControl> control;
   NativeControl *previous = owned_native_bridge;
-  NativeOwnerUse(uint64_t identity, NativeKind kind, bool any_event = false) {
+  NativeOwnerUse(uint64_t identity, NativeKind kind, bool any_event = false,
+                 bool new_work = false) {
     auto &registry = native_handles();
     std::lock_guard lock(registry.mutex);
+    if (new_work && native_quarantine_state().load(std::memory_order_acquire))
+      return;
     const auto found = registry.owners.find(identity);
     if (found != registry.owners.end() &&
         (found->second->kind == kind ||
@@ -338,6 +351,9 @@ template <class T>
 T *publish_native(std::unique_ptr<T> resource, NativeKind kind,
                   std::shared_ptr<NativeControl> parent = nullptr) {
   auto &registry = native_handles();
+  if (creating_owned_native &&
+      native_quarantine_state().load(std::memory_order_acquire))
+    throw std::runtime_error("Native ownership unconfirmed; restart process");
   auto control = std::make_shared<NativeControl>(
       kind, std::shared_ptr<T>(std::move(resource)));
   control->parent = std::move(parent);
@@ -554,6 +570,8 @@ bool prepare_native_speech_join(const std::shared_ptr<NativeControl> &control) {
   return true;
 }
 uint64_t request_native_work(uint64_t identity, NativeKind kind, bool probe) {
+  if (probe && native_quarantine_state().load(std::memory_order_acquire))
+    return 0;
   auto &registry = native_handles();
   std::lock_guard lock(registry.mutex);
   const auto found = registry.owners.find(identity);

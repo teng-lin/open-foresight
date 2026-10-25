@@ -61,9 +61,8 @@ Future<NativeRuntime> configureGeneration(
       modelType: candidate.modelType,
       current: valid,
     );
-    if (current != null && !current()) {
-      throw RpcError(RpcErrorCode.cancelled, 'Model setup cancelled');
-    }
+    // Registration is the commit boundary. A disconnected subscriber cannot
+    // retract it; the slot still enforces workspace/epoch/close ownership.
     return candidate;
   } catch (error, stack) {
     try {

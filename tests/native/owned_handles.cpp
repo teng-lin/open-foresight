@@ -92,12 +92,15 @@ void run_owner_subprocess(const char *executable, const char *mode) {
   check(posix_spawn(&child, executable, nullptr, nullptr, args, environ) == 0,
         "legacy exit subprocess started");
   int status = 0;
-  check(waitpid(child, &status, 0) == child && WIFEXITED(status) &&
-            WEXITSTATUS(status) == 0,
-        std::strcmp(mode, "--live-legacy-exit") == 0
-            ? "exit with a live legacy generation must not destroy joinable "
-              "workers"
-            : "retirement refusal must not advertise an idle parent token");
+  check(
+      waitpid(child, &status, 0) == child && WIFEXITED(status) &&
+          WEXITSTATUS(status) == 0,
+      std::strcmp(mode, "--live-legacy-exit") == 0
+          ? "exit with a live legacy generation must not destroy joinable "
+            "workers"
+      : std::strcmp(mode, "--retire-admission-failure") == 0
+          ? "retirement refusal must not advertise an idle parent token"
+          : "mapping quarantine controls preserve refusal and actual cleanup");
 }
 void live_legacy_exit(const char *executable) {
   run_owner_subprocess(executable, "--live-legacy-exit");
@@ -309,6 +312,11 @@ NativeOperation::Result child_fault(NativeOperation &op) {
   return native_retire(op);
 }
 void child_failure(const char *executable) {
+  auto healthy = fs_owned_engine_create(executable, "/dev/null", 0, 0);
+  auto healthy_child = fs_owned_conversation_create(healthy);
+  auto healthy_speech = fs_owned_speech_create(executable, "/dev/null");
+  check(healthy && healthy_child && healthy_speech,
+        "healthy owners precede quarantine");
   auto engine = fs_owned_engine_create(executable, "/dev/null", 0, 0);
   auto child = fs_owned_conversation_create(engine);
   auto parent_control = control(engine), child_control = control(child);
@@ -329,6 +337,22 @@ void child_failure(const char *executable) {
             fs_owner_release(engine) == -1 &&
             fs_operation_release(retired) == -1,
         "unconfirmed child retains actual engine and observable authority");
+  check(fs_lifetime_admission() == 0 &&
+            fs_owned_engine_create(executable, "/dev/null", 0, 0) == 0 &&
+            fs_owned_conversation_create(healthy) == 0 &&
+            fs_owned_speech_create(executable, "/dev/null") == 0 &&
+            fs_owned_capture_start("auto", 0, 16000, 0) == 0 &&
+            fs_engine_probe_async(healthy) == 0 &&
+            fs_owned_generate_options(healthy_child, "rejected", "fixture",
+                                      nullptr, 16) == -1 &&
+            fs_owned_speech_finish(healthy_speech, "rejected") == -1,
+        "status3 refuses every new owned producer before physical admission");
+  char *state = fs_owned_engine_state(healthy);
+  check(state && !fs_owned_event_poll(healthy_child, 0) &&
+            fs_owned_generation_cancel(healthy_child) == 0 &&
+            fs_owned_speech_cancel(healthy_speech) == 0,
+        "quarantine preserves state, poll and cancellation");
+  fs_string_free(state);
   auto *legacy = fs_engine_create(executable, "/dev/null");
   check(legacy && fs_engine_destroy(legacy) == 0,
         "unconfirmed async exception cannot hang legacy destruction");
@@ -341,6 +365,23 @@ void child_failure(const char *executable) {
         "retry actually destroys child before parent and drops authority");
   release_owner(child, child_control->retire);
   release_owner(engine, retired);
+  auto healthy_retirement = fs_engine_retire(healthy);
+  until([&] { return fs_operation_status(healthy_retirement) == 1; });
+  release_owner(healthy_child, control(healthy_child)->retire);
+  release_owner(healthy, healthy_retirement);
+  release_owner(healthy_speech, fs_speech_retire(healthy_speech));
+  check(fs_lifetime_admission() == 0,
+        "actual cleanup never resets mapping quarantine");
+}
+void explicit_quarantine(const char *executable) {
+  auto owner = fs_owned_engine_create(executable, "/dev/null", 0, 0);
+  check(owner && fs_lifetime_admission() == 1, "initial mapping admission");
+  fs_lifetime_quarantine();
+  check(fs_lifetime_admission() == 0 &&
+            !fs_owned_engine_create(executable, "/dev/null", 0, 0),
+        "acknowledgement uncertainty refuses new native ownership");
+  release_owner(owner, fs_engine_retire(owner));
+  check(fs_lifetime_admission() == 0, "quarantine persists after cleanup");
 }
 void speech_join_with_poll(const char *executable) {
   auto speech = fs_owned_speech_create(executable, "/dev/null");
@@ -603,6 +644,20 @@ int main(int argc, char **argv) {
   const int supervised = foresight::supervise_worker(argc, argv);
   if (supervised >= 0)
     return supervised;
+  if (argc == 2 && (std::string(argv[1]) == "--mapping-quarantine" ||
+                    std::string(argv[1]) == "--ack-quarantine")) {
+    setenv("FORESIGHT_HELPER", argv[0], 1);
+    try {
+      if (std::string(argv[1]) == "--mapping-quarantine")
+        child_failure(argv[0]);
+      else
+        explicit_quarantine(argv[0]);
+      return 0;
+    } catch (const std::exception &error) {
+      std::cerr << error.what() << '\n';
+      return 1;
+    }
+  }
   if (argc == 2 && std::string(argv[1]) == "--retire-admission-failure") {
     auto engine = fs_owned_engine_create(argv[0], "/dev/null", 0, 0);
     auto child = fs_owned_conversation_create(engine);
@@ -659,7 +714,8 @@ int main(int argc, char **argv) {
     std::cerr << "CASE independent_speech\n";
     independent_speech(argv[0]);
     std::cerr << "CASE child_failure\n";
-    child_failure(argv[0]);
+    run_owner_subprocess(argv[0], "--mapping-quarantine");
+    run_owner_subprocess(argv[0], "--ack-quarantine");
     std::cerr << "CASE probes\n";
     probes(argv[0]);
     std::cerr << "CASE reused_address\n";

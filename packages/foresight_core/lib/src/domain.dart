@@ -42,19 +42,24 @@ class Domain implements RecordingWorkspace, SummaryWorkspace, ModelWorkspace {
   final Helper helper;
   late final _queries = DomainQueries(store);
   @override
-  late final generationRuntimes = GenerationRuntimeSlot<NativeRuntime>(
-    closeRuntime: (runtime) => runtime.close(),
-    runtimeClosed: (runtime) => runtime.closed,
-    runtimeBusy: (runtime) => runtime.generating,
-    watchRuntime: (runtime, changed) => runtime.onOwnershipChanged = changed,
-    changed: () => onBackgroundSettled?.call(),
-  );
+  late final GenerationRuntimeSlot<NativeRuntime> generationRuntimes =
+      GenerationRuntimeSlot<NativeRuntime>(
+        closeRuntime: (runtime) => runtime.close(),
+        runtimeClosed: (runtime) => runtime.closed,
+        runtimeBusy: (runtime) => runtime.generating,
+        checkRuntime: (runtime) => runtime.checkAvailable(),
+        watchRuntime: (runtime, changed) =>
+            runtime.onOwnershipChanged = changed,
+        changed: () => onBackgroundSettled?.call(),
+      );
   @override
   NativeRuntime? get generator => generationRuntimes.visible;
   @visibleForTesting
   set generator(NativeRuntime? runtime) =>
       generationRuntimes.installForTesting(runtime);
   bool get generationBusy => generationRuntimes.busy;
+  Object? get generationFailure => generationRuntimes.failure;
+  bool get generationRestartRequired => generationRuntimes.restartRequired;
   void stopGeneration() => generationRuntimes.stop();
   @override
   final Clock clock;

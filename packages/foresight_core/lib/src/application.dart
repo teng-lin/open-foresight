@@ -81,6 +81,7 @@ class Application implements ModelGate, GenerationReservationGate {
   late final GenerationCoordinator _generation = GenerationCoordinator(
     restoring: () => domain.restoring,
     generating: () => domain.generationBusy,
+    checkAvailable: domain.generationRuntimes.checkAvailable,
     recording: () => recording != null,
     closed: () => _closed,
     yieldAutomatic: () async {

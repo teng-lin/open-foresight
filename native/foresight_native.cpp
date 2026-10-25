@@ -658,6 +658,18 @@ extern "C" {
 int fs_lifetime_version() {
   return 2;
 }
+int fs_lifetime_admission() {
+  return foresight::ffi_barrier(
+      [] {
+        return native_quarantine_state().load(std::memory_order_acquire) ? 0
+                                                                         : 1;
+      },
+      0);
+}
+void fs_lifetime_quarantine() {
+  foresight::ffi_barrier_void(
+      [] { native_quarantine_state().store(true, std::memory_order_release); });
+}
 uint64_t fs_engine_probe_async(uint64_t h) {
   return foresight::ffi_barrier(
       [&] { return request_native_work(h, NativeKind::engine, true); },

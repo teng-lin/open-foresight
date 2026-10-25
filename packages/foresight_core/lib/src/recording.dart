@@ -121,6 +121,7 @@ class Recording implements RecordingStatus {
         );
       }
     } else if (captures.isNotEmpty) {
+      _lifetime.ensureAdmission();
       final accepted = _nativeFsCaptureSetEchoCancellation(
         captures.first,
         enabled ? 1 : 0,
@@ -332,13 +333,6 @@ class Recording implements RecordingStatus {
     _lifetime.ensureAdmission();
     final target = _targets[channel].toNativeUtf8();
     try {
-      if (channel == 0 &&
-          _echoCancellation &&
-          !lib.providesSymbol('fs_owned_capture_start')) {
-        throw StateError(
-          'Echo cancellation requires an updated native audio runtime',
-        );
-      }
       final capture = _nativeFsCaptureStart(
         target,
         channel,

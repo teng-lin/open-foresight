@@ -231,20 +231,27 @@ final class ModelRegistry {
     bool Function()? current,
   }) async {
     final workspace = domain.workspaceGeneration;
+    var registered = false;
     await domain.generationRuntimes.replace(
-      (attempt) => configureGeneration(
-        store,
-        runtimeConfiguration.nativeLibrary,
-        request.path,
-        request.runtime,
-        backend: request.backend,
-        modelType: request.modelType,
-        current: attempt.current,
-        onCandidate: attempt.own,
-        retire: attempt.retire,
-      ),
+      (attempt) async {
+        final candidate = await configureGeneration(
+          store,
+          runtimeConfiguration.nativeLibrary,
+          request.path,
+          request.runtime,
+          backend: request.backend,
+          modelType: request.modelType,
+          current: attempt.current,
+          onCandidate: attempt.own,
+          retire: attempt.retire,
+        );
+        registered = true;
+        return candidate;
+      },
       current: () =>
-          _current(current) && workspace == domain.workspaceGeneration,
+          !_closed &&
+          (registered || (current?.call() ?? true)) &&
+          workspace == domain.workspaceGeneration,
     );
   }
 

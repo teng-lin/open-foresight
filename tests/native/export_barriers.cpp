@@ -181,5 +181,15 @@ int main(int argc, char **argv) {
     std::this_thread::yield();
   if (fs_owner_release(owned) != 0 || fs_engine_destroy(engine) != 0)
     return 11;
+  if (fs_lifetime_admission() != 1)
+    return 19;
+  busy_reporter.busy.test_and_set(std::memory_order_acquire);
+  sustained_failure = true;
+  fs_lifetime_quarantine();
+  const bool quarantine_published = fs_lifetime_admission() == 0;
+  sustained_failure = false;
+  busy_reporter.busy.clear(std::memory_order_release);
+  if (!quarantine_published || fs_lifetime_admission() != 0)
+    return 20;
   return 0;
 }

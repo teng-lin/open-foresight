@@ -14,6 +14,7 @@ struct Handle {
 };
 static Handle *channels[2] = {};
 static uint64_t next_owner = 1;
+static bool mapping_quarantined = false;
 static std::map<uint64_t, Handle *> owners;
 static std::map<uint64_t, uint64_t> retirements;
 static Handle *resolve(uint64_t owner) {
@@ -178,6 +179,12 @@ extern "C" {
 int fs_abi_version() {
   return 1;
 }
+int fs_lifetime_admission() {
+  return !mapping_quarantined;
+}
+void fs_lifetime_quarantine() {
+  mapping_quarantined = true;
+}
 int fs_lifetime_version() {
   return 2;
 }
@@ -293,8 +300,10 @@ int fs_operation_status(uint64_t token) {
   auto &operation = found->second;
   if (operation.completed)
     return 1;
-  if (unconfirmed_retirement && (operation.kind == 1 || operation.kind == 3))
+  if (unconfirmed_retirement && (operation.kind == 1 || operation.kind == 3)) {
+    fs_lifetime_quarantine();
     return 3;
+  }
   if (operation.kind == 2 ? hold_finish : hold_retirement)
     return 0;
   if ((operation.kind == 4 || operation.kind == 1) && hold_speech_join)

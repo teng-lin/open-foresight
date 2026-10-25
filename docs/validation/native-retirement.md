@@ -40,7 +40,8 @@ whose address was reused;
 repeated Dart close joins the cached completion. Probe/join/finish results use
 operation acknowledgement; retirement uses its separate owner acknowledgement.
 An unconfirmed or lost completion latches new-admission refusal for all Dart
-consumers sharing that mapping. Cleanup remains available, but the owner must
+consumers sharing that mapping. Native atomic admission state and quarantine
+exports make this refusal visible to replacement isolates too. Cleanup remains available, but the owner must
 restart the service/application process; replacing an isolate cannot recover
 lost owner state. Capacity refusal is surfaced without automatic retry loops.
 
@@ -64,10 +65,14 @@ same ownership barriers; original storage/producer errors remain primary.
 Its six production transitions cover note discovery, registered note load,
 note reset, startup discovery, startup registered load and successful model
 configuration. New attempts revoke older candidates and join their producers;
-installation waits for previous retirement and rechecks the epoch. A pending
+installation waits for previous retirement and rechecks the epoch. Once model
+registration commits, subscriber cancellation cannot discard that adoption;
+workspace/slot epoch and service close still revoke it. A pending
 candidate may supply loading status, but a stale candidate cannot replace the
 installed owner. Application close revokes this slot before waiting for model or
-generation producers. Domain drainage joins the slot before helper/Store release.
+generation producers. Domain drainage joins the slot before helper/Store release. A settled retirement
+failure is separate from actual work-in-flight: it requires restart and refuses
+new generation, but cannot permanently block idle process shutdown as busy.
 
 ## Retained synchronous consumers
 

@@ -1,10 +1,20 @@
 import 'dart:async';
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:foresight_core/src/native_lifetime.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
+
+Future<bool> admissionRefusedInFreshIsolate(String path) => Isolate.run(() {
+  try {
+    NativeLibrary(DynamicLibrary.open(path)).lifetime.ensureAdmission();
+    return false;
+  } on StateError {
+    return true;
+  }
+});
 
 // Protocol-only fixture: it owns no application resource/worker. Real native
 // join/destruction and lost acknowledgement are covered by native_owned_handles.
@@ -13,16 +23,21 @@ void main() {
   late void Function(int) status, admission, release;
   late int Function() released, ownersReleased;
   late File compiled;
+  late String fixturePath;
   var fixtureNumber = 0;
   setUpAll(() async {
     final root = createTestTempDirectorySync('lifetime-protocol-');
     final source = File('${root.path}/fixture.c')
       ..writeAsStringSync(r'''
 #include <stdint.h>
+#include <stdatomic.h>
 static int state, admitted = 1, release_ok = 1, releases, owner_releases;
+static atomic_int quarantined;
+int fs_lifetime_admission(void) { return !atomic_load(&quarantined); }
+void fs_lifetime_quarantine(void) { atomic_store(&quarantined, 1); }
 int fs_abi_version(void) { return 1; }
 int fs_lifetime_version(void) { return 2; }
-void fixture_status(int value) { state = value; }
+void fixture_status(int value) { state = value; if(value == 3)fs_lifetime_quarantine(); }
 void fixture_admission(int value) { admitted = value; }
 void fixture_release(int value) { release_ok = value; }
 int fixture_releases(void) { return releases; }
@@ -71,7 +86,8 @@ SYMBOL(fs_owned_capture_set_echo_cancellation)
     // Each test gets a distinct native mapping. An unconfirmed mapping must
     // remain refused for the process lifetime; fixture reset cannot erase it.
     final copy = compiled.copySync('${compiled.path}.${fixtureNumber++}');
-    fixture = DynamicLibrary.open(copy.path);
+    fixturePath = copy.path;
+    fixture = DynamicLibrary.open(fixturePath);
     status = fixture.lookupFunction<Void Function(Int32), void Function(int)>(
       'fixture_status',
     );
@@ -246,6 +262,32 @@ SYMBOL(fs_owned_capture_set_echo_cancellation)
       status(1);
       await lifetime.retire('fs_engine_retire', handle);
       expect(ownersReleased(), 1);
+    },
+  );
+  test(
+    'mapping quarantine refuses a fresh isolate before any originating watcher observes it',
+    () async {
+      status(
+        3,
+      ); // Native worker publishes this after latching its mapping state.
+      final path = fixturePath;
+      expect(await admissionRefusedInFreshIsolate(path), isTrue);
+      expect(ownersReleased(), 0);
+      expect(released(), 0);
+    },
+  );
+  test(
+    'retirement admission failure latches the mapping for other isolates',
+    () async {
+      admission(0);
+      await expectLater(
+        NativeLibrary(fixture).lifetime.retire('fs_engine_retire', handle),
+        throwsStateError,
+      );
+      final path = fixturePath;
+      expect(await admissionRefusedInFreshIsolate(path), isTrue);
+      expect(released(), 0);
+      expect(ownersReleased(), 0);
     },
   );
 }

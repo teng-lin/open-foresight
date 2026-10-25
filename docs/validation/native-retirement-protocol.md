@@ -15,7 +15,13 @@ The separately negotiated lifetime capability is version2. Its creation and
 operation exports use positive, monotonically increasing 63-bit **owner IDs**.
 They never expose an Engine, Conversation, Speech or Capture address. Only the
 original native mapping resolves an ID and acquires its synchronous call lease.
-No borrowed native object may cross a Dart isolate. Owned result strings are
+No borrowed native object may cross a Dart isolate. A mapping-local atomic
+quarantine survives replacement isolates. Native workers latch it before
+publishing status3; Dart publishes it through `fs_lifetime_quarantine` when an
+acknowledgement or retirement admission is uncertain. `fs_lifetime_admission`
+reports refusal to every isolate opening that image. There is no reset.
+Creation, probes and new generation/speech work refuse after quarantine;
+status, poll, cancel, capture finish, speech join and retirement stay available. Owned result strings are
 separate caller-owned buffers, freed with `fs_string_free`.
 
 Each live owner reserves one of32 independent execution groups before physical
@@ -147,7 +153,12 @@ stopping new native admissions and restarting the service/application process.
 Capacity refusal must be surfaced without automatic retry loops. Normal tracked
 watchers acknowledge their own probe/join/finish results independently, even if
 their original subscriber cancels. This restart policy is a required Dart
-consumer contract; native qualification alone does not establish its adoption.
+consumer contract. Cross-isolate controls cover known status3 and uncertain
+acknowledgements, including a native latch before an originating Dart watcher
+observes completion. They do not establish detection of an individual isolate
+which disappears before requesting cleanup; NativeFinalizer only guarantees
+callbacks by isolate-group shutdown. Native qualification alone does not
+establish complete frontend owner-loss recovery.
 Process exit keeps any still-live legacy registry intact for OS/ownership-pipe
 cleanup rather than destructing joinable workers from a static finalizer.
 Legacy callers must end API admission before process exit; exit is not a

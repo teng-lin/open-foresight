@@ -2,6 +2,9 @@ import 'dart:async';
 
 import 'package:foresight_core/src/generation_runtime_slot.dart';
 import 'package:foresight_core/src/rpc_error.dart';
+import 'package:foresight_core/src/application_services/generation_coordinator.dart';
+import 'package:foresight_core/src/service_idle_shutdown.dart';
+import 'package:foresight_core/src/helper.dart';
 import 'package:test/test.dart';
 
 final class Owner {
@@ -167,7 +170,33 @@ void main() {
       final rejected = expectLater(reset, throwsA(same(failure)));
       owner.released.completeError(failure);
       await rejected;
-      expect(runtimes.busy, isTrue);
+      expect(runtimes.busy, isFalse);
+      expect(runtimes.restartRequired, isTrue);
+      final gate = GenerationCoordinator(
+        restoring: () => false,
+        generating: () => runtimes.busy,
+        recording: () => false,
+        closed: () => false,
+        yieldAutomatic: () async {},
+        checkAvailable: runtimes.checkAvailable,
+      );
+      expect(
+        () => gate.reserve('retry', cancel: () {}),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'restart',
+            contains('restart'),
+          ),
+        ),
+      );
+      final shutdown = ServiceIdleShutdownGuard(
+        helper: Helper('/unused', '/unused', manageProcess: false),
+        recording: () => false,
+        operationsBusy: () => false,
+        backgroundBusy: () => runtimes.busy,
+      );
+      shutdown.checkBusy(); // A failed owner cannot prevent process restart.
       runtimes.stop();
       await expectLater(runtimes.drain(), throwsA(same(failure)));
       expect(owner.closes, 1);

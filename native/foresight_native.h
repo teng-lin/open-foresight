@@ -30,6 +30,13 @@ int fs_abi_version(void);
  * Engine retire also revokes and joins all owned children. Successful retire
  * means actual callback/poll/worker/child reap and resource destruction. */
 int fs_lifetime_version(void); /* currently 2 */
+/* Mapping-wide admission is shared across Dart isolates. Status3 latches
+ * refusal before publication; uncertain Dart acknowledgements explicitly
+ * quarantine. There is no reset. Poll/state/cancel/cleanup and legacy retry
+ * remain available. Admission returns1 while healthy,0 when process restart is
+ * required. */
+int fs_lifetime_admission(void);
+void fs_lifetime_quarantine(void);
 uint64_t fs_owned_engine_create(const char *runtime, const char *model,
                                 int backend, int model_type);
 uint64_t fs_owned_conversation_create(uint64_t engine);

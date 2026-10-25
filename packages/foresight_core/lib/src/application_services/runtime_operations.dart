@@ -53,7 +53,16 @@ final class RuntimeOperations {
     ...recording.state,
   };
   Map<String, Object?>? get generationState => domain.generator == null
-      ? null
+      ? domain.generationFailure == null
+            ? null
+            : {
+                'state': 'failed',
+                'error': domain.generationRestartRequired
+                    ? 'Generation ownership is unconfirmed; restart the service'
+                    : domain.generationFailure.toString(),
+                'restart_required': domain.generationRestartRequired,
+                'generating': false,
+              }
       : {
           ...domain.generator!.effectiveState,
           'generating': domain.generator!.generating,

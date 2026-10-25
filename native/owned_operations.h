@@ -84,8 +84,9 @@ public:
   // making a still-observable completion ambiguous.
   static constexpr size_t max_owner_groups = 32;
   explicit OwnedOperations(std::size_t capacity = 4096,
-                           bool default_executor = true)
-      : capacity_(capacity) {
+                           bool default_executor = true,
+                           std::atomic<bool> *quarantine_state = nullptr)
+      : capacity_(capacity), quarantine_state_(quarantine_state) {
     groups_[0].reserved = true;
     if (default_executor)
       groups_[0].worker = std::thread([this] { run(0); });
@@ -288,17 +289,20 @@ private:
         result = operation->action(*operation);
       } catch (const std::exception &error) {
         operation->boundary_failed.store(true, std::memory_order_release);
+        quarantine();
         operation->complete(OwnedOperation::State::unconfirmed);
         report_barrier_error(error.what());
         continue;
       } catch (...) {
         operation->boundary_failed.store(true, std::memory_order_release);
+        quarantine();
         operation->complete(OwnedOperation::State::unconfirmed);
         report_barrier_error("Native cleanup unconfirmed");
         continue;
       }
       if (result == OwnedOperation::Result::unsettled) {
         operation->boundary_failed.store(true, std::memory_order_release);
+        quarantine();
         // Keep unconfirmed ownership after an unexpected cleanup exception.
         // A reporter/fallback cannot turn it into a completed/releasable token.
         operation->complete(OwnedOperation::State::unconfirmed);
@@ -321,8 +325,13 @@ private:
     }
   }
 
+  void quarantine() noexcept {
+    if (quarantine_state_)
+      quarantine_state_->store(true, std::memory_order_release);
+  }
   std::mutex registry_mutex_;
   const std::size_t capacity_;
+  std::atomic<bool> *const quarantine_state_;
   std::unordered_map<uint64_t, std::shared_ptr<OwnedOperation>> operations_;
   uint64_t next_token_ = 1;
   struct Group {
