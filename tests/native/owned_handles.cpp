@@ -159,7 +159,8 @@ void completed_legacy_finalization(const char *executable) {
         "completed legacy authority still supports actual cleanup");
 }
 void capture_start_finalization(const char *executable) {
-  setenv("FORESIGHT_CAPTURE_RUNTIME", executable, 1);
+  const auto runtime = std::filesystem::absolute(executable).string();
+  setenv("FORESIGHT_CAPTURE_RUNTIME", runtime.c_str(), 1);
   setenv("FORESIGHT_TEST_THREAD_FAILURE", "capture", 1);
   capture_start_lock_probe = true;
   foresight::ScopeExit cleanup([] {
