@@ -23,6 +23,15 @@ Existing owner review for changes to trust code or publishing workflows remains
 required before merge. This amendment does not authorize a release or changes
 to external permissions/secrets/settings.
 
+## Deferred Keychain verification
+
+On 2026-10-25 the user also deferred the isolated macOS Keychain test from F12
+to speed delivery. Its actual Security -25308 failure (user interaction was
+disallowed in the test session) remains recorded as failed, not passed. Keep
+the existing opt-in fixture and gate; do not weaken or delete them. Further
+Keychain execution is outside this PR's merge requirements. The remaining
+first-run, logging, restore and Mac verification stays in scope.
+
 ## Current delivery
 
 Prioritize the reviewed recording, persistence/indexing, runtime/lifecycle,
