@@ -102,3 +102,65 @@ diagnostic files or an accepted product. The production load gate, owner/proxy,
 binary codecs, storage dispatch, schema-2 records, package/runtime selectors,
 full application gates and resource proofs remain unfinished. Repeat independent
 reviews of the repaired source are still required before convergence.
+
+## Writer/coordinator integration checkpoint
+
+`LoggingSession` accepts an additive `DiagnosticWorkerFactory`. The coordinator
+invokes it once, outside the writer, at the first eligible persistence request.
+Off, transient, no-profile and cold short sessions never invoke it. The factory
+returns its owner before any prepare/spawn call and receives only immutable
+session metadata, an actual writer-exit future and one bounded prepare callback.
+`DiagnosticStorageCommand` is a pure immutable descriptor; composition supplies
+an already validated original native table and a lazy validated command. This
+foundation never loads a library path or opens command candidates. Selected
+worker `dartId`, rather than the parent VM mode, supplies schema-2 `build_id`.
+
+Preparation runs synchronously on the actual writer after the coordinator owns
+the context. The dedicated spawn isolate receives original function addresses,
+the opaque native generation and completion ports. Its returned result and its
+actual VM exit are distinct barriers. The coordinator does not run blocking
+prepare/spawn FFI. Only the existing writer 250 ms tick supplies the native
+heartbeat; no coordinator idle keepalive is added.
+
+The writer has one outstanding request. Queued records retain their original
+producer representation and immutable kind/slot/generation. A matching final
+APPEND acknowledgement removes only that prefix; records appended during the
+await stay queued. A failed Future does not refund unknown in-flight credit or
+replay the record. Confirmed disposal permits a drop/refund. Unsent suffixes can
+be dropped during close, while unknown in-flight data stays charged until the
+writer exits. Summary counters reset before yielding a summary, so newer
+counters cannot be erased by an older summary acknowledgement. One pending
+summary is retained across a retry, using the internal writer reserve.
+
+The final phase starts only when the caller invokes close after business
+cleanup. It retains the shared 500 ms budget and 300 ms FORCE transition. A
+settled writer and unsettled prepare/spawn owner are reported separately through
+`LoggingCloseResult.ownerSettled`. Only unsettled parent work requires explicit
+same-code process exit. Child-only unknown health, an unconsumed Darwin status
+or a quiescent retained mapping does not. A matching RESULT/RETIRED still in the
+retained page is consumed before classifying an observed child exit as a lost
+reply. Observer ports remain non-keepalive and survive the external deadline
+until an actual late writer exit can settle ownership.
+
+Production without a worker factory reports `storageWorkerUnconfigured` and
+stays memory-only; it cannot call `DiagnosticStorage.admit` in the application
+PID. The old synchronous sink path is available solely through the explicit
+`startForTesting(sinkFactory: ...)` fixture injection and retains schema 1.
+Worker records use schema 2 with authenticated logical application PID, selected
+build ID and producer generation, expanded under one writer scratch permit.
+
+The added protocol/session controls hold a committed APPEND acknowledgement,
+append another record, recycle its producer slot, and distinguish unknown work
+from confirmed disposal. They cover ownership arriving during close, summaries
+updated during a write, absent factories and throwing owner controls. The FFI
+ownership fixture holds the actual writer or spawn isolate, requires an
+unsettled result at the external deadline, releases it and then proves actual
+VM exit and natural harness exit. Its third mode publishes a final RETIRED while
+also reporting exit, exercising acknowledgement ordering. This is a controlled
+native backend: it creates no OS storage child and proves no filesystem or
+production process ownership.
+
+Local focused results, failure controls and initial failed output are retained
+under `/var/tmp/of-log-owner`. They do not qualify a product native image,
+actual storage child, SDK-container/Mac/full application matrix, packaging,
+resource ceilings or physical capture. Those remain separate required lanes.
