@@ -14,6 +14,7 @@ import 'package:foresight_core/src/read_coordinator.dart';
 import 'package:foresight_core/src/sqlite_read_worker.dart';
 import 'package:foresight_core/src/store.dart';
 import 'package:sqlite3/open.dart' as loader;
+import 'package:sqlite3/sqlite3.dart' as upstream;
 
 import '../sql_support_test_bootstrap.dart';
 
@@ -61,6 +62,26 @@ void checkMappingRefusal(SqliteMappingBootstrap mapping, String path) {
 }
 
 Future<void> main(List<String> arguments) async {
+  if (arguments.first == '--probe-lock') {
+    loader.open.overrideForAll(() => DynamicLibrary.open(arguments[1]));
+    final db = upstream.sqlite3.open(arguments[2]);
+    try {
+      db.execute('PRAGMA busy_timeout=0');
+      var busy = false;
+      try {
+        db.execute('BEGIN IMMEDIATE');
+        db.execute('ROLLBACK');
+      } on upstream.SqliteException catch (error) {
+        if (error.resultCode != 5) rethrow;
+        busy = true;
+      }
+      check(busy, 'external process acquired the parent write lock');
+      stdout.writeln('SQLITE_BUSY: parent write lock retained');
+    } finally {
+      db.dispose();
+    }
+    return;
+  }
   final root = Directory(arguments.first);
   final scenario = arguments.length > 1 ? arguments[1] : 'alias';
   final lib = Directory('${root.path}/lib')..createSync(recursive: true);
@@ -197,6 +218,21 @@ Future<void> main(List<String> arguments) async {
               .single['value'] ==
           'uncommitted',
       'parent transaction was not held',
+    );
+    await worker.close();
+    final lockProbe = await Process.run(Platform.resolvedExecutable, [
+      '--probe-lock',
+      scenario == 'physical'
+          ? '${lib.path}/retained-original-inode'
+          : original.path,
+      store.path,
+    ]).timeout(const Duration(seconds: 10));
+    check(
+      lockProbe.exitCode == 0 &&
+          lockProbe.stdout.toString().contains(
+            'SQLITE_BUSY: parent write lock retained',
+          ),
+      'external write-lock probe failed: ${lockProbe.stdout} ${lockProbe.stderr}',
     );
     store.db.execute('ROLLBACK');
     stdout.writeln(

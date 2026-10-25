@@ -53,6 +53,9 @@ captures the actual mapping's physical absolute path, image base, progress
 installer address and SQLite source identity, retains it with `RTLD_NOLOAD`,
 and registers that canonical loader name before any database locks. A foreign
 prior package initialization that prevents capturing the actual mapping refuses.
+At this seam, an earlier package loader override can still select the initial
+image before capture; owning that selector and refusing production basename
+fallback remain part of the validated-selection integration gate.
 The opaque original-code handoff includes this SQLite mapping, never a database
 or native context pointer.
 
@@ -74,7 +77,9 @@ held; a second case also renames and replaces the frozen physical file itself.
 The replacement bytes are checked independently. An explicit reverse control
 proves the discovery alias changed, and a fresh bound isolate reports the original anchor in both cases. The real
 read worker returns the committed snapshot while the parent retains its write
-transaction; its mapping identity follows from the shared checked loader path,
+transaction. After the reader closes, a separate process must receive
+`SQLITE_BUSY` from `BEGIN IMMEDIATE`, independently witnessing that the parent
+retained its write lock. Its mapping identity follows from the shared checked loader path,
 rather than a separately reported worker anchor. Negative oracles refuse an
 unloaded copy without mapping it and reject a mismatched anchor.
 
@@ -180,6 +185,10 @@ observations, not a deterministic teardown count guarantee. Counter snapshots
 are inspected at quiescence/process exit; independently sampled totals are not
 transactional while jobs concurrently start/end. No environment preload was used.
 
+Both counter sets above are historical 8c results. They were not re-run on the
+current optional-marker C source or with the frozen SQLite mapping seam, and
+are not current qualification.
+
 The initial frozen-mapping follow-up (46b) binds only its 23 listed inputs:
 Linux focused 54 pass / 4 macOS-only skips and Mac focused 58 pass / 0 skips.
 Both hosts built the current unmarked direct SQL C component and passed its two
@@ -207,7 +216,9 @@ service and other wider imports remain outside this binding. Linux again passed
 55 focused tests with four macOS-only skips; Mac passed 59 with zero skips.
 Both AOT replacement scenarios also assert that an unloaded SQLite copy is
 refused and remains unmapped according to a second NOLOAD probe, and that a
-mismatched progress anchor is refused. Analysis/format scope and explicit reuse
+mismatched progress anchor is refused. The lock-oracle extension also closes the
+real read worker before an independent process requires `SQLITE_BUSY` from
+`BEGIN IMMEDIATE`, while the parent still holds its transaction. Analysis/format scope and explicit reuse
 of unchanged native artifacts remain as described above.
 
 Two Linux-only prior-resolver negatives use the exact 1ba public bootstrap,

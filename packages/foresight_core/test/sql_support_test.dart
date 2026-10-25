@@ -17,7 +17,7 @@ void main() {
   bootstrapSqlSupportFixture();
 
   test(
-    'repeated exact selection reuses code and changed selection refuses after DB open',
+    'repeated exact selection reuses code and changed path refuses while DB remains usable',
     () {
       final selected =
           Platform.environment['FORESIGHT_TEST_SQL_SUPPORT_LIBRARY']!;
