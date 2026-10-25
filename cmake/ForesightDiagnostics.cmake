@@ -237,7 +237,7 @@ function(_diag_validate_products)
       _diag_recipe_failed()
     endif()
   endforeach()
-  foreach(_target IN ITEMS foresight_diagnostic_support foresight-diagnostic-launcher
+  foreach(_target IN ITEMS foresight_diagnostic_support foresight_diagnostic_launcher
       foresight_diagnostic_identity_check foresight_diagnostic_compile
       foresight_diagnostic_products foresight_runtime_support_products)
     if(TARGET ${_target})
@@ -248,7 +248,7 @@ function(_diag_validate_products)
       endif()
     endif()
   endforeach()
-  foreach(_product IN ITEMS foresight_diagnostic_support foresight-diagnostic-launcher)
+  foreach(_product IN ITEMS foresight_diagnostic_support foresight_diagnostic_launcher)
     foreach(_property IN ITEMS COMPILE_DEFINITIONS INCLUDE_DIRECTORIES
         LINK_OPTIONS LINK_DIRECTORIES COMPILE_FLAGS LINK_FLAGS BUILD_RPATH INSTALL_RPATH
         C_VISIBILITY_PRESET INTERPROCEDURAL_OPTIMIZATION_${_diag_configuration})
@@ -340,7 +340,9 @@ add_custom_target(foresight_diagnostic_compile
   VERBATIM)
 add_custom_target(foresight_diagnostic_support DEPENDS foresight_diagnostic_compile
   SOURCES ${_diag_support_sources})
-add_custom_target(foresight-diagnostic-launcher DEPENDS foresight_diagnostic_compile
+# Keep the scheduling handle distinct from its executable byproduct: Ninja
+# emits a per-directory phony rule for every custom target.
+add_custom_target(foresight_diagnostic_launcher DEPENDS foresight_diagnostic_compile
   SOURCES ${_diag_launcher_sources})
 add_custom_target(foresight_diagnostic_products ALL
   COMMAND "${CMAKE_COMMAND}"
@@ -349,7 +351,7 @@ add_custom_target(foresight_diagnostic_products ALL
     "-DDIAGNOSTIC_SUPPORT=${_diag_support}"
     "-DDIAGNOSTIC_LAUNCHER=${_diag_launcher}"
     -P "${_diag_root}/cmake/PublishDiagnosticProducts.cmake"
-  DEPENDS foresight_diagnostic_support foresight-diagnostic-launcher
+  DEPENDS foresight_diagnostic_support foresight_diagnostic_launcher
   VERBATIM)
 function(_diag_add_runtime_products)
   if(NOT TARGET foresight_sql_support)

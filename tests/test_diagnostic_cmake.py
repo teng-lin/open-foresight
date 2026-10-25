@@ -113,11 +113,26 @@ def configure(source, build, *arguments):
     )
 
 
+@pytest.mark.parametrize(
+    "generator",
+    [
+        "Unix Makefiles",
+        pytest.param(
+            "Ninja",
+            marks=pytest.mark.skipif(
+                not shutil.which("ninja"), reason="Ninja required"
+            ),
+        ),
+    ],
+)
 def test_actual_targets_and_identity_reconfigure_fail_closed_without_deleting_old_bytes(
     tmp_path,
+    generator,
 ):
     source, build = fixture(tmp_path)
-    result = configure(source, build, "-DFORESIGHT_REQUIRE_DIAGNOSTIC_PRODUCTS=ON")
+    result = configure(
+        source, build, "-G", generator, "-DFORESIGHT_REQUIRE_DIAGNOSTIC_PRODUCTS=ON"
+    )
     assert result.returncode == 0, result.stdout + result.stderr
     state = json.loads((build / "diagnostic-products.json").read_text())
     record = json.loads((build / "diagnostic-native-inputs.json").read_text())
@@ -256,7 +271,7 @@ def test_metadata_change_refuses_even_when_objects_need_no_rebuild(tmp_path):
         'set_property(TARGET foresight_diagnostic_compile PROPERTY RULE_LAUNCH_CUSTOM "custom-NOTFOUND")',
         'set_property(TARGET foresight_diagnostic_products PROPERTY RULE_LAUNCH_CUSTOM "foreign")',
         'set_property(TARGET foresight_diagnostic_support PROPERTY RULE_LAUNCH_CUSTOM "foreign")',
-        'set_property(TARGET foresight-diagnostic-launcher PROPERTY RULE_LAUNCH_CUSTOM "foreign")',
+        'set_property(TARGET foresight_diagnostic_launcher PROPERTY RULE_LAUNCH_CUSTOM "foreign")',
         "set_target_properties(foresight_diagnostic_support PROPERTIES INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)",
         'set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/native/diagnostic_inherited.c" PROPERTIES HEADER_FILE_ONLY ON)',
         "set_property(TARGET Threads::Threads APPEND PROPERTY INTERFACE_SOURCES foreign.c)",
