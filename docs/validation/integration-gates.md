@@ -227,6 +227,49 @@ reports. Do not suppress a report without recording its cause and rationale.
 An unsupported runtime or missing evidence is a failed probe, not a clean TSan
 result.
 
+## Native leak sanitizer
+
+`tools/run_native_sanitizers.sh` enables LeakSanitizer (`detect_leaks=1`) for
+every CTest process and child, including the preloaded CPython ctypes hosts
+and helpers. Settings come from `tools/sanitizer_settings.py`, which the
+probe verifier also uses. It is kept out of `tools/sanitizer_runtime.py` so
+the instrumented SDK cache key does not change. Leak reports remain in the
+`asan.*` or `ubsan.*` evidence files: the combined runtime can use either log
+prefix. Both prefixes fail the gate for address, leak and UB reports.
+ThreadSanitizer settings are unchanged.
+
+CPython hosts run with `PYTHONMALLOC=malloc`. pymalloc arenas are mmap regions
+that LSan does not scan, so they would make live interpreter objects look
+leaked. Suppressions live only in `tools/lsan-cpython.supp`, and the settings
+module refuses to produce settings unless every rule is an exact
+`leak:^Symbol$` for an allowlisted CPython retained-allocation frame with its
+own captured-stack `# reason:` comment. The active rules cover
+`Py_InitializeFromConfig`, marshal constant reader `r_object`, parser name
+reader `_PyPegen_name_token`, and the `itertoolsmodule_exec`,
+`collections_exec`, and `_ctypes_add_objects` built-in module initializers.
+They come from the clean CPython 3.13.17 host's retained allocation traces.
+Eval-loop, call/import dispatch, finalization, generic allocator, ctypes
+call-wrapper/libffi, module-path and wildcard rules are rejected because
+application calls run beneath them. Allocation traces retain 128 frames to
+keep recursive frozen-module reads attached to their specific startup owner.
+Another interpreter build must pass the same clean-host and deliberately
+leaking-host controls; unexpected allocations remain failures to diagnose.
+
+`tools/verify_native_sanitizers.py` must pass before the suite runs. With the
+gate's settings and suppression file it requires:
+
+| Probe | Required result |
+| --- | --- |
+| `leak` | A native executable's unreachable 4242-byte block is reported and exits nonzero. |
+| `retained` | A graph held by a static pointer, like native process-lifetime registries, exits 0 without a report. |
+| `python-host-clean` | The CI virtualenv Python loads an instrumented library through ctypes, retains a graph and exits 0 without a report. |
+| `python-host-application-leak` | The same host leaks 4243 bytes inside that library through ctypes, and the leak is reported. This checks that the planted application leak remains visible with the same Python call stack and suppressions. |
+
+The existing `address` and `undefined` probes now use the same settings.
+Each probe's log and `settings.txt` are kept in `native-sanitizer-evidence`.
+Processes that end by signal or `_exit` skip the exit-time leak check. LSan
+does not cover those paths.
+
 ## Probe index
 
 `tools/integration_probes.json` records every `tools/test_*.py` and
