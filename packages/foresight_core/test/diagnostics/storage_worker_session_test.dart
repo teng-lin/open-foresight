@@ -18,7 +18,7 @@ const _build =
 final class _Sink implements DiagnosticSink {
   final records = <Map>[];
   final classifications = <DiagnosticRole>[];
-  bool closed = false;
+  bool closed = false, failFirstAppend = false;
   @override
   int get slot => 4;
   @override
@@ -36,7 +36,7 @@ final class _Sink implements DiagnosticSink {
   @override
   bool append(Uint8List bytes) {
     records.add(jsonDecode(utf8.decode(bytes)) as Map);
-    return true;
+    return !(failFirstAppend && records.length == 1);
   }
 
   @override
@@ -601,6 +601,59 @@ void main() {
       expect(result.flushed, isFalse);
       expect(jsonEncode(session.health.toJson()), isNot(contains('canary')));
       owner!.release.complete();
+    },
+  );
+  test(
+    'disabled APPEND ACK refunds only its failed prefix, preserving the newer suffix',
+    () async {
+      final profile = createTestTempDirectorySync('owner-disabled-');
+      _Owner? owner;
+      final session = await LoggingSession.startForTesting(
+        configuration: const DiagnosticConfiguration(),
+        profilePath: profile.path,
+        workerFactory: (context) {
+          owner = _Owner(context, holdFirstAppend: true);
+          owner!.sink.failFirstAppend = true;
+          return owner!;
+        },
+      );
+      addTearDown(() async {
+        if (owner != null && !owner!.release.isCompleted)
+          owner!.release.complete();
+        await session.close();
+      });
+      session.producer.emit(
+        DiagnosticEvent.runtimeFailed,
+        DiagnosticComponent.service,
+      );
+      await eventually(() => owner != null);
+      await owner!.entered.future.timeout(const Duration(seconds: 2));
+      session.producer.emit(
+        DiagnosticEvent.serviceReady,
+        DiagnosticComponent.service,
+      );
+      await eventually(
+        () async =>
+            (await session.inspectBudgetForTesting()).queuedRecords == 2,
+      );
+      final two = await session.inspectBudgetForTesting();
+      owner!.release.complete();
+      await eventually(
+        () => session.health.reason == DiagnosticHealthReason.sinkFailed,
+      );
+      final suffix = await session.inspectBudgetForTesting();
+      expect(suffix.queuedRecords, 1);
+      expect(suffix.queuedBytes, greaterThan(0));
+      expect(suffix.queuedBytes, lessThan(two.queuedBytes));
+      expect(session.health.dropped, 1);
+      expect(
+        owner!.calls.where((t) => t == DiagnosticWorkerFrame.append),
+        hasLength(1),
+      );
+      final result = await session.close();
+      expect(result.flushed, isFalse);
+      expect(result.requiresExplicitExit, isFalse);
+      expect(session.health.dropped, 2);
     },
   );
 }
