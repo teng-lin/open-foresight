@@ -70,6 +70,58 @@ TARGETS = {
     "darwin-arm64": {"compiler": "apple-clang", "floor": "macos-15.0-arm64"},
 }
 C_EXTENSIONS = frozenset({".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".mm", ".m"})
+NATIVE_DIRECTIVES = frozenset(
+    {
+        "include",
+        "define",
+        "undef",
+        "if",
+        "ifdef",
+        "ifndef",
+        "elif",
+        "else",
+        "endif",
+        "error",
+        "warning",
+        "pragma",
+        "line",
+    }
+)
+# Exact current diagnostic SDK includes. Build integration must bind their
+# resolution and include search order to the verified toolchain fingerprint.
+SYSTEM_HEADERS = frozenset(
+    {
+        "atomic",
+        "errno.h",
+        "fcntl.h",
+        "libproc.h",
+        "limits.h",
+        "poll.h",
+        "signal.h",
+        "spawn.h",
+        "stdatomic.h",
+        "stddef.h",
+        "stdint.h",
+        "stdio.h",
+        "string.h",
+        "sys/attr.h",
+        "sys/event.h",
+        "sys/file.h",
+        "sys/mman.h",
+        "sys/mount.h",
+        "sys/pidfd.h",
+        "sys/proc_info.h",
+        "sys/random.h",
+        "sys/stat.h",
+        "sys/syscall.h",
+        "sys/sysmacros.h",
+        "sys/types.h",
+        "sys/vfs.h",
+        "sys/wait.h",
+        "time.h",
+        "unistd.h",
+    }
+)
 # Defense in depth: a fixture/custom contract cannot opt these excluded paths in.
 FORBIDDEN = frozenset(
     {
@@ -100,7 +152,13 @@ def _strings(value: object) -> list[str]:
 
 
 def _path(value: object) -> str:
-    if not isinstance(value, str) or not value or "\\" in value or ":" in value:
+    if (
+        not isinstance(value, str)
+        or not value
+        or "\\" in value
+        or ":" in value
+        or any(ord(c) < 32 or ord(c) == 127 for c in value)
+    ):
         raise IdentityError("unsafe_source_path")
     p = PurePosixPath(value)
     if p.is_absolute() or any(x in {"", ".", ".."} for x in value.split("/")):
@@ -202,6 +260,10 @@ def _exists(root: Path, name: str) -> bool:
     return p.is_file()
 
 
+def _walk_error(error: OSError) -> Never:
+    raise IdentityError("unsafe_source_path") from error
+
+
 def _worker_path(value: object) -> str:
     name = _path(value)
     if any(
@@ -258,7 +320,7 @@ def _dart_uris(data: bytes) -> list[str]:
         text = data.decode("utf-8")
     except UnicodeError as error:
         raise IdentityError("unsupported_worker_header") from error
-    text = text.removeprefix("\ufeff")
+    text = text.removeprefix("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
     offset = text.find("\n") + 1 if text.startswith("#!") else 0
     result: list[str] = []
     while True:
@@ -328,7 +390,13 @@ def _native_lines(data: bytes) -> list[str]:
         raise IdentityError("unsupported_native_include") from error
     if re.search(r"\?\?[=/\\'()!<>-]", text):
         raise IdentityError("unsupported_native_include")
-    text = text.replace("\\\r\n", "").replace("\\\n", "").replace("%:", "#")
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    # Clang accepts whitespace before a splice newline with a warning. Refuse
+    # that extension rather than scanning different directives from the build.
+    if re.search(r"\\[ \t\v\f]+\n", text):
+        raise IdentityError("unsupported_native_include")
+    text = text.replace("\\\n", "").replace("%:", "#")
+    text = text.replace("\v", " ").replace("\f", " ")
     result = list(text)
     offset = 0
     while offset < len(text):
@@ -336,6 +404,8 @@ def _native_lines(data: bytes) -> list[str]:
             quote = text[offset]
             offset += 1
             while offset < len(text):
+                if text[offset] == "\n":
+                    raise IdentityError("unsupported_native_include")
                 if text[offset] == "\\":
                     offset += 2
                 elif text[offset] == quote:
@@ -343,6 +413,8 @@ def _native_lines(data: bytes) -> list[str]:
                     break
                 else:
                     offset += 1
+            else:
+                raise IdentityError("unsupported_native_include")
         elif text.startswith("//", offset) or text.startswith("/*", offset):
             start = offset
             line = text.startswith("//", offset)
@@ -363,7 +435,7 @@ def _check_native_includes(name: str, data: bytes, names: set[str]) -> None:
         if not re.match(r"[ \t]*#", line):
             continue
         directive = re.match(r"[ \t]*#[ \t]*([A-Za-z_][A-Za-z0-9_]*)", line)
-        if directive is None:
+        if directive is None or directive[1] not in NATIVE_DIRECTIVES:
             raise IdentityError("unsupported_native_include")
         if directive[1] != "include":
             continue
@@ -376,6 +448,8 @@ def _check_native_includes(name: str, data: bytes, names: set[str]) -> None:
             target = _relative_import(name, include[2])
             if target not in names:
                 raise IdentityError("unclassified_native_include")
+        elif include[2] not in SYSTEM_HEADERS:
+            raise IdentityError("unclassified_native_include")
 
 
 @dataclass(frozen=True)
@@ -493,7 +567,9 @@ class Contract:
         directory = self.root / root
         if directory.is_symlink() or not directory.is_dir():
             raise IdentityError("unsafe_source_path")
-        for base, directories, files in os.walk(directory, followlinks=False):
+        for base, directories, files in os.walk(
+            directory, followlinks=False, onerror=_walk_error
+        ):
             for child in directories:
                 if (Path(base) / child).is_symlink():
                     raise IdentityError("unsafe_source_path")
@@ -567,9 +643,12 @@ class Contract:
             if directory.is_symlink() or not directory.exists():
                 raise IdentityError("unsafe_source_path")
             if directory.is_file():
-                observed.add(_worker_path(root))
+                if root not in excluded:
+                    observed.add(_worker_path(root))
                 continue
-            for base, directories, files in os.walk(directory, followlinks=False):
+            for base, directories, files in os.walk(
+                directory, followlinks=False, onerror=_walk_error
+            ):
                 for child in directories:
                     if (Path(base) / child).is_symlink():
                         raise IdentityError("unsafe_source_path")

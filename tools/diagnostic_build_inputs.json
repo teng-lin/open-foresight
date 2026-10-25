@@ -140,6 +140,7 @@
       "native/diagnostic_support.c",
       "native/diagnostic_support.h",
       "packages/foresight_core/bin/diagnostic_storage_worker.dart",
+      "packages/foresight_core/lib/src/diagnostics/bounded_json.dart",
       "packages/foresight_core/lib/src/diagnostics/code_locations.g.dart",
       "packages/foresight_core/lib/src/diagnostics/configuration.dart",
       "packages/foresight_core/lib/src/diagnostics/events.dart",

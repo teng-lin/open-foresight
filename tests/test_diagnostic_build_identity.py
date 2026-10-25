@@ -357,18 +357,13 @@ def test_real_native_inventory_current_components_only(tmp_path):
     assert {"native/diagnostic_support.c", "native/diagnostic_support.h"} <= {
         row["path"] for row in config["native"]["inputs"]
     }
-    # This unit is based on6df, before the separately-owned support sources.
-    # Exercise its actual existing C text plus clearly synthetic missing roots.
+    # The owned native checkpoint contains every declared source. Copy its
+    # actual text into a Git-free fixture, without a missing-source fallback.
     config["scope"] = "fixture"
     for row in config["native"]["inputs"]:
         p = tmp_path / row["path"]
         p.parent.mkdir(parents=True, exist_ok=True)
-        original = ROOT / row["path"]
-        p.write_bytes(
-            original.read_bytes()
-            if original.exists()
-            else b"/* synthetic pending support */"
-        )
+        p.write_bytes((ROOT / row["path"]).read_bytes())
     save(tmp_path, config)
     value = native(tmp_path)
     assert value["kind"] == "native-components"
@@ -468,12 +463,26 @@ def test_unknown_runtime_import_does_not_open_application_graph(source):
         "#!/usr/bin/env dart\n",
         "// nested comment\n/* one /* two */ three */\n",
         "// comment\n" * 2000,
+        "// comment\r",
+        "// comment\r\n",
+        "#!/usr/bin/env dart\r",
+        "#!/usr/bin/env dart\r\n",
     ],
 )
 def test_worker_headers_cannot_hide_a_dependency(source, header):
     root, _ = source
     (root / "app/worker.dart").write_text(
         header + "import '../outside.dart';\nvoid main() {}"
+    )
+    with pytest.raises(identity.IdentityError, match="out_of_root_worker_import"):
+        worker(root)
+
+
+@pytest.mark.parametrize("prefix", ["// comment\r", "#!/usr/bin/env dart\r"])
+def test_cr_only_worker_source_cannot_hide_a_dependency(source, prefix):
+    root, _ = source
+    (root / "app/worker.dart").write_bytes(
+        (prefix + "import '../outside.dart';\rvoid main() {}\r").encode()
     )
     with pytest.raises(identity.IdentityError, match="out_of_root_worker_import"):
         worker(root)
@@ -675,6 +684,90 @@ def test_unsupported_native_preprocessing_fails_closed(source, data):
     (root / "native/diagnostic_protocol.c").write_bytes(data)
     with pytest.raises(identity.IdentityError, match="unsupported_native_include"):
         native(root)
+
+
+@pytest.mark.parametrize(
+    "data,error",
+    [
+        (b'// comment\r#include "unclassified.h"\n', "unclassified_native_include"),
+        (b'#inc\\\rlude "unclassified.h"\n', "unclassified_native_include"),
+        (b'#inc\\ \nlude "unclassified.h"\n', "unsupported_native_include"),
+        (b'#inc\\\t\r\nlude "unclassified.h"\n', "unsupported_native_include"),
+        (
+            b"#warning don't\n#define A '/*'\n#include \"unclassified.h\"\n#define B '*/'\n",
+            "unsupported_native_include",
+        ),
+        (b"#if 0\n'unterminated\n#endif\n", "unsupported_native_include"),
+        (b'#import "unclassified.h"\n', "unsupported_native_include"),
+        (b'#include_next "unclassified.h"\n', "unsupported_native_include"),
+        (b'#embed "unclassified.h"\n', "unsupported_native_include"),
+        (b"#include <unclassified.h>\n", "unclassified_native_include"),
+        (b'\v#include "unclassified.h"\n', "unclassified_native_include"),
+        (b'\f#include "unclassified.h"\n', "unclassified_native_include"),
+    ],
+)
+def test_native_lexical_forms_cannot_hide_dependencies(source, data, error):
+    root, _ = source
+    (root / "native/diagnostic_protocol.c").write_bytes(data)
+    with pytest.raises(identity.IdentityError, match=error):
+        native(root)
+
+
+def test_native_system_headers_are_closed_and_line_endings_preserved(source):
+    root, _ = source
+    (root / "native/diagnostic_protocol.c").write_bytes(
+        b'#include <stdint.h>\r#include "diagnostic_protocol.h"\r\n'
+    )
+    native(root)
+
+
+@pytest.mark.parametrize("target", ["native", "worker"])
+def test_inventory_walk_errors_refuse_incomplete_identity(source, target):
+    root, _ = source
+
+    def unreadable_walk(*args, onerror=None, **kwargs):
+        if onerror is not None:
+            onerror(PermissionError("synthetic unreadable inventory"))
+        return iter([])
+
+    with (
+        mock.patch.object(identity.os, "walk", side_effect=unreadable_walk),
+        pytest.raises(identity.IdentityError, match="unsafe_source_path"),
+    ):
+        native(root) if target == "native" else worker(root, "a" * 64)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "tools/\x00/diagnostic_build_inputs.json",
+        "tools/\x1f/diagnostic_build_inputs.json",
+    ],
+)
+def test_control_characters_in_contract_path_refused_before_open(source, name):
+    root, _ = source
+    with (
+        mock.patch.object(
+            identity.os, "open", side_effect=AssertionError("source opened")
+        ),
+        pytest.raises(identity.IdentityError, match="unsafe_source_path"),
+    ):
+        identity.Contract(root, name)
+
+
+def test_explicit_exception_on_a_file_root_is_not_hashed(source):
+    root, config = source
+    skipped = root / "owned/omitted.dart"
+    skipped.parent.mkdir()
+    skipped.write_text("This is a classified synthetic non-runtime fixture.\n")
+    config["worker"]["roots"].append("owned/omitted.dart")
+    config["worker"]["exceptions"] = {
+        "owned/omitted.dart": "Synthetic non-runtime input excluded by reviewed fixture contract."
+    }
+    save(root, config)
+    first = worker(root)
+    skipped.write_text("Changed explicitly excluded fixture.\n")
+    assert worker(root) == first
 
 
 def test_source_changed_during_read_cannot_produce_a_mixed_receipt(source):
