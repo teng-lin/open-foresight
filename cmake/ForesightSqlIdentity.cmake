@@ -5,6 +5,10 @@ set(FORESIGHT_SQL_IDENTITY_AVAILABLE FALSE)
 set(_sql_record_path "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-sql-inputs.json")
 file(WRITE "${_sql_record_path}" "{\"schema\":1,\"available\":false}\n")
 set(_sql_temporary "${CMAKE_CURRENT_BINARY_DIR}/sql-product-temp")
+if(IS_SYMLINK "${_sql_temporary}" OR
+   IS_SYMLINK "${CMAKE_CURRENT_BINARY_DIR}/sql-product-build")
+  message(FATAL_ERROR "SQL isolated build directories must not be symlinks")
+endif()
 file(MAKE_DIRECTORY "${_sql_temporary}")
 file(CHMOD "${_sql_temporary}" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE)
 # Use an allowlist, not an ever-growing environment denylist. No ambient make,
@@ -16,6 +20,13 @@ function(_foresight_prepare_sql_identity)
      NOT CMAKE_BUILD_TYPE MATCHES "^(Debug|Release|RelWithDebInfo|MinSizeRel)$" OR
      CMAKE_CONFIGURATION_TYPES OR CMAKE_CROSSCOMPILING OR
      NOT CMAKE_C_COMPILER_ID MATCHES "^(GNU|AppleClang|Clang)$")
+    return()
+  endif()
+  # Parent Ninja builds can still provide ordinary mandatory SQL when the
+  # isolated producer's fixed env/make executables are unavailable.
+  execute_process(COMMAND ${_sql_clean_environment} /usr/bin/make --version
+    RESULT_VARIABLE _make_status OUTPUT_QUIET ERROR_QUIET TIMEOUT 10)
+  if(NOT _make_status STREQUAL "0")
     return()
   endif()
   if(Python3_EXECUTABLE)

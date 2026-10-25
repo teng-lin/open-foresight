@@ -34,7 +34,7 @@ def product(tmp_path):
     return source, build
 
 
-def configure(source, build, extra="", before=""):
+def configure(source, build, extra="", before="", allow_failure=False):
     (source / "CMakeLists.txt").write_text(
         "cmake_minimum_required(VERSION 3.24)\n"
         "project(sql_identity_fixture LANGUAGES C)\n"
@@ -59,7 +59,9 @@ def configure(source, build, extra="", before=""):
     if sys.platform == "darwin":
         args.append("-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0")
     result = subprocess.run(args, text=True, capture_output=True, timeout=60)
-    assert result.returncode == 0, result.stdout + result.stderr
+    if not allow_failure:
+        assert result.returncode == 0, result.stdout + result.stderr
+    return result
 
 
 def compile_product(build, environment=None):
@@ -163,3 +165,51 @@ def test_unqualified_mandatory_sql_still_builds_without_a_product_claim(
     suffix = "dylib" if sys.platform == "darwin" else "so"
     blob = (build / f"libforesight_sql_support.{suffix}").read_bytes()
     assert b"\0FORESIGHT_SQL_SUPPORT_SOURCE_ID:v1:" not in blob
+
+
+@pytest.mark.parametrize("name", ["sql-product-temp", "sql-product-build"])
+def test_isolated_directories_cannot_alias_unrelated_build_state(
+    product, tmp_path, name
+):
+    source, build = product
+    build.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir(mode=0o755)
+    sentinel = outside / "CMakeCache.txt"
+    sentinel.write_text("unrelated build state\n")
+    (build / name).symlink_to(outside, target_is_directory=True)
+    result = configure(source, build, allow_failure=True)
+    assert result.returncode != 0
+    assert "SQL isolated build directories must not be symlinks" in result.stderr
+    assert sentinel.read_text() == "unrelated build state\n"
+    assert outside.stat().st_mode & 0o777 == 0o755
+
+
+def test_generic_output_override_installs_actual_target_not_old_default(
+    product, tmp_path
+):
+    source, build = product
+    (source / "tools/diagnostic_toolchain_metadata.py").write_text(
+        "import sys\nsys.exit(2)\n"
+    )
+    selected = tmp_path / "selected-output"
+    configure(source, build, before=f'set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "{selected}")')
+    suffix = "dylib" if sys.platform == "darwin" else "so"
+    default = build / f"libforesight_sql_support.{suffix}"
+    default.write_bytes(b"stale default bytes must never be installed")
+    result = subprocess.run(
+        ["cmake", "--build", str(build)], text=True, capture_output=True, timeout=120
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    destination = tmp_path / "installed"
+    result = subprocess.run(
+        ["cmake", "--install", str(build), "--prefix", str(destination)],
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    actual = selected / default.name
+    assert actual.is_file()
+    assert (destination / "lib" / default.name).read_bytes() == actual.read_bytes()
+    assert (destination / "lib" / default.name).read_bytes() != default.read_bytes()
