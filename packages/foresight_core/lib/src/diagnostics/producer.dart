@@ -30,10 +30,9 @@ final class DiagnosticProducerBootstrap {
       ? DiagnosticProducer._inactive(configuration)
       : DiagnosticProducer._(this);
 
-  /// Direct VM barrier, not an owner's forwarded completion notification.
-  /// Installing after execution started is safe but may miss an earlier exit;
-  /// use the owned paused-spawn helper when recycling must be guaranteed.
-  bool observeExit(Isolate isolate) {
+  // Only the owned paused-spawn helper wires this after binding the exact VM.
+  // A transferable producer bootstrap does not convey retirement authority.
+  bool _observeExit(Isolate isolate) {
     final writer = _writer;
     if (writer != null && Platform.version.startsWith('3.9.2 ')) {
       // Epoch0 identifies the lifetime barrier, covering all credit epochs.
@@ -70,7 +69,14 @@ final class DiagnosticProducer {
     _registrationDeadline = Timer(LoggingSession.closeDeadline, () {
       _shutdown(); // A lost registration is quarantined, never self-refunded.
     });
-    _writer!.send(['register', _slot, generation, 0, _credits!.sendPort]);
+    _writer!.send([
+      'register',
+      _slot,
+      generation,
+      0,
+      _credits!.sendPort,
+      Isolate.current.controlPort,
+    ]);
   }
   final SendPort? _writer;
   final int _slot, generation;

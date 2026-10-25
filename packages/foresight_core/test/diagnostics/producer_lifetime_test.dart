@@ -41,6 +41,30 @@ void _heldProducer((DiagnosticProducerBootstrap, SendPort) message) async {
 
 void _unobservedExit(DiagnosticProducerBootstrap _) => Isolate.exit();
 
+void _foreignConnection((DiagnosticProducerBootstrap, SendPort) message) async {
+  final producer = message.$1.connect();
+  await producer.ready;
+  var built = false;
+  final admitted = producer.emit(
+    DiagnosticEvent.runtimeFailed,
+    DiagnosticComponent.domain,
+    fields: () {
+      built = true;
+      return {};
+    },
+  );
+  message.$2.send((producer.active, admitted, built));
+}
+
+void _forwardedCapability(
+  (DiagnosticProducerBootstrap, SendPort) message,
+) async {
+  final child = ReceivePort();
+  await Isolate.spawn(_foreignConnection, (message.$1, child.sendPort));
+  message.$2.send(await child.first);
+  child.close();
+}
+
 void _unreachable((DiagnosticProducerBootstrap, RawReceivePort) message) {
   throw StateError('unsendable spawn must never execute its entrypoint');
 }
@@ -162,7 +186,7 @@ void main() {
   });
 
   test(
-    'a listener installed after actual exit never invents a reusable barrier',
+    'an external exit observer never invents a bound writer barrier',
     () async {
       final session = await _session();
       addTearDown(session.close);
@@ -175,7 +199,7 @@ void main() {
         onExit: exited.sendPort,
       );
       await exited.first.timeout(const Duration(seconds: 2));
-      bootstrap.observeExit(isolate);
+      expect(isolate.controlPort, isNotNull);
       session.producerExited(bootstrap);
       final state = await session.inspectBudgetForTesting();
       expect(
@@ -276,6 +300,46 @@ void main() {
     await owned.retired.timeout(const Duration(seconds: 2));
     expect(session.retainedSlotCount, 1);
   });
+
+  test(
+    'a copied capability in a foreign VM never receives encoder authority',
+    () async {
+      final session = await _session();
+      addTearDown(session.close);
+      final observations = ReceivePort();
+      addTearDown(observations.close);
+      final owned = await session.spawnProducer(
+        DiagnosticProducerKind.domain,
+        _forwardedCapability,
+        observations.sendPort,
+      );
+      expect(await observations.first.timeout(const Duration(seconds: 2)), (
+        false,
+        false,
+        false,
+      ));
+      await owned.retired.timeout(const Duration(seconds: 2));
+      expect(session.retainedSlotCount, 1);
+      _limits(await session.inspectBudgetForTesting());
+    },
+  );
+
+  test(
+    'a preflight reservation spawns only through its bound owner helper',
+    () async {
+      final session = await _session();
+      addTearDown(session.close);
+      final reservation = session.reserveProducerForSpawn(
+        DiagnosticProducerKind.domain,
+      );
+      final spawning = reservation.spawn(_exitBeforeRegistration, 0);
+      expect(reservation.cancelNeverSpawned(), isFalse);
+      final owned = await spawning;
+      await owned.retired.timeout(const Duration(seconds: 2));
+      await reservation.retired.timeout(const Duration(seconds: 2));
+      expect(session.retainedSlotCount, 1);
+    },
+  );
 
   test('owner notification alone quarantines an exposed reservation', () async {
     final session = await _session();

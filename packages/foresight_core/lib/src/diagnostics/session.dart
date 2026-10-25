@@ -368,7 +368,12 @@ final class LoggingSession {
   }
 
   DiagnosticProducer registerProducer(DiagnosticProducerKind kind) {
-    final bootstrap = reserveProducer(kind);
+    final bootstrap =
+        _reserve(
+          kind,
+          executingIsolate: Isolate.current.controlPort,
+        )?.bootstrap ??
+        _inactiveBootstrap;
     final producer = bootstrap.connect();
     if (_current(bootstrap)) _slots[bootstrap.id]!.local = producer;
     return producer;
@@ -385,7 +390,27 @@ final class LoggingSession {
     bool errorsAreFatal = true,
     String? debugName,
   }) async {
-    final slot = _reserve(kind);
+    return _spawnReserved(
+      _reserve(kind),
+      entrypoint,
+      message,
+      onError: onError,
+      onExit: onExit,
+      errorsAreFatal: errorsAreFatal,
+      debugName: debugName,
+    );
+  }
+
+  Future<DiagnosticOwnedIsolate> _spawnReserved<T>(
+    _OwnedProducer? slot,
+    void Function((DiagnosticProducerBootstrap, T)) entrypoint,
+    T message, {
+    SendPort? onError,
+    SendPort? onExit,
+    bool errorsAreFatal = true,
+    String? debugName,
+  }) async {
+    if (_closed || (slot != null && !_current(slot.bootstrap))) slot = null;
     final bootstrap = slot?.bootstrap ?? _inactiveBootstrap;
     Isolate? isolate;
     try {
@@ -398,7 +423,16 @@ final class LoggingSession {
         errorsAreFatal: errorsAreFatal,
         debugName: debugName,
       );
-      if (!bootstrap.observeExit(isolate)) producerExited(bootstrap);
+      if (_current(bootstrap)) {
+        _writer?.send([
+          'bind_vm',
+          bootstrap.slot,
+          bootstrap.generation,
+          0,
+          isolate.controlPort,
+        ]);
+      }
+      if (!bootstrap._observeExit(isolate)) producerExited(bootstrap);
       isolate.resume(isolate.pauseCapability!);
       return DiagnosticOwnedIsolate._(
         isolate,
@@ -420,9 +454,10 @@ final class LoggingSession {
 
   @visibleForTesting
   Future<DiagnosticBudgetSnapshot> inspectBudgetForTesting() async {
-    if (_closed || _writer == null) {
+    if (_writer == null) {
       return DiagnosticBudgetSnapshot._([0, 0, 0, 0, 0, 0, const []]);
     }
+    if (_closed) throw StateError('Diagnostic budget unavailable during close');
     final reply = ReceivePort();
     try {
       _writer.send(['inspect_budget', reply.sendPort]);

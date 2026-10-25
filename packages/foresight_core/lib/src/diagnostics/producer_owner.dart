@@ -24,6 +24,27 @@ final class DiagnosticProducerReservation {
 
   Future<void> get retired =>
       _slot?.retired ?? _owner._inactiveBootstrap.connect().retired;
+  Future<DiagnosticOwnedIsolate> spawn<T>(
+    void Function((DiagnosticProducerBootstrap, T)) entrypoint,
+    T message, {
+    SendPort? onError,
+    SendPort? onExit,
+    bool errorsAreFatal = true,
+    String? debugName,
+  }) {
+    final slot = !_exposed && !_cancelled ? _slot : null;
+    _exposed = true;
+    return _owner._spawnReserved(
+      slot,
+      entrypoint,
+      message,
+      onError: onError,
+      onExit: onExit,
+      errorsAreFatal: errorsAreFatal,
+      debugName: debugName,
+    );
+  }
+
   bool cancelNeverSpawned() {
     if (_cancelled || _exposed || _slot == null) return false;
     _cancelled = true;
@@ -43,7 +64,10 @@ final class DiagnosticOwnedIsolate {
 }
 
 extension _ProducerOwnership on LoggingSession {
-  _OwnedProducer? _reserve(DiagnosticProducerKind kind) {
+  _OwnedProducer? _reserve(
+    DiagnosticProducerKind kind, {
+    SendPort? executingIsolate,
+  }) {
     if (_closed || _writer == null) return null;
     for (var slot = 0; slot < LoggingSession.maximumProducers; slot++) {
       if (_slots[slot] != null || _generations[slot] == _maximumGeneration) {
@@ -59,7 +83,14 @@ extension _ProducerOwnership on LoggingSession {
       );
       final owned = _OwnedProducer(bootstrap);
       _slots[slot] = owned;
-      _writer.send(['reserve', slot, generation, 0, kind.index]);
+      _writer.send([
+        'reserve',
+        slot,
+        generation,
+        0,
+        kind.index,
+        executingIsolate,
+      ]);
       return owned;
     }
     health.producerRegistrationRefused = _sum(

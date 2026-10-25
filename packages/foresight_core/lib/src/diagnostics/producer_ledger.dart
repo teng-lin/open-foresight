@@ -7,7 +7,8 @@ const _normalPoolRecords = 160, _priorityPoolRecords = 64;
 final class _WriterProducer {
   _WriterProducer(this.snapshot);
   final DiagnosticProducerSnapshot snapshot;
-  SendPort? port;
+  SendPort? port, expectedIsolate;
+  bool vmExitBound = false;
   int normalEpoch = 1, priorityEpoch = 1, sequence = 0;
   int bytes = 0, records = 0, priority = 0, priorityCount = 0;
   int? revokeNormal, revokePriority;
@@ -69,6 +70,7 @@ final class _ProducerLedger {
             generation,
           ),
         );
+        slots[slot]!.expectedIsolate = value[5] as SendPort?;
         return true;
       case 'registration_refused':
         registrationRefused = (value[1] as int).clamp(
@@ -77,17 +79,31 @@ final class _ProducerLedger {
         );
         owner.send(['registration_refused_ack', registrationRefused]);
         return true;
+      case 'bind_vm':
+        final producer = matching(value);
+        if (producer != null &&
+            value[3] == 0 &&
+            producer.port == null &&
+            producer.expectedIsolate == null &&
+            !producer.vmExitBound) {
+          producer.expectedIsolate = value[4] as SendPort;
+          producer.vmExitBound = true;
+        }
+        return true;
       case 'register':
         final port = value[4] as SendPort, producer = matching(value);
         if (closing ||
             value[3] != 0 ||
             producer == null ||
             producer.port != null ||
-            producer.quarantined) {
+            producer.quarantined ||
+            (producer.expectedIsolate != null &&
+                producer.expectedIsolate != value[5])) {
           port.send(['stop', value[1], value[2], 0]);
           return true;
         }
         producer.port = port;
+        producer.expectedIsolate ??= value[5] as SendPort;
         producer.wantsNormal = producer.wantsPriority = true;
         _grant(producer, false, initial: true);
         _grant(producer, true, initial: true);
@@ -99,7 +115,9 @@ final class _ProducerLedger {
         return true;
       case 'actual_exit':
         final producer = matching(value);
-        if (producer != null && value[3] == 0) _retire(producer);
+        if (producer != null && producer.vmExitBound && value[3] == 0) {
+          _retire(producer);
+        }
         return true;
       case 'never_spawned':
         final producer = matching(value);

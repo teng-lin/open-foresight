@@ -47,10 +47,13 @@ and a credit epoch; epoch0 denotes the immutable lifecycle barrier covering both
 credit classes. Normal and priority credit epochs are independent so reclaiming
 idle normal credits cannot block a synchronous warning using priority credits.
 
-`LoggingSession.spawnProducer` creates a paused isolate, installs the direct VM
-response, then resumes it. Startup does not await diagnostic readiness.
+`LoggingSession.spawnProducer` creates a paused isolate, binds registration to
+that VM's control-port identity, installs its private direct exit response, then
+resumes it. A bootstrap copied into a different isolate receives no credits;
+the transferable capability cannot install an exit listener for another VM. Startup does not await diagnostic readiness.
 `reserveProducerForSpawn` supports preflight cancellation only before its
-bootstrap capability is exposed. A failed paused spawn never ran an encoder;
+bootstrap capability is exposed. Its `spawn` method binds that same reservation
+without publishing the capability first. A failed paused spawn never ran an encoder;
 a potentially executing producer requires an actual terminal or VM barrier.
 Legacy `producerExited` is a bounded owner hint and may quarantine the slot.
 It never independently refunds an encoder or releases its scratch reservation.
@@ -88,3 +91,20 @@ exits, stale/duplicate capabilities, exposed cancellation refusal,32 failed
 spawns,20 scoped SQL readers/32 failed opens, positive63-bit exhaustion, a
 catalog-small cold100 trigger and old-generation queued attribution/credits.
 Focused check counts and original failures accompany each frozen commit.
+
+## Async storage handoff assumptions
+
+The current synchronous storage/flush composition remains the baseline. The next
+async backend must retain each queued/inflight record's charge until its actual
+write ACK or definitive disposal. Producer retirement releases only unused local
+leases, never a record already debited into the independent queue. That record's
+later completion calls the global ledger without consulting a slot occupant.
+
+Serialize the one storage request, retain immutable producer attribution across
+its await, and remove only the acknowledged queue prefix. New producer events
+may append while I/O is pending; a pending/unknown request cannot authorize
+clearing their charges or the in-flight copy. The legacy synchronous `_discard`
+call must not become an unconditional release of an async in-flight request.
+The existing250ms writer tick remains; the100ms credit timer is writer-local,
+not an application/coordinator heartbeat. Final child/owner settlement and the
+bounded500ms result are owned by the storage integration, not proved here.
