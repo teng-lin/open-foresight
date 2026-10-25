@@ -121,3 +121,20 @@ class SavedNoteReviewDialog extends StatelessWidget {
     ],
   );
 }
+
+/// A saved-note read problem; the owner validates every retry/review callback.
+class NoteLoadStatus extends StatelessWidget {
+  const NoteLoadStatus({
+    super.key,
+    required this.message,
+    required this.actionLabel,
+    required this.onAction,
+  });
+  final String message, actionLabel;
+  final VoidCallback onAction;
+  @override
+  Widget build(BuildContext context) => ListTile(
+    title: Text(message),
+    trailing: TextButton(onPressed: onAction, child: Text(actionLabel)),
+  );
+}

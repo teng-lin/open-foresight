@@ -654,41 +654,31 @@ class SourcesController implements SourceCommands {
       return const SizedBox.shrink();
     if (_noteBodyPreparedCurrent && _noteBodyNeedsReview) {
       final accepted = _acceptedNoteBody!;
-      return ListTile(
-        title: const Text(
-          'Review the saved note before replacing it with this draft.',
-        ),
-        trailing: TextButton(
-          onPressed: () => unawaited(
-            _reviewLoadedNote(
-              accepted,
-            ).catchError(_operations.reportAsyncError),
-          ),
-          child: const Text('Review saved note'),
+      return NoteLoadStatus(
+        message: 'Review the saved note before replacing it with this draft.',
+        actionLabel: 'Review saved note',
+        onAction: () => unawaited(
+          _reviewLoadedNote(accepted).catchError(_operations.reportAsyncError),
         ),
       );
     }
     final current =
         _noteLoadOwner?.matchesConnection(d, alive: mounted) ?? false;
-    return ListTile(
-      title: Text(
-        current && _noteLoadError.isNotEmpty
-            ? _noteLoadError
-            : 'Reload this note before saving.',
-      ),
-      trailing: TextButton(
-        onPressed: () {
-          if (!mounted || noteId != id || noteLoading || noteBodyReady) return;
-          unawaited(
-            _loadNoteBody(
-              id,
-              noteBaseline.$1,
-              resetEditor: false,
-            ).catchError(_operations.reportAsyncError),
-          );
-        },
-        child: const Text('Retry loading note'),
-      ),
+    return NoteLoadStatus(
+      message: current && _noteLoadError.isNotEmpty
+          ? _noteLoadError
+          : 'Reload this note before saving.',
+      actionLabel: 'Retry loading note',
+      onAction: () {
+        if (!mounted || noteId != id || noteLoading || noteBodyReady) return;
+        unawaited(
+          _loadNoteBody(
+            id,
+            noteBaseline.$1,
+            resetEditor: false,
+          ).catchError(_operations.reportAsyncError),
+        );
+      },
     );
   }
 
