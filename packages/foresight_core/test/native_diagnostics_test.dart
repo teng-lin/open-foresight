@@ -75,6 +75,7 @@ void main() {
     expect(NativeDiagnosticQueue.tryOpen(loaded), isNull);
     expect(queue.close(), isTrue);
     final replacement = NativeDiagnosticQueue.tryOpen(loaded)!;
+    addTearDown(() => expect(replacement.close(), isTrue));
     expect(replacement.close(), isTrue);
     expect(queue.close(), isTrue);
   });
@@ -87,7 +88,22 @@ void main() {
     pinResult(0);
     expect(NativeDiagnosticQueue.tryOpen(loaded), isNull);
     pinResult(1);
-    expect(NativeDiagnosticQueue.tryOpen(loaded)!.close(), isTrue);
+    final queue = NativeDiagnosticQueue.tryOpen(loaded)!;
+    addTearDown(() => expect(queue.close(), isTrue));
+    expect(queue.close(), isTrue);
+  });
+
+  test('unsupported lifetime version never calls its dependent pin', () {
+    image.lookupFunction<Void Function(Int32), void Function(int)>(
+      'fs_test_pin_version',
+    )(1);
+    expect(NativeDiagnosticQueue.tryOpen(loaded), isNull);
+    expect(
+      image.lookupFunction<Int32 Function(), int Function()>(
+        'fs_test_pin_calls',
+      )(),
+      0,
+    );
   });
 
   test('priority overtakes then older ordinary and mixed records survive', () {
@@ -147,14 +163,19 @@ void main() {
       expect(queue.close(), isTrue);
     });
     gate(1);
+    var exposed = 0;
     expect(
       queue.poll(
         capacity: 1,
         priorityOnly: false,
-        onRecord: (_) => fail('busy record'),
+        onRecord: (_) {
+          exposed++;
+          return true;
+        },
       ),
       isNull,
     );
+    expect(exposed, 0);
     expect(queue.close(), isFalse);
     expect(queue.closed, isFalse);
     gate(0);
@@ -173,14 +194,19 @@ void main() {
     image.lookupFunction<Void Function(), void Function()>(
       'fs_test_malformed',
     )();
+    var exposed = 0;
     expect(
       queue.poll(
         capacity: 64,
         priorityOnly: false,
-        onRecord: (_) => fail('invalid batch prefix'),
+        onRecord: (_) {
+          exposed++;
+          return true;
+        },
       ),
       isNull,
     );
+    expect(exposed, 0);
     expect(queue.invalid, isTrue);
     expect(
       queue.poll(capacity: 1, priorityOnly: false, onRecord: (_) => true),
@@ -243,6 +269,70 @@ void main() {
       );
     }
   });
+
+  test('clamping an unsaturated native counter explicitly loses precision', () {
+    final queue = NativeDiagnosticQueue.tryOpen(loaded)!;
+    addTearDown(() => expect(queue.close(), isTrue));
+    image.lookupFunction<Void Function(), void Function()>(
+      'fs_test_clamped_drops',
+    )();
+    final batch = queue.poll(
+      capacity: 1,
+      priorityOnly: false,
+      onRecord: (_) => true,
+    )!;
+    expect(batch.droppedGeneral, 0x7fffffff);
+    expect(batch.counterSaturated, isTrue);
+    expect(batch.precisionLost, isFalse);
+  });
+
+  for (final priority in [0, 1]) {
+    for (final mode in [0, 1, 2]) {
+      test(
+        'rejects lane$priority sequence regression$mode before delivery',
+        () {
+          final queue = NativeDiagnosticQueue.tryOpen(loaded)!;
+          addTearDown(() => expect(queue.close(), isTrue));
+          configure();
+          if (mode == 2) {
+            image.lookupFunction<Void Function(), void Function()>(
+              'fs_test_high_sequence',
+            )();
+          }
+          expect(enqueue(priority), 1);
+          expect(enqueue(priority), 1);
+          expect(
+            queue
+                .poll(
+                  capacity: 2,
+                  priorityOnly: priority == 1,
+                  onRecord: (_) => true,
+                )!
+                .count,
+            2,
+          );
+          image.lookupFunction<
+            Void Function(Int32, Int32),
+            void Function(int, int)
+          >('fs_test_bad_sequence')(priority, mode);
+          var exposed = 0;
+          expect(
+            queue.poll(
+              capacity: 1,
+              priorityOnly: priority == 1,
+              onRecord: (_) {
+                exposed++;
+                return true;
+              },
+            ),
+            isNull,
+          );
+          expect(queue.invalid, isTrue);
+          expect(exposed, 0);
+        },
+      );
+    }
+  }
 
   test(
     'delivery errors are counted and cannot interrupt or reenter a batch',

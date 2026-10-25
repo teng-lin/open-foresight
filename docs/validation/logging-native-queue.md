@@ -43,3 +43,13 @@ drains. The same unit runs under ASan/UBSan and fatal TSan; qualification report
 must identify the exact source checkpoint and execution platform. Full native
 CTest, application Dart/desktop/service suites, coverage and actual macOS
 execution remain required before integrating this feature for delivery.
+
+The optional Dart binding is a subsequent leaf: it accepts an already loaded
+base-ABI image, negotiates queue ABI 1 and lifetime ABI 2, and pins the original
+mapping before opening one consumer. Its fixed 4,128-byte native buffers remain
+owned until close succeeds; BUSY keeps that ownership. It validates the entire
+batch before delivery, including separate unsigned per-lane sequence checks,
+and flags any counter clamping as saturation. Delivery failures are counted
+without exposing exception text. The ABI fixture compiles the current C++20
+queue source fresh rather than using the C++17-only cached fixture helper.
+Actual runtime adoption and the writer-credit adapter remain separate gates.

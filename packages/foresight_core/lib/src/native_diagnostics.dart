@@ -75,6 +75,8 @@ typedef _Drain =
 
 /// Closed numeric native values, validated before a diagnostic catalog adapter
 /// may encode them. No raw strings, application handles or native pointers.
+/// [sequence] carries unsigned 64-bit bits in a Dart int and can be negative;
+/// it is a native lane watermark, separate from the final writer sequence.
 final class NativeDiagnosticRecord {
   NativeDiagnosticRecord._(_Record value)
     : sequence = value.sequence,
@@ -95,19 +97,24 @@ final class NativeDiagnosticRecord {
   bool get priority => event == 1;
 }
 
-/// Counters are lower bounds if [precisionLost]. Unsigned 64-bit saturation
-/// maps to a negative Dart int; clamp to the catalog's safe counter limit.
+/// Counters are lower bounds if [precisionLost] or [counterSaturated]. Unsigned
+/// 64-bit saturation maps to a negative Dart int; clamping to the catalog's safe
+/// counter limit also sets [counterSaturated].
 final class NativeDiagnosticBatch {
   NativeDiagnosticBatch._(_Batch value, this.deliveryDropped)
     : droppedGeneral = _counter(value.droppedGeneral),
       droppedPriority = _counter(value.droppedPriority),
       precisionLost = value.flags & 1 != 0,
-      counterSaturated = value.flags & 2 != 0,
+      counterSaturated =
+          value.flags & 2 != 0 ||
+          _clamped(value.droppedGeneral) ||
+          _clamped(value.droppedPriority),
       count = value.count;
   final int count, droppedGeneral, droppedPriority, deliveryDropped;
   final bool precisionLost, counterSaturated;
   static int _counter(int value) =>
       value < 0 ? 0x7fffffff : value.clamp(0, 0x7fffffff);
+  static bool _clamped(int value) => value < 0 || value > 0x7fffffff;
 }
 
 /// A consumer of an already loaded original native image. It never opens a
@@ -147,13 +154,19 @@ final class NativeDiagnosticQueue {
       'fs_diagnostic_open',
       'fs_diagnostic_drain',
       'fs_diagnostic_close',
+      'fs_lifetime_version',
       'fs_lifetime_admission',
     ];
     if (symbols.any((name) => !image.providesSymbol(name))) return null;
     final version = image.lookupFunction<Uint32 Function(), int Function()>(
       symbols[0],
     );
-    if (version() != 1 || sizeOf<_Record>() != 64 || sizeOf<_Batch>() != 32) {
+    final lifetimeVersion = image
+        .lookupFunction<Int32 Function(), int Function()>(symbols[4]);
+    if (version() != 1 ||
+        lifetimeVersion() != 2 ||
+        sizeOf<_Record>() != 64 ||
+        sizeOf<_Batch>() != 32) {
       return null;
     }
     final open = image.lookupFunction<_OpenNative, _Open>(symbols[1]);
@@ -161,7 +174,7 @@ final class NativeDiagnosticQueue {
     final close = image
         .lookupFunction<Int32 Function(Uint64), int Function(int)>(symbols[3]);
     final pin = image.lookupFunction<Int32 Function(), int Function()>(
-      symbols[4],
+      symbols[5],
     );
     if (pin() != 1) return null;
     final token = calloc<Uint64>();
