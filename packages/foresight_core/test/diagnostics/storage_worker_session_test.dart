@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ffi';
 import 'dart:isolate';
 import 'dart:typed_data';
 
@@ -11,6 +12,8 @@ import 'package:foresight_core/src/diagnostics/storage_worker_protocol.dart';
 import 'package:foresight_test_support/poll.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
+import 'package:foresight_core/src/native.dart';
+import '../native_diagnostics_test.dart' as native_fixture;
 
 const _build =
     '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
@@ -68,6 +71,9 @@ final class _Owner implements DiagnosticWorkerOwner {
   final sink = _Sink();
   late final DiagnosticStorageWorkerState dispatch;
   final entered = Completer<void>(), release = Completer<void>();
+  final laterAppendEntered = Completer<void>(),
+      laterAppendRelease = Completer<void>();
+  bool holdLaterAppend = false;
   final calls = <int>[];
   int active = 0, maximumActive = 0, forceCalls = 0;
   bool childUnknown = false, parentSettled = true, throwControls = false;
@@ -94,6 +100,11 @@ final class _Owner implements DiagnosticWorkerOwner {
           !classificationEntered.isCompleted) {
         classificationEntered.complete();
         if (holdFirstClassification) await classificationRelease.future;
+      }
+      if (request.type == DiagnosticWorkerFrame.append && holdLaterAppend) {
+        holdLaterAppend = false;
+        laterAppendEntered.complete();
+        await laterAppendRelease.future;
       }
       if (request.type == DiagnosticWorkerFrame.append &&
           !entered.isCompleted) {
@@ -138,7 +149,113 @@ final class _Owner implements DiagnosticWorkerOwner {
   }
 }
 
+Future<void> _lateNativeCounters(
+  (DiagnosticProducerBootstrap, (String, SendPort)) invocation,
+) async {
+  final producer = invocation.$1.connect();
+  await producer.ready;
+  final image = DynamicLibrary.open(invocation.$2.$1);
+  final wait = image.lookupFunction<Void Function(), void Function()>(
+    'fs_test_actor_wait',
+  );
+  producer.emit(
+    DiagnosticEvent.runtimeFailed,
+    DiagnosticComponent.domain,
+    fields: () {
+      invocation.$2.$2.send(true);
+      wait();
+      producer.noteDropped(DiagnosticDropReason.correlationCapacity);
+      return {};
+    },
+  );
+  producer.close();
+  await producer.retired;
+}
+
 void main() {
+  test(
+    'busy native close cannot overtake a held late summary acknowledgement',
+    () async {
+      final profile = createTestTempDirectorySync('native-summary-');
+      final imagePath =
+          '${profile.path}/runtime.${Platform.isMacOS ? 'dylib' : 'so'}';
+      await native_fixture.compile(imagePath);
+      _Owner? owner;
+      final session = await LoggingSession.startForTesting(
+        configuration: const DiagnosticConfiguration(),
+        profilePath: profile.path,
+        workerFactory: (context) => owner = _Owner(context),
+      );
+      final runtime = NativeRuntime(imagePath);
+      final gate = runtime.lib
+          .lookupFunction<Void Function(Int32), void Function(int)>(
+            'fs_test_gate',
+          );
+      final actorRelease = runtime.lib
+          .lookupFunction<Void Function(), void Function()>(
+            'fs_test_actor_release',
+          );
+      final held = ReceivePort();
+      addTearDown(() async {
+        actorRelease();
+        gate(0);
+        held.close();
+        if (owner != null && !owner!.laterAppendRelease.isCompleted) {
+          owner!.laterAppendRelease.complete();
+        }
+        await session.close();
+      });
+      runtime.lib.lookupFunction<Void Function(), void Function()>(
+        'fs_test_configure',
+      )();
+      expect(
+        runtime.lib.lookupFunction<Int32 Function(Int32), int Function(int)>(
+          'fs_test_enqueue',
+        )(1),
+        1,
+      );
+      await eventually(() => owner != null && owner!.sink.records.isNotEmpty);
+      await owner!.entered.future;
+      owner!.holdLaterAppend = true;
+      final actor = await session.spawnProducer(
+        DiagnosticProducerKind.domain,
+        _lateNativeCounters,
+        (imagePath, held.sendPort),
+      );
+      await held.first.timeout(const Duration(seconds: 2));
+      gate(1);
+      var completed = false;
+      final closing = session.close().then((result) {
+        completed = true;
+        return result;
+      });
+      await eventually(
+        () => session.health.nativeReason == NativeDiagnosticHealth.unsettled,
+      );
+      actorRelease();
+      await owner!.laterAppendEntered.future.timeout(
+        const Duration(milliseconds: 350),
+      );
+      expect(owner!.active, 1);
+      gate(0);
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      expect(
+        completed,
+        isFalse,
+        reason:
+            'native close retry must not acknowledge an outstanding summary APPEND',
+      );
+      owner!.laterAppendRelease.complete();
+      final closed = await closing;
+      expect(closed.writerExited, isTrue);
+      expect(owner!.maximumActive, 1);
+      expect(
+        owner!.sink.records.any((r) => r['event'] == 'logging.records_dropped'),
+        isTrue,
+      );
+      await actor.retired.timeout(const Duration(seconds: 2));
+    },
+  );
   test('close drains records admitted during a held summary append', () async {
     final profile = createTestTempDirectorySync('summary-suffix-');
     _Owner? owner;

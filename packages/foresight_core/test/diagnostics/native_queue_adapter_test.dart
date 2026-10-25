@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:foresight_core/src/diagnostics/session.dart';
 import 'package:foresight_core/src/native.dart';
@@ -30,7 +31,102 @@ int Function(int) emitter(NativeRuntime runtime) {
   );
 }
 
+Future<void> _oldImageProducer(
+  (DiagnosticProducerBootstrap, (String, SendPort)) invocation,
+) async {
+  final producer = invocation.$1.connect();
+  await producer.ready;
+  NativeRuntime(invocation.$2.$1);
+  producer.close();
+  invocation.$2.$2.send(true);
+  await producer.retired;
+}
+
 void main() {
+  test(
+    'an old library in another VM cannot disable a working native consumer',
+    () async {
+      final capture = SinkCapture();
+      addTearDown(capture.dispose);
+      final session = await LoggingSession.startForTesting(
+        configuration: const DiagnosticConfiguration(),
+        profilePath: 'selected-private-profile',
+        sinkFactory: memorySink(capture.port.sendPort),
+      );
+      addTearDown(session.close);
+      final runtime = await runtimeImage();
+      final enqueue = emitter(runtime);
+      expect(enqueue(1), 1);
+      await eventually(
+        () => capture.records.any((r) => r['event'] == 'native.worker_failed'),
+      );
+      final root = createTestTempDirectorySync('native-old-actor-');
+      final path = '${root.path}/old.${Platform.isMacOS ? 'dylib' : 'so'}';
+      await fixture.compile(path, legacy: true);
+      final done = ReceivePort();
+      addTearDown(done.close);
+      final actor = await session.spawnProducer(
+        DiagnosticProducerKind.domain,
+        _oldImageProducer,
+        (path, done.sendPort),
+      );
+      await done.first.timeout(const Duration(seconds: 2));
+      await actor.retired;
+      expect(enqueue(1), 1);
+      await eventually(
+        () =>
+            capture.records
+                .where((r) => r['event'] == 'native.worker_failed')
+                .length ==
+            2,
+      );
+      expect(session.health.nativeReason, NativeDiagnosticHealth.healthy);
+      expect((await session.close()).flushed, isTrue);
+    },
+  );
+  test(
+    'an unleased native consumer cannot report its pending queue flushed',
+    () async {
+      final capture = SinkCapture();
+      addTearDown(capture.dispose);
+      final session = await LoggingSession.startForTesting(
+        configuration: const DiagnosticConfiguration(),
+        profilePath: 'selected-private-profile',
+        sinkFactory: memorySink(capture.port.sendPort),
+      );
+      final extras = [
+        for (var i = 1; i < LoggingSession.maximumProducers; i++)
+          session.registerProducer(DiagnosticProducerKind.parser),
+      ];
+      addTearDown(() async {
+        for (final p in extras) {
+          p.close();
+        }
+        await session.close();
+      });
+      await Future.wait(extras.map((p) => p.ready));
+      final runtime = await runtimeImage();
+      expect(emitter(runtime)(1), 1);
+      await eventually(
+        () => session.health.nativeReason == NativeDiagnosticHealth.capacity,
+      );
+      final result = await session.close();
+      expect(result.writerExited, isTrue);
+      expect(result.flushed, isFalse);
+      final manual = NativeDiagnosticQueue.tryOpen(NativeLibrary(runtime.lib))!;
+      var retained = 0;
+      manual.poll(
+        capacity: 64,
+        priorityOnly: false,
+        onRecord: (_) {
+          retained++;
+          return true;
+        },
+      );
+      expect(retained, 1);
+      expect(manual.close(), isTrue);
+    },
+  );
   test('fixed native fields fit the pre-drain writer credit envelope', () {
     for (final category in DiagnosticCategory.values) {
       for (final outcome in DiagnosticOutcome.values) {

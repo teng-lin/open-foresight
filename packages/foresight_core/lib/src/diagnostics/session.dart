@@ -955,7 +955,7 @@ void _writerMain(List<Object?> arguments) {
   state.creditTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
     state.ledger.rebalance();
     state.probe();
-    if (state._nativeFinishing) state._finish();
+    if (state._nativeFinishing) state.flush();
     state._publishNativeHealth();
   });
   state.timer = Timer.periodic(const Duration(milliseconds: 250), (_) {
@@ -1023,7 +1023,7 @@ final class _Writer {
     if (workerControl(value)) return;
     if (ledger.handle(value)) {
       _captureLedgerHighWater();
-      if (_nativeFinishing) _finish();
+      if (_nativeFinishing) flush();
       return;
     }
     switch (value.first) {
@@ -1826,8 +1826,8 @@ final class _Writer {
       'closed',
       reason == DiagnosticHealthReason.healthy &&
           _nativeReason != NativeDiagnosticHealth.protocolFailed &&
-          (_nativeQueue?.pending != true ||
-              _nativeReason == NativeDiagnosticHealth.unsupported),
+          (!_nativeRequested || _nativeQueue != null) &&
+          _nativeQueue?.pending != true,
       admitted,
       dropped,
       rejected,

@@ -5,6 +5,8 @@ extern "C" int fs_abi_version() {
 }
 #else
 #include "diagnostic_queue.cpp"
+#include <chrono>
+#include <thread>
 
 namespace {
 int pin_calls = 0, pin_result = 1, lifetime_version = 2;
@@ -22,6 +24,18 @@ extern "C" void fs_test_pin_version(int value) {
 extern "C" int fs_lifetime_admission() {
   ++pin_calls;
   return pin_result;
+}
+namespace {
+std::atomic<bool> actor_released{false};
+}
+extern "C" void fs_test_actor_release() {
+  actor_released.store(true);
+}
+extern "C" void fs_test_actor_wait() {
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (!actor_released.load() && std::chrono::steady_clock::now() < deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
 }
 extern "C" int fs_test_pin_calls() {
   return pin_calls;

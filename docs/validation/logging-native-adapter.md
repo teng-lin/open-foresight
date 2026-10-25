@@ -36,7 +36,11 @@ Close stops native polling before producer-credit revocation. The last native
 self-messages precede the writer's causal close marker. A busy native close
 retains its consumer and buffers and retries on the existing credit tick; it
 never frees live FFI storage. Native producer retirement precedes final writer
-close. Unproved pending native traffic prevents a flushed claim.
+close. Every busy-close retry re-enters the serialized flush chain, so it cannot
+overtake an outstanding storage request or newly arrived counter summary. A
+later old library cannot disable an already accepted consumer. A requested
+consumer that never obtained a producer slot cannot report its pending queue
+flushed. Unproved pending native traffic prevents a flushed claim.
 
 Focused tests cover shared credits, full-table recovery, actual queue overflow
 metadata, lane ordering, wide-field projection, canonical configuration, old

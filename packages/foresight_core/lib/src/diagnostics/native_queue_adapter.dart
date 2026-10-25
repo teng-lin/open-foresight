@@ -109,7 +109,8 @@ extension _NativeWriterControl on _Writer {
             value[3] != 0)
           return true;
         if (value.first == 'native_unsupported') {
-          _nativeQueue?.disabled = true;
+          // An unrelated old image cannot revoke an already accepted consumer.
+          if (_nativeRequested || _nativeQueue != null) return true;
           _nativeStatus(NativeDiagnosticHealth.unsupported);
         } else if (!_nativeRequested && value.length == 5) {
           _nativeRequested = true;
