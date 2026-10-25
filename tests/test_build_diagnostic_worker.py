@@ -209,3 +209,79 @@ def test_permissive_umask_cannot_make_child_manifest_writable(product):
                 assert stat.S_IMODE((product[1] / name).stat().st_mode) == 0o644
     finally:
         os.umask(previous)
+
+
+def test_failed_verify_removes_old_defines_vector(tmp_path):
+    destination = tmp_path / "defines.nul"
+    destination.write_bytes(b"old\0")
+    argv = [
+        "build_worker",
+        "--root",
+        str(tmp_path),
+        "--build",
+        str(tmp_path),
+        "--sdk",
+        str(tmp_path),
+        "--package-config",
+        str(tmp_path / "config.json"),
+        "--mode",
+        "aot",
+        "--verify",
+        "--defines-output",
+        str(destination),
+    ]
+    with (
+        mock.patch.object(build.sys, "argv", argv),
+        mock.patch.object(
+            build, "verify_worker_build", side_effect=identity.IdentityError("refused")
+        ),
+    ):
+        assert build.main() == 1
+    assert not destination.exists()
+
+
+def test_group_writable_nested_native_directory_refuses_before_source_read(product):
+    (product[1] / "native").chmod(0o775)
+    with (
+        mock.patch.object(
+            context,
+            "collect",
+            side_effect=AssertionError("must refuse before source read"),
+        ),
+        pytest.raises(identity.IdentityError, match="unsafe_worker_native_directory"),
+    ):
+        build.build_worker(*product, "aot")
+
+
+def test_noncanonical_source_path_refuses_before_source_read(product):
+    root, output, sdk, config = product
+    alias = root.parent / "alias"
+    alias.symlink_to(root, target_is_directory=True)
+    with (
+        mock.patch.object(
+            context,
+            "collect",
+            side_effect=AssertionError("must refuse before source read"),
+        ),
+        pytest.raises(identity.IdentityError, match="noncanonical_worker_path"),
+    ):
+        build.build_worker(alias, output, sdk, config, "aot")
+
+
+def test_compiler_log_symlink_cannot_modify_unrelated_file(product, tmp_path):
+    output = product[1] / "application"
+    output.mkdir(mode=0o700)
+    sentinel = tmp_path / "unrelated"
+    sentinel.write_text("unchanged")
+    (output / "diagnostic-worker-aot.log").symlink_to(sentinel)
+    with (
+        mock.patch.object(
+            context.products, "verify", return_value={"native_id": "a" * 64}
+        ),
+        mock.patch.object(
+            build.subprocess, "run", side_effect=AssertionError("compiler must not run")
+        ),
+        pytest.raises(identity.IdentityError, match="unsafe_worker_log"),
+    ):
+        build.build_worker(*product, "aot")
+    assert sentinel.read_text() == "unchanged"

@@ -20,6 +20,23 @@ from tools import diagnostic_build_identity as identity
 from tools import diagnostic_worker_context as context
 
 
+def _canonical_paths(*paths: Path) -> tuple[Path, ...]:
+    selected = tuple(path.absolute() for path in paths)
+    if any(str(path) != os.path.realpath(path) for path in selected):
+        raise identity.IdentityError("noncanonical_worker_path")
+    return selected
+
+
+def _native_directory(build: Path) -> None:
+    descriptor = context._anchor(build / "native")
+    try:
+        info = os.fstat(descriptor)
+        if info.st_mode & 0o022 or info.st_uid not in {0, os.geteuid()}:
+            raise identity.IdentityError("unsafe_worker_native_directory")
+    finally:
+        os.close(descriptor)
+
+
 def definitions(
     root: Path, build: Path, sdk: Path, config: Path, manifest: dict[str, Any]
 ) -> dict[str, str]:
@@ -120,9 +137,8 @@ def _publish(path: Path, data: bytes) -> None:
 def build_worker(
     root: Path, build: Path, sdk: Path, config: Path, mode: str
 ) -> dict[str, Any]:
-    root, build, sdk, config = (p.absolute() for p in (root, build, sdk, config))
-    anchor = context._anchor(build / "native")
-    os.close(anchor)
+    root, build, sdk, config = _canonical_paths(root, build, sdk, config)
+    _native_directory(build)
     output = build / "application"
     if output.is_symlink():
         raise identity.IdentityError("unsafe_worker_output")
@@ -197,6 +213,8 @@ def build_worker(
                 "LC_ALL": "C",
                 "TMPDIR": temporary,
             }
+            if log.is_symlink():
+                raise identity.IdentityError("unsafe_worker_log")
             with log.open("wb") as captured:
                 completed = subprocess.run(
                     command,
@@ -251,7 +269,8 @@ def build_worker(
 def verify_worker_build(
     root: Path, build: Path, sdk: Path, config: Path, mode: str
 ) -> dict[str, Any]:
-    root, build, sdk, config = (p.absolute() for p in (root, build, sdk, config))
+    root, build, sdk, config = _canonical_paths(root, build, sdk, config)
+    _native_directory(build)
     receipt_bytes = identity._read(build, "application/diagnostic-worker-build.json")
     receipt = json.loads(receipt_bytes, object_pairs_hook=identity._unique_object)
     manifest = context.collect(root, build / "native", sdk, config, mode)
@@ -318,16 +337,19 @@ def main() -> int:
     parser.add_argument("--defines-output", type=Path)
     args = parser.parse_args()
     try:
-        operation = verify_worker_build if args.verify else build_worker
-        receipt = operation(
-            args.root, args.build, args.sdk, args.package_config, args.mode
-        )
+        destination = None
         if args.defines_output is not None:
-            destination = args.defines_output.absolute()
+            destination = _canonical_paths(args.defines_output)[0]
             anchor = context._anchor(destination.parent)
             os.close(anchor)
             if destination.is_symlink() or destination.parent.stat().st_mode & 0o022:
                 raise identity.IdentityError("unsafe_worker_defines_output")
+            destination.unlink(missing_ok=True)
+        operation = verify_worker_build if args.verify else build_worker
+        receipt = operation(
+            args.root, args.build, args.sdk, args.package_config, args.mode
+        )
+        if destination is not None:
             data = b"".join(
                 f"-D{name}={value}".encode() + b"\0"
                 for name, value in sorted(receipt["defines"].items())
@@ -337,7 +359,10 @@ def main() -> int:
             ) as staging:
                 temporary = Path(staging.name)
                 staging.write(data)
-            temporary.replace(destination)
+            try:
+                temporary.replace(destination)
+            finally:
+                temporary.unlink(missing_ok=True)
     except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired):
         print(
             "Standalone worker build unavailable; captured compiler output retained",

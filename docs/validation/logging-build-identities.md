@@ -143,10 +143,9 @@ and INIT follow verification, under the unchanged one-second native bootstrap
 deadline. Scalar SHA is system-only; the unqualified CommonCrypto opt-in is
 explicitly disabled.
 
-The legacy generic worker generator remains pending. Kernel/AOT contexts from
-the new collector retain candidate status until compilation/byte receipts and
-the standalone installed companion are wired and qualified. This JIT checkpoint
-does not claim those paths, package adoption or complete application acceptance.
+The legacy generic worker generator remains pending. Raw kernel/AOT contexts from the collector retain candidate status. The build
+helper publishes them after actual compilation and the separate artifact receipt.
+Complete application and installed-package acceptance remain separate gates.
 
 ## Compiled standalone companion
 
@@ -187,3 +186,12 @@ system-only support/launcher identity. Any include from a selected support sourc
 into those headers still refuses, and every other unclassified prefix source
 still refuses. The application-native producer has its own qualification; this
 component identity does not certify that target.
+
+The child rechecks its source context; it does not hash its running executable or
+kernel. Artifact binding belongs to host-side `verify_worker_build` and the
+compiled WorkerID/page-header agreement. The two imported native/SQL receipt
+gates determine whether native prerequisites are acceptable; they do not alter
+compiled worker content and are not counted as worker content producers.
+Canonical source/build/SDK/config paths and non-writable native output
+directories are required before compilation. A failed defines-vector request
+removes the old vector, and compiler-log symlinks are refused.
