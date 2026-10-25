@@ -12,7 +12,8 @@ const _ownerWatchReady = 'read-worker-owner-watch-ready';
 const _ownerAttachTimeout = Duration(seconds: 5);
 
 /// Lazy, long-lived core-owned read isolate. No SQLite handle crosses ports.
-final class SqliteReadWorker implements ReadWorker, ReadQueueCancellation {
+final class SqliteReadWorker
+    implements ReadWorker, ReadQueueCancellation, ReadAdmissionAvailability {
   final String _path;
   final Map<String, String> _environment;
   final SqlSupportBootstrap _sqlSupport;
@@ -20,7 +21,9 @@ final class SqliteReadWorker implements ReadWorker, ReadQueueCancellation {
   final int maxQueuedReads;
   _ReaderGeneration? _generation;
   Future<void>? _closing;
-  var _closed = false, _sequence = 0;
+  var _closed = false, _sequence = 0, _drainScheduled = false;
+  // Bounded by the callers waiting for admission, never by refused requests.
+  final _admissionWaiters = <_AdmissionWaiter>{};
 
   SqliteReadWorker(
     String path, {
@@ -72,6 +75,7 @@ final class SqliteReadWorker implements ReadWorker, ReadQueueCancellation {
           active.result.complete(message.reply!);
         }
         _dispatch(generation);
+        _releaseAdmission(fromEvent: true);
       } else if (message == null) {
         _exit(generation);
       } else {
@@ -124,6 +128,7 @@ final class SqliteReadWorker implements ReadWorker, ReadQueueCancellation {
     if (port != null) Isolate.current.removeOnExitListener(port);
     generation.messages.close();
     generation.exited.complete();
+    _releaseAdmission(fromEvent: true);
   }
 
   void _dispatch(_ReaderGeneration generation) {
@@ -153,7 +158,62 @@ final class SqliteReadWorker implements ReadWorker, ReadQueueCancellation {
           'Read request cannot be sent: $error',
         ),
       );
+      _releaseAdmission();
       _dispatch(generation);
+    }
+  }
+
+  static int _reserved(_ReaderGeneration generation) =>
+      generation.queue.length + (generation.active == null ? 0 : 1);
+
+  @override
+  bool get admitsRead {
+    final generation = _generation;
+    // An exited generation is replaced by a fresh, empty one on admission.
+    return _closed ||
+        generation == null ||
+        generation.exited.isCompleted ||
+        _reserved(generation) < maxQueuedReads;
+  }
+
+  @override
+  void Function() whenAdmissionAvailable(void Function() onAvailable) {
+    final waiter = _AdmissionWaiter(onAvailable);
+    _admissionWaiters.add(waiter);
+    // A release can precede registration; never strand a waiter by capacity.
+    if (admitsRead) _releaseAdmission();
+    return () => _admissionWaiters.remove(waiter);
+  }
+
+  /// Called only where an actual reservation ended or the worker closed.
+  ///
+  /// A settlement or exit event has no caller frames, so it readmits in the
+  /// same turn the reservation ended, as the queue itself dispatches. Releases
+  /// inside a caller's stack (cancellation, close, refusal to send) defer to
+  /// a microtask rather than re-enter that caller.
+  void _releaseAdmission({bool fromEvent = false}) {
+    if (_admissionWaiters.isEmpty) return;
+    if (fromEvent) {
+      _drainAdmission();
+      return;
+    }
+    if (_drainScheduled) return;
+    _drainScheduled = true;
+    scheduleMicrotask(_drainAdmission);
+  }
+
+  void _drainAdmission() {
+    _drainScheduled = false;
+    // Every notified waiter is removed first; one that still waits issues a
+    // read (consuming capacity) before registering again behind the others.
+    while (_admissionWaiters.isNotEmpty && admitsRead) {
+      final waiter = _admissionWaiters.first;
+      _admissionWaiters.remove(waiter);
+      try {
+        waiter.notify();
+      } catch (error, stack) {
+        Zone.current.handleUncaughtError(error, stack);
+      }
     }
   }
 
@@ -163,9 +223,8 @@ final class SqliteReadWorker implements ReadWorker, ReadQueueCancellation {
       return Future.error(RpcError(RpcErrorCode.cancelled, 'Reader closed'));
     }
     final generation = _start();
-    if (generation.queue.length + (generation.active == null ? 0 : 1) >=
-        maxQueuedReads) {
-      return Future.error(RpcError(RpcErrorCode.busy, 'Read queue is full'));
+    if (_reserved(generation) >= maxQueuedReads) {
+      return Future.error(ReadAdmissionRejected());
     }
     final pending = _PendingRead(++_sequence, request);
     generation.queue.add(pending);
@@ -185,6 +244,7 @@ final class SqliteReadWorker implements ReadWorker, ReadQueueCancellation {
     pending.result.completeError(
       RpcError(RpcErrorCode.cancelled, 'Queued read cancelled'),
     );
+    _releaseAdmission();
     return true;
   }
 
@@ -193,6 +253,8 @@ final class SqliteReadWorker implements ReadWorker, ReadQueueCancellation {
 
   Future<void> _close() async {
     _closed = true;
+    // Waiters observe the terminal refusal rather than wait for capacity.
+    _releaseAdmission();
     final generation = _generation;
     if (generation == null) return;
     for (final pending in generation.queue) {
@@ -219,6 +281,11 @@ final class _ReaderGeneration {
   _PendingRead? active;
   Object? failure;
   bool attached = false;
+}
+
+final class _AdmissionWaiter {
+  final void Function() notify;
+  _AdmissionWaiter(this.notify);
 }
 
 final class _PendingRead {

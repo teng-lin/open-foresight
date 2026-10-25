@@ -91,6 +91,169 @@ SELECT key, CASE WHEN key='slow' THEN (
     },
   );
 
+  test(
+    'typed refusal announces capacity only on actual release and close',
+    () async {
+      plantLongRead();
+      final worker = SqliteReadWorker(
+        path,
+        executionBudget: const Duration(milliseconds: 150),
+        maxQueuedReads: 2,
+      );
+      addTearDown(worker.close);
+      await worker.read(request('workspaceEpoch'));
+      var notified = 0;
+      Future<void> settle() => Future<void>.delayed(Duration.zero);
+      final running = expectLater(
+        worker.read(request('slow', 2)),
+        throwsA(
+          isA<RpcError>()
+              .having((e) => e.code, 'code', RpcErrorCode.busy)
+              .having((e) => e is ReadAdmissionRejected, 'admission', false),
+        ),
+      );
+      final queuedRequest = request('workspaceEpoch', 3);
+      final queued = expectLater(
+        worker.read(queuedRequest),
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+        ),
+      );
+      expect(worker.admitsRead, isFalse);
+      await expectLater(
+        worker.read(request('workspaceEpoch', 4)),
+        throwsA(
+          isA<ReadAdmissionRejected>()
+              .having((e) => e.code, 'code', RpcErrorCode.busy)
+              .having((e) => e.message, 'message', 'Read queue is full'),
+        ),
+      );
+      worker.whenAdmissionAvailable(() => notified++);
+      await settle();
+      expect(notified, 0);
+      // Withdrawing the undispatched reservation is an actual release.
+      expect(worker.cancelQueued(queuedRequest), isTrue);
+      await queued;
+      await settle();
+      expect(notified, 1);
+      expect(worker.admitsRead, isTrue);
+      final next = worker.read(request('workspaceEpoch', 5));
+      expect(worker.admitsRead, isFalse);
+      worker.whenAdmissionAvailable(() => notified++);
+      final withdrawn = worker.whenAdmissionAvailable(() => notified += 100);
+      withdrawn();
+      await settle();
+      expect(notified, 1);
+      // Interrupted SQL settles the running reservation; that release notifies.
+      await running;
+      expect(notified, 2);
+      expect((await next).value, identity.epoch);
+      worker.whenAdmissionAvailable(() => notified++);
+      await settle();
+      expect(notified, 3, reason: 'available capacity is announced promptly');
+      final held = expectLater(
+        worker.read(request('slow', 6)),
+        throwsA(isA<RpcError>()),
+      );
+      final queuedAgain = expectLater(
+        worker.read(request('workspaceEpoch', 7)),
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+        ),
+      );
+      expect(worker.admitsRead, isFalse);
+      worker.whenAdmissionAvailable(() => notified++);
+      final closing = worker.close();
+      await settle();
+      expect(notified, 4);
+      expect(worker.admitsRead, isTrue);
+      await expectLater(
+        worker.read(request('workspaceEpoch', 8)),
+        throwsA(
+          isA<RpcError>()
+              .having((e) => e.code, 'code', RpcErrorCode.cancelled)
+              .having((e) => e is ReadAdmissionRejected, 'admission', false),
+        ),
+      );
+      await Future.wait([held, queuedAgain, closing]);
+    },
+  );
+
+  test('generation exit announces capacity held by a failed startup', () async {
+    store.db.execute('PRAGMA user_version=${Store.schemaVersion + 1}');
+    final worker = SqliteReadWorker(path, maxQueuedReads: 1);
+    addTearDown(worker.close);
+    final failed = expectLater(
+      worker.read(request('workspaceEpoch')),
+      throwsA(isA<IncompatibleReadSchema>()),
+    );
+    expect(worker.admitsRead, isFalse);
+    final announced = Completer<void>();
+    worker.whenAdmissionAvailable(announced.complete);
+    await failed;
+    await announced.future;
+    expect(worker.admitsRead, isTrue);
+  });
+
+  test(
+    'coordinator retains watches beyond real capacity until held SQL settles',
+    () async {
+      for (var i = 0; i < 6; i++) {
+        store.setPreference('fixture.$i', 'value-$i');
+      }
+      plantLongRead();
+      final worker = SqliteReadWorker(
+        path,
+        executionBudget: const Duration(milliseconds: 150),
+        maxQueuedReads: 2,
+      );
+      final reader = ReadCoordinator(identity: () => identity, worker: worker);
+      addTearDown(reader.close);
+      ReadQuery<String> preference(String key) => ReadQuery(
+        projection: 'preference',
+        arguments: {'key': key},
+        decode: (value) => value as String,
+      );
+      final slow = Completer<ReadResult<String>>();
+      final slowWatch = reader.watch(preference('slow')).listen((event) {
+        if (!slow.isCompleted) slow.complete(event);
+      });
+      addTearDown(slowWatch.cancel);
+      final values = <String, List<ReadResult<String>>>{};
+      final outcomes = <Future<ReadResult<String>>>[];
+      for (var i = 0; i < 6; i++) {
+        final outcome = Completer<ReadResult<String>>();
+        outcomes.add(outcome.future);
+        final events = values['fixture.$i'] = [];
+        final subscription = reader.watch(preference('fixture.$i')).listen((
+          event,
+        ) {
+          events.add(event);
+          if (!outcome.isCompleted) outcome.complete(event);
+        });
+        addTearDown(subscription.cancel);
+      }
+      while (!reader.busy) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      expect(reader.awaitingAdmission, 5);
+      expect(worker.admitsRead, isFalse);
+      // The held statement's own budget is a SQL busy failure, published as
+      // such; it is never mistaken for an admission refusal.
+      final interrupted = await slow.future;
+      expect(interrupted.freshness, ReadFreshness.failed);
+      expect(interrupted.error!.code, RpcErrorCode.busy);
+      expect(interrupted.error, isNot(isA<ReadAdmissionRejected>()));
+      for (final result in await Future.wait(outcomes)) {
+        expect(result.current, isTrue);
+      }
+      for (var i = 0; i < 6; i++) {
+        expect(values['fixture.$i']!.single.value, 'value-$i');
+      }
+      expect(reader.awaitingAdmission, 0);
+    },
+  );
+
   test('real long projection settles before next job and close', () async {
     plantLongRead();
     final worker = SqliteReadWorker(
@@ -205,6 +368,57 @@ SELECT key, CASE WHEN key='slow' THEN (
         (await worker.read(request('workspaceEpoch', 3))).value,
         identity.epoch,
       );
+    },
+  );
+
+  test(
+    'unsendable dispatch releases its slot and notifies a waiting read',
+    () async {
+      // One slot, held by an unsendable request queued before the fresh
+      // generation attaches; its refusal to send is the only release here.
+      final worker = SqliteReadWorker(path, maxQueuedReads: 1);
+      final unsendable = ReceivePort();
+      addTearDown(unsendable.close);
+      final refused = expectLater(
+        worker.read(
+          ReadWorkerRequest(
+            projection: 'preference',
+            arguments: {'key': 'workspaceEpoch', 'unsendable': unsendable},
+            identity: identity,
+            sequence: 1,
+          ),
+        ),
+        throwsA(
+          isA<RpcError>()
+              .having((e) => e.code, 'code', RpcErrorCode.invalidArgument)
+              .having((e) => e is ReadAdmissionRejected, 'admission', false),
+        ),
+      );
+      expect(worker.admitsRead, isFalse);
+      // A stranded waiter would surface as this deadline's busy result.
+      final reader = ReadCoordinator(
+        identity: () => identity,
+        worker: worker,
+        deadline: const Duration(seconds: 5),
+      );
+      addTearDown(reader.close);
+      final first = reader
+          .watch<String>(
+            ReadQuery(
+              projection: 'preference',
+              arguments: {'key': 'workspaceEpoch'},
+              decode: (value) => value as String,
+            ),
+          )
+          .first;
+      // Microtasks only: attach and the refused send need port messages.
+      await Future<void>.microtask(() {});
+      expect(reader.awaitingAdmission, 1);
+      await refused;
+      final result = await first;
+      expect(result.current, isTrue);
+      expect(result.value, identity.epoch);
+      expect(reader.awaitingAdmission, 0);
     },
   );
 
