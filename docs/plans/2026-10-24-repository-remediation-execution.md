@@ -618,3 +618,48 @@ coverage run passed **5,612 / 31 skipped**, **95.85%** against 95%. The same foc
 **40 tests / 11 subtests**, zero skips, passed on HanSolo with an exact-lock
 development environment. Evidence: `/var/tmp/of-profile-import`. This is one
 inventory-derived entrypoint batch, not completion of all Stage E imports.
+
+### Draft checkpoint a8 and readiness-fixture follow-up
+
+PR #180 now contains reviewed checkpoint `a8a3d2f6`. Its fresh combined Linux
+native build passed **32/32 CTests**, zero skips; full Python passed **5,612 /
+31 skipped**, **95.85%** coverage; desktop passed **567 / 17 skipped / 93.72%**;
+compiled service/MCP and both isolated-display UI cases passed **34/34**, zero
+skips. Ruff, mypy, timeout guard and actionlint with ShellCheck passed. Linux
+core retained **2,287 passed / one failed / 17 skipped**: the controlled search
+fixture timed out waiting two seconds for its first producer RPC. The failed
+combined-head core coverage gate was not reported as passing.
+
+Fresh a8 HanSolo native CTest passed **35/35**, zero skips. The first core run
+retained one service-lifetime timeout (**2,288 passed / one failed / 14 skipped**).
+The unchanged failed case passed first in isolation, then only the failed core
+lane was repeated: **2,289 / 14 skipped / 95.35%** report-only coverage. Desktop
+then passed **569 / 13 skipped / 93.61%**. The original timeout remains evidence;
+isolation is not a demonstrated fix. Evidence: `/var/tmp/of-pr180-a8` and the
+physical private HanSolo root `/private/var/tmp/of-rem-pr180-a8`.
+
+Reviewed fixture-only commit `52b26eb9`, applied locally as `f15e0df8`, warms the
+actual Domain/client/server cursor path before the existing operation clocks.
+The unused meeting ID produces no request, cursor, transcript or durable source
+change, all checked explicitly. Each subsequent RPC still opens its own owned
+channel; this is no connection-reuse claim. Stop, producer-start, search and
+reply deadlines and their original assertions are unchanged. Independent native
+peer and whole-file Claude review converged. The focused module passed **20/20**,
+zero skips, on both platforms; bypassing search readiness still fails the
+original ownership assertion. Earlier a8 isolated success alone was not treated
+as load acceptance.
+
+Repeating the failed full Linux core lane at frozen `f15e0df8` passed **2,288 /
+17 skipped / 95.06%**, enforcing 90%. Format and analysis passed. This explicitly
+reused the fresh a8 library/helpers after comparing all **58** native, root
+CMake, helper and inference input paths in that source export and build image;
+it is not a new native build. Full event output, skip names/reasons and artifact
+hashes remain in `/var/tmp/of-pr180-f15/out-core/report.json` and adjacent logs.
+
+Hosted a8 native, address/undefined sanitizer and thread-sanitizer jobs passed.
+The platform workflow is still running at this update; its Debian smoke job
+again failed the installed desktop identity check. The failed output is retained
+in `/var/tmp/of-pr180-deb/job-a8.log`. A green sanitizer workflow is not being
+substituted for completed platform or installed-package acceptance. Logging,
+native lifecycle and client/service architecture work remain unintegrated and
+must still complete review and full qualification.
