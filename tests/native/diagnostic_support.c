@@ -180,6 +180,14 @@ static void run_case(const char *launcher, const char *self, const char *mode) {
   int unbound_case =
       strcmp(mode, "wrong-identity") == 0 || strcmp(mode, "bootstrap") == 0;
   int polls = strcmp(mode, "deadline") == 0 ? 650 : unbound_case ? 120 : 100;
+#if defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+  // TSan's existing default exit instrumentation sleeps 1000ms
+  // with another live thread, after the real watcher calls _exit.
+  if (strcmp(mode, "hold") == 0 || strcmp(mode, "bootstrap") == 0)
+    polls += 100;
+#endif
+#endif
   for (int i = 0; i != polls; ++i) {
     status = fs_diag_parent_poll(1);
     assert(status >= 0);
