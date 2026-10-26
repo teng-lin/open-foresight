@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -87,6 +88,7 @@ final class _DesktopProcess {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory installation;
   late String executable, impostor;
   late Directory directory;

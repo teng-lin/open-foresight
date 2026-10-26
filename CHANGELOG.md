@@ -8,6 +8,7 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Changed
 
+- Replace legacy service transport text with typed diagnostics, honor the canonical log level, and retain a bounded startup event without delaying application ownership. MCP startup and settled RPC handlers also emit closed metadata; public service status exposes bounded diagnostic health.
 - Fresh local model setup defaults to Gemma 4 E2B on all supported memory sizes, while preserving registered models and reusing compatible downloaded models.
 - Settings model choices remain selectable while saved files are discovered. Opening the Gemma chooser checks file metadata without hashing every model; local files are checksum-verified when activated.
 
@@ -15,6 +16,12 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 - Add an opt-in manual update notice in Settings. Checks use public GitHub release
   metadata and never download or execute installers.
+- Settings → Diagnostics shows the desktop app's local logging session state,
+  as the session reports it, and reveals the profile's private logs folder in
+  the file manager. Copy a health summary of status values and counters into
+  the new bug report form; nothing is uploaded. The
+  [diagnostics guide](docs/diagnostics.md) covers log location, configuration,
+  retention, privacy and troubleshooting.
 - Support opt-in Developer ID signing, notarization and stapling for macOS DMGs,
   with checksums calculated after Gatekeeper assessment of the final image.
 - Rename meetings from the workspace header. Manual names persist across restarts
@@ -23,6 +30,12 @@ Notable changes to Open Foresight are recorded here. Versions follow
   for seven days. Each snapshot can require space comparable to the database.
 
 ### Changed
+
+- Keep background SQLite execution deadlines active during VM teardown through
+  a small, separately initialized native support image.
+
+- Bound background SQLite read admission and execution, restart failed readers
+  after actual exit, and retain cancelled work until its statement settles.
 
 - Separate meeting and source renderers from feature commands while preserving
   note saves, answer retries, generation cancellation and dialog ownership.

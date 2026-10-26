@@ -12,7 +12,11 @@ import 'package:path/path.dart' as path;
 
 import 'generated/web_content.pbgrpc.dart';
 import 'web_content.dart' show referenceWebContentHost;
-import 'platform_services.dart' show runtimeConfiguration;
+import 'platform_services.dart'
+    show
+        RuntimeConfiguration,
+        currentOwnerRuntimeSnapshot,
+        legacyRuntimeSnapshot;
 import 'runtime_execution_policy.dart' show requireInstalledRuntime;
 import 'rpc_error.dart' show RpcError;
 
@@ -438,7 +442,8 @@ class PublicModelFileDownloader implements ModelDownloader {
               'memory': model.minimumMemoryGb,
               'root': root.path,
               'existing': existingFile?.path,
-              'source': sourceForTesting?.toString(),
+              'source': (sourceForTesting ?? compiledFixtureModelSource(model))
+                  ?.toString(),
               'connect': deadlines.connect.inMicroseconds,
               'headers': deadlines.headers.inMicroseconds,
               'bodyIdle': deadlines.bodyIdle.inMicroseconds,
@@ -757,8 +762,13 @@ const _maxTransportBytes = 512 * 1024 * 1024;
 const _maxTransportConfiguration = 16 * 1024;
 
 class _ModelTransportProcess {
-  _ModelTransportProcess({this.startWorker});
+  _ModelTransportProcess({this.startWorker})
+    : _configuration = currentOwnerRuntimeSnapshot;
   final Future<Process> Function(List<String> command)? startWorker;
+
+  /// The bound owner snapshot at construction; outside any owner scope the
+  /// boundary is read at use as before.
+  final RuntimeConfiguration? _configuration;
   Process? _process;
   Future<Process>? _launching;
   bool _cancelled = false;
@@ -819,14 +829,15 @@ class _ModelTransportProcess {
     void Function(ModelDownloadPhase)? onPhase,
     int progressTotal,
   ) async {
-    final service = runtimeConfiguration['FORESIGHT_SERVICE'];
+    final runtime = _configuration ?? legacyRuntimeSnapshot();
+    final service = runtime['FORESIGHT_SERVICE'];
     final List<String> command;
     if (service != null &&
         service.startsWith('/') &&
         File(service).existsSync()) {
       try {
         command = [
-          requireInstalledRuntime(service),
+          requireInstalledRuntime(service, configuration: runtime),
           '--model-transport-worker',
         ];
       } on RpcError {

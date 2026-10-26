@@ -1,4 +1,5 @@
 import '../../desktop_environment.dart';
+import 'read_model.dart';
 import 'package:flutter/material.dart';
 import 'package:foresight_core/desktop.dart';
 
@@ -12,16 +13,20 @@ Future<bool> confirmModelTerms(
   GemmaModel model, {
   required ModelPreferenceWriter savePreference,
   Future<void> Function(Uri)? openUri,
+  bool Function()? ownerCurrent,
 }) async {
+  final epoch = store.workspaceEpoch;
+  bool owns() =>
+      context.mounted &&
+      store.workspaceEpoch == epoch &&
+      (ownerCurrent?.call() ?? true);
   final key = 'modelTerms.${model.repository}.${model.revision}';
-  final result = await store.read(StoreReadQueries.preference(key));
-  if (result.error != null) throw result.error!;
-  if (!context.mounted) return false;
-  if (!result.current)
-    throw RpcError(
-      RpcErrorCode.unavailable,
-      'Model terms state is not current; retry setup.',
-    );
+  final result = await readCurrentSetup(
+    store,
+    StoreReadQueries.preference(key),
+    ownerCurrent: owns,
+  );
+  if (result == null || !context.mounted || !owns()) return false;
   if (result.value == 'accepted') return true;
   final card = Uri.https(
     'huggingface.co',
@@ -78,7 +83,7 @@ Future<bool> confirmModelTerms(
       ],
     ),
   );
-  if (accepted != true) return false;
+  if (accepted != true || !owns()) return false;
   await savePreference(key, 'accepted');
   return true;
 }

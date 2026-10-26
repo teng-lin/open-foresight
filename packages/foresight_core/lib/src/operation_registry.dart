@@ -4,6 +4,7 @@ import 'operation_descriptor.dart';
 import 'operation_requests.dart';
 import 'operations.dart';
 import 'rpc_error.dart';
+import 'service_diagnostics.dart';
 
 typedef OperationCallback<T extends OperationRequest> =
     FutureOr<Object?> Function(T request, {bool Function()? current});
@@ -99,6 +100,12 @@ final class OperationRegistry {
             : 'Operation requires application dispatch: ${request.operation.wire}',
       );
     }
-    return handler.invoke(request, current: current);
+    if (!serviceDiagnosticsEnabled) {
+      return handler.invoke(request, current: current);
+    }
+    return observeServiceOperation(
+      request.operation.wire,
+      () => handler.invoke(request, current: current),
+    );
   }
 }

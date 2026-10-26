@@ -3,6 +3,12 @@ import '../store.dart';
 /// Content owned by the workspace. Model registrations, account configuration
 /// and pending helper deletions survive the local privacy transaction.
 const workspaceContentTables = [
+  'source_selection_items',
+  'source_selections',
+  'conversation_scopes',
+  'proactive_scopes',
+  'answer_metadata',
+  'legacy_preference_entities',
   'content_revisions',
   'google_sources',
   'google_folders',

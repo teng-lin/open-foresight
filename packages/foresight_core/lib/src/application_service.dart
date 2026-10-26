@@ -241,6 +241,11 @@ class ApplicationService {
 
   /// [desktopDetachGrace] is how long the service waits for a desktop to
   /// reattach after its approval connection closes before it shuts down.
+  /// An explicit [configuration], else the owner snapshot bound by
+  /// [runWithRuntimeConfiguration], is captured once here and every
+  /// service-owned consumer receives that immutable snapshot. Outside any
+  /// owner scope, startup decisions use one boundary snapshot taken here while
+  /// the long-lived owners stay legacy boundary consumers, as before injection.
   static Future<ApplicationService> start(
     ProfilePaths profile, {
     SearchCallbacks? webSearch,
@@ -252,22 +257,35 @@ class ApplicationService {
     void Function()? onDraining,
     Future<void> Function()? beforeReleaseOwnership,
     DesktopPeerVerifier? desktopPeerVerifier,
+    void Function()? onProfileOwned,
+    RuntimeConfiguration? configuration,
   }) async {
+    final scoped = configuration == null ? currentOwnerRuntimeSnapshot : null;
+    final captured = runtimeSnapshot(configuration);
     // This must precede native loads, database opens, and worker creation.
-    final installationLock = acquireInstallationLock();
+    final installationLock = acquireInstallationLock(configuration: captured);
     void Function()? releaseLocalOwner;
     try {
       releaseLocalOwner = retainLocalServiceOwner(profile.data);
-      final service = await _start(
+      Future<ApplicationService> startOwned() => _start(
         profile,
         installationLock,
+        captured,
+        injected: configuration != null || scoped != null,
+        explicit: configuration != null,
         webSearch: webSearch,
         internalWorker: internalWorker,
         clock: clock,
         createTimer: createTimer,
         helperStartupProbeTimeout: helperStartupProbeTimeout,
         desktopPeerVerifier: desktopPeerVerifier,
+        onProfileOwned: onProfileOwned,
       );
+      // An explicit snapshot is also bound as this owner's scope, so the store,
+      // its read worker and in-service defaults capture the same snapshot.
+      final service = await (configuration == null
+          ? startOwned()
+          : runWithRuntimeConfiguration(captured, startOwned));
       service._desktopDetachGrace = desktopDetachGrace;
       service._onDraining = onDraining;
       service._beforeReleaseOwnership = beforeReleaseOwnership;
@@ -282,18 +300,32 @@ class ApplicationService {
 
   static Future<ApplicationService> _start(
     ProfilePaths profile,
-    InstallationLock? installationLock, {
+    InstallationLock? installationLock,
+    RuntimeConfiguration captured, {
+    required bool injected,
+    required bool explicit,
     SearchCallbacks? webSearch,
     bool internalWorker = false,
     Clock? clock,
     Timer Function(Duration, void Function())? createTimer,
     Duration? helperStartupProbeTimeout,
     DesktopPeerVerifier? desktopPeerVerifier,
+    void Function()? onProfileOwned,
   }) async {
     final lock = await acquireServiceProfileLock(
       profile,
-      launchWithdrawn: () => serviceLaunchLeaseWithdrawn(profile),
+      launchWithdrawn: () =>
+          serviceLaunchLeaseWithdrawn(profile, configuration: captured),
+      // Unless the caller owns an explicit snapshot, the legacy boundary keeps
+      // receiving profile defaults for callers outside the ports; this
+      // service's own snapshot is derived below.
+      configuration: explicit ? captured : null,
     );
+    final owned = injected
+        ? profileServiceConfiguration(profile, captured)
+        : null;
+    // Startup's own view, after the lock added any profile defaults.
+    final configuration = owned ?? legacyRuntimeSnapshot();
     Store? store;
     Helper? helper;
     Application? startedApplication;
@@ -306,6 +338,7 @@ class ApplicationService {
     var publishedRecord = false;
     String? claimed;
     try {
+      onProfileOwned?.call();
       // This owner holds the profile lock; any endpoint record is a
       // predecessor's. Claim it before anything that can wait.
       claimed = claimServiceEndpointRecord(profile.data);
@@ -325,7 +358,7 @@ class ApplicationService {
           '${profile.runtime}/${internalWorker ? 'worker' : 'application'}.sock';
       await clearStaleServiceSocket(path);
       sweepStaleSpeechAudio(profile.data);
-      store = Store('${profile.data}/application.db');
+      store = Store('${profile.data}/application.db', configuration: owned);
       await store.verifyRegisteredModels(rejectInvalidRegistrations: true);
       store.meetingStore.interruptActiveCaptures();
       helper = Helper(
@@ -333,6 +366,7 @@ class ApplicationService {
         '${profile.data}/helper',
         startupProbeTimeout:
             helperStartupProbeTimeout ?? const Duration(milliseconds: 400),
+        configuration: owned,
       );
       final domain = Domain(
         store,
@@ -340,6 +374,7 @@ class ApplicationService {
         webSearch: webSearch,
         clock: clock,
         createTimer: createTimer,
+        configuration: owned,
       );
       final application = Application(domain)..profileId = profile.identity;
       startedApplication = application;
@@ -369,7 +404,10 @@ class ApplicationService {
         installationLock,
         application,
         internalWorker,
-        desktopPeerVerifier ?? verifyInstalledDesktopPeer,
+        desktopPeerVerifier ??
+            (owned == null
+                ? verifyInstalledDesktopPeer
+                : installedDesktopPeerVerifier(owned)),
       );
       try {
         await publishServiceSocket(binding, service._accept);
@@ -377,10 +415,14 @@ class ApplicationService {
         service._discard();
         rethrow;
       }
-      final manifest = runtimeConfiguration['FORESIGHT_MODEL_MANIFEST'];
+      final manifest = configuration['FORESIGHT_MODEL_MANIFEST'];
       if (manifest != null && File(manifest).existsSync()) {
         domain.initialize(
-          registerInstalledModels(store, manifest).then<void>((_) {}),
+          registerInstalledModels(
+            store,
+            manifest,
+            configuration: configuration,
+          ).then<void>((_) {}),
         );
       }
       helper.changed = () {
@@ -868,6 +910,7 @@ class ApplicationService {
     try {
       _enforceCapability(client, request);
       final guard = ServiceIdleShutdownGuard(
+        configuration: domain.configuration,
         helper: domain.helper,
         recording: () => application.recording != null,
         operationsBusy: () => _ledger.operationsBusy,

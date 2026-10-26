@@ -18,6 +18,7 @@ def build_tree(tmp_path):
     for name in (
         "build.sh",
         "build_service_gate.sh",
+        "runtime_support_gate.sh",
         "ci_timing.sh",
         "check_build_cache.py",
         "verify_toolchain_pins.py",
@@ -168,5 +169,34 @@ def test_service_stage_rejects_missing_or_non_executable_worker_before_tests(
     assert str(worker) in result.stderr
     expected = "Missing stage prerequisite" if state == "missing" else "not executable"
     assert expected in result.stderr
+    assert "service and MCP integration" not in result.stdout
+    assert not (root / "test-results").exists()
+
+
+def test_service_receipt_failure_blocks_compiled_clients(build_tree):
+    root, environment = build_tree
+    binary = Path(environment["PATH"].split(":")[0])
+    dart = binary / "dart"
+    dart.write_text("#!/bin/bash\nexit 0\n")
+    dart.chmod(0o700)
+    for relative in (
+        "application/foresight-service",
+        "application/foresight-mcp",
+        "services/helper/ForesightHelper",
+        "services/helper/model_worker_fixture",
+    ):
+        executable = root / "build" / relative
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        executable.write_text("#!/bin/sh\nexit 0\n")
+        executable.chmod(0o755)
+    native = root / "build/native/libforesight_native.so"
+    native.parent.mkdir(parents=True)
+    native.write_bytes(b"fixture-native")
+    (root / "tools/diagnostic_product_receipt.py").write_text(
+        "import sys\nprint('fixture receipt refused')\nsys.exit(29)\n"
+    )
+    result = run_stage(build_tree, "service")
+    assert result.returncode == 29, result.stdout + result.stderr
+    assert "fixture receipt refused" in result.stdout
     assert "service and MCP integration" not in result.stdout
     assert not (root / "test-results").exists()

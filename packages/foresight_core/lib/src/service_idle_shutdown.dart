@@ -11,16 +11,25 @@ class ServiceIdleShutdownGuard {
     required this.recording,
     required this.operationsBusy,
     required this.backgroundBusy,
-  });
+    RuntimeConfiguration? configuration,
+  }) : _configuration =
+           configuration?.snapshot() ?? currentOwnerRuntimeSnapshot;
+
+  /// An explicit or bound owner snapshot is fixed at construction. Outside any
+  /// owner scope this is a legacy direct construction: each access returns a
+  /// fresh immutable snapshot of the boundary, as it read it before injection.
+  RuntimeConfiguration get configuration =>
+      _configuration ?? legacyRuntimeSnapshot();
+  final RuntimeConfiguration? _configuration;
   final Helper helper;
   final bool Function() recording, operationsBusy, backgroundBusy;
   void validateOwner(ServiceStopIfIdleRequest request) {
     if ((request.expectedPid != null && request.expectedPid != pid) ||
         (request.installationRoot != null &&
-            request.installationRoot != configuredInstallationRoot) ||
+            request.installationRoot != configuration.installationRoot) ||
         (request.runtimeRevision != null &&
             request.runtimeRevision !=
-                runtimeConfiguration['FORESIGHT_RUNTIME_REVISION'])) {
+                configuration['FORESIGHT_RUNTIME_REVISION'])) {
       throw RpcError(
         RpcErrorCode.cancelled,
         'Application service ownership changed before idle shutdown; retry without replacing the app.',

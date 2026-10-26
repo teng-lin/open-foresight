@@ -1,3 +1,4 @@
+import '../sql_support_test_bootstrap.dart';
 import 'dart:io';
 
 import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
@@ -5,6 +6,7 @@ import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
 // The parent kills this process after the commit acknowledgement. Keeping the
 // connection alive until then leaves a committed WAL without a close checkpoint.
 Future<void> main(List<String> arguments) async {
+  bootstrapSqlSupportFixture();
   final db = sqlite3.open(arguments[0]);
   try {
     db.execute('PRAGMA journal_mode=WAL');

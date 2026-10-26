@@ -47,6 +47,7 @@ void legacyLabelFixture(Database db) {
 /// Fixtures that lower user_version must remove the actual version22 schema,
 /// rather than asking its ordered CREATE statements to tolerate a fake old DB.
 void preIncrementalIndexFixture(Database db) {
+  prePreferenceEntitiesFixture(db);
   for (final trigger in [
     'meeting_changes_count_insert',
     'meeting_changes_count_delete',
@@ -74,4 +75,50 @@ void preIncrementalIndexFixture(Database db) {
   }
   db.execute('DROP INDEX IF EXISTS source_details_uri');
   db.execute('DROP INDEX IF EXISTS transcript_meeting_final_id');
+}
+
+/// Reconstruct the pre23 preference representation before lowering user_version.
+/// This is a test-only downgrade; preserve values instead of pretending that a
+/// current schema is historical or making production CREATE statements tolerant.
+void prePreferenceEntitiesFixture(Database db) {
+  if (db
+      .select(
+        "SELECT 1 FROM sqlite_master WHERE name='answer_metadata' AND type='table'",
+      )
+      .isEmpty) {
+    return;
+  }
+  db.execute("DROP TRIGGER IF EXISTS legacy_preference_entities_erasure");
+  db.execute("DROP TRIGGER IF EXISTS answer_metadata_erasure");
+  db.execute("DROP TRIGGER IF EXISTS answer_preference_orphans");
+  db.execute("DROP TRIGGER IF EXISTS meeting_preference_orphans");
+  db.execute(
+    "INSERT OR REPLACE INTO preferences(key,value) SELECT 'answerScope.v1.'||answer_id,scope_identity FROM answer_metadata WHERE scope_identity IS NOT NULL",
+  );
+  db.execute(
+    "INSERT OR REPLACE INTO preferences(key,value) SELECT 'webAnswer.v1.'||answer_id,CASE web_answer WHEN 1 THEN 'true' ELSE 'false' END FROM answer_metadata WHERE web_answer IS NOT NULL",
+  );
+  db.execute(
+    "INSERT OR REPLACE INTO preferences(key,value) SELECT 'answerScope.'||conversation,mode FROM conversation_scopes",
+  );
+  db.execute(
+    "INSERT OR REPLACE INTO preferences(key,value) SELECT 'proactiveScope.'||meeting_id,mode FROM proactive_scopes",
+  );
+  db.execute("""INSERT OR REPLACE INTO preferences(key,value)
+    SELECT CASE purpose WHEN 'answer' THEN 'answerSources.' WHEN 'picker' THEN 'answerSourcesSelection.' ELSE 'preparationSources.' END||owner,
+    (SELECT json_group_array(source_id) FROM (SELECT source_id FROM source_selection_items i WHERE i.purpose=s.purpose AND i.owner=s.owner ORDER BY position))
+    FROM source_selections s""");
+  db.execute(
+    'INSERT OR REPLACE INTO preferences(key,value) SELECT key,value FROM legacy_preference_entities',
+  );
+  for (final table in [
+    'source_selection_items',
+    'source_selections',
+    'conversation_scopes',
+    'proactive_scopes',
+    'answer_metadata',
+    'legacy_preference_entities',
+  ]) {
+    db.execute('DROP TABLE $table');
+  }
 }

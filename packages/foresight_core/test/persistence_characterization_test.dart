@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -15,6 +16,7 @@ import 'package:test/test.dart';
 const fixtureRoot = 'test/fixtures/persistence-c28a1561';
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory root;
   late String path;
 

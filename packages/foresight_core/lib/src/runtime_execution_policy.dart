@@ -12,8 +12,11 @@ String canonicalRuntimePath(String path) =>
 /// Packaged executable selection belongs to the installation. Model data may
 /// live in the profile; executable files and Python workers may not escape the
 /// installed root through registration, stored settings or symbolic links.
-String requireInstalledRuntime(String runtime) {
-  final root = configuredInstallationRoot;
+String requireInstalledRuntime(
+  String runtime, {
+  RuntimeConfiguration? configuration,
+}) {
+  final root = runtimeSnapshot(configuration).installationRoot;
   if (root == null || runtime.isEmpty) return runtime;
   final selected = canonicalRuntimePath(runtime);
   if (!selected.startsWith('$root/')) {

@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -102,6 +103,7 @@ class _InterfaceGeneration extends _StreamingSummary {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory root;
   late ProfilePaths profile;
   late ApplicationService service;
@@ -588,6 +590,18 @@ void main() {
             "INSERT INTO models(kind,path,digest,runtime) VALUES('embedding','/fixture','digest','/fixture')",
         'meetings':
             "INSERT INTO meetings(id,title,state) VALUES(1,'Meeting','completed')",
+        'answer_metadata':
+            "INSERT INTO answer_metadata(answer_id,scope_identity,web_answer) VALUES(1,'private',1)",
+        'conversation_scopes':
+            "INSERT INTO conversation_scopes(conversation,meeting_id,mode) VALUES('meeting:1',1,'selected')",
+        'proactive_scopes':
+            "INSERT INTO proactive_scopes(meeting_id,mode) VALUES(1,'meeting')",
+        'source_selections':
+            "INSERT INTO source_selections(purpose,owner,meeting_id) VALUES('answer','meeting:1',1)",
+        'source_selection_items':
+            "INSERT INTO source_selection_items(purpose,owner,position,source_id) VALUES('answer','meeting:1',0,'s')",
+        'legacy_preference_entities':
+            "INSERT INTO legacy_preference_entities(key,value,reason,created,meeting_id) VALUES('preparationSources.1','invalid-json','fixture',${DateTime.now().millisecondsSinceEpoch},1)",
         'meeting_index_jobs':
             "INSERT INTO meeting_index_jobs(meeting_id,workspace_epoch,revision,requested) VALUES(1,'fixture',0,1)",
         'meeting_index_state':

@@ -1,3 +1,4 @@
+import '../sql_support_test_bootstrap.dart';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
@@ -14,6 +15,7 @@ void main(List<String> arguments) {
     );
     stdout.writeln('Preloaded ${upstream.sqlite3.version}');
   }
+  bootstrapSqlSupportFixture();
   final db = selected.sqlite3.openInMemory();
   try {
     stdout.writeln(

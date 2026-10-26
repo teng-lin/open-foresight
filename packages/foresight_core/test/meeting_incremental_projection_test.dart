@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_core/src/persistence/meeting_transcript_projection.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -38,6 +39,7 @@ class ProjectionRag extends rag.RagServiceBase {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory root;
   late Store store;
   late Helper helper;

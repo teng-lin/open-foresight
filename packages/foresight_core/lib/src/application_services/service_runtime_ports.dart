@@ -5,11 +5,20 @@ import 'package:clock/clock.dart';
 import '../generation_runtime_slot.dart';
 import '../helper.dart';
 import '../native.dart';
+import '../platform_services.dart' show RuntimeConfiguration;
 import '../store.dart';
+
+/// The owning service's immutable runtime snapshot. An injected owner captures
+/// it once at its composition boundary; a legacy owner returns a fresh immutable
+/// snapshot of the process boundary. No port exposes the editable boundary.
+abstract interface class RuntimeConfigurationPort {
+  RuntimeConfiguration get configuration;
+}
 
 /// Capture owns timers and recording resources; workspace state only revokes
 /// stale callbacks. It does not need generation or helper mutation authority.
-abstract interface class RecordingWorkspace {
+abstract interface class RecordingWorkspace
+    implements RuntimeConfigurationPort {
   Store get store;
   Clock get clock;
   Timer Function(Duration, void Function()) get createTimer;
@@ -30,7 +39,7 @@ abstract interface class SummaryWorkspace {
 
 /// Registration adopts through the one runtime slot and uses the helper only
 /// for embedding configuration. Other workspace controllers stay separate.
-abstract interface class ModelWorkspace {
+abstract interface class ModelWorkspace implements RuntimeConfigurationPort {
   Store get store;
   Helper get helper;
   int get workspaceGeneration;

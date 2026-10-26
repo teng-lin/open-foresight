@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/application.dart';
 import 'dart:convert';
@@ -6,6 +7,7 @@ import 'package:test/test.dart';
 import 'package:foresight_core/foresight_core.dart';
 
 void main() {
+  bootstrapSqlSupportFixture();
   final env = Platform.environment;
   test(
     'dedicated detector queues English and Chinese questions without a chat model',

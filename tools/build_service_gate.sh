@@ -4,7 +4,7 @@ set -euo pipefail
 task_platform=${1:?platform}
 task_build=${2:?absolute build directory}
 task_python=${3:?Python executable}
-task_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+task_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 source "$task_root/tools/ci_timing.sh"
 case "$task_platform" in
   macos) task_native="$task_build/native/libforesight_native.dylib" ;;
@@ -23,6 +23,9 @@ for task_binary in "$task_build/application/foresight-service" "$task_build/appl
   [[ -x "$task_binary" ]] || { echo "Stage prerequisite is not executable: $task_binary" >&2; exit 1; }
 done
 [[ -f "$task_native" ]] || { echo "Missing stage prerequisite: $task_native" >&2; exit 1; }
+source "$task_root/tools/runtime_support_gate.sh"
+foresight_verify_runtime_support "$task_root" "$task_build" "$task_python"
+foresight_diagnostic_worker "$task_root" "$task_build" "$task_python" --verify
 # Short sockets work on macOS too. Honor disk-backed local test storage.
 task_service_temp=$(mktemp -d "${FORESIGHT_TEST_TEMP_ROOT:-/tmp}/of-svc.XXXXXX")
 trap 'rm -rf -- "$task_service_temp"' EXIT

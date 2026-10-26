@@ -154,6 +154,7 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
       widget.store,
       model,
       savePreference: widget.savePreference,
+      ownerCurrent: () => active && !cancelled,
       openUri: widget.environment.openUri,
     ))
       throw const ModelDownloadCancelled();

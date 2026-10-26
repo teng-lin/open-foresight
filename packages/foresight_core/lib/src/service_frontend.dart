@@ -4,8 +4,10 @@ import 'dart:io';
 import 'dart:isolate';
 import 'dart:ffi';
 import 'native_lifetime.dart';
+import 'diagnostics/session.dart';
 import 'application_service.dart';
 import 'platform_services.dart';
+import 'persistence/sql_support.dart';
 import 'profile_paths.dart';
 import 'service_diagnostics.dart';
 import 'service_framing.dart';
@@ -72,7 +74,11 @@ class IsolatedApplicationService {
   static Future<IsolatedApplicationService> start(
     ProfilePaths profile, {
     DesktopPeerVerifier? desktopPeerVerifier,
+    LoggingSession? diagnostics,
   }) async {
+    // Entrypoint/embedding already mapped the trusted support image before
+    // any DB. Only original code is handed to the application worker.
+    final sqlSupport = currentSqlSupportBootstrap;
     if (_nativeRestartRequired) {
       throw StateError('Native ownership is unconfirmed; restart the service');
     }
@@ -94,6 +100,7 @@ class IsolatedApplicationService {
       if (!host._ready.isCompleted) host._ready.completeError(host._failure!);
     });
     host._exits.listen((_) {
+      diagnostics?.ownershipWorkerTerminated();
       traceServiceTransport(
         () => 'worker exit received failed=${host._failure != null}',
       );
@@ -125,18 +132,34 @@ class IsolatedApplicationService {
     try {
       final releaseLocalOwner = retainLocalServiceOwner(profile.data);
       unawaited(host.closed.whenComplete(releaseLocalOwner));
-      await Isolate.spawn(
-        _applicationServiceWorker,
-        [
-          host._messages.sendPort,
-          profile.data,
-          profile.runtime,
-          Map<String, String>.from(runtimeConfiguration.environment),
-        ],
-        onError: host._errors.sendPort,
-        onExit: host._exits.sendPort,
-        debugName: 'foresight-domain',
-      );
+      final ownership = diagnostics?.expectOwnershipDecision();
+      final configuration = <Object?>[
+        host._messages.sendPort,
+        profile.data,
+        profile.runtime,
+        Map<String, String>.from(runtimeConfiguration.environment),
+        sqlSupport,
+        null, // Owned diagnostic bootstrap is appended by the private adapter.
+        ownership,
+      ];
+      if (diagnostics == null) {
+        await Isolate.spawn(
+          _applicationServiceWorker,
+          configuration,
+          onError: host._errors.sendPort,
+          onExit: host._exits.sendPort,
+          debugName: 'foresight-domain',
+        );
+      } else {
+        await diagnostics.spawnProducer<List<Object?>>(
+          DiagnosticProducerKind.domain,
+          _applicationServiceWorkerWithDiagnostics,
+          configuration,
+          onError: host._errors.sendPort,
+          onExit: host._exits.sendPort,
+          debugName: 'foresight-domain',
+        );
+      }
       spawned = true;
       await host._ready.future;
       return host;
@@ -529,15 +552,46 @@ class IsolatedApplicationService {
   }
 }
 
+/// Bind the immutable original carrier once without resolving the profile or
+/// consuming startup metadata again. Constructors inside capture this owner.
+R runApplicationWorkerConfiguration<R>(
+  Map<String, String> environment,
+  R Function() runner,
+) => runWithRuntimeConfiguration(
+  RuntimeConfiguration.serviceWorker(environment),
+  runner,
+);
+
+void _applicationServiceWorkerWithDiagnostics(
+  (DiagnosticProducerBootstrap, List<Object?>) invocation,
+) {
+  invocation.$2[5] = invocation.$1;
+  _applicationServiceWorker(invocation.$2);
+}
+
 void _applicationServiceWorker(List<Object?> configuration) {
+  final producer = (configuration[5] as DiagnosticProducerBootstrap?)
+      ?.connect();
+  final ownership = configuration[6] as DiagnosticOwnershipReporter?;
   runApplicationWorkerZone(() async {
-    try {
-      await _runApplicationServiceWorker(configuration);
-    } catch (error, stack) {
-      // Include failures before the main worker lifecycle installs its own
-      // handler (for example while installing the inherited environment).
-      (configuration[0] as SendPort).send(['failure', '$error\n$stack']);
-    }
+    await waitForServiceDiagnostics(producer);
+    await runWithServiceDiagnostics(producer, () async {
+      try {
+        // Bind the original immutable code before entering application code.
+        bindSqlSupportBootstrap(configuration[4] as SqlSupportBootstrap);
+        await runApplicationWorkerConfiguration<Future<void>>(
+          (configuration[3] as Map).cast<String, String>(),
+          () => _runApplicationServiceWorker(configuration),
+        );
+      } catch (error, stack) {
+        ownership?.report(OwnershipDecision.failedBeforeLock);
+        // Include failures before the main worker lifecycle installs its own
+        // handler (for example while installing the inherited environment).
+        (configuration[0] as SendPort).send(['failure', '$error\n$stack']);
+      } finally {
+        producer?.close();
+      }
+    }, ownership: ownership);
   });
 }
 
@@ -556,6 +610,7 @@ Future<void> _runApplicationServiceWorker(List<Object?> configuration) async {
   installServiceWorkerEnvironment(
     (configuration[3] as Map).cast<String, String>(),
   );
+  bindSqlSupportBootstrap(configuration[4] as SqlSupportBootstrap);
   traceServiceTransport(() => 'worker starting');
   final control = ReceivePort();
   final nativePermits = <int, Completer<void>>{};
@@ -632,6 +687,8 @@ Future<void> _runApplicationServiceWorker(List<Object?> configuration) async {
     service = await ApplicationService.start(
       profile,
       internalWorker: true,
+      onProfileOwned: () => (configuration[6] as DiagnosticOwnershipReporter?)
+          ?.report(OwnershipDecision.acquired),
       onDraining: () {
         revokeNativeAdmission();
         parent.send(['draining']);
@@ -659,6 +716,13 @@ Future<void> _runApplicationServiceWorker(List<Object?> configuration) async {
     await Future<void>.delayed(Duration.zero);
   } catch (error, stack) {
     revokeNativeAdmission();
+    (configuration[6] as DiagnosticOwnershipReporter?)?.report(
+      error is ServiceOwnershipContended
+          ? OwnershipDecision.contended
+          : error is ServiceLaunchWithdrawn
+          ? OwnershipDecision.withdrawn
+          : OwnershipDecision.failedBeforeLock,
+    );
     traceServiceTransport(() => 'worker main failed $error\n$stack');
     parent.send([
       'failure',

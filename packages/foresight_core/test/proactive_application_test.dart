@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_core/src/generated/transcript_index.pb.dart'
     as transcript;
 import 'package:foresight_test_support/transcript_index_service.dart';
@@ -106,10 +107,14 @@ class _Detector implements QueryCompletionRuntime {
   final prompts = <String>[];
   String output = ' Who owns the draft?';
   Object? failure;
+  final entered = Completer<void>();
+  Completer<void>? gate;
   @override
   Future<String> complete(String prompt, String requestId) async {
     requests.add(requestId);
     prompts.add(prompt);
+    if (!entered.isCompleted) entered.complete();
+    if (gate != null) await gate!.future;
     if (failure != null) throw failure!;
     return output;
   }
@@ -146,6 +151,7 @@ class _Runtime extends NativeRuntime {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory directory;
   late Store store;
   late Server server;
@@ -175,6 +181,8 @@ void main() {
   });
   setUp(() {
     addTearDown(() async {
+      final held = detector.gate;
+      if (held != null && !held.isCompleted) held.complete();
       await app.close();
       domain.close();
       await domain.drain();
@@ -247,8 +255,14 @@ void main() {
         1000,
         'microphone',
       );
+      detector.gate = Completer<void>();
       queue.notify(id);
-      await queue.process();
+      final detecting = queue.process();
+      await detector.entered.future;
+      expect(runtime.requests, isEmpty);
+      expect(store.rows('SELECT * FROM answers'), isEmpty);
+      detector.gate!.complete();
+      await detecting;
       await queue.process();
       await queue.process();
       expect(queue.errors, isEmpty);
@@ -288,7 +302,13 @@ void main() {
       store.transcript(id, 'Who owns the draft?', true, 0, 1000, 'microphone');
       queue.notify(id);
       detector.failure = StateError('Dedicated detector failed');
-      await queue.process();
+      detector.gate = Completer<void>();
+      final detecting = queue.process();
+      await detector.entered.future;
+      expect(runtime.requests, isEmpty);
+      expect(queue.errors, isEmpty);
+      detector.gate!.complete();
+      await detecting;
       expect(queue.errors[id], contains('Dedicated detector failed'));
       expect(runtime.requests, isEmpty);
       expect(store.rows('SELECT * FROM meeting_questions'), isEmpty);
@@ -331,7 +351,9 @@ void main() {
       queue.notify(id);
       await queue.process();
       domain.indexGate = Completer<void>();
+      domain.indexEntered = Completer<void>();
       final answer = queue.process();
+      await domain.indexEntered!.future;
       await queue.close().timeout(const Duration(seconds: 2));
       await answer;
       expect(runtime.requests, isEmpty);
@@ -522,6 +544,7 @@ void main() {
             'volume': .02,
             'data': base64Encode(bytes.buffer.asUint8List()),
           }).toNativeUtf8();
+          detector.gate = Completer<void>();
           expect(
             fixture.lookupFunction<
               Int32 Function(Int32, Pointer<Utf8>),
@@ -533,15 +556,10 @@ void main() {
           if (!interim) {
             await app.call(Operation.meetingsPause.wire, {'id': id});
           }
-          final deadline = DateTime.now().add(const Duration(seconds: 3));
-          while ((interim
-                  ? app.provisionalTranscript.values.every(
-                      (text) => text.isEmpty,
-                    )
-                  : store.rows('SELECT * FROM transcript').isEmpty) &&
-              DateTime.now().isBefore(deadline)) {
-            await Future<void>.delayed(const Duration(milliseconds: 10));
-          }
+          // The native callback must reach automatic detection. Hold its
+          // completion while checking capture state; do not race a wall clock.
+          await detector.entered.future;
+          final detecting = app.proactive.process();
           if (interim) {
             expect(store.rows('SELECT * FROM transcript'), isEmpty);
             expect(
@@ -568,7 +586,8 @@ void main() {
           }
           final queue = app.proactive;
           // The capture callback, not this test, called notify().
-          await queue.process();
+          detector.gate!.complete();
+          await detecting;
           await queue.process();
           await queue.process();
           expect(queue.errors, isEmpty);

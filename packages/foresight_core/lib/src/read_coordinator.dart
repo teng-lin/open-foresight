@@ -83,6 +83,39 @@ abstract interface class ReadWorker {
   Future<void> close();
 }
 
+/// Cancellation of an undispatched owner-local reservation only. A false return
+/// must never be interpreted as interruption of a running SQLite statement.
+abstract interface class ReadQueueCancellation {
+  bool cancelQueued(ReadWorkerRequest request);
+}
+
+/// A bounded worker refused [ReadWorker.read] before reserving anything.
+///
+/// Code, message and wire shape match the generic busy refusal; only the type
+/// distinguishes an admission limit from busy SQL execution.
+final class ReadAdmissionRejected extends RpcError {
+  ReadAdmissionRejected([String message = 'Read queue is full'])
+    : super(RpcErrorCode.busy, message);
+}
+
+/// Optional capability of a bounded worker that refuses excess requests with
+/// [ReadAdmissionRejected]. Workers without it keep the previous behavior.
+abstract interface class ReadAdmissionAvailability {
+  /// False exactly while [ReadWorker.read] would refuse admission. A closed
+  /// worker reports true: its refusal is terminal, not an admission limit.
+  bool get admitsRead;
+
+  /// Calls [onAvailable] once after an actual reservation is released
+  /// (settlement, queued cancellation, generation exit) or the worker closes,
+  /// or promptly if [admitsRead] already holds; never from inside this call or
+  /// from the stack of a caller's read, cancellation or close.
+  /// Waiters are served in registration order while [admitsRead] holds; a
+  /// notified waiter re-registers only after issuing a read or while admission
+  /// is refused, so a drain is bounded by actual capacity. The result
+  /// withdraws the registration.
+  void Function() whenAdmissionAvailable(void Function() onAvailable);
+}
+
 enum ReadFreshness { current, preview, busy, failed, cancelled }
 
 final class ReadResult<T> {
@@ -126,6 +159,10 @@ final class ReadCoordinator {
   final void Function()? onClosed;
   final _entries = <String, _ReadEntry>{};
   final _active = <Future<void>>{};
+  // Pending listened entries the worker cannot admit yet, in arrival order.
+  // They hold no worker reservation, identity sample or dispatch arguments.
+  final _awaiting = <_ReadEntry>{};
+  void Function()? _withdrawAdmission;
   final _activity = StreamController<void>.broadcast(sync: true);
   var _disposed = false, _sequence = 0;
   Future<void>? _closing;
@@ -143,6 +180,7 @@ final class ReadCoordinator {
   int get activeReads => _active.length;
   int get trackedQueries => _entries.length;
   int get pendingRefreshes => _entries.values.where((e) => e.pending).length;
+  int get awaitingAdmission => _awaiting.length;
   bool get busy => _active.isNotEmpty;
   RpcError? get failure => _incompatibility?.rpcError;
   Stream<void> get activityChanges => _activity.stream;
@@ -175,6 +213,8 @@ final class ReadCoordinator {
           // Leaving and revisiting the same query is a new request identity.
           created.generation++;
           created.pending = false;
+          _leaveAdmission(created);
+          created.cancelQueued?.call();
           scheduleMicrotask(() => _releaseUnused(created));
         },
       );
@@ -237,6 +277,13 @@ final class ReadCoordinator {
     }
   }
 
+  ReadAdmissionAvailability? get _admission {
+    final worker = _worker;
+    return worker is ReadAdmissionAvailability
+        ? worker as ReadAdmissionAvailability
+        : null;
+  }
+
   void _pump(_ReadEntry entry) {
     if (_disposed ||
         entry.active ||
@@ -244,6 +291,46 @@ final class ReadCoordinator {
         !entry.events.hasListener) {
       return;
     }
+    final admission = _admission;
+    // Earlier waiters keep their turn; actual capacity, never a timer or a
+    // refused attempt, readmits the retained pending entry.
+    if (admission != null && (_awaiting.isNotEmpty || !admission.admitsRead)) {
+      _awaiting.add(entry);
+      _withdrawAdmission ??= admission.whenAdmissionAvailable(_admitAwaiting);
+      return;
+    }
+    _start(entry);
+  }
+
+  void _admitAwaiting() {
+    _withdrawAdmission = null;
+    final admission = _admission!;
+    if (_disposed) return;
+    // One start per notification lets coordinators sharing a worker rotate;
+    // remaining entries queue again behind every other waiter.
+    while (_awaiting.isNotEmpty && admission.admitsRead) {
+      final entry = _awaiting.first;
+      _awaiting.remove(entry);
+      if (entry.active || !entry.pending || !entry.events.hasListener) {
+        continue;
+      }
+      _start(entry);
+      break;
+    }
+    // A start can publish a failure synchronously, and a listener may then
+    // invalidate and register through _pump. Keep that single registration.
+    if (_awaiting.isNotEmpty && !_disposed) {
+      _withdrawAdmission ??= admission.whenAdmissionAvailable(_admitAwaiting);
+    }
+  }
+
+  void _leaveAdmission(_ReadEntry entry) {
+    if (!_awaiting.remove(entry) || _awaiting.isNotEmpty) return;
+    _withdrawAdmission?.call();
+    _withdrawAdmission = null;
+  }
+
+  void _start(_ReadEntry entry) {
     entry.pending = false;
     entry.active = true;
     final sequence = ++_sequence, generation = entry.generation;
@@ -266,6 +353,7 @@ final class ReadCoordinator {
         !identical(_entries[entry.query.key], entry)) {
       return;
     }
+    _leaveAdmission(entry);
     _entries.remove(entry.query.key);
     entry.lastValue = null;
     entry.lastIdentity = null;
@@ -325,6 +413,7 @@ final class ReadCoordinator {
       }
       timer = _timer(deadline, () {
         expired = true;
+        entry.cancelQueued?.call();
         if (listening()) {
           entry.pending = true;
           publish(
@@ -333,14 +422,18 @@ final class ReadCoordinator {
           );
         }
       });
-      final reply = await _worker.read(
-        ReadWorkerRequest(
-          projection: entry.query.projection,
-          arguments: entry.query.argumentsForDispatch(),
-          identity: before,
-          sequence: sequence,
-        ),
+      final request = ReadWorkerRequest(
+        projection: entry.query.projection,
+        arguments: entry.query.argumentsForDispatch(),
+        identity: before,
+        sequence: sequence,
       );
+      final worker = _worker;
+      if (worker is ReadQueueCancellation) {
+        final cancellation = worker as ReadQueueCancellation;
+        entry.cancelQueued = () => cancellation.cancelQueued(request);
+      }
+      final reply = await worker.read(request);
       if (!listening() || expired) return;
       final now = identity();
       if (!before.sameOwner(now) || reply.epoch != before.epoch) {
@@ -363,6 +456,14 @@ final class ReadCoordinator {
         // Joining this task from inside itself would deadlock. Retirement
         // publishes immediately, then joins every actual read asynchronously.
         unawaited(retire(error));
+      } else if (error is ReadAdmissionRejected &&
+          !expired &&
+          _admission?.admitsRead == false) {
+        // Nothing was reserved and capacity is genuinely held, so a release
+        // will notify. Retain the request rather than publish a lost value.
+        // A worker claiming capacity while refusing cannot be retried without
+        // spinning; that refusal is published like any other failure.
+        if (listening()) entry.pending = true;
       } else if (!expired) {
         publish(
           ReadFreshness.failed,
@@ -373,6 +474,7 @@ final class ReadCoordinator {
       }
     } finally {
       timer?.cancel();
+      entry.cancelQueued = null;
     }
   }
 
@@ -408,8 +510,12 @@ final class ReadCoordinator {
 
   Future<void> _close() async {
     _disposed = true;
+    _awaiting.clear();
+    _withdrawAdmission?.call();
+    _withdrawAdmission = null;
     for (final entry in _entries.values) {
       entry.pending = false;
+      entry.cancelQueued?.call();
       if (entry.events.hasListener) {
         entry.events.add(
           ReadResult<Object?>(
@@ -447,6 +553,7 @@ final class _ReadEntry {
   int generation = 0;
   Object? lastValue;
   ReadIdentity? lastIdentity;
+  void Function()? cancelQueued;
   _ReadEntry(this.query, {required void Function() onCancel})
     : events = StreamController.broadcast(sync: true, onCancel: onCancel);
 }

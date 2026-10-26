@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
@@ -20,6 +21,7 @@ class DiscoveredRuntime extends NativeRuntime {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   for (final hasCandidate in [false, true]) {
     test(
       'resume refuses late discovery after close, candidate=$hasCandidate',

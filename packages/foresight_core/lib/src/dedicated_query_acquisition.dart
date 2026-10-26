@@ -28,10 +28,18 @@ class DedicatedQueryAcquisition {
     Directory? stagingRoot,
     this.runtime,
     this.catalog,
-  }) : stagingRoot = stagingRoot ?? File(store.path).parent;
+    RuntimeConfiguration? configuration,
+  }) : configuration = configuration?.snapshot() ?? currentOwnerRuntimeSnapshot,
+       stagingRoot = stagingRoot ?? File(store.path).parent;
 
-  factory DedicatedQueryAcquisition.distribution(Store store) {
+  /// Bundled resources come from the owner's [configuration]. The distribution
+  /// credential keeps its separately owned value-supply path.
+  factory DedicatedQueryAcquisition.distribution(
+    Store store, {
+    RuntimeConfiguration? configuration,
+  }) {
     final key = runtimeConfiguration['FORESIGHT_WEB_CONTENT_API_KEY'];
+    final resources = runtimeSnapshot(configuration);
     if (!Platform.isMacOS) {
       throw StateError('Automatic question model acquisition requires macOS.');
     }
@@ -41,7 +49,7 @@ class DedicatedQueryAcquisition {
       );
     }
     for (final name in ['FORESIGHT_QUERY_WORKER', 'FORESIGHT_MODEL_CRYPTO']) {
-      final value = runtimeConfiguration[name];
+      final value = resources[name];
       if (value == null || !File(value).existsSync()) {
         throw StateError(
           'The bundled automatic question runtime is unavailable.',
@@ -49,8 +57,8 @@ class DedicatedQueryAcquisition {
       }
     }
     final queryRuntime =
-        runtimeConfiguration['FORESIGHT_QUERY_RUNTIME'] ??
-        runtimeConfiguration['FORESIGHT_LITERT_PYTHON'];
+        resources['FORESIGHT_QUERY_RUNTIME'] ??
+        resources['FORESIGHT_LITERT_PYTHON'];
     if (queryRuntime == null || !File(queryRuntime).existsSync()) {
       throw StateError(
         'The bundled automatic question runtime is unavailable.',
@@ -72,7 +80,9 @@ class DedicatedQueryAcquisition {
         root: Directory(
           '${File(store.path).parent.path}/models/query-detector',
         ),
+        configuration: resources,
       ),
+      configuration: resources,
     );
   }
 
@@ -83,6 +93,7 @@ class DedicatedQueryAcquisition {
   final MacModelVault vault;
   final Directory stagingRoot;
   final String? runtime;
+  final RuntimeConfiguration? configuration;
   bool _closed = false;
   bool _started = false;
   Future<void>? _closing;
@@ -185,6 +196,7 @@ class DedicatedQueryAcquisition {
         runtime: runtime,
         current: valid,
         vault: vault,
+        configuration: configuration,
       );
       if (catalog case final assets?) {
         await assets.publish(plan.metadata, encrypted, adopt);

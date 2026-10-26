@@ -26,6 +26,11 @@ def reporter(tmp_path, monkeypatch):
     (desktop / "integration_test/fixture_test.dart").write_text("// fixture\n")
     (root / "packages/foresight_core").mkdir(parents=True)
     monkeypatch.setattr(gates, "ROOT", root)
+    monkeypatch.setattr(
+        gates,
+        "_source_worker_defines",
+        lambda env, dart: {"FIXTURE_WORKER": "verified public context"},
+    )
     child = tmp_path / "reporter"
     child.write_text(
         f"#!{sys.executable}\n"

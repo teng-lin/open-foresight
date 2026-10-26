@@ -1,3 +1,4 @@
+import 'persistence/preference_entities.dart';
 import 'persistence/application_schema.dart';
 import 'persistence/sqlite_snapshot_source.dart';
 import 'label_organization.dart';
@@ -19,6 +20,7 @@ import 'persistence/schema_migrations.dart';
 import 'persistence/content_history.dart';
 import 'persistence/sqlite_preflight.dart';
 import 'persistence/migration_backups.dart';
+import 'persistence/restore_pending.dart';
 import 'rpc_error.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -26,6 +28,8 @@ import 'dart:io';
 import 'graph_labels.dart';
 import 'dart:math' show Random;
 import 'persistence/sqlite_runtime.dart';
+import 'platform_services.dart'
+    show RuntimeConfiguration, currentOwnerRuntimeSnapshot;
 
 /// Linux application schema, independently versioned from helper databases.
 class Store implements SqliteSnapshotSource {
@@ -59,8 +63,18 @@ class Store implements SqliteSnapshotSource {
   Timer? _privacyProbe;
   Timer? _historyExpiry;
 
-  Store.readOnly(this.path)
-    : db = openApplicationDatabase(path, mode: OpenMode.readOnly) {
+  /// An explicit or bound owner snapshot, fixed at construction; null for a
+  /// store built outside any owner scope, whose model queries read the
+  /// boundary at use as before.
+  final RuntimeConfiguration? configuration;
+
+  // An interrupted offline restore refuses before any SQLite file is opened.
+  Store.readOnly(this.path, {RuntimeConfiguration? configuration})
+    : configuration = configuration?.snapshot() ?? currentOwnerRuntimeSnapshot,
+      db = openApplicationDatabase(
+        requireNoPendingRestore(path),
+        mode: OpenMode.readOnly,
+      ) {
     try {
       _checkVersion();
       _privacyMaintenancePending = readSnapshot(
@@ -78,7 +92,9 @@ class Store implements SqliteSnapshotSource {
     }
   }
 
-  Store(this.path) : db = _openForMigrations(path) {
+  Store(this.path, {RuntimeConfiguration? configuration})
+    : configuration = configuration?.snapshot() ?? currentOwnerRuntimeSnapshot,
+      db = _openForMigrations(requireNoPendingRestore(path)) {
     try {
       // Refuse newer profiles before even changing their journal mode.
       final originalVersion = _checkVersion();
@@ -194,6 +210,9 @@ class Store implements SqliteSnapshotSource {
         ],
       );
       if (db.updatedRows == 256) delay = const Duration(milliseconds: 10);
+      if (PreferenceEntities(db).pruneLegacy()) {
+        delay = const Duration(milliseconds: 10);
+      }
       if (path != ':memory:') migrationBackups.prune();
     } catch (_) {
       // Reads already exclude expired records. Retry physical retention without
@@ -340,8 +359,11 @@ class Store implements SqliteSnapshotSource {
     String sql, [
     List<Object?> args = const [],
   ]) => db.select(sql, args).map((r) => Map<String, Object?>.from(r)).toList();
-  SourceQueries get sourceQueries =>
-      SourceQueries(db, supportedVersion: schemaVersion);
+  SourceQueries get sourceQueries => SourceQueries(
+    db,
+    supportedVersion: schemaVersion,
+    configuration: configuration,
+  );
   List<Map<String, Object?>> get sources => sourceQueries
       .sources()
       .map((source) => Map<String, Object?>.from(source.toRow()))
@@ -479,7 +501,11 @@ class Store implements SqliteSnapshotSource {
   }) => _requestKeys.writeOnce(key, operation, write, arguments: arguments);
   void _pruneRequestKeys() => _requestKeys.prune();
 
-  ModelStore get _modelStore => ModelStore(db, supportedVersion: schemaVersion);
+  ModelStore get _modelStore => ModelStore(
+    db,
+    supportedVersion: schemaVersion,
+    configuration: configuration,
+  );
   Map<String, Object?> resolveModelRuntime(Map<String, Object?> model) =>
       _modelStore.resolveModelRuntime(model);
   Map<String, Object?>? model(String kind) => _modelStore.model(kind);
@@ -577,10 +603,14 @@ class Store implements SqliteSnapshotSource {
   @override
   String preference(String key, [String fallback = '']) =>
       sourceQueries.preference(key, fallback);
-  void setPreference(String key, String value) => db.execute(
-    'INSERT INTO preferences VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-    [key, value],
-  );
+  void setPreference(String key, String value) {
+    if (PreferenceEntities(db).write(key, value)) return;
+    db.execute(
+      'INSERT INTO preferences VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+      [key, value],
+    );
+  }
+
   void putDocumentLabel(DocumentLabel label) {
     requireSource(label.documentId);
     _labelStore.put(label);

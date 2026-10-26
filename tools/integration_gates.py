@@ -2,8 +2,10 @@
 """Explicit, fail-closed integration groups; only disposable profiles/virtual audio."""
 
 import argparse
+import base64
 from contextlib import contextmanager
 import hashlib
+import importlib
 import json
 import os
 from pathlib import Path
@@ -59,6 +61,29 @@ def widget_test_alias(relative):
     return str(alias.relative_to(desktop))
 
 
+def _source_worker_defines(env, dart):
+    """Use the finished source worker's exact public compilation context."""
+    native = env.get("FORESIGHT_NATIVE_LIBRARY") or env.get("FORESIGHT_NATIVE")
+    build = ROOT / "build"
+    if native is not None and Path(native).parent.name == "native":
+        build = Path(native).resolve(strict=True).parent.parent
+    executable = shutil.which(dart, path=env.get("PATH"))
+    if executable is None:
+        raise RuntimeError("Dart is required to verify the integration worker")
+    sdk = Path(executable).resolve(strict=True).parent.parent
+    module = importlib.import_module(
+        "tools.build_diagnostic_worker" if __package__ else "build_diagnostic_worker"
+    )
+    receipt = module.verify_worker_build(
+        ROOT,
+        build,
+        sdk,
+        ROOT / "packages/foresight_core/.dart_tool/package_config.json",
+        "aot",
+    )
+    return receipt["defines"]
+
+
 def run_tests(
     package,
     files,
@@ -71,10 +96,30 @@ def run_tests(
     *,
     device=None,
     timeout=2400,
+    model_fixture_catalog=None,
 ):
     output.mkdir(parents=True, exist_ok=True)
     events = output / f"{name}.events.jsonl"
     events.unlink(missing_ok=True)
+    defines = (
+        _source_worker_defines(env, dart)
+        if package == "desktop"
+        and any(path.startswith("integration_test/") for path in files)
+        else {}
+    )
+    if model_fixture_catalog is not None:
+        if package != "desktop" or files != [
+            "integration_test/first_run_models_test.dart"
+        ]:
+            raise ValueError(
+                "Compiled model fixture is restricted to the first-run journey"
+            )
+        defines.update(
+            FORESIGHT_ENABLE_TEST_HOOKS="true",
+            FORESIGHT_MODEL_CATALOG_TEST_BASE64=base64.b64encode(
+                json.dumps(model_fixture_catalog, separators=(",", ":")).encode()
+            ).decode("ascii"),
+        )
     aliases = []
     command_files = []
     for relative in files:
@@ -96,6 +141,9 @@ def run_tests(
         "--file-reporter=json:" + str(events),
     ]
     if package == "desktop":
+        command.extend(
+            f"--dart-define={key}={value}" for key, value in sorted(defines.items())
+        )
         command.append("--no-pub")
         if device is not None:
             command.extend(["-d", device])
@@ -385,7 +433,8 @@ def meeting_environment(args, env, private):
                 "desktop": str(desktop),
                 "scope": "Unbundled native Debug integration; installed package acceptance is separate",
             }
-        ) + "\n"
+        )
+        + "\n"
     )
     data = args.output / "meeting-data"
     screenshots = args.output / "meeting-screenshots"

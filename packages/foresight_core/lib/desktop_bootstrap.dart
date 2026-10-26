@@ -7,6 +7,15 @@ import 'src/profile_paths.dart';
 import 'src/remote_domain.dart';
 
 export 'src/profile_paths.dart' show ProfilePaths;
+export 'src/diagnostic_bootstrap.dart' show ApplicationRuntimeBootstrap;
+export 'src/diagnostics/startup.dart'
+    show
+        DiagnosticHost,
+        DiagnosticWorkerInvocation,
+        DiagnosticWorkerInvocationKind;
+export 'src/diagnostics/session.dart' show LoggingSession, DiagnosticComponent;
+export 'src/diagnostic_support_local.dart' show LocalDiagnosticSupport;
+export 'src/service_diagnostics.dart' show runWithServiceDiagnostics;
 export 'src/platform_services.dart'
     show privateDirectory, privateRuntime, configureProfileRuntime;
 

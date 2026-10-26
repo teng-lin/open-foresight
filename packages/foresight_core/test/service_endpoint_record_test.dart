@@ -1,3 +1,6 @@
+import 'package:foresight_test_support/hooked_service.dart'
+    show sourceServiceCompileDefines;
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -105,6 +108,7 @@ class RenameFailingFile implements File {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Map<String, String> environment;
   late Directory root;
   late ProfilePaths profile;
@@ -308,7 +312,11 @@ void main() {
       record().writeAsStringSync('[]');
       final result = await Process.run(
         Platform.resolvedExecutable,
-        ['bin/service.dart', '--status'],
+        [
+          ...await sourceServiceCompileDefines(),
+          'bin/service.dart',
+          '--status',
+        ],
         environment: {
           'HOME': root.path,
           'FORESIGHT_DATA': profile.data,

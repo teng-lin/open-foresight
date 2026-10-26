@@ -1,9 +1,13 @@
+import 'package:foresight_core/src/persistence/sql_support.dart';
+import 'package:foresight_core/src/platform_services.dart';
+import 'sql_support_test_bootstrap.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 
 import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
 import 'package:test/test.dart';
+import 'package:foresight_test_support/test_paths.dart';
 
 Map<String, Object?> engineIdentity() {
   final db = sqlite3.openInMemory();
@@ -24,15 +28,140 @@ Map<String, Object?> engineIdentity() {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   test('SQLite identity is consistent in a fresh reader isolate', () async {
     final identity = engineIdentity();
     expect(identity['body'], 'committed');
-    expect(await Isolate.run(engineIdentity), identity);
+    final support = currentSqlSupportBootstrap;
+    final environment = runtimeConfiguration.environment;
+    expect(
+      await Isolate.run(() {
+        installServiceWorkerEnvironment(environment);
+        bindSqlSupportBootstrap(support);
+        return engineIdentity();
+      }),
+      identity,
+    );
     if (Platform.isMacOS) {
       expect(identity['version'], applicationSqliteVersion);
       expect(identity['source_id'], applicationSqliteSourceId);
     }
   });
+  test(
+    'a transported snapshot selects the same SQLite in a fresh isolate',
+    () async {
+      final identity = engineIdentity();
+      final support = currentSqlSupportBootstrap;
+      // Read workers install their owner's exact immutable snapshot.
+      final snapshot = runtimeConfiguration;
+      final (previous, isolated) = await Isolate.run(() {
+        final previous = installRuntimeConfiguration(snapshot);
+        bindSqlSupportBootstrap(support);
+        return (previous, engineIdentity());
+      });
+      expect(previous, isNull);
+      expect(isolated, identity);
+    },
+  );
+
+  for (final mappingScenario in ['alias', 'physical', 'foreign-global']) {
+    test(
+      'AOT reader retains original mapping across changed $mappingScenario path',
+      () async {
+        final root = createTestTempDirectorySync('sqlite-map-');
+        final binary = File('${root.path}/bin/foresight-service');
+        binary.parent.createSync();
+        final compilation = await Process.run(Platform.resolvedExecutable, [
+          'compile',
+          'exe',
+          'test/fixtures/sqlite_mapping_handoff.dart',
+          '-o',
+          binary.path,
+        ]).timeout(const Duration(seconds: 60));
+        expect(
+          compilation.exitCode,
+          0,
+          reason: '${compilation.stdout}\n${compilation.stderr}',
+        );
+        final result = await Process.run(
+          binary.path,
+          [root.path, mappingScenario],
+          environment: {
+            ...Platform.environment,
+            if (Platform.isMacOS)
+              'FORESIGHT_TEST_SQLITE_ORIGINAL_LIBRARY':
+                  Platform.environment['FORESIGHT_SQLITE_LIBRARY']!,
+            'FORESIGHT_SQLITE_LIBRARY': '${root.path}/lib/libsqlite3.so',
+          },
+        ).timeout(const Duration(seconds: 30));
+        expect(
+          result.exitCode,
+          0,
+          reason: '${result.stdout}\n${result.stderr}',
+        );
+        expect(
+          result.stdout,
+          contains(
+            'original SQLite mapping retained; alias reverse control; parent transaction; real reader',
+          ),
+        );
+      },
+      timeout: const Timeout(Duration(seconds: 100)),
+    );
+  }
+
+  if (Platform.isLinux) {
+    test(
+      'Linux source selection replaces a pre-existing global override',
+      () async {
+        final root = createTestTempDirectorySync('sqlite-source-');
+        final result = await Process.run(Platform.resolvedExecutable, [
+          'test/fixtures/sqlite_mapping_handoff.dart',
+          root.path,
+          'source-global',
+        ]).timeout(const Duration(seconds: 30));
+        expect(
+          result.exitCode,
+          0,
+          reason: '${result.stdout}\n${result.stderr}',
+        );
+        expect(result.stdout, contains('source-global: SQLite initialized'));
+      },
+    );
+
+    test(
+      'Linux installed shape refuses missing layout before source fallback',
+      () async {
+        final root = createTestTempDirectorySync('sqlite-missing-');
+        final binary = File('${root.path}/bin/foresight-service');
+        binary.parent.createSync();
+        final compilation = await Process.run(Platform.resolvedExecutable, [
+          'compile',
+          'exe',
+          'test/fixtures/sqlite_mapping_handoff.dart',
+          '-o',
+          binary.path,
+        ]).timeout(const Duration(seconds: 60));
+        expect(
+          compilation.exitCode,
+          0,
+          reason: '${compilation.stdout}\n${compilation.stderr}',
+        );
+        final result = await Process.run(binary.path, [
+          root.path,
+          'missing-layout',
+        ]).timeout(const Duration(seconds: 30));
+        expect(
+          result.exitCode,
+          isNot(0),
+          reason: '${result.stdout}\n${result.stderr}',
+        );
+        expect(result.stderr, contains('installed SQLite layout is missing'));
+        expect(result.stdout, isNot(contains('SQLite initialized')));
+      },
+      timeout: const Timeout(Duration(seconds: 100)),
+    );
+  }
 
   for (final scenario in [
     'missing',

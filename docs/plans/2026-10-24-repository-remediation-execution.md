@@ -1,6 +1,7 @@
 # Combined remediation and logging execution
 
-Status: local implementation and qualification in progress, 2026-10-24. Implementation issue:
+Implementation and validation record, updated 2026-10-26. Current delivery state:
+[PR #180](https://github.com/teng-lin/open-foresight/pull/180). Implementation issue:
 [#179](https://github.com/teng-lin/open-foresight/issues/179).
 Requirements: [combined plan](2026-10-24-repository-remediation-plan.md), revision 6,
 SHA-256 `6e1ad7f091caf781a199cc5c063a5109728984ec069c81cc029f151ec654d1a7`.
@@ -18,11 +19,17 @@ will be opened on GitHub.
 
 Integration branch: `codex/repository-remediation`.
 Initial code baseline: `ae9170830ca115cb40a44ad7e9ade8714a170bec`.
-Fetched origin/main still matches that source. The distribution-credential topic
+The initial fetch matched that source; the reviewed candidate now includes main
+through `de70a24c`. The distribution-credential topic
 remains excluded. Repository-wide PR-size enforcement remains an open policy
 decision, not a passed implementation check.
 
-## Local work units (not GitHub PRs)
+## Initial local work allocations (historical, not GitHub PRs)
+
+The allocation statuses and dated entries below are chronological checkpoints.
+They preserve failures and earlier prerequisites rather than describing today's
+remaining implementation. The delivery amendment and latest qualification
+checkpoint govern the retained scope; PR #180 records current CI and merge state.
 
 | Unit | Ownership | Integration prerequisites | Status |
 | --- | --- | --- | --- |
@@ -962,3 +969,193 @@ remaining Python import conversion. Runtime accounting also reproduced an
 unbounded health-message mailbox with a paused coordinator; a bounded ACK repair
 is undergoing its own review/platform checks before integration. These are real
 remaining implementation/acceptance gates, not a whole-plan completion claim.
+
+
+### Reviewed local candidate checkpoint, 2026-10-25
+
+The next candidate integrates accepted branch `6a3a815a` with the closed logging,
+SQL and application checkpoints. It remains local: PR #180 is still a draft at
+`66c23c9e`. Neither this integration nor the following component results establish
+full-plan acceptance or permission to publish installers.
+
+- Preference compatibility repair `36e8f5c0` is integrated as `ed300b86`.
+  The nine reproduced regressions now pass; 87 existing focused cases pass with
+  no skips. The original malformed-selection/privacy oracles remain unchanged.
+  Follow-up `8017005c`, integrated as `069ceac7`, adds all six entity tables to
+  the exact service/external-writer revision inventory. Two additional workspace
+  clear/rollback cases pass unchanged. Historical migrations and fixtures stay
+  frozen. Schema-23 documentation and drift tests are updated in `c4737ae3`:
+  the actual registry check succeeds and all 17 tests pass.
+- Logging control repair `ab7df69d`, integrated as `d1cf2e77`, passes 105 tests
+  each on Linux and HanSolo. Holding the actual writer in controlled C++ prepare
+  changes 1,000 profile plus 1,000 ownership messages to zero plus one. This
+  proves those control bounds, not the aggregate 512 KiB memory requirement.
+- Reader admission and fixture-lifecycle repair `46ca1f28` passed a second whole
+  independent review. Its final bytes pass 112 core and 58 desktop-adjacent
+  cases, with no skips/failures. The earlier full desktop result, 591 passed,
+  17 skipped and zero failed, belongs to the preceding source revision; the
+  final reentrant-registration repair still needs the combined full suite.
+- Native reporting `6935e924`, integrated as `2c87ccb7`, passed whole review
+  after correcting the false unflushed-profile detection claim and adding LLVM
+  total-consistency and timeout-output controls. Its 58 focused Python tests
+  pass. The actual Clang-23 report retains original build provenance: root CTest
+  38/38 and line coverage 7,962/11,140 (71.47%). This is the older native scope;
+  current SQL/logging target classification and actual Mac coverage remain open.
+- The wire-only closing launcher omission is repaired in `2f114dc8`.
+  Accepted updater `c50b2f28` is present as `c8f7643d`; its Linux and Mac results
+  remain 39 core plus seven widget cases each, without a live GitHub TLS or
+  installed-product acceptance claim.
+
+The accepted branch `6a3a815a` separately passed its complete Python gate:
+5,781 passed, 31 skipped, 52 retained warnings and 95.75% combined coverage.
+Ruff, mypy (171 files) and the timeout guard passed. Evidence and actual skip
+reasons are in `/var/tmp/of-push6a3/report.json`; this does not qualify the
+unmerged Python import batch or final combined candidate.
+
+The immutable `2c4bcda2` plus catalog run finished with 2,620 core passes,
+17 skips and 13 failures. Its full output and skip metadata remain in
+`/var/tmp/of-coherent-final/`. Repairs are staged separately; no passing full
+core/coverage claim is made from that failed run. Five skips emitted no reason
+and are explicitly recorded that way rather than given invented prerequisites.
+
+Required work remains: production logging readiness and safe transport adoption;
+aggregate physical memory and bounded producer capability/health controls;
+Step-4 support UI/docs; restore race repairs, shipping bootstrap and Mac cases;
+current configuration-port injection; correct-toolchain Python import/caller
+qualification; pin/builder/ICU/reproducibility qualification and owner-reviewed
+workflow wiring; final first-run review/freshness/Mac cases; and the
+complete frozen-source matrix, CI/reviews and verified merge. The synthetic
+first-run journey is not real-model, GPU, physical-audio, minimum-Mac-runtime or
+final signed-installer acceptance. The scope amendment's deferred security work
+remains deferred; existing gates and owner-review requirements remain intact.
+
+The user subsequently deferred isolated Keychain execution as recorded in the
+delivery scope amendment. Its Security -25308 failure remains failed evidence;
+it is no longer a merge blocker and no further Keychain run is required here.
+
+### Retained-scope verification checkpoint, October 26
+
+The [delivery scope amendment](2026-10-24-remediation-delivery-scope.md)
+supersedes earlier remaining-work lists. Exact 512 KiB and strict 5%/10%
+logging certification, expanded bridge/background correlation, new dependency
+reproducibility/builder/ICU work, new native coverage/clang-tidy infrastructure,
+the broad Python import conversion, Keychain execution and broader security
+additions remain deferred. Existing bounds, privacy, coverage and trust gates
+remain required. The reproduced client lost-emitter repair is integrated.
+
+The reviewed production integration reached `c467a5cc`, including startup,
+desktop diagnostic binding/support, restore, first-run, SQL and owned service
+configuration. Subsequent fixture repairs passed the second complete core run
+except for journal compaction: **2,872 passed, 16 skipped, one failed**.
+Core coverage remains **unqualified** because that suite exited nonzero.
+The original failed runs remain retained. The third, instrumented run is
+diagnostic evidence only; its 4,097 rows, assertions and 30-second timeout are
+unchanged. It shows continued indexing progress at the deadline rather than
+a deadlock and also records a native-queue short-deadline failure.
+
+The actual `tools/coverage.sh` run on `c467a5cc` passed **6,134 tests**, with
+32 skipped, 52 warnings and **95.23% combined line/branch coverage** against
+the existing 95% floor. Desktop passed **634**, with 17 skipped and **93.29%**
+coverage against 90%. Actual isolated-display Linux integration passed **3/3**
+with all 68 named expectations; fast scenarios passed **2/2**. These retain
+their exact original source/product provenance, not blanket final-head claims.
+
+Final service-fixture review converged after replacing retired stderr-text
+oracles with typed events and actual wire observations. The MCP handoff
+fixture now observes its new startup connection, real kernel peer identities,
+the exact closing refusal and the held profile lock before releasing the old
+helper. The official build gate compiles the required diagnostic Worker before
+core tests, verifies it again before hosts, and retains service/MCP compilation
+after test and coverage gates. The affected 142 tooling controls pass, including
+explicit ambient-coverage controls. Full compiled-lifecycle qualification on
+the final matching products remains pending.
+
+Pinned formatting required one continuation-line correction in
+`native/diagnostic_protocol.c`, integrated as `297bf7ef`. Although its C tokens
+are unchanged, its source identity changes. Fresh root native CTest passed
+**51/51 Linux and 60/60 HanSolo**, zero skips, in separate new build roots;
+the older native cohorts were preserved. New Linux Native identity is
+`c62c8bf91ffa625087626d6c020d99132ccfc5e8ca5c519a94b6dfb2aae54117`.
+Matching application products and applicable Dart qualification are pending.
+HanSolo runs on macOS 26.6, not the minimum macOS 15 runtime.
+
+Ruff, the subprocess-timeout guard and native formatting pass on the reviewed
+`60f62bf6` Git-free source. The document checker checked 334 local links with
+zero problems; architecture facts and the generated catalog check passed on
+the unchanged corresponding inputs. Actionlint 1.7.7 ran with ShellCheck 0.9.0
+and passed. Complete Git-free Python discovery is running in unrelated-PR,
+main and no-ref contexts. Four installer cases initially failed because the
+container UID and temporary ancestor ownership differed; all four passed in
+each context using a private, correctly owned `/var/tmp` root. No validator or
+test assertion changed. Original failed output is retained.
+
+This is still local verification. PR #180 remains the older draft at
+`66c23c9e`, with historical red CI and merge conflicts. Remaining delivery work
+is resolving core failures, matching final products/checks, recording terminal
+Git-free outcomes, required owner review, pushing the combined candidate,
+resolving current-head CI/reviews and verifying the merge to main. Real models,
+GPU/physical audio, signed/installed distributions, minimum-Mac runtime and
+external activation observations are not inferred from synthetic fixtures.
+
+### Final retained-scope local qualification, October 26
+
+The final test source is `6b2224f7`. Its production inputs are unchanged from
+`8a10945d`; `6923a6a5` and `6b2224f7` add only the independently reviewed worker
+and startup contract tests. The worker cases use the existing controlled FFI
+backend and actual Dart writer/owner isolates. No production hook, assertion,
+timeout, coverage exclusion or numerical gate changed.
+
+The complete Linux core run passed **2,889 tests**, with **16 skipped and zero
+errors**, and **91.03% line coverage (24,583/27,006)** against 90%. Full package
+analysis and formatting of both added files passed. The journal-compaction
+case retained all 4,097 rows and its original 30-second deadline, passing in
+7.499 seconds. The explicit `--concurrency=4` schedules the complete suite;
+it does not omit tests or change their assertions. The earlier eight-suite
+diagnostic failures and the 89.90% floor failure remain recorded as failures.
+Shared-VM contention is supported by the scheduling comparison; a VM-wide pause
+mechanism was not proven.
+
+Native products explicitly reuse the fresh Linux **51/51** cohort with exact
+SHA/mode checks; they are not represented as another native compilation.
+The separate fresh HanSolo cohort passed **60/60**, zero skips. The final
+source view has its own freshly compiled, source-bound Worker, service and MCP,
+all successful, with Worker identity
+`51af3904f6aaff9da428894be0f8675af72c2c99f6954b54a059fb5783e47b28`.
+Core evidence, skipped reasons and terminal events are retained under
+`/var/tmp/of-fin/core-coverage-final/retained-evidence/`.
+
+The matching production/native desktop run passed **634**, with **17 skipped**
+and **93.31% coverage (9,083/9,734)** against 90%; analysis passed. Compiled
+service/MCP has passing evidence for its exact **35 selected cases**, zero
+skips, across the initial 15 passes and the exact 20-case failed-first rerun.
+The first run's missing supplementary model-worker fixture is retained as an
+infrastructure failure. The corrected fixture came from the same fresh CMake
+cohort, with separate provenance; the existing twelve products and application
+bytes did not change. These are two commands, not a claimed clean 35-case run.
+
+Git-free ordinary Python discovery completed in all three controlled inherited
+ref environments: unrelated PR, main and no ref. Each initially passed **6,131**,
+with **32 skipped and 1,398 passing subtests**, and failed the same four installer
+cases because of temporary ancestor ownership. The exact four cases passed in
+each environment with an owned private `/var/tmp` root, yielding passing
+evidence for all **6,135 cases**. No security validator or source changed for
+those retries. These integrity runs do not replace the actual **95.23%** Python
+coverage result on the unchanged production Python inputs. Full failed outputs,
+metadata, node unions and skip reasons are retained in
+`/var/tmp/of-fin/gitfree-final/` and the compiled service evidence directory.
+
+Linux isolated-display integration remains **3/3**, with all 68 named assertions,
+and fast integration **2/2**, on its recorded unchanged production inputs.
+HanSolo functional checkpoints include actual first-run recovery/adoption and
+shared-service flow, restore **37/37**, logging lifecycle/health, support-folder
+reveal and client correlation. These component results and native 60/60 do not
+claim a full current-head Mac application run; current-head hosted Mac CI must
+supply that evidence before merge. External activation and explicitly deferred
+measurements remain outside the completion claims in the delivery amendment.
+
+Local implementation and applicable pre-push qualification are complete at this
+checkpoint. The remaining delivery gates are current-head hosted CI and review
+resolution, actual owner review of retained publishing/trust changes, and verified
+merge of the single PR to main. Agent/CLI convergence does not supply owner
+approval. See PR #180 for their current outcomes rather than treating this dated
+checkpoint as a claim that the merge or release publication already happened.

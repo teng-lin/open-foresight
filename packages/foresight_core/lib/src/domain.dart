@@ -52,6 +52,14 @@ class Domain
         MeetingIndexingPort {
   @override
   final Store store;
+
+  /// An explicit or bound owner snapshot is fixed at construction. Outside any
+  /// owner scope this is a legacy direct construction: each access returns a
+  /// fresh immutable snapshot of the boundary, as it read it before injection.
+  @override
+  RuntimeConfiguration get configuration =>
+      _configuration ?? legacyRuntimeSnapshot();
+  final RuntimeConfiguration? _configuration;
   @override
   final Helper helper;
   late final _queries = DomainQueries(store);
@@ -81,7 +89,7 @@ class Domain
   final Clock clock;
   @override
   final Timer Function(Duration, void Function()) createTimer;
-  final GenerationRuntimeDiscovery _discoverGeneration;
+  final GenerationRuntimeDiscovery? _discoverGeneration;
   Domain(
     this.store,
     this.helper, {
@@ -90,11 +98,14 @@ class Domain
     Clock? clock,
     Timer Function(Duration, void Function())? createTimer,
     GenerationRuntimeDiscovery? discoverGeneration,
-  }) : modelGate = modelGate ?? const IdleModelGate(),
+    RuntimeConfiguration? configuration,
+  }) : _configuration =
+           configuration?.snapshot() ?? currentOwnerRuntimeSnapshot,
+       modelGate = modelGate ?? const IdleModelGate(),
        _webSearch = webSearch,
        clock = clock ?? const Clock(),
        createTimer = createTimer ?? Timer.new,
-       _discoverGeneration = discoverGeneration ?? discoverGenerationRuntime;
+       _discoverGeneration = discoverGeneration;
   Future<void> Function(int, {bool Function()? current})?
   indexMeetingTranscript;
   @override
@@ -610,16 +621,33 @@ class Domain
 
   /// Separate construction allows fixture runtimes to exercise real ownership.
   NativeRuntime createNoteEnhancementRuntime() =>
-      NativeRuntime(runtimeConfiguration.nativeLibrary);
+      NativeRuntime(configuration.nativeLibrary);
+
+  Future<NativeRuntime?> _discoverConfigured(
+    Store store,
+    String library, {
+    bool Function()? current,
+    void Function(NativeRuntime)? onCandidate,
+    Future<void> Function(NativeRuntime)? retire,
+  }) => discoverGenerationRuntime(
+    store,
+    library,
+    configuration: configuration,
+    current: current,
+    onCandidate: onCandidate,
+    retire: retire,
+  );
 
   Future<void> _initializeNoteEnhancementService() async {
     final workspace = workspaceGeneration;
     await generationRuntimes.replace((attempt) async {
       final model = _queries.generationRegistration();
       if (model == null) {
+        final config = configuration;
         return discoverGenerationRuntime(
           store,
-          runtimeConfiguration.nativeLibrary,
+          config.nativeLibrary,
+          configuration: config,
           current: attempt.current,
           onCandidate: attempt.own,
           retire: attempt.retire,
@@ -706,9 +734,10 @@ class Domain
       final workspace = workspaceGeneration;
       await generationRuntimes.replace((attempt) async {
         if (!_queries.hasModel('generation')) {
-          final candidate = await _discoverGeneration(
+          final config = configuration;
+          final candidate = await (_discoverGeneration ?? _discoverConfigured)(
             store,
-            runtimeConfiguration.nativeLibrary,
+            config.nativeLibrary,
             current: attempt.current,
             onCandidate: attempt.own,
             retire: attempt.retire,

@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/google_connections.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'package:foresight_core/src/application.dart';
@@ -40,6 +41,7 @@ class FailedRecording extends Recording {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Application app;
   late Directory temp;
   late Store store;

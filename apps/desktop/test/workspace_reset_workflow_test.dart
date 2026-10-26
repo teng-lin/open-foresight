@@ -36,11 +36,15 @@ void main() {
         ),
       );
       addTearDown(() async {
-        await tester.pumpWidget(const SizedBox.shrink());
-        await pumpUntilCompleted(tester, fixture.remote.closed);
         await tester.runAsync(commands!.close);
         await tester.runAsync(fixture.close);
       });
+      // The connection and its reader belong to this fixture, not the widget
+      // tree. Join them after unmount, before Flutter checks pending timers.
+      registerDesktopFixtureOwner(
+        close: fixture.remote.close,
+        settled: () => fixture.remote.closed,
+      );
       fixture.handler = (socket, request) =>
           fixture.reply(socket, request, null);
       await tester.pumpWidget(

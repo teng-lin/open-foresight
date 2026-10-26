@@ -158,22 +158,33 @@ class SettingsReadModel {
   }
 }
 
-/// A setup action needs a current registration; same-owner preview is display
-/// state and never certifies an installation or a late model adoption.
+/// Keep one owned subscription through ordinary revision catch-up. Preview is
+/// display state; the coordinator's existing deadline still bounds this wait.
+Future<ReadResult<T>?> readCurrentSetup<T>(
+  StoreReader reader,
+  ReadQuery<T> query, {
+  bool Function()? ownerCurrent,
+}) async {
+  final epoch = reader.workspaceEpoch;
+  bool owns() =>
+      reader.workspaceEpoch == epoch && (ownerCurrent?.call() ?? true);
+  if (!owns()) return null;
+  final result = await reader
+      .watch(query)
+      .firstWhere(
+        (result) => !owns() || result.current || result.error != null,
+      );
+  if (!owns()) return null;
+  if (result.error != null) throw result.error!;
+  return result;
+}
+
+/// A setup action needs a current registration from the same workspace.
 Future<ModelRegistration?> readSetupModel(
   StoreReader reader,
   String kind,
-) async {
-  final result = await reader.read(StoreReadQueries.model(kind));
-  if (result.error != null) throw result.error!;
-  if (!result.current) {
-    throw RpcError(
-      RpcErrorCode.unavailable,
-      'Model registration is not current; retry setup.',
-    );
-  }
-  return result.value;
-}
+) async =>
+    (await readCurrentSetup(reader, StoreReadQueries.model(kind)))?.value;
 
 /// The existing cache finder accepts only these registration hints. They carry
 /// no persistence API and do not decode a row or issue a synchronous query.

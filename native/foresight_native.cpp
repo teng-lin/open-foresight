@@ -1,5 +1,6 @@
 #include "foresight_native.h"
 #include "capture_pcm_pipe.h"
+#include "diagnostic_queue_internal.h"
 #include "exception_barrier.h"
 #include "image_pin.h"
 #include "json_string.h"
@@ -480,6 +481,10 @@ std::string event(const std::string &type, const std::string &id,
 }
 void failure(Worker &w, const std::string &id, uint64_t &seq,
              const std::string &code, const std::string &message) {
+  // Source-owned closed categories only. IDs, vendor output and free-text
+  // messages remain outside the diagnostic queue.
+  foresight::diagnostics::worker_failed(code == "tool_protocol" ? 6 : 10, 3, 0,
+                                        0);
   w.emit(event("error", id, seq++,
                ",\"code\":" + quote(code) + ",\"message\":" + quote(message) +
                    ",\"retryable\":false"));
@@ -1749,22 +1754,34 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate,
         std::lock_guard life(c->life);
         c->active = true;
         c->thread = start_worker_thread(*c, "capture", [c] {
+          foresight::diagnostics::capture_state(0, 0, 0, true);
           foresight::guarded_worker(
               [&] {
 #ifdef __APPLE__
                 if (c->runtime.empty()) {
-                  fs_macos_capture(
+                  const auto outcome = fs_macos_capture(
                       c->target, c->playback, c->rate, c->cancel, c->macos,
                       [c](const auto &bytes) { audio_frame(*c, bytes); },
                       [c](const auto &event) { c->emit(event); },
                       &c->echoCancellation);
                   c->active = false;
+                  const bool failed = outcome == MacCaptureOutcome::failed;
+                  const bool cancelled =
+                      outcome == MacCaptureOutcome::cancelled;
+                  foresight::diagnostics::capture_state(failed      ? 9
+                                                        : cancelled ? 2
+                                                                    : 0,
+                                                        failed      ? 3
+                                                        : cancelled ? 4
+                                                                    : 2,
+                                                        0, false);
                   c->emit("{\"type\":\"state\",\"channel\":\"foresight.linux/"
                           "audio_state_v1\",\"state\":\"stopped\"}");
                   return;
                 }
 #endif
                 int attempt = 0;
+                bool exhausted = false;
                 while (!c->cancel) {
                   c->emit("{\"type\":\"state\",\"channel\":\"foresight.linux/"
                           "audio_state_v1\",\"state\":\"connecting\"}");
@@ -1832,6 +1849,7 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate,
                       audio_frame(*c, residual);
                     break;
                   }
+                  foresight::diagnostics::worker_failed(10, 3, status, 0);
                   c->emit(
                       "{\"type\":\"gap\",\"channel\":\"foresight.linux/"
                       "audio_state_v1\",\"reason\":\"device_or_pipewire_lost\","
@@ -1839,6 +1857,7 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate,
                       std::to_string(residual.size()) +
                       ",\"exit_status\":" + std::to_string(status) + "}");
                   if (++attempt >= 5) {
+                    exhausted = true;
                     c->emit("{\"type\":\"state\",\"channel\":\"foresight.linux/"
                             "audio_state_v1\",\"state\":\"failed\",\"message\":"
                             "\"Capture "
@@ -1849,11 +1868,20 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate,
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 }
                 c->active = false;
+                foresight::diagnostics::capture_state(exhausted   ? 9
+                                                      : c->cancel ? 2
+                                                                  : 0,
+                                                      exhausted   ? 3
+                                                      : c->cancel ? 4
+                                                                  : 2,
+                                                      0, false);
                 c->emit("{\"type\":\"state\",\"channel\":\"foresight.linux/"
                         "audio_state_v1\",\"state\":\"stopped\"}");
               },
               [&](const std::string &) {
                 c->active = false;
+                foresight::diagnostics::worker_failed(0, 3, 0, 0);
+                foresight::diagnostics::capture_state(0, 3, 0, false);
                 c->emit("{\"type\":\"state\",\"channel\":\"foresight.linux/"
                         "audio_state_v1\",\"state\":\"failed\",\"message\":"
                         "\"Capture failed\"}");
@@ -2046,18 +2074,47 @@ extern "C" int fs_set_runtime_environment(const char *key, const char *value) {
             "FORESIGHT_WHISPER_BACKEND", "FORESIGHT_WHISPER_DEVICE",
             "FORESIGHT_HELPER",          "FORESIGHT_LITERT_CACHE",
             "FORESIGHT_WHISPER_RUNTIME", "FORESIGHT_WHISPER_WORKER",
-            "PYTHONPYCACHEPREFIX",       "LD_LIBRARY_PATH"};
+            "PYTHONPYCACHEPREFIX",       "LD_LIBRARY_PATH",
+            "FORESIGHT_LOG_LEVEL"};
         if (!allowed.count(key))
           return -1;
+        const bool logging = std::strcmp(key, "FORESIGHT_LOG_LEVEL") == 0;
+        auto level = foresight::diagnostics::Level::off;
+        if (logging) {
+          using Level = foresight::diagnostics::Level;
+          if (std::strcmp(value, "error") == 0)
+            level = Level::error;
+          else if (std::strcmp(value, "warn") == 0)
+            level = Level::warn;
+          else if (std::strcmp(value, "info") == 0)
+            level = Level::info;
+          else if (std::strcmp(value, "debug") == 0)
+            level = Level::debug;
+          else if (std::strcmp(value, "trace") == 0)
+            level = Level::trace;
+          else if (std::strcmp(value, "off") != 0)
+            return -1;
+        }
         std::lock_guard lock(foresight::launch_mutex_for_process());
+        static bool logging_configured = false;
         if (foresight::runtime_environment_sealed) {
           // Fresh Dart isolates may replay the same resolved runtime map. Keep
           // the sealed process environment immutable while accepting that exact
           // no-op.
+          // An inherited spelling is not evidence that the native queue's
+          // level was installed before handles sealed configuration.
+          if (logging && !logging_configured)
+            return -1;
           const char *current = std::getenv(key);
           return current && std::strcmp(current, value) == 0 ? 0 : -1;
         }
-        return setenv(key, value, 1) == 0 ? 0 : -1;
+        if (setenv(key, value, 1) != 0)
+          return -1;
+        if (logging) {
+          foresight::diagnostics::configure(level);
+          logging_configured = true;
+        }
+        return 0;
       },
       -1);
 }

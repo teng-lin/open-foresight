@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -58,6 +59,7 @@ final class HeldIndexDomain extends AdapterDomain {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory root, profile;
   late String library;
   late DynamicLibrary fixture;

@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'package:clock/clock.dart';
@@ -246,6 +247,7 @@ class StopRun {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late HookedServiceBuild build;
   late Map<String, String> saved;
   setUpAll(() async => build = await HookedServiceBuild.compile());
@@ -993,7 +995,10 @@ void main() {
       await owner.reached('close.before_lock_release');
       // Every connection has closed; --stop found the lock still held and
       // keeps waiting instead of reporting success at that EOF.
-      await stop.line('still holds its profile');
+      await stop.line(
+        'Waiting for the application service (pid ${owner.pid}) to release its profile.',
+      );
+      expect(lockHeld(profile), isTrue);
       expect(exited, isFalse);
       owner.release('close.before_lock_release');
       expect(await stop.exited(), 0, reason: stop.lines.join('\n'));

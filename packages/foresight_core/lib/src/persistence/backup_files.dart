@@ -57,6 +57,10 @@ final _ftruncate = _libc
     .lookupFunction<Int32 Function(Int32, Int64), int Function(int, int)>(
       'ftruncate',
     );
+final _fchmod = _libc
+    .lookupFunction<Int32 Function(Int32, Uint32), int Function(int, int)>(
+      'fchmod',
+    );
 final _unlink = _libc
     .lookupFunction<
       Int32 Function(Int32, Pointer<Utf8>, Int32),
@@ -103,6 +107,70 @@ final _closedir = _libc
     .lookupFunction<Int32 Function(Pointer<Void>), int Function(Pointer<Void>)>(
       'closedir',
     );
+
+final _fcntlEmpty = _libc
+    .lookupFunction<
+      Int32 Function(Int32, Int32, VarArgs<()>),
+      int Function(int, int)
+    >('fcntl');
+final _fcntlInt = _libc
+    .lookupFunction<
+      Int32 Function(Int32, Int32, VarArgs<(Int32,)>),
+      int Function(int, int, int)
+    >('fcntl');
+final _flock = _libc
+    .lookupFunction<Int32 Function(Int32, Int32), int Function(int, int)>(
+      'flock',
+    );
+final _rename = _libc
+    .lookupFunction<
+      Int32 Function(Int32, Pointer<Utf8>, Int32, Pointer<Utf8>),
+      int Function(int, Pointer<Utf8>, int, Pointer<Utf8>)
+    >('renameat');
+final _fstatfs = _libc
+    .lookupFunction<
+      Int32 Function(Int32, Pointer<Uint8>),
+      int Function(int, Pointer<Uint8>)
+    >('fstatfs');
+
+/// Named targets only; each release records which real filesystems ran its
+/// lease fixtures. Unknown/network filesystems never become persistent sinks.
+enum ScopedLocalFileSystem { ext4, btrfs, xfs, overlay, apfs, unsupported }
+
+ScopedLocalFileSystem _localFileSystem(int descriptor) {
+  final buffer = calloc<Uint8>(4096);
+  try {
+    if (_fstatfs(descriptor, buffer) != 0) {
+      return ScopedLocalFileSystem.unsupported;
+    }
+    if (Platform.isLinux) {
+      final type = ByteData.sublistView(
+        buffer.asTypedList(4096),
+      ).getUint64(0, Endian.host);
+      return switch (type) {
+        0xef53 => ScopedLocalFileSystem.ext4,
+        0x9123683e => ScopedLocalFileSystem.btrfs,
+        0x58465342 => ScopedLocalFileSystem.xfs,
+        0x794c7630 => ScopedLocalFileSystem.overlay,
+        _ => ScopedLocalFileSystem.unsupported,
+      };
+    }
+    if (Platform.isMacOS &&
+        (buffer + 72).cast<Utf8>().toDartString(length: 4) == 'apfs') {
+      return ScopedLocalFileSystem.apfs;
+    }
+    return ScopedLocalFileSystem.unsupported;
+  } finally {
+    calloc.free(buffer);
+  }
+}
+
+int _relocate(int fd, int minimum) {
+  if (fd < 0 || fd >= minimum) return fd;
+  final next = _fcntlInt(fd, Platform.isMacOS ? 67 : 1030, minimum);
+  _close(fd);
+  return next;
+}
 
 int get _directory => Platform.isMacOS ? 0x100000 : 0x10000;
 int get _noFollow => Platform.isMacOS ? 0x100 : 0x20000;
@@ -179,24 +247,49 @@ ScopedFileMetadata _metadata(int fd) {
   }
 }
 
+/// Optional per-instance replacement for libc directory streams. It writes the
+/// names of the open directory [descriptor], except "." and "..", into
+/// [names] ([capacity] bytes) as one length byte plus the name bytes each, and
+/// returns the packed length or a negative refusal. It must not retain
+/// [names] or [descriptor]; the caller closes the descriptor.
+typedef BackupDirectoryReader =
+    int Function(int descriptor, Pointer<Uint8> names, int capacity);
+
+/// Packed-name buffer for one [BackupDirectoryReader] call: at most 256 names
+/// of at most 255 bytes, as [BackupDirectory.entries] also allows.
+const backupDirectoryNameBytes = 256 * 256;
+
 /// Backup-only descriptor operations. Every path component is opened without
 /// following links. Existing entries are never chmod'ed into apparent safety.
 /// Linux x86-64 statx and Darwin arm64 stat/dirent layouts are explicit here;
 /// both require their real-platform fixtures before release qualification.
 final class BackupDirectory {
-  BackupDirectory(String path, {bool create = true, bool private = true})
-    : path = p.normalize(p.absolute(path)),
-      _private = private {
+  BackupDirectory(
+    String path, {
+    bool create = true,
+    bool private = true,
+    int minimumDescriptor = 0,
+    BackupDirectoryReader? reader,
+  }) : path = p.normalize(p.absolute(path)),
+       _private = private,
+       _minimumDescriptor = minimumDescriptor,
+       _reader = reader {
     final components = p.split(this.path);
-    var fd = _name('/', (name) => _open(name, _directory | _cloexec));
+    var fd = _relocate(
+      _name('/', (name) => _open(name, _directory | _cloexec)),
+      minimumDescriptor,
+    );
     if (fd < 0) _refuse();
     try {
       for (var i = 1; i < components.length; i++) {
         final last = i == components.length - 1;
-        final next = _name(components[i], (name) {
-          if (last && create) _mkdirAt(fd, name, 0x1c0);
-          return _openAt(fd, name, _directory | _noFollow | _cloexec, 0);
-        });
+        final next = _relocate(
+          _name(components[i], (name) {
+            if (last && create) _mkdirAt(fd, name, 0x1c0);
+            return _openAt(fd, name, _directory | _noFollow | _cloexec, 0);
+          }),
+          minimumDescriptor,
+        );
         if (next < 0) _refuse();
         _close(fd);
         fd = next;
@@ -216,12 +309,19 @@ final class BackupDirectory {
   }
   final String path;
   final bool _private;
+  final int _minimumDescriptor;
+  final BackupDirectoryReader? _reader;
   late final int _fd;
   late final String _identity;
   bool _closed = false;
 
   void verifyAnchor() {
-    final probe = BackupDirectory(path, create: false, private: _private);
+    final probe = BackupDirectory(
+      path,
+      create: false,
+      private: _private,
+      minimumDescriptor: _minimumDescriptor,
+    );
     try {
       if (probe._identity != _identity) _refuse();
     } finally {
@@ -233,18 +333,21 @@ final class BackupDirectory {
     if (_closed || p.basename(name) != name || name == '.' || name == '..') {
       _refuse();
     }
-    final fd = _name(
-      name,
-      (name) => _openAt(
-        _fd,
+    final fd = _relocate(
+      _name(
         name,
-        2 |
-            _nonBlocking |
-            _noFollow |
-            _cloexec |
-            (create ? _create | _exclusive : 0),
-        0x180,
+        (name) => _openAt(
+          _fd,
+          name,
+          2 |
+              _nonBlocking |
+              _noFollow |
+              _cloexec |
+              (create ? _create | _exclusive : 0),
+          0x180,
+        ),
       ),
+      _minimumDescriptor,
     );
     if (fd < 0) _refuse();
     try {
@@ -293,11 +396,22 @@ final class BackupDirectory {
   /// Callback iteration keeps memory bounded even for legacy directories with
   /// many owned copies. Returning false stops iteration and closes its FD.
   void visitEntries(bool Function(String name) visit) {
-    final duplicate = _name(
-      '.',
-      (name) => _openAt(_fd, name, _directory | _noFollow | _cloexec, 0),
+    final duplicate = _relocate(
+      _name(
+        '.',
+        (name) => _openAt(_fd, name, _directory | _noFollow | _cloexec, 0),
+      ),
+      _minimumDescriptor,
     );
     if (duplicate < 0) _refuse();
+    if (_reader case final reader?) {
+      try {
+        _readEntries(reader, duplicate, visit);
+      } finally {
+        _close(duplicate);
+      }
+      return;
+    }
     final directory = _fdopendir(duplicate);
     if (directory == nullptr) {
       _close(duplicate);
@@ -322,6 +436,37 @@ final class BackupDirectory {
       }
     } finally {
       _closedir(directory);
+    }
+  }
+
+  /// The configured reader lists exactly [duplicate], once verified to be this
+  /// anchor, into one bounded buffer; no libc directory stream is opened.
+  void _readEntries(
+    BackupDirectoryReader reader,
+    int duplicate,
+    bool Function(String name) visit,
+  ) {
+    if (_metadata(duplicate).identity != _identity) _refuse();
+    final names = calloc<Uint8>(backupDirectoryNameBytes);
+    try {
+      final length = reader(duplicate, names, backupDirectoryNameBytes);
+      if (length < 0 || length > backupDirectoryNameBytes) _refuse();
+      var count = 0;
+      for (var offset = 0; offset < length;) {
+        final size = names[offset++];
+        if (size == 0 || size > length - offset || ++count > 256) _refuse();
+        final name = (names + offset).cast<Utf8>().toDartString(length: size);
+        offset += size;
+        if (name == '.' ||
+            name == '..' ||
+            name.contains('/') ||
+            name.contains('\u0000')) {
+          _refuse();
+        }
+        if (!visit(name)) break;
+      }
+    } finally {
+      calloc.free(names);
     }
   }
 
@@ -350,6 +495,68 @@ final class BackupDirectory {
     return found;
   }
 
+  /// Explicit shared primitives for the diagnostic writer. Backup ownership and
+  /// publication semantics above remain unchanged; no general writer uses them.
+  int get descriptor => _fd;
+  bool get closeOnExec {
+    final flags = _fcntlEmpty(_fd, 1);
+    return flags >= 0 && flags & 1 == 1;
+  }
+
+  String get identity => _identity;
+  ScopedLocalFileSystem get localFileSystem => _localFileSystem(_fd);
+
+  BackupDirectory child(String name, {bool create = true}) {
+    if (p.basename(name) != name || name == '.' || name == '..') _refuse();
+    verifyAnchor();
+    final child = BackupDirectory(
+      p.join(path, name),
+      create: create,
+      minimumDescriptor: _minimumDescriptor,
+      reader: _reader,
+    );
+    try {
+      verifyAnchor();
+      return child;
+    } catch (_) {
+      child.close();
+      rethrow;
+    }
+  }
+
+  BackupFile openOrCreate(String name) {
+    try {
+      return open(name);
+    } catch (_) {
+      try {
+        return open(name, create: true);
+      } catch (_) {
+        return open(name);
+      }
+    }
+  }
+
+  void replace(String temporary, String complete) {
+    if ([
+      temporary,
+      complete,
+    ].any((name) => p.basename(name) != name || name == '.' || name == '..')) {
+      _refuse();
+    }
+    verifyAnchor();
+    final source = metadata(temporary);
+    if (containsEntry(complete)) metadata(complete);
+    if (_name(
+          temporary,
+          (from) => _name(complete, (to) => _rename(_fd, from, _fd, to)),
+        ) !=
+        0) {
+      _refuse();
+    }
+    if (metadata(complete).identity != source.identity) _refuse();
+    verifyAnchor();
+  }
+
   void publish(String temporary, String complete) {
     if ([
       temporary,
@@ -375,6 +582,49 @@ final class BackupDirectory {
     if (metadata(complete).identity != source.identity) _refuse();
     sync();
     verifyAnchor();
+  }
+
+  /// Offline activation only: one atomic rename of [from] here to [to] in
+  /// [target] on the same filesystem. Without [exchange] it never replaces;
+  /// with it both names must exist and swap, so neither is ever absent.
+  /// Linux renameat2 NOREPLACE=1/EXCHANGE=2, Darwin renameatx_np EXCL=4/SWAP=2.
+  /// [fromPrivate]/[toPrivate] describe the files initially at each name.
+  void renameInto(
+    String from,
+    BackupDirectory target,
+    String to, {
+    bool exchange = false,
+    bool fromPrivate = true,
+    bool toPrivate = true,
+  }) {
+    if (target._closed ||
+        [from, to].any(
+          (name) => p.basename(name) != name || name == '.' || name == '..',
+        )) {
+      _refuse();
+    }
+    verifyAnchor();
+    target.verifyAnchor();
+    final source = metadata(from, private: fromPrivate);
+    final replaced = exchange ? target.metadata(to, private: toPrivate) : null;
+    final flags = exchange ? 2 : (Platform.isMacOS ? 4 : 1);
+    if (_name(
+          from,
+          (f) =>
+              _name(to, (t) => _renameNoReplace(_fd, f, target._fd, t, flags)),
+        ) !=
+        0) {
+      _refuse();
+    }
+    if (target.metadata(to, private: fromPrivate).identity != source.identity ||
+        (replaced != null &&
+            metadata(from, private: toPrivate).identity != replaced.identity)) {
+      _refuse();
+    }
+    sync();
+    if (!identical(target, this)) target.sync();
+    verifyAnchor();
+    target.verifyAnchor();
   }
 
   void remove(String name) {
@@ -449,6 +699,47 @@ final class BackupFile {
 
   void truncateTo(int size) {
     if (_closed || size < 0 || _ftruncate(_fd, size) != 0) _refuse();
+  }
+
+  int get descriptor => _fd;
+  bool get closeOnExec {
+    final flags = _fcntlEmpty(_fd, 1);
+    return flags >= 0 && flags & 1 == 1;
+  }
+
+  ScopedLocalFileSystem get localFileSystem => _localFileSystem(_fd);
+
+  bool tryExclusiveLease() => _flock(_fd, 2 | 4) == 0;
+  static String? inspectDescriptorIdentity(int descriptor) {
+    try {
+      return _metadata(descriptor).identity;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void truncate() {
+    truncateTo(0);
+    rewind();
+  }
+
+  bool writeOnce(Uint8List bytes) {
+    if (_closed || bytes.length > 16384) _refuse();
+    final buffer = calloc<Uint8>(bytes.length);
+    try {
+      buffer.asTypedList(bytes.length).setAll(0, bytes);
+      return _write(_fd, buffer, bytes.length) == bytes.length;
+    } finally {
+      calloc.free(buffer);
+    }
+  }
+
+  /// Offline activation only: make owner-only the previous live database,
+  /// whose identity the caller has already proved. An untrusted entry is
+  /// never chmod'ed into apparent safety.
+  void restrictToOwner() {
+    if (_closed || _fchmod(_fd, 0x180) != 0) _refuse();
+    if (_metadata(_fd).mode & 0x3f != 0) _refuse();
   }
 
   String get descriptorPath =>

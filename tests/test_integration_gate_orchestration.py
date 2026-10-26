@@ -21,6 +21,10 @@ from tools import integration_gates as gates
 
 @pytest.fixture(autouse=True)
 def isolated_audio_host(monkeypatch):
+    monkeypatch.setattr(
+        gates, "_source_worker_defines",
+        lambda env, dart: {"FIXTURE_WORKER": "verified public context"},
+    )
     # Model the sound-device-free CI container, regardless of the test host.
     exists = Path.exists
     monkeypatch.setattr(

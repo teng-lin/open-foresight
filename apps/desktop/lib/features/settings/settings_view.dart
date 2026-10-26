@@ -138,10 +138,14 @@ extension _SettingsView on SettingsController {
         const Text('Updates', style: DesktopVisuals.sectionTitle),
         UpdateNoticeView(
           enabled: _reads.preference('updateNoticeEnabled') == 'true',
+          openRelease: _host.environment.openUri,
           setEnabled: (enabled) => runAction(
             () => preference('updateNoticeEnabled', enabled ? 'true' : 'false'),
           ),
         ),
+        const SizedBox(height: 24),
+        const Text('Diagnostics', style: DesktopVisuals.sectionTitle),
+        DiagnosticSupportView(support: _host.environment.diagnosticSupport),
         const SizedBox(height: 24),
         const Card(
           child: Padding(

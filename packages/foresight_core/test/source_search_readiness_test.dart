@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -78,6 +79,7 @@ final class _Retrieval extends rag.RagServiceBase {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Store store;
   late Domain domain;
   late Helper helper;

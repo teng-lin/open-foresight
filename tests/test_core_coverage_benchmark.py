@@ -12,6 +12,8 @@ import pytest
 from tests.test_pull_request_workflows import parse_workflow
 
 ROOT = Path(__file__).resolve().parents[1]
+# Opaque fixture values: the worker helper alone owns the real define recipe.
+WORKER_DEFINES = ["-DFIXTURE_WORKER=verified", "-DFIXTURE_ROOT=/a path/with spaces"]
 
 
 def test_hosted_benchmark_is_linux_only_and_macos_nightly_coverage_is_report_only():
@@ -64,12 +66,43 @@ def gate(tmp_path):
         "ci_timing.sh",
         "coverage_core.sh",
         "run_core_tests.sh",
+        "runtime_support_gate.sh",
         "check_coverage.py",
         "compare_test_runs.py",
         "verify_toolchain_pins.py",
         "pins.json",
     ):
         shutil.copy2(ROOT / "tools" / name, root / "tools" / name)
+    # The real receipt verifier and AOT worker builder need finished native
+    # products and an SDK; tests/test_runtime_support_gate.py owns those. Here
+    # they record the gate's exact CLI use and honor its exit/NUL-define contract.
+    (root / "tools/diagnostic_product_receipt.py").write_text(
+        """import json, os, sys
+with open(os.environ['SUPPORT_COMMANDS'], 'a') as stream:
+    stream.write(json.dumps({'tool': 'receipt', 'args': sys.argv[1:]}) + '\\n')
+sys.exit(int(os.getenv('RECEIPT_EXIT', '0')))
+"""
+    )
+    (root / "tools/build_diagnostic_worker.py").write_text(
+        """import argparse, json, os, sys
+parser = argparse.ArgumentParser()
+for option in ('--root', '--build', '--sdk', '--package-config'):
+    parser.add_argument(option, required=True)
+parser.add_argument('--mode', required=True, choices=['aot'])
+parser.add_argument('--defines-output')
+parser.add_argument('--verify', action='store_true')
+args = parser.parse_args()
+with open(os.environ['SUPPORT_COMMANDS'], 'a') as stream:
+    stream.write(json.dumps({'tool': 'worker', 'args': sys.argv[1:]}) + '\\n')
+code = int(os.getenv('WORKER_EXIT', '0'))
+if code:
+    sys.exit(code)
+defines = [] if os.getenv('WORKER_DEFINES') == 'empty' else json.loads(os.environ['WORKER_DEFINES'])
+if args.defines_output:
+    with open(args.defines_output, 'wb') as stream:
+        stream.write(b''.join(value.encode() + b'\\0' for value in defines))
+"""
+    )
     binary = tmp_path / "bin"
     binary.mkdir()
     dart = binary / "dart"
@@ -77,6 +110,10 @@ def gate(tmp_path):
         f"#!{sys.executable}\n"
         + """import json, os, pathlib, sys
 args = sys.argv[1:]
+if len(args) == 1 and args[0].endswith('/locate.dart'):
+    assert 'Platform.resolvedExecutable' in pathlib.Path(args[0]).read_text()
+    print(pathlib.Path(__file__).resolve())
+    sys.exit(0)
 with open(os.environ['COMMANDS'], 'a') as stream:
     stream.write(json.dumps({'args': args, 'tool': sys.argv[0], 'native': os.getenv('FORESIGHT_NATIVE_LIBRARY'),
                              'helper': os.getenv('FORESIGHT_HELPER'),
@@ -137,6 +174,8 @@ elif args[:2] == ['run', 'coverage:format_coverage']:
     environment.update(
         PATH=f"{binary}:{os.defpath}",
         COMMANDS=str(tmp_path / "commands"),
+        SUPPORT_COMMANDS=str(tmp_path / "support-commands"),
+        WORKER_DEFINES=json.dumps(WORKER_DEFINES),
         GITHUB_RUN_NUMBER="0",
         GITHUB_RUN_ATTEMPT="1",
     )
@@ -177,7 +216,9 @@ def test_default_runs_full_suite_once_and_keeps_native_and_hook_gates(gate, cove
     assert result.returncode == 0, result.stdout + result.stderr
     tests = [command for command in commands if command["args"][0] == "test"]
     assert len(tests) == 1
-    assert tests[0]["test_helper"] == str(gate[0] / "build/services/helper/ForesightHelperTest")
+    assert tests[0]["test_helper"] == str(
+        gate[0] / "build/services/helper/ForesightHelperTest"
+    )
     assert not any(arg.endswith(".dart") for arg in tests[0]["args"])
     assert any(arg.startswith("--coverage=") for arg in tests[0]["args"]) == (
         coverage == "1"
@@ -191,7 +232,58 @@ def test_default_runs_full_suite_once_and_keeps_native_and_hook_gates(gate, cove
         command["args"][0] == "-DFORESIGHT_ENABLE_TEST_HOOKS=true"
         for command in commands
     )
-    assert sum(command["args"][:2] == ["compile", "exe"] for command in commands) == 2
+    compiled = [c["args"] for c in commands if c["args"][:2] == ["compile", "exe"]]
+    assert [args[2:4] for args in compiled] == [WORKER_DEFINES, WORKER_DEFINES]
+    root = gate[0].resolve()
+    support = support_commands(gate)
+    receipts = [row for row in support if row["tool"] == "receipt"]
+    producer, worker = [row for row in support if row["tool"] == "worker"]
+    assert [row["tool"] for row in support] == [
+        "receipt",
+        "worker",
+        *(["receipt"] if coverage == "1" else []),
+        "worker",
+    ]
+    # The coverage wrapper is a separate consumer and recomputes verification.
+    assert receipts == [
+        {
+            "tool": "receipt",
+            "args": [
+                "--root",
+                str(root),
+                "--build",
+                str(gate[0] / "build/native"),
+                "--verify",
+            ],
+        }
+    ] * (2 if coverage == "1" else 1)
+    defines = Path(worker["args"][-1])
+    assert worker == {
+        "tool": "worker",
+        "args": [
+            "--root",
+            str(root),
+            "--build",
+            str(root / "build"),
+            "--sdk",
+            str(Path(gate[1]["PATH"].split(":")[0]).resolve().parent),
+            "--package-config",
+            str(root / "packages/foresight_core/.dart_tool/package_config.json"),
+            "--mode",
+            "aot",
+            "--verify",
+            "--defines-output",
+            str(defines),
+        ],
+    }
+    assert producer == {"tool": "worker", "args": worker["args"][:-3]}
+    assert defines.parent.parent == root / "build/application"
+    assert not defines.parent.exists()
+
+
+def support_commands(gate):
+    path = Path(gate[1]["SUPPORT_COMMANDS"])
+    return [json.loads(line) for line in path.read_text().splitlines()]
 
 
 @pytest.mark.parametrize("platform", ["linux", "macos"])
@@ -488,3 +580,53 @@ def test_core_wrapper_preserves_arguments_override_environment_and_test_failure(
     assert commands[0]["cache"] == commands[1]["cache"]
     assert commands[1]["warmed"]
     assert not Path(commands[1]["cache"]).exists()
+
+
+@pytest.mark.parametrize("stage", ["core", "desktop"])
+@pytest.mark.parametrize("platform", ["linux", "macos"])
+def test_unverified_runtime_support_stops_before_any_dart_or_flutter_command(
+    gate, stage, platform
+):
+    root, environment = gate
+    result = subprocess.run(
+        [
+            "bash",
+            str(root / "tools/build_dart_gates.sh"),
+            stage,
+            platform,
+            str(root / "build"),
+            sys.executable,
+        ],
+        env={**environment, "RECEIPT_EXIT": "13"},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 13, result.stdout + result.stderr
+    assert not Path(environment["COMMANDS"]).exists()
+    assert [c["tool"] for c in support_commands(gate)] == ["receipt"]
+
+
+@pytest.mark.parametrize(
+    "settings,status,message",
+    [
+        ({"WORKER_EXIT": "17"}, 17, ""),
+        ({"WORKER_DEFINES": "empty"}, 1, "Missing verified worker defines"),
+    ],
+)
+def test_unverified_worker_defines_stop_host_compilation(
+    gate, settings, status, message
+):
+    result, commands = run(gate, **settings)
+    assert result.returncode == status, result.stdout + result.stderr
+    assert message in result.stderr
+    assert any(command["args"][0] == "test" for command in commands) == (
+        "WORKER_EXIT" not in settings
+    )
+    assert all(command["args"][0] != "compile" for command in commands)
+    assert [c["tool"] for c in support_commands(gate)] == (
+        ["receipt", "worker"]
+        if "WORKER_EXIT" in settings
+        else ["receipt", "worker", "worker"]
+    )
+    assert not list((gate[0] / "build/application").glob(".diagnostic-defines.*"))

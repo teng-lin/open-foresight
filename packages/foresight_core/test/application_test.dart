@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/google_connections.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_test_support/test_paths.dart';
@@ -58,6 +59,7 @@ class BrowserAuth extends GoogleAuth {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Application app;
   bool ownsApp = false;
   late Directory directory;

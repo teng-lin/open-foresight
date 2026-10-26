@@ -1,3 +1,4 @@
+import '../sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -5,6 +6,7 @@ import 'dart:isolate';
 
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/service.dart';
+import 'package:foresight_core/persistence_bootstrap.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'package:foresight_test_support/hooked_service.dart' show ServiceGates;
 
@@ -45,7 +47,9 @@ Future<bool> replacementIsolateRefuses(
   String data,
   String runtime,
   String library,
+  SqliteRuntimeBootstrap sqlRuntime,
 ) => Isolate.run(() async {
+  bindSqliteRuntime(sqlRuntime);
   // The environment configuration list is deliberately empty. A selected
   // native-capable mapping must still refuse after quarantine.
   runtimeConfiguration.environment
@@ -86,6 +90,7 @@ Future<void> ready(ServiceClient client) async {
 }
 
 Future<void> main(List<String> args) async {
+  final sqlRuntime = bootstrapSqlSupportFixture();
   final root = Directory(args[0]), mode = args[1], library = args[2];
   final profile = ProfilePaths('${root.path}/data', '${root.path}/run');
   final runner = '${root.path}/model-worker';
@@ -225,6 +230,7 @@ Future<void> main(List<String> args) async {
             profile.data,
             profile.runtime,
             library,
+            sqlRuntime,
           )) {
         throw StateError(
           'Native loss permitted a frontend or isolate replacement',

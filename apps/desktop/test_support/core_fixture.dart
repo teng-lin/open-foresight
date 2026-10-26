@@ -30,3 +30,14 @@ export 'package:foresight_core/src/speech_models.dart';
 export 'package:foresight_core/src/sqlite_read_session.dart';
 export 'package:foresight_core/src/sqlite_store_reader.dart';
 export 'package:foresight_core/src/store.dart';
+
+export 'package:foresight_core/src/diagnostics/session.dart'
+    show
+        LoggingSession,
+        DiagnosticConfiguration,
+        DiagnosticEvent,
+        DiagnosticComponent,
+        DiagnosticHealthState,
+        DiagnosticIdentity;
+export 'package:foresight_core/src/diagnostics/storage.dart'
+    show DiagnosticSink, DiagnosticRole;

@@ -28,6 +28,121 @@ final class GatedReadWorker implements ReadWorker {
   }
 }
 
+final class _Waiter {
+  final void Function() notify;
+  _Waiter(this.notify);
+}
+
+/// Bounded like SqliteReadWorker: the oldest reservation runs, later ones
+/// queue, excess is refused before reserving, and only actual releases notify.
+final class HeldAdmissionWorker
+    implements ReadWorker, ReadQueueCancellation, ReadAdmissionAvailability {
+  HeldAdmissionWorker(this.capacity, {this.claimsCapacity = false});
+  final int capacity;
+  // A contract violation: reports capacity while refusing admission.
+  final bool claimsCapacity;
+  final requests = <ReadWorkerRequest>[];
+  final waiters = <_Waiter>[];
+  final _held = <ReadWorkerRequest, Completer<ReadWorkerReply>>{};
+  int refusals = 0, closes = 0;
+  bool closed = false;
+  // Registrations still held when an owner closes this worker.
+  int? waitersAtClose;
+
+  int get reserved => _held.length;
+
+  @override
+  bool get admitsRead => claimsCapacity || closed || _held.length < capacity;
+
+  @override
+  Future<ReadWorkerReply> read(ReadWorkerRequest request) {
+    if (closed) {
+      return Future.error(RpcError(RpcErrorCode.cancelled, 'Reader closed'));
+    }
+    if (_held.length >= capacity) {
+      refusals++;
+      return Future.error(ReadAdmissionRejected());
+    }
+    requests.add(request);
+    return (_held[request] = Completer<ReadWorkerReply>()).future;
+  }
+
+  @override
+  void Function() whenAdmissionAvailable(void Function() onAvailable) {
+    final waiter = _Waiter(onAvailable);
+    waiters.add(waiter);
+    if (admitsRead) scheduleMicrotask(_drain);
+    return () => waiters.remove(waiter);
+  }
+
+  void _drain() {
+    while (waiters.isNotEmpty && admitsRead) {
+      waiters.removeAt(0).notify();
+    }
+  }
+
+  void complete(int index, String epoch, Object? value) {
+    _held.remove(requests[index])!.complete(ReadWorkerReply(epoch, value));
+    _drain();
+  }
+
+  /// Settles several reservations before one notification pass.
+  void completeAll(List<int> indexes, String epoch, Object? value) {
+    for (final index in indexes) {
+      _held.remove(requests[index])!.complete(ReadWorkerReply(epoch, value));
+    }
+    _drain();
+  }
+
+  void fail(int index, Object error) {
+    _held.remove(requests[index])!.completeError(error);
+    _drain();
+  }
+
+  @override
+  bool cancelQueued(ReadWorkerRequest request) {
+    if (!_held.containsKey(request) || identical(_held.keys.first, request)) {
+      return false;
+    }
+    _held
+        .remove(request)!
+        .completeError(
+          RpcError(RpcErrorCode.cancelled, 'Queued read cancelled'),
+        );
+    scheduleMicrotask(_drain);
+    return true;
+  }
+
+  @override
+  Future<void> close() async {
+    closes++;
+    waitersAtClose ??= waiters.length;
+    closed = true;
+    _drain();
+  }
+}
+
+/// A legacy worker that refuses with the typed error but offers no signal.
+final class RefusingReadWorker implements ReadWorker {
+  int reads = 0;
+  @override
+  Future<ReadWorkerReply> read(ReadWorkerRequest request) {
+    reads++;
+    return Future.error(ReadAdmissionRejected());
+  }
+
+  @override
+  Future<void> close() async {}
+}
+
+ReadQuery<String> _numbered(Object name) => ReadQuery<String>(
+  projection: 'fixture',
+  arguments: {'n': name},
+  decode: (value) => value as String,
+);
+
+Object? _number(ReadWorkerRequest request) => request.arguments['n'];
+
 void main() {
   final query = ReadQuery<String>(
     projection: 'fixture',
@@ -563,6 +678,493 @@ void main() {
       unawaited(activity.cancel());
       clock.flushMicrotasks();
     });
+  });
+
+  test('watches beyond held capacity wait for actual releases, not timers', () {
+    fakeAsync((clock) {
+      final worker = HeldAdmissionWorker(2);
+      final coordinator = ReadCoordinator(identity: _identity, worker: worker);
+      final received = {for (var i = 0; i < 5; i++) i: <ReadResult<String>>[]};
+      final subscriptions = [
+        for (var i = 0; i < 5; i++)
+          coordinator.watch(_numbered(i)).listen(received[i]!.add),
+      ];
+      clock.flushMicrotasks();
+      expect(worker.requests.map(_number), [0, 1]);
+      expect(coordinator.awaitingAdmission, 3);
+      expect(worker.waiters, hasLength(1));
+      clock.elapse(const Duration(seconds: 10));
+      expect(worker.requests, hasLength(2));
+      expect(worker.refusals, 0);
+      expect(clock.periodicTimerCount, 0);
+      expect(received.values.expand((events) => events), isEmpty);
+      worker.complete(0, 'epoch', 'value-0');
+      clock.flushMicrotasks();
+      expect(worker.requests.map(_number), [0, 1, 2]);
+      expect(received[0]!.single.value, 'value-0');
+      for (var i = 1; i < 5; i++) {
+        worker.complete(i, 'epoch', 'value-$i');
+        clock.flushMicrotasks();
+      }
+      expect(worker.requests.map(_number), [0, 1, 2, 3, 4]);
+      for (var i = 0; i < 5; i++) {
+        expect(received[i]!.single.current, isTrue);
+        expect(received[i]!.single.value, 'value-$i');
+      }
+      expect(worker.refusals, 0);
+      expect(coordinator.awaitingAdmission, 0);
+      expect(worker.waiters, isEmpty);
+      for (final subscription in subscriptions) {
+        unawaited(subscription.cancel());
+      }
+      unawaited(coordinator.close());
+      clock.flushMicrotasks();
+      expect(clock.nonPeriodicTimerCount, 0);
+    });
+  });
+
+  test('cancelled waiters never dispatch; queued cancellation readmits', () {
+    fakeAsync((clock) {
+      final worker = HeldAdmissionWorker(2);
+      final coordinator = ReadCoordinator(identity: _identity, worker: worker);
+      final values = <int, String?>{};
+      final subscriptions = {
+        for (var i = 0; i < 4; i++)
+          i: coordinator
+              .watch(_numbered(i))
+              .listen((result) => values[i] = result.value),
+      };
+      clock.flushMicrotasks();
+      expect(worker.requests.map(_number), [0, 1]);
+      unawaited(subscriptions[2]!.cancel());
+      // Leaving withdraws the waiting entry at once, not at entry release.
+      expect(coordinator.awaitingAdmission, 1);
+      clock.flushMicrotasks();
+      expect(coordinator.awaitingAdmission, 1);
+      expect(worker.requests, hasLength(2));
+      // The undispatched worker reservation is withdrawn, which is an actual
+      // release; the running reservation is not interrupted.
+      unawaited(subscriptions[1]!.cancel());
+      unawaited(subscriptions[0]!.cancel());
+      clock.flushMicrotasks();
+      expect(worker.requests.map(_number), [0, 1, 3]);
+      expect(worker.reserved, 2);
+      expect(coordinator.activeReads, 2);
+      worker.complete(0, 'epoch', 'unused');
+      worker.complete(2, 'epoch', 'value-3');
+      clock.flushMicrotasks();
+      expect(values, {3: 'value-3'});
+      expect(worker.requests.map(_number), [0, 1, 3]);
+      expect(coordinator.trackedQueries, 1);
+      unawaited(subscriptions[3]!.cancel());
+      unawaited(coordinator.close());
+      clock.flushMicrotasks();
+      expect(worker.waiters, isEmpty);
+    });
+  });
+
+  test('the last waiting subscriber withdraws the worker registration', () {
+    fakeAsync((clock) {
+      final worker = HeldAdmissionWorker(1);
+      final coordinator = ReadCoordinator(identity: _identity, worker: worker);
+      final running = coordinator.watch(_numbered(0)).listen((_) {});
+      final waiting = coordinator.watch(_numbered(1)).listen((_) {});
+      clock.flushMicrotasks();
+      expect(worker.waiters, hasLength(1));
+      unawaited(waiting.cancel());
+      expect(worker.waiters, isEmpty);
+      worker.complete(0, 'epoch', 'value');
+      clock.flushMicrotasks();
+      expect(worker.requests, hasLength(1));
+      unawaited(running.cancel());
+      unawaited(coordinator.close());
+      clock.flushMicrotasks();
+    });
+  });
+
+  test('new work cannot pass waiters while a deferred release is pending', () {
+    fakeAsync((clock) {
+      final worker = HeldAdmissionWorker(2);
+      final coordinator = ReadCoordinator(identity: _identity, worker: worker);
+      final idle = coordinator.watch(_numbered(0)).listen((_) {});
+      clock.flushMicrotasks();
+      worker.complete(0, 'epoch', 'value-0');
+      clock.flushMicrotasks();
+      final running = coordinator.watch(_numbered(1)).listen((_) {});
+      final queued = coordinator.watch(_numbered(2)).listen((_) {});
+      final waiting = coordinator.watch(_numbered(3)).listen((_) {});
+      clock.flushMicrotasks();
+      expect(worker.requests.map(_number), [0, 1, 2]);
+      // Queued cancellation frees a slot now but notifies from a microtask;
+      // an invalidation in between must still queue behind the waiter.
+      unawaited(queued.cancel());
+      expect(worker.admitsRead, isTrue);
+      coordinator.invalidate();
+      clock.flushMicrotasks();
+      expect(worker.requests.map(_number), [0, 1, 2, 3]);
+      worker.complete(1, 'epoch', 'value-1');
+      clock.flushMicrotasks();
+      expect(worker.requests.map(_number), [0, 1, 2, 3, 0]);
+      unawaited(idle.cancel());
+      unawaited(running.cancel());
+      unawaited(waiting.cancel());
+      unawaited(coordinator.close());
+      clock.flushMicrotasks();
+    });
+  });
+
+  test(
+    'waiting subscribers keep their deadline; retained entries their turn',
+    () {
+      fakeAsync((clock) {
+        final worker = HeldAdmissionWorker(1);
+        final coordinator = ReadCoordinator(
+          identity: _identity,
+          worker: worker,
+        );
+        final first = <ReadResult<String>>[];
+        final waiting = <ReadResult<String>>[];
+        final held = coordinator.watch(_numbered(0)).listen(first.add);
+        final retained = coordinator.watch(_numbered(1)).listen(waiting.add);
+        ReadResult<String>? oneShot;
+        unawaited(
+          coordinator.read(_numbered(2)).then((value) => oneShot = value),
+        );
+        clock.flushMicrotasks();
+        expect(worker.requests.map(_number), [0]);
+        expect(coordinator.awaitingAdmission, 2);
+        clock.elapse(const Duration(seconds: 30));
+        expect(first.single.freshness, ReadFreshness.busy);
+        expect(waiting.single.freshness, ReadFreshness.busy);
+        expect(waiting.single.error!.code, RpcErrorCode.busy);
+        expect(oneShot!.freshness, ReadFreshness.busy);
+        expect(oneShot!.value, isNull);
+        // The settled one-shot leaves; the still-subscribed watch is retained.
+        expect(coordinator.awaitingAdmission, 1);
+        expect(worker.requests, hasLength(1));
+        worker.complete(0, 'epoch', 'expired');
+        clock.flushMicrotasks();
+        // The waiting key keeps its turn ahead of the expired key's refresh.
+        expect(worker.requests.map(_number), [0, 1]);
+        worker.complete(1, 'epoch', 'value-1');
+        clock.flushMicrotasks();
+        expect(waiting.last.current, isTrue);
+        expect(waiting.last.value, 'value-1');
+        expect(worker.requests.map(_number), [0, 1, 0]);
+        worker.complete(2, 'epoch', 'fresh');
+        clock.flushMicrotasks();
+        expect(first.last.value, 'fresh');
+        expect(worker.requests.map(_number), isNot(contains(2)));
+        unawaited(held.cancel());
+        unawaited(retained.cancel());
+        unawaited(coordinator.close());
+        clock.flushMicrotasks();
+        expect(clock.nonPeriodicTimerCount, 0);
+      });
+    },
+  );
+
+  test('a waiting request samples owner identity at actual admission', () {
+    fakeAsync((clock) {
+      var epoch = 'old';
+      final worker = HeldAdmissionWorker(1);
+      final coordinator = ReadCoordinator(
+        identity: () => _identity(epoch: epoch),
+        worker: worker,
+      );
+      final first = <ReadResult<String>>[];
+      final second = <ReadResult<String>>[];
+      final a = coordinator.watch(_numbered(0)).listen(first.add);
+      final b = coordinator.watch(_numbered(1)).listen(second.add);
+      clock.flushMicrotasks();
+      expect(worker.requests.single.identity.epoch, 'old');
+      epoch = 'new';
+      coordinator.invalidate();
+      worker.complete(0, 'old', 'retired workspace');
+      clock.flushMicrotasks();
+      expect(first, isEmpty);
+      expect(worker.requests.map(_number), [0, 1]);
+      expect(worker.requests[1].identity.epoch, 'new');
+      worker.complete(1, 'new', 'value-1');
+      clock.flushMicrotasks();
+      expect(second.single.current, isTrue);
+      expect(second.single.value, 'value-1');
+      expect(worker.requests.map(_number), [0, 1, 0]);
+      expect(worker.requests[2].identity.epoch, 'new');
+      worker.complete(2, 'new', 'value-0');
+      clock.flushMicrotasks();
+      expect(first.single.value, 'value-0');
+      unawaited(a.cancel());
+      unawaited(b.cancel());
+      unawaited(coordinator.close());
+      clock.flushMicrotasks();
+    });
+  });
+
+  test('a continuously invalidated key cannot starve waiting keys', () {
+    fakeAsync((clock) {
+      final worker = HeldAdmissionWorker(1);
+      final coordinator = ReadCoordinator(identity: _identity, worker: worker);
+      final subscriptions = [
+        for (var i = 0; i < 3; i++)
+          coordinator.watch(_numbered(i)).listen((_) {}),
+      ];
+      clock.flushMicrotasks();
+      for (var index = 0; index < 5; index++) {
+        for (var i = 0; i < 10; i++) {
+          coordinator.invalidate();
+        }
+        worker.complete(index, 'epoch', 'value');
+        clock.flushMicrotasks();
+      }
+      expect(worker.requests.map(_number), [0, 1, 2, 0, 1, 2]);
+      expect(worker.refusals, 0);
+      for (final subscription in subscriptions) {
+        unawaited(subscription.cancel());
+      }
+      unawaited(coordinator.close());
+      clock.flushMicrotasks();
+    });
+  });
+
+  test('coordinators and direct reads sharing capacity rotate fairly', () {
+    fakeAsync((clock) {
+      final worker = HeldAdmissionWorker(2);
+      final x = ReadCoordinator(identity: _identity, worker: worker);
+      final y = ReadCoordinator(identity: _identity, worker: worker);
+      // Direct reservations hold the shared capacity before either reader.
+      for (final name in ['e0', 'e1']) {
+        unawaited(
+          worker.read(
+            ReadWorkerRequest(
+              projection: 'fixture',
+              arguments: {'n': name},
+              identity: _identity(),
+              sequence: 0,
+            ),
+          ),
+        );
+      }
+      final subscriptions = [
+        for (var i = 0; i < 3; i++) x.watch(_numbered('x$i')).listen((_) {}),
+      ];
+      clock.flushMicrotasks();
+      subscriptions.addAll([
+        for (var i = 0; i < 3; i++) y.watch(_numbered('y$i')).listen((_) {}),
+      ]);
+      clock.flushMicrotasks();
+      expect(worker.waiters, hasLength(2));
+      expect(x.awaitingAdmission + y.awaitingAdmission, 6);
+      // Two slots released in one notification pass go one to each reader.
+      worker.completeAll([0, 1], 'epoch', 'value');
+      clock.flushMicrotasks();
+      expect(worker.requests.map(_number), ['e0', 'e1', 'x0', 'y0']);
+      for (var i = 2; i < 6; i++) {
+        worker.complete(i, 'epoch', 'value');
+        clock.flushMicrotasks();
+      }
+      expect(worker.requests.map(_number), [
+        'e0',
+        'e1',
+        'x0',
+        'y0',
+        'x1',
+        'y1',
+        'x2',
+        'y2',
+      ]);
+      worker.completeAll([6, 7], 'epoch', 'value');
+      clock.flushMicrotasks();
+      expect(worker.waiters, isEmpty);
+      expect(worker.refusals, 0);
+      for (final subscription in subscriptions) {
+        unawaited(subscription.cancel());
+      }
+      unawaited(x.close());
+      unawaited(y.close());
+      clock.flushMicrotasks();
+    });
+  });
+
+  test(
+    'reentrant invalidation from a dispatch failure keeps one registration',
+    () {
+      fakeAsync((clock) {
+        final worker = HeldAdmissionWorker(1);
+        final x = ReadCoordinator(identity: _identity, worker: worker);
+        final y = ReadCoordinator(identity: _identity, worker: worker);
+        // Dispatch sampling fails synchronously inside admission; its failure
+        // listener invalidates while that admission is still on the stack.
+        final failing = ReadQuery<String>(
+          projection: 'fixture',
+          arguments: {'n': 'b'},
+          decode: (value) => value as String,
+          dispatchArguments: () => throw StateError('dispatch moved'),
+        );
+        var invalidated = false;
+        final failures = <ReadResult<String>>[];
+        final subscriptions = [
+          x.watch(_numbered('a')).listen((_) {}),
+          x.watch(failing).listen((event) {
+            failures.add(event);
+            if (!invalidated) {
+              invalidated = true;
+              x.invalidate();
+            }
+          }),
+          x.watch(_numbered('c')).listen((_) {}),
+          x.watch(_numbered('d')).listen((_) {}),
+        ];
+        clock.flushMicrotasks();
+        final ySubscriptions = [
+          y.watch(_numbered('y0')).listen((_) {}),
+          y.watch(_numbered('y1')).listen((_) {}),
+        ];
+        clock.flushMicrotasks();
+        expect(worker.requests.map(_number), ['a']);
+        expect(worker.waiters, hasLength(2));
+        worker.complete(0, 'epoch', 'value');
+        clock.flushMicrotasks();
+        expect(failures.single.freshness, ReadFreshness.failed);
+        expect(invalidated, isTrue);
+        // One registration per waiting coordinator, never an orphaned second.
+        expect(worker.waiters, hasLength(2));
+        for (var i = 1; i < 3; i++) {
+          worker.complete(i, 'epoch', 'value');
+          clock.flushMicrotasks();
+        }
+        // The reentrant failure gives x no extra turn ahead of y.
+        expect(worker.requests.map(_number), ['a', 'y0', 'c', 'y1']);
+        expect(worker.waiters, hasLength(1));
+        // d, plus a and b, which the reentrant invalidation marked pending.
+        expect(x.awaitingAdmission, 3);
+        unawaited(x.close());
+        clock.flushMicrotasks();
+        // The closing owner withdrew its only registration before disposal;
+        // no callback into the closed coordinator remains with the worker.
+        expect(worker.waitersAtClose, 0);
+        worker.complete(3, 'epoch', 'value');
+        clock.flushMicrotasks();
+        expect(worker.requests, hasLength(4));
+        for (final subscription in [...subscriptions, ...ySubscriptions]) {
+          unawaited(subscription.cancel());
+        }
+        unawaited(y.close());
+        clock.flushMicrotasks();
+      });
+    },
+  );
+
+  test('close withdraws waiting admission and joins only actual reads', () {
+    fakeAsync((clock) {
+      final worker = HeldAdmissionWorker(1);
+      final coordinator = ReadCoordinator(identity: _identity, worker: worker);
+      final waiting = <ReadResult<String>>[];
+      coordinator.watch(_numbered(0)).listen((_) {});
+      coordinator.watch(_numbered(1)).listen(waiting.add);
+      clock.flushMicrotasks();
+      expect(worker.waiters, hasLength(1));
+      var closed = false;
+      unawaited(coordinator.close().then((_) => closed = true));
+      clock.flushMicrotasks();
+      expect(waiting.single.freshness, ReadFreshness.cancelled);
+      expect(worker.waiters, isEmpty);
+      expect(coordinator.awaitingAdmission, 0);
+      expect(worker.closes, 0);
+      expect(closed, isFalse);
+      worker.complete(0, 'epoch', 'late ignored');
+      clock.flushMicrotasks();
+      expect(worker.closes, 1);
+      expect(closed, isTrue);
+      expect(worker.requests, hasLength(1));
+      expect(clock.nonPeriodicTimerCount, 0);
+    });
+  });
+
+  test(
+    'refusal without an exact capacity signal is published, not retried',
+    () {
+      fakeAsync((clock) {
+        final legacy = RefusingReadWorker();
+        final claiming = HeldAdmissionWorker(1, claimsCapacity: true);
+        final legacyReader = ReadCoordinator(
+          identity: _identity,
+          worker: legacy,
+        );
+        final claimingReader = ReadCoordinator(
+          identity: _identity,
+          worker: claiming,
+        );
+        final legacyEvents = <ReadResult<String>>[];
+        final claimingEvents = <ReadResult<String>>[];
+        final subscriptions = [
+          legacyReader.watch(query).listen(legacyEvents.add),
+          claimingReader.watch(_numbered(0)).listen((_) {}),
+          claimingReader.watch(_numbered(1)).listen(claimingEvents.add),
+        ];
+        clock.flushMicrotasks();
+        clock.elapse(const Duration(seconds: 60));
+        for (final events in [legacyEvents, claimingEvents]) {
+          expect(events.single.freshness, ReadFreshness.failed);
+          expect(events.single.error, isA<ReadAdmissionRejected>());
+          expect(events.single.error!.code, RpcErrorCode.busy);
+          expect(events.single.error!.message, 'Read queue is full');
+        }
+        expect(legacy.reads, 1);
+        expect(claiming.refusals, 1);
+        for (final subscription in subscriptions) {
+          unawaited(subscription.cancel());
+        }
+        claiming.complete(0, 'epoch', 'value');
+        unawaited(legacyReader.close());
+        unawaited(claimingReader.close());
+        clock.flushMicrotasks();
+      });
+    },
+  );
+
+  test('busy SQL execution is a published failure, not an admission wait', () {
+    fakeAsync((clock) {
+      final worker = HeldAdmissionWorker(2);
+      final coordinator = ReadCoordinator(identity: _identity, worker: worker);
+      final slow = <ReadResult<String>>[];
+      final waiting = <ReadResult<String>>[];
+      final subscriptions = [
+        coordinator.watch(_numbered(0)).listen((_) {}),
+        coordinator.watch(_numbered(1)).listen(slow.add),
+        coordinator.watch(_numbered(2)).listen(waiting.add),
+      ];
+      clock.flushMicrotasks();
+      final budget = RpcError(RpcErrorCode.busy, 'Read exceeded its budget');
+      worker.fail(1, budget);
+      clock.flushMicrotasks();
+      // Capacity is held again by the readmitted waiter when the SQL failure
+      // is observed; only the type distinguishes admission from execution.
+      expect(worker.admitsRead, isFalse);
+      expect(slow.single.freshness, ReadFreshness.failed);
+      expect(slow.single.error, same(budget));
+      expect(worker.requests.map(_number), [0, 1, 2]);
+      worker.complete(2, 'epoch', 'value-2');
+      clock.flushMicrotasks();
+      expect(waiting.single.value, 'value-2');
+      expect(worker.requests, hasLength(3));
+      for (final subscription in subscriptions) {
+        unawaited(subscription.cancel());
+      }
+      worker.complete(0, 'epoch', 'unused');
+      unawaited(coordinator.close());
+      clock.flushMicrotasks();
+    });
+  });
+
+  test('typed admission refusal keeps the generic busy wire shape', () {
+    final refusal = ReadAdmissionRejected();
+    expect(refusal, isA<RpcError>());
+    expect(refusal.toJson(), {'code': 'busy', 'message': 'Read queue is full'});
+    expect(RpcError.from(refusal), same(refusal));
+    final decoded = RpcError.from(refusal.toJson());
+    expect(decoded.code, RpcErrorCode.busy);
+    expect(decoded.message, 'Read queue is full');
   });
 }
 

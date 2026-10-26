@@ -239,6 +239,16 @@ def test_native_runner_publishes_distinct_runtime_and_compilation_archives(
             "build/services/helper/ForesightHelper",
             "build/services/helper/ForesightHelperTest",
             "build/native/libforesight_native.so",
+            "build/native/libforesight_sql_support.so",
+            "build/native/libforesight_sql_support.dylib",
+            "build/native/libforesight_diagnostic_support.so",
+            "build/native/libforesight_diagnostic_support.dylib",
+            "build/native/foresight-diagnostic-launcher",
+            "build/native/diagnostic-native-inputs.json",
+            "build/native/diagnostic-toolchain-metadata.json",
+            "build/native/diagnostic-products.json",
+            "build/native/diagnostic-sql-inputs.json",
+            "build/native/runtime-support-build.json",
             "build/_deps/compiler/object.o",
         ):
             target = tmp_path / name
@@ -292,4 +302,17 @@ def test_native_runner_publishes_distinct_runtime_and_compilation_archives(
     assert (target / "build/services/helper/ForesightHelperTest").read_bytes() == (
         tmp_path / "build/services/helper/ForesightHelperTest"
     ).read_bytes()
+    for relative in (
+        "build/native/libforesight_sql_support.so",
+        "build/native/libforesight_sql_support.dylib",
+        "build/native/libforesight_diagnostic_support.so",
+        "build/native/libforesight_diagnostic_support.dylib",
+        "build/native/foresight-diagnostic-launcher",
+        "build/native/diagnostic-native-inputs.json",
+        "build/native/diagnostic-toolchain-metadata.json",
+        "build/native/diagnostic-products.json",
+        "build/native/diagnostic-sql-inputs.json",
+        "build/native/runtime-support-build.json",
+    ):
+        assert (target / relative).read_bytes() == (tmp_path / relative).read_bytes()
     assert not (target / "build/_deps").exists()

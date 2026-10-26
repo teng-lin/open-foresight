@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -166,6 +167,7 @@ Future<ServerSocket> legacyOwner(String endpoint, int ownerPid) async {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late HookedServiceBuild build;
   late Map<String, String> saved;
   setUpAll(() async => build = await HookedServiceBuild.compile());

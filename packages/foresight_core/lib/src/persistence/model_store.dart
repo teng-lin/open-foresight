@@ -1,4 +1,6 @@
 import 'model_queries.dart';
+import '../platform_services.dart'
+    show RuntimeConfiguration, currentOwnerRuntimeSnapshot;
 import 'dart:convert';
 import 'dart:io';
 import 'package:sqlite3/sqlite3.dart';
@@ -18,7 +20,15 @@ void requireEmbeddingBundle(String path) {
 class ModelStore {
   final Database db;
   final int supportedVersion;
-  ModelStore(this.db, {required this.supportedVersion});
+
+  /// An explicit or bound owner snapshot, fixed at construction (an editable
+  /// boundary passed here is frozen); null outside any owner scope.
+  final RuntimeConfiguration? configuration;
+  ModelStore(
+    this.db, {
+    required this.supportedVersion,
+    RuntimeConfiguration? configuration,
+  }) : configuration = configuration?.snapshot() ?? currentOwnerRuntimeSnapshot;
   List<Map<String, Object?>> _rows(
     String sql, [
     List<Object?> args = const [],
@@ -34,8 +44,11 @@ class ModelStore {
     'INSERT INTO preferences VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
     [key, value],
   );
-  ModelQueries get _queries =>
-      ModelQueries(db, supportedVersion: supportedVersion);
+  ModelQueries get _queries => ModelQueries(
+    db,
+    supportedVersion: supportedVersion,
+    configuration: configuration,
+  );
   Map<String, Object?> resolveModelRuntime(Map<String, Object?> model) =>
       _queries.resolveModelRuntime(model);
   Map<String, Object?>? model(String kind) => _queries.model(kind);

@@ -227,7 +227,9 @@ def test_meeting_workflow_waits_until_the_desktop_mounts():
     assert "find.text('Open Foresight could not start')" in helper
     assert "find.byType(app.Workspace)" in helper
     assert "Desktop did not start:" in helper
-    assert helper.index("await waitUntil(tester,") < helper.index("return tester.state(")
+    assert helper.index("await waitUntil(tester,") < helper.index(
+        "return tester.state("
+    )
     assert "as app.WorkspaceTestAccess" in helper
     assert source.count("await startedWorkspace(tester)") == 4
     assert (
@@ -322,6 +324,11 @@ def test_native_runner_executes_original_integration_source(tmp_path, device):
     runner.chmod(0o700)
     with (
         patch.object(gates, "ROOT", tmp_path),
+        patch.object(
+            gates,
+            "_source_worker_defines",
+            return_value={"FIXTURE_WORKER": "verified public context"},
+        ),
         patch.object(gates.subprocess, "run", wraps=gates.subprocess.run) as launch,
     ):
         result = gates.run_tests(
@@ -339,6 +346,7 @@ def test_native_runner_executes_original_integration_source(tmp_path, device):
     assert result == {"passed": 1, "skipped": 0}
     arguments = json.loads((desktop / "argv.json").read_text())
     assert "--no-pub" in arguments
+    assert "--dart-define=FIXTURE_WORKER=verified public context" in arguments
     if device:
         assert "integration_test/workflow.dart" in arguments
         assert arguments[arguments.index("-d") + 1] == device

@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -48,6 +49,7 @@ Future<void> _runIsolatedSelection(String selection) async {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   final library = Platform.environment['FORESIGHT_NATIVE_LIBRARY'];
   group(
     'installed service model runtime admission',

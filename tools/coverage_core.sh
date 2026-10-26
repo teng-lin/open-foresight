@@ -3,6 +3,13 @@
 set -euo pipefail
 task_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 task_dart=${FORESIGHT_DART:-dart}
+task_native_build=${FORESIGHT_BUILD_DIR:-}
+if [[ -z "$task_native_build" && -n "${FORESIGHT_NATIVE_LIBRARY:-}" ]]; then
+  task_native_build=$(dirname -- "$(dirname -- "$FORESIGHT_NATIVE_LIBRARY")")
+fi
+task_native_build=${task_native_build:-"$task_root/build"}
+source "$task_root/tools/runtime_support_gate.sh"
+foresight_verify_runtime_support "$task_root" "$task_native_build" "${FORESIGHT_PYTHON:-python3}"
 task_output="$task_root/coverage/core"
 mkdir -p "$task_output"
 rm -f -- "$task_output/lcov.info"

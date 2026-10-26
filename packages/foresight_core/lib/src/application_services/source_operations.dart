@@ -194,7 +194,9 @@ final class SourceOperations {
         file.lengthSync() > ImportPolicy.maxFileBytes) {
       throw StateError('Import requires a regular file no larger than 10 MiB');
     }
-    final (text, provenance) = await Parser().extract(file.path);
+    final (text, provenance) = await Parser(
+      configuration: domain.configuration,
+    ).extract(file.path);
     final modified = (await file.stat()).modified.millisecondsSinceEpoch;
     domain.checkWorkspace(generation);
     if (current != null && !current()) {

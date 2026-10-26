@@ -64,8 +64,9 @@ the schema.
 | 20 | `sources.generated` and `meeting_notes.enhanced_generated` ownership, meeting index job/state tables, bounded content history and privacy-maintenance markers |
 | 21 | Ordinary deletion routes history erasure to `internal.backupErasurePending`; legacy privacy markers keep their full-cleanup meaning |
 | 22 | Meeting transcript index outbox: source mapping, progress, changes, segments, deletes, batches, triggers, `source_contents` view and lookup indexes |
+| 23 | Typed answer metadata, conversation and proactive scopes, and ordered source selections with foreign keys; malformed and orphan legacy values use a bounded compatibility quarantine |
 
-`ApplicationMigrations.run` defines steps 1–22 and throws for any other
+`ApplicationMigrations.run` defines steps 1–23 and throws for any other
 version. `Store.schemaVersion` aliases `applicationSchemaVersion` from
 `persistence/application_schema.dart`; `tools/check_architecture_facts.py`
 checks this table against the defined steps.

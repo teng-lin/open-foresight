@@ -314,3 +314,65 @@ Workspace clear stress validation on 2026-10-18: 50 invocations at concurrency f
 Installed release and Preview `standard` validation both import generated PDF and RTF fixtures through the exact installed application service's Parser and sandbox, verifying persisted source URI, known extracted text and the real platform adapter. No developer Dart runtime substitutes for the installed service. Standard validation has no model fixtures, so a recorded post-parse indexing failure does not establish indexing or inference; the probe requires that extraction and storage already succeeded. Full acceptance runs the same document check alongside its model tests.
 
 TSan triage on 2026-10-18: the first hosted run (39146727197) passed all five helper targets and 24/25 CTest targets overall. The lifecycle fixture restored Python's process environment immediately after asynchronous capture startup, racing `posix_spawnp` on the native worker. The fixture now keeps its environment override until `fs_capture_stop` joins the worker. No suppression was added. After that change, all 14 standalone native TSan targets and 50 repeated capture-tail fixture invocations passed locally without race reports. The current-head hosted rerun remains the final confirmation.
+
+## Compiled first-run model acquisition
+
+`tests/service/test_service_process.py::test_compiled_first_run_setup_download_restart_retry_adoption_and_indexing`
+owns the tiny first-run journey. It freshly compiles the standard service and MCP
+with the verified diagnostic Worker's exact public defines, and runs
+`apps/desktop/integration_test/first_run_models_test.dart` as a native Flutter
+application on an isolated display. It opens the actual first-run model surface;
+it does not use `finishOnboarding` to mark setup complete.
+
+The catalog substitution requires both the existing
+`FORESIGHT_ENABLE_TEST_HOOKS=true` compile flag and an immutable
+`FORESIGHT_MODEL_CATALOG_TEST_BASE64` define (JSON is base64-encoded because the Dart AOT CLI splits define values at
+commas). Without the flag, the fixture define
+has no effect. Entries require checksum-pinned bytes no larger than 64 KiB at
+literal loopback URLs. Each redirect must remain one of the exact compiled
+fixture URLs. Normal products retain the pinned catalog and HTTPS validation.
+The real acquisition coordinator and reaped download worker retain consent,
+range staging, checksum validation and publication ownership. These synthetic
+bytes are not model weights: the controlled runtime and indexing fixture cannot
+establish real inference, real model loading or physical audio acceptance.
+
+The journey requires the pinned SDKs, a verified native/diagnostic companion
+build and an isolated native display. The compiled service/MCP suite owns those
+prerequisites; a selected first-run journey fails if they are missing. Retain its
+compile logs, service/Flutter output, JSON test events, download range ledger and
+partial journey report. Real-model acceptance remains in the separate model gate.
+
+## Deferred macOS Keychain acceptance
+
+The existing opt-in fixture remains unchanged in
+`tests/integration/test_model_crypto_keychain.py`, enabled by
+`FORESIGHT_MODEL_CRYPTO_KEYCHAIN_TEST=1`. Its actual isolated Mac attempt failed
+with Security status -25308 (user interaction not allowed). Complete output is
+retained privately. The user deferred further Keychain testing; this is neither
+a passing result nor a current merge blocker. It does not establish Developer ID
+signing, Finder launch or TCC acceptance.
+
+## Opt-in native raw-query probe
+
+The inference runtime owner builds `native_raw_query_probe` from
+`tests/inference/raw_query_probe.cpp` in `native/CMakeLists.txt`. This is an
+explicit manual executable path, excluded from ordinary CTest execution because
+it needs an independently authorized local model and a prepared raw prompt.
+Neither assets nor a model license are acquired by this probe.
+
+After building that target with the reviewed LiteRT SDK and preparing its normal
+verified library identity metadata, run from a private task directory:
+
+```sh
+FORESIGHT_LITERT_LIBRARY=/owned/sdk/liblitert-lm.so \
+  /owned/build/native/native_raw_query_probe \
+  /owned/models/authorized-model.litertlm "$PREPARED_RAW_PROMPT" 512 cpu \
+  >raw-query.stdout 2>raw-query.stderr
+```
+
+Use the platform's `.dylib` path on macOS. Retain the exact model/library/prompt
+provenance and both streams privately, plus the exit status. A missing LiteRT
+library, identity, model or executable is an unmet prerequisite; it is never a
+pass for a selected LiteRT lane. A zero exit code establishes only that this raw
+prompt executed, not dedicated-model/tokenizer parity or inference quality. This
+unit supplies no authorized real-model evidence for that manual probe.

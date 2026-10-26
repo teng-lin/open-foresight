@@ -42,7 +42,7 @@ class ConversationQueries {
     required String scopeIdentity,
   }) =>
       _rows(
-            "SELECT question FROM answers WHERE conversation=? ${privateScope ? "AND EXISTS(SELECT 1 FROM preferences WHERE key='answerScope.v1.'||answers.id AND value=?)" : ''} ORDER BY id DESC LIMIT 1",
+            "SELECT question FROM answers WHERE conversation=? ${privateScope ? "AND EXISTS(SELECT 1 FROM answer_metadata WHERE answer_id=answers.id AND scope_identity=?)" : ''} ORDER BY id DESC LIMIT 1",
             [conversation, if (privateScope) scopeIdentity],
           ).firstOrNull?['question']
           as String?;
@@ -64,7 +64,7 @@ class ConversationQueries {
       _rows(
             "SELECT through_answer_id,messages,token_counts FROM conversation_memory WHERE conversation=? "
             "AND EXISTS(SELECT 1 FROM answers WHERE id=through_answer_id AND conversation=? "
-            "AND EXISTS(SELECT 1 FROM preferences WHERE key='webAnswer.v1.'||answers.id AND value='true'))",
+            "AND EXISTS(SELECT 1 FROM answer_metadata WHERE answer_id=answers.id AND web_answer=1))",
             [memoryKey, conversation],
           )
           .map(
@@ -85,11 +85,11 @@ class ConversationQueries {
       (web
               ? _rows(
                   "SELECT id,question,body,model_response FROM answers WHERE conversation=? AND status='completed' AND id>? "
-                  "AND EXISTS(SELECT 1 FROM preferences WHERE key='webAnswer.v1.'||answers.id AND value='true') ${privateScope ? "AND EXISTS(SELECT 1 FROM preferences WHERE key='answerScope.v1.'||answers.id AND value=?)" : ''} ORDER BY id",
+                  "AND EXISTS(SELECT 1 FROM answer_metadata WHERE answer_id=answers.id AND web_answer=1) ${privateScope ? "AND EXISTS(SELECT 1 FROM answer_metadata WHERE answer_id=answers.id AND scope_identity=?)" : ''} ORDER BY id",
                   [conversation, through, if (privateScope) scopeIdentity],
                 )
               : _rows(
-                  "SELECT question,body,model_response FROM answers WHERE conversation=? AND status='completed' ${privateScope ? "AND EXISTS(SELECT 1 FROM preferences WHERE key='answerScope.v1.'||answers.id AND value=?)" : ''} ORDER BY id DESC LIMIT 4",
+                  "SELECT question,body,model_response FROM answers WHERE conversation=? AND status='completed' ${privateScope ? "AND EXISTS(SELECT 1 FROM answer_metadata WHERE answer_id=answers.id AND scope_identity=?)" : ''} ORDER BY id DESC LIMIT 4",
                   [conversation, if (privateScope) scopeIdentity],
                 ).reversed.toList())
           .map(SavedAnswer.fromRow)
@@ -152,7 +152,7 @@ class ConversationQueries {
         final intervening = referenceChatHistory(
           _store.rows(
             "SELECT question,body,model_response FROM answers WHERE conversation=? AND status='completed' AND id>? AND id<? "
-            "AND EXISTS(SELECT 1 FROM preferences WHERE key='webAnswer.v1.'||answers.id AND value='true') ${privateScope ? "AND EXISTS(SELECT 1 FROM preferences WHERE key='answerScope.v1.'||answers.id AND value=?)" : ''} ORDER BY id",
+            "AND EXISTS(SELECT 1 FROM answer_metadata WHERE answer_id=answers.id AND web_answer=1) ${privateScope ? "AND EXISTS(SELECT 1 FROM answer_metadata WHERE answer_id=answers.id AND scope_identity=?)" : ''} ORDER BY id",
             [
               conversation,
               historyThroughAnswerId!,

@@ -288,13 +288,16 @@ class LinuxPackagesTest(unittest.TestCase):
 
 class PackagePreflightTest(unittest.TestCase):
     def test_missing_speech_worker_leaves_output_available_for_retry(self):
+        from contextlib import ExitStack
         from types import SimpleNamespace
         from unittest.mock import patch
 
         sys.path.insert(0, str(ROOT / "tools"))
         import package
 
-        with tempfile.TemporaryDirectory() as directory:
+        from tests.test_linux_bundle_failure_paths import diagnostic_products
+
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as products:
             root = Path(directory)
             build, flutter, runtime = root / "build", root / "flutter", root / "runtime"
             flutter.mkdir()
@@ -310,6 +313,8 @@ class PackagePreflightTest(unittest.TestCase):
                 target = build / name
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(b"fixture")
+            for owner, name, value in diagnostic_products(build, root / "dart-sdk"):
+                products.enter_context(patch.object(owner, name, value))
             library = build / "lib/liblitert-lm.so"
             (runtime / "whisper-cli").write_bytes(b"fixture")
             output = root / "bundle"
@@ -361,13 +366,16 @@ class PackagePreflightTest(unittest.TestCase):
 )
 class LinuxDependencyCollectionTest(unittest.TestCase):
     def test_extension_validation_preserves_sdk_lookup_and_bundle_relocates(self):
+        from contextlib import ExitStack
         from types import SimpleNamespace
         from unittest.mock import patch
 
         sys.path.insert(0, str(ROOT / "tools"))
         import package
 
-        with tempfile.TemporaryDirectory() as directory:
+        from tests.test_linux_bundle_failure_paths import diagnostic_products
+
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as products:
             root = Path(directory)
             build, sdk, flutter = root / "build", root / "sdk", root / "flutter"
             sdk.mkdir()
@@ -462,6 +470,8 @@ int main(void) {
                 target = build / f"_deps/sentencepiece-src/third_party/{name}/LICENSE"
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text("fixture license")
+            for owner, name, value in diagnostic_products(build, root / "dart-sdk"):
+                products.enter_context(patch.object(owner, name, value))
             digest = hashlib.sha256(library.read_bytes()).hexdigest()
             extensions = SimpleNamespace(
                 manifest={

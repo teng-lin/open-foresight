@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:io';
 import 'package:foresight_core/src/store.dart';
 import 'package:foresight_core/src/persistence/schema_migrations.dart';
@@ -6,6 +7,7 @@ import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
 import 'package:test/test.dart';
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory root;
   late String path;
   setUp(() {
@@ -119,7 +121,7 @@ void main() {
           store.contentHistory.revisions('sources', 'meeting-42'),
           isEmpty,
         );
-        expect(store.rows('PRAGMA user_version').single.values.single, 22);
+        expect(store.rows('PRAGMA user_version').single.values.single, 23);
         expect(store.rows('PRAGMA foreign_key_check'), isEmpty);
       } finally {
         store.close();
@@ -153,7 +155,7 @@ void main() {
       failed.dispose();
       final retried = Store(path);
       try {
-        expect(retried.rows('PRAGMA user_version').single.values.single, 22);
+        expect(retried.rows('PRAGMA user_version').single.values.single, 23);
         expect(
           retried.sourceQueries.source('meeting-42')!.content,
           '[Remote 10–20 ms] retained speech',

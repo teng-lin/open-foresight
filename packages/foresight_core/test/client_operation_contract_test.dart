@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:analyzer/dart/analysis/utilities.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
@@ -170,6 +171,7 @@ const _remoteTransportLeaves = <String, int>{
 };
 
 void main() {
+  bootstrapSqlSupportFixture();
   test('typed descriptors retain one original operation registry', () {
     expect(
       Operation.values.map((operation) => operation.descriptor).toSet(),

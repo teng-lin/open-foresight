@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:io';
 
 import 'package:foresight_core/src/persistence/meeting_index_jobs.dart';
@@ -7,6 +8,7 @@ import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Database db;
   late MeetingIndexJobs jobs;
   var epoch = 'original';
