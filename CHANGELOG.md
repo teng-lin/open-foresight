@@ -8,6 +8,7 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Changed
 
+- Replace legacy service transport text with typed diagnostics, honor the canonical log level, and retain a bounded startup event without delaying application ownership. MCP startup and settled RPC handlers also emit closed metadata; public service status exposes bounded diagnostic health.
 - Fresh local model setup defaults to Gemma 4 E2B on all supported memory sizes, while preserving registered models and reusing compatible downloaded models.
 - Settings model choices remain selectable while saved files are discovered. Opening the Gemma chooser checks file metadata without hashing every model; local files are checksum-verified when activated.
 

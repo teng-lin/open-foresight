@@ -552,6 +552,16 @@ class IsolatedApplicationService {
   }
 }
 
+/// Bind the immutable original carrier once without resolving the profile or
+/// consuming startup metadata again. Constructors inside capture this owner.
+R runApplicationWorkerConfiguration<R>(
+  Map<String, String> environment,
+  R Function() runner,
+) => runWithRuntimeConfiguration(
+  RuntimeConfiguration.serviceWorker(environment),
+  runner,
+);
+
 void _applicationServiceWorkerWithDiagnostics(
   (DiagnosticProducerBootstrap, List<Object?>) invocation,
 ) {
@@ -564,20 +574,24 @@ void _applicationServiceWorker(List<Object?> configuration) {
       ?.connect();
   final ownership = configuration[6] as DiagnosticOwnershipReporter?;
   runApplicationWorkerZone(() async {
-    try {
-      producer?.emit(
-        DiagnosticEvent.serviceStarting,
-        DiagnosticComponent.domain,
-      );
-      await _runApplicationServiceWorker(configuration);
-    } catch (error, stack) {
-      ownership?.report(OwnershipDecision.failedBeforeLock);
-      // Include failures before the main worker lifecycle installs its own
-      // handler (for example while installing the inherited environment).
-      (configuration[0] as SendPort).send(['failure', '$error\n$stack']);
-    } finally {
-      producer?.close();
-    }
+    await waitForServiceDiagnostics(producer);
+    await runWithServiceDiagnostics(producer, () async {
+      try {
+        // Bind the original immutable code before entering application code.
+        bindSqlSupportBootstrap(configuration[4] as SqlSupportBootstrap);
+        await runApplicationWorkerConfiguration<Future<void>>(
+          (configuration[3] as Map).cast<String, String>(),
+          () => _runApplicationServiceWorker(configuration),
+        );
+      } catch (error, stack) {
+        ownership?.report(OwnershipDecision.failedBeforeLock);
+        // Include failures before the main worker lifecycle installs its own
+        // handler (for example while installing the inherited environment).
+        (configuration[0] as SendPort).send(['failure', '$error\n$stack']);
+      } finally {
+        producer?.close();
+      }
+    }, ownership: ownership);
   });
 }
 

@@ -7,6 +7,7 @@ import 'dart:convert';
 import 'package:foresight_core/src/profile_paths.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/service.dart';
+import 'package:foresight_core/src/service_diagnostics.dart';
 import 'package:foresight_core/src/operations.dart';
 import 'package:foresight_core/src/persistence/restore_command.dart';
 import 'package:foresight_core/src/service_compatibility.dart';
@@ -203,11 +204,16 @@ Future<void> main(List<String> args) async {
       }
       return;
     }
+    await startServiceDiagnostics(diagnostics.producer);
     try {
-      service = await IsolatedApplicationService.start(
-        profile,
-        diagnostics: diagnostics,
-      );
+      service =
+          await runWithServiceDiagnostics<Future<IsolatedApplicationService>>(
+            diagnostics.producer,
+            () => IsolatedApplicationService.start(
+              profile,
+              diagnostics: diagnostics,
+            ),
+          );
     } catch (error) {
       // A detached launch has no stderr; tell the launcher why (L3).
       recordServiceStartupFailure(profile, error);

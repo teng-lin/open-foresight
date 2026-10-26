@@ -7,6 +7,7 @@ import 'profile_paths.dart';
 import 'service_socket.dart';
 import 'service_gates.dart';
 import 'service_diagnostics.dart';
+import 'diagnostics/session.dart' show OwnershipDecision;
 
 /// Another profile's service serves the endpoint, or listens on a socket
 /// this profile's service needs (SL-7).
@@ -455,18 +456,20 @@ Future<RandomAccessFile> acquireServiceProfileLock(
   required bool Function() launchWithdrawn,
   RuntimeConfiguration? configuration,
 }) async {
-  privateDirectory(profile.data, repairOwnedPermissions: true);
-  // Configure native state only when a native installation is present. Tests
-  // and administration may use the storage-only service without model workers.
-  // Without a snapshot the legacy boundary receives the profile defaults.
-  if (runtimeSnapshot(configuration)['FORESIGHT_NATIVE'] != null) {
-    configureProfileRuntime(profile.data, configuration: configuration);
-  }
-  privateRuntime(profile);
-  final lock = File(
-    '${profile.data}/.application.lock',
-  ).openSync(mode: FileMode.append);
+  RandomAccessFile? lock;
+  var locked = false;
   try {
+    privateDirectory(profile.data, repairOwnedPermissions: true);
+    // Configure native state only when a native installation is present. Tests
+    // and administration may use the storage-only service without model workers.
+    // Without a snapshot the legacy boundary receives the profile defaults.
+    if (runtimeSnapshot(configuration)['FORESIGHT_NATIVE'] != null) {
+      configureProfileRuntime(profile.data, configuration: configuration);
+    }
+    privateRuntime(profile);
+    lock = File(
+      '${profile.data}/.application.lock',
+    ).openSync(mode: FileMode.append);
     if (Process.runSync('/bin/chmod', [
           '600',
           '${profile.data}/.application.lock',
@@ -480,8 +483,10 @@ Future<RandomAccessFile> acquireServiceProfileLock(
     // this start to serve then. Its launcher decides whether to relaunch.
     try {
       lock.lockSync(FileLock.exclusive);
+      locked = true;
     } on FileSystemException catch (error) {
       if (!serviceLockContended(error)) rethrow;
+      noteServiceOwnershipDecision(OwnershipDecision.contended);
       if (serviceGatesEnabled) await serviceGate('start.lock_contended');
       throw ServiceOwnershipContended(
         'Another application service owns this profile: $error',
@@ -490,17 +495,22 @@ Future<RandomAccessFile> acquireServiceProfileLock(
     // A launch that reached the lock only after its launcher stopped
     // waiting (it attached to another owner, or gave up) serves nobody.
     if (launchWithdrawn()) {
+      noteServiceOwnershipDecision(OwnershipDecision.withdrawn);
       traceServiceTransport(() => 'launch lease withdrawn; not serving');
       throw ServiceLaunchWithdrawn(
         'The launcher that started this service stopped waiting for it, so '
         'it exits without serving.',
       );
     }
+    noteServiceOwnershipDecision(OwnershipDecision.acquired);
+    return lock;
   } catch (_) {
-    lock.closeSync();
+    noteServiceOwnershipDecision(
+      locked ? OwnershipDecision.unknown : OwnershipDecision.failedBeforeLock,
+    );
+    lock?.closeSync();
     rethrow;
   }
-  return lock;
 }
 
 /// Adopt a predecessor only after ruling out another profile's live runtime.

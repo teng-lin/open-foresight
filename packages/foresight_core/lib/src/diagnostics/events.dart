@@ -81,10 +81,12 @@ enum DiagnosticField {
   firstMs,
   lastMs,
   precisionLost,
+  call,
 }
 
 enum DiagnosticEvent {
   serviceStarting('service.starting', DiagnosticLevel.info),
+  mcpStarting('mcp.starting', DiagnosticLevel.info),
   serviceReady('service.ready', DiagnosticLevel.info),
   serviceStopped('service.stopped', DiagnosticLevel.info),
   rpcCompleted('rpc.completed', DiagnosticLevel.info),
@@ -98,13 +100,14 @@ enum DiagnosticEvent {
   authChanged('auth.changed', DiagnosticLevel.info),
   recordsDropped('logging.records_dropped', DiagnosticLevel.warn),
   recordRejected('logging.record_rejected', DiagnosticLevel.warn),
-  invalidConfiguration('logging.invalid_configuration', DiagnosticLevel.warn);
+  invalidConfiguration('logging.invalid_configuration', DiagnosticLevel.warn),
+  rpcConnectionChanged('rpc.connection_changed', DiagnosticLevel.info);
 
   const DiagnosticEvent(this.wire, this.severity);
   final String wire;
   final DiagnosticLevel severity;
   Set<DiagnosticField> get fields => switch (this) {
-    serviceStarting || serviceReady || serviceStopped => const {
+    serviceStarting || mcpStarting || serviceReady || serviceStopped => const {
       DiagnosticField.outcome,
       DiagnosticField.durationUs,
       DiagnosticField.count,
@@ -116,6 +119,13 @@ enum DiagnosticEvent {
       DiagnosticField.durationUs,
       DiagnosticField.status,
       DiagnosticField.attempt,
+      DiagnosticField.call,
+    },
+    rpcConnectionChanged => const {
+      DiagnosticField.outcome,
+      DiagnosticField.category,
+      DiagnosticField.durationUs,
+      DiagnosticField.count,
     },
     invalidFrame || transportActivity => const {
       DiagnosticField.category,
@@ -378,6 +388,7 @@ final class DiagnosticRecord {
         DiagnosticCategory category => category.name,
         DiagnosticOutcome outcome => outcome.name,
         DiagnosticProvider provider => provider.name,
+        DiagnosticIdentity identity => identity.value,
         int number => number,
         bool boolean => boolean,
         _ => null,
@@ -403,6 +414,7 @@ final class DiagnosticRecord {
     DiagnosticField field,
     Object? value,
   ) => switch (field) {
+    DiagnosticField.call => value is String && _lowerHex(value, 32),
     DiagnosticField.operation =>
       value is String &&
           value.length <= 96 &&

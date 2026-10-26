@@ -8,6 +8,7 @@ import '../operation_requests.dart';
 import '../operations.dart';
 import '../platform_services.dart';
 import '../service_compatibility.dart';
+import '../service_diagnostics.dart';
 import 'answer_coordinator.dart';
 import 'generation_coordinator.dart';
 import 'google_maintenance.dart';
@@ -73,6 +74,8 @@ final class RuntimeOperations {
           'generating': domain.generator!.generating,
         };
   Map<String, Object?> status() => {
+    'diagnostics': serviceDiagnosticHealth().toJson(),
+    'diagnostic_observation': serviceDiagnosticObservation(),
     'pid': pid,
     'profile_id': identity.profileId,
     'application_api_version': applicationApiVersion,
