@@ -127,7 +127,14 @@ class _SpeechReader implements StoreReader {
   }
 
   @override
-  Stream<ReadResult<T>> watch<T>(ReadQuery<T> query) => delegate.watch(query);
+  Stream<ReadResult<T>> watch<T>(ReadQuery<T> query) {
+    if (query.projection != 'model' || query.arguments['kind'] != 'speech') {
+      return delegate.watch(query);
+    }
+    reads++;
+    return reply.future.asStream().map((result) => result.asType<T>());
+  }
+
   @override
   dynamic noSuchMethod(Invocation invocation) => throw StateError(
     'Unexpected synchronous setup read ${invocation.memberName}',
@@ -341,7 +348,7 @@ void main() {
             sequence: 0,
           ),
         );
-        await action;
+        await pumpUntilCompleted(tester, action);
         expect(settings.speechPrompts, 0);
         expect(
           connection.calls.where(

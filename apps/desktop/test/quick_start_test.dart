@@ -230,6 +230,10 @@ void main() {
       );
       await tester.pumpAndSettle();
       await tester.tap(find.text('Start transcribing'));
+      await pumpUntil(
+        tester,
+        () => domain.operations.contains('meetings.start'),
+      );
       await tester.pumpAndSettle();
       expect(
         find.text('Allow microphone and system audio recording?'),
@@ -260,6 +264,10 @@ void main() {
           )
           .onPressed!;
       await tester.tap(find.text('Start transcribing'));
+      await pumpUntil(
+        tester,
+        () => find.byType(SpeechSetupDialog).evaluate().isNotEmpty,
+      );
       await tester.pumpAndSettle();
       expect(find.byType(SpeechSetupDialog), findsOneWidget);
       final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
@@ -280,12 +288,20 @@ void main() {
     (tester) async {
       await show(tester);
       await tester.tap(find.text('Start transcribing'));
+      await pumpUntil(
+        tester,
+        () => find.byType(SpeechSetupDialog).evaluate().isNotEmpty,
+      );
       await tester.pumpAndSettle();
       expect(find.byType(SpeechSetupDialog), findsOneWidget);
       // Complete the setup registration using tiny control-flow fixtures; no
       // model download or inference is represented by this widget test.
       await tester.runAsync(registerSpeech);
       Navigator.of(tester.element(find.byType(SpeechSetupDialog))).pop();
+      await pumpUntil(
+        tester,
+        () => domain.operations.contains('meetings.start'),
+      );
       await tester.pumpAndSettle();
       expect(
         domain.operations
@@ -317,6 +333,10 @@ void main() {
       state.update(() => state.meetingFeature.meetingId = meeting);
       await tester.pumpAndSettle();
       await tester.tap(find.text('Start transcribing'));
+      await pumpUntil(
+        tester,
+        () => domain.operations.contains('meetings.start'),
+      );
       await tester.pumpAndSettle();
       expect(domain.operations, isNot(contains('meetings.create')));
       expect(
@@ -337,11 +357,19 @@ void main() {
       domain.loseCreateReply = true;
       await show(tester);
       await tester.tap(find.text('Start transcribing'));
+      await pumpUntil(
+        tester,
+        () => domain.operations.contains('meetings.create'),
+      );
       await tester.pumpAndSettle();
       final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       expect(state.error, contains('disconnected'));
       expect(domain.operations, isNot(contains('meetings.start')));
       await tester.tap(find.text('Start transcribing'));
+      await pumpUntil(
+        tester,
+        () => domain.operations.contains('meetings.start'),
+      );
       await tester.pumpAndSettle();
       final meeting = store.rows('SELECT id FROM meetings').single['id'];
       expect(state.meetingFeature.meetingId, meeting);
@@ -432,6 +460,10 @@ void main() {
           )
           .onPressed!;
       await tester.tap(find.text('Start transcribing'));
+      await pumpUntil(
+        tester,
+        () => domain.operations.contains('meetings.create'),
+      );
       await tester.pump();
       final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       start();

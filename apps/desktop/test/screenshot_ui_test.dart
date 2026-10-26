@@ -216,6 +216,10 @@ void main() {
       await tester.tap(find.text('Existing meeting'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Start transcribing'));
+      await pumpUntil(
+        tester,
+        () => find.text('Transcription Model').evaluate().isNotEmpty,
+      );
       await tester.pumpAndSettle();
       final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       expect(state.meetingFeature.meetingPreviewId, existing);

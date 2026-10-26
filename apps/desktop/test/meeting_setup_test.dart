@@ -177,6 +177,10 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byTooltip('Meeting options'), findsNothing);
       await tester.tap(find.text('Start transcribing'));
+      await pumpUntil(
+        tester,
+        () => find.byType(SpeechSetupDialog).evaluate().isNotEmpty,
+      );
       await tester.pumpAndSettle();
       expect(find.byType(SpeechSetupDialog), findsOneWidget);
       await tester.tap(find.text('Cancel'));
