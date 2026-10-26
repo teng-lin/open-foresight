@@ -4,6 +4,7 @@ import 'profile_paths.dart';
 import 'rpc_error.dart';
 import 'service_client.dart';
 import 'service_startup.dart';
+import 'service_diagnostics.dart';
 
 /// Whether [error] says its request never took effect, so sending it once
 /// more, after a handoff, is safe: a closing owner refused it before dispatch,
@@ -21,16 +22,22 @@ class ServiceConnection {
   final _retired = <ServiceClient>{};
   Future<ServiceClient>? _connecting;
   bool _closed = false;
-  ServiceConnection(this.profile);
+  ServiceDiagnosticEmitter? _diagnostics;
+  ServiceConnection(this.profile)
+    : _diagnostics = captureServiceDiagnosticEmitter();
   Future<ServiceClient> connect() async {
     if (_closed) throw StateError('Client closed');
+    _diagnostics ??= captureServiceDiagnosticEmitter();
     final current = _client;
     if (current != null && !current.isClosed) return current;
     return _connecting ??= _open().whenComplete(() => _connecting = null);
   }
 
   Future<ServiceClient> _open() async {
+    final started = _diagnostics?.clockMicros();
     final client = await ensureService(profile);
+    _diagnostics ??= client.diagnosticEmitter;
+    if (_diagnostics case final owner?) client.adoptDiagnostics(owner, started);
     if (_closed) {
       await client.close();
       throw StateError('Client closed');
@@ -50,6 +57,7 @@ class ServiceConnection {
     StreamSubscription<Object?>? request;
     var cancelled = false;
     ClientDiagnosticCall? diagnostic;
+    var observationAttempted = false;
     Future<void> send({required bool resent}) async {
       final ServiceClient client;
       try {
@@ -64,6 +72,10 @@ class ServiceConnection {
         return;
       }
       if (cancelled) return;
+      if (!observationAttempted) {
+        observationAttempted = true;
+        diagnostic = ClientDiagnosticCall.begin(method, emitter: _diagnostics);
+      }
       var received = false;
       var handedOff = false;
       request = client
@@ -102,7 +114,8 @@ class ServiceConnection {
 
     output = StreamController<Object?>(
       onListen: () {
-        diagnostic = ClientDiagnosticCall.begin(method);
+        observationAttempted = _diagnostics != null;
+        diagnostic = ClientDiagnosticCall.begin(method, emitter: _diagnostics);
         unawaited(send(resent: false));
       },
       onPause: () => request?.pause(),
@@ -126,9 +139,13 @@ class ServiceConnection {
   /// Close the connection and any replaced one still waiting for answers.
   Future<void> close() async {
     _closed = true;
-    for (final retired in _retired.toList()) {
-      await retired.close();
+    try {
+      for (final retired in _retired.toList()) {
+        await retired.close();
+      }
+      await _client?.close();
+    } finally {
+      _diagnostics = null;
     }
-    await _client?.close();
   }
 }

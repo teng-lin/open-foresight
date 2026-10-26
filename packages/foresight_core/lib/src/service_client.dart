@@ -64,6 +64,20 @@ class ServiceClient {
   RpcError? _failure;
   ClientDiagnosticConnection? _diagnostics;
 
+  /// Closed emission capability captured by the connection's diagnostic owner.
+  ServiceDiagnosticEmitter? get diagnosticEmitter => _diagnostics?.emitter;
+
+  /// Observe an already-established connection returned by the existing opener.
+  /// Its readiness is observed here; no earlier start is invented.
+  void adoptDiagnostics(ServiceDiagnosticEmitter emitter, int? started) {
+    if (isClosed || _diagnostics != null) return;
+    _diagnostics = ClientDiagnosticConnection.begin(
+      emitter: emitter,
+      initial: DiagnosticOutcome.ready,
+      started: started,
+    );
+  }
+
   /// Whether no request is sent on this connection any more: it is closed,
   /// or [retire]d and waiting for its last answers.
   bool get isClosed => _closed || _retired;
@@ -100,7 +114,7 @@ class ServiceClient {
   void _receive(Uint8List frame) {
     final value = decodeServiceFrame(frame);
     if (value == null) {
-      emitServiceDiagnostic(
+      _diagnostics?.emitter?.emit(
         DiagnosticEvent.invalidFrame,
         connection: _diagnostics?.identity,
         fields: () => {
@@ -266,7 +280,11 @@ class ServiceClient {
   ]) => streamAttempt(
     method,
     args,
-    ClientDiagnosticCall.begin(method, ownsLifetime: true),
+    ClientDiagnosticCall.begin(
+      method,
+      emitter: diagnosticEmitter,
+      ownsLifetime: true,
+    ),
     1,
   );
 

@@ -4,24 +4,26 @@ import 'diagnostics/session.dart';
 import 'rpc_error.dart';
 import 'service_diagnostics.dart';
 
-// These slots retain only generated identities, closed operations and scalars.
+// These slots retain generated identities, closed operations/scalars and the
+// existing owner's immutable emission capability.
 // They never retain sockets, arguments, results, errors, Zones or callbacks.
 // The runtime budget owner measures this cap before any increase.
 const _capacity = 1;
 int _connections = 0, _connectionRefusals = 0, _callRefusals = 0;
 int _connectionAdmissions = 0, _callAdmissions = 0;
-int _now() => serviceDiagnosticClockMicros() ?? 0;
-int _duration(int started) => (_now() - started).clamp(0, 0x7fffffff);
+int _now(ServiceDiagnosticEmitter emitter) => emitter.clockMicros() ?? 0;
+int _duration(ServiceDiagnosticEmitter emitter, int started) =>
+    (_now(emitter) - started).clamp(0, 0x7fffffff);
 int _increment(int value) => (value + 1).clamp(0, 0x7fffffff);
 
-void _refuse({required bool connection}) {
-  if (!serviceDiagnosticsEnabled) return;
+void _refuse(ServiceDiagnosticEmitter emitter, {required bool connection}) {
+  if (!emitter.active) return;
   if (connection) {
     _connectionRefusals = _increment(_connectionRefusals);
   } else {
     _callRefusals = _increment(_callRefusals);
   }
-  noteServiceDiagnosticCorrelationRefused();
+  emitter.noteCorrelationRefused();
 }
 
 Map<String, int> clientDiagnosticObservation() => {
@@ -38,24 +40,32 @@ Map<String, int> clientDiagnosticObservation() => {
 
 /// A bounded diagnostic socket identity; it conveys no connection authority.
 final class ClientDiagnosticConnection {
-  ClientDiagnosticConnection._()
+  ClientDiagnosticConnection._(ServiceDiagnosticEmitter emitter, int? started)
     : _identity = DiagnosticIdentity.random(),
-      _started = _now();
+      _emitter = emitter,
+      _started = started ?? _now(emitter);
   DiagnosticIdentity? _identity;
+  ServiceDiagnosticEmitter? _emitter;
   DiagnosticIdentity? get identity => _identity;
+  ServiceDiagnosticEmitter? get emitter => _emitter;
   int _started;
 
-  static ClientDiagnosticConnection? begin() {
-    if (!serviceDiagnosticsEnabled) return null;
+  static ClientDiagnosticConnection? begin({
+    ServiceDiagnosticEmitter? emitter,
+    DiagnosticOutcome initial = DiagnosticOutcome.started,
+    int? started,
+  }) {
+    final owner = emitter ?? captureServiceDiagnosticEmitter();
+    if (owner == null || !owner.active) return null;
     if (_connections >= _capacity) {
-      _refuse(connection: true);
+      _refuse(owner, connection: true);
       return null;
     }
     _connections++;
     try {
-      final value = ClientDiagnosticConnection._();
+      final value = ClientDiagnosticConnection._(owner, started);
       _connectionAdmissions = _increment(_connectionAdmissions);
-      value.record(DiagnosticOutcome.started);
+      value.record(initial);
       return value;
     } catch (_) {
       _connections--;
@@ -68,13 +78,14 @@ final class ClientDiagnosticConnection {
     DiagnosticCategory? category,
     int? count,
   }) {
-    if (identity == null) return;
-    emitServiceDiagnostic(
+    final owner = _emitter;
+    if (identity == null || owner == null) return;
+    owner.emit(
       DiagnosticEvent.rpcConnectionChanged,
       connection: identity,
       fields: () => {
         DiagnosticField.outcome: outcome,
-        DiagnosticField.durationUs: _duration(_started),
+        DiagnosticField.durationUs: _duration(owner, _started),
         if (category != null) DiagnosticField.category: category,
         if (count != null) DiagnosticField.count: count.clamp(0, 0x7fffffff),
       },
@@ -87,6 +98,7 @@ final class ClientDiagnosticConnection {
       record(outcome, category: category);
     } finally {
       _identity = null;
+      _emitter = null;
       _started = 0;
       _connections--;
     }
@@ -97,27 +109,36 @@ final class ClientDiagnosticConnection {
 /// The call ID is local. Only wire ID plus connection evidence joins a service
 /// record; no client identity is sent over the socket.
 final class ClientDiagnosticCall {
-  ClientDiagnosticCall._(this._operation, this._ownsLifetime)
+  ClientDiagnosticCall._(this._operation, this._ownsLifetime, this._emitter)
     : _identity = DiagnosticIdentity.random(),
-      _started = _now();
+      _started = _now(_emitter!);
   static ClientDiagnosticCall? _active;
   DiagnosticIdentity? _identity, _connection;
   DiagnosticOperation? _operation;
+  ServiceDiagnosticEmitter? _emitter;
   int? _wire;
   int _attempt = 0, _started;
   final bool _ownsLifetime;
   bool _settled = false;
 
-  static ClientDiagnosticCall? begin(String wire, {bool ownsLifetime = false}) {
-    if (!serviceDiagnosticsEnabled || wire.length > 96) return null;
+  static ClientDiagnosticCall? begin(
+    String wire, {
+    ServiceDiagnosticEmitter? emitter,
+    bool ownsLifetime = false,
+  }) {
+    if (emitter == null || !emitter.active || wire.length > 96) return null;
     final operation = DiagnosticOperation.parse(wire);
     if (operation == null) return null;
     if (_active != null) {
-      _refuse(connection: false);
+      _refuse(emitter, connection: false);
       return null;
     }
     try {
-      final call = _active = ClientDiagnosticCall._(operation, ownsLifetime);
+      final call = _active = ClientDiagnosticCall._(
+        operation,
+        ownsLifetime,
+        emitter,
+      );
       _callAdmissions = _increment(_callAdmissions);
       return call;
     } catch (_) {
@@ -128,7 +149,7 @@ final class ClientDiagnosticCall {
   void attach(DiagnosticIdentity? connection, int wire, int attempt) {
     if (_identity == null) return;
     if (connection == null) {
-      _refuse(connection: false);
+      if (_emitter case final owner?) _refuse(owner, connection: false);
       release();
       return;
     }
@@ -157,7 +178,8 @@ final class ClientDiagnosticCall {
     _settled = true;
     final (category, outcome) = _classify(error);
     final identity = _identity!, operation = _operation!;
-    emitServiceDiagnostic(
+    final owner = _emitter!;
+    owner.emit(
       error == null ? DiagnosticEvent.rpcCompleted : DiagnosticEvent.rpcFailed,
       connection: _connection,
       request: _wire,
@@ -166,7 +188,7 @@ final class ClientDiagnosticCall {
         DiagnosticField.call: identity,
         DiagnosticField.operation: operation,
         DiagnosticField.outcome: outcome,
-        DiagnosticField.durationUs: _duration(_started),
+        DiagnosticField.durationUs: _duration(owner, _started),
         if (category != null) DiagnosticField.category: category,
       },
     );
@@ -191,6 +213,7 @@ final class ClientDiagnosticCall {
     _identity = null;
     _connection = null;
     _operation = null;
+    _emitter = null;
     _wire = null;
     _attempt = _started = 0;
     if (identical(_active, this)) _active = null;
