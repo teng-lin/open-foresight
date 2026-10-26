@@ -1311,3 +1311,10 @@ These are execution and fixture repairs, not a claim that the new hosted core
 run, complete Python coverage or merge has already passed. Evidence is retained
 under `/var/tmp/of-ci-user/`, `/var/tmp/of-ci-final/`,
 `/var/tmp/of-fin/uid-selection-probe/` and `/var/tmp/of-native-queue-sync/`.
+Final review also corrected the fast step to expand `$GITHUB_WORKSPACE` inside
+the container. Ownership-test fixtures use an explicit private `/var/tmp` root
+and assert each intended refusal reason. Flutter verification in both setup
+entry points scopes Git trust to that single SDK path for that step, including
+nested Flutter Git calls. An actual UID-1001 tar-cache round trip reproduced
+unscoped root refusal and scoped success while another foreign repository stayed
+refused. The final Claude CLI review converged with no blocking findings.
