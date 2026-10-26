@@ -38,6 +38,24 @@ docker buildx build --builder "$(docker context show)" --platform linux/amd64 --
   --cache-from "type=registry,ref=ghcr.io/$task_repository/linux-sdk:acceptance-tools-buildcache-v1" \
   --cache-from "type=registry,ref=ghcr.io/$task_repository/linux-sdk:app-buildcache-x86-64" \
   --tag foresight-acceptance:local .
+# Only virtual audio needs source-side native-debug tests. Restore the exact
+# qualified producer tree at its original anchor; never reconstruct or compile it.
+task_audio_volume=
+if [[ "$task_suite" == audio && "${VIRTUAL_AUDIO_SELECTED:-true}" == true ]]; then
+  : "${SOURCE_REVISION:?Exact qualified source revision required}"
+  : "${AUDIO_HANDOFF_DIRECTORY:?Qualified source/build handoff required}"
+  task_audio_control="$PWD/build/audio-handoff-inputs"
+  python tools/prepare_audio_handoff.py --sdk-image "$SDK_IMAGE" --output "$task_audio_control"
+  task_audio_volume=$(docker volume create)
+  trap 'docker volume rm "$task_audio_volume" >/dev/null' EXIT
+  docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+    -v "$task_audio_volume:/src" -v "$AUDIO_HANDOFF_DIRECTORY:/handoff:ro" \
+    -v "$task_audio_control:/control:ro" -w / \
+    -v "$PWD/tools/ci_linux_handoff.py:/src-restore.py:ro" \
+    foresight-acceptance:local bash -c 'python3 /src-restore.py restore --root /src \
+      --directory /handoff --revision "$1" --inputs /control/ci-inputs.json && chown "$2:$3" /src' \
+      -- "$SOURCE_REVISION" "$(id -u)" "$(id -g)"
+fi
 python tools/test_installed_release.py --prepare-models-only --models build/acceptance-models --output test-results/model-download
 mkdir -p "test-results/acceptance-$task_suite"
 chmod 0777 "test-results/acceptance-$task_suite"
@@ -55,8 +73,14 @@ else
     --allow-litert-unavailable --bundle dist/open-foresight --models /models --output /reports/software-gpu || task_status=$?
   fi
   if [[ "${VIRTUAL_AUDIO_SELECTED:-true}" == true ]]; then
-  docker run "${task_common[@]}" foresight-acceptance:local dbus-run-session -- python3 tools/integration_gates.py \
-    --suite virtual-audio --bundle dist/open-foresight --models /models --output /reports/virtual-audio || task_status=$?
+  docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+    -v "$task_audio_volume:/src" -v "$PWD/build/portable/dist/open-foresight:/portable:ro" \
+    -v "$PWD/build/acceptance-models:/models:ro" \
+    -v "$PWD/test-results/acceptance-$task_suite:/reports" \
+    -v "$PWD/tools/run_ci_user.py:/run-ci-user.py:ro" \
+    foresight-acceptance:local python3 /run-ci-user.py --workspace /src --flutter-root /opt/flutter -- \
+    dbus-run-session -- python3 tools/integration_gates.py \
+    --suite virtual-audio --bundle /portable --models /models --output /reports/virtual-audio || task_status=$?
   fi
   exit "$task_status"
 fi

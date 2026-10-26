@@ -919,6 +919,18 @@ jobs:
         producer-sdk-digest: ${{ needs.linux-build.outputs.producer_sdk_digest }}
         own-pr: ${{ github.event.pull_request.number || 0 }}
         label: ${{ inputs.label }}
+    - name: Qualify this run's original source/build bytes for virtual audio
+      if: needs.changes.outputs.acceptance_virtual_audio != 'false'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SOURCE: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
+        PRODUCER_ATTEMPT: ${{ needs.linux-build.outputs.attempt }}
+        ARTIFACT_ID: ${{ needs.linux-build.outputs.handoff_id }}
+        ARTIFACT_DIGEST: ${{ needs.linux-build.outputs.handoff_digest }}
+      run: |
+        python tools/ci_linux_handoff.py qualify --directory build/audio-handoff --revision "$SOURCE" \
+          --repository "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID" --attempt "$PRODUCER_ATTEMPT" \
+          --artifact-id "$ARTIFACT_ID" --artifact-digest "$ARTIFACT_DIGEST"
     - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
         path: build/acceptance-models
@@ -928,6 +940,8 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
         SDK_IMAGE: ${{ steps.consumer.outputs.image }}
+        SOURCE_REVISION: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
+        AUDIO_HANDOFF_DIRECTORY: ${{ github.workspace }}/build/audio-handoff
         VERSION: ${{ steps.consumer.outputs.version }}
         CPU_MODELS_SELECTED: ${{ needs.changes.outputs.acceptance_cpu_models != 'false' }}
         SOFTWARE_GPU_SELECTED: ${{ needs.changes.outputs.acceptance_software_gpu != 'false' }}
