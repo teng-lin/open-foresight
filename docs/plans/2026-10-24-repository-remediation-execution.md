@@ -1025,3 +1025,67 @@ remains deferred; existing gates and owner-review requirements remain intact.
 The user subsequently deferred isolated Keychain execution as recorded in the
 delivery scope amendment. Its Security -25308 failure remains failed evidence;
 it is no longer a merge blocker and no further Keychain run is required here.
+
+### Retained-scope verification checkpoint, October 26
+
+The [delivery scope amendment](2026-10-24-remediation-delivery-scope.md)
+supersedes earlier remaining-work lists. Exact 512 KiB and strict 5%/10%
+logging certification, expanded bridge/background correlation, new dependency
+reproducibility/builder/ICU work, new native coverage/clang-tidy infrastructure,
+the broad Python import conversion, Keychain execution and broader security
+additions remain deferred. Existing bounds, privacy, coverage and trust gates
+remain required. The reproduced client lost-emitter repair is integrated.
+
+The reviewed production integration reached `c467a5cc`, including startup,
+desktop diagnostic binding/support, restore, first-run, SQL and owned service
+configuration. Subsequent fixture repairs passed the second complete core run
+except for journal compaction: **2,872 passed, 16 skipped, one failed**.
+Core coverage remains **unqualified** because that suite exited nonzero.
+The original failed runs remain retained. The third, instrumented run is
+diagnostic evidence only; its 4,097 rows, assertions and 30-second timeout are
+unchanged. It shows continued indexing progress at the deadline rather than
+a deadlock and also records a native-queue short-deadline failure.
+
+The actual `tools/coverage.sh` run on `c467a5cc` passed **6,134 tests**, with
+32 skipped, 52 warnings and **95.23% combined line/branch coverage** against
+the existing 95% floor. Desktop passed **634**, with 17 skipped and **93.29%**
+coverage against 90%. Actual isolated-display Linux integration passed **3/3**
+with all 68 named expectations; fast scenarios passed **2/2**. These retain
+their exact original source/product provenance, not blanket final-head claims.
+
+Final service-fixture review converged after replacing retired stderr-text
+oracles with typed events and actual wire observations. The MCP handoff
+fixture now observes its new startup connection, real kernel peer identities,
+the exact closing refusal and the held profile lock before releasing the old
+helper. The official build gate compiles the required diagnostic Worker before
+core tests, verifies it again before hosts, and retains service/MCP compilation
+after test and coverage gates. The affected 142 tooling controls pass, including
+explicit ambient-coverage controls. Full compiled-lifecycle qualification on
+the final matching products remains pending.
+
+Pinned formatting required one continuation-line correction in
+`native/diagnostic_protocol.c`, integrated as `297bf7ef`. Although its C tokens
+are unchanged, its source identity changes. Fresh root native CTest passed
+**51/51 Linux and 60/60 HanSolo**, zero skips, in separate new build roots;
+the older native cohorts were preserved. New Linux Native identity is
+`c62c8bf91ffa625087626d6c020d99132ccfc5e8ca5c519a94b6dfb2aae54117`.
+Matching application products and applicable Dart qualification are pending.
+HanSolo runs on macOS 26.6, not the minimum macOS 15 runtime.
+
+Ruff, the subprocess-timeout guard and native formatting pass on the reviewed
+`60f62bf6` Git-free source. The document checker checked 334 local links with
+zero problems; architecture facts and the generated catalog check passed on
+the unchanged corresponding inputs. Actionlint 1.7.7 ran with ShellCheck 0.9.0
+and passed. Complete Git-free Python discovery is running in unrelated-PR,
+main and no-ref contexts. Four installer cases initially failed because the
+container UID and temporary ancestor ownership differed; all four passed in
+each context using a private, correctly owned `/var/tmp` root. No validator or
+test assertion changed. Original failed output is retained.
+
+This is still local verification. PR #180 remains the older draft at
+`66c23c9e`, with historical red CI and merge conflicts. Remaining delivery work
+is resolving core failures, matching final products/checks, recording terminal
+Git-free outcomes, required owner review, pushing the combined candidate,
+resolving current-head CI/reviews and verifying the merge to main. Real models,
+GPU/physical audio, signed/installed distributions, minimum-Mac runtime and
+external activation observations are not inferred from synthetic fixtures.
