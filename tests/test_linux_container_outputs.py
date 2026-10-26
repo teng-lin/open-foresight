@@ -16,23 +16,33 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = "open-foresight-1.0.0-1-linux-x86_64.tar.gz"
 
 
-def test_system_python_prefix_cannot_replace_container_toolchain(tmp_path):
+@pytest.mark.parametrize(
+    "prefix", ["/usr", "/home", "/root", "/var", "/var/tmp", "/tmp", "HOME"]
+)
+def test_system_or_home_python_prefix_is_not_mounted(tmp_path, prefix):
     root = tmp_path / "checkout"
     (root / "tools").mkdir(parents=True)
     shutil.copy2(ROOT / "tools/build_linux_container.sh", root / "tools")
     selected = tmp_path / "host-python"
-    selected.write_text("#!/bin/sh\nprintf '/usr\\n'\n")
+    home = str(tmp_path / "actual-home")
+    selected.write_text(
+        f"#!/bin/sh\nprintf '%s\\n' '{home if prefix == 'HOME' else prefix}'\n"
+    )
     selected.chmod(0o755)
     result = subprocess.run(
         ["bash", str(root / "tools/build_linux_container.sh"), "--prepare-only"],
-        env={**os.environ, "FORESIGHT_HOST_PYTHON": str(selected)},
+        env={**os.environ, "FORESIGHT_HOST_PYTHON": str(selected), "HOME": home},
         capture_output=True,
         text=True,
         timeout=10,
         check=False,
     )
     assert result.returncode != 0
-    assert "Python build runtime would replace container paths" in result.stderr
+    assert (
+        "must not expose the host home directory"
+        if prefix == "HOME"
+        else "would replace container paths"
+    ) in result.stderr
     assert not (root / "build").exists()
 
 

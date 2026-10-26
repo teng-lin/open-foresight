@@ -7,6 +7,7 @@ set -euo pipefail
 [[ "$OUT_UID:$OUT_GID" =~ ^[0-9]+:[0-9]+$ ]]
 mkdir -p /out
 trap 'chown -R "$OUT_UID:$OUT_GID" /out' EXIT
+# shellcheck source=tools/linux_tooling_python.sh
 source /workspace/tools/linux_tooling_python.sh
 foresight_select_tooling_python /workspace
 task_python=$FORESIGHT_PYTHON

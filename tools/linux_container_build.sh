@@ -10,6 +10,7 @@ mkdir -p /out
 trap 'chown -R "$OUT_UID:$OUT_GID" /out' EXIT
 # Match the source exclusions of .dockerignore. In particular, local account
 # data and .env files must not enter the container or portable bundle.
+# shellcheck source=tools/linux_tooling_python.sh
 source /workspace/tools/linux_tooling_python.sh
 foresight_select_tooling_python /workspace
 bash /workspace/tools/copy_linux_source.sh /workspace /src

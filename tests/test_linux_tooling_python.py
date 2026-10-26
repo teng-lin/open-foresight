@@ -12,7 +12,20 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.mark.parametrize("failure", ["", "runtime", "venv", "pip", "imports"])
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "",
+        "runtime",
+        "nonempty",
+        "symlink",
+        "owner",
+        "permissions",
+        "venv",
+        "pip",
+        "imports",
+    ],
+)
 def test_tooling_bootstrap_requires_version_locked_dependencies_and_imports(
     tmp_path, failure
 ):
@@ -21,15 +34,12 @@ def test_tooling_bootstrap_requires_version_locked_dependencies_and_imports(
     lock.write_text("controlled hash-locked dependencies\n")
     runtime = tmp_path / "runtime"
     environment = tmp_path / "environment"
-    binary = tmp_path / "bin"
-    binary.mkdir()
-    mktemp = binary / "mktemp"
-    mktemp.write_text(
-        "#!/bin/sh\n"
-        'test "$1" = -d && test "$2" = /var/tmp/of-tool-python.XXXXXX || exit 10\n'
-        f'mkdir -m 700 "{environment}"\nprintf "%s\\n" "{environment}"\n'
+    helper = tmp_path / "bootstrap.sh"
+    helper.write_text(
+        (ROOT / "tools/linux_tooling_python.sh")
+        .read_text()
+        .replace("/var/tmp/foresight-tooling-python", str(environment))
     )
-    mktemp.chmod(0o755)
     launcher = (
         f"#!{sys.executable}\n"
         "import json,os,pathlib,sys\n"
@@ -51,6 +61,18 @@ def test_tooling_bootstrap_requires_version_locked_dependencies_and_imports(
         "def record(value):\n"
         " with open(os.environ['TOOLING_LOG'],'a') as f: f.write(json.dumps(value)+'\\n')\n"
         "if sys.argv[1:3] == ['-I','-c']:\n"
+        " if len(sys.argv) == 5:\n"
+        "  record(['environment'])\n"
+        "  code=sys.argv[3];target=pathlib.Path(sys.argv[4])\n"
+        "  failure=os.environ['TOOLING_FAILURE']\n"
+        "  if failure=='nonempty':\n"
+        "   target.mkdir(mode=0o700);(target/'retained').write_text('must not reuse')\n"
+        "  if failure=='symlink':\n"
+        "   other=target.with_name('other');other.mkdir();target.symlink_to(other)\n"
+        "  if failure=='permissions':target.mkdir(mode=0o777);target.chmod(0o777)\n"
+        "  if failure=='owner':\n"
+        "   original=os.geteuid;os.geteuid=lambda:original()+1\n"
+        "  sys.argv=['-c',str(target)];exec(code);sys.exit(0)\n"
         " record(['runtime'])\n"
         " if os.environ['TOOLING_FAILURE']=='runtime': sys.version_info=(3,12)\n"
         " exec(sys.argv[3]);sys.exit(0)\n"
@@ -75,12 +97,11 @@ def test_tooling_bootstrap_requires_version_locked_dependencies_and_imports(
             "-c",
             script,
             "bootstrap",
-            str(ROOT / "tools/linux_tooling_python.sh"),
+            str(helper),
             str(tmp_path),
         ],
         env={
             **os.environ,
-            "PATH": str(binary) + os.pathsep + os.environ["PATH"],
             "FORESIGHT_TOOLING_PYTHON_RUNTIME": str(runtime),
             "FORESIGHT_PYTHON": "original-model-independent-tooling",
             "TOOLING_LOG": str(log),
@@ -93,9 +114,14 @@ def test_tooling_bootstrap_requires_version_locked_dependencies_and_imports(
     )
     (tmp_path / "bootstrap.log").write_text(result.stdout + result.stderr)
     commands = [json.loads(line) for line in log.read_text().splitlines()]
-    expected = ["runtime", "venv", "pip", "imports"]
+    expected = ["runtime", "environment", "venv", "pip", "imports"]
     if failure:
-        expected = expected[: expected.index(failure) + 1]
+        phase = (
+            "environment"
+            if failure in {"nonempty", "symlink", "owner", "permissions"}
+            else failure
+        )
+        expected = expected[: expected.index(phase) + 1]
         assert result.returncode != 0
         assert "preserved=original-model-independent-tooling" in result.stdout
     else:

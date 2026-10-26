@@ -15,10 +15,14 @@ if sys.version_info[:2] != (3, 13):
 print(Path(sys.base_prefix).resolve())
 ')
 case "$task_tooling_prefix" in
-  /|/usr|/usr/*|/bin|/bin/*|/sbin|/sbin/*|/lib|/lib/*|/lib64|/lib64/*|/etc|/etc/*|/opt|/opt/toolchain|/opt/toolchain/*|/opt/flutter|/opt/flutter/*|/opt/dev-python|/opt/dev-python/*|/opt/litert-*|/opt/whisper-*|/src|/src/*|/workspace|/workspace/*|/out|/out/*|/run|/run/*)
+  /|/home|/root|/var|/var/tmp|/tmp|/usr|/usr/*|/bin|/bin/*|/sbin|/sbin/*|/lib|/lib/*|/lib64|/lib64/*|/etc|/etc/*|/opt|/opt/toolchain|/opt/toolchain/*|/opt/flutter|/opt/flutter/*|/opt/dev-python|/opt/dev-python/*|/opt/litert-*|/opt/whisper-*|/src|/src/*|/workspace|/workspace/*|/out|/out/*|/run|/run/*)
     echo 'Python build runtime would replace container paths; select an isolated Python 3.13 installation' >&2
     exit 1 ;;
 esac
+if [[ "$task_tooling_prefix" == "${HOME:-}" ]]; then
+  echo 'Python build runtime must not expose the host home directory' >&2
+  exit 1
+fi
 task_tooling_runtime="$task_tooling_prefix/bin/python3"
 [[ -x "$task_tooling_runtime" ]] || { echo 'Python 3.13 runtime is incomplete' >&2; exit 1; }
 task_sdk=${SDK_IMAGE:-open-foresight-sdk:local}
