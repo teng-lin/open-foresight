@@ -70,6 +70,35 @@ DiagnosticSink? _failingSink(
   DiagnosticRole role,
 ) => _FailingSink();
 
+final class _HealthySink implements DiagnosticSink {
+  @override
+  int get slot => 4;
+  @override
+  bool get failed => false;
+  @override
+  bool classify(
+    DiagnosticRole role, {
+    required bool error,
+    bool genuineFailure = false,
+  }) => true;
+  @override
+  bool append(Uint8List bytes) => true;
+  @override
+  void close() {}
+}
+
+DiagnosticSink? _healthySink(
+  String profile,
+  DiagnosticIdentity session,
+  DiagnosticRole role,
+) => _HealthySink();
+
+DiagnosticSink? _noSlot(
+  String profile,
+  DiagnosticIdentity session,
+  DiagnosticRole role,
+) => null;
+
 Set<String> _closure(File entry) {
   final visited = <String>{}, pending = [entry];
   while (pending.isNotEmpty) {
@@ -295,24 +324,332 @@ void main() {
   });
 
   group('health snapshot', () {
-    test('off reflects the actual session configuration', () async {
+    Future<(LoggingSession, LocalDiagnosticSupport)> start({
+      DiagnosticConfiguration configuration = const DiagnosticConfiguration(),
+      DiagnosticSinkFactory? sinkFactory,
+      String? profile,
+    }) async {
       final session = await LoggingSession.startForTesting(
+        configuration: configuration,
+        profilePath: profile,
+        sinkFactory: sinkFactory,
+      );
+      addTearDown(session.close);
+      return (
+        session,
+        LocalDiagnosticSupport(openUri: _Opener().call)..attachSession(session),
+      );
+    }
+
+    bool emitError(LoggingSession session) => session.producer.emit(
+      DiagnosticEvent.runtimeFailed,
+      DiagnosticComponent.logging,
+    );
+
+    test('off is a known local off report, also after close', () async {
+      final (session, support) = await start(
         configuration: DiagnosticConfiguration.fromEnvironment(const {
           'FORESIGHT_LOG_LEVEL': 'off',
         }),
       );
-      final support = LocalDiagnosticSupport(openUri: _Opener().call)
-        ..attachSession(session);
       var snapshot = support.snapshot();
       expect(snapshot.status, DiagnosticSupportStatus.off);
       expect(snapshot.reason, DiagnosticSupportReason.off);
       expect(snapshot.level, DiagnosticSupportLevel.off);
-      expect(snapshot.closed, isFalse);
+      expect(snapshot.known, isTrue);
+      expect(snapshot.ageMs, 0);
+      expect(snapshot.storageConfigured, isFalse);
       expect(snapshot.logsFolderKnown, isFalse);
       await session.close();
       snapshot = support.snapshot();
       expect(snapshot.status, DiagnosticSupportStatus.off);
-      expect(snapshot.closed, isTrue);
+    });
+
+    test(
+      'an unconfigured enabled session is degraded, never healthy',
+      () async {
+        final profile = _profile('support-unconfigured-');
+        final (session, support) = await start(profile: profile.path);
+        // The initial session reason is healthy; it alone proves nothing.
+        expect(session.health.reason, DiagnosticHealthReason.healthy);
+        final snapshot = support.snapshot();
+        expect(snapshot.reason, DiagnosticSupportReason.healthy);
+        expect(snapshot.storageConfigured, isFalse);
+        expect(snapshot.status, DiagnosticSupportStatus.degraded);
+        expect(snapshot.slot, isNull);
+        expect(snapshot.known, isTrue);
+        expect(snapshot.stale, isFalse);
+        expect(snapshot.ageMs, 0);
+        expect(emitError(session), isTrue);
+        await eventually(
+          () =>
+              support.snapshot().reason ==
+              DiagnosticSupportReason.storageWorkerUnconfigured,
+        );
+        expect(support.snapshot().status, DiagnosticSupportStatus.degraded);
+      },
+    );
+
+    test('configured storage without an admitted slot is starting', () async {
+      final profile = _profile('support-starting-');
+      final (session, support) = await start(
+        sinkFactory: _healthySink,
+        profile: profile.path,
+      );
+      final snapshot = support.snapshot();
+      expect(snapshot.reason, DiagnosticSupportReason.healthy);
+      expect(snapshot.storageConfigured, isTrue);
+      expect(snapshot.slot, isNull);
+      expect(snapshot.status, DiagnosticSupportStatus.starting);
+      // A cold session with no warning, 100 records or five seconds of
+      // running time admits no slot and keeps starting.
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+      expect(support.snapshot().status, DiagnosticSupportStatus.starting);
+      expect(support.snapshot().slot, isNull);
+      expect(session.health.slot, isNull);
+    });
+
+    test('an admitted slot moves starting to healthy', () async {
+      final profile = _profile('support-healthy-');
+      final (session, support) = await start(
+        sinkFactory: _healthySink,
+        profile: profile.path,
+      );
+      expect(support.snapshot().status, DiagnosticSupportStatus.starting);
+      expect(emitError(session), isTrue);
+      await eventually(
+        () => support.snapshot().status == DiagnosticSupportStatus.healthy,
+      );
+      final snapshot = support.snapshot();
+      expect(snapshot.slot, 4);
+      expect(snapshot.reason, DiagnosticSupportReason.healthy);
+      expect(snapshot.storageConfigured, isTrue);
+    });
+
+    test('configured storage that admits no slot is degraded', () async {
+      final profile = _profile('support-no-slot-');
+      final (session, support) = await start(
+        sinkFactory: _noSlot,
+        profile: profile.path,
+      );
+      expect(support.snapshot().status, DiagnosticSupportStatus.starting);
+      expect(emitError(session), isTrue);
+      await eventually(
+        () => support.snapshot().status == DiagnosticSupportStatus.degraded,
+      );
+      final snapshot = support.snapshot();
+      expect(snapshot.storageConfigured, isTrue);
+      expect(snapshot.slot, isNull);
+      expect(snapshot.reason, isNot(DiagnosticSupportReason.healthy));
+      expect(snapshot.reason, isNot(DiagnosticSupportReason.bootstrapOnly));
+    });
+
+    test('a failed sink is degraded with its own reason', () async {
+      final profile = _profile('support-sink-');
+      final (session, support) = await start(
+        sinkFactory: _failingSink,
+        profile: profile.path,
+      );
+      support.selectProfile(ProfilePaths(profile.path, '${profile.path}/run'));
+      expect(support.snapshot().logsFolderKnown, isTrue);
+      expect(emitError(session), isTrue);
+      await eventually(
+        () => support.snapshot().status == DiagnosticSupportStatus.degraded,
+      );
+      final snapshot = support.snapshot();
+      expect(snapshot.reason, DiagnosticSupportReason.sinkFailed);
+      expect(snapshot.storageConfigured, isTrue);
+      expect(snapshot.nativeReason, DiagnosticSupportNativeReason.unconfigured);
+    });
+
+    test('native degradation is reported apart from session status', () async {
+      final profile = _profile('support-native-');
+      final (session, support) = await start(
+        sinkFactory: _healthySink,
+        profile: profile.path,
+      );
+      expect(emitError(session), isTrue);
+      await eventually(
+        () => support.snapshot().status == DiagnosticSupportStatus.healthy,
+      );
+      // Injected into the session's own health record, as its native health
+      // message would; no native library is loaded by this test.
+      session.health
+        ..nativeReason = NativeDiagnosticHealth.capacity
+        ..nativeDropsExact = false;
+      final snapshot = support.snapshot();
+      expect(snapshot.status, DiagnosticSupportStatus.healthy);
+      expect(snapshot.reason, DiagnosticSupportReason.healthy);
+      expect(snapshot.nativeReason, DiagnosticSupportNativeReason.capacity);
+      expect(snapshot.nativeDropsExact, isFalse);
+    });
+
+    test('close reports closing, then closed', () async {
+      final profile = _profile('support-close-');
+      final (session, support) = await start(
+        sinkFactory: _healthySink,
+        profile: profile.path,
+      );
+      expect(emitError(session), isTrue);
+      await eventually(
+        () => support.snapshot().status == DiagnosticSupportStatus.healthy,
+      );
+      final closing = session.close();
+      expect(support.snapshot().status, DiagnosticSupportStatus.closing);
+      await closing;
+      final snapshot = support.snapshot();
+      expect(snapshot.status, DiagnosticSupportStatus.closed);
+      expect(snapshot.known, isTrue);
+    });
+
+    test('an unconfigured session closes as closed', () async {
+      final (session, support) = await start();
+      final closing = session.close();
+      expect(support.snapshot().status, DiagnosticSupportStatus.closing);
+      await closing;
+      expect(support.snapshot().status, DiagnosticSupportStatus.closed);
+    });
+
+    test('a stale cached report keeps its values but is unknown', () async {
+      final profile = _profile('support-stale-');
+      final (session, _) = await start(
+        sinkFactory: _healthySink,
+        profile: profile.path,
+      );
+      expect(emitError(session), isTrue);
+      await eventually(
+        () => session.healthSnapshot.state == DiagnosticHealthState.healthy,
+      );
+      final report = session.healthSnapshot.toJson();
+      final fresh = DiagnosticHealthSnapshot.tryParse({
+        ...report,
+        'ageMs': DiagnosticHealthSnapshot.staleAfterMs,
+      });
+      final stale = DiagnosticHealthSnapshot.tryParse({
+        ...report,
+        'ageMs': DiagnosticHealthSnapshot.staleAfterMs + 1,
+        'stale': true,
+        'state': DiagnosticHealthState.unknown.name,
+      });
+      expect(
+        LocalDiagnosticSupport.fromHealth(fresh!).status,
+        DiagnosticSupportStatus.healthy,
+      );
+      final snapshot = LocalDiagnosticSupport.fromHealth(stale!);
+      expect(snapshot.status, DiagnosticSupportStatus.unknown);
+      expect(snapshot.stale, isTrue);
+      expect(snapshot.known, isTrue);
+      expect(snapshot.ageMs, DiagnosticHealthSnapshot.staleAfterMs + 1);
+      expect(snapshot.reason, DiagnosticSupportReason.healthy);
+      expect(snapshot.slot, 4);
+      expect(snapshot.admitted, report['admittedRecords']);
+    });
+
+    test('no report yet is unknown without an age', () {
+      final snapshot = LocalDiagnosticSupport.fromHealth(
+        const DiagnosticHealthSnapshot(),
+      );
+      expect(snapshot.status, DiagnosticSupportStatus.unknown);
+      expect(snapshot.known, isFalse);
+      expect(snapshot.ageMs, isNull);
+      expect(snapshot.stale, isFalse);
+      expect(snapshot.supportText, contains('age_ms: none'));
+      expect(snapshot.supportText, contains('slot: none'));
+    });
+
+    test('every state, reason and native reason maps by name', () {
+      for (final state in DiagnosticHealthState.values) {
+        expect(
+          LocalDiagnosticSupport.fromHealth(
+            DiagnosticHealthSnapshot(state: state),
+          ).status.name,
+          state.name,
+        );
+      }
+      for (final reason in DiagnosticHealthReason.values) {
+        expect(
+          LocalDiagnosticSupport.fromHealth(
+            DiagnosticHealthSnapshot(reason: reason),
+          ).reason.name,
+          reason.name,
+        );
+      }
+      for (final native in NativeDiagnosticHealth.values) {
+        expect(
+          LocalDiagnosticSupport.fromHealth(
+            DiagnosticHealthSnapshot(nativeReason: native),
+          ).nativeReason.name,
+          native.name,
+        );
+      }
+    });
+
+    test('configuration, counters and slot are copied faithfully', () {
+      final snapshot = LocalDiagnosticSupport.fromHealth(
+        const DiagnosticHealthSnapshot(
+          level: DiagnosticLevel.debug,
+          transportTrace: true,
+          invalidLevel: true,
+          storageConfigured: true,
+          known: true,
+          ageMs: 7,
+          state: DiagnosticHealthState.healthy,
+          reason: DiagnosticHealthReason.healthy,
+          nativeReason: NativeDiagnosticHealth.healthy,
+          nativeDropsExact: true,
+          admittedRecords: 1,
+          droppedRecords: 2,
+          rejectedRecords: 3,
+          highWaterBytes: 4,
+          highWaterRecords: 5,
+          producerRegistrationRefused: 6,
+          quarantinedProducers: 7,
+          slot: 3,
+        ),
+        logsFolderKnown: true,
+      );
+      expect(
+        [
+          snapshot.level,
+          snapshot.transportTrace,
+          snapshot.invalidLevel,
+          snapshot.storageConfigured,
+          snapshot.known,
+          snapshot.stale,
+          snapshot.ageMs,
+          snapshot.nativeReason,
+          snapshot.nativeDropsExact,
+          snapshot.admitted,
+          snapshot.dropped,
+          snapshot.rejected,
+          snapshot.highWaterBytes,
+          snapshot.highWaterRecords,
+          snapshot.refusedProducers,
+          snapshot.quarantinedProducers,
+          snapshot.slot,
+          snapshot.logsFolderKnown,
+        ],
+        [
+          DiagnosticSupportLevel.debug,
+          true,
+          true,
+          true,
+          true,
+          false,
+          7,
+          DiagnosticSupportNativeReason.healthy,
+          true,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          3,
+          true,
+        ],
+      );
     });
 
     test('an invalid level and transport trace are reported', () async {
@@ -336,118 +673,23 @@ void main() {
           true,
         ),
       ]) {
-        final session = await LoggingSession.startForTesting(
+        final (_, support) = await start(
           configuration: DiagnosticConfiguration.fromEnvironment(environment),
         );
-        addTearDown(session.close);
-        final snapshot = (LocalDiagnosticSupport(
-          openUri: _Opener().call,
-        )..attachSession(session)).snapshot();
+        final snapshot = support.snapshot();
         expect(snapshot.level, level, reason: '$environment');
         expect(snapshot.invalidLevel, invalid, reason: '$environment');
         expect(snapshot.transportTrace, trace, reason: '$environment');
-        expect(snapshot.status, isNot(DiagnosticSupportStatus.off));
+        expect(snapshot.status, DiagnosticSupportStatus.degraded);
       }
-    });
-
-    test('an actual sink failure changes the snapshot', () async {
-      final profile = _profile('support-sink-');
-      final session = await LoggingSession.startForTesting(
-        configuration: const DiagnosticConfiguration(),
-        profilePath: profile.path,
-        sinkFactory: _failingSink,
-      );
-      addTearDown(session.close);
-      final support = LocalDiagnosticSupport(openUri: _Opener().call)
-        ..attachSession(session)
-        ..selectProfile(ProfilePaths(profile.path, '${profile.path}/run'));
-      final before = support.snapshot();
-      expect(before.status, DiagnosticSupportStatus.active);
-      expect(before.logsFolderKnown, isTrue);
-      expect(
-        session.producer.emit(
-          DiagnosticEvent.runtimeFailed,
-          DiagnosticComponent.logging,
-        ),
-        isTrue,
-      );
-      await eventually(
-        () => support.snapshot().status == DiagnosticSupportStatus.failed,
-      );
-      expect(support.snapshot().reason, DiagnosticSupportReason.sinkFailed);
-      await session.close();
-      final after = support.snapshot();
-      expect(after.closed, isTrue);
-      expect(after.reason, DiagnosticSupportReason.sinkFailed);
-    });
-
-    test('a missing storage worker reports its closed reason', () async {
-      final profile = _profile('support-unconfigured-');
-      final session = await LoggingSession.startForTesting(
-        configuration: const DiagnosticConfiguration(),
-        profilePath: profile.path,
-      );
-      addTearDown(session.close);
-      final support = LocalDiagnosticSupport(openUri: _Opener().call)
-        ..attachSession(session);
-      expect(
-        session.producer.emit(
-          DiagnosticEvent.runtimeFailed,
-          DiagnosticComponent.logging,
-        ),
-        isTrue,
-      );
-      await eventually(
-        () => support.snapshot().status != DiagnosticSupportStatus.active,
-      );
-      expect(
-        support.snapshot().reason,
-        DiagnosticSupportReason.storageWorkerUnconfigured,
-      );
-      expect(support.snapshot().status, DiagnosticSupportStatus.limited);
-    });
-
-    test('every session reason maps by name and counters are copied', () async {
-      final session = await LoggingSession.startForTesting(
-        configuration: const DiagnosticConfiguration(),
-      );
-      addTearDown(session.close);
-      final support = LocalDiagnosticSupport(openUri: _Opener().call)
-        ..attachSession(session);
-      final health = session.health;
-      for (final reason in DiagnosticHealthReason.values) {
-        health.reason = reason;
-        expect(support.snapshot().reason.name, reason.name);
-      }
-      health
-        ..admitted = 7
-        ..dropped = 3
-        ..rejected = 2
-        ..producerRegistrationRefused = 1
-        ..quarantinedProducers = 4;
-      final snapshot = support.snapshot();
-      expect(
-        [
-          snapshot.admitted,
-          snapshot.dropped,
-          snapshot.rejected,
-          snapshot.refusedProducers,
-          snapshot.quarantinedProducers,
-        ],
-        [7, 3, 2, 1, 4],
-      );
     });
 
     test('repeated reads allocate or register no producer', () async {
       final profile = _profile('support-reads-');
-      final session = await LoggingSession.startForTesting(
-        configuration: const DiagnosticConfiguration(),
-        profilePath: profile.path,
-        sinkFactory: _failingSink,
+      final (session, support) = await start(
+        sinkFactory: _healthySink,
+        profile: profile.path,
       );
-      addTearDown(session.close);
-      final support = LocalDiagnosticSupport(openUri: _Opener().call)
-        ..attachSession(session);
       final producers = session.retainedProducerCount,
           slots = session.retainedSlotCount;
       for (var i = 0; i < 1000; ++i) {
@@ -459,19 +701,19 @@ void main() {
 
     test('support text holds only closed fields', () async {
       final profile = _profile('support-text-');
-      final session = await LoggingSession.startForTesting(
-        configuration: const DiagnosticConfiguration(),
-        profilePath: profile.path,
+      final (session, support) = await start(
+        sinkFactory: _healthySink,
+        profile: profile.path,
       );
-      addTearDown(session.close);
-      final support = LocalDiagnosticSupport(openUri: _Opener().call)
-        ..attachSession(session)
-        ..selectProfile(ProfilePaths(profile.path, '${profile.path}/run'));
+      support.selectProfile(ProfilePaths(profile.path, '${profile.path}/run'));
       session.health.admitted = 0x7fffffff + 5;
       final text = support.snapshot().supportText;
       expect(text, isNot(contains('/')));
       expect(text, isNot(contains(profile.path.split('/').last)));
       expect(text, contains('host: desktop'));
+      expect(text, contains('status: starting'));
+      expect(text, contains('storage_configured: true'));
+      expect(text, isNot(contains('supported')));
       expect(text, contains('logs_folder_known: true'));
       expect(text, contains('admitted: ${0x7fffffff}'));
       for (final line in text.split('\n')) {
@@ -537,6 +779,12 @@ void main() {
         'reserveProducer',
         'session.selectProfile',
         'session.close',
+        'create: true',
+        '.remove(',
+        '.replace(',
+        '.publish(',
+        '.open(',
+        '.health.',
       ]) {
         expect(source, isNot(contains(token)), reason: token);
       }

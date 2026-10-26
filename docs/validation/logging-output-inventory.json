@@ -108,8 +108,8 @@
     },
     {
       "path": "packages/foresight_core/lib/src/diagnostic_support_local.dart",
-      "line": 79,
-      "disposition": "B4: explicit-click reveal of the validated private profile logs folder through the inventoried platform_services opener; closed result only, opener error/output discarded; no upload or new sink"
+      "line": 98,
+      "disposition": "B4: explicit-click reveal of the owner-checked no-follow private profile logs folder through the inventoried platform_services opener; closed result only, opener error/output discarded; no upload or new sink"
     },
     {
       "path": "packages/foresight_core/lib/src/document_parser.dart",
@@ -518,7 +518,7 @@
     },
     {
       "path": "apps/desktop/lib/features/settings/diagnostic_support_view.dart",
-      "line": 93,
+      "line": 100,
       "disposition": "B4: explicit-click clipboard copy of the closed in-memory health summary for manual review; no file, log, network or upload sink"
     },
     {

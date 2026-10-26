@@ -26,13 +26,14 @@ class _DiagnosticSupportViewState extends State<DiagnosticSupportView> {
   late DiagnosticSupportSnapshot _snapshot = widget.support.snapshot();
   bool _opening = false;
   String _message = '';
-  int _generation = 0;
+  int _generation = 0, _copyGeneration = 0;
 
   @override
   void didUpdateWidget(covariant DiagnosticSupportView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.support, widget.support)) {
       _generation++;
+      _copyGeneration++;
       _opening = false;
       _message = '';
       _snapshot = widget.support.snapshot();
@@ -42,6 +43,7 @@ class _DiagnosticSupportViewState extends State<DiagnosticSupportView> {
   @override
   void dispose() {
     _generation++;
+    _copyGeneration++;
     super.dispose();
   }
 
@@ -71,51 +73,107 @@ class _DiagnosticSupportViewState extends State<DiagnosticSupportView> {
       _message = switch (result) {
         DiagnosticFolderOpenResult.opened => '',
         DiagnosticFolderOpenResult.unavailable =>
-          'The logs folder is unavailable in this session.',
+          _snapshot.logsFolderKnown ? _folderUnavailable : '',
         DiagnosticFolderOpenResult.missing =>
           'No log files have been written yet.',
         DiagnosticFolderOpenResult.unsafe =>
-          'The logs folder was not opened because it is not a private folder.',
+          'The logs folder was not shown because it is not a private folder '
+              'owned by you.',
         DiagnosticFolderOpenResult.failed =>
           'Could not show the logs folder. Try again.',
       };
     });
   }
 
+  static const _folderUnavailable =
+      'The logs folder is unavailable in this session.';
+
   String get _summary =>
       'Open Foresight ${widget.version} (build ${widget.buildNumber})\n'
       '${_snapshot.supportText}';
 
   Future<void> _copy() async {
-    final generation = _generation;
+    final generation = ++_copyGeneration;
+    String message;
     try {
       await (widget.copyText?.call(_summary) ??
           Clipboard.setData(ClipboardData(text: _summary)));
-      if (mounted && generation == _generation)
-        setState(() => _message = 'Copied the health summary.');
+      message = 'Copied the health summary.';
     } catch (_) {
-      if (mounted && generation == _generation)
-        setState(() => _message = 'Could not copy the health summary.');
+      message = 'Could not copy the health summary.';
+    }
+    if (mounted && generation == _copyGeneration) {
+      setState(() => _message = message);
     }
   }
 
-  static String _status(DiagnosticSupportStatus status) => switch (status) {
-    DiagnosticSupportStatus.unavailable => 'Unavailable in this session',
-    DiagnosticSupportStatus.off => 'Off',
-    DiagnosticSupportStatus.active => 'Recording',
-    DiagnosticSupportStatus.memoryOnly => 'Held in memory, not written',
-    DiagnosticSupportStatus.limited =>
-      'Not writing log files; the app continues',
-    DiagnosticSupportStatus.failed =>
-      'Log writing stopped after a failure; the app continues',
-    DiagnosticSupportStatus.closed => 'Closed',
-  };
+  static String _degraded(DiagnosticSupportSnapshot snapshot) {
+    if (!snapshot.storageConfigured) return 'log storage is not configured';
+    return switch (snapshot.reason) {
+      DiagnosticSupportReason.storageUnavailable =>
+        'no log file slot is available',
+      DiagnosticSupportReason.unsupportedFilesystem =>
+        'this file system is not used for log files',
+      DiagnosticSupportReason.sinkFailed ||
+      DiagnosticSupportReason.writerFailed => 'writing log files failed',
+      DiagnosticSupportReason.storageWorkerUnconfigured =>
+        'log storage is not configured',
+      DiagnosticSupportReason.storageStagingUnavailable ||
+      DiagnosticSupportReason.storagePlatformUnsupported ||
+      DiagnosticSupportReason.storageDescriptorLimit =>
+        'log storage is unavailable on this system',
+      DiagnosticSupportReason.storageWorkerLaunchFailed ||
+      DiagnosticSupportReason.storageWorkerProtocolFailed ||
+      DiagnosticSupportReason.storageWorkerExited ||
+      DiagnosticSupportReason.storageWorkerUnresponsive ||
+      DiagnosticSupportReason.storageWorkerUnknown =>
+        'the log storage worker stopped or did not start',
+      DiagnosticSupportReason.unavailable ||
+      DiagnosticSupportReason.healthy ||
+      DiagnosticSupportReason.bootstrapOnly ||
+      DiagnosticSupportReason.off ||
+      DiagnosticSupportReason.closed => 'logging is limited',
+    };
+  }
+
+  static String _status(DiagnosticSupportSnapshot snapshot) =>
+      switch (snapshot.status) {
+        DiagnosticSupportStatus.unavailable => 'Unavailable in this session',
+        DiagnosticSupportStatus.off => 'Off',
+        DiagnosticSupportStatus.unknown =>
+          snapshot.stale
+              ? 'Unknown: the last report is out of date'
+              : 'Unknown: no report yet',
+        DiagnosticSupportStatus.starting =>
+          'Starting: no log file has been admitted yet',
+        DiagnosticSupportStatus.healthy => 'Writing to a log file',
+        DiagnosticSupportStatus.degraded =>
+          'Degraded: ${_degraded(snapshot)}; the app continues',
+        DiagnosticSupportStatus.closing => 'Closing',
+        DiagnosticSupportStatus.closed => 'Closed',
+      };
+
+  static String? _native(DiagnosticSupportSnapshot snapshot) {
+    final reason = switch (snapshot.nativeReason) {
+      DiagnosticSupportNativeReason.unconfigured => null,
+      DiagnosticSupportNativeReason.healthy => 'working',
+      DiagnosticSupportNativeReason.unsupported =>
+        'not supported by this native library',
+      DiagnosticSupportNativeReason.capacity => 'at capacity',
+      DiagnosticSupportNativeReason.protocolFailed => 'failed',
+      DiagnosticSupportNativeReason.unsettled => 'not settled',
+    };
+    if (reason == null) return null;
+    return 'Native diagnostics: $reason'
+        '${snapshot.nativeDropsExact ? '' : '; drop counts are approximate'}';
+  }
 
   @override
   Widget build(BuildContext context) {
     final snapshot = _snapshot;
     final available = snapshot.status != DiagnosticSupportStatus.unavailable;
     final canOpen = snapshot.logsFolderKnown && !_opening;
+    final native = _native(snapshot);
     return Card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -124,12 +182,13 @@ class _DiagnosticSupportViewState extends State<DiagnosticSupportView> {
             key: const Key('diagnosticHealth'),
             title: const Text('Logging in this desktop app'),
             subtitle: Text(
-              '${_status(snapshot.status)}'
+              '${_status(snapshot)}'
               '${available ? ' · level ${snapshot.level.name}' : ''}'
               '${snapshot.invalidLevel ? ' (FORESIGHT_LOG_LEVEL was invalid)' : ''}\n'
-              'Logs stay on this computer and are never uploaded. Open logs '
-              'folder shows it in your file manager. The background service '
-              'keeps its own logs there; its health is not shown here.',
+              'Updated when this page opens or you choose Refresh. Logs stay '
+              'on this computer and are never uploaded. Show logs folder '
+              'reveals it in your file manager. The background service keeps '
+              'its own logs there; its health is not shown here.',
             ),
           ),
           if (available)
@@ -141,6 +200,11 @@ class _DiagnosticSupportViewState extends State<DiagnosticSupportView> {
                 ' · rejected ${snapshot.rejected}',
               ),
             ),
+          if (native != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+              child: Text(key: const Key('nativeDiagnosticHealth'), native),
+            ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
             child: Wrap(
@@ -149,9 +213,9 @@ class _DiagnosticSupportViewState extends State<DiagnosticSupportView> {
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 TextButton(
-                  key: const Key('openLogsFolder'),
+                  key: const Key('showLogsFolder'),
                   onPressed: canOpen ? _open : null,
-                  child: Text(_opening ? 'Opening…' : 'Open logs folder'),
+                  child: Text(_opening ? 'Showing…' : 'Show logs folder'),
                 ),
                 TextButton(
                   key: const Key('refreshDiagnosticHealth'),
@@ -163,8 +227,7 @@ class _DiagnosticSupportViewState extends State<DiagnosticSupportView> {
                   onPressed: available ? _copy : null,
                   child: const Text('Copy health summary'),
                 ),
-                if (!snapshot.logsFolderKnown)
-                  const Text('The logs folder is unavailable in this session.'),
+                if (!snapshot.logsFolderKnown) const Text(_folderUnavailable),
                 if (_message.isNotEmpty)
                   Semantics(liveRegion: true, child: Text(_message)),
               ],

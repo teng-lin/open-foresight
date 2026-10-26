@@ -39,17 +39,33 @@ final class _Port implements DiagnosticSupportPort {
 }
 
 DiagnosticSupportSnapshot _snapshot(
-  DiagnosticSupportReason reason, {
+  DiagnosticSupportStatus status, {
+  DiagnosticSupportReason reason = DiagnosticSupportReason.healthy,
   bool folder = true,
+  bool storageConfigured = true,
+  bool stale = false,
+  DiagnosticSupportNativeReason native =
+      DiagnosticSupportNativeReason.unconfigured,
+  bool nativeDropsExact = true,
+  int? slot,
   DiagnosticSupportLevel level = DiagnosticSupportLevel.info,
-  int admitted = 12,
 }) => DiagnosticSupportSnapshot(
+  status: status,
   reason: reason,
   level: level,
+  storageConfigured: storageConfigured,
+  known: true,
+  stale: stale,
+  ageMs: stale ? 2500 : 0,
+  nativeReason: native,
+  nativeDropsExact: nativeDropsExact,
+  slot: slot,
   logsFolderKnown: folder,
-  admitted: admitted,
+  admitted: 12,
   dropped: 1,
 );
+
+final _writing = _snapshot(DiagnosticSupportStatus.healthy, slot: 3);
 
 Future<void> _mount(
   WidgetTester tester,
@@ -75,9 +91,13 @@ void main() {
   testWidgets('shows the actual snapshot and labels its host scope', (
     tester,
   ) async {
-    final port = _Port(_snapshot(DiagnosticSupportReason.healthy));
+    final port = _Port(_writing);
     await _mount(tester, port);
-    expect(find.textContaining('Recording · level info'), findsOneWidget);
+    expect(
+      find.textContaining('Writing to a log file · level info'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Updated when this page opens'), findsOneWidget);
     expect(find.textContaining('never uploaded'), findsOneWidget);
     expect(find.textContaining('its health is not shown here'), findsOneWidget);
     expect(find.text('Recorded 12 · dropped 1 · rejected 0'), findsOneWidget);
@@ -87,7 +107,7 @@ void main() {
   testWidgets('rebuilds read health once and never open the folder', (
     tester,
   ) async {
-    final port = _Port(_snapshot(DiagnosticSupportReason.healthy));
+    final port = _Port(_writing);
     var color = Colors.white;
     late StateSetter rebuild;
     await tester.pumpWidget(
@@ -116,34 +136,124 @@ void main() {
   });
 
   testWidgets('refresh shows a changed session state', (tester) async {
-    final port = _Port(_snapshot(DiagnosticSupportReason.healthy));
+    final port = _Port(_writing);
     await _mount(tester, port);
-    port.current = _snapshot(DiagnosticSupportReason.sinkFailed);
-    expect(find.textContaining('Recording'), findsOneWidget);
+    port.current = _snapshot(
+      DiagnosticSupportStatus.degraded,
+      reason: DiagnosticSupportReason.sinkFailed,
+    );
+    expect(find.textContaining('Writing to a log file'), findsOneWidget);
     await tester.tap(find.byKey(const Key('refreshDiagnosticHealth')));
     await tester.pump();
     expect(
-      find.textContaining('Log writing stopped after a failure'),
+      find.textContaining(
+        'Degraded: writing log files failed; the app continues',
+      ),
       findsOneWidget,
     );
+  });
+
+  for (final (name, snapshot, label) in [
+    (
+      'no report',
+      DiagnosticSupportSnapshot(
+        status: DiagnosticSupportStatus.unknown,
+        reason: DiagnosticSupportReason.storageWorkerUnknown,
+        level: DiagnosticSupportLevel.info,
+        logsFolderKnown: true,
+      ),
+      'Unknown: no report yet',
+    ),
+    (
+      'a stale report',
+      _snapshot(DiagnosticSupportStatus.unknown, stale: true, slot: 3),
+      'Unknown: the last report is out of date',
+    ),
+    (
+      'configured storage without a slot',
+      _snapshot(DiagnosticSupportStatus.starting),
+      'Starting: no log file has been admitted yet',
+    ),
+    (
+      'unconfigured storage',
+      _snapshot(DiagnosticSupportStatus.degraded, storageConfigured: false),
+      'Degraded: log storage is not configured; the app continues',
+    ),
+    (
+      'no admitted slot',
+      _snapshot(
+        DiagnosticSupportStatus.degraded,
+        reason: DiagnosticSupportReason.storageUnavailable,
+      ),
+      'Degraded: no log file slot is available; the app continues',
+    ),
+    (
+      'a failed storage worker',
+      _snapshot(
+        DiagnosticSupportStatus.degraded,
+        reason: DiagnosticSupportReason.storageWorkerExited,
+      ),
+      'Degraded: the log storage worker stopped or did not start; '
+          'the app continues',
+    ),
+    ('closing', _snapshot(DiagnosticSupportStatus.closing), 'Closing'),
+    ('closed', _snapshot(DiagnosticSupportStatus.closed), 'Closed'),
+    (
+      'off',
+      _snapshot(
+        DiagnosticSupportStatus.off,
+        reason: DiagnosticSupportReason.off,
+        level: DiagnosticSupportLevel.off,
+      ),
+      'Off · level off',
+    ),
+  ]) {
+    testWidgets('$name has its own status', (tester) async {
+      await _mount(tester, _Port(snapshot));
+      expect(find.textContaining(label), findsOneWidget);
+      expect(find.textContaining('Writing to a log file'), findsNothing);
+    });
+  }
+
+  testWidgets('native degradation is shown apart from session status', (
+    tester,
+  ) async {
+    await _mount(
+      tester,
+      _Port(
+        _snapshot(
+          DiagnosticSupportStatus.healthy,
+          slot: 3,
+          native: DiagnosticSupportNativeReason.capacity,
+          nativeDropsExact: false,
+        ),
+      ),
+    );
+    expect(find.textContaining('Writing to a log file'), findsOneWidget);
+    expect(
+      find.text('Native diagnostics: at capacity; drop counts are approximate'),
+      findsOneWidget,
+    );
+    await _mount(tester, _Port(_writing));
+    expect(find.byKey(const Key('nativeDiagnosticHealth')), findsNothing);
   });
 
   testWidgets(
     'an explicit click opens once and shows an accessible busy state',
     (tester) async {
-      final port = _Port(_snapshot(DiagnosticSupportReason.healthy));
+      final port = _Port(_writing);
       await _mount(tester, port);
-      await tester.tap(find.byKey(const Key('openLogsFolder')));
+      await tester.tap(find.byKey(const Key('showLogsFolder')));
       await tester.pump();
       expect(port.opens, 1);
-      expect(find.text('Opening…'), findsOneWidget);
-      expect(_button(tester, 'openLogsFolder').onPressed, isNull);
+      expect(find.text('Showing…'), findsOneWidget);
+      expect(_button(tester, 'showLogsFolder').onPressed, isNull);
       expect(_button(tester, 'refreshDiagnosticHealth').onPressed, isNull);
       final semantics = tester.ensureSemantics();
       expect(
-        tester.getSemantics(find.byKey(const Key('openLogsFolder'))),
+        tester.getSemantics(find.byKey(const Key('showLogsFolder'))),
         matchesSemantics(
-          label: 'Opening…',
+          label: 'Showing…',
           isButton: true,
           hasEnabledState: true,
           isEnabled: false,
@@ -152,13 +262,13 @@ void main() {
         ),
       );
       semantics.dispose();
-      await tester.tap(find.byKey(const Key('openLogsFolder')));
+      await tester.tap(find.byKey(const Key('showLogsFolder')));
       await tester.pump();
       expect(port.opens, 1);
       port.pending!.complete(DiagnosticFolderOpenResult.opened);
       await tester.pump();
-      expect(find.text('Open logs folder'), findsOneWidget);
-      expect(_button(tester, 'openLogsFolder').onPressed, isNotNull);
+      expect(find.text('Show logs folder'), findsOneWidget);
+      expect(_button(tester, 'showLogsFolder').onPressed, isNotNull);
       expect(port.snapshots, 2, reason: 'health is re-read after the attempt');
     },
   );
@@ -167,7 +277,8 @@ void main() {
     (DiagnosticFolderOpenResult.missing, 'No log files have been written yet.'),
     (
       DiagnosticFolderOpenResult.unsafe,
-      'The logs folder was not opened because it is not a private folder.',
+      'The logs folder was not shown because it is not a private folder '
+          'owned by you.',
     ),
     (
       DiagnosticFolderOpenResult.failed,
@@ -179,9 +290,9 @@ void main() {
     ),
   ]) {
     testWidgets('${result.name} shows a closed message', (tester) async {
-      final port = _Port(_snapshot(DiagnosticSupportReason.healthy));
+      final port = _Port(_writing);
       await _mount(tester, port);
-      await tester.tap(find.byKey(const Key('openLogsFolder')));
+      await tester.tap(find.byKey(const Key('showLogsFolder')));
       await tester.pump();
       port.pending!.complete(result);
       await tester.pump();
@@ -196,10 +307,10 @@ void main() {
   }
 
   testWidgets('a thrown port error never reaches the user', (tester) async {
-    final port = _Port(_snapshot(DiagnosticSupportReason.healthy))
+    final port = _Port(_writing)
       ..failure = StateError('/home/fixture/secret: vendor stderr');
     await _mount(tester, port);
-    await tester.tap(find.byKey(const Key('openLogsFolder')));
+    await tester.tap(find.byKey(const Key('showLogsFolder')));
     await tester.pump();
     expect(
       find.text('Could not show the logs folder. Try again.'),
@@ -213,9 +324,9 @@ void main() {
   testWidgets('disposal during an open discards its late result', (
     tester,
   ) async {
-    final port = _Port(_snapshot(DiagnosticSupportReason.healthy));
+    final port = _Port(_writing);
     await _mount(tester, port);
-    await tester.tap(find.byKey(const Key('openLogsFolder')));
+    await tester.tap(find.byKey(const Key('showLogsFolder')));
     await tester.pump();
     await tester.pumpWidget(const SizedBox());
     port.pending!.complete(DiagnosticFolderOpenResult.failed);
@@ -225,14 +336,20 @@ void main() {
   });
 
   testWidgets('a replaced port invalidates the pending result', (tester) async {
-    final first = _Port(_snapshot(DiagnosticSupportReason.healthy));
-    final second = _Port(_snapshot(DiagnosticSupportReason.off));
+    final first = _Port(_writing);
+    final second = _Port(
+      _snapshot(
+        DiagnosticSupportStatus.off,
+        reason: DiagnosticSupportReason.off,
+        level: DiagnosticSupportLevel.off,
+      ),
+    );
     await _mount(tester, first);
-    await tester.tap(find.byKey(const Key('openLogsFolder')));
+    await tester.tap(find.byKey(const Key('showLogsFolder')));
     await tester.pump();
     await _mount(tester, second);
     expect(find.textContaining('Off'), findsOneWidget);
-    expect(find.text('Open logs folder'), findsOneWidget);
+    expect(find.text('Show logs folder'), findsOneWidget);
     first.pending!.complete(DiagnosticFolderOpenResult.failed);
     await tester.pump();
     expect(
@@ -243,7 +360,7 @@ void main() {
     expect(second.opens, 0);
   });
 
-  testWidgets('the unavailable default disables every action', (tester) async {
+  testWidgets('the unavailable default disables show and copy', (tester) async {
     await _mount(tester, const UnavailableDiagnosticSupport());
     expect(find.textContaining('Unavailable in this session'), findsOneWidget);
     expect(
@@ -251,7 +368,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.byKey(const Key('diagnosticCounters')), findsNothing);
-    expect(_button(tester, 'openLogsFolder').onPressed, isNull);
+    expect(_button(tester, 'showLogsFolder').onPressed, isNull);
     expect(_button(tester, 'copyDiagnosticSummary').onPressed, isNull);
   });
 
@@ -259,14 +376,18 @@ void main() {
     tester,
   ) async {
     final port = _Port(
-      _snapshot(DiagnosticSupportReason.storageUnavailable, folder: false),
+      _snapshot(
+        DiagnosticSupportStatus.degraded,
+        reason: DiagnosticSupportReason.storageUnavailable,
+        folder: false,
+      ),
     );
     await _mount(tester, port);
     expect(
-      find.textContaining('Not writing log files; the app continues'),
+      find.text('The logs folder is unavailable in this session.'),
       findsOneWidget,
     );
-    expect(_button(tester, 'openLogsFolder').onPressed, isNull);
+    expect(_button(tester, 'showLogsFolder').onPressed, isNull);
     expect(_button(tester, 'copyDiagnosticSummary').onPressed, isNotNull);
   });
 
@@ -275,6 +396,7 @@ void main() {
       tester,
       _Port(
         DiagnosticSupportSnapshot(
+          status: DiagnosticSupportStatus.degraded,
           reason: DiagnosticSupportReason.healthy,
           level: DiagnosticSupportLevel.info,
           invalidLevel: true,
@@ -291,23 +413,58 @@ void main() {
     tester,
   ) async {
     final copies = <String>[];
-    final port = _Port(_snapshot(DiagnosticSupportReason.bootstrapOnly));
+    final port = _Port(
+      _snapshot(
+        DiagnosticSupportStatus.starting,
+        reason: DiagnosticSupportReason.bootstrapOnly,
+      ),
+    );
     await _mount(tester, port, copy: (text) async => copies.add(text));
     await tester.tap(find.byKey(const Key('copyDiagnosticSummary')));
     await tester.pump();
     expect(copies, [
       'Open Foresight 0.1.3 (build 4)\n${port.current.supportText}',
     ]);
-    expect(copies.single, contains('status: memoryOnly'));
+    expect(copies.single, contains('status: starting'));
+    expect(copies.single, contains('reason: bootstrapOnly'));
+    expect(copies.single, contains('storage_configured: true'));
     expect(copies.single, isNot(contains('/')));
     expect(find.text('Copied the health summary.'), findsOneWidget);
     expect(port.opens, 0);
   });
 
+  testWidgets('a copy result survives a concurrent show request', (
+    tester,
+  ) async {
+    final copied = Completer<void>();
+    final port = _Port(_writing);
+    await _mount(tester, port, copy: (_) => copied.future);
+    await tester.tap(find.byKey(const Key('copyDiagnosticSummary')));
+    await tester.tap(find.byKey(const Key('showLogsFolder')));
+    await tester.pump();
+    copied.complete();
+    await tester.pump();
+    expect(find.text('Copied the health summary.'), findsOneWidget);
+    port.pending!.complete(DiagnosticFolderOpenResult.opened);
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a replaced port discards a pending copy result', (tester) async {
+    final copied = Completer<void>();
+    await _mount(tester, _Port(_writing), copy: (_) => copied.future);
+    await tester.tap(find.byKey(const Key('copyDiagnosticSummary')));
+    await tester.pump();
+    await _mount(tester, _Port(_writing), copy: (_) async {});
+    copied.complete();
+    await tester.pump();
+    expect(find.text('Copied the health summary.'), findsNothing);
+  });
+
   testWidgets('a clipboard failure shows a closed message', (tester) async {
     await _mount(
       tester,
-      _Port(_snapshot(DiagnosticSupportReason.healthy)),
+      _Port(_writing),
       copy: (_) async => throw StateError('fixture clipboard'),
     );
     await tester.tap(find.byKey(const Key('copyDiagnosticSummary')));
@@ -326,7 +483,7 @@ void main() {
       launcher: '/fixture/launcher',
     );
     expect(environment.diagnosticSupport, isA<UnavailableDiagnosticSupport>());
-    final port = _Port(_snapshot(DiagnosticSupportReason.healthy));
+    final port = _Port(_writing);
     final bound = environment.withDiagnosticSupport(port);
     expect(bound.diagnosticSupport, same(port));
     expect(bound.variables, environment.variables);
@@ -364,17 +521,18 @@ void main() {
       'HttpClient',
       'Socket',
       'Process',
-      'Platform',
     ]) {
       expect(source, isNot(contains(token)), reason: token);
     }
+    // Same host API pattern as the environment adapter guard.
+    expect(RegExp(r'\bPlatform\s*\.').hasMatch(source), isFalse);
   });
 
   testWidgets(
     'settings shows the port supplied through the desktop environment',
     (tester) async => withDesktopFixtures(tester, () async {
       final root = createTestTempDirectorySync('diagnostic-settings-');
-      final port = _Port(_snapshot(DiagnosticSupportReason.healthy));
+      final port = _Port(_writing);
       final connection = ControllerConnection(
         Application(
           Domain(
@@ -409,7 +567,7 @@ void main() {
       expect(tester.widget<DiagnosticSupportView>(view).support, same(port));
       expect(find.text('Diagnostics'), findsOneWidget);
       expect(port.opens, 0);
-      await tester.tap(find.byKey(const Key('openLogsFolder')));
+      await tester.tap(find.byKey(const Key('showLogsFolder')));
       await tester.pump();
       expect(port.opens, 1);
       port.pending!.complete(DiagnosticFolderOpenResult.opened);

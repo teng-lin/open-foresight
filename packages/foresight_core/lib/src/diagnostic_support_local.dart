@@ -7,10 +7,11 @@ import 'dart:io';
 
 import 'diagnostic_support.dart';
 import 'diagnostics/session.dart';
+import 'persistence/backup_files.dart' show BackupDirectory;
 import 'platform_services.dart' show openPlatformUri;
 import 'profile_paths.dart';
 
-/// Reads the attached process [LoggingSession]'s in-memory health and reveals
+/// Copies the attached process [LoggingSession]'s health snapshot and reveals
 /// the canonical selected profile's `logs` folder through an injected local
 /// URI opener. Attach the session and select the profile once each; later
 /// calls are ignored, as LoggingSession.selectProfile ignores them across
@@ -48,21 +49,39 @@ final class LocalDiagnosticSupport implements DiagnosticSupportPort {
   DiagnosticSupportSnapshot snapshot() {
     final session = _session;
     if (session == null) return DiagnosticSupportSnapshot.unavailable;
-    final health = session.health, configuration = session.configuration;
-    return DiagnosticSupportSnapshot(
-      reason: _reason(health.reason),
-      level: _level(configuration.level),
-      invalidLevel: configuration.invalidLevel,
-      transportTrace: configuration.transportTrace,
-      closed: health.closed,
+    return fromHealth(
+      session.healthSnapshot,
       logsFolderKnown: _profile != null,
-      admitted: health.admitted,
-      dropped: health.dropped,
-      rejected: health.rejected,
-      refusedProducers: health.producerRegistrationRefused,
-      quarantinedProducers: health.quarantinedProducers,
     );
   }
+
+  /// Field-by-field copy of a session health snapshot. The status is the
+  /// snapshot's own derived state; nothing is inferred from its reason.
+  static DiagnosticSupportSnapshot fromHealth(
+    DiagnosticHealthSnapshot health, {
+    bool logsFolderKnown = false,
+  }) => DiagnosticSupportSnapshot(
+    status: _status(health.state),
+    reason: _reason(health.reason),
+    level: _level(health.level),
+    invalidLevel: health.invalidLevel,
+    transportTrace: health.transportTrace,
+    storageConfigured: health.storageConfigured,
+    known: health.known,
+    stale: health.stale,
+    ageMs: health.ageMs,
+    nativeReason: _native(health.nativeReason),
+    nativeDropsExact: health.nativeDropsExact,
+    admitted: health.admittedRecords,
+    dropped: health.droppedRecords,
+    rejected: health.rejectedRecords,
+    highWaterBytes: health.highWaterBytes,
+    highWaterRecords: health.highWaterRecords,
+    refusedProducers: health.producerRegistrationRefused,
+    quarantinedProducers: health.quarantinedProducers,
+    slot: health.slot,
+    logsFolderKnown: logsFolderKnown,
+  );
 
   /// Concurrent requests share one validation and opener invocation.
   @override
@@ -84,33 +103,56 @@ final class LocalDiagnosticSupport implements DiagnosticSupportPort {
     return DiagnosticFolderOpenResult.opened;
   }
 
-  /// The logs folder must be a real directory without group or other access,
-  /// inside a profile directory that is not group/other writable, with no
-  /// symbolic link anywhere in its canonical path. FileStat exposes no owner,
-  /// so ownership relies on the storage worker's private creation inside the
-  /// user's profile.
+  /// Uses the storage writer's own directory primitive: every component is
+  /// opened without following links, and the profile and logs folder must be
+  /// directories owned by the effective user. The profile must not be group or
+  /// other writable and the logs folder must have no group or other access.
+  /// The path is then handed to the opener, so a same-user process could still
+  /// swap it between this check and the reveal.
   static DiagnosticFolderOpenResult? _validate(String profile, String logs) {
+    for (final path in [profile, logs]) {
+      final type = FileSystemEntity.typeSync(path, followLinks: false);
+      if (type == FileSystemEntityType.notFound) {
+        return DiagnosticFolderOpenResult.missing;
+      }
+    }
+    BackupDirectory? parent, child;
     try {
-      for (final (path, forbidden) in [(profile, 0x12), (logs, 0x3f)]) {
-        final type = FileSystemEntity.typeSync(path, followLinks: false);
-        if (type == FileSystemEntityType.notFound) {
-          return DiagnosticFolderOpenResult.missing;
-        }
-        if (type != FileSystemEntityType.directory) {
-          return DiagnosticFolderOpenResult.unsafe;
-        }
-        if (FileStat.statSync(path).mode & forbidden != 0) {
-          return DiagnosticFolderOpenResult.unsafe;
-        }
-      }
-      if (Directory(logs).resolveSymbolicLinksSync() != logs) {
-        return DiagnosticFolderOpenResult.unsafe;
-      }
-    } on FileSystemException {
+      parent = BackupDirectory(profile, create: false, private: false);
+      child = parent.child('logs', create: false);
+    } catch (_) {
       return DiagnosticFolderOpenResult.unsafe;
+    } finally {
+      child?.close();
+      parent?.close();
     }
     return null;
   }
+
+  static DiagnosticSupportStatus _status(DiagnosticHealthState state) =>
+      switch (state) {
+        DiagnosticHealthState.off => DiagnosticSupportStatus.off,
+        DiagnosticHealthState.unknown => DiagnosticSupportStatus.unknown,
+        DiagnosticHealthState.starting => DiagnosticSupportStatus.starting,
+        DiagnosticHealthState.healthy => DiagnosticSupportStatus.healthy,
+        DiagnosticHealthState.degraded => DiagnosticSupportStatus.degraded,
+        DiagnosticHealthState.closing => DiagnosticSupportStatus.closing,
+        DiagnosticHealthState.closed => DiagnosticSupportStatus.closed,
+      };
+
+  static DiagnosticSupportNativeReason _native(
+    NativeDiagnosticHealth reason,
+  ) => switch (reason) {
+    NativeDiagnosticHealth.unconfigured =>
+      DiagnosticSupportNativeReason.unconfigured,
+    NativeDiagnosticHealth.healthy => DiagnosticSupportNativeReason.healthy,
+    NativeDiagnosticHealth.unsupported =>
+      DiagnosticSupportNativeReason.unsupported,
+    NativeDiagnosticHealth.capacity => DiagnosticSupportNativeReason.capacity,
+    NativeDiagnosticHealth.protocolFailed =>
+      DiagnosticSupportNativeReason.protocolFailed,
+    NativeDiagnosticHealth.unsettled => DiagnosticSupportNativeReason.unsettled,
+  };
 
   static DiagnosticSupportLevel _level(DiagnosticLevel level) =>
       switch (level) {
