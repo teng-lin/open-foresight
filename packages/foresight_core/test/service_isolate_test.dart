@@ -4,6 +4,9 @@ import 'dart:async';
 import 'dart:isolate';
 import 'dart:io';
 import 'dart:convert';
+import 'dart:ffi' as ffi;
+import 'package:ffi/ffi.dart';
+import 'package:foresight_test_support/capture_process.dart';
 import 'package:foresight_test_support/hooked_service.dart'
     show ServiceGates, sourceServiceCompileDefines;
 import 'package:foresight_test_support/poll.dart';
@@ -16,6 +19,82 @@ import 'package:foresight_core/src/diagnostics/session.dart'
     show DiagnosticHealthSnapshot;
 import 'package:foresight_core/src/service.dart';
 import 'package:test/test.dart';
+
+Future<Map<String, Object?>> _handoffResources(
+  List<String> defines,
+  String launch,
+  List<String> profileDirectories,
+) async {
+  final result = <String, Object?>{
+    'os': Platform.operatingSystem,
+    'osVersionNumeric': RegExp(
+      r'\d+(?:\.\d+)+',
+    ).firstMatch(Platform.operatingSystemVersion)?.group(0),
+    'dartVersion': Platform.version.split(' ').first,
+    'processors': Platform.numberOfProcessors,
+    'launchMode': launch.endsWith('.dill') ? 'portable-kernel' : 'source-jit',
+  };
+  for (final key in ['NATIVE_ID', 'BUILD_ID', 'DART_SDK_ID']) {
+    final prefix = '-DFORESIGHT_DIAGNOSTIC_$key=';
+    final value = defines
+        .where((value) => value.startsWith(prefix))
+        .firstOrNull;
+    if (value != null) {
+      final id = value.substring(prefix.length);
+      if (RegExp(r'^[0-9a-f]{64}$').hasMatch(id)) result[key] = id;
+    }
+  }
+  try {
+    result['fixtureFdCount'] =
+        Directory(Platform.isMacOS ? '/dev/fd' : '/proc/self/fd')
+            .listSync(followLinks: false)
+            .where((entry) => int.tryParse(entry.path.split('/').last) != null)
+            .length;
+    final limits = calloc<ffi.Uint64>(2);
+    try {
+      final getrlimit = ffi.DynamicLibrary.process()
+          .lookupFunction<
+            ffi.Int32 Function(ffi.Int32, ffi.Pointer<ffi.Uint64>),
+            int Function(int, ffi.Pointer<ffi.Uint64>)
+          >('getrlimit');
+      if (getrlimit(Platform.isMacOS ? 8 : 7, limits) == 0) {
+        result['nofileSoft'] = limits[0];
+        final hard = limits[1];
+        result['nofileHardUnlimited'] = hard < 0 || hard >= 0x7fffffffffffffff;
+        if (hard >= 0 && hard < 0x7fffffffffffffff) result['nofileHard'] = hard;
+      }
+    } finally {
+      calloc.free(limits);
+    }
+  } catch (_) {
+    result['fdMetadataAvailable'] = false;
+  }
+  try {
+    final args = Platform.isMacOS
+        ? ['-f', '%u %g %Lp', ...profileDirectories]
+        : ['-c', '%u %g %a', ...profileDirectories];
+    final stat = await runCaptureProcess(
+      '/usr/bin/stat',
+      args,
+      timeout: const Duration(milliseconds: 500),
+    );
+    final values = (stat.stdout as String).trim().split(RegExp(r'\s+'));
+    if (stat.exitCode == 0 &&
+        values.length == 9 &&
+        values.every((value) => RegExp(r'^[0-9]+$').hasMatch(value))) {
+      for (var i = 0; i < 3; i++) {
+        result['profile${i}Uid'] = int.parse(values[i * 3]);
+        result['profile${i}Gid'] = int.parse(values[i * 3 + 1]);
+        result['profile${i}Mode'] = int.tryParse(values[i * 3 + 2], radix: 8);
+      }
+    } else {
+      result['profileMetadataAvailable'] = false;
+    }
+  } catch (_) {
+    result['profileMetadataAvailable'] = false;
+  }
+  return result;
+}
 
 /// A closing owner's refusal as it reaches a client: unavailable, with the
 /// reason or, from an older owner, only the unchanged text.
@@ -154,8 +233,11 @@ void main() {
         'XDG_RUNTIME_DIR': '${directory.path}/xdg-run',
         'FORESIGHT_STARTUP_ENV': handoff.path,
       };
+      final verifiedDefines = await sourceServiceCompileDefines(
+        verifiedWorker: true,
+      );
       final command = [
-        ...await sourceServiceCompileDefines(verifiedWorker: true),
+        ...verifiedDefines,
         '--packages=${File('.dart_tool/package_config.json').absolute.path}',
         'bin/service.dart',
       ];
@@ -206,6 +288,9 @@ void main() {
           // Emit only validated closed tags/booleans, never raw status, paths,
           // configuration, child output or exception messages.
           stderr.writeln('Startup handoff health: ${jsonEncode(lastHealth)}');
+          stderr.writeln(
+            'Startup handoff resources: ${jsonEncode(await _handoffResources(verifiedDefines, command.last, [directory.path, profile.data, profile.runtime]))}',
+          );
           rethrow;
         }
         final statusHandoff = await writeServiceStartupEnvironment(
