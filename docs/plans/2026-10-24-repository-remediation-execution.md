@@ -1507,3 +1507,93 @@ Evidence: `/var/tmp/p95r64/qualification.json`,
 Mac application qualification were not executed locally. Current-head hosted
 CI, actual owner review of retained trust/consumer/workflow controls, and
 verified merge to main remain required. No scope deferral or gate was added.
+
+### CI environment differences found on `6b4a3d11`
+
+The complete hosted check inventory has five underlying failures: the same
+root-host fixture failure in Native Linux and Arch, initial DMG lock setup,
+audio's Flutter-tool cache, and two Mac Core cases. Acceptance/platform aggregate
+failures derive from these; the dedicated Core/Desktop/Service stages were
+skipped after the Native host-contract failure, rather than passing. Quality
+passed **6,255 / 31 skipped / 95.20%**; both sanitizer suites passed **51/51**.
+All seven dependency producers reused qualified originals. The independent
+restored Linux consumer passed native **51/51**, Core **2,889 / 16 skipped /
+91.04%**, desktop **634 / 17 skipped / 93.29%**, service/GUI **38/38**, and fast
+**2/2**. Its real Docker cache fixture also passed. CPU acceptance executed six
+passing cases; packaging and DEB acceptance passed.
+
+The local full Python run used an ordinary user, whereas the failing hosted
+host-contract entrypoints used root. Eight fixture variants incorrectly derived
+their synthetic target identity from that host UID. The production non-root
+guard stays unchanged; the fixture now supplies an explicit non-root target and
+records ownership commands without executing them. Root and ordinary-user
+failed-first controls pass, including separate root-UID/root-GID refusals. The
+full host-contract command subsequently passed **747 / 6 skipped / 1 deselected**
+in each real UID context using Arch, GCC 16.2.1, CMake 4.4.4, Python 3.13.17 and
+protoc 35.1. The ordinary-user context includes a real NSS account and trusted
+home. Its initial missing-account harness failure is retained. The local image
+has one additional Poppler format-fixture skip compared with CI; the hosted real
+document-import gate passed. These environments are not claimed byte-identical.
+
+The DMG fixture now waits at most three seconds for its initial exclusive file
+ownership, accepting only transient EAGAIN/EWOULDBLOCK. It establishes the
+checksum baseline after ownership, then runs the unchanged six-second contention,
+repeated EAGAIN, checksum and no-extra-file assertions. A controlled inherited-FD
+case reproduced the old failure; all three controls and the affected real Mac
+case passed. The initial hosted lock holder's identity remains unproven.
+
+Audio preflight had verified Worker metadata without executing the actual
+offline Flutter consumer. Its original app cache was restored, but Flutter's
+separate SDK-tool graph referred to root-only package directories. The consumer
+now copies only referenced public SDK packages into a distinct workspace cache
+and changes only their tool-graph `rootUri` metadata before privilege drop.
+Locked versions, original app cache and product records stay intact. The actual
+acceptance image ran **31 Flutter tests / zero skips** offline as UID 1001;
+official Worker verification and all fourteen artifact and 13,149 original
+app-cache file checks passed afterward. The successful Ubuntu consumer is
+unchanged. This does not certify the unexecuted local virtual-audio/model bodies.
+
+Full Python qualification of `f94a7a2c` passed **6,271 / 32 skipped / 95.26%**,
+with Ruff, mypy, timeout and matched workflow checks. Affected fixtures passed
+**137/137 in each of three Git-free CI-ref contexts**. Native peers and
+tools-disabled Claude CLI reviews converged. Evidence is in
+`/var/tmp/p95r65/qualification.json`, `/var/tmp/hm6/qualification.json`,
+`/var/tmp/of-dmg-ready/handoff.json`,
+`/var/tmp/of-audio-handoff-proof/flutter-consumer-handoff.json` and
+`/var/tmp/of-fin/ci-gf-f94b/qualification.json`. The first Git-free attempt's
+overbroad metadata ownership walk is retained as unaccepted; the corrected view
+uses only explicit public overlays and the guarded DMG hunk. Original source was
+unchanged, and metadata audits found no private file-body reads, hashes or copies.
+
+Mac still has a real `storageWorkerExited` health failure and a notes-enhancement
+whole-test timeout. Quiet local component and portable-kernel replays do not
+resolve them. The latter mode changes cold-start timing, and HanSolo's OS/CPU
+environment differs from the hosted runner. Closed numeric failure evidence is
+being added to distinguish those conditions without changing deadlines or
+accessing protected configuration bodies. Neither Mac failure is reported fixed.
+
+The following test-only Mac diagnostics are now reviewed: bounded execution-phase
+timestamps for the notes case; failure-only OS/Dart/CPU/descriptor limits,
+validated identity hashes and indexed permission/owner metadata; and a Darwin
+peer observer for direct child exit status. The observer limits child tracking
+and output to sixteen, checks UID/parent/birth identity, never reads names,
+arguments or environment, and never signals or reaps. Actual Darwin exit 0, 65,
+67 and signal 15 were observed while the authoritative parent retained reaping
+in all four cases. Linux activation is disabled. Original cleanup and test
+deadlines remain unchanged.
+
+Full Core qualification on `f3007944` (resource and phase witnesses, before the
+Mac-only observer and final indexed SDK-ancestor append) passed **2,889 / 16
+skipped / 91.04% (24,585/27,006)**. Both files analyzed/formatted cleanly.
+The observer and final failure-metadata append have separate targeted checks;
+their evidence is not substituted for the full-suite source revision. The Mac
+notes file passed **51/51** in portable-kernel replay, while the service-context
+replay passed startup/health but reached a later cold-gate persistence assertion
+too early. It remains unqualified as a complete service-case pass. The actual
+source-JIT failures still require current-head hosted evidence.
+
+The user's requested `AGENTS.md` rewrite reduces duplicated instructions and
+records these lessons: small integration batches, exact CI entrypoints and
+environment comparison, actual consumer checks, bounded failure ownership,
+precise evidence labels, and preserved test/integrity gates. Existing owner
+review remains required before merge.
