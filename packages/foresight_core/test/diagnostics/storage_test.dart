@@ -50,7 +50,18 @@ final _closedir = _libc
       'closedir',
     );
 
+final _duplicateAtLeast = _libc
+    .lookupFunction<
+      Int32 Function(Int32, Int32, VarArgs<(Int32,)>),
+      int Function(int, int, int)
+    >('fcntl');
+
 bool _isOpen(int descriptor) => _fcntl(descriptor, 1) >= 0;
+
+// Other test isolates may reuse a closed number. A surviving handle to this
+// private directory, rather than any later user of that number, is a leak.
+bool _targetsDirectory(int descriptor, BackupDirectory directory) =>
+    BackupFile.inspectDescriptorIdentity(descriptor) == directory.identity;
 
 /// Test double for the native reader with real listings: a libc stream on its
 /// own dup of [descriptor], packed as [BackupDirectoryReader] requires.
@@ -600,6 +611,7 @@ void main() {
     BackupDirectoryReader fixed(List<int> packed, [List<int>? seen]) =>
         (descriptor, names, capacity) {
           seen?.add(descriptor);
+          expect(_isOpen(descriptor), isTrue);
           expect(capacity, backupDirectoryNameBytes);
           names.asTypedList(packed.length).setAll(0, packed);
           return packed.length;
@@ -619,7 +631,7 @@ void main() {
       // A libc stream would have listed "real"; only the reader is used.
       expect(listed.entries(), ['alpha', 'beta']);
       expect(seen.single, isNot(listed.descriptor));
-      expect(_isOpen(seen.single), isFalse);
+      expect(_targetsDirectory(seen.single, listed), isFalse);
       expect(listed.containsEntry('beta'), isTrue);
       expect(listed.containsEntry('real'), isFalse);
       expect(seen, hasLength(3));
@@ -627,6 +639,37 @@ void main() {
       expect(directory.entries(), ['real']);
       expect(seen, hasLength(3));
     });
+
+    test(
+      'closed reader targets stay closed when descriptor numbers are reused',
+      () {
+        final seen = <int>[];
+        final listed = BackupDirectory(_profile(), reader: fixed([], seen));
+        addTearDown(listed.close);
+        expect(listed.entries(), isEmpty);
+        expect(seen, hasLength(1));
+        expect(_targetsDirectory(seen.single, listed), isFalse);
+
+        final other = BackupDirectory(_profile());
+        addTearDown(other.close);
+        // F_DUPFD_CLOEXEC never replaces a live descriptor: if another isolate
+        // already reused this number it selects the next available one.
+        final reused = _duplicateAtLeast(
+          other.descriptor,
+          Platform.isMacOS ? 67 : 1030,
+          seen.single,
+        );
+        try {
+          expect(reused, greaterThanOrEqualTo(seen.single));
+          expect(_isOpen(reused), isTrue);
+          expect(_targetsDirectory(reused, other), isTrue);
+          expect(other.identity, isNot(listed.identity));
+          expect(_targetsDirectory(seen.single, listed), isFalse);
+        } finally {
+          if (reused >= 0) _close(reused);
+        }
+      },
+    );
 
     test('children inherit the reader; other instances do not', () {
       final parent = BackupDirectory(
@@ -666,6 +709,12 @@ void main() {
           create: false,
           reader: (descriptor, names, capacity) {
             seen.add(descriptor);
+            expect(_isOpen(descriptor), isTrue, reason: what);
+            expect(
+              _targetsDirectory(descriptor, directory),
+              isTrue,
+              reason: what,
+            );
             names.asTypedList(bytes.length).setAll(0, bytes);
             return length;
           },
@@ -679,7 +728,11 @@ void main() {
             reason: what,
           );
           expect(seen, hasLength(2), reason: what);
-          expect(seen.any(_isOpen), isFalse, reason: what);
+          expect(
+            seen.any((descriptor) => _targetsDirectory(descriptor, directory)),
+            isFalse,
+            reason: what,
+          );
         } finally {
           reader.close();
         }
