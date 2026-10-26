@@ -10,10 +10,12 @@
 #include <iterator>
 #include <signal.h>
 #include <sqlite3.h>
+#include <sstream>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
+#include <vector>
 namespace t = foresight::transcript::v1;
 namespace r = foresight::helper::v1;
 namespace c = foresight::linux::control::v1;
@@ -343,21 +345,97 @@ int main(int argc, char **argv) {
                              "identity and parent citation";
     uint64_t processed[2] = {}, tokens[2] = {}, chunks[2] = {},
              constructed[2] = {};
+    // Linux ticks are coarse, and include instrumentation in this process.
+    // The child is the exact fork/exec PID owned by Fixture, never inferred.
+    auto cpu_ticks = [](pid_t pid) {
+      std::pair<uint64_t, uint64_t> ticks{};
+#ifdef __linux__
+      std::ifstream input("/proc/" + std::to_string(pid) + "/stat");
+      std::string line;
+      REQUIRE(bool(std::getline(input, line)));
+      std::istringstream fields(line.substr(line.rfind(')') + 2));
+      std::string field;
+      for (int i = 0; i <= 12; ++i) {
+        REQUIRE(bool(fields >> field));
+        if (i == 11)
+          ticks.first = std::stoull(field);
+        if (i == 12)
+          ticks.second = std::stoull(field);
+      }
+#else
+      (void)pid;
+#endif
+      return ticks;
+    };
+    auto storage_bytes = [&](const std::string &suffix) {
+      uint64_t bytes = 0;
+      for (const auto *member :
+           {"agent_metadata.db", "linux_state.db", "rag_vector.db"}) {
+        const auto path = f.dir + "/" + member + suffix;
+        if (fs::exists(path))
+          bytes += fs::file_size(path);
+      }
+      return bytes;
+    };
     for (int run = 0; run < 2; ++run) {
       const auto parent = std::string("linear-") + std::to_string(run);
+      const auto parent_cpu = cpu_ticks(getpid());
+      const auto child_cpu = cpu_ticks(f.pid);
+      const auto db_before = storage_bytes("");
+      const auto wal_before = storage_bytes("-wal");
+      std::vector<int64_t> apply_us;
+      apply_us.reserve(n * (run + 1));
       for (int i = 1; i <= n * (run + 1); ++i) {
         auto request = delta(parent, i - 1, i);
         segment(request, i, text);
         if (i == 1)
           request.set_reset(true);
+        const auto rpc_start = std::chrono::steady_clock::now();
         const auto response = f.apply(request);
+        apply_us.push_back(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - rpc_start)
+                .count());
         processed[run] +=
             response.tokenized_bytes() + response.embedded_bytes();
         tokens[run] += response.tokenized_tokens();
         chunks[run] += response.embedded_chunks();
         constructed[run] += response.snapshot_constructed_chunks();
       }
+      const auto search_start = std::chrono::steady_clock::now();
       REQUIRE(f.search(parent, text).chunks_size() == n * (run + 1));
+      const auto search_us =
+          std::chrono::duration_cast<std::chrono::microseconds>(
+              std::chrono::steady_clock::now() - search_start)
+              .count();
+      const auto parent_after = cpu_ticks(getpid());
+      const auto child_after = cpu_ticks(f.pid);
+      const auto db_after = storage_bytes("");
+      const auto wal_after = storage_bytes("-wal");
+      std::cout
+          << "F3_HELPER_RESOURCES segments=" << n * (run + 1)
+#ifdef __linux__
+          << " cpu_supported=1"
+#else
+          << " cpu_supported=0"
+#endif
+          << " ticks_per_second=" << sysconf(_SC_CLK_TCK)
+          << " parent_user_ticks=" << parent_after.first - parent_cpu.first
+          << " parent_system_ticks=" << parent_after.second - parent_cpu.second
+          << " owned_child_user_ticks=" << child_after.first - child_cpu.first
+          << " owned_child_system_ticks="
+          << child_after.second - child_cpu.second
+          << " database_bytes_before=" << db_before
+          << " database_bytes_after=" << db_after
+          << " database_bytes_delta=" << int64_t(db_after) - int64_t(db_before)
+          << " wal_bytes_before=" << wal_before
+          << " wal_bytes_after=" << wal_after
+          << " wal_bytes_delta=" << int64_t(wal_after) - int64_t(wal_before)
+          << " db_scope=cumulative_fixture_including_previous_documents"
+          << " search_rpc_us=" << search_us << " apply_rpc_us=";
+      for (const auto us : apply_us)
+        std::cout << us << ',';
+      std::cout << '\n';
       std::cout << "segments=" << n * (run + 1)
                 << " processed_bytes=" << processed[run]
                 << " tokenized_tokens=" << tokens[run]
@@ -372,7 +450,13 @@ int main(int argc, char **argv) {
     REQUIRE(f.scalar("agent_metadata.db",
                      "SELECT COUNT(*) FROM documents WHERE id "
                      "IN ('linear-0','linear-1')") == 0);
+    const auto stop_start = std::chrono::steady_clock::now();
     f.stop();
+    std::cout << "F3_HELPER_EXISTING_KILL_AND_WAIT_US="
+              << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - stop_start)
+                     .count()
+              << '\n';
     fs::remove(f.dir + "/agent_metadata.db");
     f.start();
     REQUIRE(!f.cursor("linear-0").exists());

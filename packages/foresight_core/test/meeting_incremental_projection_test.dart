@@ -3,6 +3,7 @@ import 'package:foresight_core/src/persistence/meeting_transcript_projection.dar
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ffi';
 
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/application.dart';
@@ -50,6 +51,20 @@ void main() {
   late ProjectionRag ragPeer;
   late int meeting;
   late String socket;
+  Map<String, Object?>? linearityReport;
+  Map<String, int>? cpuTicks() {
+    if (!Platform.isLinux) return null;
+    final stat = File('/proc/self/stat').readAsStringSync();
+    final fields = stat.substring(stat.lastIndexOf(')') + 2).split(' ');
+    final rate = DynamicLibrary.process()
+        .lookupFunction<Int64 Function(Int32), int Function(int)>('sysconf')(2);
+    return {
+      'user': int.parse(fields[11]),
+      'system': int.parse(fields[12]),
+      'ticks_per_second': rate,
+    };
+  }
+
   String getId() => 'meeting-$meeting';
   void open() {
     store = Store('${root.path}/application.db');
@@ -63,9 +78,15 @@ void main() {
   }
 
   Future<void> close() async {
+    final closing = linearityReport == null ? null : (Stopwatch()..start());
     await app.close();
     domain.close();
     await domain.drain();
+    if (closing != null) {
+      linearityReport!['app_close_and_domain_drain_us'] =
+          closing.elapsedMicroseconds;
+      print('APP_LINEARITY_RESOURCES ${jsonEncode(linearityReport)}');
+    }
     await helper.close();
     store.close();
   }
@@ -81,6 +102,7 @@ void main() {
           .map((piece) => piece.text)
           .join('\n');
   setUp(() async {
+    linearityReport = null;
     root = createTestTempDirectorySync('projection-');
     socket = '${root.path}/peer.sock';
     peer = ControlledTranscriptIndex();
@@ -133,9 +155,92 @@ void main() {
     'producer append work and serialization scale linearly without source history',
     () async {
       Map<String, int>? at64;
+      final baselineCpu = cpuTicks();
+      final indexMicros = <int>[];
+      final snapshots = <Map<String, Object?>>[];
+      final highWater = <String, int>{
+        'meeting_index_jobs': 0,
+        'meeting_index_batches': 0,
+        'meeting_transcript_changes': 0,
+        'meeting_index_deletes': 0,
+      };
+      void samplePending() {
+        for (final table in [
+          'meeting_index_jobs',
+          'meeting_index_batches',
+          'meeting_transcript_changes',
+          'meeting_index_deletes',
+        ]) {
+          final count =
+              store.rows('SELECT count(*) AS n FROM $table').single['n'] as int;
+          if (count > (highWater[table] ?? 0)) highWater[table] = count;
+        }
+      }
+
+      Map<String, Object?> snapshot(int n) {
+        final cpu = cpuTicks();
+        final history = store.contentHistory.revisions('sources', getId());
+        return {
+          'segments': n,
+          'cpu_user_ticks': cpu == null
+              ? null
+              : cpu['user']! - baselineCpu!['user']!,
+          'cpu_system_ticks': cpu == null
+              ? null
+              : cpu['system']! - baselineCpu!['system']!,
+          'cpu_ticks_per_second': cpu?['ticks_per_second'],
+          'database_file_bytes': File(store.path).lengthSync(),
+          'wal_file_bytes': File('${store.path}-wal').existsSync()
+              ? File('${store.path}-wal').lengthSync()
+              : 0,
+          'source_history_revisions': history.length,
+          'source_history_json_bytes': utf8.encode(jsonEncode(history)).length,
+          'source_history_snapshot_utf8_bytes': history.fold<int>(
+            0,
+            (bytes, row) =>
+                bytes + utf8.encode(row['snapshot'] as String).length,
+          ),
+          'source_history_content_utf8_bytes': history.fold<int>(
+            0,
+            (bytes, row) =>
+                bytes +
+                utf8
+                    .encode(
+                      (jsonDecode(row['snapshot'] as String)
+                                  as Map<String, dynamic>)['content']
+                              as String? ??
+                          '',
+                    )
+                    .length,
+          ),
+          'whole_index_settlement_including_pending_sample_us': List<int>.of(
+            indexMicros,
+          ),
+          'pending_sampled_high_water': Map<String, int>.of(highWater),
+        };
+      }
+
+      snapshots.add(snapshot(0));
+      linearityReport = {
+        'workload':
+            'fixed64/128; existing synthetic producer peer; no startup excluded',
+        'cpu_scope':
+            'whole test-runner process including in-process gRPC peer; raw Linux ticks, null on other OS',
+        'pending_sampling':
+            'after append, immediately after existing indexMeeting starts, after settlement; not continuous peak',
+        'storage_scope':
+            'whole application DB/WAL physical file lengths including allocation; history JSON serialization is separate from snapshot/content UTF8 payload',
+        'snapshots': snapshots,
+      };
       for (var i = 0; i < 128; i++) {
         append('segment ${i.toString().padLeft(3, '0')} ${'speech ' * 16}');
-        await app.indexMeeting(meeting);
+        samplePending();
+        final watch = Stopwatch()..start();
+        final indexed = app.indexMeeting(meeting);
+        samplePending();
+        await indexed;
+        indexMicros.add(watch.elapsedMicroseconds);
+        samplePending();
         expect(store.sourceQueries.summaries().single.state, 'indexed');
         if (i == 0) store.db.execute('UPDATE source_details SET changed=1');
         if (i == 1) {
@@ -144,8 +249,12 @@ void main() {
             greaterThan(1),
           );
         }
-        if (i == 63) at64 = {...app.meetingIndexWork};
+        if (i == 63) {
+          at64 = {...app.meetingIndexWork};
+          snapshots.add(snapshot(64));
+        }
       }
+      snapshots.add(snapshot(128));
       final at128 = app.meetingIndexWork;
       for (final metric in [
         'transcript_rows_read',
