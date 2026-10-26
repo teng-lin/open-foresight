@@ -419,9 +419,14 @@ function(_diag_add_runtime_products)
     execute_process(COMMAND ${_diag_clean_environment} "${_diag_python}" -I
       "${_diag_root}/tools/diagnostic_product_receipt.py"
       --root "${_diag_root}" --build "${CMAKE_CURRENT_BINARY_DIR}" --verify
-      RESULT_VARIABLE _consumer_status OUTPUT_QUIET ERROR_QUIET TIMEOUT 60)
+      RESULT_VARIABLE _consumer_status OUTPUT_VARIABLE _consumer_output
+      ERROR_VARIABLE _consumer_error TIMEOUT 60)
     if(NOT _consumer_status STREQUAL "0")
-      message(FATAL_ERROR "Consumer runtime product verification failed")
+      string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef _consumer_nonce)
+      set(_consumer_log "${_diag_temp}/consumer-verification-error-${_consumer_nonce}.log")
+      file(WRITE "${_consumer_log}" "${_consumer_output}${_consumer_error}")
+      file(CHMOD "${_consumer_log}" PERMISSIONS OWNER_READ OWNER_WRITE)
+      message(FATAL_ERROR "Consumer runtime product verification failed; output: ${_consumer_log}")
     endif()
     add_custom_target(foresight_runtime_support_products ALL
       DEPENDS foresight_diagnostic_products foresight_sql_support)

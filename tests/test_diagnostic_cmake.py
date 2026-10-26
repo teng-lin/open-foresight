@@ -872,10 +872,16 @@ def test_qualified_consumer_has_no_product_commands_and_refuses_tampering(
         in refused.stdout + refused.stderr
     )
     assert receipt.read_bytes() == tampered_receipt
+    failures = list(
+        (build / "diagnostic-product-temp").glob("consumer-verification-error-*.log")
+    )
+    assert len(failures) == 1
+    assert failures[0].stat().st_mode & 0o777 == 0o600
+    assert "ProductError" in failures[0].read_text()
 
 
 @pytest.mark.parametrize(
-    "mutation", ["sql", "native", "toolchain", "recipe", "missing"]
+    "mutation", ["sql", "native", "added", "removed", "toolchain", "recipe", "missing"]
 )
 def test_qualified_consumer_refuses_changed_inputs_without_rebuilding(
     tmp_path, mutation
@@ -898,6 +904,14 @@ def test_qualified_consumer_refuses_changed_inputs_without_rebuilding(
         previous = path.stat()
         path.write_text(path.read_text() + "\n/* changed controlled input */\n")
         os.utime(path, ns=(previous.st_atime_ns, previous.st_mtime_ns))
+    elif mutation in {"added", "removed"}:
+        directory = source / "native"
+        previous = directory.stat()
+        if mutation == "added":
+            (directory / "diagnostic_unlisted.c").write_text("/* unlisted input */\n")
+        else:
+            (directory / "diagnostic_protocol.h").unlink()
+        os.utime(directory, ns=(previous.st_atime_ns, previous.st_mtime_ns))
     elif mutation == "toolchain":
         path = source / "tools/fixture-metadata.json"
         record = json.loads(path.read_text())
