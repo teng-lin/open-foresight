@@ -22,4 +22,16 @@ if(FORESIGHT_SANITIZERS OR FORESIGHT_THREAD_SANITIZER)
       add_link_options(-shared-libasan)
     endif()
   endif()
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # The diagnostic launcher intentionally replaces the child's environment.
+    # Shared sanitizer runtimes must remain resolvable without LD_LIBRARY_PATH.
+    execute_process(COMMAND "${CMAKE_CXX_COMPILER}" --print-runtime-dir
+      RESULT_VARIABLE _fs_runtime_result
+      OUTPUT_VARIABLE _fs_runtime_directory OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(NOT _fs_runtime_result EQUAL 0 OR NOT IS_ABSOLUTE "${_fs_runtime_directory}"
+        OR NOT IS_DIRECTORY "${_fs_runtime_directory}")
+      message(FATAL_ERROR "Cannot locate the selected Clang sanitizer runtime directory")
+    endif()
+    add_link_options("LINKER:-rpath,${_fs_runtime_directory}")
+  endif()
 endif()

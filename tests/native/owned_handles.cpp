@@ -69,9 +69,7 @@ struct HeldWorker {
     gate->released = true;
     gate->changed.notify_all();
   }
-  ~HeldWorker() {
-    release();
-  }
+  ~HeldWorker() { release(); }
 };
 std::shared_ptr<NativeControl> control(uint64_t id) {
   auto &registry = native_handles();
@@ -690,8 +688,10 @@ void probes(const char *executable) {
       (std::filesystem::canonical(root) / "owned-probe-v2-XXXXXX").string();
   check(mkdtemp(scratch.data()), "private probe fixture root required");
   auto marker = std::filesystem::path(scratch) / "child";
+  auto pending_marker = marker.string() + ".pending";
   foresight::ScopeExit cleanup([&] {
     unsetenv("FORESIGHT_OWNED_PROBE_MARKER");
+    std::filesystem::remove(pending_marker);
     std::filesystem::remove(marker);
     std::filesystem::remove(scratch);
   });
@@ -775,7 +775,14 @@ int main(int argc, char **argv) {
   if (argc > 1) {
     if (const char *marker = std::getenv("FORESIGHT_OWNED_PROBE_MARKER");
         marker && std::string(argv[1]) == "--model") {
-      std::ofstream(marker) << getpid() << std::endl;
+      // Publish a complete PID before existence admits the held-child check.
+      // Sanitizer scheduling can otherwise expose the newly created empty file.
+      const auto pending = std::string(marker) + ".pending";
+      std::ofstream output(pending);
+      output << getpid() << std::endl;
+      output.close();
+      if (!output || std::rename(pending.c_str(), marker) != 0)
+        return 1;
       close(STDOUT_FILENO);
       for (;;)
         pause();
