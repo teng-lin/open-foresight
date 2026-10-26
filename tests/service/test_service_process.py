@@ -2080,11 +2080,28 @@ def test_attached_mcp_follows_a_closing_owner_to_one_replacement(tmp_path):
         FORESIGHT_NATIVE=str(NATIVE),
         FORESIGHT_SERVICE=str(wrapper),
         FORESIGHT_SERVICE_TRACE="1",
+        FORESIGHT_LOG_LEVEL="info",
     )
     # The replacement runs without a helper; only the owner's is gated.
     owner_env = {**env, "FORESIGHT_HELPER": str(helper.executable)}
     mcp_env = {**env, "FORESIGHT_HELPER": ""}
     mcp = None
+
+    def process_diagnostics(process_pid):
+        # Manifests bind these real typed records to this synthetic process.
+        # A segment's incomplete final write is observed on the next poll.
+        records: list[dict[str, object]] = []
+        for manifest in data.glob("logs/slot-*/manifest.json"):
+            if json.loads(manifest.read_text())["pid"] != process_pid:
+                continue
+            for segment in manifest.parent.glob("*.jsonl"):
+                records.extend(
+                    json.loads(line)
+                    for line in segment.read_text().splitlines(keepends=True)
+                    if line.endswith("\n")
+                )
+        return records
+
     with (tmp_path / "service.log").open("w+") as log:
         owner = subprocess.Popen([str(SERVICE)], env=owner_env, stdout=log, stderr=log)
         try:
@@ -2106,14 +2123,41 @@ def test_attached_mcp_follows_a_closing_owner_to_one_replacement(tmp_path):
             mcp.initialize()
             attached = mcp.tool("get_status")["structuredContent"]["result"]
             assert attached["pid"] == owner.pid
+            # Settle the logger's existing cold gate before the helper hold;
+            # startup/flush work must not consume any of its unchanged 5 s.
+            while not any(
+                record["event"] == "mcp.starting"
+                for record in process_diagnostics(mcp.process.pid)
+            ):
+                assert mcp.process.poll() is None, mcp.timeout_details(mcp.sequence)
+                poll_delay(deadline)
             owner.send_signal(signal.SIGTERM)
             held = helper.published("stopping", deadline, owner)
             pending = mcp.send("tools/call", {"name": "get_status", "arguments": {}})
             # The owner refuses the request; the draining frontend then
             # refuses the handoff's startup probe and keeps it open.
-            while "frontend refuse peer=" not in Path(log.name).read_text():
+            while not any(
+                record["event"] == "rpc.failed"
+                and record["fields"].get("operation") == "status"
+                and record["fields"].get("category") == "closing"
+                and record["fields"].get("outcome") == "refused"
+                for record in process_diagnostics(mcp.process.pid)
+            ):
                 assert mcp.process.poll() is None, mcp.process.stderr.read()
                 poll_delay(deadline)
+            # The actual public frontend still gives the unchanged closing
+            # refusal on the old owner's endpoint while its helper is held.
+            closing = Peer(runtime / "application.sock")
+            try:
+                with pytest.raises(RuntimeError) as refused:
+                    closing.call("status")
+                assert refused.value.args[0] == {
+                    "code": "unavailable",
+                    "message": "Application service is shutting down; retry after it exits.",
+                    "reason": "closing",
+                }
+            finally:
+                closing.close()
             # The service kills a helper that holds SIGTERM for 5 s. Only
             # while it is still held does the owner provably hold the lock.
             try:
