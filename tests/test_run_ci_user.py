@@ -127,7 +127,15 @@ def prepared(tmp_path, monkeypatch):
     monkeypatch.setattr(user, "claim_tree", lambda p, u, g: calls.append(p))
     monkeypatch.setattr(user.os, "chown", lambda *_: None)
     monkeypatch.setattr(user, "ensure_account", lambda *_: "ci-owner")
-    monkeypatch.setattr(user.tempfile, "mkdtemp", lambda **_: str(temporary))
+
+    def directory(prefix, dir):
+        if prefix == "c-":
+            return str(temporary)
+        selected = Path(dir) / "persistent"
+        selected.mkdir(mode=0o700)
+        return str(selected)
+
+    monkeypatch.setattr(user.tempfile, "mkdtemp", directory)
     monkeypatch.setattr(
         user.subprocess,
         "run",
@@ -165,7 +173,12 @@ def test_cache_miss_private_environment_preserves_controls_and_umask(
         "PYTHONPYCACHEPREFIX",
     ):
         path = Path(env[name])
-        assert path.parent == temporary and stat.S_IMODE(path.stat().st_mode) == 0o700
+        expected = workspace / "build/persistent" if name == "HOME" else temporary
+        assert path.parent == expected and stat.S_IMODE(path.stat().st_mode) == 0o700
+    for name in ("HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"):
+        assert Path(env[name]).is_relative_to(workspace / "build/persistent")
+    assert env["TMPDIR"] == env["FORESIGHT_TEST_TEMP_ROOT"]
+    assert not Path(env["HOME"]).is_relative_to(temporary)
 
 
 @pytest.mark.parametrize("escape", ["outside", "symlink", "parent"])
@@ -212,7 +225,15 @@ def test_root_can_repeat_verification_after_sdk_ownership_change(prepared, monke
     # The private environment is new for every invocation; the workspace/SDK remain.
     next_private = workspace.parent / "second-private"
     next_private.mkdir(mode=0o700)
-    monkeypatch.setattr(user.tempfile, "mkdtemp", lambda **_: str(next_private))
+
+    def next_directory(prefix, dir):
+        if prefix == "c-":
+            return str(next_private)
+        selected = Path(dir) / "second-persistent"
+        selected.mkdir(mode=0o700)
+        return str(selected)
+
+    monkeypatch.setattr(user.tempfile, "mkdtemp", next_directory)
     user.prepare(workspace)
     assert len(commands) == 2
     assert all(
@@ -323,3 +344,51 @@ def test_wrapper_bytes_and_mode_participate_in_existing_stage_identity(tmp_path)
         script.chmod(0o755)
         assert cache.source_inputs(tmp_path, stage) != before
         script.chmod(0o644)
+
+
+def test_new_os_account_home_matches_the_trusted_persistent_home(prepared, monkeypatch):
+    workspace, _, temporary, _ = prepared
+    homes = []
+
+    def account(uid, gid, home):
+        homes.append((uid, gid, home))
+        return "ci-owner"
+
+    monkeypatch.setattr(user, "ensure_account", account)
+    _, _, env = user.prepare(workspace)
+    assert homes == [(1234, 2345, Path(env["HOME"]))]
+    assert Path(env["HOME"]).is_relative_to(workspace / "build")
+    assert not Path(env["HOME"]).is_relative_to(temporary)
+
+
+def test_persistent_home_refuses_a_symlinked_build_directory(prepared):
+    workspace, _, _, _ = prepared
+    outside = workspace.parent / "outside-build"
+    outside.mkdir()
+    marker = outside / "marker"
+    marker.write_bytes(b"unchanged outside fixture")
+    (workspace / "build").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="physical workspace build"):
+        user.prepare(workspace)
+    assert list(outside.iterdir()) == [marker]
+    assert marker.read_bytes() == b"unchanged outside fixture"
+
+
+def test_persistent_home_is_not_source_input_or_stage_artifact(tmp_path):
+    import subprocess
+
+    cache = importlib.import_module("tools.ci_native_cache")
+    artifacts = importlib.import_module("tools.ci_stage_artifacts")
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, timeout=15)
+    (tmp_path / ".gitignore").write_text("build/\n")
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "add", ".gitignore"], check=True, timeout=15
+    )
+    before = {stage: cache.source_inputs(tmp_path, stage) for stage in cache.STAGES}
+    relative = "build/.h-controlled/h/config"
+    private = tmp_path / relative
+    private.parent.mkdir(parents=True, mode=0o700)
+    private.write_text("controlled private fixture")
+    for stage in cache.STAGES:
+        assert cache.source_inputs(tmp_path, stage) == before[stage]
+        assert not artifacts.allowed(relative, "linux", stage)

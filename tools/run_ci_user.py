@@ -136,23 +136,45 @@ def prepare(workspace: Path) -> tuple[int, int, dict[str, str]]:
             raise ValueError("The job pub cache must contain only physical directories")
     claim_tree(workspace, uid, gid)
     claim_tree(FLUTTER, uid, gid)
-    temporary = Path(tempfile.mkdtemp(prefix="of-ci-", dir="/var/tmp"))
-    os.chown(temporary, uid, gid)
+    # Persistent OS/NSS home storage must not inherit the sticky /var/tmp
+    # ancestor: InstallationLock deliberately forbids all writable ancestors.
+    # build/ is ignored by source identity and this private child is outside
+    # the stage artifact allowlist, so no home/config data enters either.
+    build = workspace / "build"
+    build.mkdir(mode=0o755, exist_ok=True)
+    if not stat.S_ISDIR(build.lstat().st_mode):
+        raise ValueError("The private home needs a physical workspace build directory")
+    os.chown(build, uid, gid)
+    persistent = Path(tempfile.mkdtemp(prefix=".h-", dir=build))
+    temporary = Path(tempfile.mkdtemp(prefix="c-", dir="/var/tmp"))
+    for base in (persistent, temporary):
+        os.chown(base, uid, gid)
     env = dict(os.environ, PUB_CACHE=str(pub))
-    for variable, child in {
-        "HOME": "home",
-        "TMPDIR": "tmp",
-        "FORESIGHT_TEST_TEMP_ROOT": "tests",
-        "PYTHONPYCACHEPREFIX": "pycache",
-        "XDG_RUNTIME_DIR": "run",
-        "XDG_CACHE_HOME": "cache",
-        "XDG_CONFIG_HOME": "config",
-        "XDG_DATA_HOME": "data",
-    }.items():
-        path = temporary / child
-        path.mkdir(mode=0o700)
-        os.chown(path, uid, gid)
-        env[variable] = str(path)
+    for base, variables in (
+        (
+            persistent,
+            {
+                "HOME": "h",
+                "XDG_CACHE_HOME": "k",
+                "XDG_CONFIG_HOME": "c",
+                "XDG_DATA_HOME": "d",
+            },
+        ),
+        (
+            temporary,
+            {
+                "TMPDIR": "t",
+                "FORESIGHT_TEST_TEMP_ROOT": "t",
+                "PYTHONPYCACHEPREFIX": "p",
+                "XDG_RUNTIME_DIR": "r",
+            },
+        ),
+    ):
+        for variable, child in variables.items():
+            path = base / child
+            path.mkdir(mode=0o700, exist_ok=True)
+            os.chown(path, uid, gid)
+            env[variable] = str(path)
     name = ensure_account(uid, gid, Path(env["HOME"]))
     env.update(USER=name, LOGNAME=name)
     print(
