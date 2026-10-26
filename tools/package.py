@@ -176,9 +176,9 @@ def main():
         speech_worker = args.whisper_gpu_runtime.parent / "foresight-whisper-worker"
         if not speech_worker.is_file():
             raise ValueError("Whisper runtime must include foresight-whisper-worker")
-    worker = prepare_worker(ROOT, args.build)
+    diagnostic_worker = prepare_worker(ROOT, args.build)
     support = prepare_runtime_support(ROOT, args.build / "native", "linux-x86_64")
-    if worker.receipt["native_id"] != support.receipt["native_id"]:
+    if diagnostic_worker.receipt["native_id"] != support.receipt["native_id"]:
         raise ValueError("Diagnostic worker and support NativeID differ")
     shutil.copytree(args.flutter_bundle, args.output / "app")
     (args.output / "bin").mkdir()
@@ -189,7 +189,7 @@ def main():
     shutil.copy2(mcp, args.output / "bin/foresight-mcp")
     shutil.copy2(native, args.output / "lib/libforesight_native.so")
     stage_runtime_support(args.output, support)
-    stage_worker(args.output, worker)
+    stage_worker(args.output, diagnostic_worker)
     if args.whisper_gpu_runtime:
         shutil.copy2(args.whisper_gpu_runtime, args.output / "bin/whisper-cli-vulkan")
         speech_worker = args.whisper_gpu_runtime.parent / "foresight-whisper-worker"
@@ -382,7 +382,7 @@ esac
         web_search_keys,
     )
     seal_runtime_support(args.output, support, transformed=False)
-    seal_worker(args.output, worker, transformed=False)
+    seal_worker(args.output, diagnostic_worker, transformed=False)
     files = [
         {
             "path": str(file.relative_to(args.output)),

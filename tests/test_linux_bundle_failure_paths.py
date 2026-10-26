@@ -322,3 +322,20 @@ def test_complete_gpu_bundle_keeps_dependency_closure_and_receipts(
         )
     assert probe.called is extensions
     assert case.commands[0][0][-1] == "--check"
+
+
+def test_model_and_diagnostic_workers_keep_their_own_source_bytes(bundle):
+    case = bundle
+    package.main()
+    manifest = {
+        entry["path"]: entry["sha256"]
+        for entry in json.loads((case.output / "manifest.json").read_text())["files"]
+    }
+    for packaged, source in (
+        ("bin/foresight-model", "services/inference/foresight-model"),
+        ("bin/foresight-diagnostic-worker", "application/foresight-diagnostic-worker"),
+    ):
+        data = (case.build / source).read_bytes()
+        assert (case.output / packaged).read_bytes() == data
+        assert manifest[packaged] == hashlib.sha256(data).hexdigest()
+    assert (case.output / "bin/foresight-diagnostic-worker").stat().st_mode & 0o777 == 0o755
