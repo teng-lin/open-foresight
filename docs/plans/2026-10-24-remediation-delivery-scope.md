@@ -34,6 +34,38 @@ first-run, logging, restore and Mac verification stays in scope.
 
 ## Current delivery
 
+### Additional deferrals approved October 25
+
+The user approved these five follow-up areas to bring the current PR to closure:
+
+- Exact logging memory certification against the 512 KiB outstanding-traffic
+  budget and the strict 5% median / 10% p95 overhead measurements. Keep bounded
+  queues, producer/observer limits, privacy protections and existing tests. The
+  numerical targets remain unverified follow-up requirements, not passing claims.
+- Additional frontend bridge and background-job correlation. Finish the
+  reproduced client defect that loses diagnostic events when calls occur outside
+  their creation context; preserve existing protocol, retry and cancellation
+  semantics. Do not expand the tracing implementation to close the original
+  plan's entire correlation matrix in this PR.
+- New dependency-assurance work: package reproducibility comparisons, Linux
+  builder snapshots and new ICU pinning. Keep the existing pins, package
+  integrity checks and publishing/trust requirements. Unintegrated proposals for
+  these additions do not need to land with this PR.
+- New native coverage reporting and clang-tidy infrastructure. Preserve the
+  existing native tests and sanitizer gates. Additional report infrastructure
+  that has not reached the accepted branch belongs in follow-up work.
+- The separate broad Python import/entrypoint conversion (the 128-file batch).
+  Keep the current supported entrypoints and fix actual packaging/test failures
+  needed by the retained changes; the broad cleanup is not a completion gate.
+
+These are explicit scope deferrals, not completed work or waived failing tests.
+Retain failed output and document qualification limits. Do not weaken existing
+test, coverage, privacy or artifact-integrity checks. Keep completed fixes that
+are needed by the retained implementation; avoid speculative rewrites solely to
+meet a deferred measurement or expansion. Final merge still requires working
+logging and restore integration, data-safety fixes, actual Mac functional
+verification, applicable existing checks, and resolved reviews and CI.
+
 Prioritize the reviewed recording, persistence/indexing, runtime/lifecycle,
 unified logging, documentation and already-started tooling changes. Fix data
 integrity, ownership and privacy faults required by those changes. Preserve
