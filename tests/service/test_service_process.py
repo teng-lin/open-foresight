@@ -2313,8 +2313,6 @@ def test_attached_mcp_follows_a_closing_owner_to_one_replacement(tmp_path):
             if mcp is not None and mcp.process.poll() is None:
                 mcp.process.kill()
                 mcp.process.wait(timeout=30)
-            if relay is not None:
-                relay.close()
             if owner.poll() is None:
                 owner.kill()
                 owner.wait(timeout=10)
@@ -2332,6 +2330,8 @@ def test_attached_mcp_follows_a_closing_owner_to_one_replacement(tmp_path):
                     except ProcessLookupError:
                         pass  # It exited after the ps check.
             helper.kill()
+            if relay is not None:
+                relay.close()
 
 
 def process_gone(pid):
