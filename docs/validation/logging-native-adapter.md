@@ -98,3 +98,28 @@ actual writer VM mailbox while the C++ test backend holds that VM.
 The paused-coordinator qualification uses a real exec storage child and sixteen
 producer slots while ordinary credits are exhausted; the native health mailbox
 must remain bounded as the native drain continues using priority-only credit.
+
+The compatibility `reserveProducer` capability is bound to its creating VM.
+Reading `DiagnosticProducerReservation.bootstrap` binds local compatibility use
+once and removes cancellation authority. Worker code uses `spawnProducer` or
+reservation `spawn`, whose paused wrapper binds before invoking user code. A
+getter read while that spawn is pending cannot expose or steal its temporarily
+unbound transport. Copied capabilities in another VM reject before allocating
+an active producer registry, endpoint, registration timer, or encoder authority.
+This contract does not claim logging adoption for arbitrary manually spawned
+workers or SQL readers. `ready` acknowledges registration/epochs; it does not
+promise nonzero credits. Emission remains best effort.
+
+Health uses the existing owner status port and producer credit port. Each of at
+most 16 producer slots retains one registered VM/credit-port binding, one last
+nonce, and at most one unanswered refresh. The fixed wire payloads are 5-element
+binding, 6-element request and 16-element reply lists. Producer retention includes
+one cached reply list and request/receive timestamps; the clock is one lazy
+Stopwatch per VM. The synchronous public snapshot model adds no observer port or
+timer. The inactive producer cache retains one replaceable value, preserving the
+configuration and configured-backend metadata of prior caller-held values.
+These payloads, copies/native message envelopes, models, clock, and extra fields
+belong to physical control accounting. The declared request-slot cap is not an
+allocation proof, and the 512 KiB acceptance gate remains open until the combined
+RPC-observer/control/IPC bounds are established. Held-owner and held-writer tests
+exercise repeated reads against the actual pending-request state.

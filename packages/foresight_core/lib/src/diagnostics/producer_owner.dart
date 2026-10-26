@@ -6,20 +6,40 @@ final class _OwnedProducer {
   DiagnosticProducer? local;
   final completion = Completer<void>();
   bool ownerExitSent = false;
+  // The single endpoint binding published by writer registration.
+  SendPort? healthVm, healthPort;
+  int healthNonce = 0;
   Future<void> get retired => completion.future;
 }
 
-/// A reservation whose capability has not yet been made transferable.
-/// Reading bootstrap irreversibly removes never-spawned cancellation authority.
+/// A reservation activated only by the owned paused-spawn helper.
+/// Reading [bootstrap] binds compatibility use to this VM and irrevocably
+/// removes never-spawned cancellation authority.
 final class DiagnosticProducerReservation {
   DiagnosticProducerReservation._(this._owner, this._slot);
   final LoggingSession _owner;
   final _OwnedProducer? _slot;
-  bool _exposed = false, _cancelled = false;
+  bool _exposed = false, _cancelled = false, _spawnAttempted = false;
   DiagnosticProducerBootstrap get bootstrap {
     if (_cancelled || _slot == null) return _owner._inactiveBootstrap;
-    _exposed = true;
-    return _slot.bootstrap;
+    final bootstrap = _slot.bootstrap;
+    // An asynchronous owned spawn has not exposed a capability yet. Never
+    // bind its temporary transport to this VM or expose it before activation.
+    if (_spawnAttempted && bootstrap._executionVm == null) {
+      return _owner._inactiveBootstrap;
+    }
+    if (!_exposed) {
+      _exposed = true;
+      bootstrap._executionVm = Isolate.current.controlPort;
+      bootstrap._writer?.send([
+        'bind_vm',
+        bootstrap.id,
+        bootstrap.generation,
+        0,
+        bootstrap._executionVm,
+      ]);
+    }
+    return bootstrap;
   }
 
   Future<void> get retired =>
@@ -34,6 +54,7 @@ final class DiagnosticProducerReservation {
   }) {
     final slot = !_exposed && !_cancelled ? _slot : null;
     _exposed = true;
+    _spawnAttempted = true;
     return _owner._spawnReserved(
       slot,
       entrypoint,
@@ -81,6 +102,8 @@ extension _ProducerOwnership on LoggingSession {
         kind,
         configuration,
       );
+      bootstrap._ownerStatus = _status?.sendPort;
+      bootstrap._storageConfigured = _storageConfigured;
       bootstrap._executionVm = executingIsolate;
       final owned = _OwnedProducer(bootstrap);
       _slots[slot] = owned;

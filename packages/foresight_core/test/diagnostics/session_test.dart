@@ -506,17 +506,18 @@ void main() {
       addTearDown(done.close);
       final exited = ReceivePort();
       addTearDown(exited.close);
-      final bootstrap = session.reserveProducer(DiagnosticProducerKind.domain);
-      await Isolate.spawn(_worker, [
-        bootstrap,
+      final owned = await session.spawnProducer(
+        DiagnosticProducerKind.domain,
+        _ownedWorker,
         done.sendPort,
-      ], onExit: exited.sendPort);
+        onExit: exited.sendPort,
+      );
       expect(
         await done.first.timeout(const Duration(seconds: 2)),
         'worker_done',
       );
       await exited.first.timeout(const Duration(seconds: 2));
-      session.producerExited(bootstrap);
+      await owned.retired;
       expect((await session.close()).writerExited, isTrue);
       await capture.closed.future.timeout(const Duration(seconds: 2));
       expect(capture.records.single['producer'], 'domain:1');
@@ -663,3 +664,6 @@ void _worker(List<Object> arguments) async {
   producer.emit(DiagnosticEvent.runtimeFailed, DiagnosticComponent.domain);
   (arguments[1] as SendPort).send('worker_done');
 }
+
+void _ownedWorker((DiagnosticProducerBootstrap, SendPort) invocation) =>
+    _worker([invocation.$1, invocation.$2]);

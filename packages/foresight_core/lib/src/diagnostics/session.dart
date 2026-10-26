@@ -69,6 +69,263 @@ final class DiagnosticHealth {
   };
 }
 
+enum DiagnosticHealthState {
+  off,
+  unknown,
+  starting,
+  healthy,
+  degraded,
+  closing,
+  closed,
+}
+
+/// Immutable closed health scalars. No close handle, authority, path, session
+/// identity or user text crosses this model. `storageConfigured` only means a
+/// backend factory/sink was configured; it never means supported hardware or
+/// durable storage. No state asserts a physical writer/child exit.
+final class DiagnosticHealthSnapshot {
+  /// Typed fakes start unknown, never healthy.
+  const DiagnosticHealthSnapshot({
+    this.level = DiagnosticLevel.info,
+    this.transportTrace = false,
+    this.invalidLevel = false,
+    this.storageConfigured = false,
+    this.known = false,
+    this.stale = false,
+    this.ageMs,
+    this.state = DiagnosticHealthState.unknown,
+    this.reason = DiagnosticHealthReason.storageWorkerUnknown,
+    this.nativeReason = NativeDiagnosticHealth.unconfigured,
+    this.nativeDropsExact = false,
+    this.admittedRecords = 0,
+    this.droppedRecords = 0,
+    this.rejectedRecords = 0,
+    this.highWaterBytes = 0,
+    this.highWaterRecords = 0,
+    this.producerRegistrationRefused = 0,
+    this.quarantinedProducers = 0,
+    this.slot,
+  });
+
+  factory DiagnosticHealthSnapshot._derive(
+    DiagnosticConfiguration configuration,
+    bool storageConfigured, {
+    required bool known,
+    required int? ageMs,
+    bool closing = false,
+    bool closed = false,
+    DiagnosticHealthReason reason = DiagnosticHealthReason.storageWorkerUnknown,
+    NativeDiagnosticHealth nativeReason = NativeDiagnosticHealth.unconfigured,
+    bool nativeDropsExact = false,
+    int admittedRecords = 0,
+    int droppedRecords = 0,
+    int rejectedRecords = 0,
+    int highWaterBytes = 0,
+    int highWaterRecords = 0,
+    int producerRegistrationRefused = 0,
+    int quarantinedProducers = 0,
+    int? slot,
+  }) {
+    final enabled = configuration.enabled;
+    final stale = known && enabled && ageMs != null && ageMs > staleAfterMs;
+    final starting =
+        reason == DiagnosticHealthReason.healthy ||
+        reason == DiagnosticHealthReason.bootstrapOnly;
+    final DiagnosticHealthState state;
+    if (!enabled) {
+      state = DiagnosticHealthState.off;
+    } else if (closed) {
+      state = DiagnosticHealthState.closed;
+    } else if (closing) {
+      state = DiagnosticHealthState.closing;
+    } else if (!known || stale) {
+      state = DiagnosticHealthState.unknown;
+    } else if (!storageConfigured || !starting) {
+      state = DiagnosticHealthState.degraded;
+    } else if (reason == DiagnosticHealthReason.healthy && slot != null) {
+      state = DiagnosticHealthState.healthy;
+    } else {
+      state = DiagnosticHealthState.starting;
+    }
+    return DiagnosticHealthSnapshot(
+      level: configuration.level,
+      transportTrace: configuration.transportTrace,
+      invalidLevel: configuration.invalidLevel,
+      storageConfigured: storageConfigured,
+      known: known,
+      stale: stale,
+      ageMs: ageMs?.clamp(0, _maximumCounter),
+      state: state,
+      reason: reason,
+      nativeReason: nativeReason,
+      nativeDropsExact: nativeDropsExact,
+      admittedRecords: admittedRecords.clamp(0, _maximumCounter),
+      droppedRecords: droppedRecords.clamp(0, _maximumCounter),
+      rejectedRecords: rejectedRecords.clamp(0, _maximumCounter),
+      highWaterBytes: highWaterBytes.clamp(0, _maximumCounter),
+      highWaterRecords: highWaterRecords.clamp(0, _maximumCounter),
+      producerRegistrationRefused: producerRegistrationRefused.clamp(
+        0,
+        _maximumCounter,
+      ),
+      quarantinedProducers: quarantinedProducers.clamp(0, _maximumCounter),
+      slot: slot,
+    );
+  }
+
+  /// Canonical off is known locally; it needs no port, timer or request.
+  factory DiagnosticHealthSnapshot._off(
+    DiagnosticConfiguration configuration,
+    bool storageConfigured,
+  ) => DiagnosticHealthSnapshot._derive(
+    configuration,
+    storageConfigured,
+    known: true,
+    ageMs: 0,
+    reason: DiagnosticHealthReason.off,
+    nativeDropsExact: true,
+  );
+
+  static const version = 1, staleAfterMs = 2000, maximumSlot = 9;
+  final DiagnosticLevel level;
+  final bool transportTrace, invalidLevel, storageConfigured, known, stale;
+  final int? ageMs;
+  final DiagnosticHealthState state;
+  final DiagnosticHealthReason reason;
+  final NativeDiagnosticHealth nativeReason;
+  final bool nativeDropsExact;
+  final int admittedRecords, droppedRecords, rejectedRecords;
+  final int highWaterBytes, highWaterRecords;
+  final int producerRegistrationRefused, quarantinedProducers;
+  final int? slot;
+  bool get transportEnabled =>
+      level != DiagnosticLevel.off &&
+      (level == DiagnosticLevel.trace || transportTrace);
+
+  static const _booleans = [
+    'transportTrace',
+    'invalidLevel',
+    'storageConfigured',
+    'known',
+    'stale',
+    'nativeDropsExact',
+  ];
+  static const _counters = [
+    'admittedRecords',
+    'droppedRecords',
+    'rejectedRecords',
+    'highWaterBytes',
+    'highWaterRecords',
+    'producerRegistrationRefused',
+    'quarantinedProducers',
+  ];
+
+  Map<String, Object?> toJson() => {
+    'version': version,
+    'level': level.name,
+    'transportTrace': transportTrace,
+    'invalidLevel': invalidLevel,
+    'storageConfigured': storageConfigured,
+    'known': known,
+    'stale': stale,
+    'ageMs': ageMs,
+    'state': state.name,
+    'reason': reason.name,
+    'nativeReason': nativeReason.name,
+    'nativeDropsExact': nativeDropsExact,
+    'admittedRecords': admittedRecords,
+    'droppedRecords': droppedRecords,
+    'rejectedRecords': rejectedRecords,
+    'highWaterBytes': highWaterBytes,
+    'highWaterRecords': highWaterRecords,
+    'producerRegistrationRefused': producerRegistrationRefused,
+    'quarantinedProducers': quarantinedProducers,
+    'slot': slot,
+  };
+
+  /// Returns null for any malformed, extended or unknown-version snapshot.
+  static DiagnosticHealthSnapshot? tryParse(Object? value) {
+    if (value is! Map ||
+        value.length != 20 ||
+        value['version'] is! int ||
+        value['version'] != version) {
+      return null;
+    }
+    T? named<T extends Enum>(List<T> values, Object? name) =>
+        values.where((known) => known.name == name).firstOrNull;
+    bool counter(Object? value) =>
+        value is int && value >= 0 && value <= _maximumCounter;
+    final level = named(DiagnosticLevel.values, value['level']);
+    final state = named(DiagnosticHealthState.values, value['state']);
+    final reason = named(DiagnosticHealthReason.values, value['reason']);
+    final native = named(NativeDiagnosticHealth.values, value['nativeReason']);
+    final ageMs = value['ageMs'], slot = value['slot'];
+    if (level == null ||
+        state == null ||
+        reason == null ||
+        native == null ||
+        !value.containsKey('ageMs') ||
+        !value.containsKey('slot') ||
+        (ageMs != null && !counter(ageMs)) ||
+        (slot != null && (slot is! int || slot < 0 || slot > maximumSlot)) ||
+        _booleans.any((key) => value[key] is! bool) ||
+        _counters.any((key) => !counter(value[key]))) {
+      return null;
+    }
+    final known = value['known'] as bool, stale = value['stale'] as bool;
+    // Closed invariants: unknown snapshots carry no age; off is known/off.
+    if ((known != (ageMs != null)) ||
+        (!known && (stale || state != DiagnosticHealthState.unknown)) ||
+        ((level == DiagnosticLevel.off) !=
+            (state == DiagnosticHealthState.off))) {
+      return null;
+    }
+    final enabled = level != DiagnosticLevel.off;
+    if (stale != (known && enabled && (ageMs as int) > staleAfterMs)) {
+      return null;
+    }
+    if (!enabled && (!known || reason != DiagnosticHealthReason.off)) {
+      return null;
+    }
+    if (enabled &&
+        state != DiagnosticHealthState.closing &&
+        state != DiagnosticHealthState.closed) {
+      final starting =
+          reason == DiagnosticHealthReason.healthy ||
+          reason == DiagnosticHealthReason.bootstrapOnly;
+      final expected = !known || stale
+          ? DiagnosticHealthState.unknown
+          : value['storageConfigured'] != true || !starting
+          ? DiagnosticHealthState.degraded
+          : reason == DiagnosticHealthReason.healthy && slot != null
+          ? DiagnosticHealthState.healthy
+          : DiagnosticHealthState.starting;
+      if (state != expected) return null;
+    }
+    return DiagnosticHealthSnapshot(
+      level: level,
+      transportTrace: value['transportTrace'] as bool,
+      invalidLevel: value['invalidLevel'] as bool,
+      storageConfigured: value['storageConfigured'] as bool,
+      known: known,
+      stale: stale,
+      ageMs: ageMs as int?,
+      state: state,
+      reason: reason,
+      nativeReason: native,
+      nativeDropsExact: value['nativeDropsExact'] as bool,
+      admittedRecords: value['admittedRecords'] as int,
+      droppedRecords: value['droppedRecords'] as int,
+      rejectedRecords: value['rejectedRecords'] as int,
+      highWaterBytes: value['highWaterBytes'] as int,
+      highWaterRecords: value['highWaterRecords'] as int,
+      producerRegistrationRefused: value['producerRegistrationRefused'] as int,
+      quarantinedProducers: value['quarantinedProducers'] as int,
+      slot: slot as int?,
+    );
+  }
+}
+
 final class LoggingCloseResult {
   const LoggingCloseResult({
     required this.writerExited,
@@ -119,6 +376,7 @@ final class LoggingSession {
     this._errors,
     this._exited,
     this.health,
+    this._storageConfigured,
   );
   static Future<LoggingSession>? _processSession;
   static const maximumProducers = 16;
@@ -133,6 +391,10 @@ final class LoggingSession {
   static const maximumControlBytes = 16 * 1024;
   static const maximumNativeProducerEventBytes = 256;
   static const closeDeadline = Duration(milliseconds: 500);
+  // At most one unacknowledged health request/reply pair per producer slot,
+  // require physical control accounting; this protocol cap is not a byte proof.
+  static const maximumOutstandingHealthRequests = maximumProducers;
+  static const healthRefreshMs = 250;
   final DiagnosticConfiguration configuration;
   final DiagnosticIdentity identity;
   final SendPort? _writer;
@@ -140,6 +402,103 @@ final class LoggingSession {
   final RawReceivePort? _status, _errors;
   final Completer<void> _exited;
   final DiagnosticHealth health;
+  final bool _storageConfigured;
+
+  /// Local authoritative snapshot. Close results remain the exit evidence.
+  DiagnosticHealthSnapshot get healthSnapshot =>
+      DiagnosticHealthSnapshot._derive(
+        configuration,
+        _storageConfigured,
+        known: true,
+        ageMs: 0,
+        closing: _closed,
+        closed: health.closed,
+        reason: health.reason,
+        nativeReason: health.nativeReason,
+        nativeDropsExact: health.nativeDropsExact,
+        admittedRecords: health.admitted,
+        droppedRecords: health.dropped,
+        rejectedRecords: health.rejected,
+        highWaterBytes: health.highWaterBytes,
+        highWaterRecords: health.highWaterRecords,
+        producerRegistrationRefused: health.producerRegistrationRefused,
+        quarantinedProducers: health.quarantinedProducers,
+        slot: _healthSlot(health.slot),
+      );
+  static int? _healthSlot(int? slot) =>
+      slot != null && slot >= 0 && slot <= DiagnosticHealthSnapshot.maximumSlot
+      ? slot
+      : null;
+
+  // Only the writer's registration path publishes this, before any credits.
+  void _bindHealth(List value) {
+    final slot = value[1], generation = value[2], vm = value[3];
+    final port = value[4];
+    if (slot is! int ||
+        generation is! int ||
+        vm is! SendPort ||
+        port is! SendPort ||
+        slot < 0 ||
+        slot >= _slots.length) {
+      return;
+    }
+    final owned = _slots[slot];
+    // Exact bound execution VM only. A legacy unbound capability stays unknown.
+    if (owned == null ||
+        owned.bootstrap.generation != generation ||
+        owned.healthPort != null ||
+        owned.bootstrap._executionVm == null ||
+        owned.bootstrap._executionVm != vm) {
+      return;
+    }
+    owned.healthVm = vm;
+    owned.healthPort = port;
+  }
+
+  void _answerHealth(List value) {
+    final slot = value[1], generation = value[2], nonce = value[3];
+    if (slot is! int ||
+        generation is! int ||
+        nonce is! int ||
+        slot < 0 ||
+        slot >= _slots.length) {
+      return;
+    }
+    final owned = _slots[slot], port = owned?.healthPort;
+    if (owned == null ||
+        port == null ||
+        owned.bootstrap.generation != generation ||
+        value[4] != port ||
+        value[5] != owned.healthVm ||
+        nonce <= owned.healthNonce) {
+      return;
+    }
+    owned.healthNonce = nonce;
+    final slotValue = _healthSlot(health.slot);
+    port.send([
+      'health_reply',
+      slot,
+      generation,
+      nonce,
+      health.closed
+          ? 2
+          : _closed
+          ? 1
+          : 0,
+      health.reason.index,
+      health.nativeReason.index,
+      health.nativeDropsExact ? 1 : 0,
+      health.admitted.clamp(0, _maximumCounter),
+      health.dropped.clamp(0, _maximumCounter),
+      health.rejected.clamp(0, _maximumCounter),
+      health.highWaterBytes.clamp(0, _maximumCounter),
+      health.highWaterRecords.clamp(0, _maximumCounter),
+      health.producerRegistrationRefused.clamp(0, _maximumCounter),
+      health.quarantinedProducers.clamp(0, _maximumCounter),
+      slotValue ?? -1,
+    ]);
+  }
+
   late final DiagnosticProducer producer;
   final _slots = List<_OwnedProducer?>.filled(maximumProducers, null);
   final _generations = Uint64List(maximumProducers);
@@ -149,7 +508,7 @@ final class LoggingSession {
     0,
     DiagnosticProducerKind.entrypoint,
     configuration,
-  );
+  ).._storageConfigured = _storageConfigured;
   late final _inactiveReservation = DiagnosticProducerReservation._(this, null);
   bool _registrationPending = false;
   int _registrationSent = 0;
@@ -223,6 +582,8 @@ final class LoggingSession {
     }
     final identity = DiagnosticIdentity.random();
     final health = DiagnosticHealth();
+    // Configuration only: not supported hardware or healthy storage.
+    final storageConfigured = workerFactory != null || sinkFactory != null;
     if (!configuration.enabled) {
       health.reason = DiagnosticHealthReason.off;
       final session = LoggingSession._(
@@ -234,6 +595,7 @@ final class LoggingSession {
         null,
         Completer<void>()..complete(),
         health,
+        storageConfigured,
       );
       session.producer = session
           .reserveProducer(DiagnosticProducerKind.entrypoint)
@@ -282,6 +644,14 @@ final class LoggingSession {
         health.nativeReason = NativeDiagnosticHealth.values[value[1] as int];
         health.nativeDropsExact = value[2] as bool;
         currentSession?._writer?.send(['native_health_ack']);
+        return;
+      }
+      if (value.first == 'health_bind' && value.length == 5) {
+        currentSession?._bindHealth(value);
+        return;
+      }
+      if (value.first == 'health_request' && value.length == 6) {
+        currentSession?._answerHealth(value);
         return;
       }
       if (value.first == 'worker_probe' && value.length == 1) {
@@ -364,6 +734,7 @@ final class LoggingSession {
         errors,
         exited,
         health,
+        storageConfigured,
       );
       session._profileSelectionSent = profile != null;
       if (!DiagnosticProducer._selectWriter(port)) {
@@ -411,6 +782,7 @@ final class LoggingSession {
         isolate == null ? null : errors,
         exited,
         health,
+        storageConfigured,
       );
       currentSession = session;
       session.producer = session
@@ -422,8 +794,14 @@ final class LoggingSession {
     }
   }
 
+  /// Compatibility capability for this VM only. Workers must use
+  /// [reserveProducerForSpawn] or [spawnProducer] to bind before user entry.
   DiagnosticProducerBootstrap reserveProducer(DiagnosticProducerKind kind) =>
-      _reserve(kind)?.bootstrap ?? _inactiveBootstrap;
+      _reserve(
+        kind,
+        executingIsolate: Isolate.current.controlPort,
+      )?.bootstrap ??
+      _inactiveBootstrap;
 
   DiagnosticProducerReservation reserveProducerForSpawn(
     DiagnosticProducerKind kind,

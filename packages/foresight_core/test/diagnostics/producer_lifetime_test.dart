@@ -67,6 +67,8 @@ void _foreignConnection((DiagnosticProducerBootstrap, SendPort) message) async {
     built,
     DiagnosticProducer.localEndpointCount,
     DiagnosticProducer.localRegistrationTimerCount,
+    DiagnosticProducer.retainedConnectionCount,
+    DiagnosticProducer.localRegistryAllocatedForTesting,
   ));
 }
 
@@ -102,6 +104,77 @@ Future<LoggingSession> _session() => LoggingSession.startForTesting(
 
 void main() {
   bootstrapSqlSupportFixture();
+  test(
+    'legacy and exposed reservations reject foreign VM before registry setup',
+    () async {
+      final session = await _session();
+      addTearDown(session.close);
+      final reserved = session.reserveProducerForSpawn(
+        DiagnosticProducerKind.domain,
+      );
+      final exposed = reserved.bootstrap;
+      for (var i = 0; i < 10000; i++) {
+        expect(identical(reserved.bootstrap, exposed), isTrue);
+      }
+      for (final bootstrap in [
+        session.reserveProducer(DiagnosticProducerKind.setup),
+        exposed,
+      ]) {
+        final observation = ReceivePort();
+        final exited = ReceivePort();
+        try {
+          await Isolate.spawn(_foreignConnection, (
+            bootstrap,
+            observation.sendPort,
+          ), onExit: exited.sendPort);
+          expect(await observation.first.timeout(const Duration(seconds: 2)), (
+            false,
+            false,
+            false,
+            0,
+            0,
+            0,
+            false,
+          ));
+          await exited.first.timeout(const Duration(seconds: 2));
+        } finally {
+          observation.close();
+          exited.close();
+        }
+        final local = bootstrap.connect();
+        await local.ready;
+        expect(local.active, isTrue);
+        local.close();
+        await local.retired;
+      }
+    },
+  );
+
+  test(
+    'getter during paused owned spawn never steals the worker binding',
+    () async {
+      final session = await _session();
+      addTearDown(session.close);
+      final reservation = session.reserveProducerForSpawn(
+        DiagnosticProducerKind.domain,
+      );
+      final observations = ReceivePort();
+      addTearDown(observations.close);
+      final spawning = reservation.spawn(_heldProducer, observations.sendPort);
+      final premature = reservation.bootstrap.connect();
+      expect(premature.active, isFalse);
+      final owned = await spawning;
+      final observation =
+          await observations.first.timeout(const Duration(seconds: 2))
+              as (SendPort, bool);
+      expect(observation.$2, isTrue);
+      expect(reservation.bootstrap.connect().active, isFalse);
+      observation.$1.send(null);
+      await owned.retired.timeout(const Duration(seconds: 2));
+      expect(session.retainedSlotCount, 1);
+    },
+  );
+
   test(
     'catalog-small cold100 admits before five seconds using only normal credits',
     () async {
@@ -454,6 +527,8 @@ void main() {
         false,
         0,
         0,
+        0,
+        false,
       ));
       expect(accepted.active, isTrue);
       accepted.close();
@@ -544,6 +619,8 @@ void main() {
         false,
         0,
         0,
+        0,
+        false,
       ));
       await owned.retired.timeout(const Duration(seconds: 2));
       expect(session.retainedSlotCount, 1);

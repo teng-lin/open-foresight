@@ -11,6 +11,7 @@ import 'package:foresight_core/src/diagnostics/storage_worker_protocol.dart';
 import 'package:foresight_core/src/persistence/backup_files.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
+import 'package:path/path.dart' as p;
 
 const build =
     '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
@@ -171,6 +172,48 @@ void admitted(DiagnosticStorageWorkerState state) {
 }
 
 void main() {
+  test('INIT canonical path scan preserves POSIX normalization acceptance', () {
+    final segments = ['', '.', '..', 'a', '...', 'aa', '界', 'a b', r'a\b'];
+    final profiles = <String>[
+      '/',
+      '',
+      'relative',
+      '/a\u0000b',
+      '/${'a/' * 2046}aaa',
+      '/${'aa/' * 1363}./aaaa',
+      '/${'a/' * 2045}./aaa',
+      '/${'界/' * 2046}界',
+    ];
+    for (final a in segments) {
+      for (final b in segments) {
+        for (final c in segments) {
+          profiles.add('/$a/$b/$c');
+          profiles.add('$a/$b/$c');
+        }
+      }
+    }
+    for (final profile in profiles) {
+      final accepted =
+          profile.length > 1 &&
+          profile.length <= 4096 &&
+          !profile.contains('\u0000') &&
+          p.posix.isAbsolute(profile) &&
+          p.posix.normalize(profile) == profile &&
+          !profile.endsWith('/') &&
+          utf8.encode(profile).length <= 4096;
+      if (accepted) {
+        final bytes = init(profile).encode();
+        expect(DiagnosticWorkerInit.decode(bytes).profile, profile);
+      } else {
+        expect(
+          () => init(profile).encode(),
+          throwsFormatException,
+          reason: 'POSIX canonical acceptance must match',
+        );
+      }
+    }
+  });
+
   test('manifest preflight admits only bounded flat closed scalars', () {
     final text = jsonEncode({
       'schema': 1,

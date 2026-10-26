@@ -1,8 +1,6 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:path/path.dart' as p;
-
 import 'bounded_json.dart';
 import 'events.dart';
 import 'storage.dart';
@@ -45,13 +43,29 @@ final class DiagnosticWorkerInit {
   final DiagnosticIdentity session;
   final DiagnosticRole role;
 
-  static bool _profile(String value) =>
-      value.length > 1 &&
-      value.length <= 4096 &&
-      !value.contains('\u0000') &&
-      p.isAbsolute(value) &&
-      p.normalize(value) == value &&
-      !value.endsWith('/');
+  // Supported hosts use POSIX paths. Scan canonical segments directly rather
+  // than allocating normalized segment/separator lists for a rejected profile.
+  static bool _profile(String value) {
+    if (value.length <= 1 || value.length > 4096 || value.codeUnitAt(0) != 47) {
+      return false;
+    }
+    var start = 1;
+    for (var i = 1; i <= value.length; i++) {
+      final unit = i == value.length ? 47 : value.codeUnitAt(i);
+      if (unit == 0) return false;
+      if (unit != 47) continue;
+      final length = i - start;
+      if (length == 0 ||
+          (length == 1 && value.codeUnitAt(start) == 46) ||
+          (length == 2 &&
+              value.codeUnitAt(start) == 46 &&
+              value.codeUnitAt(start + 1) == 46)) {
+        return false;
+      }
+      start = i + 1;
+    }
+    return true;
+  }
 
   Uint8List encode() {
     if (!_profile(profile) || role == DiagnosticRole.transient) _invalid();

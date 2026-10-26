@@ -104,6 +104,14 @@ final class _ProducerLedger {
         }
         producer.port = port;
         producer.expectedIsolate ??= value[5] as SendPort;
+        // The owner records this exact endpoint before credits make it ready.
+        owner.send([
+          'health_bind',
+          value[1],
+          value[2],
+          producer.expectedIsolate,
+          port,
+        ]);
         producer.wantsNormal = producer.wantsPriority = true;
         _grant(producer, false, initial: true);
         _grant(producer, true, initial: true);

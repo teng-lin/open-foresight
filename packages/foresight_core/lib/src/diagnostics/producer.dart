@@ -27,10 +27,16 @@ final class DiagnosticProducerBootstrap {
   final DiagnosticProducerKind kind;
   final DiagnosticConfiguration configuration;
   SendPort? _executionVm;
+  // Existing owner status endpoint plus immutable initial health metadata.
+  SendPort? _ownerStatus;
+  bool _storageConfigured = false;
   DiagnosticProducer connect() {
     if (_writer == null ||
         (_executionVm != null && _executionVm != Isolate.current.controlPort)) {
-      return DiagnosticProducer._inactive(configuration);
+      return DiagnosticProducer._inactive(
+        configuration,
+        storageConfigured: _storageConfigured,
+      );
     }
     return DiagnosticProducer._connect(this);
   }
@@ -57,8 +63,12 @@ final class DiagnosticProducer {
   // One logging owner per VM. A bootstrap cannot change that selection. The
   // owner/private entry wrapper may replace an entirely unwound test context.
   static SendPort? _connectionWriter;
-  static final _connections = List<DiagnosticProducer?>.filled(16, null);
-  static final _latestGenerations = Uint64List(16);
+  static List<DiagnosticProducer?>? _connectionStorage;
+  static Uint64List? _generationStorage;
+  static List<DiagnosticProducer?> get _connections =>
+      _connectionStorage ??= List<DiagnosticProducer?>.filled(16, null);
+  static Uint64List get _latestGenerations =>
+      _generationStorage ??= Uint64List(16);
   static bool _selectWriter(SendPort writer) {
     if (_connectionWriter == writer) return true;
     for (final old in _connections) {
@@ -77,19 +87,25 @@ final class DiagnosticProducer {
 
   static DiagnosticProducer _connect(DiagnosticProducerBootstrap bootstrap) {
     final writer = bootstrap._writer!, slot = bootstrap.slot;
-    // Legacy unbound callers can select their first context. Subsequent writer
+    // Every exposed capability is already bound to this VM. Subsequent writer
     // selection belongs to the owner, never to a copied/stale capability.
     _connectionWriter ??= writer;
     if (_connectionWriter != writer ||
         slot < 0 ||
         slot >= 16 ||
         bootstrap.generation <= _latestGenerations[slot]) {
-      return _inactive(bootstrap.configuration);
+      return _inactive(
+        bootstrap.configuration,
+        storageConfigured: bootstrap._storageConfigured,
+      );
     }
     final old = _connections[slot];
     if (old != null &&
         (!old._closed || old._emitting || old._credits != null)) {
-      return _inactive(bootstrap.configuration);
+      return _inactive(
+        bootstrap.configuration,
+        storageConfigured: bootstrap._storageConfigured,
+      );
     }
     _latestGenerations[slot] = bootstrap.generation;
     final connected = _connections[slot] = DiagnosticProducer._(bootstrap);
@@ -126,18 +142,43 @@ final class DiagnosticProducer {
 
   @visibleForTesting
   static int get localEndpointCount =>
-      _connections.where((p) => p?._credits != null).length;
+      _connectionStorage?.where((p) => p?._credits != null).length ?? 0;
   @visibleForTesting
   static int get localRegistrationTimerCount =>
-      _connections.where((p) => p?._registrationDeadline != null).length;
+      _connectionStorage
+          ?.where((p) => p?._registrationDeadline != null)
+          .length ??
+      0;
   @visibleForTesting
   static int get retainedConnectionCount =>
-      _latestGenerations.where((generation) => generation != 0).length;
+      _generationStorage?.where((generation) => generation != 0).length ?? 0;
+  @visibleForTesting
+  static bool get localRegistryAllocatedForTesting =>
+      _connectionStorage != null || _generationStorage != null;
   static DiagnosticProducer? _inactiveProducer;
-  static DiagnosticProducer _inactive(DiagnosticConfiguration configuration) =>
-      _inactiveProducer ??= DiagnosticProducer._off(configuration);
-  DiagnosticProducer._off(this.configuration)
+  static DiagnosticProducer _inactive(
+    DiagnosticConfiguration configuration, {
+    bool storageConfigured = false,
+  }) {
+    final cached = _inactiveProducer;
+    if (cached != null &&
+        cached.configuration.level == configuration.level &&
+        cached.configuration.transportTrace == configuration.transportTrace &&
+        cached.configuration.invalidLevel == configuration.invalidLevel &&
+        cached._storageConfigured == storageConfigured) {
+      return cached;
+    }
+    // Keep one inactive instance, never a per-configuration registry. Old
+    // caller-held values retain their immutable metadata without resources.
+    return _inactiveProducer = DiagnosticProducer._off(
+      configuration,
+      storageConfigured,
+    );
+  }
+
+  DiagnosticProducer._off(this.configuration, this._storageConfigured)
     : _writer = null,
+      _ownerStatus = null,
       _slot = -1,
       generation = 0 {
     _closed = true;
@@ -146,6 +187,8 @@ final class DiagnosticProducer {
   }
   DiagnosticProducer._(DiagnosticProducerBootstrap bootstrap)
     : _writer = bootstrap._writer,
+      _ownerStatus = bootstrap._ownerStatus,
+      _storageConfigured = bootstrap._storageConfigured,
       _slot = bootstrap.id,
       generation = bootstrap.generation,
       configuration = bootstrap.configuration {
@@ -163,11 +206,112 @@ final class DiagnosticProducer {
       Isolate.current.controlPort,
     ]);
   }
-  final SendPort? _writer;
+  final SendPort? _writer, _ownerStatus;
+  final bool _storageConfigured;
   final int _slot, generation;
   int get slot => _slot;
+  // One monotonic clock per VM; no Timer. Replies reuse the credit port.
+  static final _healthClock = Stopwatch()..start();
+  int _healthNonce = 0, _healthPending = 0, _healthRequestedAt = 0;
+  int _healthReceivedAt = 0;
+  List? _healthReply;
+
+  /// Cached and synchronous. Reading may send one bounded refresh request; it
+  /// never waits for it. Unknown until the owner's authoritative reply.
+  DiagnosticHealthSnapshot get healthSnapshot {
+    if (!configuration.enabled) {
+      return DiagnosticHealthSnapshot._off(configuration, _storageConfigured);
+    }
+    final now = _healthClock.elapsedMilliseconds;
+    _requestHealth(now);
+    final reply = _healthReply;
+    if (reply == null) {
+      return DiagnosticHealthSnapshot._derive(
+        configuration,
+        _storageConfigured,
+        known: false,
+        ageMs: null,
+      );
+    }
+    final slot = reply[15] as int;
+    return DiagnosticHealthSnapshot._derive(
+      configuration,
+      _storageConfigured,
+      known: true,
+      ageMs: now - _healthReceivedAt,
+      closing: reply[4] == 1,
+      closed: reply[4] == 2,
+      reason: DiagnosticHealthReason.values[reply[5] as int],
+      nativeReason: NativeDiagnosticHealth.values[reply[6] as int],
+      nativeDropsExact: reply[7] == 1,
+      admittedRecords: reply[8] as int,
+      droppedRecords: reply[9] as int,
+      rejectedRecords: reply[10] as int,
+      highWaterBytes: reply[11] as int,
+      highWaterRecords: reply[12] as int,
+      producerRegistrationRefused: reply[13] as int,
+      quarantinedProducers: reply[14] as int,
+      slot: slot < 0 ? null : slot,
+    );
+  }
+
+  /// Exact local request state: (last nonce, pending nonce or 0).
+  @visibleForTesting
+  (int, int) get healthRequestStateForTesting => (_healthNonce, _healthPending);
+
+  void _requestHealth(int now) {
+    final status = _ownerStatus, credits = _credits;
+    // Authorized, open endpoints only; pending means no retry or replacement.
+    if (status == null ||
+        credits == null ||
+        _closed ||
+        !_hadAuthority ||
+        _healthPending != 0 ||
+        _healthNonce >= _maximumCounter ||
+        (_healthNonce != 0 &&
+            now - _healthRequestedAt < LoggingSession.healthRefreshMs)) {
+      return;
+    }
+    _healthPending = ++_healthNonce;
+    _healthRequestedAt = now;
+    status.send([
+      'health_request',
+      _slot,
+      generation,
+      _healthNonce,
+      credits.sendPort,
+      Isolate.current.controlPort,
+    ]);
+  }
+
+  void _receiveHealth(List value) {
+    if (_healthPending == 0 ||
+        value.length != 16 ||
+        value[3] != _healthPending) {
+      return;
+    }
+    _healthPending = 0;
+    for (var i = 4; i < 16; i++) {
+      final scalar = value[i];
+      if (scalar is! int || scalar < (i == 15 ? -1 : 0)) return;
+      if (scalar > _maximumCounter) return;
+    }
+    if ((value[4] as int) > 2 ||
+        (value[5] as int) >= DiagnosticHealthReason.values.length ||
+        (value[6] as int) >= NativeDiagnosticHealth.values.length ||
+        (value[7] as int) > 1 ||
+        (value[15] as int) > DiagnosticHealthSnapshot.maximumSlot) {
+      return;
+    }
+    _healthReply = value;
+    _healthReceivedAt = _healthClock.elapsedMilliseconds;
+  }
+
   final DiagnosticConfiguration configuration;
   final _ready = Completer<void>(), _retired = Completer<void>();
+
+  /// Registration/epoch handshake only. A ready producer may have zero credits;
+  /// emission remains best effort and never waits for credit redistribution.
   Future<void> get ready => _ready.future;
   Future<void> get retired => _retired.future;
   RawReceivePort? _credits;
@@ -228,6 +372,10 @@ final class DiagnosticProducer {
         value.length < 4 ||
         value[1] != _slot ||
         value[2] != generation) {
+      return;
+    }
+    if (value.first == 'health_reply') {
+      _receiveHealth(value);
       return;
     }
     final epoch = value[3] as int;
