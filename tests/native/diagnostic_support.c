@@ -30,6 +30,31 @@ static void tick(void) {
   nanosleep(&delay, NULL);
 }
 
+static uint64_t monotonic_ns(void) {
+  struct timespec now;
+  assert(clock_gettime(CLOCK_MONOTONIC, &now) == 0);
+  return (uint64_t)now.tv_sec * UINT64_C(1000000000) + (uint64_t)now.tv_nsec;
+}
+
+static void verification_work(void) {
+  uint64_t started = monotonic_ns();
+  uint64_t deadline = started + UINT64_C(1300000000);
+  for (;;) {
+    uint64_t now = monotonic_ns();
+    if (now >= deadline)
+      break;
+    uint64_t left = deadline - now;
+    struct timespec remaining = {(time_t)(left / UINT64_C(1000000000)),
+                                 (long)(left % UINT64_C(1000000000))};
+    if (nanosleep(&remaining, NULL) != 0)
+      assert(errno == EINTR);
+  }
+  uint64_t elapsed = monotonic_ns() - started;
+  fprintf(stderr, "diagnostic verification work elapsed_us=%llu\n",
+          (unsigned long long)(elapsed / 1000));
+  assert(elapsed >= UINT64_C(1300000000) && elapsed < UINT64_C(5000000000));
+}
+
 static void *watcher(void *unused) {
   (void)unused;
   for (;;) {
@@ -93,8 +118,7 @@ static int worker(const char *parent_text, const char *mode) {
   assert(mapped == FS_DIAG_SUPPORT_PREPARED);
   if (strcmp(mode, "verify-slow") == 0 || strcmp(mode, "verify-rearmed") == 0) {
     assert(fs_diag_child_operation(1, 1) == 0);
-    for (int i = 0; i != 130; ++i)
-      tick();
+    verification_work();
     assert(fs_diag_child_operation(1, 0) == 0);
     assert(fs_diag_child_operation(1, 1) == FS_DIAG_SUPPORT_ERROR);
   }
@@ -183,7 +207,20 @@ static void run_case(const char *launcher, const char *self, const char *mode) {
   int preinit_deadline = strcmp(mode, "verify-deadline") == 0;
   if (strcmp(mode, "wrong-identity") != 0 && strcmp(mode, "bootstrap") != 0 &&
       !bootstrap_idle && !preinit_deadline) {
-    assert(receive(FS_DIAG_HELLO, 0, 1));
+    uint64_t started = monotonic_ns();
+    int hello = receive(FS_DIAG_HELLO, 0, 1);
+    if (!hello) {
+      int state = fs_diag_parent_poll(1), actual = 0;
+      pid_t observed = waitpid(-1, &actual, WNOHANG);
+      fprintf(stderr,
+              "diagnostic HELLO unavailable elapsed_us=%llu status=%d "
+              "exit_class=%d child_observed=%d child_exit=%d child_signal=%d\n",
+              (unsigned long long)((monotonic_ns() - started) / 1000), state,
+              fs_diag_parent_exit_class(1), observed > 0,
+              observed > 0 && WIFEXITED(actual) ? WEXITSTATUS(actual) : -1,
+              observed > 0 && WIFSIGNALED(actual) ? WTERMSIG(actual) : 0);
+    }
+    assert(hello);
     // HELLO alone cannot admit private INIT before the coordinator observes
     // the fresh post-registration challenge acknowledgement.
     assert(fs_diag_support_send(1, FS_DIAG_INIT, 1, 4, (const uint8_t *)"test",
