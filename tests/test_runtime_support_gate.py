@@ -99,6 +99,7 @@ def test_source_service_compilation_uses_receipt_verified_explicit_roots(
     dart.write_text(
         "#!/usr/bin/env python3\nimport json,os,sys\n"
         "with open(os.environ['FIXTURE_DART_CALLS'],'a') as stream: stream.write(json.dumps(sys.argv[1:])+'\\n')\n"
+        "if len(sys.argv)==2 and sys.argv[1].endswith('locate.dart'): print(os.path.realpath(__file__))\n"
     )
     dart.chmod(0o755)
     result = subprocess.run(
@@ -139,14 +140,25 @@ def test_source_service_compilation_uses_receipt_verified_explicit_roots(
 
 
 @pytest.mark.parametrize("worker_exit", [0, 29])
+@pytest.mark.parametrize("wrapper", [False, True])
 def test_worker_gate_uses_current_sdk_and_explicit_aot_verification(
-    gate_tree, tmp_path, worker_exit
+    gate_tree, tmp_path, worker_exit, wrapper
 ):
     root, build = gate_tree
-    binary = tmp_path / "sdk/bin"
+    binary = tmp_path / "flutter/bin/cache/dart-sdk/bin"
     binary.mkdir(parents=True)
-    (binary / "dart").write_text("fixture executable")
+    (binary / "dart").write_text(
+        "#!/usr/bin/env python3\nfrom pathlib import Path\nimport sys\n"
+        "assert len(sys.argv)==2\n"
+        "assert 'Platform.resolvedExecutable' in Path(sys.argv[1]).read_text()\n"
+        "print(Path(__file__).resolve())\n"
+    )
     (binary / "dart").chmod(0o755)
+    selected = binary
+    if wrapper:
+        selected = tmp_path / "flutter/bin"
+        (selected / "dart").write_text(f"#!/bin/sh\nexec '{binary / 'dart'}' \"$@\"\n")
+        (selected / "dart").chmod(0o755)
     (root / "tools/build_diagnostic_worker.py").write_text(
         "import os,sys\nprint('worker:'+'|'.join(sys.argv[1:]))\n"
         "sys.exit(int(os.environ['FIXTURE_WORKER_EXIT']))\n"
@@ -164,7 +176,7 @@ def test_worker_gate_uses_current_sdk_and_explicit_aot_verification(
         ],
         env={
             **os.environ,
-            "PATH": f"{binary}:{os.environ['PATH']}",
+            "PATH": f"{selected}:{os.environ['PATH']}",
             "FIXTURE_WORKER_EXIT": str(worker_exit),
         },
         text=True,
@@ -179,3 +191,42 @@ def test_worker_gate_uses_current_sdk_and_explicit_aot_verification(
         in result.stdout
     )
     assert ("consumer" in result.stdout.splitlines()) is (worker_exit == 0)
+
+
+@pytest.mark.parametrize("probe_exit", [0, 37])
+def test_worker_gate_refuses_failed_or_invalid_vm_probe(
+    gate_tree, tmp_path, probe_exit
+):
+    root, build = gate_tree
+    binary = tmp_path / "wrapper/bin"
+    binary.mkdir(parents=True)
+    (binary / "dart").write_text(
+        "#!/usr/bin/env python3\nimport sys\n"
+        "print('invalid relative VM path')\n"
+        "print('probe refused', file=sys.stderr)\n"
+        f"sys.exit({probe_exit})\n"
+    )
+    (binary / "dart").chmod(0o755)
+    (root / "tools/build_diagnostic_worker.py").write_text(
+        "raise AssertionError('worker must not run after refused probe')\n"
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            "-euc",
+            'source "$1/tools/runtime_support_gate.sh"; '
+            'foresight_diagnostic_worker "$1" "$2" "$3" --verify; echo consumer',
+            "fixture",
+            str(root),
+            str(build),
+            sys.executable,
+        ],
+        env={**os.environ, "PATH": f"{binary}:{os.environ['PATH']}"},
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
+    assert result.returncode == (probe_exit or 1), result.stdout + result.stderr
+    assert "consumer" not in result.stdout
+    assert "worker must not run" not in result.stderr
+    assert ("probe refused" if probe_exit else "did not report") in result.stderr

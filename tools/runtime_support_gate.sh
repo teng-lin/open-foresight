@@ -33,6 +33,37 @@ foresight_diagnostic_worker() {
   shift 3
   local task_worker_dart task_worker_sdk
   task_worker_dart=$(command -v dart) || return $?
-  task_worker_sdk=$("$task_worker_python" -c     'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve().parent.parent)'     "$task_worker_dart") || return $?
+  # Flutter's bin/dart is a wrapper, not the VM inside bin/cache/dart-sdk.
+  # Probe that selected command without loading the application's package graph.
+  task_worker_sdk=$("$task_worker_python" - "$task_worker_dart" <<'PYTHON'
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+selected = Path(sys.argv[1]).absolute()
+with tempfile.TemporaryDirectory(prefix="dart-sdk-") as temporary:
+    probe = Path(temporary) / "locate.dart"
+    probe.write_text(
+        "import 'dart:io';\n"
+        "void main() => stdout.writeln(Platform.resolvedExecutable);\n"
+    )
+    result = subprocess.run(
+        [str(selected), str(probe)],
+        cwd=temporary,
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    if result.returncode:
+        sys.stderr.write(result.stderr)
+        sys.exit(result.returncode)
+    executable = Path(result.stdout.strip())
+    if not executable.is_absolute() or not executable.is_file():
+        sys.exit("Selected Dart did not report its VM executable")
+    print(executable.resolve().parent.parent)
+PYTHON
+  ) || return $?
   "$task_worker_python" "$task_worker_root/tools/build_diagnostic_worker.py"     --root "$task_worker_root" --build "$task_worker_build"     --sdk "$task_worker_sdk"     --package-config "$task_worker_root/packages/foresight_core/.dart_tool/package_config.json"     --mode aot "$@"
 }
