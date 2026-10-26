@@ -12,6 +12,8 @@ import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/diagnostics/events.dart'
     show DiagnosticRecord;
+import 'package:foresight_core/src/diagnostics/session.dart'
+    show DiagnosticHealthSnapshot;
 import 'package:foresight_core/src/service.dart';
 import 'package:test/test.dart';
 
@@ -177,14 +179,35 @@ void main() {
         expect(handoff.existsSync(), isFalse);
         // The real worker must adopt the same profile and qualified logger.
         // Observe the unchanged five-second cold gate through actual status.
-        await eventually(() async {
-          final status = await client!.call('status') as Map;
-          expect(status['pid'], process.pid);
-          expect(status['profile_id'], profile.identity);
-          final diagnostics = status['diagnostics'] as Map;
-          expect(diagnostics['level'], 'info');
-          return diagnostics['state'] == 'healthy';
-        }, timeout: const Duration(seconds: 15));
+        Map<String, Object?> lastHealth = {'observed': false};
+        try {
+          await eventually(() async {
+            final status = await client!.call('status') as Map;
+            expect(status['pid'], process.pid);
+            expect(status['profile_id'], profile.identity);
+            final diagnostics = status['diagnostics'] as Map;
+            expect(diagnostics['level'], 'info');
+            final snapshot = DiagnosticHealthSnapshot.tryParse(diagnostics);
+            lastHealth = snapshot == null
+                ? {'observed': true, 'valid': false}
+                : {
+                    'observed': true,
+                    'valid': true,
+                    'state': snapshot.state.name,
+                    'reason': snapshot.reason.name,
+                    'nativeReason': snapshot.nativeReason.name,
+                    'known': snapshot.known,
+                    'stale': snapshot.stale,
+                    'storageConfigured': snapshot.storageConfigured,
+                  };
+            return diagnostics['state'] == 'healthy';
+          }, timeout: const Duration(seconds: 15));
+        } catch (_) {
+          // Emit only validated closed tags/booleans, never raw status, paths,
+          // configuration, child output or exception messages.
+          stderr.writeln('Startup handoff health: ${jsonEncode(lastHealth)}');
+          rethrow;
+        }
         final statusHandoff = await writeServiceStartupEnvironment(
           Directory(profile.runtime),
           values,
