@@ -2086,6 +2086,120 @@ def test_attached_mcp_follows_a_closing_owner_to_one_replacement(tmp_path):
     owner_env = {**env, "FORESIGHT_HELPER": str(helper.executable)}
     mcp_env = {**env, "FORESIGHT_HELPER": ""}
     mcp = None
+    relay = None
+
+    class ProbeRelay:
+        """Transparent fixture observer for MCP's real new startup connection."""
+
+        def __init__(self, client_pid, owner_pid):
+            self.observed = threading.Event()
+            self.stopped = threading.Event()
+            self.errors = []
+            self.sockets = []
+            self.threads = []
+            self.client_pid, self.owner_pid = client_pid, owner_pid
+            self.evidence = None
+            self.backend_path = runtime / "owner.sock"
+            assert not self.backend_path.exists()
+            os.rename(runtime / "application.sock", self.backend_path)
+            self.listener = socket.socket(socket.AF_UNIX)
+            self.listener.bind(str(runtime / "application.sock"))
+            os.chmod(runtime / "application.sock", 0o600)
+            self.listener_inode = (runtime / "application.sock").stat().st_ino
+            self.listener.listen()
+            self.listener.settimeout(0.1)
+            self.acceptor = threading.Thread(target=self.accept, daemon=True)
+            self.acceptor.start()
+
+        @staticmethod
+        def peer_pid(peer):
+            credentials = (
+                peer.getsockopt(0, 2, 4)
+                if sys.platform == "darwin"
+                else peer.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
+            )
+            return int.from_bytes(credentials[:4], sys.byteorder, signed=True)
+
+        def accept(self):
+            while not self.stopped.is_set():
+                try:
+                    frontend, _ = self.listener.accept()
+                except TimeoutError:
+                    continue
+                except OSError:
+                    return
+                thread = threading.Thread(target=self.bridge, args=(frontend,), daemon=True)
+                self.threads.append(thread)
+                thread.start()
+
+        def bridge(self, frontend):
+            backend = socket.socket(socket.AF_UNIX)
+            self.sockets.extend([frontend, backend])
+            try:
+                backend.connect(str(self.backend_path))
+                client_pid, owner_pid = self.peer_pid(frontend), self.peer_pid(backend)
+                buffers = {frontend: b"", backend: b""}
+                status_requests = set()
+                readers = [frontend, backend]
+                while readers and not self.stopped.is_set():
+                    ready, _, _ = select.select(readers, [], [], 0.1)
+                    for source in ready:
+                        destination = backend if source is frontend else frontend
+                        chunk = source.recv(65536)
+                        if not chunk:
+                            readers.remove(source)
+                            if source is backend:
+                                # Mirror removal of the old owner's public
+                                # endpoint before delivering its actual EOF.
+                                self.listener.close()
+                                endpoint = runtime / "application.sock"
+                                if endpoint.exists() and endpoint.stat().st_ino == self.listener_inode:
+                                    endpoint.unlink()
+                            destination.shutdown(socket.SHUT_WR)
+                            continue
+                        # Preserve bytes, response ordering and the owner's EOF.
+                        destination.sendall(chunk)
+                        buffers[source] += chunk
+                        while b"\n" in buffers[source]:
+                            line, buffers[source] = buffers[source].split(b"\n", 1)
+                            frame = json.loads(line)
+                            if source is frontend and frame.get("method") == "status":
+                                status_requests.add(frame["id"])
+                            if (
+                                source is backend
+                                and frame.get("id") in status_requests
+                                and frame.get("error") == {
+                                    "code": "unavailable",
+                                    "message": "Application service is shutting down; retry after it exits.",
+                                    "reason": "closing",
+                                }
+                                and client_pid == self.client_pid
+                                and owner_pid == self.owner_pid
+                            ):
+                                self.evidence = (client_pid, owner_pid, frame["id"])
+                                self.observed.set()
+            except (OSError, ValueError) as error:
+                if not self.stopped.is_set():
+                    self.errors.append(repr(error))
+            finally:
+                frontend.close()
+                backend.close()
+
+        def close(self):
+            self.stopped.set()
+            self.listener.close()
+            for peer in self.sockets:
+                try:
+                    peer.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                peer.close()
+            self.acceptor.join(timeout=2)
+            for thread in self.threads:
+                thread.join(timeout=2)
+            assert not self.acceptor.is_alive()
+            assert not any(thread.is_alive() for thread in self.threads)
+            self.backend_path.unlink(missing_ok=True)
 
     def process_diagnostics(process_pid):
         # Manifests bind these real typed records to this synthetic process.
@@ -2131,33 +2245,29 @@ def test_attached_mcp_follows_a_closing_owner_to_one_replacement(tmp_path):
             ):
                 assert mcp.process.poll() is None, mcp.timeout_details(mcp.sequence)
                 poll_delay(deadline)
+            # The attached client stays on its existing direct connection.
+            # Only the later handoff/startup probe traverses this observer.
+            relay = ProbeRelay(mcp.process.pid, owner.pid)
             owner.send_signal(signal.SIGTERM)
             held = helper.published("stopping", deadline, owner)
             pending = mcp.send("tools/call", {"name": "get_status", "arguments": {}})
             # The owner refuses the request; the draining frontend then
             # refuses the handoff's startup probe and keeps it open.
-            while not any(
-                record["event"] == "rpc.failed"
-                and record["fields"].get("operation") == "status"
-                and record["fields"].get("category") == "closing"
-                and record["fields"].get("outcome") == "refused"
-                for record in process_diagnostics(mcp.process.pid)
+            while not (
+                relay.observed.is_set()
+                and any(
+                    record["event"] == "rpc.failed"
+                    and record["fields"].get("operation") == "status"
+                    and record["fields"].get("category") == "closing"
+                    and record["fields"].get("outcome") == "refused"
+                    for record in process_diagnostics(mcp.process.pid)
+                )
             ):
+                assert not relay.errors, relay.errors
                 assert mcp.process.poll() is None, mcp.process.stderr.read()
                 poll_delay(deadline)
-            # The actual public frontend still gives the unchanged closing
-            # refusal on the old owner's endpoint while its helper is held.
-            closing = Peer(runtime / "application.sock")
-            try:
-                with pytest.raises(RuntimeError) as refused:
-                    closing.call("status")
-                assert refused.value.args[0] == {
-                    "code": "unavailable",
-                    "message": "Application service is shutting down; retry after it exits.",
-                    "reason": "closing",
-                }
-            finally:
-                closing.close()
+            assert not relay.errors, relay.errors
+            assert relay.evidence == (mcp.process.pid, owner.pid, 1)
             # The service kills a helper that holds SIGTERM for 5 s. Only
             # while it is still held does the owner provably hold the lock.
             try:
@@ -2165,6 +2275,21 @@ def test_attached_mcp_follows_a_closing_owner_to_one_replacement(tmp_path):
             except ProcessLookupError:
                 pytest.fail("hold window missed: the helper was killed first")
             assert not launches.exists()
+            with (data / ".application.lock").open("a") as held_profile:
+                try:
+                    fcntl.lockf(held_profile, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    pass
+                else:
+                    pytest.fail("old owner released its profile during the helper hold")
+            (tmp_path / "probe-evidence.json").write_text(json.dumps({
+                "mcp_pid": relay.evidence[0],
+                "old_owner_pid": relay.evidence[1],
+                "startup_status_request": relay.evidence[2],
+                "old_helper_pid": held,
+                "profile_lock_held": True,
+                "no_replacement_before_release": True,
+            }))
             helper.release()
             assert owner.wait(timeout=30) == 0
             assert helper.released(), "hold window missed: the helper was killed"
@@ -2188,6 +2313,8 @@ def test_attached_mcp_follows_a_closing_owner_to_one_replacement(tmp_path):
             if mcp is not None and mcp.process.poll() is None:
                 mcp.process.kill()
                 mcp.process.wait(timeout=30)
+            if relay is not None:
+                relay.close()
             if owner.poll() is None:
                 owner.kill()
                 owner.wait(timeout=10)
