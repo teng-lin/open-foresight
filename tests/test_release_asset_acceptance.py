@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import DEFAULT, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from release_asset_acceptance import (
@@ -657,6 +657,20 @@ class ReleaseAssetAcceptanceTest(unittest.TestCase):
         """Linux package launcher must export FORESIGHT_RUNTIME_REVISION for exact revision acceptance."""
         import package
 
+        unpatched_run = subprocess.run
+
+        def run_with_sdk_probe(arguments, **options):
+            # Keep unrelated process mocks intact while executing the controlled SDK
+            # locator fixture through its real executable path.
+            if len(arguments) == 2 and Path(arguments[1]).name == "locate.dart":
+                self.assertEqual(
+                    Path(arguments[1]).read_text(),
+                    "import 'dart:io';\n"
+                    "void main() => stdout.writeln(Platform.resolvedExecutable);\n",
+                )
+                return unpatched_run(arguments, **options)
+            return DEFAULT
+
         revision = "c" * 40
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -707,7 +721,7 @@ class ReleaseAssetAcceptanceTest(unittest.TestCase):
                     ],
                 ),
                 patch.object(package, "LIBRARY_SHA256", litert_digest),
-                patch("package.subprocess.run"),
+                patch("package.subprocess.run", side_effect=run_with_sdk_probe),
                 patch("package.subprocess.check_output", return_value=""),
             ):
                 for owner, name, value in diagnostic_products(build, root / "dart-sdk"):
