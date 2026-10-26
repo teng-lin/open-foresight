@@ -87,9 +87,9 @@ def test_refusal_never_publishes_consumer_inputs(subject, tmp_path, provider):
 def test_audio_restores_before_readonly_portable_mount_and_does_not_build_app():
     root = Path(__file__).parents[1]
     script = (root / "tools/linux_acceptance.sh").read_text()
-    assert script.index("/src-restore.py restore --root /src") < script.index(
-        "--suite virtual-audio --bundle /portable"
-    )
+    assert script.index(
+        "/handoff-control/tools/ci_linux_handoff.py restore --root /src"
+    ) < script.index("--suite virtual-audio --bundle /portable")
     assert '-v "$task_audio_volume:/src"' in script
     assert '-v "$PWD/build/portable/dist/open-foresight:/portable:ro"' in script
     assert 'chown "$2:$3" /src' in script

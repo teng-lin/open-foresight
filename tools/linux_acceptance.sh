@@ -51,8 +51,8 @@ if [[ "$task_suite" == audio && "${VIRTUAL_AUDIO_SELECTED:-true}" == true ]]; th
   docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
     -v "$task_audio_volume:/src" -v "$AUDIO_HANDOFF_DIRECTORY:/handoff:ro" \
     -v "$task_audio_control:/control:ro" -w / \
-    -v "$PWD/tools/ci_linux_handoff.py:/src-restore.py:ro" \
-    foresight-acceptance:local bash -c 'python3 /src-restore.py restore --root /src \
+    -v "$PWD/tools/ci_linux_handoff.py:/handoff-control/tools/ci_linux_handoff.py:ro" \
+    foresight-acceptance:local bash -c 'python3 /handoff-control/tools/ci_linux_handoff.py restore --root /src \
       --directory /handoff --revision "$1" --inputs /control/ci-inputs.json && chown "$2:$3" /src' \
       -- "$SOURCE_REVISION" "$(id -u)" "$(id -g)"
 fi
