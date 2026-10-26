@@ -59,12 +59,14 @@ if [[ ! -x "$task_python" ]]; then
 fi
 if [[ "$task_stage" == all || "$task_stage" == native ]]; then
   if [[ "$task_mode" == test-only ]]; then
+    ci_timed "verified runtime support consumer configuration" cmake \
+      -S "$task_root" -B "$task_build" -DFORESIGHT_RUNTIME_SUPPORT_CONSUMER=ON
     "$task_python" "$task_root/tools/verify_application_no_build.py" --build "$task_build"
   else
     "$task_python" "$task_root/tools/check_build_cache.py" "$task_build/CMakeCache.txt"
     "$task_python" "$task_root/tools/verify_toolchain_pins.py" protoc
     "$task_python" "$task_root/tools/verify_descriptor.py"
-    ci_timed "native configure" cmake -S "$task_root" -B "$task_build" -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$task_python" ${task_cmake_platform[@]+"${task_cmake_platform[@]}"} "$@"
+    ci_timed "native configure" cmake -S "$task_root" -B "$task_build" -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$task_python" ${task_cmake_platform[@]+"${task_cmake_platform[@]}"} "$@" -DFORESIGHT_RUNTIME_SUPPORT_CONSUMER=OFF
     if [[ "${FORESIGHT_REQUIRE_APP_DEPENDENCY_REUSE:-0}" == 1 ]]; then
       "$task_python" "$task_root/tools/verify_app_dependency_reuse.py" --build "$task_build"
     fi
