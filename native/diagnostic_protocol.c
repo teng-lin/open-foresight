@@ -10,7 +10,8 @@
 _Static_assert(sizeof(FORESIGHT_DIAGNOSTIC_NATIVE_ID) == 65,
                "diagnostic native identity length");
 static const char diagnostic_build_identity_marker[] __attribute__((used)) =
-    "\0FORESIGHT_DIAGNOSTIC_NATIVE_ID:v1:" FORESIGHT_DIAGNOSTIC_NATIVE_ID ":end";
+    "\0FORESIGHT_DIAGNOSTIC_NATIVE_ID:v1:" FORESIGHT_DIAGNOSTIC_NATIVE_ID
+    ":end";
 #endif
 
 typedef struct channel_view {
