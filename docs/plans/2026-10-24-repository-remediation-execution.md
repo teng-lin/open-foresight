@@ -1597,3 +1597,124 @@ records these lessons: small integration batches, exact CI entrypoints and
 environment comparison, actual consumer checks, bounded failure ownership,
 precise evidence labels, and preserved test/integrity gates. Existing owner
 review remains required before merge.
+
+
+### 2026-10-26: bounded bootstrap lease, fresh consumers and completion evidence
+
+The current Mac failure evidence identified an actual diagnostic child exit 65.
+A controlled 1.3-second verification reproduced the cause: the pre-INIT idle
+watchdog expired during the existing five-second active verification lease.
+The reviewed fix permits one bounded active operation before INIT, then starts
+a fresh one-second idle interval. Repeated inactive calls cannot renew it;
+post-INIT renewal, parent-heartbeat checks, source verification, HELLO and private
+INIT validation retain their existing semantics. The original failure output
+and old cohorts remain retained.
+
+Fresh ordinary root CTest passed **52/52 on Linux and 61/61 on Mac, zero skips**.
+Fresh ASan/LSan/UBSan and TSan profiles each passed **52/52, zero skips**. These
+runs reused the qualified SDKs and dependencies; they did not rebuild an SDK or
+stamp old products with new identities. Linux NativeID is
+`6d4ccf1d94a0bbc45d7faefc92b6b7ca2351fe94259d0b1c7df0730a8d2f7b2f`
+and SQLID is
+`ba22417ff8e3c466b6ca4fbf6f42b547f6bdf8874f61149908b62760d71bae6e`.
+Mac NativeID is
+`1e93bd4bf6ce8f98fa49e049c39a03190912d352e186fa01e9e945db05e1698f`;
+its SQLID is
+`58e1c69a7d2226c7c31039c2f378c87381e2c4a4ca3f8f341d2e0ca63d7ac697`.
+Official receipt verification and source/product postchecks passed. Evidence:
+`/var/tmp/of-bootstrap-native/linux/qualification.json`, Mac
+`/var/tmp/of-bootstrap-native/mac-qualification.json`, and
+`/var/tmp/of-bootstrap-san/qualification.json`.
+
+A fresh application cohort compiled its Worker, service and MCP against the new
+Linux products. WorkerID is
+`0a417fdfb291ec0931ea6d8e683c759cd22c76400bc2583ee961f9ccada8cfce`.
+The complete existing application graph remained an opaque compiler input;
+only explicitly approved public deltas were overlaid in a private view. There
+was no private frontend/configuration graft or broad application copy/hash.
+The application qualification covers the `4ffbbf62` production graph, with the
+separately reviewed Desktop fixture close repair where stated; it is not a
+claim that every later tooling-only HEAD received another full application run.
+
+| Actual check | Result and boundary |
+| --- | --- |
+| Core analysis, format and complete coverage suite | 2,889 passed, 16 skipped; 91.04% (24,586/27,006), floor 90 |
+| Desktop analysis, format and complete coverage suite after explicit fixture cleanup | 643 passed, 17 skipped; 93.27% (9,126/9,784), floor 90 |
+| Compiled service/MCP suite | 35 passed, zero skips; three GUI cases deselected |
+| Separate isolated-display GUI suite | Three passed, zero skips; 32 non-GUI cases deselected |
+| Fast gate | Two passed, zero skips, including qualified sibling SQL binding without inherited fixture environment |
+| Audio acceptance follow-up | Four of four passed: two Desktop cases, one Core case and the complete meeting workflow; real-model virtual-audio execution uses the qualified `4a395f49` artifact plus the three reviewed Desktop production overlays, separately from the new-native application cohort |
+
+The compiled and GUI results came from separate commands, not one claimed
+38-case invocation. The first Desktop retry retained a VM thread-start loader
+failure. Its exact failed module subsequently passed 2/2, followed by the clean
+full Desktop result above; the original resource cause remains unproven.
+No deadline, assertion, skip or coverage-floor change was used. Final official
+Worker/Native verification passed, with zero mismatches across thirteen native
+artifacts and three compiled application artifacts. Detailed counts, skip
+inventories, failed output and postchecks are in
+`/var/tmp/of-app-4ff/handoff.json` and `/var/tmp/of-fin/app-4ff/`.
+The tiny first-run service fixtures remain synthetic and do not certify real
+inference. The separate audio packet executed real models with a fixture audio
+stream; neither packet certifies GPU, physical capture or personal-profile access.
+
+F3 now has portable numeric evidence in
+[`incremental-indexing-measurements-2026-10-26.json`](../validation/incremental-indexing-measurements-2026-10-26.json)
+and the reproducibility limits in
+[`meeting-indexing.md`](../validation/meeting-indexing.md).
+The existing fixed N=64/N=128 workload and ratio assertions remain unchanged:
+processed content doubles, while the retained snapshot ratio is 2.25. Reports
+include raw CPU ticks/clock rate, whole-index and helper-RPC durations, physical
+DB/WAL before/after bytes, typed history content/counts, sampled pending
+high-water values and the actual settlement/close observations. CPU sampling
+starts after fixture setup; the index-loop duration includes reporting overhead.
+The helper N=128 run uses the same warm database after N=64. Sampled high-water
+values are not continuous maxima, and native kill/wait timing is not graceful
+drain. These controlled-runtime measurements retain their own original product
+provenance; they are not relabeled as the new bootstrap cohort or presented as
+production-model performance certification. Full Core passed on the measurement
+freeze; the subsequent output-label-only change has its separate focused pass.
+
+CI orchestration retains independent gate results and now emits bounded progress
+and periodic heartbeats, including failed output while sibling work continues.
+Flutter-consuming work preserves its ownership/serialization contract. Private
+unprivileged execution, SDK/cache provenance and qualified-consumer no-build
+verification remain mandatory; no exit-status or integrity gate was relaxed.
+
+The three affected orchestration/consumer modules were then executed in the
+complete Git-free application export with the exact public `c815def3` overlays:
+`test_linux_test_schedule.py`, `test_parallel_build_gates.py` and
+`test_measure_service_rpc.py`. Each unrelated-PR, main and unset-ref context
+passed **236 cases, zero skips: 708 total passing executions**. Actual `.git`
+absence and Git refusal were verified separately in each context. Only six
+named changed files and three public script prerequisites were overlaid; only
+the private upper received ownership changes. All nine byte/mode postchecks
+matched. This is not a rerun or claim for unrelated modules. Evidence:
+`/var/tmp/of-fin/ci-gf-c815/qualification.json`.
+
+The frozen `c815def3` full Python coverage run passed **6,323 tests / 32 skips /
+95.26% combined line/branch coverage**, retaining the 95% floor. Ruff, mypy and
+the subprocess-timeout checker passed. The 32 recorded skip reasons cover opt-in
+original-detector/Docker paths, CTest-owned loader fixtures, and unavailable
+platform/compiler/packaging tools; they are not acceptance passes. This run
+recorded Python 3.13.17, CMake 3.31.6, Ninja 1.12.1 and protoc 35.1 before
+execution and confirmed HEAD unchanged afterward. The earlier run selected an
+unconfigured CMake shim and failed; its output remains retained. The corrected
+failed-first run passed 157 cases / one skip before the complete run. Evidence:
+`/var/tmp/p95b67/qualification.json`, `preflight.json` and `skips.json`.
+
+The F16 native-active RPC benchmark remains pending: actual model registration
+returned unavailable because its helper socket was absent. Idle samples alone
+do not qualify the benchmark; bounded startup/harness diagnosis continues
+independently of the follow-up push.
+The Mac notes source-JIT path also remains unverified: portable-kernel successes
+do not resolve the hosted whole-test timeout. Immediate numeric body/phase and
+global-setup witnesses preserve all five-/thirty-second deadlines and assertions
+for the next actual execution. Current-head hosted results and required owner
+review of retained CI/artifact-trust changes remain merge conditions.
+
+The delivery amendment's explicit user deferrals remain deferrals, not passing
+results: Keychain (retained -25308 failure), strict logging size/overhead
+certification and expanded correlation, new native-report/clang-tidy work,
+broad Python cleanup, and the specified broader security/governance work.
+Existing privacy, integrity, qualification and publication protections remain.
