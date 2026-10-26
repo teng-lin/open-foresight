@@ -1159,3 +1159,69 @@ resolution, actual owner review of retained publishing/trust changes, and verifi
 merge of the single PR to main. Agent/CLI convergence does not supply owner
 approval. See PR #180 for their current outcomes rather than treating this dated
 checkpoint as a claim that the merge or release publication already happened.
+
+### Current-head CI repair and requalification, October 26
+
+The combined candidate was pushed as `3c2a97c4` and PR #180 marked ready for
+review. Its hosted failures were inspected before this repair batch; successful
+jobs were not manually rerun. The cancelled Python job was not counted as a pass.
+
+The Arch stage had selected Python 3.14, while the Ubuntu SDK's development
+Python was 3.12. Both conflicted with the existing 3.13 diagnostic-tooling
+requirement and left runtime receipts unavailable. The repairs explicitly select
+supported 3.13 tooling without replacing SDK/model environments or rebuilding
+compatible SDKs. Ubuntu build and restored-test containers use the same private
+absolute tooling path; actual separate-container CTest changed from a missing
+random interpreter path to **1/1 passing in each container**. Existing version,
+dependency-hash, directory-ownership and source-identity guards remain enforced.
+Arch drift uses the same required tooling selection. The metadata collector now
+records real pacman package provenance and ownership on Arch; real GCC/Clang
+records pass native and SQL identity consumers. Ubuntu and Mac metadata output
+bytes remain identical. The collector's source hash correctly changes SQL IDs.
+
+Sanitizer fixes preserve the diagnostic launcher's closed child environment.
+Compiler-runtime RUNPATH resolves instrumented children, build-bound defaults
+retain fatal child reports, and the gates collect those reports into their
+existing evidence. Four actual ASan, UBSan, LSan and TSan child faults were
+captured through that launcher; the real gates rejected all four even when
+the enclosing CTests expected the fault. Atomic PID publication removes the
+fixture's empty-file race. The user directed “Fix CI error” after presentation
+of the precise TSan observation proposal: only Clang-TSan hold/bootstrap checks
+allow the additional one-second runtime finalization delay. Ordinary and ASan
+limits, other deadlines, physical-reap/exit assertions, race detection and
+TSan's default exit delay remain unchanged. Full new root runs passed
+**51/51 ASan/LSan/UBSan and 51/51 TSan**, zero CTest skips.
+
+Fresh ordinary root CTest separately passed **51/51 Linux and 60/60 HanSolo**,
+zero CTest skips, with all 191 approved source inputs checked after execution.
+Other products were reused with exact byte/mode provenance while SQL products
+were actually recompiled and verified against the new collector. New SQL IDs
+are Linux `11be03ce584c1e17f02696e38ee35122dc0bae3f1fa6ad267efcd96c80d4d3f0`
+and Mac `19af92d6e156150bf1f3e8e0092f83395c73dc536c23703960f1fb51d5cc693b`.
+Native IDs remain unchanged. These are new SQL products, not renamed old bytes.
+
+Application qualification on `33fa1e38`, with the refreshed SQL binding and
+fresh source-bound Worker/service/MCP, passed **2,889 core / 16 skipped / 91.02%**,
+**634 desktop / 17 skipped / 93.31%**, and **35/35 compiled service/MCP**, zero
+selected-suite skips. Analysis, post-run Worker/receipt verification and all
+thirteen artifact checks passed. Later fixture and measurement-tool repairs do
+not change those application inputs.
+
+The final Python source `aff34fd5` passed **6,167 tests / 32 skipped** and
+**95.23% combined coverage**, enforcing the unchanged 95% floor. Ruff, mypy,
+subprocess-timeout checks and matched actionlint/ShellCheck passed. All three
+complete Git-free runs on that source passed **6,167 / 32 skipped / 1,402 passing
+subtests** in unrelated-PR, main and no-ref contexts, with no failed-first retry
+needed. Earlier shim/cache infrastructure failures and stale-fixture failures
+remain retained. RPC cleanup keeps its original time limits: kernel SID lookup
+replaces expensive host-wide stat reads, preserving pidfd-first signal authority,
+birth checks and physical cleanup assertions on the busy test host.
+
+Evidence: `/var/tmp/of-sanitizer-proposal/`, `/var/tmp/of-native-9f9d/`,
+`/var/tmp/of-native-33fa/`, `/var/tmp/of-fin/app-33fa/`,
+`/var/tmp/of-p95-final/` and `/var/tmp/of-fin/gf-final-{0,1,2}/`.
+The same single PR still requires hosted verification of the repaired head,
+review resolution, actual owner review of retained publishing/trust changes
+and verified merge to main. Scope deferrals and external acceptance limitations
+remain those of the delivery amendment; local results do not supply that approval
+or release authorization.

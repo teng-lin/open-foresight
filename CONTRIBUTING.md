@@ -30,6 +30,11 @@ It builds native targets, runs CTest and Dart/Flutter checks, compiles service/M
 and builds the desktop application. `FORESIGHT_BUILD_DIR`, `FORESIGHT_PYTHON`, and
 `FORESIGHT_BUILD_JOBS` configure output, Python, and parallelism. Run
 `ctest --test-dir build --output-on-failure` to repeat native checks after a build.
+For `tools/build_linux_container.sh`, select an isolated Python 3.13 installation
+with `FORESIGHT_HOST_PYTHON`. The driver mounts that installation read-only and
+creates a private, hash-locked tooling environment at the same absolute path in
+the separate build and test containers. System and home-directory prefixes are
+rejected; the existing SDK Python environments are not replaced.
 `tools/coverage.sh` and `tools/coverage_core.sh` collect Python and core coverage.
 Python enforces 95% combined line/branch coverage, including Python subprocesses
 and the native model setup tool. Linux core and desktop gates enforce 90% line
