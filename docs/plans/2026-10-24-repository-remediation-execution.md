@@ -1239,3 +1239,34 @@ ten-minute job maximum before completing coverage. The job budget is now thirty
 minutes for the full suite on hosted runners; test deadlines and the 95% gate
 are unchanged. The matched workflow lint and all 26 existing quick-win workflow
 contracts pass. The interrupted hosted run remains unqualified.
+
+Hosted `c0a2705f` subsequently passed both sanitizer gates, **51/51 each**,
+and Linux root CTest **51/51**, with **733 host contracts / 5 skipped**.
+Mac reached **59/60**: its capture fixture inherited the `/var` symlink that
+production deliberately refuses. Canonicalizing only the newly created positive
+fixture preserves all five unsafe-path cases and the FIFO, permission, ownership
+and cleanup assertions. Actual old-alias failure changed to fixed-alias success;
+fresh fixture compilation followed by complete CTest passed **51/51 Linux and
+60/60 Mac**, zero CTest skips. All thirteen production artifacts and their
+identities stayed unchanged; official receipt verification passed both systems.
+
+Ubuntu compiled the application but packaging inferred the SDK from Flutter's
+launcher path. The packaging helper now queries `Platform.resolvedExecutable`
+using a standard-library-only, thirty-second probe in a private directory, then
+runs the unchanged ownership, version, identity and receipt verifiers. The real
+Flutter launcher changed from `unowned_worker_sdk_root` to successful verification
+against the existing qualified Worker. Arch drift now selects the already-pinned
+descriptor compiler with the same verified checksum and version check as the
+native stage; C++ continues using Protobuf's system CONFIG imported target.
+
+The complete ordinary Python run on `74a303cd` passed **6,167 / 32 skipped**
+and exposed five broad subprocess mocks intercepting the new SDK probe. Only
+those mocks were narrowed; all three affected modules then passed **48 tests /
+6 subtests / zero skips**, including all five failures. Production code stayed
+unchanged after that full run. This is failed-first qualification, not a claim
+of a new complete coverage run. Ruff, mypy, subprocess-timeout checks, matched
+workflow lint and the full pinned native formatting check passed. The original
+full failure remains in `/var/tmp/of-pypost-sdk/`; follow-up results are in
+`/var/tmp/of-ci-eba/`. Native peers and Claude CLI reviewed the public changes;
+the repaired pushed head still requires its complete hosted coverage and
+platform gates, plus the owner review described above.
