@@ -53,6 +53,7 @@ def test_failed_run_cannot_reuse_stale_evidence(tmp_path):
 def test_native_bundle_overrides_do_not_inherit_accounts_or_capture_routes(tmp_path):
     for relative in [
         "lib/libforesight_native.so",
+        "lib/libforesight_sql_support.so",
         "bin/ForesightHelper",
         "bin/foresight-model",
     ]:
@@ -66,12 +67,16 @@ def test_native_bundle_overrides_do_not_inherit_accounts_or_capture_routes(tmp_p
             "FORESIGHT_DATA": "/private/profile",
             "FORESIGHT_GOOGLE_CLIENT": "/private/account",
             "FORESIGHT_MICROPHONE_TARGET": "host-mic",
+            "FORESIGHT_TEST_SQL_SUPPORT_LIBRARY": "/host/unrelated-sql.so",
         },
     )
     assert "FORESIGHT_DATA" not in env and "FORESIGHT_GOOGLE_CLIENT" not in env
     assert "FORESIGHT_MICROPHONE_TARGET" not in env
     assert env["FORESIGHT_LITERT_BACKEND"] == "cpu"
     assert env["FORESIGHT_NATIVE"] == str(tmp_path / "lib/libforesight_native.so")
+    assert env["FORESIGHT_TEST_SQL_SUPPORT_LIBRARY"] == str(
+        tmp_path / "lib/libforesight_sql_support.so"
+    )
 
 
 def test_virtual_audio_refuses_host_devices(tmp_path):
@@ -469,6 +474,7 @@ def test_packaged_runtime_does_not_replace_the_debug_flutter_engine(tmp_path):
     (tmp_path / "app/lib").mkdir(parents=True)
     for name in (
         "lib/libforesight_native.so",
+        "lib/libforesight_sql_support.so",
         "bin/ForesightHelper",
         "bin/foresight-model",
     ):
@@ -476,6 +482,9 @@ def test_packaged_runtime_does_not_replace_the_debug_flutter_engine(tmp_path):
     env = gates.bundle_environment(tmp_path, {"LD_LIBRARY_PATH": "/host/lib"})
     assert env["LD_LIBRARY_PATH"] == str(tmp_path / "lib")
     assert env["FORESIGHT_NATIVE"] == str(tmp_path / "lib/libforesight_native.so")
+    assert env["FORESIGHT_TEST_SQL_SUPPORT_LIBRARY"] == str(
+        tmp_path / "lib/libforesight_sql_support.so"
+    )
 
 
 def test_missing_x_server_closes_readiness_descriptors(tmp_path, monkeypatch):
@@ -497,3 +506,41 @@ def test_missing_x_server_closes_readiness_descriptors(tmp_path, monkeypatch):
     for descriptor in opened:
         with pytest.raises(OSError):
             os.fstat(descriptor)
+
+
+def test_bundle_requires_its_own_sql_support_fixture(tmp_path):
+    for relative in (
+        "lib/libforesight_native.so",
+        "bin/ForesightHelper",
+        "bin/foresight-model",
+    ):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    with pytest.raises(
+        ValueError, match="Missing bundle runtime: FORESIGHT_TEST_SQL_SUPPORT_LIBRARY"
+    ):
+        gates.bundle_environment(
+            tmp_path, {"FORESIGHT_TEST_SQL_SUPPORT_LIBRARY": "/host/sql.so"}
+        )
+
+
+def test_macos_bundle_binds_its_sql_support_fixture(tmp_path):
+    bundle = tmp_path / "Fixture.app"
+    resources = bundle / "Contents/Resources"
+    config = {
+        "FORESIGHT_NATIVE": "lib/libforesight_native.dylib",
+        "FORESIGHT_HELPER": "bin/ForesightHelper",
+        "FORESIGHT_LITERT_RUNNER": "bin/foresight-model",
+    }
+    for relative in (*config.values(), "lib/libforesight_sql_support.dylib"):
+        path = resources / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    (resources / "runtime.json").write_text(json.dumps(config))
+    env = gates.bundle_environment(
+        bundle, {"FORESIGHT_TEST_SQL_SUPPORT_LIBRARY": "/host/sql.dylib"}
+    )
+    assert env["FORESIGHT_TEST_SQL_SUPPORT_LIBRARY"] == str(
+        resources / "lib/libforesight_sql_support.dylib"
+    )

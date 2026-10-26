@@ -187,6 +187,9 @@ def bundle_environment(bundle, inherited):
     if bundle.suffix == ".app":
         resources = bundle / "Contents/Resources"
         config = json.loads((resources / "runtime.json").read_text())
+        env["FORESIGHT_TEST_SQL_SUPPORT_LIBRARY"] = str(
+            resources / "lib/libforesight_sql_support.dylib"
+        )
         keys = [
             "FORESIGHT_NATIVE",
             "FORESIGHT_HELPER",
@@ -202,6 +205,9 @@ def bundle_environment(bundle, inherited):
     else:
         env.update(
             FORESIGHT_NATIVE=str(bundle / "lib/libforesight_native.so"),
+            FORESIGHT_TEST_SQL_SUPPORT_LIBRARY=str(
+                bundle / "lib/libforesight_sql_support.so"
+            ),
             FORESIGHT_HELPER=str(bundle / "bin/ForesightHelper"),
             FORESIGHT_LITERT_RUNNER=str(bundle / "bin/foresight-model"),
             FORESIGHT_MODEL_WORKER=str(bundle / "bin/foresight-model"),
@@ -214,7 +220,12 @@ def bundle_environment(bundle, inherited):
             # Loading the packaged release engine here prevents VM startup.
             LD_LIBRARY_PATH=str(bundle / "lib"),
         )
-    for key in ["FORESIGHT_NATIVE", "FORESIGHT_HELPER", "FORESIGHT_LITERT_RUNNER"]:
+    for key in [
+        "FORESIGHT_NATIVE",
+        "FORESIGHT_HELPER",
+        "FORESIGHT_LITERT_RUNNER",
+        "FORESIGHT_TEST_SQL_SUPPORT_LIBRARY",
+    ]:
         if not Path(env[key]).is_file():
             raise ValueError(f"Missing bundle runtime: {key}")
     env.update(FORESIGHT_LITERT_BACKEND="cpu", FORESIGHT_GENERATION_BACKEND="litert_lm")
