@@ -101,6 +101,7 @@ def test_audio_restores_before_readonly_portable_mount_and_does_not_build_app():
     assert script.index(
         "--workspace /src --flutter-root /opt/flutter --"
     ) < script.index("dbus-run-session -- python3 tools/integration_gates.py")
+    assert "-e PUB_CACHE=/src/.pub-cache" in script
     assert "build_diagnostic_worker" not in script
     assert "build.sh" not in script
     workflow = (

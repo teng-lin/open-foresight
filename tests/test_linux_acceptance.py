@@ -216,6 +216,7 @@ if os.environ['GPU_FAILURE'] == '1' and 'tools/accept_software_gpu.py' in sys.ar
         assert gate[gate.index("--bundle") + 1] == "/portable"
         assert gate.index("/run-ci-user.py") < gate.index("dbus-run-session")
         assert gate[gate.index("--workspace") + 1] == "/src"
+        assert "PUB_CACHE=/src/.pub-cache" in gate
         assert gate[gate.index("--flutter-root") + 1] == "/opt/flutter"
         assert ["docker", "volume", "rm", "qualified-audio-source"] in rows
     else:
