@@ -20,6 +20,7 @@
 #include <unistd.h>
 #ifdef __linux__
 #include <sys/pidfd.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #else
 #include <sys/event.h>
@@ -27,16 +28,47 @@
 #include <sys/random.h>
 #endif
 
-// Native fixtures replace only the metadata observations, never enumeration.
+// Diagnostic directory reads: one raw system call per fixed buffer, never a
+// libc DIR stream. Records are parsed by explicit offsets: Linux x86-64
+// getdents64 has inode/offset words, u16 reclen, u8 type, then the name; the
+// Darwin 64-bit-inode dirent adds a u16 name length before the type.
+#ifdef __linux__
+enum { RECORD_LENGTH = 16, RECORD_NAME = 19 };
+static long directory_read(int descriptor, void *buffer, size_t size) {
+  return syscall(SYS_getdents64, descriptor, buffer, size);
+}
+#else
+// Darwin arm64 64-bit-inode struct dirent and DT_WHT; the native test asserts
+// both against the SDK's <dirent.h>.
+enum {
+  RECORD_LENGTH = 16,
+  RECORD_NAME_LENGTH = 18,
+  RECORD_TYPE = 20,
+  RECORD_NAME = 21,
+  RECORD_WHITEOUT = 14
+};
+// The libsystem_kernel entry Libc's own readdir uses (Libc telldir.h).
+size_t __getdirentries64(int descriptor, void *buffer, size_t size,
+                         off_t *base);
+static long directory_read(int descriptor, void *buffer, size_t size) {
+  off_t base;
+  return (long)(ssize_t)__getdirentries64(descriptor, buffer, size, &base);
+}
+#endif
+
+// Native fixtures observe or replace one raw read and the Darwin volume flags;
+// the real read stays available to them.
 #ifdef FS_DIAG_DIRECTORY_TEST_HOOKS
-int fs_diag_test_fstat(int descriptor, struct stat *information);
-#define DIRECTORY_FSTAT fs_diag_test_fstat
+long fs_diag_test_directory_read(int descriptor, void *buffer, size_t size,
+                                 long (*real)(int, void *, size_t));
+#define DIRECTORY_READ(descriptor, buffer, size)                               \
+  fs_diag_test_directory_read(descriptor, buffer, size, directory_read)
 #ifdef __APPLE__
 int fs_diag_test_fstatfs(int descriptor, struct statfs *volume);
 #define DIRECTORY_FSTATFS fs_diag_test_fstatfs
 #endif
 #else
-#define DIRECTORY_FSTAT fstat
+#define DIRECTORY_READ directory_read
 #define DIRECTORY_FSTATFS fstatfs
 #endif
 
@@ -676,28 +708,76 @@ int fs_diag_support_receive(uint64_t id, uint8_t *output, uint32_t capacity,
   return result;
 }
 
-int fs_diag_directory_bound(int descriptor) {
-  // The same descriptor that a later fdopendir(openat(descriptor, ".")) reads:
-  // "." names this vnode, so its inode/mount metadata are the ones observed.
+int fs_diag_directory_names(int descriptor, uint8_t *output,
+                            uint32_t capacity) {
   struct stat information;
-  if (descriptor < 0 || DIRECTORY_FSTAT(descriptor, &information) != 0)
+  if (descriptor < 0 || output == NULL ||
+      capacity < FS_DIAG_DIRECTORY_OUTPUT_BYTES ||
+      fstat(descriptor, &information) != 0 || !S_ISDIR(information.st_mode))
     return FS_DIAG_SUPPORT_ERROR;
-  if (!S_ISDIR(information.st_mode))
-    return FS_DIAG_DIRECTORY_UNSUPPORTED;
-#ifdef __linux__
-  // glibc fdopendir: malloc(sizeof(DIR) + MIN(MAX(st_blksize, 32KiB), 1MiB))
-  // from this fstat. A larger or bogus hint is refused, never enumerated.
-  if (information.st_blksize <= 0 ||
-      information.st_blksize > FS_DIAG_DIRECTORY_BLOCK_BYTES)
-    return FS_DIAG_DIRECTORY_UNSUPPORTED;
-#else
-  // Darwin Libc fdopendir reads a MNT_UNION stack completely (_filldir). An
-  // ordinary directory uses a 2KiB buffer that readdir grows once to 8KiB.
+#ifdef __APPLE__
+  // Libc merges a MNT_UNION stack in user space; one raw read sees one layer.
   struct statfs volume;
   if (DIRECTORY_FSTATFS(descriptor, &volume) != 0)
     return FS_DIAG_SUPPORT_ERROR;
   if (volume.f_flags & MNT_UNION)
     return FS_DIAG_DIRECTORY_UNSUPPORTED;
 #endif
-  return FS_DIAG_DIRECTORY_OK;
+  if (lseek(descriptor, 0, SEEK_SET) != 0)
+    return FS_DIAG_SUPPORT_ERROR;
+  // The only workspace, whatever the filesystem reports. Every non-empty read
+  // consumes a record and at most NAMES + 2 records are accepted, so one
+  // enumeration makes at most NAMES + 3 reads.
+  _Alignas(8) unsigned char raw[FS_DIAG_DIRECTORY_RAW_BYTES];
+  uint32_t length = 0;
+  unsigned records = 0, names = 0, dots = 0;
+  for (;;) {
+    long size = DIRECTORY_READ(descriptor, raw, sizeof(raw));
+    if (size < 0 || size > (long)sizeof(raw))
+      return FS_DIAG_SUPPORT_ERROR;
+    if (size == 0)
+      return (int)length;
+    for (size_t offset = 0; offset < (size_t)size;) {
+      if ((size_t)size - offset <= RECORD_NAME)
+        return FS_DIAG_SUPPORT_ERROR;
+      uint16_t record;
+      memcpy(&record, raw + offset + RECORD_LENGTH, sizeof(record));
+      if (record <= RECORD_NAME || record > (size_t)size - offset)
+        return FS_DIAG_SUPPORT_ERROR;
+      const unsigned char *name = raw + offset + RECORD_NAME;
+      const unsigned char *end = memchr(name, '\0', record - RECORD_NAME);
+      if (end == NULL || end == name)
+        return FS_DIAG_SUPPORT_ERROR;
+      size_t bytes = (size_t)(end - name);
+      int skip = 0;
+#ifdef __APPLE__
+      uint16_t declared;
+      uint64_t inode;
+      memcpy(&declared, raw + offset + RECORD_NAME_LENGTH, sizeof(declared));
+      memcpy(&inode, raw + offset, sizeof(inode));
+      if (declared != bytes)
+        return FS_DIAG_SUPPORT_ERROR;
+      // As Libc readdir: no deleted (inode 0) or whiteout entries.
+      skip = inode == 0 || raw[offset + RECORD_TYPE] == RECORD_WHITEOUT;
+#endif
+      offset += record;
+      if (++records > FS_DIAG_DIRECTORY_NAMES + 2)
+        return FS_DIAG_DIRECTORY_UNSUPPORTED;
+      if ((bytes == 1 && name[0] == '.') ||
+          (bytes == 2 && name[0] == '.' && name[1] == '.')) {
+        if (++dots > 2)
+          return FS_DIAG_SUPPORT_ERROR;
+        continue;
+      }
+      if (skip)
+        continue;
+      if (bytes > FS_DIAG_DIRECTORY_NAME_BYTES || memchr(name, '/', bytes))
+        return FS_DIAG_SUPPORT_ERROR;
+      if (++names > FS_DIAG_DIRECTORY_NAMES)
+        return FS_DIAG_DIRECTORY_UNSUPPORTED;
+      output[length] = (uint8_t)bytes;
+      memcpy(output + length + 1, name, bytes);
+      length += 1 + (uint32_t)bytes;
+    }
+  }
 }

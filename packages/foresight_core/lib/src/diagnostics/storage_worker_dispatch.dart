@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:meta/meta.dart';
 
+import '../persistence/backup_files.dart' show BackupDirectoryReader;
 import 'events.dart';
 import 'storage.dart';
 import 'storage_worker_native.dart';
@@ -17,9 +18,9 @@ final class DiagnosticStorageWorkerState {
   DiagnosticStorageWorkerState.authenticated({
     required this.parentPid,
     required this.buildId,
-    required DiagnosticDirectoryBound directoryBound,
+    required BackupDirectoryReader? directoryReader,
   }) : _factory = null,
-       _directoryBound = directoryBound;
+       _directoryReader = directoryReader;
 
   @visibleForTesting
   DiagnosticStorageWorkerState.forTesting({
@@ -27,12 +28,12 @@ final class DiagnosticStorageWorkerState {
     required this.buildId,
     required DiagnosticSinkFactory factory,
   }) : _factory = factory,
-       _directoryBound = null;
+       _directoryReader = null;
 
   final int parentPid;
   final String buildId;
   final DiagnosticSinkFactory? _factory;
-  final DiagnosticDirectoryBound? _directoryBound;
+  final BackupDirectoryReader? _directoryReader;
   DiagnosticWorkerInit? _init;
   DiagnosticSink? _sink;
   DiagnosticRole? _role;
@@ -109,7 +110,13 @@ final class DiagnosticStorageWorkerState {
                     init.session,
                     _role!,
                     applicationPid: parentPid,
-                    directoryBound: _directoryBound,
+                    // An image without the bounded reader disables logging;
+                    // libc directory streams are never the fallback.
+                    directoryReader:
+                        _directoryReader ??
+                        (throw const DiagnosticStorageUnavailable(
+                          DiagnosticHealthReason.unsupportedFilesystem,
+                        )),
                   )
                 : _factory(init.profile, init.session, _role!);
           } on DiagnosticStorageUnavailable catch (error) {
@@ -323,7 +330,7 @@ Future<int> runDiagnosticStorageWorker({
     final state = DiagnosticStorageWorkerState.authenticated(
       parentPid: expectedParentPid,
       buildId: dartId,
-      directoryBound: functions.directoryBound,
+      directoryReader: functions.directoryReader,
     );
     final idle = Stopwatch()..start();
     var offset = 0;

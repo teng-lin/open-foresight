@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -15,6 +16,62 @@ const build =
     '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 final session = DiagnosticIdentity.parse('0123456789abcdef0123456789abcdef')!;
 final empty = Uint8List(0);
+
+final _libc = DynamicLibrary.process();
+final _dup = _libc.lookupFunction<Int32 Function(Int32), int Function(int)>(
+  'dup',
+);
+final _close = _libc.lookupFunction<Int32 Function(Int32), int Function(int)>(
+  'close',
+);
+final _fdopendir = _libc
+    .lookupFunction<Pointer<Void> Function(Int32), Pointer<Void> Function(int)>(
+      'fdopendir',
+    );
+final _readdir = _libc
+    .lookupFunction<
+      Pointer<Uint8> Function(Pointer<Void>),
+      Pointer<Uint8> Function(Pointer<Void>)
+    >('readdir');
+final _closedir = _libc
+    .lookupFunction<Int32 Function(Pointer<Void>), int Function(Pointer<Void>)>(
+      'closedir',
+    );
+
+/// Test double for the native reader with real listings: a libc stream on its
+/// own dup of [descriptor], packed as [BackupDirectoryReader] requires.
+int _streamReader(int descriptor, Pointer<Uint8> names, int capacity) {
+  final duplicate = _dup(descriptor);
+  final directory = duplicate < 0 ? nullptr : _fdopendir(duplicate);
+  if (directory == nullptr) {
+    if (duplicate >= 0) _close(duplicate);
+    return -1;
+  }
+  try {
+    var length = 0;
+    for (var entry = _readdir(directory); entry != nullptr;) {
+      final name = entry + (Platform.isMacOS ? 21 : 19);
+      var size = 0;
+      while (name[size] != 0) {
+        size++;
+      }
+      final dot = size == 1 && name[0] == 46;
+      final dots = size == 2 && name[0] == 46 && name[1] == 46;
+      if (!dot && !dots) {
+        if (length + 1 + size > capacity) return -2;
+        names[length] = size;
+        (names + length + 1)
+            .asTypedList(size)
+            .setAll(0, name.asTypedList(size));
+        length += 1 + size;
+      }
+      entry = _readdir(directory);
+    }
+    return length;
+  } finally {
+    _closedir(directory);
+  }
+}
 
 DiagnosticWorkerInit init([String profile = '/private/profile']) =>
     DiagnosticWorkerInit(
@@ -154,13 +211,13 @@ void main() {
       final path = profile.path;
       profile.close();
       parent.close();
-      final bounded = <int>[];
+      final listed = <int>[];
       final worker = DiagnosticStorageWorkerState.authenticated(
         parentPid: pid,
         buildId: build,
-        directoryBound: (descriptor) {
-          bounded.add(descriptor);
-          return true;
+        directoryReader: (descriptor, names, capacity) {
+          listed.add(descriptor);
+          return _streamReader(descriptor, names, capacity);
         },
       );
       addTearDown(() {
@@ -172,7 +229,7 @@ void main() {
       );
       final first = worker.handle(4, empty);
       expect(first.result, DiagnosticWorkerResult.ok);
-      expect(bounded, isNotEmpty);
+      expect(listed, isNotEmpty);
       expect(
         classify(worker, role: DiagnosticRole.candidate).result,
         DiagnosticWorkerResult.ok,
@@ -412,23 +469,24 @@ void main() {
       }
     },
   );
-  test('worker admission refuses an unbounded directory stream', () {
+  String workerProfile() {
     final parent = BackupDirectory(
-      createTestTempDirectorySync('diag-bound-').path,
+      createTestTempDirectorySync('diag-reader-').path,
       private: false,
     );
     final profile = parent.child('profile');
     final path = profile.path;
     profile.close();
     parent.close();
-    final bounded = <int>[];
+    return path;
+  }
+
+  test('an image without the bounded reader disables logging only', () {
+    final path = workerProfile();
     final worker = DiagnosticStorageWorkerState.authenticated(
       parentPid: pid,
       buildId: build,
-      directoryBound: (descriptor) {
-        bounded.add(descriptor);
-        return false;
-      },
+      directoryReader: null,
     );
     expect(
       worker.handle(2, init(path).encode()).result,
@@ -438,7 +496,30 @@ void main() {
     expect(reply.result, DiagnosticWorkerResult.retry);
     expect(reply.reason, DiagnosticHealthReason.unsupportedFilesystem);
     expect(reply.slot, isNull);
-    expect(bounded, hasLength(1));
+    // No libc listing fallback: admission never touched the profile.
+    expect(Directory('$path/logs').existsSync(), isFalse);
+    expect(worker.handle(8, empty).reason, DiagnosticHealthReason.closed);
+  });
+  test('worker admission stops at a refused directory listing', () {
+    final path = workerProfile();
+    final listed = <int>[];
+    final worker = DiagnosticStorageWorkerState.authenticated(
+      parentPid: pid,
+      buildId: build,
+      directoryReader: (descriptor, names, capacity) {
+        listed.add(descriptor);
+        return -2;
+      },
+    );
+    expect(
+      worker.handle(2, init(path).encode()).result,
+      DiagnosticWorkerResult.ok,
+    );
+    final reply = worker.handle(4, empty);
+    expect(reply.result, DiagnosticWorkerResult.retry);
+    expect(reply.reason, DiagnosticHealthReason.storageUnavailable);
+    expect(reply.slot, isNull);
+    expect(listed, hasLength(1));
     expect(Directory('$path/logs').listSync(), isEmpty);
     expect(worker.handle(8, empty).reason, DiagnosticHealthReason.closed);
   });
@@ -541,13 +622,13 @@ void main() {
       final path = profile.path;
       profile.close();
       parent.close();
-      final bounded = <int>[];
+      final listed = <int>[];
       final worker = DiagnosticStorageWorkerState.authenticated(
         parentPid: pid,
         buildId: build,
-        directoryBound: (descriptor) {
-          bounded.add(descriptor);
-          return true;
+        directoryReader: (descriptor, names, capacity) {
+          listed.add(descriptor);
+          return _streamReader(descriptor, names, capacity);
         },
       );
       addTearDown(() {
@@ -559,7 +640,7 @@ void main() {
       );
       final admitted = worker.handle(4, empty);
       expect(admitted.result, DiagnosticWorkerResult.ok);
-      expect(bounded, isNotEmpty);
+      expect(listed, isNotEmpty);
       expect(classify(worker).result, DiagnosticWorkerResult.ok);
       final bytes = jsonBytes(record());
       expect(worker.handle(6, bytes).result, DiagnosticWorkerResult.ok);

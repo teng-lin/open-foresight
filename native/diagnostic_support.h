@@ -81,17 +81,23 @@ int fs_diag_support_receive(uint64_t id, uint8_t *output, uint32_t capacity,
                             uint32_t *copied, uint8_t *type,
                             uint64_t *request_id, uint32_t *total_length);
 
-// Closed directory-enumeration admission for diagnostic storage. Observes only
-// the caller's already anchored directory descriptor: no path, allocation,
-// enumeration or errno text. OK proves the qualified libc DIR buffer bound
-// before fdopendir/readdir: glibc sizes it from fstat st_blksize (accepted
-// <=64KiB); Darwin Libc reads a MNT_UNION directory whole (refused).
+// Closed bounded directory enumeration for diagnostic storage; no libc DIR
+// stream. Reads exactly the caller's open directory descriptor from offset 0
+// through one fixed RAW_BYTES stack buffer (Linux getdents64, Darwin
+// __getdirentries64) and packs every name except "." and ".." into output as
+// one length byte plus 1..255 name bytes. Returns the packed length (at most
+// OUTPUT_BYTES) or ERROR, or UNSUPPORTED for more than NAMES entries or a
+// Darwin MNT_UNION stack that a raw read cannot list completely. capacity must
+// be at least OUTPUT_BYTES. No allocation, path, errno or pointer is retained;
+// the descriptor remains the caller's to close.
 enum {
-  FS_DIAG_DIRECTORY_OK = 0,
-  FS_DIAG_DIRECTORY_UNSUPPORTED = 1,
-  FS_DIAG_DIRECTORY_BLOCK_BYTES = 65536
+  FS_DIAG_DIRECTORY_UNSUPPORTED = -2,
+  FS_DIAG_DIRECTORY_NAMES = 256,
+  FS_DIAG_DIRECTORY_NAME_BYTES = 255,
+  FS_DIAG_DIRECTORY_RAW_BYTES = 8192,
+  FS_DIAG_DIRECTORY_OUTPUT_BYTES = 65536
 };
-int fs_diag_directory_bound(int descriptor);
+int fs_diag_directory_names(int descriptor, uint8_t *output, uint32_t capacity);
 
 #ifdef __cplusplus
 }

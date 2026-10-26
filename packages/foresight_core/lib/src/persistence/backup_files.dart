@@ -243,6 +243,18 @@ ScopedFileMetadata _metadata(int fd) {
   }
 }
 
+/// Optional per-instance replacement for libc directory streams. It writes the
+/// names of the open directory [descriptor], except "." and "..", into
+/// [names] ([capacity] bytes) as one length byte plus the name bytes each, and
+/// returns the packed length or a negative refusal. It must not retain
+/// [names] or [descriptor]; the caller closes the descriptor.
+typedef BackupDirectoryReader =
+    int Function(int descriptor, Pointer<Uint8> names, int capacity);
+
+/// Packed-name buffer for one [BackupDirectoryReader] call: at most 256 names
+/// of at most 255 bytes, as [BackupDirectory.entries] also allows.
+const backupDirectoryNameBytes = 256 * 256;
+
 /// Backup-only descriptor operations. Every path component is opened without
 /// following links. Existing entries are never chmod'ed into apparent safety.
 /// Linux x86-64 statx and Darwin arm64 stat/dirent layouts are explicit here;
@@ -253,9 +265,11 @@ final class BackupDirectory {
     bool create = true,
     bool private = true,
     int minimumDescriptor = 0,
+    BackupDirectoryReader? reader,
   }) : path = p.normalize(p.absolute(path)),
        _private = private,
-       _minimumDescriptor = minimumDescriptor {
+       _minimumDescriptor = minimumDescriptor,
+       _reader = reader {
     final components = p.split(this.path);
     var fd = _relocate(
       _name('/', (name) => _open(name, _directory | _cloexec)),
@@ -292,6 +306,7 @@ final class BackupDirectory {
   final String path;
   final bool _private;
   final int _minimumDescriptor;
+  final BackupDirectoryReader? _reader;
   late final int _fd;
   late final String _identity;
   bool _closed = false;
@@ -385,6 +400,14 @@ final class BackupDirectory {
       _minimumDescriptor,
     );
     if (duplicate < 0) _refuse();
+    if (_reader case final reader?) {
+      try {
+        _readEntries(reader, duplicate, visit);
+      } finally {
+        _close(duplicate);
+      }
+      return;
+    }
     final directory = _fdopendir(duplicate);
     if (directory == nullptr) {
       _close(duplicate);
@@ -409,6 +432,37 @@ final class BackupDirectory {
       }
     } finally {
       _closedir(directory);
+    }
+  }
+
+  /// The configured reader lists exactly [duplicate], once verified to be this
+  /// anchor, into one bounded buffer; no libc directory stream is opened.
+  void _readEntries(
+    BackupDirectoryReader reader,
+    int duplicate,
+    bool Function(String name) visit,
+  ) {
+    if (_metadata(duplicate).identity != _identity) _refuse();
+    final names = calloc<Uint8>(backupDirectoryNameBytes);
+    try {
+      final length = reader(duplicate, names, backupDirectoryNameBytes);
+      if (length < 0 || length > backupDirectoryNameBytes) _refuse();
+      var count = 0;
+      for (var offset = 0; offset < length;) {
+        final size = names[offset++];
+        if (size == 0 || size > length - offset || ++count > 256) _refuse();
+        final name = (names + offset).cast<Utf8>().toDartString(length: size);
+        offset += size;
+        if (name == '.' ||
+            name == '..' ||
+            name.contains('/') ||
+            name.contains('\u0000')) {
+          _refuse();
+        }
+        if (!visit(name)) break;
+      }
+    } finally {
+      calloc.free(names);
     }
   }
 
@@ -455,6 +509,7 @@ final class BackupDirectory {
       p.join(path, name),
       create: create,
       minimumDescriptor: _minimumDescriptor,
+      reader: _reader,
     );
     try {
       verifyAnchor();

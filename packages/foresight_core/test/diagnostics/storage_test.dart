@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -20,6 +21,69 @@ String _profile() {
     return path;
   } finally {
     parent.close();
+  }
+}
+
+final _libc = DynamicLibrary.process();
+final _dup = _libc.lookupFunction<Int32 Function(Int32), int Function(int)>(
+  'dup',
+);
+final _close = _libc.lookupFunction<Int32 Function(Int32), int Function(int)>(
+  'close',
+);
+final _fcntl = _libc
+    .lookupFunction<
+      Int32 Function(Int32, Int32, VarArgs<()>),
+      int Function(int, int)
+    >('fcntl');
+final _fdopendir = _libc
+    .lookupFunction<Pointer<Void> Function(Int32), Pointer<Void> Function(int)>(
+      'fdopendir',
+    );
+final _readdir = _libc
+    .lookupFunction<
+      Pointer<Uint8> Function(Pointer<Void>),
+      Pointer<Uint8> Function(Pointer<Void>)
+    >('readdir');
+final _closedir = _libc
+    .lookupFunction<Int32 Function(Pointer<Void>), int Function(Pointer<Void>)>(
+      'closedir',
+    );
+
+bool _isOpen(int descriptor) => _fcntl(descriptor, 1) >= 0;
+
+/// Test double for the native reader with real listings: a libc stream on its
+/// own dup of [descriptor], packed as [BackupDirectoryReader] requires.
+int _streamReader(int descriptor, Pointer<Uint8> names, int capacity) {
+  final duplicate = _dup(descriptor);
+  final directory = duplicate < 0 ? nullptr : _fdopendir(duplicate);
+  if (directory == nullptr) {
+    if (duplicate >= 0) _close(duplicate);
+    return -1;
+  }
+  try {
+    var length = 0;
+    for (var entry = _readdir(directory); entry != nullptr;) {
+      final name = entry + (Platform.isMacOS ? 21 : 19);
+      var size = 0;
+      while (name[size] != 0) {
+        size++;
+      }
+      final dot = size == 1 && name[0] == 46;
+      final dots = size == 2 && name[0] == 46 && name[1] == 46;
+      if (!dot && !dots) {
+        if (length + 1 + size > capacity) return -2;
+        names[length] = size;
+        (names + length + 1)
+            .asTypedList(size)
+            .setAll(0, name.asTypedList(size));
+        length += 1 + size;
+      }
+      entry = _readdir(directory);
+    }
+    return length;
+  } finally {
+    _closedir(directory);
   }
 }
 
@@ -529,90 +593,184 @@ void main() {
     expect(storage.append(_record()), isTrue);
   });
 
-  group('native directory-stream bound', () {
-    test('refusal precedes every root enumeration and admission IO', () {
+  group('per-instance directory reader', () {
+    List<int> pack(List<List<int>> names) => [
+      for (final name in names) ...[name.length, ...name],
+    ];
+    BackupDirectoryReader fixed(List<int> packed, [List<int>? seen]) =>
+        (descriptor, names, capacity) {
+          seen?.add(descriptor);
+          expect(capacity, backupDirectoryNameBytes);
+          names.asTypedList(packed.length).setAll(0, packed);
+          return packed.length;
+        };
+
+    test('lists only reader output for a verified, closed duplicate', () {
+      final directory = BackupDirectory(_profile());
+      addTearDown(directory.close);
+      directory.openOrCreate('real').close();
+      final seen = <int>[];
+      final listed = BackupDirectory(
+        directory.path,
+        create: false,
+        reader: fixed(pack([utf8.encode('alpha'), utf8.encode('beta')]), seen),
+      );
+      addTearDown(listed.close);
+      // A libc stream would have listed "real"; only the reader is used.
+      expect(listed.entries(), ['alpha', 'beta']);
+      expect(seen.single, isNot(listed.descriptor));
+      expect(_isOpen(seen.single), isFalse);
+      expect(listed.containsEntry('beta'), isTrue);
+      expect(listed.containsEntry('real'), isFalse);
+      expect(seen, hasLength(3));
+      // Without a reader the same directory keeps the libc enumeration.
+      expect(directory.entries(), ['real']);
+      expect(seen, hasLength(3));
+    });
+
+    test('children inherit the reader; other instances do not', () {
+      final parent = BackupDirectory(
+        _profile(),
+        reader: fixed(pack([utf8.encode('listed')])),
+      );
+      addTearDown(parent.close);
+      final child = parent.child('nested');
+      addTearDown(child.close);
+      expect(child.entries(), ['listed']);
+      final plain = BackupDirectory(child.path, create: false);
+      addTearDown(plain.close);
+      expect(plain.entries(), isEmpty);
+    });
+
+    test('malformed or refused reader output never yields names', () {
+      final directory = BackupDirectory(_profile());
+      addTearDown(directory.close);
+      final cases = <String, (int, List<int>)>{
+        'refusal': (-2, []),
+        'length past capacity': (backupDirectoryNameBytes + 1, []),
+        'zero-length name': (2, [0, 0]),
+        'name past length': (3, [5, 97, 98]),
+        'dot': (2, pack([utf8.encode('.')])),
+        'dot dot': (3, pack([utf8.encode('..')])),
+        'slash': (4, pack([utf8.encode('a/b')])),
+        'NUL': (4, pack([utf8.encode('a\u0000b')])),
+        'over 256 names': (
+          257 * 2,
+          pack([for (var i = 0; i < 257; i++) utf8.encode('n')]),
+        ),
+      };
+      for (final MapEntry(key: what, value: (length, bytes)) in cases.entries) {
+        final seen = <int>[];
+        final reader = BackupDirectory(
+          directory.path,
+          create: false,
+          reader: (descriptor, names, capacity) {
+            seen.add(descriptor);
+            names.asTypedList(bytes.length).setAll(0, bytes);
+            return length;
+          },
+        );
+        try {
+          // containsEntry has no list cap of its own; the reader parse does.
+          expect(reader.entries, throwsStateError, reason: what);
+          expect(
+            () => reader.containsEntry('absent'),
+            throwsStateError,
+            reason: what,
+          );
+          expect(seen, hasLength(2), reason: what);
+          expect(seen.any(_isOpen), isFalse, reason: what);
+        } finally {
+          reader.close();
+        }
+      }
+      final invalid = BackupDirectory(
+        directory.path,
+        create: false,
+        reader: fixed([2, 0xc3, 0x28]),
+      );
+      addTearDown(invalid.close);
+      expect(invalid.entries, throwsFormatException);
+      // Exactly 256 names, as entries() itself allows, are accepted.
+      final full = BackupDirectory(
+        directory.path,
+        create: false,
+        reader: fixed(pack([for (var i = 0; i < 256; i++) utf8.encode('n')])),
+      );
+      addTearDown(full.close);
+      expect(full.entries(), hasLength(256));
+    });
+
+    test('every root and slot enumeration in admission uses the reader', () {
       final profile = _profile();
-      // Root admission creates logs; an unexpected entry would be found only
-      // by enumeration (storageUnavailable), never by the bound refusal.
-      BackupDirectory('$profile/logs').close();
-      File('$profile/logs/unexpected').writeAsStringSync('x');
+      final seen = <int>[];
+      final storage = DiagnosticStorage.admit(
+        profile,
+        DiagnosticIdentity.random(),
+        DiagnosticRole.service,
+        directoryReader: (descriptor, names, capacity) {
+          seen.add(descriptor);
+          return _streamReader(descriptor, names, capacity);
+        },
+      )!;
+      addTearDown(storage.close);
+      // Root once; validation and manifest read per slot; the selected slot's
+      // revalidation, five cleanup containsEntry calls and manifest replace.
+      expect(seen, hasLength(1 + 2 * DiagnosticStorage.slotCount + 1 + 5 + 1));
+      expect(seen.every((descriptor) => descriptor >= 10), isTrue);
+      seen.clear();
+      expect(storage.append(_record()), isTrue);
+      expect(seen, isEmpty);
+      expect(storage.classify(DiagnosticRole.service, error: true), isTrue);
+      // Root validation, slot validation and the manifest replace.
+      expect(seen, hasLength(3));
+      seen.clear();
+      expect(
+        storage.classify(
+          DiagnosticRole.service,
+          error: true,
+          genuineFailure: true,
+        ),
+        isTrue,
+      );
+      // Plus validation and manifest read of every slot, through children.
+      expect(seen, hasLength(3 + 2 * DiagnosticStorage.slotCount));
+    });
+
+    test('a refused root listing precedes admission IO', () {
+      final profile = _profile();
       final seen = <int>[];
       expect(
         () => DiagnosticStorage.admit(
           profile,
           DiagnosticIdentity.random(),
           DiagnosticRole.service,
-          directoryBound: (descriptor) {
+          directoryReader: (descriptor, names, capacity) {
             seen.add(descriptor);
-            return false;
+            return -2;
           },
         ),
-        throwsA(
-          isA<DiagnosticStorageUnavailable>().having(
-            (error) => error.reason,
-            'reason',
-            DiagnosticHealthReason.unsupportedFilesystem,
-          ),
-        ),
+        throwsA(isA<DiagnosticStorageUnavailable>()),
       );
       expect(seen, hasLength(1));
-      expect(File('$profile/logs/admission.lock').existsSync(), isFalse);
-      expect(Directory('$profile/logs').listSync().map((e) => e.path), [
-        '$profile/logs/unexpected',
-      ]);
+      expect(Directory('$profile/logs').listSync(), isEmpty);
     });
 
-    test('refused slot directories are never enumerated or leased', () {
+    test('refused slot listings are never leased', () {
       final profile = _profile();
-      int? root;
-      final seen = <int>[];
+      var calls = 0;
       final storage = DiagnosticStorage.admit(
         profile,
         DiagnosticIdentity.random(),
         DiagnosticRole.service,
-        directoryBound: (descriptor) {
-          seen.add(descriptor);
-          root ??= descriptor;
-          return descriptor == root;
-        },
+        directoryReader: (descriptor, names, capacity) =>
+            ++calls == 1 ? _streamReader(descriptor, names, capacity) : -2,
       );
       expect(storage, isNull);
-      expect(seen.where((value) => value == root), hasLength(1));
-      expect(seen.where((value) => value != root), hasLength(10));
+      expect(calls, 1 + DiagnosticStorage.slotCount);
       for (var index = 0; index < DiagnosticStorage.slotCount; index++) {
         expect(Directory('$profile/logs/slot-$index').listSync(), isEmpty);
       }
-    });
-
-    test('accepted bound gates every enumeration on anchored descriptors', () {
-      final profile = _profile();
-      final seen = <int>[];
-      bool bound(int descriptor) {
-        seen.add(descriptor);
-        return true;
-      }
-
-      final storage = DiagnosticStorage.admit(
-        profile,
-        DiagnosticIdentity.random(),
-        DiagnosticRole.service,
-        directoryBound: bound,
-      )!;
-      addTearDown(storage.close);
-      final proof = storage.descriptorProof;
-      final root = proof[0].descriptor, slot = proof[1].descriptor;
-      // Root once; slot validate+manifest read per slot, selected slot's
-      // revalidation and its manifest replace.
-      expect(seen.first, root);
-      expect(seen.where((value) => value == root), hasLength(1));
-      expect(seen.last, slot);
-      expect(seen, hasLength(1 + 2 * DiagnosticStorage.slotCount + 2));
-      seen.clear();
-      expect(storage.append(_record()), isTrue);
-      expect(seen, isEmpty);
-      expect(storage.classify(DiagnosticRole.service, error: true), isTrue);
-      expect(seen.first, root);
-      expect(seen, [root, slot, slot]);
     });
   });
 }

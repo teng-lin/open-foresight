@@ -52,6 +52,8 @@ typedef _Receive =
       Pointer<Uint64>,
       Pointer<Uint32>,
     );
+typedef _DirectoryNamesNative = Int32 Function(Int32, Pointer<Uint8>, Uint32);
+typedef _DirectoryNames = int Function(int, Pointer<Uint8>, int);
 
 /// A function table from an already validated, early loaded system-only image.
 ///
@@ -65,8 +67,8 @@ final class DiagnosticNativeFunctions {
         List<int>.unmodifiable([
           ..._symbols.map((name) => image.lookup<Void>(name).address),
           // Optional: an image without it loads, and storage refuses admission.
-          image.providesSymbol(_directoryBoundSymbol)
-              ? image.lookup<Void>(_directoryBoundSymbol).address
+          image.providesSymbol(_directoryNamesSymbol)
+              ? image.lookup<Void>(_directoryNamesSymbol).address
               : 0,
         ]),
         image,
@@ -94,8 +96,7 @@ final class DiagnosticNativeFunctions {
     'fs_diag_parent_exit_class',
     'fs_diag_child_finish',
   ];
-  static const _directoryBoundSymbol = 'fs_diag_directory_bound';
-  static const directoryBounded = 0;
+  static const _directoryNamesSymbol = 'fs_diag_directory_names';
   static const error = -1,
       prepared = 2,
       spawned = 8,
@@ -123,22 +124,25 @@ final class DiagnosticNativeFunctions {
     return List<int>.unmodifiable(values);
   }
 
-  late final _directoryBound = codeAddresses.last == 0
+  late final _directoryNames = codeAddresses.last == 0
       ? null
-      : Pointer<NativeFunction<Int32 Function(Int32)>>.fromAddress(
+      : Pointer<NativeFunction<_DirectoryNamesNative>>.fromAddress(
           codeAddresses.last,
-        ).asFunction<int Function(int)>();
+        ).asFunction<_DirectoryNames>();
 
-  /// Closed native DIR-buffer admission for an anchored directory descriptor.
-  /// Only [directoryBounded] permits enumeration; a missing optional symbol,
-  /// refusal or error never falls back to an unbounded libc directory stream.
-  bool directoryBound(int descriptor) {
-    final bound = _directoryBound;
-    return bound != null &&
-        descriptor >= 0 &&
-        descriptor <= 0x7fffffff &&
-        bound(descriptor) == directoryBounded;
-  }
+  /// Bounded native directory reader (a BackupDirectoryReader) for diagnostic
+  /// storage: one fixed raw buffer and packed names, never a libc directory
+  /// stream. Null for an image without it; storage then refuses admission.
+  int Function(int descriptor, Pointer<Uint8> names, int capacity)?
+  get directoryReader => _directoryNames == null ? null : _readDirectory;
+
+  int _readDirectory(int descriptor, Pointer<Uint8> names, int capacity) =>
+      descriptor < 0 ||
+          descriptor > 0x7fffffff ||
+          capacity < 0 ||
+          capacity > 0xffffffff
+      ? error
+      : _directoryNames!(descriptor, names, capacity);
 
   late final _reserve = Pointer<NativeFunction<_ReserveNative>>.fromAddress(
     codeAddresses[0],
