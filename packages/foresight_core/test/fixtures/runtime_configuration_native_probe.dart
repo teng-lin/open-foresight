@@ -23,6 +23,8 @@ import 'package:foresight_core/src/service_ownership.dart';
 Future<void> main(List<String> arguments) async {
   final directory = arguments.first;
   final flags = arguments.skip(1).toSet();
+  // Bootstrap SQLite before replacing configuration with native-only test scopes.
+  if (flags.contains('service')) bootstrapSqlSupportFixture();
   final nativeLibrary = Platform.environment['FORESIGHT_NATIVE_LIBRARY']!;
   if (flags.contains('seal-first')) _sealWithFirstHandle(nativeLibrary);
   final result = await _nativeProfileSelection(
@@ -69,7 +71,6 @@ Future<Map<String, Object?>> _nativeProfileSelection(
   final profile = ProfilePaths('$directory/data', '$directory/run');
   Future<void> start() async {
     if (service) {
-      bootstrapSqlSupportFixture();
       final owner = await ApplicationService.start(
         profile,
         desktopPeerVerifier: (_) => false,
