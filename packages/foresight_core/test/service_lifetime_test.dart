@@ -1606,6 +1606,7 @@ while True:
   test(
     'a notes edit schedules its production 30 second enhancement timer without busy work until it fires',
     () async {
+      print('NOTES_TIMER_PROGRESS phase=0 elapsed_us=0');
       final rag = EmbeddingService()..embeddingGate = Completer<void>();
       var phase = 0;
       final phaseClock = Stopwatch()..start();
@@ -1613,6 +1614,9 @@ while True:
       void mark(int value) {
         phase = value;
         phaseMicros.add(phaseClock.elapsedMicroseconds);
+        print(
+          'NOTES_TIMER_PROGRESS phase=$phase elapsed_us=${phaseMicros.last}',
+        );
       }
 
       addTearDown(() {
