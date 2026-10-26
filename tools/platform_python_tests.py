@@ -21,6 +21,7 @@ SHARED = (
     "tests/test_ci_stage_setup.py",
     "tests/test_ci_timing.py",
     "tests/test_core_coverage_benchmark.py",
+    "tests/test_diagnostic_cmake.py",
     "tests/test_helper_build_identity.py",
     "tests/test_installed_documents.py",
     "tests/test_linux_packages.py",
@@ -34,6 +35,7 @@ SHARED = (
     "tests/test_profile_migration.py",
     "tests/test_release_hook_configurations.py",
     "tests/test_release_upgrade.py",
+    "tests/test_sql_support_cmake.py",
     "tests/test_test_hygiene.py",
     "tests/contracts/test_descriptor.py",
     "tests/contracts/test_owned_descriptors.py",
@@ -56,6 +58,7 @@ QUALITY_ONLY = {
     "tests/test_ci_gate_owners.py": "Apple runner and host metadata are fixture inputs; real DMG contracts have an external owner.",
     "tests/test_build_recipes.py": "All platform/tool probes are monkeypatched.",
     "tests/test_litert_build_orchestration.py": "Host platform/machine are fixture inputs.",
+    "tests/test_linux_bundle_failure_paths.py": "Dart SDK lookup, loader probes and compiler products are fixture inputs.",
 }
 
 

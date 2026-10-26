@@ -681,9 +681,14 @@ class ReleaseAssetAcceptanceTest(unittest.TestCase):
                 target = build / rel
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(b"fixture")
+            from contextlib import ExitStack
+
+            from tests.test_linux_bundle_failure_paths import diagnostic_products
+
             output = root / "dist"
             litert_digest = hashlib.sha256(b"fixture").hexdigest()
             with (
+                ExitStack() as products,
                 patch.object(
                     sys,
                     "argv",
@@ -705,6 +710,8 @@ class ReleaseAssetAcceptanceTest(unittest.TestCase):
                 patch("package.subprocess.run"),
                 patch("package.subprocess.check_output", return_value=""),
             ):
+                for owner, name, value in diagnostic_products(build, root / "dart-sdk"):
+                    products.enter_context(patch.object(owner, name, value))
                 package.main()
             launcher = (output / "open-foresight").read_text()
             self.assertIn(f'export FORESIGHT_RUNTIME_REVISION="{revision}"', launcher)
