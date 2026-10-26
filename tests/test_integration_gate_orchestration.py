@@ -213,6 +213,7 @@ def test_fast_gate_selects_platform_failures_and_isolates_capture_path(
     native = tmp_path / "native"
     if has_native:
         native.touch()
+        (tmp_path / "libforesight_sql_support.so").touch()
     args = SimpleNamespace(
         native=native if has_native else None,
         output=tmp_path,

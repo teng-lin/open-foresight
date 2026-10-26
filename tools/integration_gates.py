@@ -675,9 +675,14 @@ def fast_gate(args, env):
         if sys.platform == "linux":
             if args.native is None or not args.native.is_file():
                 raise ValueError("--native is required on Linux")
+            native = args.native.resolve(strict=True)
+            sql = native.parent / "libforesight_sql_support.so"
+            if sql.is_symlink() or not sql.is_file():
+                raise ValueError("The selected native build requires its SQL support library")
             env.update(
                 FORESIGHT_CAPTURE_STATE_TEST="1",
-                FORESIGHT_NATIVE=str(args.native.resolve()),
+                FORESIGHT_NATIVE=str(native),
+                FORESIGHT_TEST_SQL_SUPPORT_LIBRARY=str(sql),
             )
             files.append("test/capture_failure_test.dart")
         return run_tests(
