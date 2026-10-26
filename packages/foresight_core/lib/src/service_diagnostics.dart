@@ -59,6 +59,14 @@ final class ServiceDiagnosticEmitter {
       : null;
 }
 
+/// Select only the captured construction-owner emitter for an opener. A null
+/// owner explicitly masks an inherited caller emitter; all other Zone values,
+/// including producer/component/ownership bindings, remain with the caller.
+T runWithServiceDiagnosticEmitter<T>(
+  ServiceDiagnosticEmitter? emitter,
+  T Function() body,
+) => runZoned(body, zoneValues: {_serviceEmitterKey: emitter});
+
 /// Repeated captures in one owner scope reuse one handle. Disabled or unbound
 /// construction allocates no handle and cannot later borrow a caller's producer.
 ServiceDiagnosticEmitter? captureServiceDiagnosticEmitter() {

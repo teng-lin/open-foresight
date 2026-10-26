@@ -62,6 +62,146 @@ class _PrivateFailure implements Exception {
 
 void main() {
   test(
+    'emitter opener scope keeps the construction owner and caller context',
+    () async {
+      final capture = SinkCapture();
+      final session = await LoggingSession.startForTesting(
+        configuration: const DiagnosticConfiguration(),
+        profilePath: createTestTempDirectorySync('emitter-owner-').path,
+        sinkFactory: memorySink(capture.port.sendPort),
+      );
+      final producerA = session.producer;
+      final producerB = session.registerProducer(DiagnosticProducerKind.domain);
+      await producerB.ready;
+      try {
+        final emitterA = runWithServiceDiagnostics(
+          producerA,
+          captureServiceDiagnosticEmitter,
+          component: DiagnosticComponent.desktop,
+        )!;
+        final emitterB = runWithServiceDiagnostics(
+          producerB,
+          captureServiceDiagnosticEmitter,
+          component: DiagnosticComponent.mcp,
+        )!;
+        final callerKey = Object();
+        final callerValue = Object();
+        final endpoints = DiagnosticProducer.localEndpointCount;
+        final timers = DiagnosticProducer.localRegistrationTimerCount;
+        await runZoned(
+          () => runWithServiceDiagnostics(producerB, () async {
+            final callerEmitter = captureServiceDiagnosticEmitter();
+            expect(callerEmitter, isNot(same(emitterA)));
+            await runWithServiceDiagnosticEmitter(emitterA, () async {
+              expect(Zone.current[callerKey], same(callerValue));
+              expect(captureServiceDiagnosticEmitter(), same(emitterA));
+              await runWithServiceDiagnosticEmitter(null, () async {
+                await Future<void>.value();
+                expect(captureServiceDiagnosticEmitter(), isNull);
+                runWithServiceDiagnosticEmitter(emitterB, () {
+                  expect(captureServiceDiagnosticEmitter(), same(emitterB));
+                });
+                expect(captureServiceDiagnosticEmitter(), isNull);
+              });
+              expect(captureServiceDiagnosticEmitter(), same(emitterA));
+              expect(
+                captureServiceDiagnosticEmitter()!.emit(
+                  DiagnosticEvent.rpcFailed,
+                ),
+                isTrue,
+              );
+              // Producer/component bindings remain the caller's; only capture changes.
+              expect(emitServiceDiagnostic(DiagnosticEvent.rpcFailed), isTrue);
+            });
+            expect(captureServiceDiagnosticEmitter(), same(callerEmitter));
+            expect(emitterB.emit(DiagnosticEvent.rpcFailed), isTrue);
+          }),
+          zoneValues: {callerKey: callerValue},
+        );
+        expect(DiagnosticProducer.localEndpointCount, endpoints);
+        expect(DiagnosticProducer.localRegistrationTimerCount, timers);
+        producerA.close();
+        runWithServiceDiagnostics(producerB, () {
+          expect(captureServiceDiagnosticEmitter(), isNotNull);
+          runWithServiceDiagnosticEmitter(emitterA, () {
+            expect(captureServiceDiagnosticEmitter(), isNull);
+          });
+        });
+        await session.close();
+        await capture.closed.future.timeout(const Duration(seconds: 2));
+        final events = capture.records.where((r) => r['event'] == 'rpc.failed');
+        expect(events, hasLength(3));
+        expect(events.map((r) => r['component']).toSet(), {
+          'desktop',
+          'service',
+          'mcp',
+        });
+      } finally {
+        await session.close();
+        capture.dispose();
+      }
+    },
+  );
+
+  test(
+    'emitter opener scope preserves result Future error and stack identity',
+    () async {
+      final marker = Object();
+      expect(runWithServiceDiagnosticEmitter(null, () => marker), same(marker));
+      final future = Future<Object>.value(marker);
+      expect(runWithServiceDiagnosticEmitter(null, () => future), same(future));
+      final failure = StateError('opener failure');
+      final stack = StackTrace.fromString('original opener stack');
+      try {
+        runWithServiceDiagnosticEmitter<void>(null, () {
+          Error.throwWithStackTrace(failure, stack);
+        });
+        fail('synchronous error was swallowed');
+      } catch (error, caughtStack) {
+        expect(error, same(failure));
+        expect(caughtStack, same(stack));
+      }
+      final failed = Future<Object>.error(failure, stack);
+      final returned = runWithServiceDiagnosticEmitter(null, () => failed);
+      expect(returned, same(failed));
+      try {
+        await returned;
+        fail('asynchronous error was swallowed');
+      } catch (error, caughtStack) {
+        expect(error, same(failure));
+        expect(caughtStack, same(stack));
+      }
+    },
+  );
+
+  test(
+    'off emitter opener scope allocates no endpoint or registration timer',
+    () async {
+      final off = await LoggingSession.startForTesting(
+        configuration: DiagnosticConfiguration.fromEnvironment({
+          'FORESIGHT_LOG_LEVEL': 'off',
+        }),
+        profilePath: createTestTempDirectorySync('emitter-owner-off-').path,
+      );
+      try {
+        final captured = runWithServiceDiagnostics(
+          off.producer,
+          captureServiceDiagnosticEmitter,
+        );
+        expect(captured, isNull);
+        await runWithServiceDiagnosticEmitter(captured, () async {
+          await Future<void>.value();
+          expect(captureServiceDiagnosticEmitter(), isNull);
+        });
+        expect(DiagnosticProducer.localEndpointCount, 0);
+        expect(DiagnosticProducer.localRegistrationTimerCount, 0);
+      } finally {
+        await off.close();
+      }
+    },
+  );
+
+  test(
     'captured emitter retains owner across unbound callbacks and retires',
     () async {
       final capture = SinkCapture();
