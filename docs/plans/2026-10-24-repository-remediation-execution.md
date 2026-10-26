@@ -1318,3 +1318,73 @@ entry points scopes Git trust to that single SDK path for that step, including
 nested Flutter Git calls. An actual UID-1001 tar-cache round trip reproduced
 unscoped root refusal and scoped success while another foreign repository stayed
 refused. The final Claude CLI review converged with no blocking findings.
+
+### Final repair cohort and local qualification, October 26
+
+The next repair cohort addresses the complete failed-step inventory on
+`52bdd397`, including Ubuntu's independent restored-build and CPU/audio consumers.
+The installation-lock failures came from the OS account's NSS home, rather than
+only the `HOME` environment variable. Persistent account home and state now use
+trusted private workspace storage; short ephemeral test paths stay under private
+`/var/tmp` storage. Five unchanged Core files reproduced **17 failed / 7 passed /
+1 Mac-only skip** with the old synthetic NSS home and **24 passed / the same
+skip** with the new home, preserving source, products, UID and deadlines.
+The socket fixture's unchanged five-test module passes with the shorter prefix.
+
+Storage fixtures use their existing bounded readiness helper when a concurrent
+child can retain an inherited file description until exec. Their nineteen-test
+module passes; invalid payload and permanent-contention oracles remain. The Mac
+native-selection fixture bootstraps SQL before installing a deliberately partial
+native configuration; all five current native probes pass on Mac. The shared
+bundle environment binds its own required SQL library, resolving CPU/audio test
+bootstrap failures without inheriting a host library. Actual entrypoint load
+controls pass; those controls intentionally skip model bodies and do not certify
+real model or audio acceptance.
+
+Under two-CPU affinity Dart 3.9.2 still reported sixteen processors and defaulted
+to eight test suites. An unchanged eight-suite cohort reproduced the catalog's
+15-second timeout with that fanout and passed **57 / 1 skip** with fanout two.
+CI now selects two through an optional validated argument; workloads, coverage
+floors and deadlines remain. The TLS timeout was not independently reproduced.
+The helper retains Bash 3 compatibility, including its empty optional array.
+
+Restored CMake builds now explicitly select verified runtime-product consumer
+mode. It checks current source, compiler, recipe, IDs, original receipts, bytes
+and modes without scheduling producers or rewriting their records. Missing,
+tampered and changed inventory fails closed, including preserved-mtime changes.
+Ordinary builds reset consumer mode off. Actual full Make/Ninja consumer plans
+pass the unchanged no-build guard; original artifact bytes and modes stay intact.
+Complete verification failures are retained in private logs.
+
+These CMake source changes required new products. Fresh Linux CTest passed
+**51/51** and HanSolo Mac **60/60**, zero CTest skips; all 191 approved inputs
+matched after execution. Fresh ASan/LSan/UBSan and TSan each passed **51/51**,
+zero CTest skips, with strict report gates and all 196 inputs checked. Existing
+qualified SDKs were reused. New Linux NativeID is
+`e33bbb6c7ae5289ac9ff5e6cb3fa7503d9b387818e2b75ed2b5620a9731de279`, SQL ID
+`ba22417ff8e3c466b6ca4fbf6f42b547f6bdf8874f61149908b62760d71bae6e`.
+Mac IDs are Native
+`a655e6f3c50fa922b5b7a9a6fdcc29d0336ecadfa4700399e421711f7608ef84`, SQL
+`58e1c69a7d2226c7c31039c2f378c87381e2c4a4ca3f8f341d2e0ca63d7ac697`.
+
+Matching application qualification on frozen `e60a6f74` passed **2,889 Core /
+16 skipped / 91.02%**, **634 desktop / 17 skipped / 93.31%**, **35 service/MCP**,
+**3 isolated GUI scenarios / 68 expectations**, and **2 fast scenarios**.
+Selected service/GUI/fast suites had zero skips. Fresh Worker/service/MCP builds,
+both analyses and post-run Worker/receipt checks passed; all thirteen native
+artifacts and three application binaries stayed unchanged afterward.
+
+Final Python qualification on `bd9f0e78` passed **6,224 / 32 skipped** and
+**95.23% combined coverage**, enforcing the unchanged 95% floor. Ruff, mypy,
+timeout checks and matched workflow lint passed. The earlier local run's explicit
+compiler overrides were an invalid harness setup: its **33 failures / 94.83%**
+remain unqualified and retained. Clean failed-first runs and two narrow fixture
+repairs preceded the complete successful run; no guard or test assertion was
+removed. Later changes after application qualification only repair Python fixtures.
+
+Final evidence: `/var/tmp/of-native-consumer/qualification.json`,
+`/var/tmp/of-sanitizer-consumer/qualification.json`,
+`/var/tmp/of-app-consumer/handoff.json` and `/var/tmp/p95fin/report.json`.
+All skip inventories and original failures remain with those reports. The next
+pushed head still requires complete hosted CI and review resolution, actual owner
+review of retained workflow/trust/consumer changes, and verified merge to main.
