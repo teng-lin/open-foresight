@@ -210,8 +210,13 @@ def run(gate, platform="linux", stage="core", **settings):
 
 @pytest.mark.parametrize("coverage", ["0", "1"])
 def test_default_runs_full_suite_once_and_keeps_native_and_hook_gates(gate, coverage):
+    # The coverage wrapper selects runtime support for the executing host.
+    platform = "macos" if sys.platform == "darwin" else "linux"
     result, commands = run(
-        gate, FORESIGHT_COVERAGE=coverage, FORESIGHT_CORE_COVERAGE_MIN="90"
+        gate,
+        platform=platform,
+        FORESIGHT_COVERAGE=coverage,
+        FORESIGHT_CORE_COVERAGE_MIN="90",
     )
     assert result.returncode == 0, result.stdout + result.stderr
     tests = [command for command in commands if command["args"][0] == "test"]
@@ -226,7 +231,10 @@ def test_default_runs_full_suite_once_and_keeps_native_and_hook_gates(gate, cove
     assert ("--coverage-package=^foresight_core$" in tests[0]["args"]) == (
         coverage == "1"
     )
-    assert tests[0]["native"].endswith("build/native/libforesight_native.so")
+    suffix = "dylib" if platform == "macos" else "so"
+    assert tests[0]["native"] == str(
+        gate[0] / f"build/native/libforesight_native.{suffix}"
+    )
     assert tests[0]["helper"].endswith("build/services/helper/ForesightHelper")
     assert any(
         command["args"][0] == "-DFORESIGHT_ENABLE_TEST_HOOKS=true"

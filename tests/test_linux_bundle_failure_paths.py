@@ -96,7 +96,11 @@ def diagnostic_products(build, sdk):
         return str(dart) if name == "dart" else which(name, *args, **kwargs)
 
     def verify(root, actual_build, actual_sdk):
-        assert root == ROOT and actual_build == build and actual_sdk == sdk
+        assert (
+            root == ROOT
+            and actual_build == build
+            and actual_sdk == sdk.resolve(strict=True)
+        )
         return json.loads(json.dumps(receipt))
 
     return [
