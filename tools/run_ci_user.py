@@ -15,6 +15,8 @@ import tempfile
 
 FLUTTER = Path("/opt/foresight-flutter")
 FLUTTER_REVISION = "adc901062556672b4138e18a4dc62a4be8f4b3c2"
+# Fixed bootstrap venv; require a physical root-owned mode-0700 directory below.
+TOOLING_PYTHON_ROOT = Path("/var/tmp/foresight-tooling-python")  # noqa: S108
 
 
 def workspace_owner(workspace: Path) -> tuple[int, int]:
@@ -63,6 +65,22 @@ def claim_tree(path: Path, uid: int, gid: int) -> None:
             info = entry.lstat()
             if (info.st_uid, info.st_gid) != (uid, gid):
                 os.lchown(entry, uid, gid)
+
+
+def claim_tooling_python(uid: int, gid: int) -> None:
+    """Transfer the exact private venv created by linux_tooling_python.sh."""
+    if os.environ.get("FORESIGHT_PYTHON") != str(TOOLING_PYTHON_ROOT / "bin/python"):
+        return
+    root = TOOLING_PYTHON_ROOT
+    info = root.lstat()
+    if (
+        root.resolve(strict=True) != root
+        or not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != 0
+        or stat.S_IMODE(info.st_mode) != 0o700
+    ):
+        raise ValueError("The tooling environment must be the private root-owned venv")
+    claim_tree(root, uid, gid)
 
 
 def ensure_account(uid: int, gid: int, home: Path) -> str:
@@ -139,6 +157,7 @@ def prepare(
             raise ValueError("The job pub cache must contain only physical directories")
     claim_tree(workspace, uid, gid)
     claim_tree(flutter, uid, gid)
+    claim_tooling_python(uid, gid)
     # Persistent OS/NSS home storage must not inherit the sticky /var/tmp
     # ancestor: InstallationLock deliberately forbids all writable ancestors.
     # build/ is ignored by source identity and this private child is outside

@@ -264,6 +264,66 @@ def test_account_creation_is_local_numeric_and_does_not_copy_credentials(
     assert len(calls) == 2
 
 
+def test_private_tooling_venv_transfer_preserves_external_interpreter(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "tooling"
+    root.mkdir(mode=0o700)
+    binary = root / "bin"
+    binary.mkdir()
+    (binary / "python").symlink_to(sys.executable)
+    monkeypatch.setattr(user, "TOOLING_PYTHON_ROOT", root)
+    monkeypatch.setenv("FORESIGHT_PYTHON", str(binary / "python"))
+    original = Path.lstat
+
+    def metadata(path):
+        info = original(path)
+        if path == root:
+            return SimpleNamespace(st_mode=info.st_mode, st_uid=0)
+        return info
+
+    monkeypatch.setattr(Path, "lstat", metadata)
+    claimed = []
+    monkeypatch.setattr(user, "claim_tree", lambda *args: claimed.append(args))
+    user.claim_tooling_python(1234, 2345)
+    assert claimed == [(root, 1234, 2345)]
+    assert (binary / "python").resolve() == Path(sys.executable).resolve()
+
+
+@pytest.mark.parametrize("unsafe", ["foreign", "writable", "symlink", "unselected"])
+def test_tooling_venv_cannot_expand_ownership_scope(tmp_path, monkeypatch, unsafe):
+    root = tmp_path / "tooling"
+    root.mkdir(mode=0o700)
+    if unsafe == "writable":
+        root.chmod(0o755)
+    selected = root
+    if unsafe == "symlink":
+        selected = tmp_path / "alias"
+        selected.symlink_to(root, target_is_directory=True)
+    monkeypatch.setattr(user, "TOOLING_PYTHON_ROOT", selected)
+    monkeypatch.setenv(
+        "FORESIGHT_PYTHON",
+        str((selected if unsafe != "unselected" else tmp_path) / "bin/python"),
+    )
+    original = Path.lstat
+
+    def metadata(path):
+        info = original(path)
+        return SimpleNamespace(
+            st_mode=info.st_mode, st_uid=4321 if unsafe == "foreign" else 0
+        )
+
+    monkeypatch.setattr(Path, "lstat", metadata)
+    claimed = []
+    monkeypatch.setattr(user, "claim_tree", lambda *args: claimed.append(args))
+    if unsafe == "unselected":
+        user.claim_tooling_python(1234, 2345)
+    else:
+        with pytest.raises(ValueError, match="private root-owned venv"):
+            user.claim_tooling_python(1234, 2345)
+    assert not claimed
+
+
 @pytest.mark.parametrize("flutter", [None, "/opt/flutter", "/opt/foresight-flutter"])
 def test_drop_all_supplementary_groups_then_gid_uid_before_exec(monkeypatch, flutter):
     calls = []
