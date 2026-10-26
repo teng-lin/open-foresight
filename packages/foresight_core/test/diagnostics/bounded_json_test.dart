@@ -24,6 +24,7 @@ void main() {
                 DiagnosticField.operation => DiagnosticOperation.parse(
                   operation,
                 )!,
+                DiagnosticField.call => identity,
                 DiagnosticField.category => DiagnosticCategory.unavailable,
                 DiagnosticField.outcome => DiagnosticOutcome.completed,
                 DiagnosticField.provider => DiagnosticProvider.unknown,
@@ -87,6 +88,34 @@ void main() {
       }
     }
     expect(cases, greaterThan(400));
+  });
+
+  test('typed call identity normalizes to canonical JSON', () {
+    const canonical = '0123456789abcdef0123456789abcdef';
+    final identity = DiagnosticIdentity.parse(canonical)!;
+    final wire = DiagnosticRecord(
+      DiagnosticEvent.rpcCompleted,
+      DiagnosticComponent.desktop,
+      fields: {DiagnosticField.call: identity},
+    ).toWire()!;
+    final expected = jsonEncode({
+      'event': 'rpc.completed',
+      'component': 'desktop',
+      'fields': {'call': canonical},
+    });
+    expect(diagnosticAsciiJsonString(wire, maximumBytes: 4096), expected);
+    expect(
+      diagnosticAsciiJsonBytes(wire, maximumBytes: 4096),
+      utf8.encode('$expected\n'),
+    );
+    expect(
+      DiagnosticRecord(
+        DiagnosticEvent.rpcCompleted,
+        DiagnosticComponent.desktop,
+        fields: {DiagnosticField.call: canonical},
+      ).toWire(),
+      isNull,
+    );
   });
 
   test('capacity includes newline and returns independent exact bytes', () {
