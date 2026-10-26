@@ -1718,3 +1718,50 @@ results: Keychain (retained -25308 failure), strict logging size/overhead
 certification and expanded correlation, new native-report/clang-tidy work,
 broad Python cleanup, and the specified broader security/governance work.
 Existing privacy, integrity, qualification and publication protections remain.
+
+### 2026-10-26: Mac verification fixture uses elapsed time
+
+Hosted `7efb1d20` passed Quality (6,324 Python tests / 31 skips / 95.22%),
+Linux Native (52/52 and 800 host contracts / five skips / one deselection),
+both full 52-case sanitizer suites, Arch's complete native/Core/Desktop gates,
+Linux Desktop (643 / 17 skips / 93.26%), six real-model CPU cases, all four
+virtual-audio cases, and the single compiled service/MCP/GUI invocation (38/38).
+Arch Core coverage was 91.05% (24,588/27,006); the separate hosted Core job passed
+2,888 / 17 skips but published no numeric coverage report. Its extra namespace
+skip explicitly reports that `unshare` is not permitted. Current-source audio
+acceptance now supplies the complete real-model workflow result on the new
+native cohort; physical capture remains unexecuted. Raw outputs remain in the
+`/var/tmp/of-ci-7efb-root/`, `of-ci-7efb-linux-san/` and `of-ci-7efb-mac/` packets.
+
+The actual Mac job stopped at native CTest: 60/61 passed, with the new
+`verify-slow` bootstrap case failing to receive HELLO. Core, Desktop and the
+notes/storage-health witnesses did not run. The fixture represented its
+intended 1.3-second work as 130 separate ten-millisecond sleeps. A controlled
+HanSolo run that coalesces only sub-40ms waits to 40ms reproduces the failure:
+current Native plus the old fixture fails after 8.423 seconds, with actual
+child exit 66. The new monotonic hold passes all five bootstrap cases under
+that same condition; its internal assertion requires actual work of at least
+1.3 seconds and less than the existing five-second lease. Against the old
+one-second Native watchdog, the new hold still fails with actual child exit 65.
+The production launcher suppresses child stderr, so no exact positive hold
+scalar is claimed beyond the executed timing assertions.
+
+The fixture-only repair handles interrupted sleeps by recomputing remaining
+monotonic time and adds numeric failure witnesses. Production leases, poll
+counts, alarms, CTest timeouts and assertions retain their original bounds.
+Native-peer and tools-disabled Claude reviews converged on the exact public
+fixture. Full ordinary root CTest then passed **52/52 Linux and 61/61 HanSolo,
+zero skips**, with no coalescing shim in either qualification. Linux rebuilt
+only the fixture object/executable; all thirteen production artifact bytes,
+modes and sizes remained unchanged. Official receipt checks passed on both
+platforms and Native/SQL identities remain the preceding qualified identities.
+Application qualification retains its unchanged production provenance; no SDK
+or application rebuild is represented as necessary for this test-only change.
+Evidence: `/var/tmp/of-bootstrap-fixture-linux/qualification.json` and
+`/var/tmp/of-bootstrap-fixture-clock/mac-full-qualification.json`.
+
+F16 has passed three real 100-RPC conditions, including native-active generation,
+but its later speech-registration failure still leaves capture and active
+teardown unqualified. Those partial timings are not a completed benchmark.
+The latest hosted Mac application paths, remaining F16 observations, resolved
+current-head CI and required owner review remain merge conditions.
