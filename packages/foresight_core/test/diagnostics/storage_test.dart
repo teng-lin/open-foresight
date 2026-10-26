@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:foresight_core/src/diagnostics/events.dart';
 import 'package:foresight_core/src/diagnostics/storage.dart';
 import 'package:foresight_core/src/persistence/backup_files.dart';
+import 'package:foresight_test_support/poll.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
 
@@ -142,7 +143,7 @@ void _seedSlot(
 void main() {
   test(
     'real admission and classification contention retain bytes and health',
-    () {
+    () async {
       final profile = _profile();
       final storage = DiagnosticStorage.admit(
         profile,
@@ -155,7 +156,8 @@ void main() {
       final root = BackupDirectory('$profile/logs');
       final admission = root.open('admission.lock');
       try {
-        expect(admission.tryExclusiveLease(), isTrue);
+        // A concurrent child may retain the closed admission description until exec.
+        await eventually(admission.tryExclusiveLease);
         expect(
           DiagnosticStorage.admit(
             profile,
@@ -255,7 +257,7 @@ void main() {
   );
   test(
     'orphan manifest.next is reclaimable but orphan payload stays occupied',
-    () {
+    () async {
       for (final payload in [false, true]) {
         final profile = _profile();
         final first = DiagnosticStorage.admit(
@@ -276,7 +278,7 @@ void main() {
           segment.close();
         }
         dir.close();
-        final recovered = DiagnosticStorage.admit(
+        DiagnosticStorage? recover() => DiagnosticStorage.admit(
           profile,
           DiagnosticIdentity.random(),
           DiagnosticRole.desktop,
@@ -285,6 +287,7 @@ void main() {
               if (i != slot) i,
           },
         );
+        var recovered = recover();
         if (payload) {
           expect(recovered, isNull);
           expect(
@@ -292,6 +295,11 @@ void main() {
             _record(),
           );
         } else {
+          // Null is legitimate contention while a concurrent child reaches exec.
+          await eventually(() {
+            recovered ??= recover();
+            return recovered != null;
+          });
           expect(recovered?.slot, slot);
           expect(
             File('$profile/logs/slot-$slot/manifest.next').existsSync(),
