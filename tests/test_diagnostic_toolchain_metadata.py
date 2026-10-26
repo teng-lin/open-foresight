@@ -9,6 +9,7 @@ import pytest
 
 from tools import diagnostic_toolchain_metadata as toolchain
 from tools import diagnostic_build_identity as identity
+from tools import sql_support_identity as sql_identity
 
 
 def linux_fixture(tmp_path):
@@ -235,3 +236,155 @@ def test_explicit_other_sdk_refuses_before_settings_read(tmp_path):
         pytest.raises(toolchain.MetadataError),
     ):
         toolchain.metadata("darwin-arm64", compiler, "apple-clang", "18.0.0", other)
+
+
+def arch_fixture(tmp_path, family):
+    compiler = tmp_path / family
+    compiler.write_bytes(b"controlled Arch compiler")
+    names = ["glibc", "linux-api-headers", "binutils", "gcc-libs", "libgcc", family]
+    if family == "clang":
+        names.append("llvm-libs")
+    packages = {name: "16.2.1+r23+gabcdef-1" for name in names}
+    owners = ["binutils", "glibc", "linux-api-headers", "glibc", "libgcc"]
+
+    def command(arguments):
+        if arguments == [str(compiler), "--version"]:
+            return (
+                f"{family} version 16.2.1" if family == "clang" else "gcc (GCC) 16.2.1"
+            )
+        if arguments[0] == "/usr/bin/dpkg-query":
+            raise FileNotFoundError("dpkg is not an Arch provider")
+        assert arguments[0] == "/usr/bin/pacman"
+        if arguments[1] == "-Q":
+            assert arguments[2:] == names
+            return "\n".join(f"{name} {value}" for name, value in packages.items())
+        assert arguments[1] == "-Qqo"
+        if arguments[2:] == [str(compiler)]:
+            return family
+        assert arguments[2:] == [
+            "/usr/bin/ld",
+            "/usr/include/features.h",
+            "/usr/include/linux/version.h",
+            "/usr/lib/libc.so.6",
+            "/usr/lib/libgcc_s.so.1",
+        ]
+        return "\n".join(owners)
+
+    return compiler, packages, owners, command
+
+
+@pytest.mark.parametrize("family", ["gcc", "clang"])
+def test_arch_package_metadata_covers_selected_compiler_and_system(tmp_path, family):
+    compiler, packages, owners, command = arch_fixture(tmp_path, family)
+    with mock.patch.object(toolchain, "_command", side_effect=command):
+        result = toolchain.metadata("linux-x86_64", compiler, family, "16.2.1")
+        assert result["record"]["system"] == {
+            "kind": "selected-pacman-system-headers-libc-binutils",
+            "packages": packages,
+        }
+        assert str(tmp_path) not in str(result)
+        root = Path(__file__).resolve().parents[1]
+        selected = result["record"]["compiler"]
+        native = identity.Contract(root).native_identity(
+            "linux-x86_64",
+            identity.Compiler(
+                family, "16.2.1", selected["sha256"], result["fingerprint"]
+            ),
+            ["-std=c11", "-O2"],
+        )
+        assert native["record"]["compiler"]["toolchain_sha256"] == result["fingerprint"]
+        sql = sql_identity.identity(root, result, ["-std=c11", "-O2"])
+        assert sql_identity.verify_record(root, sql) == sql["sql_source_id"]
+        for name in ["glibc", "linux-api-headers", "libgcc", family]:
+            before = packages[name]
+            packages[name] += ".changed"
+            assert (
+                result["fingerprint"]
+                != toolchain.metadata("linux-x86_64", compiler, family, "16.2.1")[
+                    "fingerprint"
+                ]
+            )
+            packages[name] = before
+        owners[1] = "unreviewed-glibc-provider"
+        with pytest.raises(toolchain.MetadataError):
+            toolchain.metadata("linux-x86_64", compiler, family, "16.2.1")
+
+
+@pytest.mark.parametrize(
+    "change", ["missing", "duplicate", "foreign", "invalid", "compiler"]
+)
+def test_arch_refuses_incomplete_or_unowned_selected_toolchain(tmp_path, change):
+    compiler, _, _, original = arch_fixture(tmp_path, "gcc")
+
+    def command(arguments):
+        output = original(arguments)
+        if arguments[:2] == ["/usr/bin/pacman", "-Q"]:
+            rows = output.splitlines()
+            if change == "missing":
+                rows.pop()
+            elif change == "duplicate":
+                rows.append(rows[0])
+            elif change == "foreign":
+                rows.append("private-supplier secret-canary")
+            elif change == "invalid":
+                rows[0] = "glibc not a version"
+            return "\n".join(rows)
+        if (
+            arguments == ["/usr/bin/pacman", "-Qqo", str(compiler)]
+            and change == "compiler"
+        ):
+            return "unreviewed-compiler-provider"
+        return output
+
+    with (
+        mock.patch.object(toolchain, "_command", side_effect=command),
+        pytest.raises(toolchain.MetadataError),
+    ):
+        toolchain.metadata("linux-x86_64", compiler, "gcc", "16.2.1")
+
+
+def test_failed_debian_query_does_not_fall_back_to_another_database(tmp_path):
+    compiler, _, original = linux_fixture(tmp_path)
+
+    def command(arguments):
+        if arguments[0] == "/usr/bin/dpkg-query":
+            raise toolchain.MetadataError("diagnostic_toolchain_metadata_unavailable")
+        return original(arguments)
+
+    with (
+        mock.patch.object(toolchain, "_command", side_effect=command),
+        pytest.raises(toolchain.MetadataError),
+    ):
+        toolchain.metadata("linux-x86_64", compiler, "gcc", "13.3.0")
+
+
+def test_unknown_linux_database_is_closed_without_input_echo(
+    tmp_path, monkeypatch, capsys
+):
+    compiler = tmp_path / "private-canary-compiler"
+    compiler.write_bytes(b"controlled compiler")
+
+    def command(arguments):
+        if arguments == [str(compiler), "--version"]:
+            return "gcc (GCC) 16.2.1"
+        raise FileNotFoundError("private database detail must not escape")
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "metadata",
+            "--target",
+            "linux-x86_64",
+            "--compiler",
+            str(compiler),
+            "--family",
+            "gcc",
+            "--version",
+            "16.2.1",
+        ],
+    )
+    with mock.patch.object(toolchain, "_command", side_effect=command):
+        assert toolchain.main() == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == '{"error":"diagnostic_toolchain_metadata_unavailable"}\n'

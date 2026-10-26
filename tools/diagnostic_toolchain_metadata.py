@@ -21,6 +21,14 @@ LINUX_PACKAGES = (
     "binutils",
     "binutils-x86-64-linux-gnu",
 )
+ARCH_SYSTEM_PACKAGES = ("glibc", "linux-api-headers", "binutils", "gcc-libs", "libgcc")
+ARCH_SYSTEM_OWNERS = (
+    ("/usr/bin/ld", "binutils"),
+    ("/usr/include/features.h", "glibc"),
+    ("/usr/include/linux/version.h", "linux-api-headers"),
+    ("/usr/lib/libc.so.6", "glibc"),
+    ("/usr/lib/libgcc_s.so.1", "libgcc"),
+)
 
 
 class MetadataError(ValueError):
@@ -41,6 +49,55 @@ def _sha(path: Path) -> str:
         raise MetadataError("diagnostic_toolchain_metadata_unavailable")
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def _packages(text: str, names: tuple[str, ...], separator: str) -> dict[str, str]:
+    packages = {}
+    for line in text.splitlines():
+        name, found, value = line.partition(separator)
+        if not found or name not in names or name in packages:
+            raise MetadataError("diagnostic_toolchain_metadata_unavailable")
+        if not PACKAGE_VERSION.fullmatch(value):
+            raise MetadataError("diagnostic_toolchain_metadata_unavailable")
+        packages[name] = value
+    if set(packages) != set(names):
+        raise MetadataError("diagnostic_toolchain_metadata_unavailable")
+    return packages
+
+
+def _linux_system(compiler: Path, family: str) -> dict:
+    try:
+        text = _command(
+            [
+                "/usr/bin/dpkg-query",
+                "-W",
+                "-f=${Package}=${Version}\\n",
+                *LINUX_PACKAGES,
+            ]
+        )
+    except FileNotFoundError:
+        # Arch has a different package database, not Debian package aliases.
+        # Require the complete declared set and ownership of the actual selected
+        # compiler, linker, C/kernel headers, libc and compiler runtime.
+        names = ARCH_SYSTEM_PACKAGES + (
+            ("gcc",) if family == "gcc" else ("clang", "llvm-libs")
+        )
+        packages = _packages(_command(["/usr/bin/pacman", "-Q", *names]), names, " ")
+        if _command(["/usr/bin/pacman", "-Qqo", str(compiler)]) != family:
+            raise MetadataError("diagnostic_toolchain_metadata_unavailable") from None
+        owners = _command(
+            ["/usr/bin/pacman", "-Qqo", *(path for path, _ in ARCH_SYSTEM_OWNERS)]
+        ).splitlines()
+        if owners != [owner for _, owner in ARCH_SYSTEM_OWNERS]:
+            raise MetadataError("diagnostic_toolchain_metadata_unavailable") from None
+        return {
+            "kind": "selected-pacman-system-headers-libc-binutils",
+            "packages": packages,
+        }
+    return {
+        "kind": "selected-dpkg-system-headers-libc-binutils",
+        "packages": _packages(text, LINUX_PACKAGES, "="),
+    }
 
 
 def metadata(
@@ -108,31 +165,12 @@ def metadata(
         },
     }
     if target == "linux-x86_64":
-        text = _command(
-            [
-                "/usr/bin/dpkg-query",
-                "-W",
-                "-f=${Package}=${Version}\\n",
-                *LINUX_PACKAGES,
-            ]
-        )
-        packages = {}
-        for line in text.splitlines():
-            name, separator, value = line.partition("=")
-            if not separator or name not in LINUX_PACKAGES or name in packages:
-                raise MetadataError("diagnostic_toolchain_metadata_unavailable")
-            if not PACKAGE_VERSION.fullmatch(value):
-                raise MetadataError("diagnostic_toolchain_metadata_unavailable")
-            packages[name] = value
-        if set(packages) != set(LINUX_PACKAGES):
-            raise MetadataError("diagnostic_toolchain_metadata_unavailable")
-        record["system"] = {
-            "kind": "selected-dpkg-system-headers-libc-binutils",
-            "packages": packages,
-        }
+        record["system"] = _linux_system(compiler, family)
     else:
         sdk = Path(_command(["/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-path"]))
-        if sdk_root is not None and sdk_root.resolve(strict=True) != sdk.resolve(strict=True):
+        if sdk_root is not None and sdk_root.resolve(strict=True) != sdk.resolve(
+            strict=True
+        ):
             raise MetadataError("diagnostic_toolchain_metadata_unavailable")
         sdk_version = _command(
             ["/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-version"]
