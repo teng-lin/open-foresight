@@ -556,16 +556,19 @@ def host_state() -> dict[str, Any]:
 def session_members(session: int) -> list[int]:
     """Include owned worker process groups while the live supervisor pins SID."""
     members = []
-    for entry in Path("/proc").iterdir():
-        if not entry.name.isdecimal() or int(entry.name) == session:
-            continue
-        try:
-            # comm is parenthesized and may itself contain spaces or ')'.
-            fields = (entry / "stat").read_text().rpartition(")")[2].split()
-        except (FileNotFoundError, ProcessLookupError):
-            continue
-        if int(fields[3]) == session:
-            members.append(int(entry.name))
+    # Query the kernel SID without opening every process's stat file. Multiple
+    # host-wide stat scans can exhaust cleanup's deadline on a busy host even
+    # after the owned service and descendants have already settled.
+    with os.scandir("/proc") as entries:
+        for entry in entries:
+            if not entry.name.isdecimal() or int(entry.name) == session:
+                continue
+            member = int(entry.name)
+            try:
+                if os.getsid(member) == session:
+                    members.append(member)
+            except ProcessLookupError:
+                continue
     return members
 
 

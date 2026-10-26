@@ -1,6 +1,7 @@
 """Offline tests of RPC timing, exact export provenance and owned cleanup."""
 
 import argparse
+from contextlib import nullcontext
 import hashlib
 import io
 import json
@@ -794,24 +795,31 @@ def test_real_supervisor_cleans_descendant_after_service_exits(private, ignore_t
         assert process.returncode in {0, -9}, (out, err)
 
 
-def test_supervisor_membership_ignores_disappearing_process_and_parses_comm(monkeypatch):
+def test_supervisor_membership_uses_kernel_sid_and_ignores_exited_process(monkeypatch):
     entries = [SimpleNamespace(name="self"), SimpleNamespace(name="10"),
                SimpleNamespace(name="11"), SimpleNamespace(name="12"), SimpleNamespace(name="13")]
-    monkeypatch.setattr(Path, "iterdir", lambda _path: entries)
-    def stat(entry, _name):
-        if entry.name == "11":
-            raise FileNotFoundError("exited")
-        if entry.name == "12":
+    monkeypatch.setattr(rpc.os, "scandir", lambda _path: nullcontext(entries))
+    calls = []
+    def sid(pid):
+        calls.append(pid)
+        if pid == 11:
             raise ProcessLookupError("exited")
-        return SimpleNamespace(read_text=lambda: "13 (name with ) spaces) S 1 99 10 0")
-    # SimpleNamespace cannot overload '/', so adapt the numeric fixture entries.
-    class Entry:
-        def __init__(self, name):
-            self.name = name
-        def __truediv__(self, name):
-            return stat(self, name)
-    monkeypatch.setattr(Path, "iterdir", lambda _path: [Entry(row.name) for row in entries])
+        return 99 if pid == 12 else 10
+    monkeypatch.setattr(rpc.os, "getsid", sid)
     assert rpc.session_members(10) == [13]
+    assert calls == [11, 12, 13]
+
+
+def test_supervisor_live_members_ignores_disappearing_process_and_parses_comm(monkeypatch):
+    monkeypatch.setattr(rpc, "session_members", lambda _session: [11, 12, 13])
+    def stat(path):
+        if path.parts[-2] == "11":
+            raise FileNotFoundError("exited")
+        if path.parts[-2] == "12":
+            raise ProcessLookupError("exited")
+        return "13 (name with ) spaces) S 1 99 10 0"
+    monkeypatch.setattr(Path, "read_text", stat)
+    assert rpc.live_session_members(10) == [{"pid": 13, "state": "S", "process_group": 99}]
 
 
 def test_supervisor_refuses_missing_subreaper_before_launch(monkeypatch):
