@@ -57,6 +57,10 @@ final _ftruncate = _libc
     .lookupFunction<Int32 Function(Int32, Int64), int Function(int, int)>(
       'ftruncate',
     );
+final _fchmod = _libc
+    .lookupFunction<Int32 Function(Int32, Uint32), int Function(int, int)>(
+      'fchmod',
+    );
 final _unlink = _libc
     .lookupFunction<
       Int32 Function(Int32, Pointer<Utf8>, Int32),
@@ -580,6 +584,49 @@ final class BackupDirectory {
     verifyAnchor();
   }
 
+  /// Offline activation only: one atomic rename of [from] here to [to] in
+  /// [target] on the same filesystem. Without [exchange] it never replaces;
+  /// with it both names must exist and swap, so neither is ever absent.
+  /// Linux renameat2 NOREPLACE=1/EXCHANGE=2, Darwin renameatx_np EXCL=4/SWAP=2.
+  /// [fromPrivate]/[toPrivate] describe the files initially at each name.
+  void renameInto(
+    String from,
+    BackupDirectory target,
+    String to, {
+    bool exchange = false,
+    bool fromPrivate = true,
+    bool toPrivate = true,
+  }) {
+    if (target._closed ||
+        [from, to].any(
+          (name) => p.basename(name) != name || name == '.' || name == '..',
+        )) {
+      _refuse();
+    }
+    verifyAnchor();
+    target.verifyAnchor();
+    final source = metadata(from, private: fromPrivate);
+    final replaced = exchange ? target.metadata(to, private: toPrivate) : null;
+    final flags = exchange ? 2 : (Platform.isMacOS ? 4 : 1);
+    if (_name(
+          from,
+          (f) =>
+              _name(to, (t) => _renameNoReplace(_fd, f, target._fd, t, flags)),
+        ) !=
+        0) {
+      _refuse();
+    }
+    if (target.metadata(to, private: fromPrivate).identity != source.identity ||
+        (replaced != null &&
+            metadata(from, private: toPrivate).identity != replaced.identity)) {
+      _refuse();
+    }
+    sync();
+    if (!identical(target, this)) target.sync();
+    verifyAnchor();
+    target.verifyAnchor();
+  }
+
   void remove(String name) {
     // Validate immediately before unlink; unlinkat never follows the entry.
     metadata(name);
@@ -685,6 +732,14 @@ final class BackupFile {
     } finally {
       calloc.free(buffer);
     }
+  }
+
+  /// Offline activation only: make owner-only the previous live database,
+  /// whose identity the caller has already proved. An untrusted entry is
+  /// never chmod'ed into apparent safety.
+  void restrictToOwner() {
+    if (_closed || _fchmod(_fd, 0x180) != 0) _refuse();
+    if (_metadata(_fd).mode & 0x3f != 0) _refuse();
   }
 
   String get descriptorPath =>

@@ -20,6 +20,7 @@ import 'persistence/schema_migrations.dart';
 import 'persistence/content_history.dart';
 import 'persistence/sqlite_preflight.dart';
 import 'persistence/migration_backups.dart';
+import 'persistence/restore_pending.dart';
 import 'rpc_error.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -60,8 +61,12 @@ class Store implements SqliteSnapshotSource {
   Timer? _privacyProbe;
   Timer? _historyExpiry;
 
+  // An interrupted offline restore refuses before any SQLite file is opened.
   Store.readOnly(this.path)
-    : db = openApplicationDatabase(path, mode: OpenMode.readOnly) {
+    : db = openApplicationDatabase(
+        requireNoPendingRestore(path),
+        mode: OpenMode.readOnly,
+      ) {
     try {
       _checkVersion();
       _privacyMaintenancePending = readSnapshot(
@@ -79,7 +84,7 @@ class Store implements SqliteSnapshotSource {
     }
   }
 
-  Store(this.path) : db = _openForMigrations(path) {
+  Store(this.path) : db = _openForMigrations(requireNoPendingRestore(path)) {
     try {
       // Refuse newer profiles before even changing their journal mode.
       final originalVersion = _checkVersion();

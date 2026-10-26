@@ -76,6 +76,170 @@ compatibility, retain the newer profile separately, and confirm the restored
 profile opens before completing recovery. A SQLite snapshot alone does not
 provide binary/helper-model rollback.
 
+## Offline restore activation
+
+`RestoreActivation` (`lib/src/persistence/restore_activation.dart`) and its
+utility, the restore route of `foresight-service` (`bin/service.dart` with
+`lib/src/persistence/restore_command.dart`), make a verified snapshot the
+profile's live database. `--restore-list` reports candidates with their
+data-loss point; `--restore-activate=S --accept-data-loss=S` must name the same
+snapshot twice (otherwise exit 64, nothing changed); `--restore-recover`
+resolves an interrupted activation. The service's diagnostic-worker and model
+transport routes keep precedence. The route is part of the service source; this
+document does not claim that any installed package has been qualified with
+it.
+
+The route is dispatched after those worker routes and validates its arguments
+and the confirmation first, without loading anything. Then it calls
+`ApplicationRuntimeBootstrap.prepare(DiagnosticHost.service)` once, which
+selects, metadata-checks and initializes the mandatory SQL support image and
+freezes the SQLite mapping before any profile lock or SQLite call. It then
+starts a *transient* logging session for the selected profile: the role the
+service's own `--status`/`--stop` utility modes use, which takes no owner or
+candidate slot. A restore is a utility, not a service profile owner. Without a
+verified selection (an installed `foresight-service` layout, or source-build
+metadata compiled in) it refuses with exit 1 before touching the profile; there
+is no lazy or environment-selected SQL fallback. Logging closes through the
+session's own bounded close. A failure there never changes the utility's
+output or exit status, and when the close reports that an owner must be
+retired, the flushed process exits explicitly with the utility's status.
+
+Activation runs in its own process and takes the real profile lock through
+`acquireServiceProfileLock`; it refuses (exit 75) while a service owns the
+profile, and refuses in a process that hosts an owner. That lock is
+cooperative: every Open Foresight owner takes it, and it is what makes the
+profile offline. Holding it, activation lists the snapshot again (checksum,
+manifest source identity, schema, SQLite integrity). Before changing anything
+it refuses a live profile newer than this build (below) and a profile that
+still records deletion intent (`internal.privacyMaintenancePending` or
+`internal.backupErasurePending`): those snapshots may hold content the user
+deleted, and replacing the live database would drop the intent that erases
+them.
+
+It then switches the live database to the rollback journal and takes a
+write-free `BEGIN EXCLUSIVE`. It does that on a new connection, then repeats
+the schema and deletion-intent checks under the lock. A writer that ignores the
+profile lock and commits between the early checks and the lock is caught and
+refused; the journal mode has changed by then, and Store re-establishes WAL. A
+fresh connection is required: with the SQLite 3.45.1 loaded in these tests, a
+connection that had read in WAL mode still returned its stale cached pages
+after leaving WAL under its own EXCLUSIVE lock, and missed such a commit.
+
+SQLite's locks are a second check, and they prove less than the profile lock.
+The switch fails, and activation refuses with the live database still in WAL
+mode, while another connection is inside a transaction or is a WAL connection
+that has read (rw or ro), because WAL keeps that shared lock until close. An
+idle rollback-journal connection holds no lock and is not detected. Tested with
+3.45.1: after the exchange it still reads the database it opened, now the
+displaced one. Its writes, a switch to WAL and an open write transaction are
+all refused with SQLITE_READONLY_DBMOVED (1032), because the name now holds
+another file. It leaves no journal, even when killed. A connection opened but
+not yet used is not detectable either. The prerequisite therefore stands: stop
+every Open Foresight process, and no other program may keep the profile
+database open.
+
+The quiesce lock on the previous database is held until the names have been
+exchanged, and through any reverse exchange. The staged copy is reserved with
+its own write-free `BEGIN EXCLUSIVE` before the exchange; it is checked to be a
+rollback-journal file first, so no WAL is named after the staged path. Its
+descriptor follows the file through the exchange, so the restored database is
+never unreserved under the live name. Confirmation (identity, schema,
+integrity) runs on that connection, because any other descriptor on the file
+would drop its POSIX locks when closed. The reservation is kept through
+retention of the previous database and marker removal. A connection that
+ignores the profile lock gets SQLITE_BUSY from either database while names
+change; it cannot commit into a restored database that a later failure rolls
+back. `test/restore_activation_test.dart` keeps the original prototype defect
+(a Store writer in the gap left its WAL attached to the restored file) and the
+lost-commit case found in review as regressions.
+
+`restoreCopy` re-verifies the snapshot. Activation writes a durable marker
+(snapshot checksum, previous database identity and schema), moves the prepared
+copy beside the live database, rechecks its checksum and swaps the two names in
+one atomic exchange (Linux `renameat2` `RENAME_EXCHANGE`, Darwin `renameatx_np`
+`RENAME_SWAP`). The live name is never absent. A filesystem without exchange
+refuses before the live name changes. A failed rename, fsync or confirmation
+swaps the names back and removes only the staged copy, which held the live name
+only while reserved. If SQLite files of the restored database already exist, it
+stays live instead and the previous database is retained as below. After
+process death, `--restore-recover` (or the next activation) identifies files by the
+marker. The previous database's identity is always retained; the snapshot copy
+is removed. A marker with nothing staged is resolved, and if the previous
+database was already retained it is found by identity and reported. Anything
+else, or a staged file without a marker, is reported and left untouched. Death
+before staging leaves at most the prepared copy in `application.db.backups`,
+which is a managed restore copy (one copy, seven days, erased with every
+backup) and is replaced by the next activation.
+
+While a staged database or published marker exists, `Store` and
+`Store.readOnly` refuse before any SQLite file is opened
+(`persistence/restore_pending.dart` checks directory names only), so ordinary
+startup cannot open, migrate or clear the profile while the previous database
+is still outside managed erasure. A real service start exits with that refusal.
+Nothing is discarded automatically: the bytes stay until `--restore-recover` (or the
+next activation, which runs recovery first) retains them as below. Activation
+and recovery use their own SQLite connections, not `Store`, so the guard does
+not block them.
+
+The previous database is retained as a managed migration snapshot of the
+restored profile, in `application.db.backups`, under the existing
+`MigrationBackups` names, manifest and owner-only mode. It is listed as a
+candidate, so activating it undoes the restore, and the existing policy applies
+unchanged: at most two snapshots and seven days, and `erase()` on every
+workspace clear or content deletion, with the erasure intent persisted until
+that succeeds. The command reports its name and latest retention time, and
+activation also reports previous profiles its recovery retained
+(`recovered_snapshots`).
+Snapshots taken from the previous database no longer match the restored file's
+identity; the next prune removes them.
+
+Schema compatibility is injected. The command passes this build's
+`Store.schemaVersion`, and no snapshot newer than it is accepted. A live
+profile newer than it is refused too, by Store's own `SqlitePreflight` (page-1
+header and a private copy of any WAL, read-only) before any writable connection
+or journal-mode change: its bytes, journal mode and sidecars stay unchanged.
+For a downgrade, restore with the newer installation that supports the live
+profile, then install the older application; never run an older command against
+a newer live profile. Restoring does not roll
+back the application binary, helper, native runtime or models; the operator
+must install compatible ones. On first open, Store upgrades an older restored
+schema and takes a new pre-upgrade snapshot, which does not evict the retained
+previous profile.
+
+Data-loss point: every change after the snapshot's `created` time leaves the
+active profile and remains only in the displaced snapshot, for at most its
+retention.
+
+Linux tests on btrfs and tmpfs run against the current development source with
+the mandatory SQL support bootstrap: in-process and fixture children through
+the test bootstrap, and the real service and restore command compiled with
+source-build metadata through their production bootstrap. The SQLite they load
+is the system 3.45.1: the Linux native build used links the system library, and
+only macOS verifies the pinned 3.54.1 source id when it loads SQLite. Which
+SQLite a Linux package installs as `lib/libsqlite3.so` was not examined. They
+cover:
+- a real service process refusal (library and command);
+- cross-process readers;
+- idle WAL (rw and ro) and rollback-journal connections;
+- Store, raw SQLite and committing writers before, at and after the exchange
+  and through retention, including a failure injected after a writer at the
+  exchange;
+- writers racing the early schema and deletion-intent checks;
+- newer-live-schema refusal with unchanged bytes and journal mode;
+- pending-erasure refusal;
+- erasure and expiry of the displaced profile through the production Store and
+  `MigrationBackups`;
+- rollback after injected failures at each stage;
+- child-process death at every stage from the quiesce to after the retain
+  rename;
+- Store and real service refusal until recovery;
+- the command itself, including its refusal without a verified runtime
+  selection.
+
+They do not qualify an installed or packaged command or the pinned 3.54.1
+runtime, and they do not inject kernel fsync errors. Darwin exchange, `fchmod`
+and the macOS command require their own qualification.
+
 Linux descriptor-backed snapshot and failure fixtures exercise the production
 Store path. Darwin syscall layout, the descriptor-backed SQLite VFS, the owned
 runtime and actual offline activation require their own Mac qualification. Source review or

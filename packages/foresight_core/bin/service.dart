@@ -8,6 +8,7 @@ import 'package:foresight_core/src/profile_paths.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/service.dart';
 import 'package:foresight_core/src/operations.dart';
+import 'package:foresight_core/src/persistence/restore_command.dart';
 import 'package:foresight_core/src/service_compatibility.dart';
 import 'package:foresight_core/src/service_socket.dart' show probeSocketPath;
 
@@ -44,6 +45,10 @@ Future<void> main(List<String> args) async {
       return;
     }
     await runModelTransportWorker();
+    return;
+  }
+  if (isRestoreInvocation(args)) {
+    await _runRestoreUtility(args);
     return;
   }
   IsolatedApplicationService? service;
@@ -231,6 +236,43 @@ Future<void> main(List<String> args) async {
     await service?.close();
     final result = await diagnostics?.close();
     if (result?.requiresExplicitExit == true) exit(exitCode);
+  }
+}
+
+/// The offline restore utility: transient, never a profile owner or
+/// candidate. Arguments and the data-loss confirmation are validated before
+/// any bootstrap, SQLite or profile access.
+Future<void> _runRestoreUtility(List<String> args) async {
+  final command = RestoreCommand.parse(args, stderr);
+  if (command == null) {
+    exitCode = 64;
+    return;
+  }
+  LoggingSession? diagnostics;
+  try {
+    final runtime = ApplicationRuntimeBootstrap.prepare(DiagnosticHost.service);
+    diagnostics = await runtime.startDiagnostics(transient: true);
+    final profile = ProfilePaths.resolve(runtimeConfiguration.environment);
+    diagnostics.selectProfile(profile.data);
+    exitCode = await runRestoreProfile(command, profile, stdout, stderr);
+  } catch (error) {
+    stderr.writeln('The restore command could not start: $error');
+    exitCode = 1;
+  } finally {
+    // The session's own bounded close; a logging problem never replaces the
+    // utility's result or output.
+    var explicit = false;
+    try {
+      explicit = (await diagnostics?.close())?.requiresExplicitExit == true;
+    } catch (error) {
+      stderr.writeln('Diagnostic logging did not shut down cleanly: $error');
+      explicit = true;
+    }
+    if (explicit) {
+      await stdout.flush();
+      await stderr.flush();
+      exit(exitCode);
+    }
   }
 }
 
