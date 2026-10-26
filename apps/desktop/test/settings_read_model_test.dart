@@ -94,12 +94,18 @@ void main() {
             'digest': digest,
           });
       reader.reply(0, [registration()]);
-      reader.reply(1, '120');
+      final idleQuery = StoreReadQueries.preference('serviceIdleMinutes', '30');
+      final idleIndex = reader.queries.indexWhere(
+        (query) => query.key == idleQuery.key,
+      );
+      expect(idleIndex, greaterThanOrEqualTo(0));
+      reader.reply(idleIndex, '120');
       await Future<void>(() {});
       final published = publications, snapshot = model.models;
       reader.reply(0, [registration()]);
-      reader.reply(1, '120');
-      for (var i = 2; i < 1 + SettingsReadModel.defaults.length; i++) {
+      reader.reply(idleIndex, '120');
+      for (var i = 1; i < 1 + SettingsReadModel.defaults.length; i++) {
+        if (i == idleIndex) continue;
         reader.reply(i, SettingsReadModel.defaults.values.elementAt(i - 1));
       }
       await Future<void>(() {});
@@ -153,7 +159,12 @@ void main() {
       reader.reply(0, [registration], freshness: ReadFreshness.preview);
       expect(model.model('speech'), same(registration));
       expect(model.currentModel('speech'), isNull);
-      reader.reply(1, '120');
+      final idleQuery = StoreReadQueries.preference('serviceIdleMinutes', '30');
+      final idleIndex = reader.queries.indexWhere(
+        (query) => query.key == idleQuery.key,
+      );
+      expect(idleIndex, greaterThanOrEqualTo(0));
+      reader.reply(idleIndex, '120');
       expect(model.preference('serviceIdleMinutes'), '120');
       expect(model.preference('unknown', 'fallback'), 'fallback');
       reader.dataRevision = '2';

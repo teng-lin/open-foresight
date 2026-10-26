@@ -38,7 +38,7 @@ Future<void> mount(
               await save?.call(value);
               update(() => enabled = value);
             },
-            openRelease: openRelease,
+            openRelease: openRelease ?? (_) async {},
           ),
         ),
       ),

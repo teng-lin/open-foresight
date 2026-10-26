@@ -6,16 +6,16 @@ class UpdateNoticeView extends StatefulWidget {
     super.key,
     required this.enabled,
     required this.setEnabled,
+    required this.openRelease,
     this.client,
     this.currentVersion = openForesightVersion,
-    this.openRelease,
   });
 
   final bool enabled;
   final Future<void> Function(bool) setEnabled;
   final UpdateNoticeClient? client;
   final String currentVersion;
-  final Future<void> Function(Uri)? openRelease;
+  final Future<void> Function(Uri) openRelease;
 
   @override
   State<UpdateNoticeView> createState() => _UpdateNoticeViewState();
@@ -105,7 +105,7 @@ class _UpdateNoticeViewState extends State<UpdateNoticeView> {
     final page = _releasePage;
     if (page == null) return;
     try {
-      await (widget.openRelease?.call(page) ?? openPlatformUri(page));
+      await widget.openRelease(page);
     } catch (_) {
       if (mounted)
         setState(

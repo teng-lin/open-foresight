@@ -138,6 +138,7 @@ extension _SettingsView on SettingsController {
         const Text('Updates', style: DesktopVisuals.sectionTitle),
         UpdateNoticeView(
           enabled: _reads.preference('updateNoticeEnabled') == 'true',
+          openRelease: _host.environment.openUri,
           setEnabled: (enabled) => runAction(
             () => preference('updateNoticeEnabled', enabled ? 'true' : 'false'),
           ),
