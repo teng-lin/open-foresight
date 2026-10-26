@@ -1,4 +1,6 @@
 import 'preference_entities.dart';
+import '../platform_services.dart'
+    show RuntimeConfiguration, currentOwnerRuntimeSnapshot;
 import 'dart:convert';
 import 'source_contents.dart';
 import 'package:sqlite3/sqlite3.dart';
@@ -11,7 +13,15 @@ import 'read_schema_guard.dart';
 class SourceQueries {
   final Database db;
   final int supportedVersion;
-  SourceQueries(this.db, {required this.supportedVersion});
+
+  /// An explicit or bound owner snapshot, fixed at construction (an editable
+  /// boundary passed here is frozen); null outside any owner scope.
+  final RuntimeConfiguration? configuration;
+  SourceQueries(
+    this.db, {
+    required this.supportedVersion,
+    RuntimeConfiguration? configuration,
+  }) : configuration = configuration?.snapshot() ?? currentOwnerRuntimeSnapshot;
   T _read<T>(T Function() read) =>
       readSnapshot(db, read, supportedVersion: supportedVersion);
   List<Map<String, Object?>> _rows(
@@ -86,8 +96,11 @@ class SourceQueries {
     for (final row in _rows('SELECT source_id,mime FROM google_sources'))
       row['source_id'] as String: row['mime'] as String,
   };
-  ModelQueries get _models =>
-      ModelQueries(db, supportedVersion: supportedVersion);
+  ModelQueries get _models => ModelQueries(
+    db,
+    supportedVersion: supportedVersion,
+    configuration: configuration,
+  );
   ModelRegistration? model(String kind) => _read(() {
     final row = _models.model(kind);
     return row == null ? null : ModelRegistration.fromRow(row);

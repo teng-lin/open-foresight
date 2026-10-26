@@ -15,7 +15,16 @@ const modelRuntimeResources = {
 class ModelQueries {
   final Database db;
   final int supportedVersion;
-  ModelQueries(this.db, {required this.supportedVersion});
+
+  /// The owner's immutable snapshot (explicit or bound at construction); null
+  /// outside any owner scope, e.g. reader-isolate projections and legacy
+  /// direct construction, which read the boundary at use.
+  final RuntimeConfiguration? configuration;
+  ModelQueries(
+    this.db, {
+    required this.supportedVersion,
+    RuntimeConfiguration? configuration,
+  }) : configuration = configuration?.snapshot() ?? currentOwnerRuntimeSnapshot;
   List<Map<String, Object?>> _rows(
     String sql, [
     List<Object?> args = const [],
@@ -34,11 +43,12 @@ class ModelQueries {
           as String? ??
       fallback;
   String? ownedRuntime(String resource) {
-    final root = runtimeConfiguration['FORESIGHT_INSTALL_ROOT'];
+    final config = configuration ?? legacyRuntimeSnapshot();
+    final root = config['FORESIGHT_INSTALL_ROOT'];
     final path =
-        runtimeConfiguration[resource] ??
+        config[resource] ??
         (resource == 'FORESIGHT_QUERY_RUNTIME'
-            ? runtimeConfiguration['FORESIGHT_LITERT_PYTHON']
+            ? config['FORESIGHT_LITERT_PYTHON']
             : null);
     if (root == null || path == null) return null;
     try {

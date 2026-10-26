@@ -10,6 +10,10 @@ import 'package:foresight_core/src/application_services/service_runtime_ports.da
 import 'package:foresight_core/src/audio_devices.dart';
 import 'package:foresight_core/src/dedicated_query_terms.dart';
 import 'package:foresight_core/src/domain.dart';
+import 'package:foresight_core/src/model_acquisition.dart';
+import 'package:foresight_core/src/model_catalog.dart';
+import 'package:foresight_core/src/persistence/model_store.dart';
+import 'package:foresight_core/src/persistence/source_queries.dart';
 import 'package:foresight_core/src/helper.dart';
 import 'package:foresight_core/src/platform_services.dart';
 import 'package:foresight_core/src/profile_paths.dart';
@@ -72,6 +76,24 @@ Future<Map<String, Object?>> _nativeProfileSelection(
     return {'ok': false, 'missingLegacyLibrary': '$error'.contains(missing)};
   }
 }
+
+/// An installed bundle with an executable speech runner, as relocated
+/// packaged installs present it to model provenance.
+({String root, String speech}) _installedApp(Directory directory, String name) {
+  final root = '${directory.path}/$name';
+  final speech = '$root/Contents/Resources/bin/whisper-cli';
+  File(speech)
+    ..createSync(recursive: true)
+    ..writeAsStringSync('#!/bin/sh\n');
+  expect(Process.runSync('/bin/chmod', ['700', speech]).exitCode, 0);
+  return (root: root, speech: File(speech).resolveSymbolicLinksSync());
+}
+
+RuntimeConfiguration _appConfiguration(({String root, String speech}) app) =>
+    RuntimeConfiguration({
+      'FORESIGHT_INSTALL_ROOT': app.root,
+      'FORESIGHT_WHISPER_RUNTIME': app.speech,
+    });
 
 void main() {
   bootstrapSqlSupportFixture();
@@ -781,5 +803,215 @@ void main() {
       handoff['FORESIGHT_X'] = 'changed';
       expect(bound.environment, {'FORESIGHT_X': 'x'});
     });
+  });
+
+  group('owner snapshots in storage and transport', () {
+    test('a store built in scope keeps its owned runtime view', () async {
+      final old = _installedApp(root, 'Old App.app');
+      final moved = _installedApp(root, 'Moved App.app');
+      final asset = File('${root.path}/model.bin')..writeAsStringSync('model');
+      final database = '${root.path}/application.db';
+      installRuntimeConfiguration(RuntimeConfiguration({}));
+      final store = runWithRuntimeConfiguration(
+        _appConfiguration(old),
+        () => Store(database),
+      );
+      // After scope exit the legacy boundary names a different installation.
+      runtimeConfiguration.environment['FORESIGHT_INSTALL_ROOT'] = moved.root;
+      runtimeConfiguration.environment['FORESIGHT_WHISPER_RUNTIME'] =
+          moved.speech;
+      await store.register('speech', asset.path, old.speech);
+      expect(store.preference('modelRuntimeResource.speech'), isNotEmpty);
+      expect(store.model('speech')!['runtime'], old.speech);
+      expect(store.sourceQueries.model('speech')!.runtime, old.speech);
+      expect(store.configuration!.isSnapshot, isTrue);
+      expect(
+        () => store.configuration!.environment['FORESIGHT_INSTALL_ROOT'] = '/',
+        throwsUnsupportedError,
+      );
+      store.close();
+
+      // A relocated owner resolves the recorded provenance through its own
+      // snapshot, whatever the boundary says after its scope has exited.
+      final relocated = runWithRuntimeConfiguration(
+        _appConfiguration(moved),
+        () => Store(database),
+      );
+      addTearDown(relocated.close);
+      installRuntimeConfiguration(_appConfiguration(old));
+      runtimeConfiguration.environment.remove('FORESIGHT_INSTALL_ROOT');
+      expect(relocated.model('speech')!['runtime'], moved.speech);
+      expect(relocated.sourceQueries.model('speech')!.runtime, moved.speech);
+      expect(relocated.models.single['runtime'], moved.speech);
+    });
+
+    test(
+      'an unowned registration stays unowned under any later boundary',
+      () async {
+        final app = _installedApp(root, 'Installed.app');
+        final external = _installedApp(root, 'External.app');
+        final asset = File('${root.path}/model.bin')
+          ..writeAsStringSync('model');
+        installRuntimeConfiguration(_appConfiguration(app));
+        final store = runWithRuntimeConfiguration(
+          _appConfiguration(app),
+          () => Store('${root.path}/application.db'),
+        );
+        addTearDown(store.close);
+        // The legacy boundary is edited to claim the external runner, but the
+        // owner's snapshot does not own it, so no provenance is recorded.
+        runtimeConfiguration.environment['FORESIGHT_WHISPER_RUNTIME'] =
+            external.speech;
+        runtimeConfiguration.environment['FORESIGHT_INSTALL_ROOT'] =
+            external.root;
+        await store.register('speech', asset.path, external.speech);
+        expect(store.preference('modelRuntimeResource.speech'), isEmpty);
+        expect(store.model('speech')!['runtime'], external.speech);
+      },
+    );
+
+    test(
+      'explicit editable boundaries are frozen; legacy reads stay live',
+      () async {
+        final old = _installedApp(root, 'Old App.app');
+        final moved = _installedApp(root, 'Moved App.app');
+        final asset = File('${root.path}/model.bin')
+          ..writeAsStringSync('model');
+        installRuntimeConfiguration(_appConfiguration(old));
+        final store = Store('${root.path}/application.db');
+        addTearDown(store.close);
+        // Outside any scope the store reads the boundary at use, as before.
+        expect(store.configuration, isNull);
+        await store.register('speech', asset.path, old.speech);
+        expect(store.preference('modelRuntimeResource.speech'), isNotEmpty);
+
+        installRuntimeConfiguration(_appConfiguration(moved));
+        final explicitStore = Store(
+          '${root.path}/application.db',
+          configuration: runtimeConfiguration,
+        );
+        addTearDown(explicitStore.close);
+        final models = ModelStore(
+          store.db,
+          supportedVersion: Store.schemaVersion,
+          configuration: runtimeConfiguration,
+        );
+        final sources = SourceQueries(
+          store.db,
+          supportedVersion: Store.schemaVersion,
+          configuration: runtimeConfiguration,
+        );
+        final legacy = SourceQueries(
+          store.db,
+          supportedVersion: Store.schemaVersion,
+        );
+        expect(legacy.configuration, isNull);
+        expect(legacy.model('speech')!.runtime, moved.speech);
+        // Editing the boundary in place reaches only the legacy readers.
+        runtimeConfiguration.environment.remove('FORESIGHT_INSTALL_ROOT');
+        expect(explicitStore.model('speech')!['runtime'], moved.speech);
+        expect(models.model('speech')!['runtime'], moved.speech);
+        expect(sources.model('speech')!.runtime, moved.speech);
+        for (final captured in [
+          explicitStore.configuration!,
+          models.configuration!,
+          sources.configuration!,
+        ]) {
+          expect(captured.isSnapshot, isTrue);
+          expect(
+            () => captured.environment['FORESIGHT_INSTALL_ROOT'] = '/',
+            throwsUnsupportedError,
+          );
+        }
+        expect(legacy.model('speech')!.runtime, old.speech);
+        expect(store.model('speech')!['runtime'], old.speech);
+      },
+    );
+
+    test(
+      'model transport launches the service its owner scope installed',
+      () async {
+        final installed = Directory('${root.path}/installed')..createSync();
+        final service = _script(installed, 'foresight-service', 'exit 1');
+        final other = Directory('${root.path}/other')..createSync();
+        final outside = _script(other, 'foresight-service', 'exit 1');
+        final model = GemmaModel(
+          'fixture',
+          'fixture/model',
+          'revision',
+          'fixture.bin',
+          'a' * 64,
+          1,
+          0,
+        );
+        final commands = <List<String>>[];
+        PublicModelFileDownloader downloader() => PublicModelFileDownloader(
+          retryPolicy: ModelDownloadRetryPolicy(
+            maxAttempts: 1,
+            delay: (_) => Duration.zero,
+          ),
+          startWorkerForTesting: (command) async {
+            commands.add(command);
+            throw const ProcessException('fixture-worker', []);
+          },
+        );
+        // The legacy boundary installs elsewhere and names its own service.
+        installRuntimeConfiguration(
+          RuntimeConfiguration({
+            'FORESIGHT_INSTALL_ROOT': other.path,
+            'FORESIGHT_SERVICE': outside.path,
+          }),
+        );
+        final scoped = downloader();
+        addTearDown(scoped.cancel);
+        await expectLater(
+          runWithRuntimeConfiguration(
+            RuntimeConfiguration({
+              'FORESIGHT_INSTALL_ROOT': installed.path,
+              'FORESIGHT_SERVICE': service.path,
+            }),
+            () => scoped.download(model, Directory('${root.path}/cache')),
+          ),
+          throwsA(
+            isA<ModelTransportException>().having(
+              (error) => error.failureType,
+              'failureType',
+              'worker_start',
+            ),
+          ),
+        );
+        // The owner's service is selected and validated against its own root.
+        expect(commands, [
+          [service.resolveSymbolicLinksSync(), '--model-transport-worker'],
+        ]);
+        // Outside any scope the boundary is still read at use.
+        final legacy = downloader();
+        addTearDown(legacy.cancel);
+        await expectLater(
+          legacy.download(model, Directory('${root.path}/cache')),
+          throwsA(isA<ModelTransportException>()),
+        );
+        expect(commands.last, [
+          outside.resolveSymbolicLinksSync(),
+          '--model-transport-worker',
+        ]);
+        // An in-place boundary edit reaches the next legacy launch: its service
+        // is now outside the boundary's installation, so nothing is launched.
+        runtimeConfiguration.environment['FORESIGHT_SERVICE'] = service.path;
+        final denied = downloader();
+        addTearDown(denied.cancel);
+        await expectLater(
+          denied.download(model, Directory('${root.path}/cache')),
+          throwsA(
+            isA<ModelTransportException>().having(
+              (error) => error.failureType,
+              'failureType',
+              'worker_unavailable',
+            ),
+          ),
+        );
+        expect(commands, hasLength(2));
+      },
+    );
   });
 }

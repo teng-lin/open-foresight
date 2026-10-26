@@ -28,6 +28,8 @@ import 'dart:io';
 import 'graph_labels.dart';
 import 'dart:math' show Random;
 import 'persistence/sqlite_runtime.dart';
+import 'platform_services.dart'
+    show RuntimeConfiguration, currentOwnerRuntimeSnapshot;
 
 /// Linux application schema, independently versioned from helper databases.
 class Store implements SqliteSnapshotSource {
@@ -61,9 +63,15 @@ class Store implements SqliteSnapshotSource {
   Timer? _privacyProbe;
   Timer? _historyExpiry;
 
+  /// An explicit or bound owner snapshot, fixed at construction; null for a
+  /// store built outside any owner scope, whose model queries read the
+  /// boundary at use as before.
+  final RuntimeConfiguration? configuration;
+
   // An interrupted offline restore refuses before any SQLite file is opened.
-  Store.readOnly(this.path)
-    : db = openApplicationDatabase(
+  Store.readOnly(this.path, {RuntimeConfiguration? configuration})
+    : configuration = configuration?.snapshot() ?? currentOwnerRuntimeSnapshot,
+      db = openApplicationDatabase(
         requireNoPendingRestore(path),
         mode: OpenMode.readOnly,
       ) {
@@ -84,7 +92,9 @@ class Store implements SqliteSnapshotSource {
     }
   }
 
-  Store(this.path) : db = _openForMigrations(requireNoPendingRestore(path)) {
+  Store(this.path, {RuntimeConfiguration? configuration})
+    : configuration = configuration?.snapshot() ?? currentOwnerRuntimeSnapshot,
+      db = _openForMigrations(requireNoPendingRestore(path)) {
     try {
       // Refuse newer profiles before even changing their journal mode.
       final originalVersion = _checkVersion();
@@ -349,8 +359,11 @@ class Store implements SqliteSnapshotSource {
     String sql, [
     List<Object?> args = const [],
   ]) => db.select(sql, args).map((r) => Map<String, Object?>.from(r)).toList();
-  SourceQueries get sourceQueries =>
-      SourceQueries(db, supportedVersion: schemaVersion);
+  SourceQueries get sourceQueries => SourceQueries(
+    db,
+    supportedVersion: schemaVersion,
+    configuration: configuration,
+  );
   List<Map<String, Object?>> get sources => sourceQueries
       .sources()
       .map((source) => Map<String, Object?>.from(source.toRow()))
@@ -488,7 +501,11 @@ class Store implements SqliteSnapshotSource {
   }) => _requestKeys.writeOnce(key, operation, write, arguments: arguments);
   void _pruneRequestKeys() => _requestKeys.prune();
 
-  ModelStore get _modelStore => ModelStore(db, supportedVersion: schemaVersion);
+  ModelStore get _modelStore => ModelStore(
+    db,
+    supportedVersion: schemaVersion,
+    configuration: configuration,
+  );
   Map<String, Object?> resolveModelRuntime(Map<String, Object?> model) =>
       _modelStore.resolveModelRuntime(model);
   Map<String, Object?>? model(String kind) => _modelStore.model(kind);
