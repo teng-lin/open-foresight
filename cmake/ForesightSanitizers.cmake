@@ -26,6 +26,7 @@ if(FORESIGHT_SANITIZERS OR FORESIGHT_THREAD_SANITIZER)
     # The diagnostic launcher intentionally replaces the child's environment.
     # Shared sanitizer runtimes must remain resolvable without LD_LIBRARY_PATH.
     execute_process(COMMAND "${CMAKE_CXX_COMPILER}" --print-runtime-dir
+      TIMEOUT 30
       RESULT_VARIABLE _fs_runtime_result
       OUTPUT_VARIABLE _fs_runtime_directory OUTPUT_STRIP_TRAILING_WHITESPACE)
     if(NOT _fs_runtime_result EQUAL 0 OR NOT IS_ABSOLUTE "${_fs_runtime_directory}"
