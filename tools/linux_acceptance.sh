@@ -48,7 +48,7 @@ if [[ "$task_suite" == audio && "${VIRTUAL_AUDIO_SELECTED:-true}" == true ]]; th
   python tools/prepare_audio_handoff.py --sdk-image "$SDK_IMAGE" --output "$task_audio_control"
   task_audio_volume=$(docker volume create)
   trap 'docker volume rm "$task_audio_volume" >/dev/null' EXIT
-  docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+  docker run --rm --network none --cap-drop ALL --cap-add CHOWN --security-opt no-new-privileges \
     -v "$task_audio_volume:/src" -v "$AUDIO_HANDOFF_DIRECTORY:/handoff:ro" \
     -v "$task_audio_control:/control:ro" -w / \
     -v "$PWD/tools/ci_linux_handoff.py:/handoff-control/tools/ci_linux_handoff.py:ro" \
@@ -73,7 +73,8 @@ else
     --allow-litert-unavailable --bundle dist/open-foresight --models /models --output /reports/software-gpu || task_status=$?
   fi
   if [[ "${VIRTUAL_AUDIO_SELECTED:-true}" == true ]]; then
-  docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+  docker run --rm --network none --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID \
+    --security-opt no-new-privileges \
     -v "$task_audio_volume:/src" -v "$PWD/build/portable/dist/open-foresight:/portable:ro" \
     -v "$PWD/build/acceptance-models:/models:ro" \
     -v "$PWD/test-results/acceptance-$task_suite:/reports" \
