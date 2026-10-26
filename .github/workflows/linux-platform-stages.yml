@@ -134,6 +134,7 @@ jobs:
         env:
           FORESIGHT_COVERAGE: ${{ inputs.core_coverage_benchmark && '1' || '0' }}
           FORESIGHT_CORE_COVERAGE_MIN: '90'
+          FORESIGHT_CORE_TEST_CONCURRENCY: '2'
           GH_TOKEN: ${{ github.token }}
           STAGE_EVENT: ${{ inputs.event }}
           OWN_PR: ${{ inputs.own_pr }}

@@ -107,6 +107,8 @@ jobs:
           .venv/bin/python tools/ci_native_work.py --own-pr "$OWN_PR" \
             --output test-results/arch/native-work.json -- -G Ninja
       - name: Build and test with the current Arch toolchain
+        env:
+          FORESIGHT_CORE_TEST_CONCURRENCY: '2'
         run: .venv/bin/python tools/run_ci_user.py --workspace "$GITHUB_WORKSPACE" -- xvfb-run -a dbus-run-session -- bash tools/build.sh --platform linux -G Ninja
       - name: Record actual scheduled retained Arch closure after validation
         if: github.event_name == 'schedule' && github.ref == 'refs/heads/main'
