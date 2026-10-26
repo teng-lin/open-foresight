@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import stat
 import sys
+import tempfile
 from types import SimpleNamespace
 
 import pytest
@@ -19,9 +20,16 @@ user = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(user)
 
 
+@pytest.fixture
+def owner_root():
+    with tempfile.TemporaryDirectory(prefix="of-ci-owner-", dir="/var/tmp") as root:
+        yield Path(root)
+
+
 def test_owner_is_derived_from_ancestors_even_when_checkout_is_root(
-    tmp_path, monkeypatch
+    owner_root, monkeypatch
 ):
+    tmp_path = owner_root
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     original = Path.lstat
@@ -40,8 +48,9 @@ def test_owner_is_derived_from_ancestors_even_when_checkout_is_root(
 
 @pytest.mark.parametrize("case", ["root", "group", "mixed", "writable"])
 def test_unsafe_or_ambiguous_workspace_fails_before_mutation(
-    tmp_path, monkeypatch, case
+    owner_root, monkeypatch, case
 ):
+    tmp_path = owner_root
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     original = Path.lstat
@@ -49,7 +58,7 @@ def test_unsafe_or_ambiguous_workspace_fails_before_mutation(
     def metadata(path):
         info = original(path)
         uid = 1234 if path in (tmp_path, workspace) else 0
-        gid = 2345
+        gid = 2345 if path in (tmp_path, workspace) else 0
         mode = info.st_mode
         if case == "root":
             uid = 0
@@ -62,7 +71,13 @@ def test_unsafe_or_ambiguous_workspace_fails_before_mutation(
         return SimpleNamespace(st_mode=mode, st_uid=uid, st_gid=gid)
 
     monkeypatch.setattr(Path, "lstat", metadata)
-    with pytest.raises(ValueError):
+    reason = {
+        "root": "non-root owner",
+        "group": "primary group",
+        "mixed": "mixed non-root owners",
+        "writable": "unsafe write permissions",
+    }[case]
+    with pytest.raises(ValueError, match=reason):
         user.workspace_owner(workspace)
 
 
@@ -257,6 +272,23 @@ def test_all_runtime_consumers_drop_before_display_or_dbus_and_native_stays_root
         )
     native = workflow["jobs"]["native-linux"]["steps"]
     assert not any("run_ci_user.py" in s.get("run", "") for s in native)
+    fast = next(
+        s
+        for s in workflow["jobs"]["desktop-linux"]["steps"]
+        if s.get("name")
+        == "Fresh fast integration against the current native prerequisite"
+    )
+    assert 'FORESIGHT_TEST_SQL_SUPPORT_LIBRARY="$GITHUB_WORKSPACE/' in fast["run"]
+    assert "${{ github.workspace }}" not in fast["run"]
+    drift = yaml.safe_load((ROOT / ".github/workflows/arch-drift.yml").read_text())
+    drift_gates = [
+        s["run"]
+        for s in drift["jobs"]["arch"]["steps"]
+        if "xvfb-run" in s.get("run", "")
+    ]
+    assert drift_gates and all(
+        s.index("run_ci_user.py") < s.index("xvfb-run") for s in drift_gates
+    )
     action = yaml.safe_load(
         (ROOT / ".github/actions/setup-linux-stage/action.yml").read_text()
     )
@@ -270,6 +302,7 @@ def test_all_runtime_consumers_drop_before_display_or_dbus_and_native_stays_root
 
 def test_wrapper_bytes_and_mode_participate_in_existing_stage_identity(tmp_path):
     import subprocess
+
     cache = importlib.import_module("tools.ci_native_cache")
 
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, timeout=15)

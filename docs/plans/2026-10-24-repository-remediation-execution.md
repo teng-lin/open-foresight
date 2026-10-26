@@ -1270,3 +1270,44 @@ full failure remains in `/var/tmp/of-pypost-sdk/`; follow-up results are in
 `/var/tmp/of-ci-eba/`. Native peers and Claude CLI reviewed the public changes;
 the repaired pushed head still requires its complete hosted coverage and
 platform gates, plus the owner review described above.
+
+The later hosted core job on `c0a2705f` finished **2,815 passed / 70 failed /
+19 skipped**, without a qualifying coverage result. Most failures reached the
+unchanged startup directory policy before loading native support: container root
+was foreign to the workspace owner, and ordinary Dart temporary directories were
+0755. Root also bypassed the unwritable-profile permission fixture. Controlled
+probes on the same application paths reproduced root refusal versus workspace-UID
+selection, root write access versus non-root denial, and rejection of a 0755
+temporary boundary versus acceptance after changing only that boundary to 0700.
+Actual hosted workspace ownership was not inferred from those synthetic paths;
+the execution wrapper derives it from real ancestor metadata at invocation.
+
+Linux runtime consumers now run as that non-root owner with a private 0700
+temporary boundary, home and XDG directories. The wrapper precedes Xvfb and DBus,
+preserves build umask, artifact bytes and file modes, and changes ownership only
+inside the job workspace and verified Flutter working cache. It neither changes
+shared workspace ancestors nor copies credentials. Managed Python uses a readable
+prefix with its existing version. Core, desktop, service, fast and Arch-drift
+entry points use the same wrapper. Its bytes and mode already participate in all
+stage cache identities through the existing input graph; no selector, publishing
+permission or SDK identity was changed.
+
+Two successive controlled Arch-container wrapper invocations passed with UID
+1001, no supplementary groups, actual Dart 3.9.2 and Xvfb/DBus, private-directory
+checks, denied writes to a mode-0500 fixture, unchanged artifact bytes/mode and an
+untouched symlink target. Seventeen new and sixty-three existing checks passed;
+the merged follow-up then passed **274 tests / 101 subtests / zero skips**, Ruff,
+mypy, timeout checks and matched workflow lint. The isolated fast gate separately
+changed from two SQL-library load failures to **2/2 passing** with the current
+native prerequisite. All three Git-free packaging contexts passed **33/33**;
+their original public bytes and modes were restored and verified afterward.
+
+One queue fixture now uses the existing bounded readiness helper after observing
+two priority records, since priority drain does not imply normal credit recovery.
+Its old-image and final-flush assertions remain; all ten module tests passed with
+clean analysis and formatting. The hosted race is retained, while the original
+isolated local test passed; no deterministic local reproduction is claimed.
+These are execution and fixture repairs, not a claim that the new hosted core
+run, complete Python coverage or merge has already passed. Evidence is retained
+under `/var/tmp/of-ci-user/`, `/var/tmp/of-ci-final/`,
+`/var/tmp/of-fin/uid-selection-probe/` and `/var/tmp/of-native-queue-sync/`.
