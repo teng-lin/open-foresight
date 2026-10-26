@@ -14,6 +14,7 @@ export 'application.dart' show Foresight, Workspace, WorkspaceTestAccess;
 
 ApplicationRuntimeBootstrap? _desktopRuntime;
 LoggingSession? _desktopDiagnostics;
+final _desktopDiagnosticSupport = LocalDiagnosticSupport.platform();
 Future<void>? _quittingDesktop;
 
 Future<void> _prepareDesktopRuntime() async {
@@ -21,6 +22,7 @@ Future<void> _prepareDesktopRuntime() async {
     DiagnosticHost.desktop,
   );
   _desktopDiagnostics ??= await runtime.startDiagnostics();
+  _desktopDiagnosticSupport.attachSession(_desktopDiagnostics!);
 }
 
 Future<void> main([List<String> arguments = const []]) async {
@@ -41,7 +43,9 @@ Future<void> main([List<String> arguments = const []]) async {
   runApp(
     DesktopStartup(
       arguments: arguments,
-      environment: DesktopEnvironment.production(),
+      environment: DesktopEnvironment.production().withDiagnosticSupport(
+        _desktopDiagnosticSupport,
+      ),
       prepareRuntime: _prepareDesktopRuntime,
       bootstrapFailure: bootstrapFailure,
     ),
@@ -119,6 +123,7 @@ class _DesktopStartupState extends State<DesktopStartup> {
       privateRuntime(profile);
       widget.configureRuntime(profile.data);
       _desktopDiagnostics?.selectProfile(profile.data);
+      _desktopDiagnosticSupport.selectProfile(profile);
       final commandPath = '${profile.runtime}/commands.sock';
       final authUrl = widget.arguments
           .where(
