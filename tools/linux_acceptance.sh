@@ -79,8 +79,10 @@ else
     -v "$PWD/build/acceptance-models:/models:ro" \
     -v "$PWD/test-results/acceptance-$task_suite:/reports" \
     -v "$PWD/tools/run_ci_user.py:/run-ci-user.py:ro" \
+    -v "$PWD/tools/prepare_flutter_consumer.py:/prepare-flutter-consumer.py:ro" \
     -e PUB_CACHE=/src/.pub-cache \
-    foresight-acceptance:local python3 /run-ci-user.py --workspace /src --flutter-root /opt/flutter -- \
+    foresight-acceptance:local python3 /prepare-flutter-consumer.py --workspace /src --flutter-root /opt/flutter -- \
+    python3 /run-ci-user.py --workspace /src --flutter-root /opt/flutter -- \
     dbus-run-session -- python3 tools/integration_gates.py \
     --suite virtual-audio --bundle /portable --models /models --output /reports/virtual-audio || task_status=$?
   fi
