@@ -89,7 +89,8 @@ def diagnostic_products(build, sdk):
     (native / "diagnostic-worker-inputs.json").write_bytes(b'{"synthetic":"context"}\n')
     dart = sdk / "bin/dart"
     dart.parent.mkdir(parents=True)
-    dart.write_bytes(b"synthetic executable path")
+    dart.write_text(f"#!{sys.executable}\nprint({str(dart)!r})\n")
+    dart.chmod(0o755)
     which = support.shutil.which
 
     def select(name, *args, **kwargs):

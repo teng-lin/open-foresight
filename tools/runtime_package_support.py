@@ -14,6 +14,9 @@ import os
 import shutil
 from pathlib import Path
 import stat
+import subprocess
+import sys
+import tempfile
 from typing import Any
 
 try:
@@ -244,7 +247,40 @@ def prepare_worker(root: Path, build: Path) -> PreparedWorker:
     dart = shutil.which("dart")
     if dart is None:
         raise PackageSupportError("missing_worker_verification_sdk")
-    sdk = Path(dart).resolve().parent.parent
+    # Flutter's bin/dart is a launcher, not the VM inside bin/cache/dart-sdk.
+    # Probe the selected command outside the application's package graph, just
+    # as the compiler gate does, then retain all existing ownership/ID checks.
+    with tempfile.TemporaryDirectory(prefix="fs-dart-", dir="/var/tmp") as temporary:
+        probe = Path(temporary) / "locate.dart"
+        probe.write_text(
+            "import 'dart:io';\n"
+            "void main() => stdout.writeln(Platform.resolvedExecutable);\n"
+        )
+        try:
+            result = subprocess.run(
+                [str(Path(dart).absolute()), str(probe)],
+                cwd=temporary,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as error:
+            for output in (error.stdout, error.stderr):
+                if output:
+                    sys.stderr.write(
+                        output.decode(errors="replace")
+                        if isinstance(output, bytes)
+                        else output
+                    )
+            raise
+        if result.returncode:
+            sys.stderr.write(result.stdout + result.stderr)
+            raise PackageSupportError("worker_verification_sdk_probe_failed")
+        executable = Path(result.stdout.strip())
+        if not executable.is_absolute() or not executable.is_file():
+            raise PackageSupportError("invalid_worker_verification_sdk")
+        sdk = executable.resolve(strict=True).parent.parent
     receipt = _verify_worker(root, build, sdk)
     artifact = receipt["artifact"]
     if (

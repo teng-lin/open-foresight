@@ -2,6 +2,9 @@
 
 from copy import deepcopy
 import json
+import sys
+import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -194,7 +197,8 @@ def worker_build(tmp_path, monkeypatch):
     )
     dart = tmp_path / "sdk/bin/dart"
     dart.parent.mkdir(parents=True)
-    dart.write_bytes(b"synthetic executable path")
+    dart.write_text(f"#!{sys.executable}\nprint({str(dart)!r})\n")
+    dart.chmod(0o755)
     monkeypatch.setattr(package.shutil, "which", lambda name: str(dart))
 
     def verify(root, actual_build, sdk):
@@ -243,3 +247,79 @@ def test_worker_changed_staged_bytes_refuse_unmodified_seal(worker_build, tmp_pa
         package.PackageSupportError, match="package_worker_copy_changed"
     ):
         package.seal_worker(payload, prepared, transformed=False)
+
+
+def test_worker_verification_probes_selected_flutter_launcher(
+    worker_build, tmp_path, monkeypatch
+):
+    source, build, receipt = worker_build
+    vm = tmp_path / "sdk/bin/dart"
+    launcher = tmp_path / "flutter/bin/dart"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text(f"#!{sys.executable}\nprint({str(vm)!r})\n")
+    launcher.chmod(0o755)
+    monkeypatch.setattr(package.shutil, "which", lambda _name: str(launcher))
+    # The fixture's verifier still requires the exact VM SDK, not flutter/.
+    prepared = package.prepare_worker(source, build)
+    assert prepared.receipt == receipt
+
+
+@pytest.mark.parametrize("response", ["relative/bin/dart", "/missing-vm/bin/dart"])
+def test_worker_sdk_probe_refuses_invalid_response_before_receipt(
+    worker_build, monkeypatch, response
+):
+    source, build, _ = worker_build
+
+    def run(arguments, **options):
+        from pathlib import Path
+
+        probe = Path(arguments[1])
+        assert (
+            probe.read_text()
+            == "import 'dart:io';\nvoid main() => stdout.writeln(Platform.resolvedExecutable);\n"
+        )
+        assert str(probe.parent).startswith("/var/tmp/fs-dart-")
+        assert probe.parent.stat().st_mode & 0o777 == 0o700
+        assert options == {
+            "cwd": str(probe.parent),
+            "capture_output": True,
+            "text": True,
+            "timeout": 30,
+            "check": False,
+        }
+        return SimpleNamespace(returncode=0, stdout=response, stderr="")
+
+    monkeypatch.setattr(package.subprocess, "run", run)
+    monkeypatch.setattr(
+        package,
+        "_verify_worker",
+        lambda *_: pytest.fail("receipt verification preceded valid SDK"),
+    )
+    with pytest.raises(
+        package.PackageSupportError, match="invalid_worker_verification_sdk"
+    ):
+        package.prepare_worker(source, build)
+
+
+@pytest.mark.parametrize("timeout", [False, True])
+def test_worker_sdk_probe_retains_failed_subprocess_output(
+    worker_build, monkeypatch, capsys, timeout
+):
+    source, build, _ = worker_build
+
+    def run(arguments, **options):
+        assert options["timeout"] == 30
+        if timeout:
+            raise subprocess.TimeoutExpired(
+                arguments, 30, output=b"probe stdout", stderr=b"probe stderr"
+            )
+        return SimpleNamespace(
+            returncode=7, stdout="probe stdout", stderr="probe stderr"
+        )
+
+    monkeypatch.setattr(package.subprocess, "run", run)
+    with pytest.raises(
+        subprocess.TimeoutExpired if timeout else package.PackageSupportError
+    ):
+        package.prepare_worker(source, build)
+    assert capsys.readouterr().err == "probe stdoutprobe stderr"
