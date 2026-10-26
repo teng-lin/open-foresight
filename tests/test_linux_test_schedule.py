@@ -70,9 +70,12 @@ if os.getenv('CANCEL_MODE')=='1' and name=='core':
     time.sleep(60)
 if os.getenv('FAIL_STAGE')==name:raise SystemExit(7)
 if not os.getenv('FAIL_STAGE') and os.getenv('REQUIRE_RESTORE')!='1':
-    if name=='core':wait('fast.done')
-    if name=='host':
-        wait('core.started');wait('desktop.started')
+    if name=='core':
+        assert not (root/'desktop.started').exists()
+        assert not (root/'host.started').exists()
+    if name in ['desktop','host']:
+        assert (root/'core.done').exists()
+        wait('host.started' if name=='desktop' else 'desktop.started')
 if name=='fast' and os.getenv('REQUIRE_RESTORE')!='1':assert (root/'desktop.done').exists()
 if name=='service':
     for other in ['core','desktop','fast','host']:assert (root/(other+'.done')).exists()
@@ -104,7 +107,7 @@ def run(runner, failure=""):
     return root, result
 
 
-def test_core_desktop_fast_and_host_overlap_without_flutter_collision(runner):
+def test_core_isolated_then_desktop_and_host_overlap_without_flutter_collision(runner):
     root, result = run(runner)
     assert result.returncode == 0, result.stdout + result.stderr
     for name in ("native", "core", "desktop", "fast", "host", "service"):
@@ -136,12 +139,15 @@ def test_failed_stage_cannot_be_hidden_by_a_later_success(runner, failure):
     if failure == "native":
         assert not (root / "core.started").exists()
         assert not (root / "host.started").exists()
+    elif failure == "core":
+        assert not (root / "desktop.started").exists()
+        assert not (root / "host.started").exists()
     elif failure == "desktop":
         assert not (root / "fast.started").exists()
     logs = root / "test-results/linux-test-schedule"
     owner = "desktop" if failure == "fast" else failure
     assert failure + " diagnostics" in (logs / (owner + ".log")).read_text()
-    if failure in ("core", "desktop", "fast", "host"):
+    if failure in ("desktop", "fast", "host"):
         for name in ("core", "desktop", "host"):
             assert (logs / (name + ".log")).exists()
 

@@ -6,6 +6,7 @@ import signal
 import sys
 import subprocess
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -18,6 +19,105 @@ spec.loader.exec_module(gates)
 
 
 class ParallelBuildGatesTest(unittest.TestCase):
+    def test_later_failure_is_printed_once_before_held_gate_releases(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ready, release = root / "ready", root / "release"
+            held = (
+                "from pathlib import Path; import time; "
+                f"Path({str(ready)!r}).touch(); end=time.monotonic()+5\n"
+                f"while not Path({str(release)!r}).exists():\n"
+                " if time.monotonic()>end: raise RuntimeError('release missing')\n"
+                " time.sleep(.01)\n"
+                "print('held complete')\n"
+            )
+            failed = "import sys; sys.stdout.buffer.write('later failure café\\n'.encode()); raise SystemExit(7)"
+            program = (
+                "import importlib.util; from pathlib import Path; "
+                f"spec=importlib.util.spec_from_file_location('gates',{gates.__file__!r}); "
+                "g=importlib.util.module_from_spec(spec); spec.loader.exec_module(g); "
+                "g.PROGRESS_INTERVAL_SECONDS=.02; "
+                f"raise SystemExit(g.run_gates({[('held', [sys.executable, '-c', held]), ('later', [sys.executable, '-c', failed])]!r},Path({str(root / 'logs')!r})))"
+            )
+            output = root / "combined.log"
+            with output.open("wb") as stream:
+                process = subprocess.Popen(
+                    [sys.executable, "-c", program],
+                    stdout=stream,
+                    stderr=subprocess.STDOUT,
+                )
+                try:
+                    deadline = time.monotonic() + 4
+                    while b"::group::later gate (exit 7)" not in output.read_bytes():
+                        self.assertIsNone(process.poll(), output.read_text())
+                        self.assertLess(time.monotonic(), deadline, output.read_text())
+                        time.sleep(0.01)
+                    self.assertTrue(ready.exists())
+                    self.assertFalse(release.exists())
+                    self.assertNotIn(b"held complete", output.read_bytes())
+                    release.touch()
+                    self.assertEqual(process.wait(timeout=5), 1)
+                finally:
+                    release.touch()
+                    if process.poll() is None:
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait(timeout=5)
+            self.assertEqual(
+                (root / "logs/later.log").read_bytes(), "later failure café\n".encode()
+            )
+            self.assertEqual((root / "logs/held.log").read_bytes(), b"held complete\n")
+            raw = output.read_bytes()
+            self.assertEqual(raw.count(b"::group::later gate (exit 7)"), 1)
+            self.assertEqual(raw.count("later failure café\n".encode()), 1)
+            self.assertEqual(raw.count(b"::group::held gate (exit 0)"), 1)
+
+    def test_progress_slices_do_not_reset_original_wait_deadline(self):
+        clock = [0.0]
+        waits = []
+
+        class Owner:
+            pid = 10001
+            args = ["controlled fixture"]
+            exited = False
+
+            def poll(self):
+                return 0 if self.exited else None
+
+            def wait(self, timeout):
+                if self.exited:
+                    return 0
+                waits.append(timeout)
+                clock[0] += timeout
+                raise subprocess.TimeoutExpired(self.args, timeout)
+
+        owner = Owner()
+
+        def stop(_pid, _signal):
+            owner.exited = True
+
+        with tempfile.TemporaryDirectory() as directory:
+            with (
+                patch.object(gates, "WAIT_TIMEOUT_SECONDS", 0.07),
+                patch.object(gates, "PROGRESS_INTERVAL_SECONDS", 0.02),
+                patch.object(gates.time, "monotonic", side_effect=lambda: clock[0]),
+                patch.object(gates.subprocess, "Popen", return_value=owner),
+                patch.object(gates.os, "killpg", side_effect=stop) as signal_group,
+            ):
+                with self.assertRaises(subprocess.TimeoutExpired) as failure:
+                    gates.run_gates([("held", owner.args)], Path(directory))
+            self.assertAlmostEqual(clock[0], 0.07)
+            self.assertEqual(len(waits), 4)
+            self.assertAlmostEqual(sum(waits), 0.07)
+            self.assertEqual(failure.exception.timeout, 0.07)
+            self.assertEqual(
+                [c.args[1] for c in signal_group.call_args_list],
+                [signal.SIGTERM, signal.SIGKILL],
+            )
+            self.assertTrue(owner.exited)
+
     def test_denied_first_group_does_not_leave_other_owned_gates_running(self):
         original_launch = gates.subprocess.Popen
         original_signal = gates.os.killpg
@@ -46,7 +146,11 @@ class ParallelBuildGatesTest(unittest.TestCase):
                             [
                                 (
                                     str(index),
-                                    [sys.executable, "-c", "import time; time.sleep(60)"],
+                                    [
+                                        sys.executable,
+                                        "-c",
+                                        "import time; time.sleep(60)",
+                                    ],
                                 )
                                 for index in range(3)
                             ],

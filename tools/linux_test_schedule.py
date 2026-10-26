@@ -98,7 +98,11 @@ def schedule(root, python):
     # it fails. No gate invokes the all-stage/nested parallel runner.
     if run_gates([task("native")], logs):
         return 1
-    if run_gates([task("core"), task("desktop"), task("host")], logs):
+    # Source-JIT startup and coverage collection need the runner CPU budget;
+    # do not overlap Core with Flutter compilation or host compiler probes.
+    if run_gates([task("core")], logs):
+        return 1
+    if run_gates([task("desktop"), task("host")], logs):
         return 1
     return run_gates([task("service")], logs)
 

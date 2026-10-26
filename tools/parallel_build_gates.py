@@ -10,6 +10,8 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+WAIT_TIMEOUT_SECONDS = 3600
+PROGRESS_INTERVAL_SECONDS = 30
 
 
 def signal_owned_group(process, sig):
@@ -53,15 +55,51 @@ def run_gates(tasks, log_directory):
             running.append((name, process, path))
             print(f"Started {name} gate; log: {path}", flush=True)
         failed = False
-        for name, process, path in running:
-            code = process.wait(timeout=3600)
-            failed |= code != 0
-            print(f"::group::{name} gate (exit {code})", flush=True)
-            with path.open("rb") as stream:
-                while data := stream.read(65536):
-                    sys.stdout.buffer.write(data)
-            sys.stdout.flush()
-            print("::endgroup::", flush=True)
+        reported = set()
+
+        def report_finished():
+            nonlocal failed
+            for name, process, path in running:
+                code = process.poll()
+                if code is None or process.pid in reported:
+                    continue
+                reported.add(process.pid)
+                failed |= code != 0
+                print(f"::group::{name} gate (exit {code})", flush=True)
+                with path.open("rb") as stream:
+                    while data := stream.read(65536):
+                        sys.stdout.buffer.write(data)
+                sys.stdout.flush()
+                print("::endgroup::", flush=True)
+
+        def report_progress():
+            states = []
+            for name, process, path in running:
+                code = process.poll()
+                state = "running" if code is None else f"exit {code}"
+                states.append(
+                    f"{name}: {state}, {path.stat().st_size} bytes, log: {path}"
+                )
+            print(
+                f"Gate progress after {time.monotonic() - started:.1f}s: "
+                + "; ".join(states),
+                flush=True,
+            )
+
+        for _, process, _ in running:
+            # Preserve the original per-wait budget. Heartbeats must not renew it.
+            deadline = time.monotonic() + WAIT_TIMEOUT_SECONDS
+            report_finished()
+            while process.poll() is None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(process.args, WAIT_TIMEOUT_SECONDS)
+                try:
+                    process.wait(timeout=min(PROGRESS_INTERVAL_SECONDS, remaining))
+                except subprocess.TimeoutExpired:
+                    report_finished()
+                    report_progress()
+            report_finished()
         completed = True
         print(
             f"Parallel gates finished in {time.monotonic() - started:.1f}s", flush=True
