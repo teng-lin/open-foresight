@@ -1431,3 +1431,24 @@ At this checkpoint, full macOS and Ubuntu restored-byte testing are still
 running. Their conclusions must be recorded before claiming current-head CI
 completion. Original logs remain in `/var/tmp/of-ci-platform-63d47/` and
 `/var/tmp/of-ci-63-quality/`.
+
+Both remaining consumers subsequently failed. Ubuntu native CTest passed
+**51/51**, Core had **2,879 passed / 18 skipped / 7 failed**, and the desktop
+suite passed **634 / 17 skipped** before two fast-test SQL bootstrap failures.
+The seven Core failures reproduced unchanged under container root and `/tmp`:
+one unwritable-profile oracle and six trusted-startup-path cases. The same seven
+passed as the ordinary user under private `/var/tmp` storage. The restored-byte
+entrypoint now uses the existing privilege-drop wrapper with Ubuntu's pinned
+`/opt/flutter` layout; it retains every gate and original artifact bytes/modes.
+The scheduler allocates short private `/var/tmp/c-*` directories. A real isolated
+container probe verified UID/GID 1002, empty supplementary groups, trusted NSS
+home, denied writes to mode-0500 storage, unchanged artifact bytes/mode and an
+untouched external symlink target. **41 Python tests** and static checks passed.
+
+The service SDK correction also changed the actual three GUI/F12 cases from
+**2 failed / 1 error** to **3 passed / zero skips**, using unchanged compiled
+service, MCP and Worker binaries. Mac's sole failure is a 15-second health-state
+assertion in `service_isolate_test.dart`; its native **60/60**, Core **2,886 /
+14 skipped** other cases and desktop **636 / 13 skipped** passed. That health
+failure remains under investigation, with its deadline and healthy-state
+assertion retained. These results do not certify the skipped Mac packaging steps.
