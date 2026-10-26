@@ -10,6 +10,8 @@ import 'package:foresight_test_support/poll.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/rpc_error.dart';
+import 'package:foresight_core/src/diagnostics/events.dart'
+    show DiagnosticRecord;
 import 'package:foresight_core/src/service.dart';
 import 'package:test/test.dart';
 
@@ -136,6 +138,7 @@ void main() {
         'FORESIGHT_DATA': profile.data,
         'FORESIGHT_RUNTIME': profile.runtime,
         'FORESIGHT_SERVICE_TRACE': '1',
+        'FORESIGHT_LOG_LEVEL': 'info',
       };
       final handoff = await writeServiceStartupEnvironment(
         Directory(profile.runtime),
@@ -150,7 +153,7 @@ void main() {
         'FORESIGHT_STARTUP_ENV': handoff.path,
       };
       final command = [
-        ...await sourceServiceCompileDefines(),
+        ...await sourceServiceCompileDefines(verifiedWorker: true),
         '--packages=${File('.dart_tool/package_config.json').absolute.path}',
         'bin/service.dart',
       ];
@@ -172,6 +175,16 @@ void main() {
         expect(await client.call('notes.list'), isEmpty);
         expect(File('${profile.data}/application.db').existsSync(), isTrue);
         expect(handoff.existsSync(), isFalse);
+        // The real worker must adopt the same profile and qualified logger.
+        // Observe the unchanged five-second cold gate through actual status.
+        await eventually(() async {
+          final status = await client!.call('status') as Map;
+          expect(status['pid'], process.pid);
+          expect(status['profile_id'], profile.identity);
+          final diagnostics = status['diagnostics'] as Map;
+          expect(diagnostics['level'], 'info');
+          return diagnostics['state'] == 'healthy';
+        }, timeout: const Duration(seconds: 15));
         final statusHandoff = await writeServiceStartupEnvironment(
           Directory(profile.runtime),
           values,
@@ -198,12 +211,64 @@ void main() {
         await output;
         final diagnostics = await errors;
         expect(process.exitCode, completion(0), reason: diagnostics);
-        expect(diagnostics, contains('worker starting'));
         expect(
           diagnostics,
           isNot(contains('Invalid service environment handoff')),
         );
       }
+      final records = Directory('${profile.data}/logs')
+          .listSync(recursive: true, followLinks: false)
+          .whereType<File>()
+          .where((file) => file.path.endsWith('.jsonl'))
+          .where((file) {
+            final manifest = File('${file.parent.path}/manifest.json');
+            return manifest.existsSync() &&
+                (jsonDecode(manifest.readAsStringSync()) as Map)['pid'] ==
+                    process.pid;
+          })
+          .expand(
+            (file) => const LineSplitter().convert(file.readAsStringSync()),
+          )
+          .where((line) => line.isNotEmpty)
+          .map((line) => jsonDecode(line) as Map<String, dynamic>)
+          .toList();
+      expect(records, isNotEmpty);
+      expect(records.every((record) => record['schema'] == 2), isTrue);
+      expect(
+        records.every(
+          (record) => DiagnosticRecord.validWire({
+            for (final entry in record.entries)
+              if (const {
+                'event',
+                'component',
+                'fields',
+                'connection',
+                'request',
+                'attempt',
+                'job',
+                'stack',
+              }.contains(entry.key))
+                entry.key: entry.value,
+          }),
+        ),
+        isTrue,
+      );
+      expect(
+        records.where(
+          (record) =>
+              record['event'] == 'service.starting' &&
+              record['component'] == 'service',
+        ),
+        hasLength(1),
+      );
+      expect(
+        records.any(
+          (record) =>
+              record['event'] == 'rpc.completed' &&
+              (record['fields'] as Map?)?['operation'] == 'notes.list',
+        ),
+        isTrue,
+      );
     },
     // Both subprocesses compile the service from source under parallel load.
     timeout: const Timeout(Duration(minutes: 4)),

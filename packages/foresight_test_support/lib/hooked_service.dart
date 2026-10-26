@@ -90,8 +90,12 @@ class ServiceGates {
 }
 
 /// Source fixture authority is selected at compilation, before runtime lookups.
-/// It supplies no optional diagnostic identities; those require the producer.
-Future<List<String>> sourceServiceCompileDefines() async {
+/// The default remains context-only. [verifiedWorker] requires a prebuilt,
+/// matching AOT worker and forwards only the producer's verified define vector;
+/// it never invents identities, builds a shared worker, or falls back on failure.
+Future<List<String>> sourceServiceCompileDefines({
+  bool verifiedWorker = false,
+}) async {
   final library = await Isolate.resolvePackageUri(
     Uri.parse('package:foresight_core/foresight_core.dart'),
   );
@@ -101,6 +105,51 @@ Future<List<String>> sourceServiceCompileDefines() async {
   final build = Directory(
     Platform.environment['FORESIGHT_BUILD_DIR'] ?? '$checkout/build',
   ).resolveSymbolicLinksSync();
+  if (verifiedWorker) {
+    final temporary = await createPrivateTempDirectory(
+      shortTestTempRoot,
+      'of-defines-',
+    );
+    try {
+      final output = File('${temporary.path}/defines');
+      final sdk = File(Platform.resolvedExecutable).resolveSymbolicLinksSync();
+      final result = await Process.run(
+        Platform.environment['FORESIGHT_PYTHON'] ?? 'python3',
+        [
+          '$checkout/tools/build_diagnostic_worker.py',
+          '--root',
+          checkout,
+          '--build',
+          build,
+          '--sdk',
+          File(sdk).parent.parent.path,
+          '--package-config',
+          '$root/.dart_tool/package_config.json',
+          '--mode',
+          'aot',
+          '--verify',
+          '--defines-output',
+          output.path,
+        ],
+      ).timeout(const Duration(seconds: 300));
+      if (result.exitCode != 0) {
+        throw StateError(
+          'Cannot verify source worker: ${result.stdout}${result.stderr}',
+        );
+      }
+      final values = utf8.decode(await output.readAsBytes()).split('\u0000');
+      if (values.length < 2 ||
+          values.last.isNotEmpty ||
+          values
+              .take(values.length - 1)
+              .any((value) => !value.startsWith('-D'))) {
+        throw StateError('Invalid verified source worker defines');
+      }
+      return values.take(values.length - 1).toList();
+    } finally {
+      await temporary.delete(recursive: true);
+    }
+  }
   return [
     '-DFORESIGHT_DIAGNOSTIC_TEST_CONTEXT=true',
     '-DFORESIGHT_DIAGNOSTIC_SOURCE_ANCHOR=$checkout',
