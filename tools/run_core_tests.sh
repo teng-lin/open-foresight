@@ -41,4 +41,4 @@ DART
   if (( task_explicit )); then task_budget=explicit-cli; fi
   echo "Core test concurrency=$task_budget Dart-processors=$task_processors available-processors=$task_available" >&2
 fi
-"$task_dart" test "${task_concurrency[@]}" "$@"
+"$task_dart" test ${task_concurrency[@]+"${task_concurrency[@]}"} "$@"
