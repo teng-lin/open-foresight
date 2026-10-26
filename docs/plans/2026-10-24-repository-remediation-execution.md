@@ -1388,3 +1388,37 @@ Final evidence: `/var/tmp/of-native-consumer/qualification.json`,
 All skip inventories and original failures remain with those reports. The next
 pushed head still requires complete hosted CI and review resolution, actual owner
 review of retained workflow/trust/consumer changes, and verified merge to main.
+
+### Hosted follow-up on `63d47e68`, October 26
+
+Quality passed with **6,225 Python tests / 31 skipped / 95.19% coverage**.
+Dependencies, both full sanitizer suites (**51/51** each), Linux native
+(**51/51**), Core (**2,888 / 17 skipped**) and desktop (**634 / 17 skipped**)
+passed. CPU acceptance executed **six real-model cases with zero skips**.
+Linux application build, DEB acceptance and all three Linux package consumers
+also passed. These results apply to this hosted head; they do not turn earlier
+failed runs into passes.
+
+Three independent failure groups remain under parallel investigation:
+
+- Standalone audio acceptance requests a source Worker build directory that is
+  absent from its bundle-only image. The acceptance aggregate consequently fails.
+- Service integration passes its 35 non-GUI cases, but three GUI/F12 cases derive
+  the Dart SDK from Flutter's launcher rather than the resolved VM.
+- Arch Core has two timeouts, in the source/JIT TLS-handshake fixture and the
+  diagnostic catalog generator. The concurrency cap of two was applied; Core
+  and Desktop still overlap in this job. No timeout or assertion is waived.
+
+The follow-up runs Arch's complete Core and Desktop gates sequentially, removing
+cross-gate compiler contention while retaining every test and coverage gate.
+Local overlap trials did not reproduce the failures: the two affected modules
+passed **28/28** alongside desktop analysis; the eight-module Core coverage
+cohort passed **57 / 1 Mac-only skip** alongside **17 desktop coverage tests**
+under four-CPU affinity. The scheduling change requires a new hosted outcome;
+these negative reproductions do not establish that it fixes the two failures.
+Workflow lint passed with actionlint 1.7.7 and ShellCheck 0.9.0 available.
+
+At this checkpoint, full macOS and Ubuntu restored-byte testing are still
+running. Their conclusions must be recorded before claiming current-head CI
+completion. Original logs remain in `/var/tmp/of-ci-platform-63d47/` and
+`/var/tmp/of-ci-63-quality/`.

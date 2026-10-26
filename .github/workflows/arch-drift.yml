@@ -15,7 +15,8 @@ concurrency:
   cancel-in-progress: false
 env:
   FORESIGHT_FLUTTER_EXECUTABLE: /opt/foresight-flutter/bin/flutter
-  FORESIGHT_PARALLEL_GATES: '1'
+  # Keep Core's child-VM deadlines independent of Desktop's compiler load.
+  FORESIGHT_PARALLEL_GATES: '0'
   FORESIGHT_REQUIRE_DART_GATES: '1'
   FORESIGHT_BUILD_JOBS: '2'
   FORESIGHT_COVERAGE: '1'
