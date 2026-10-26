@@ -35,7 +35,7 @@ class MacModelVault {
     RuntimeConfiguration? configuration,
   }) : _helper =
            helperPath ??
-           (configuration ?? runtimeConfiguration)['FORESIGHT_MODEL_CRYPTO'],
+           runtimeSnapshot(configuration)['FORESIGHT_MODEL_CRYPTO'],
        _tempRoot = tempRoot ?? Directory.systemTemp,
        _startProcess =
            startProcess ??

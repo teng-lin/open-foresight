@@ -456,11 +456,11 @@ Future<RandomAccessFile> acquireServiceProfileLock(
   RuntimeConfiguration? configuration,
 }) async {
   privateDirectory(profile.data, repairOwnedPermissions: true);
-  final config = configuration ?? runtimeConfiguration;
   // Configure native state only when a native installation is present. Tests
   // and administration may use the storage-only service without model workers.
-  if (config['FORESIGHT_NATIVE'] != null) {
-    configureProfileRuntime(profile.data, configuration: config);
+  // Without a snapshot the legacy boundary receives the profile defaults.
+  if (runtimeSnapshot(configuration)['FORESIGHT_NATIVE'] != null) {
+    configureProfileRuntime(profile.data, configuration: configuration);
   }
   privateRuntime(profile);
   final lock = File(

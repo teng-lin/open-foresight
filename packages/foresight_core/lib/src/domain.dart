@@ -53,9 +53,12 @@ class Domain
   @override
   final Store store;
 
-  /// The owning service's snapshot; direct construction captures the boundary.
+  /// An injected snapshot is fixed at construction. Without one this is a
+  /// legacy direct construction: each access returns a fresh immutable snapshot
+  /// of the boundary, as it read the boundary before injection.
   @override
-  final RuntimeConfiguration configuration;
+  RuntimeConfiguration get configuration => _configuration ?? runtimeSnapshot();
+  final RuntimeConfiguration? _configuration;
   @override
   final Helper helper;
   late final _queries = DomainQueries(store);
@@ -85,50 +88,22 @@ class Domain
   final Clock clock;
   @override
   final Timer Function(Duration, void Function()) createTimer;
-  final GenerationRuntimeDiscovery _discoverGeneration;
+  final GenerationRuntimeDiscovery? _discoverGeneration;
   Domain(
-    Store store,
-    Helper helper, {
+    this.store,
+    this.helper, {
     SearchCallbacks? webSearch,
     ModelGate? modelGate,
     Clock? clock,
     Timer Function(Duration, void Function())? createTimer,
     GenerationRuntimeDiscovery? discoverGeneration,
     RuntimeConfiguration? configuration,
-  }) : this._(
-         store,
-         helper,
-         configuration ?? runtimeConfiguration,
-         webSearch: webSearch,
-         modelGate: modelGate,
-         clock: clock,
-         createTimer: createTimer,
-         discoverGeneration: discoverGeneration,
-       );
-  Domain._(
-    this.store,
-    this.helper,
-    this.configuration, {
-    SearchCallbacks? webSearch,
-    ModelGate? modelGate,
-    Clock? clock,
-    Timer Function(Duration, void Function())? createTimer,
-    GenerationRuntimeDiscovery? discoverGeneration,
-  }) : modelGate = modelGate ?? const IdleModelGate(),
+  }) : _configuration = configuration?.snapshot(),
+       modelGate = modelGate ?? const IdleModelGate(),
        _webSearch = webSearch,
        clock = clock ?? const Clock(),
        createTimer = createTimer ?? Timer.new,
-       _discoverGeneration =
-           discoverGeneration ??
-           ((store, library, {current, onCandidate, retire}) =>
-               discoverGenerationRuntime(
-                 store,
-                 library,
-                 configuration: configuration,
-                 current: current,
-                 onCandidate: onCandidate,
-                 retire: retire,
-               ));
+       _discoverGeneration = discoverGeneration;
   Future<void> Function(int, {bool Function()? current})?
   indexMeetingTranscript;
   @override
@@ -646,15 +621,31 @@ class Domain
   NativeRuntime createNoteEnhancementRuntime() =>
       NativeRuntime(configuration.nativeLibrary);
 
+  Future<NativeRuntime?> _discoverConfigured(
+    Store store,
+    String library, {
+    bool Function()? current,
+    void Function(NativeRuntime)? onCandidate,
+    Future<void> Function(NativeRuntime)? retire,
+  }) => discoverGenerationRuntime(
+    store,
+    library,
+    configuration: configuration,
+    current: current,
+    onCandidate: onCandidate,
+    retire: retire,
+  );
+
   Future<void> _initializeNoteEnhancementService() async {
     final workspace = workspaceGeneration;
     await generationRuntimes.replace((attempt) async {
       final model = _queries.generationRegistration();
       if (model == null) {
+        final config = configuration;
         return discoverGenerationRuntime(
           store,
-          configuration.nativeLibrary,
-          configuration: configuration,
+          config.nativeLibrary,
+          configuration: config,
           current: attempt.current,
           onCandidate: attempt.own,
           retire: attempt.retire,
@@ -741,9 +732,10 @@ class Domain
       final workspace = workspaceGeneration;
       await generationRuntimes.replace((attempt) async {
         if (!_queries.hasModel('generation')) {
-          final candidate = await _discoverGeneration(
+          final config = configuration;
+          final candidate = await (_discoverGeneration ?? _discoverConfigured)(
             store,
-            configuration.nativeLibrary,
+            config.nativeLibrary,
             current: attempt.current,
             onCandidate: attempt.own,
             retire: attempt.retire,

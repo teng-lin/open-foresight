@@ -241,8 +241,11 @@ class ApplicationService {
 
   /// [desktopDetachGrace] is how long the service waits for a desktop to
   /// reattach after its approval connection closes before it shuts down.
-  /// [configuration] defaults to this process's boundary snapshot, captured
-  /// once here; every service-owned consumer receives it from this owner.
+  /// An injected [configuration] is captured once here and every
+  /// service-owned consumer receives that immutable snapshot. Without one,
+  /// startup decisions use one boundary snapshot taken here, while the
+  /// long-lived owners stay legacy boundary consumers: their ports hand out a
+  /// fresh immutable boundary snapshot on each access, as before injection.
   static Future<ApplicationService> start(
     ProfilePaths profile, {
     SearchCallbacks? webSearch,
@@ -257,7 +260,7 @@ class ApplicationService {
     void Function()? onProfileOwned,
     RuntimeConfiguration? configuration,
   }) async {
-    final captured = configuration ?? runtimeConfiguration;
+    final captured = runtimeSnapshot(configuration);
     // This must precede native loads, database opens, and worker creation.
     final installationLock = acquireInstallationLock(configuration: captured);
     void Function()? releaseLocalOwner;
@@ -267,6 +270,7 @@ class ApplicationService {
         profile,
         installationLock,
         captured,
+        injected: configuration != null,
         webSearch: webSearch,
         internalWorker: internalWorker,
         clock: clock,
@@ -291,6 +295,7 @@ class ApplicationService {
     ProfilePaths profile,
     InstallationLock? installationLock,
     RuntimeConfiguration captured, {
+    required bool injected,
     SearchCallbacks? webSearch,
     bool internalWorker = false,
     Clock? clock,
@@ -303,9 +308,15 @@ class ApplicationService {
       profile,
       launchWithdrawn: () =>
           serviceLaunchLeaseWithdrawn(profile, configuration: captured),
-      configuration: captured,
+      // A boundary-started service keeps the legacy boundary's profile defaults
+      // for callers outside its ports; its own snapshot is derived below.
+      configuration: injected ? captured : null,
     );
-    final configuration = profileServiceConfiguration(profile, captured);
+    final owned = injected
+        ? profileServiceConfiguration(profile, captured)
+        : null;
+    // Startup's own view, after the lock added any profile defaults.
+    final configuration = owned ?? runtimeSnapshot();
     Store? store;
     Helper? helper;
     Application? startedApplication;
@@ -346,7 +357,7 @@ class ApplicationService {
         '${profile.data}/helper',
         startupProbeTimeout:
             helperStartupProbeTimeout ?? const Duration(milliseconds: 400),
-        configuration: configuration,
+        configuration: owned,
       );
       final domain = Domain(
         store,
@@ -354,7 +365,7 @@ class ApplicationService {
         webSearch: webSearch,
         clock: clock,
         createTimer: createTimer,
-        configuration: configuration,
+        configuration: owned,
       );
       final application = Application(domain)..profileId = profile.identity;
       startedApplication = application;
@@ -384,7 +395,10 @@ class ApplicationService {
         installationLock,
         application,
         internalWorker,
-        desktopPeerVerifier ?? installedDesktopPeerVerifier(configuration),
+        desktopPeerVerifier ??
+            (owned == null
+                ? verifyInstalledDesktopPeer
+                : installedDesktopPeerVerifier(owned)),
       );
       try {
         await publishServiceSocket(binding, service._accept);

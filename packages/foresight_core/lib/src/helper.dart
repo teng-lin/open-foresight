@@ -20,7 +20,7 @@ void validateHelperCompatibility(
   control.State value, {
   RuntimeConfiguration? configuration,
 }) {
-  final config = configuration ?? runtimeConfiguration;
+  final config = runtimeSnapshot(configuration);
   if (!ping.success ||
       ping.version != helperProtocolVersion ||
       value.referenceVersion != helperProtocolVersion) {
@@ -121,15 +121,18 @@ class Helper {
   Future<void> Function()? onReady;
   final bool manageProcess;
 
-  /// The owning service's snapshot; direct construction captures the boundary.
-  final RuntimeConfiguration configuration;
+  /// An injected snapshot is fixed at construction. Without one this is a
+  /// legacy direct construction: each access returns a fresh immutable snapshot
+  /// of the boundary, as it read the boundary before injection.
+  RuntimeConfiguration get configuration => _configuration ?? runtimeSnapshot();
+  final RuntimeConfiguration? _configuration;
   Helper(
     this.socket,
     this.storage, {
     this.manageProcess = true,
     this.startupProbeTimeout = const Duration(milliseconds: 400),
     RuntimeConfiguration? configuration,
-  }) : configuration = configuration ?? runtimeConfiguration {
+  }) : _configuration = configuration?.snapshot() {
     channel = helperChannel(socket);
     client = helperClient(channel);
   }
@@ -192,7 +195,9 @@ class Helper {
         'Restart the application service to replace the incompatible helper',
       );
     }
-    final executable = configuration['FORESIGHT_HELPER'];
+    // One snapshot covers this start's executable, compatibility and child.
+    final config = configuration;
+    final executable = config['FORESIGHT_HELPER'];
     if (manageProcess && executable != null && process == null) {
       if (_launching != null) {
         try {
@@ -225,7 +230,7 @@ class Helper {
           validateHelperCompatibility(
             existing,
             snapshot!,
-            configuration: configuration,
+            configuration: config,
           );
         } catch (error) {
           incompatible = true;
@@ -241,11 +246,10 @@ class Helper {
       if (!live) {
         _launchingNow = true;
         try {
-          process = await (_launching = Process.start(
-            executable,
-            [socket, storage],
-            environment: nativeHelperEnvironment(configuration.environment),
-          ));
+          process = await (_launching = Process.start(executable, [
+            socket,
+            storage,
+          ], environment: nativeHelperEnvironment(config.environment)));
         } finally {
           _launchingNow = false;
         }

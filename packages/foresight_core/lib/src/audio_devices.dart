@@ -19,8 +19,7 @@ Future<List<AudioDevice>> audioDevices({
 }) async {
   final run = runProcess ?? _deviceProcess.run;
   if (macOS ?? Platform.isMacOS) {
-    final helper =
-        (configuration ?? runtimeConfiguration)['FORESIGHT_AUDIO_DEVICES'];
+    final helper = runtimeSnapshot(configuration)['FORESIGHT_AUDIO_DEVICES'];
     if (helper == null) {
       throw StateError('The bundled Mac audio device adapter is unavailable.');
     }
@@ -72,7 +71,7 @@ Future<List<AudioDevice>> audioDevices({
 /// Querying capabilities never asks for protected resources or starts capture.
 Map<String, dynamic> audioCapabilities({RuntimeConfiguration? configuration}) {
   final lib = NativeLibrary(
-    DynamicLibrary.open((configuration ?? runtimeConfiguration).nativeLibrary),
+    DynamicLibrary.open(runtimeSnapshot(configuration).nativeLibrary),
   ).library;
   final result = lib
       .lookupFunction<Pointer<Utf8> Function(), Pointer<Utf8> Function()>(
@@ -94,7 +93,7 @@ Map<String, dynamic> audioCapabilities({RuntimeConfiguration? configuration}) {
 Future<Map<String, dynamic>> requestMicrophonePermission({
   RuntimeConfiguration? configuration,
 }) async {
-  final config = configuration ?? runtimeConfiguration;
+  final config = runtimeSnapshot(configuration);
   final capabilities = audioCapabilities(configuration: config);
   if (Platform.isMacOS && capabilities['microphone_purpose_present'] != true) {
     throw StateError(
@@ -119,7 +118,7 @@ Future<Map<String, dynamic>> requestMicrophonePermission({
 Future<Map<String, dynamic>> requestSystemAudioPermission({
   RuntimeConfiguration? configuration,
 }) async {
-  final config = configuration ?? runtimeConfiguration;
+  final config = runtimeSnapshot(configuration);
   final capabilities = audioCapabilities(configuration: config);
   if (Platform.isMacOS &&
       capabilities['system_audio_purpose_present'] != true) {

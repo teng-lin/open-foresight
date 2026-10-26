@@ -28,8 +28,9 @@ class DedicatedQueryAcquisition {
     Directory? stagingRoot,
     this.runtime,
     this.catalog,
-    this.configuration,
-  }) : stagingRoot = stagingRoot ?? File(store.path).parent;
+    RuntimeConfiguration? configuration,
+  }) : configuration = configuration?.snapshot(),
+       stagingRoot = stagingRoot ?? File(store.path).parent;
 
   /// Bundled resources come from the owner's [configuration]. The distribution
   /// credential keeps its separately owned value-supply path.
@@ -38,7 +39,7 @@ class DedicatedQueryAcquisition {
     RuntimeConfiguration? configuration,
   }) {
     final key = runtimeConfiguration['FORESIGHT_WEB_CONTENT_API_KEY'];
-    final resources = configuration ?? runtimeConfiguration;
+    final resources = runtimeSnapshot(configuration);
     if (!Platform.isMacOS) {
       throw StateError('Automatic question model acquisition requires macOS.');
     }

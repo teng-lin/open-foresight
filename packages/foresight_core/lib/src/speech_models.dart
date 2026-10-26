@@ -19,7 +19,7 @@ Future<void> configureSpeech(
   void Function(Process)? onProcess,
   RuntimeConfiguration? configuration,
 }) async {
-  final config = configuration ?? runtimeConfiguration;
+  final config = runtimeSnapshot(configuration);
   runner = requireInstalledRuntime(runner, configuration: config);
   final executable = File(runner);
   if (!executable.existsSync() || (executable.statSync().mode & 0x49) == 0) {

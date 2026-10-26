@@ -37,7 +37,7 @@ final class SqliteReadWorker
     this.maxQueuedReads = 16,
   }) : _path = path,
        _configuration =
-           configuration ??
+           configuration?.snapshot() ??
            RuntimeConfiguration.serviceWorker(
              environment ?? runtimeConfiguration.environment,
            ),

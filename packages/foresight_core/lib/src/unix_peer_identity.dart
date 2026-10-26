@@ -82,8 +82,10 @@ bool verifyInstalledDesktopPeer(Socket peer) =>
 /// [verifyInstalledDesktopPeer] against a service-owned [configuration].
 DesktopPeerVerifier installedDesktopPeerVerifier(
   RuntimeConfiguration configuration,
-) =>
-    (peer) => _verifyInstalledDesktopPeer(peer, configuration);
+) {
+  final snapshot = configuration.snapshot();
+  return (peer) => _verifyInstalledDesktopPeer(peer, snapshot);
+}
 
 bool _verifyInstalledDesktopPeer(
   Socket peer,

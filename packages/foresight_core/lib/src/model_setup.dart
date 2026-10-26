@@ -105,8 +105,7 @@ Future<NativeRuntime?> discoverGenerationRuntime(
       final path = await catalog.localPath(type);
       if (path == null) continue;
       final runtime =
-          runner ??
-          (configuration ?? runtimeConfiguration)['FORESIGHT_LITERT_RUNNER'];
+          runner ?? runtimeSnapshot(configuration)['FORESIGHT_LITERT_RUNNER'];
       if (runtime == null) {
         throw StateError('Bundled generation runtime is unavailable');
       }
@@ -180,7 +179,7 @@ Future<void> configureDedicatedQuery(
     path,
     runtime: runtime,
     current: current,
-    configuration: configuration ?? runtimeConfiguration,
+    configuration: runtimeSnapshot(configuration),
   );
   await store.register(
     dedicatedQueryModelKind,
@@ -224,7 +223,7 @@ Future<void> configureEncryptedDedicatedQuery(
       lease.path,
       runtime: runtime,
       current: current,
-      configuration: configuration ?? runtimeConfiguration,
+      configuration: runtimeSnapshot(configuration),
     );
   } finally {
     try {

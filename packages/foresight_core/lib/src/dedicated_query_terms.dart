@@ -6,7 +6,7 @@ const dedicatedQueryTermsKey =
     'modelTerms.query-detector.$dedicatedQueryModelDigest';
 Uri? dedicatedQueryTermsUri({RuntimeConfiguration? configuration}) {
   final uri = Uri.tryParse(
-    (configuration ?? runtimeConfiguration)['FORESIGHT_QUERY_TERMS_URL'] ?? '',
+    runtimeSnapshot(configuration)['FORESIGHT_QUERY_TERMS_URL'] ?? '',
   );
   return uri != null &&
           uri.scheme == 'https' &&

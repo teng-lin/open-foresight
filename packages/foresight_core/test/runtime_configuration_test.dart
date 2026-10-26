@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 
+import 'package:foresight_core/src/application_services/model_asset_acquisition.dart';
 import 'package:foresight_core/src/application_services/service_runtime_ports.dart';
 import 'package:foresight_core/src/audio_devices.dart';
 import 'package:foresight_core/src/dedicated_query_terms.dart';
@@ -61,13 +62,33 @@ void main() {
       expect(configuration.linuxBundleRoot, '/bundle');
     });
 
-    test('the installed boundary snapshot rejects mutation', () {
-      installRuntimeConfiguration(RuntimeConfiguration({'FORESIGHT_X': 'a'}));
+    test('the legacy boundary stays editable; its snapshots do not', () {
+      final installed = RuntimeConfiguration({'FORESIGHT_X': 'a'});
+      installRuntimeConfiguration(installed);
+      final captured = runtimeSnapshot();
+      // Legacy callers keep editing the boundary in place.
+      runtimeConfiguration.environment['FORESIGHT_X'] = 'b';
+      runtimeConfiguration.environment['FORESIGHT_Y'] = 'y';
+      expect(runtimeConfiguration['FORESIGHT_X'], 'b');
+      expect(runtimeConfiguration.isSnapshot, isFalse);
+      // Neither the installed snapshot nor a capture observes those edits.
+      expect(installed.environment, {'FORESIGHT_X': 'a'});
+      expect(captured.isSnapshot, isTrue);
+      expect(captured.environment, {'FORESIGHT_X': 'a'});
       expect(
-        () => runtimeConfiguration.environment['FORESIGHT_X'] = 'b',
+        () => captured.environment['FORESIGHT_X'] = 'c',
         throwsUnsupportedError,
       );
-      expect(runtimeConfiguration['FORESIGHT_X'], 'a');
+      expect(identical(captured.snapshot(), captured), isTrue);
+      expect(identical(runtimeSnapshot(captured), captured), isTrue);
+      // Derivations from the boundary are immutable copies too.
+      final derived = runtimeConfiguration.withDefaults({'FORESIGHT_X': 'z'});
+      expect(derived.isSnapshot, isTrue);
+      expect(() => derived.environment.clear(), throwsUnsupportedError);
+      expect(
+        runtimeConfiguration.withOverrides({}).environment,
+        isNot(same(runtimeConfiguration.environment)),
+      );
     });
 
     test('defaults never replace explicit values and keep the bundle root', () {
@@ -147,28 +168,61 @@ void main() {
         'FORESIGHT_HELPER': '/bundle/helper',
         'FORESIGHT_NATIVE': '/bundle/native.so',
       }, linuxBundleRoot: '/bundle');
-      final (previous, environment, bundle, rejected) = await Isolate.run(() {
-        // A fresh isolate has no installed snapshot; installing one must not
-        // resolve the process environment first.
-        final previous = installRuntimeConfiguration(snapshot);
-        var rejected = false;
-        try {
+      final (previous, environment, bundle, rejected, kept) = await Isolate.run(
+        () {
+          // A fresh isolate has no installed boundary; installing one must
+          // not resolve the process environment first.
+          final previous = installRuntimeConfiguration(snapshot);
+          final environment = Map.of(runtimeConfiguration.environment);
+          // The isolate's legacy boundary is an editable copy; the
+          // transported snapshot itself still rejects writes.
           runtimeConfiguration.environment['FORESIGHT_HELPER'] = '/x';
-        } on UnsupportedError {
-          rejected = true;
-        }
-        return (
-          previous,
-          Map.of(runtimeConfiguration.environment),
-          runtimeConfiguration.linuxBundleRoot,
-          rejected,
-        );
-      });
+          var rejected = false;
+          try {
+            snapshot.environment['FORESIGHT_HELPER'] = '/x';
+          } on UnsupportedError {
+            rejected = true;
+          }
+          return (
+            previous,
+            environment,
+            runtimeConfiguration.linuxBundleRoot,
+            rejected,
+            Map.of(snapshot.environment),
+          );
+        },
+      );
       expect(previous, isNull);
       expect(environment, snapshot.environment);
       expect(bundle, '/bundle');
       expect(rejected, isTrue);
+      expect(kept, snapshot.environment);
     });
+
+    test(
+      'a worker receives the values captured before boundary edits',
+      () async {
+        installRuntimeConfiguration(
+          RuntimeConfiguration({'FORESIGHT_HELPER': '/bundle/helper'}),
+        );
+        final captured = runtimeSnapshot();
+        runtimeConfiguration.environment['FORESIGHT_HELPER'] = '/edited/helper';
+        runtimeConfiguration.environment.remove('FORESIGHT_HELPER');
+        final (seen, rejected) = await Isolate.run(() {
+          installRuntimeConfiguration(captured);
+          var rejected = false;
+          try {
+            captured.environment.remove('FORESIGHT_HELPER');
+          } on UnsupportedError {
+            rejected = true;
+          }
+          return (runtimeConfiguration['FORESIGHT_HELPER'], rejected);
+        });
+        expect(seen, '/bundle/helper');
+        expect(rejected, isTrue);
+        expect(runtimeConfiguration['FORESIGHT_HELPER'], isNull);
+      },
+    );
 
     test('a worker snapshot is independent of the sender boundary', () async {
       final snapshot = RuntimeConfiguration({'FORESIGHT_X': 'worker'});
@@ -186,8 +240,13 @@ void main() {
         'FORESIGHT_X': 'x',
       });
       expect(configuration.environment, {'FORESIGHT_X': 'x'});
-      installServiceWorkerEnvironment({'FORESIGHT_X': 'x'});
+      expect(configuration.isSnapshot, isTrue);
+      final handoff = {'FORESIGHT_X': 'x'};
+      installServiceWorkerEnvironment(handoff);
+      handoff['FORESIGHT_X'] = 'changed';
       expect(runtimeConfiguration.environment, configuration.environment);
+      // As before, the worker boundary is an editable copy of the handoff.
+      expect(runtimeConfiguration.isSnapshot, isFalse);
       expect(
         runtimeConfiguration.linuxBundleRoot,
         configuration.linuxBundleRoot,
@@ -279,10 +338,15 @@ void main() {
           ),
         ),
       );
-      final (boundaryText, _) = await Parser(
-        macOS: true,
-      ).extract(document.path);
-      expect(boundaryText.trim(), 'boundary text');
+      // Passing the editable boundary itself freezes it at construction.
+      final captured = Parser(macOS: true, configuration: runtimeConfiguration);
+      // A legacy direct construction keeps reading the boundary, as before.
+      final legacy = Parser(macOS: true);
+      runtimeConfiguration.environment['FORESIGHT_FILE_PARSER'] = owner.path;
+      final (capturedText, _) = await captured.extract(document.path);
+      expect(capturedText.trim(), 'boundary text');
+      final (legacyText, _) = await legacy.extract(document.path);
+      expect(legacyText.trim(), 'owner text');
     });
 
     test('installed runtime containment uses the owner root only', () {
@@ -331,7 +395,7 @@ void main() {
       );
     });
 
-    test('the helper launches the executable of its owner', () async {
+    test('the helper launches the executable it captured', () async {
       final launched = File('${root.path}/launched');
       final owner = _script(
         root,
@@ -344,16 +408,23 @@ void main() {
         'echo boundary >> "${launched.path}"',
       );
       installRuntimeConfiguration(
-        RuntimeConfiguration({'FORESIGHT_HELPER': boundary.path}),
+        RuntimeConfiguration({'FORESIGHT_HELPER': owner.path}),
       );
       final runtime = createTestTempDirectorySync('of-rc-helper-');
+      // Even the editable boundary object itself is frozen on capture.
       final helper = Helper(
         '${runtime.path}/helper.sock',
         '${root.path}/helper-data',
         startupProbeTimeout: const Duration(milliseconds: 50),
-        configuration: RuntimeConfiguration({'FORESIGHT_HELPER': owner.path}),
+        configuration: runtimeConfiguration,
       );
       addTearDown(helper.close);
+      runtimeConfiguration.environment['FORESIGHT_HELPER'] = boundary.path;
+      expect(helper.configuration.isSnapshot, isTrue);
+      expect(
+        () => helper.configuration.environment['FORESIGHT_HELPER'] = '/x',
+        throwsUnsupportedError,
+      );
       final startup = helper.start();
       final deadline = DateTime.now().add(const Duration(seconds: 10));
       while (!launched.existsSync() && DateTime.now().isBefore(deadline)) {
@@ -364,7 +435,7 @@ void main() {
       expect(launched.readAsLinesSync().toSet(), {'owner'});
     });
 
-    test('a domain keeps one snapshot for all of its ports', () async {
+    test('a domain keeps its injected snapshot for all ports', () async {
       final store = Store('${root.path}/application.db');
       final helper = Helper(
         '${root.path}/helper.sock',
@@ -374,18 +445,26 @@ void main() {
       final owned = RuntimeConfiguration({
         'FORESIGHT_NATIVE': '/owner/native.so',
       });
+      installRuntimeConfiguration(
+        RuntimeConfiguration({'FORESIGHT_NATIVE': '/boundary/native.so'}),
+      );
       final domain = Domain(store, helper, configuration: owned);
-      final direct = Domain(store, helper);
-      final boundary = runtimeConfiguration;
+      final legacy = Domain(store, helper);
+      final explicitBoundary = Domain(
+        store,
+        helper,
+        configuration: runtimeConfiguration,
+      );
       addTearDown(() async {
         domain.close();
-        direct.close();
+        legacy.close();
+        explicitBoundary.close();
         await helper.close();
         store.close();
       });
-      installRuntimeConfiguration(
-        RuntimeConfiguration({'FORESIGHT_NATIVE': '/later/native.so'}),
-      );
+      final before = legacy.configuration;
+      // Legacy fixture edits after capture reach no injected owner.
+      runtimeConfiguration.environment['FORESIGHT_NATIVE'] = '/later/native.so';
       for (final RuntimeConfigurationPort port in <RuntimeConfigurationPort>[
         domain,
         domain as RecordingWorkspace,
@@ -394,8 +473,42 @@ void main() {
         expect(identical(port.configuration, owned), isTrue);
       }
       expect(domain.configuration.nativeLibrary, '/owner/native.so');
-      // Direct construction captures the boundary once, not on each read.
-      expect(identical(direct.configuration, boundary), isTrue);
+      expect(
+        explicitBoundary.configuration.nativeLibrary,
+        '/boundary/native.so',
+      );
+      // A legacy direct construction follows the boundary, but every value
+      // it hands out is an immutable snapshot that later edits cannot change.
+      expect(legacy.configuration.nativeLibrary, '/later/native.so');
+      expect(before.nativeLibrary, '/boundary/native.so');
+      for (final snapshot in [
+        domain.configuration,
+        explicitBoundary.configuration,
+        legacy.configuration,
+        before,
+      ]) {
+        expect(snapshot.isSnapshot, isTrue);
+        expect(
+          () => snapshot.environment['FORESIGHT_NATIVE'] = '/x',
+          throwsUnsupportedError,
+        );
+      }
+      // Application-owned children read their owner's snapshot.
+      final coordinator = ModelAssetAcquisitionCoordinator(
+        store: store,
+        changed: () {},
+        ownerConfiguration: () => domain.configuration,
+      );
+      expect(identical(coordinator.configuration, owned), isTrue);
+      expect(
+        ModelAssetAcquisitionCoordinator(
+          store: store,
+          changed: () {},
+          configuration: runtimeConfiguration,
+          ownerConfiguration: () => domain.configuration,
+        ).configuration.environment,
+        {'FORESIGHT_NATIVE': '/later/native.so'},
+      );
     });
   });
 }

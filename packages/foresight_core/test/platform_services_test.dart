@@ -13,10 +13,6 @@ import 'package:foresight_core/src/service.dart'
         serviceLaunchCommand,
         writeServiceStartupEnvironment;
 
-/// Install a derived snapshot; the captured configuration itself is immutable.
-void _configure(Map<String, String?> values) =>
-    installRuntimeConfiguration(runtimeConfiguration.withOverrides(values));
-
 void main() {
   // CI also runs this test with -DFORESIGHT_ENABLE_TEST_HOOKS=true by name.
   test('crash and delay hooks require an explicit test compilation', () {
@@ -487,15 +483,20 @@ void main() {
 
   test('native runner resolves Finder resource configuration', () {
     const key = 'FORESIGHT_LITERT_RUNNER';
-    final previous = runtimeConfiguration;
+    final previous = runtimeConfiguration.environment[key];
     try {
-      _configure({key: '/bundle with spaces/bin/foresight-model'});
+      runtimeConfiguration.environment[key] =
+          '/bundle with spaces/bin/foresight-model';
       expect(
         liteRtRunner('/obsolete/python-runner'),
         '/bundle with spaces/bin/foresight-model',
       );
     } finally {
-      installRuntimeConfiguration(previous);
+      if (previous == null) {
+        runtimeConfiguration.environment.remove(key);
+      } else {
+        runtimeConfiguration.environment[key] = previous;
+      }
     }
   });
 
@@ -731,8 +732,8 @@ void main() {
       final script = File('${scratch.path}/helper');
       script.writeAsStringSync('#!/bin/sh\ntouch "${marker.path}"\n');
       Process.runSync('/bin/chmod', ['700', script.path]);
-      final previous = runtimeConfiguration;
-      _configure({'FORESIGHT_HELPER': script.path});
+      final previous = runtimeConfiguration.environment['FORESIGHT_HELPER'];
+      runtimeConfiguration.environment['FORESIGHT_HELPER'] = script.path;
       final runtime = createTestTempDirectorySync('of-probe-');
       final socketPath = '${runtime.path}/helper.sock';
       final server = await ServerSocket.bind(
@@ -758,7 +759,11 @@ void main() {
         }
         await server.close();
         runtime.deleteSync(recursive: true);
-        installRuntimeConfiguration(previous);
+        if (previous == null) {
+          runtimeConfiguration.environment.remove('FORESIGHT_HELPER');
+        } else {
+          runtimeConfiguration.environment['FORESIGHT_HELPER'] = previous;
+        }
       }
     },
   );

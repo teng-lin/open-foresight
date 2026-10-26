@@ -26,8 +26,7 @@ bool serviceLaunchLeaseWithdrawn(
   ProfilePaths profile, {
   RuntimeConfiguration? configuration,
 }) {
-  final path =
-      (configuration ?? runtimeConfiguration)['FORESIGHT_STARTUP_STATUS'];
+  final path = runtimeSnapshot(configuration)['FORESIGHT_STARTUP_STATUS'];
   if (path == null || !_isStartupStatusPath(path, profile)) return false;
   return FileSystemEntity.typeSync(path, followLinks: false) ==
       FileSystemEntityType.notFound;
@@ -472,7 +471,7 @@ Future<ServiceClient> ensureService(
   profile,
   startupTimeout: startupTimeout,
   statusProbeLimit: statusProbeLimit,
-  configuration: configuration ?? runtimeConfiguration,
+  configuration: runtimeSnapshot(configuration),
 )).client;
 
 /// Reserve desktop socket lifetime and obtain its final startup snapshot.
@@ -489,7 +488,7 @@ Future<ServiceStartup> ensureServiceSnapshot(
   profile,
   startupTimeout: startupTimeout,
   statusProbeLimit: statusProbeLimit,
-  configuration: configuration ?? runtimeConfiguration,
+  configuration: runtimeSnapshot(configuration),
   snapshot: true,
 );
 

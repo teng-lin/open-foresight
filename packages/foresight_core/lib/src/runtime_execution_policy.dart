@@ -16,7 +16,7 @@ String requireInstalledRuntime(
   String runtime, {
   RuntimeConfiguration? configuration,
 }) {
-  final root = (configuration ?? runtimeConfiguration).installationRoot;
+  final root = runtimeSnapshot(configuration).installationRoot;
   if (root == null || runtime.isEmpty) return runtime;
   final selected = canonicalRuntimePath(runtime);
   if (!selected.startsWith('$root/')) {

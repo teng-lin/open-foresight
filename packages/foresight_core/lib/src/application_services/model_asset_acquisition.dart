@@ -70,7 +70,9 @@ final class ModelAssetAcquisitionCoordinator {
     this.startPreflight,
     this.stopPreflight = _stopProcess,
     RuntimeConfiguration? configuration,
-  }) : configuration = configuration ?? runtimeConfiguration,
+    RuntimeConfiguration Function()? ownerConfiguration,
+  }) : _configuration = configuration?.snapshot(),
+       _ownerConfiguration = ownerConfiguration,
        createDownloader = createDownloader ?? PublicModelFileDownloader.new,
        _prepareGemma = prepareGemma,
        _catalog = catalog,
@@ -79,8 +81,14 @@ final class ModelAssetAcquisitionCoordinator {
   final Future<Process> Function(String runner)? startPreflight;
   final Future<void> Function(Process) stopPreflight;
 
-  /// The owning service's snapshot; direct construction captures the boundary.
-  final RuntimeConfiguration configuration;
+  /// An injected snapshot is fixed at construction. Without one this is a
+  /// legacy direct construction: each access returns a fresh immutable snapshot
+  /// of the boundary, as it read the boundary before injection.
+  /// An owner may supply its own snapshot instead ([ownerConfiguration]).
+  RuntimeConfiguration get configuration =>
+      _configuration ?? _ownerConfiguration?.call() ?? runtimeSnapshot();
+  final RuntimeConfiguration? _configuration;
+  final RuntimeConfiguration Function()? _ownerConfiguration;
   final Store store;
   final void Function() changed;
   final Directory modelRoot;
@@ -292,11 +300,12 @@ final class ModelAssetAcquisitionCoordinator {
       check();
       return;
     }
-    final runner = configuration['FORESIGHT_LITERT_RUNNER'];
+    final config = configuration;
+    final runner = config['FORESIGHT_LITERT_RUNNER'];
     if (runner == null || runner.isEmpty) {
       throw RpcError(RpcErrorCode.unavailable, modelRuntimeUnavailableMessage);
     }
-    final process = await _launchPreflight(runner);
+    final process = await _launchPreflight(runner, config);
     job.preflight = process;
     final out = process.stdout.listen((_) {}, onError: (Object _) {});
     final error = process.stderr.listen((_) {}, onError: (Object _) {});
@@ -333,13 +342,16 @@ final class ModelAssetAcquisitionCoordinator {
     }
   }
 
-  Future<Process> _launchPreflight(String runner) async {
+  Future<Process> _launchPreflight(
+    String runner,
+    RuntimeConfiguration config,
+  ) async {
     try {
       return await (startPreflight?.call(runner) ??
           Process.start(
-            requireInstalledRuntime(runner, configuration: configuration),
+            requireInstalledRuntime(runner, configuration: config),
             ['--check'],
-            environment: configuration.environment,
+            environment: config.environment,
           ));
     } catch (_) {
       throw RpcError(RpcErrorCode.unavailable, modelRuntimeUnavailableMessage);

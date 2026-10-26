@@ -224,14 +224,12 @@ final class ModelRegistry {
       );
       return;
     }
+    final config = domain.configuration;
     final runtime =
         request.kind == 'generation' && request.backend == 'litert_lm'
         ? requireInstalledRuntime(
-            liteRtRunner(
-              request.runtime ?? '',
-              configuration: domain.configuration,
-            ),
-            configuration: domain.configuration,
+            liteRtRunner(request.runtime ?? '', configuration: config),
+            configuration: config,
           )
         : request.runtime ?? '';
     await store.register(
@@ -250,15 +248,16 @@ final class ModelRegistry {
     bool Function()? current,
   }) async {
     final workspace = domain.workspaceGeneration;
+    final config = domain.configuration;
     var registered = false;
     await domain.generationRuntimes.replace(
       (attempt) async {
         final candidate = await configureGeneration(
           store,
-          domain.configuration.nativeLibrary,
+          config.nativeLibrary,
           request.path,
           request.runtime,
-          configuration: domain.configuration,
+          configuration: config,
           backend: request.backend,
           modelType: request.modelType,
           current: attempt.current,

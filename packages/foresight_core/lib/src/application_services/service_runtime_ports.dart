@@ -8,8 +8,9 @@ import '../native.dart';
 import '../platform_services.dart' show RuntimeConfiguration;
 import '../store.dart';
 
-/// The owning service's immutable runtime snapshot, captured once at its
-/// composition boundary and never re-read from process-wide configuration.
+/// The owning service's immutable runtime snapshot. An injected owner captures
+/// it once at its composition boundary; a legacy owner returns a fresh immutable
+/// snapshot of the process boundary. No port exposes the editable boundary.
 abstract interface class RuntimeConfigurationPort {
   RuntimeConfiguration get configuration;
 }

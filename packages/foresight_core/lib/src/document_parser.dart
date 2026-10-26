@@ -18,7 +18,7 @@ class Parser {
     RuntimeConfiguration? configuration,
   }) : _macOS = macOS ?? Platform.isMacOS,
        _macParser = macParser,
-       _configuration = configuration,
+       _configuration = configuration?.snapshot(),
        _startProcess =
            startProcess ??
            ((executable, arguments) => Process.start(
@@ -80,8 +80,7 @@ class Parser {
     if (_macOS && (lower.endsWith('.pdf') || lower.endsWith('.rtf'))) {
       return _MacDocumentExtractor(
         _extractProcess,
-        _macParser ??
-            (_configuration ?? runtimeConfiguration)['FORESIGHT_FILE_PARSER'],
+        _macParser ?? runtimeSnapshot(_configuration)['FORESIGHT_FILE_PARSER'],
       ).extract(path, lower);
     }
     if (lower.endsWith('.pdf')) {
