@@ -144,8 +144,11 @@ def bundle(tmp_path, monkeypatch):
     monkeypatch.setattr(package, "read_version", lambda: ("1.2.3", 42))
     monkeypatch.delenv("FORESIGHT_GOOGLE_CLIENT_JSON", raising=False)
     commands = []
+    real_run = subprocess.run
 
     def run(command, **kwargs):
+        if command[0] == str(tmp_path / "sdk/bin/dart"):
+            return real_run(command, **kwargs)
         commands.append((command, kwargs))
         return subprocess.CompletedProcess(command, 0)
 
