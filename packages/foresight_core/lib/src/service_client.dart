@@ -7,7 +7,6 @@ import 'operations.dart';
 import 'client_diagnostics.dart';
 import 'diagnostics/session.dart';
 import 'rpc_error.dart';
-import 'service_diagnostics.dart';
 import 'service_framing.dart';
 
 // Closing owners flush within two seconds; leave scheduling margin.
@@ -63,17 +62,6 @@ class ServiceClient {
   Timer? _retirement;
   RpcError? _failure;
   ClientDiagnosticConnection? _diagnostics;
-
-  /// Observe an already-established connection returned by the existing opener.
-  /// Its readiness is observed here; no earlier start is invented.
-  void adoptDiagnostics(ServiceDiagnosticEmitter emitter, int? started) {
-    if (isClosed || _diagnostics != null) return;
-    _diagnostics = ClientDiagnosticConnection.begin(
-      emitter: emitter,
-      initial: DiagnosticOutcome.ready,
-      started: started,
-    );
-  }
 
   /// Whether no request is sent on this connection any more: it is closed,
   /// or [retire]d and waiting for its last answers.

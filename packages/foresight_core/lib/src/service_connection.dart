@@ -33,12 +33,10 @@ class ServiceConnection {
   }
 
   Future<ServiceClient> _open() async {
-    final started = _diagnostics?.clockMicros();
     final client = await runWithServiceDiagnosticEmitter(
       _diagnostics,
       () => ensureService(profile),
     );
-    if (_diagnostics case final owner?) client.adoptDiagnostics(owner, started);
     if (_closed) {
       await client.close();
       throw StateError('Client closed');

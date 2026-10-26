@@ -360,6 +360,26 @@ void main() {
     },
   );
 
+  test('a connection opener counts one capacity refusal', () async {
+    await observe(() async {
+      final first = await ServiceClient.connect(
+        '${fixture.profile.runtime}/application.sock',
+      );
+      final second = ServiceConnection(fixture.profile);
+      try {
+        final before = clientDiagnosticObservation()['connectionRefusals']!;
+        await second.connect();
+        expect(clientDiagnosticObservation()['connectionRefusals'], before + 1);
+        fixture.handler = (socket, request) =>
+            fixture.reply(socket, request, canary);
+        expect(await second.stream('notes.list').single, canary);
+      } finally {
+        await second.close();
+        await first.close();
+      }
+    });
+  });
+
   test(
     'a bound client keeps its diagnostic owner for later unbound callbacks',
     () async {
