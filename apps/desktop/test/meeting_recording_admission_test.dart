@@ -44,6 +44,10 @@ class _Reader implements StoreReader {
     requestTag: 'old-one-shot',
     sequence: 0,
   );
+  Future<void> close() async {
+    await replies.close();
+  }
+
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
@@ -80,6 +84,12 @@ class _Connection implements DesktopConnection {
   ) {
     if (!current()) throw StateError('superseded fixture command');
     return command(operation, arguments);
+  }
+
+  @override
+  Future<void> close() async {
+    await store.close();
+    await events.close();
   }
 
   @override
@@ -181,8 +191,7 @@ void main() {
   });
   tearDown(() async {
     await controller.dispose();
-    await connection.store.replies.close();
-    await connection.events.close();
+    await connection.close();
   });
   for (final quick in [false, true]) {
     test(
@@ -278,7 +287,7 @@ void main() {
       }
       await tester.runAsync(() => checked);
       expect(reader.active, 0);
-      await tester.runAsync(() => reader.replies.close());
+      await tester.runAsync(reader.close);
     },
   );
 }
