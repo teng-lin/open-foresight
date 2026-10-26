@@ -86,11 +86,11 @@ def test_source_service_compilation_uses_receipt_verified_explicit_roots(
     (root / "tools/build_diagnostic_worker.py").write_text(
         "import sys,json,pathlib,os\n"
         "sys.exit(int(os.environ['FIXTURE_WORKER_EXIT'])) if os.environ['FIXTURE_WORKER_EXIT'] != '0' else None\n"
-        "args=sys.argv[1:]; output=pathlib.Path(args[args.index('--defines-output')+1])\n"
+        "args=sys.argv[1:]\n"
         "source=args[args.index('--root')+1]; build=args[args.index('--build')+1]\n"
         "assert args[args.index('--mode')+1]=='aot'\n"
         "defines=['-DFORESIGHT_DIAGNOSTIC_TEST_CONTEXT=true', '-DFORESIGHT_DIAGNOSTIC_SOURCE_ANCHOR='+source, '-DFORESIGHT_DIAGNOSTIC_BUILD_ROOT='+build, '-DFORESIGHT_DIAGNOSTIC_NATIVE_ID='+'a'*64, '-DFORESIGHT_DIAGNOSTIC_BUILD_ID='+'b'*64, '-DFORESIGHT_DIAGNOSTIC_CATALOG_ID='+'c'*64, '-DFIXTURE_SPACES=one two']\n"
-        "output.write_bytes(b'\\0'.join(item.encode() for item in defines)+b'\\0')\n"
+        "if '--defines-output' in args: pathlib.Path(args[args.index('--defines-output')+1]).write_bytes(b'\\0'.join(item.encode() for item in defines)+b'\\0')\n"
     )
     binary = tmp_path / "bin"
     binary.mkdir()
@@ -230,3 +230,66 @@ def test_worker_gate_refuses_failed_or_invalid_vm_probe(
     assert "consumer" not in result.stdout
     assert "worker must not run" not in result.stderr
     assert ("probe refused" if probe_exit else "did not report") in result.stderr
+
+
+def test_all_mode_builds_worker_before_tests_and_hosts_only_after_tests(
+    gate_tree, tmp_path
+):
+    import json
+
+    root, build = gate_tree
+    build.mkdir()
+    (root / "packages/foresight_core").mkdir(parents=True)
+    for name in ("build_dart_gates.sh", "ci_timing.sh"):
+        shutil.copyfile(ROOT / "tools" / name, root / "tools" / name)
+    (root / "tools/verify_toolchain_pins.py").write_text("pass\n")
+    run_tests = root / "tools/run_core_tests.sh"
+    run_tests.write_text("#!/bin/sh\nexec dart test fixture-core\n")
+    run_tests.chmod(0o700)
+    (root / "tools/build_diagnostic_worker.py").write_text(
+        "import pathlib,sys\nargs=sys.argv[1:]\n"
+        "build=pathlib.Path(args[args.index('--build')+1])\n"
+        "(build/'worker-built').touch()\n"
+        "if '--defines-output' in args: pathlib.Path(args[args.index('--defines-output')+1]).write_bytes(b'-DFIXTURE=verified\\0')\n"
+    )
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    calls = tmp_path / "commands.jsonl"
+    dart = binary / "dart"
+    dart.write_text(
+        "#!/usr/bin/env python3\nimport json,os,pathlib,sys\nargs=sys.argv[1:]\n"
+        "with open(os.environ['FIXTURE_DART_CALLS'],'a') as stream: stream.write(json.dumps(args)+'\\n')\n"
+        "if len(args)==1 and args[0].endswith('locate.dart'): print(pathlib.Path(__file__).resolve())\n"
+        "elif args[:2]==['compile','exe']: pathlib.Path(args[args.index('-o')+1]).touch()\n"
+        "elif 'test' in args:\n"
+        " build=pathlib.Path(os.environ['FIXTURE_BUILD'])\n"
+        " assert (build/'worker-built').is_file(), 'tests ran before worker compiled'\n"
+        " assert not any((build/name).exists() for name in ['application/foresight-service','application/foresight-mcp']), 'hosts compiled before test gates'\n"
+    )
+    dart.chmod(0o700)
+    result = subprocess.run(
+        [
+            "bash",
+            str(root / "tools/build_dart_gates.sh"),
+            "core",
+            "linux",
+            str(build),
+            sys.executable,
+        ],
+        env={
+            **os.environ,
+            "PATH": f"{binary}:{os.environ['PATH']}",
+            "FORESIGHT_BUILD_MODE": "all",
+            "FIXTURE_BUILD": str(build),
+            "FIXTURE_DART_CALLS": str(calls),
+        },
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    commands = [json.loads(line) for line in calls.read_text().splitlines()]
+    compiled = [i for i, args in enumerate(commands) if args[:2] == ["compile", "exe"]]
+    tested = [i for i, args in enumerate(commands) if "test" in args]
+    assert len(compiled) == 2
+    assert tested and max(tested) < min(compiled)

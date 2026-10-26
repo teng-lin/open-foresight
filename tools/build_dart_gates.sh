@@ -45,6 +45,12 @@ case "$task_gate" in
     fi
     if [[ "$task_mode" != build-only ]]; then
     ci_timed "core analysis" dart analyze
+    fi
+    if [[ "$task_mode" != test-only ]]; then
+      ci_timed "diagnostic worker compilation" foresight_diagnostic_worker \
+        "$task_root" "$task_source_build" "$task_python"
+    fi
+    if [[ "$task_mode" != build-only ]]; then
     if [[ "${FORESIGHT_CORE_COVERAGE_BENCHMARK:-0}" == 1 ]]; then
       # Compare the full suite on the same host/native binaries. Keep coverage
       # enforcement and reject changed test/skip outcomes between the two runs.
@@ -91,9 +97,9 @@ case "$task_gate" in
     mkdir -p "$task_build/application"
     task_worker_gate_temp=$(mktemp -d "$task_build/application/.diagnostic-defines.XXXXXX")
     trap 'rm -rf -- "$task_worker_gate_temp"' EXIT
-    ci_timed "diagnostic worker compilation" foresight_diagnostic_worker \
+    ci_timed "diagnostic worker verification" foresight_diagnostic_worker \
       "$task_root" "$task_source_build" "$task_python" \
-      --defines-output "$task_worker_gate_temp/defines"
+      --verify --defines-output "$task_worker_gate_temp/defines"
     task_source_defines=()
     while IFS= read -r -d '' task_worker_define; do
       task_source_defines+=("$task_worker_define")

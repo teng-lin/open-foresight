@@ -86,9 +86,11 @@ sys.exit(int(os.getenv('RECEIPT_EXIT', '0')))
     (root / "tools/build_diagnostic_worker.py").write_text(
         """import argparse, json, os, sys
 parser = argparse.ArgumentParser()
-for option in ('--root', '--build', '--sdk', '--package-config', '--defines-output'):
+for option in ('--root', '--build', '--sdk', '--package-config'):
     parser.add_argument(option, required=True)
 parser.add_argument('--mode', required=True, choices=['aot'])
+parser.add_argument('--defines-output')
+parser.add_argument('--verify', action='store_true')
 args = parser.parse_args()
 with open(os.environ['SUPPORT_COMMANDS'], 'a') as stream:
     stream.write(json.dumps({'tool': 'worker', 'args': sys.argv[1:]}) + '\\n')
@@ -96,8 +98,9 @@ code = int(os.getenv('WORKER_EXIT', '0'))
 if code:
     sys.exit(code)
 defines = [] if os.getenv('WORKER_DEFINES') == 'empty' else json.loads(os.environ['WORKER_DEFINES'])
-with open(args.defines_output, 'wb') as stream:
-    stream.write(b''.join(value.encode() + b'\\0' for value in defines))
+if args.defines_output:
+    with open(args.defines_output, 'wb') as stream:
+        stream.write(b''.join(value.encode() + b'\\0' for value in defines))
 """
     )
     binary = tmp_path / "bin"
@@ -232,7 +235,15 @@ def test_default_runs_full_suite_once_and_keeps_native_and_hook_gates(gate, cove
     compiled = [c["args"] for c in commands if c["args"][:2] == ["compile", "exe"]]
     assert [args[2:4] for args in compiled] == [WORKER_DEFINES, WORKER_DEFINES]
     root = gate[0].resolve()
-    *receipts, worker = support_commands(gate)
+    support = support_commands(gate)
+    receipts = [row for row in support if row["tool"] == "receipt"]
+    producer, worker = [row for row in support if row["tool"] == "worker"]
+    assert [row["tool"] for row in support] == [
+        "receipt",
+        "worker",
+        *(["receipt"] if coverage == "1" else []),
+        "worker",
+    ]
     # The coverage wrapper is a separate consumer and recomputes verification.
     assert receipts == [
         {
@@ -260,10 +271,12 @@ def test_default_runs_full_suite_once_and_keeps_native_and_hook_gates(gate, cove
             str(root / "packages/foresight_core/.dart_tool/package_config.json"),
             "--mode",
             "aot",
+            "--verify",
             "--defines-output",
             str(defines),
         ],
     }
+    assert producer == {"tool": "worker", "args": worker["args"][:-3]}
     assert defines.parent.parent == root / "build/application"
     assert not defines.parent.exists()
 
@@ -607,7 +620,13 @@ def test_unverified_worker_defines_stop_host_compilation(
     result, commands = run(gate, **settings)
     assert result.returncode == status, result.stdout + result.stderr
     assert message in result.stderr
-    assert any(command["args"][0] == "test" for command in commands)
+    assert any(command["args"][0] == "test" for command in commands) == (
+        "WORKER_EXIT" not in settings
+    )
     assert all(command["args"][0] != "compile" for command in commands)
-    assert [c["tool"] for c in support_commands(gate)] == ["receipt", "worker"]
+    assert [c["tool"] for c in support_commands(gate)] == (
+        ["receipt", "worker"]
+        if "WORKER_EXIT" in settings
+        else ["receipt", "worker", "worker"]
+    )
     assert not list((gate[0] / "build/application").glob(".diagnostic-defines.*"))
