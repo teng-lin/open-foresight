@@ -1,5 +1,6 @@
 #include "../../native/capture_pcm_pipe.h"
 #include <cstring>
+#include <filesystem>
 #include <iostream>
 #include <stdexcept>
 
@@ -16,7 +17,9 @@ int main() {
     buffer.push_back(0);
     const char *created = mkdtemp(buffer.data());
     require(created, "cannot create test root");
-    const std::string root = created;
+    // Only the fresh, exclusively owned fixture gets canonicalized. Production
+    // still refuses symlink ancestors and every unsafe TMPDIR case below.
+    const std::string root = std::filesystem::canonical(created).string();
     setenv("TMPDIR", root.c_str(), 1);
     std::string owned;
     {
