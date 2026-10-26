@@ -4,6 +4,7 @@ Run after building: .venv/bin/python -m pytest tests/service -v
 These fixtures verify ownership and data flow, not inference quality.
 """
 
+import base64
 import concurrent.futures
 import fcntl
 import json
@@ -414,12 +415,81 @@ def test_direct_packaged_entrypoints_enforce_identity_without_launcher(tmp_path,
 
 
 @pytest.fixture
+def first_run_catalog(tmp_path, monkeypatch):
+    from first_run_loopback import LoopbackModels
+    from build_diagnostic_worker import verify_worker_build
+
+    native_build = NATIVE.resolve(strict=True).parent.parent
+    dart = shutil.which("dart")
+    assert dart, "First-run acceptance requires the pinned Dart SDK"
+    sdk = Path(dart).resolve(strict=True).parent.parent
+    receipt = verify_worker_build(
+        ROOT,
+        native_build,
+        sdk,
+        ROOT / "packages/foresight_core/.dart_tool/package_config.json",
+        "aot",
+    )
+    compiled = tmp_path / "first-run-hosts"
+    compiled.mkdir(mode=0o700)
+    with LoopbackModels() as loopback:
+        defines = [
+            f"-D{key}={value}" for key, value in sorted(receipt["defines"].items())
+        ]
+        defines.extend(
+            [
+                "-DFORESIGHT_ENABLE_TEST_HOOKS=true",
+                "-DFORESIGHT_MODEL_CATALOG_TEST_BASE64="
+                + base64.b64encode(json.dumps(loopback.catalog, separators=(",", ":")).encode()).decode("ascii"),
+            ]
+        )
+        for source, name in [
+            ("service.dart", "foresight-service"),
+            ("mcp.dart", "foresight-mcp"),
+        ]:
+            with (compiled / f"{name}.compile.log").open("w") as log:
+                subprocess.run(
+                    [
+                        dart,
+                        "compile",
+                        "exe",
+                        *defines,
+                        str(ROOT / "packages/foresight_core/bin" / source),
+                        "-o",
+                        str(compiled / name),
+                    ],
+                    cwd=ROOT / "packages/foresight_core",
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    timeout=300,
+                    check=True,
+                )
+        monkeypatch.setattr(
+            sys.modules[__name__], "SERVICE", compiled / "foresight-service"
+        )
+        monkeypatch.setattr(sys.modules[__name__], "MCP", compiled / "foresight-mcp")
+        yield loopback
+        # Preserve acquisition evidence even if owner teardown fails below.
+        (tmp_path / "first-run-downloads.json").write_text(
+            json.dumps(loopback.requests, indent=2)
+        )
+        worker_report = tmp_path / "first-run-worker.jsonl"
+        if worker_report.exists():
+            for line in worker_report.read_text().splitlines():
+                owner = json.loads(line)
+                assert owner["uid"] == os.getuid() and owner["synthetic"] is True
+                with pytest.raises(ProcessLookupError):
+                    os.kill(owner["pid"], 0)
+
+
+@pytest.fixture
 def running(tmp_path, request):
+    parameter = getattr(request, "param", None)
+    options = parameter.split(",") if parameter else []
+    first_run = request.getfixturevalue("first_run_catalog") if "first_run" in options else None
     assert SERVICE.is_file() and MCP.is_file(), (
         "Build service and MCP executables first"
     )
-    parameter = getattr(request, "param", None)
-    options = parameter.split(",") if parameter else []
     preferences = {}
     for option in options:
         if option.startswith("idle="):
@@ -493,6 +563,19 @@ def running(tmp_path, request):
         FORESIGHT_DELAY_GENERATION=str(fixtures / "delay"),
         PATH=str(fixtures) + ":" + env["PATH"],
     )
+    if first_run is not None:
+        synthetic_worker = fixtures / "first-run-model-worker"
+        synthetic_worker.write_bytes((ROOT / "tests/service/first_run_model_worker.py").read_bytes())
+        synthetic_worker.chmod(0o700)
+        assert synthetic_worker.stat().st_uid == os.getuid()
+        assert synthetic_worker.stat().st_mode & 0o777 == 0o700
+        env.update(
+            FORESIGHT_MODEL_WORKER=str(synthetic_worker),
+            FORESIGHT_FIRST_RUN_WORKER_REPORT=str(tmp_path / "first-run-worker.jsonl"),
+            FORESIGHT_LITERT_RUNNER=str(runner),
+            FORESIGHT_FIRST_RUN_LOOPBACK=first_run.origin,
+            FORESIGHT_FIRST_RUN_REPORT=str(tmp_path / "first-run.json"),
+        )
     if "capture_poll_gate" in options:
         wrapper = fixtures / (
             "capture_poll_gate.dylib"
@@ -2331,3 +2414,79 @@ def test_internal_model_transport_has_bounded_frames_and_no_profile_authority(
         server.server_close()
         thread.join(timeout=3)
         assert not thread.is_alive()
+
+
+@pytest.mark.parametrize("running", ["without_embedding,first_run"], indirect=True)
+def test_compiled_first_run_setup_download_restart_retry_adoption_and_indexing(
+    running, first_run_catalog
+):
+    """Tiny loopback bytes verify setup ownership, not real-model inference."""
+    flutter = os.environ.get("FORESIGHT_FLUTTER_EXECUTABLE")
+    platform = "macos" if sys.platform == "darwin" else "linux"
+    assert flutter and os.environ.get(f"FORESIGHT_{platform.upper()}_UI_TEST") == "1", (
+        "First-run journey requires an isolated native Flutter display"
+    )
+    peer = running["peer"]
+    assert peer.call("status")["models_busy"] is False
+    imported = peer.call(
+        "sources.import",
+        {
+            "title": "First-run retained source",
+            "text": "Fixture setup indexes this retained source.",
+        },
+    )["id"]
+    running["desktop"].close()
+    env = {
+        **running["env"],
+        "FORESIGHT_MCP_EXECUTABLE": str(MCP),
+        "FORESIGHT_FIRST_RUN_SOURCE_ID": imported,
+    }
+    if platform == "linux":
+        assert env.get("DISPLAY"), "An isolated X display is required"
+        env["GDK_BACKEND"] = "x11"
+    run_tests(
+        "desktop",
+        ["integration_test/first_run_models_test.dart"],
+        1,
+        env,
+        running["root"] / "first-run-events",
+        "first-run",
+        flutter=flutter,
+        device=platform,
+        timeout=300,
+        model_fixture_catalog=first_run_catalog.catalog,
+    )
+    report = json.loads((running["root"] / "first-run.json").read_text())
+    assert all(
+        report[key]
+        for key in [
+            "fresh",
+            "partial",
+            "interrupted",
+            "desktop_closed",
+            "restarted",
+            "checksum_rejected",
+            "retried",
+            "adopted",
+            "indexed",
+            "same_service_mcp",
+        ]
+    )
+    generation = [r for r in first_run_catalog.requests if r["kind"] == "generation"]
+    interrupted = [r for r in generation if r.get("interrupted")]
+    assert interrupted and interrupted[0]["sent"] > 0
+    staged = 0
+    for attempt in interrupted:
+        assert attempt["start"] == staged
+        assert attempt["status"] == (206 if staged else 200)
+        staged += attempt["sent"]
+    resumed = next(r for r in generation if r["mode"] == "corrupt")
+    assert 0 < staged < first_run_catalog.catalog["generation"][0]["bytes"]
+    assert resumed["start"] == staged and resumed["status"] == 206
+    # A checksum rejection discards the partial bytes; retry begins from zero.
+    retried = [r for r in generation if r["mode"] == "good"]
+    assert len(retried) == 1 and retried[0]["start"] == 0
+    assert retried[0]["status"] == 200
+    assert report["real_models"] == "not_run"
+    assert report["real_gpu"] == "not_run"
+    assert (running["root"] / "first-run-worker.jsonl").is_file()

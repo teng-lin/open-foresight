@@ -438,7 +438,8 @@ class PublicModelFileDownloader implements ModelDownloader {
               'memory': model.minimumMemoryGb,
               'root': root.path,
               'existing': existingFile?.path,
-              'source': sourceForTesting?.toString(),
+              'source': (sourceForTesting ?? compiledFixtureModelSource(model))
+                  ?.toString(),
               'connect': deadlines.connect.inMicroseconds,
               'headers': deadlines.headers.inMicroseconds,
               'bodyIdle': deadlines.bodyIdle.inMicroseconds,

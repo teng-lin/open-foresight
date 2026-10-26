@@ -355,8 +355,12 @@ class GemmaDownload implements ModelDownloader {
     String? range,
   }) async {
     var uri = source;
+    final fixture = isCompiledFixtureModelSource(source);
     for (var redirects = 0; redirects <= 5; redirects++) {
-      if (uri.scheme != 'https' || uri.userInfo.isNotEmpty) {
+      if ((fixture
+              ? !isCompiledFixtureModelSource(uri)
+              : uri.scheme != 'https') ||
+          uri.userInfo.isNotEmpty) {
         throw ModelAssetFailure(ModelAssetFailureCode.https);
       }
       _check();

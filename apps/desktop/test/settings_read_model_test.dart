@@ -197,23 +197,33 @@ void main() {
   );
 
   test(
-    'prepared model actions refuse preview and failed reads rather than certify readiness',
+    'prepared model actions wait through preview without certifying readiness and propagate failures',
     () async {
       final reader = _Reader();
-      expect(await readSetupModel(reader, 'speech'), isNull);
-      reader.nextFreshness = ReadFreshness.preview;
-      await expectLater(
-        readSetupModel(reader, 'speech'),
-        throwsA(isA<RpcError>()),
-      );
-      reader.nextError = RpcError(
+      var settled = false;
+      final pending = readSetupModel(reader, 'speech').then((value) {
+        settled = true;
+        return value;
+      });
+      reader.reply(0, null, freshness: ReadFreshness.preview);
+      await Future<void>(() {});
+      expect(settled, false);
+      expect(reader.active, 1);
+      reader.reply(0, null);
+      expect(await pending, isNull);
+      expect(reader.active, 0);
+      final failure = RpcError(
         RpcErrorCode.unavailable,
         'fixture model failure',
       );
-      await expectLater(
-        readSetupModel(reader, 'speech'),
-        throwsA(same(reader.nextError)),
-      );
+      final failed = readSetupModel(reader, 'speech');
+      final assertion = expectLater(failed, throwsA(same(failure)));
+      reader.reply(1, null, freshness: ReadFreshness.failed, error: failure);
+      await assertion;
+      expect(reader.active, 0);
+      for (final stream in reader.streams) {
+        await stream.close();
+      }
     },
   );
 }

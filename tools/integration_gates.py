@@ -2,6 +2,7 @@
 """Explicit, fail-closed integration groups; only disposable profiles/virtual audio."""
 
 import argparse
+import base64
 from contextlib import contextmanager
 import hashlib
 import importlib
@@ -95,6 +96,7 @@ def run_tests(
     *,
     device=None,
     timeout=2400,
+    model_fixture_catalog=None,
 ):
     output.mkdir(parents=True, exist_ok=True)
     events = output / f"{name}.events.jsonl"
@@ -105,6 +107,19 @@ def run_tests(
         and any(path.startswith("integration_test/") for path in files)
         else {}
     )
+    if model_fixture_catalog is not None:
+        if package != "desktop" or files != [
+            "integration_test/first_run_models_test.dart"
+        ]:
+            raise ValueError(
+                "Compiled model fixture is restricted to the first-run journey"
+            )
+        defines.update(
+            FORESIGHT_ENABLE_TEST_HOOKS="true",
+            FORESIGHT_MODEL_CATALOG_TEST_BASE64=base64.b64encode(
+                json.dumps(model_fixture_catalog, separators=(",", ":")).encode()
+            ).decode("ascii"),
+        )
     aliases = []
     command_files = []
     for relative in files:
