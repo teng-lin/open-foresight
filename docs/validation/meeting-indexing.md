@@ -84,3 +84,57 @@ never extend the snapshot. Paused or explicitly unconfigured indexing adds no
 wait. The normal indexed-source allowlist and post-retrieval revision checks
 remain authoritative. Stop still commits and releases capture independently of
 helper indexing. The same 64 bound limits concurrent readiness waiters.
+
+
+## Fixed-workload resource measurements (2026-10-26)
+
+The [portable numeric record](incremental-indexing-measurements-2026-10-26.json)
+contains the existing fixed 64/128 append workloads and unchanged processed-content
+ratio limit of 2.5. Application row/byte/piece/request work doubles; actual
+controlled helper token/embedding work doubles and snapshot construction is 2.25x.
+
+| Observed measurement | N = 64 | N = 128 |
+| --- | ---: | ---: |
+| Application transcript bytes read | 7,936 | 15,872 |
+| Helper tokenized plus embedded bytes | 9,728 | 19,456 |
+| Application process CPU ticks (100 Hz) | 133 | 222 |
+| Owned helper child CPU ticks (100 Hz) | 15 | 30 |
+| Sum of whole-index settlement durations (microseconds) | 5,083,652 | 9,924,924 |
+| Application DB / WAL physical bytes | 389,120 / 4,132,392 | 417,792 / 4,144,752 |
+| Actual source-history content bytes | 0 | 0 |
+| Sampled pending jobs / changes | 1 / 1 | 1 / 1 |
+
+The record includes every whole-index and helper RPC duration, all four pending
+counts, native DB before/after/delta bytes, and the existing close observations.
+Application close plus Domain drain after completed indexing took 9,787
+microseconds. Helper shutdown is explicitly its existing SIGKILL plus authoritative
+wait, not graceful drain. These timings are observations, with no new latency gate.
+
+CPU baselines follow fixture setup. No loop samples or numeric startup constant
+are excluded. Application durations include pending-query instrumentation. Pending
+high-water values are sampled after append, immediately after index start, and
+after settlement; they are not continuous peaks. The native N128 parent follows
+N64 in the same warm helper/database, so absolute database sizes are not an
+independent doubling experiment. JSON serialization bytes are separate from actual
+history-content bytes. The controlled model proves processed-content scaling,
+not production-model CPU latency, physical audio, GPU, or statistical performance.
+
+Run the existing public cases with the qualified mandatory SQL fixture and the
+separate test-helper target:
+
+```sh
+cd packages/foresight_core
+dart test test/meeting_incremental_projection_test.dart \
+  --plain-name 'producer append work and serialization scale linearly without source history'
+cd ../..
+cmake --build build --target helper_transcript_index_test --parallel 2
+ctest --test-dir build --output-on-failure -R '^helper_transcript_index$'
+```
+
+Keep `FORESIGHT_TEST_SQL_SUPPORT_LIBRARY` pointed at the qualified SQL product
+and `FORESIGHT_TEST_HELPER` separate from production `FORESIGHT_HELPER`. Use a
+short private directory with mode 0700 under `/var/tmp` for `TMPDIR` and
+`FORESIGHT_TEST_TEMP_ROOT`; preserve raw output and source/product identities.
+The full Core qualification on `5e672a72` passed 2,889 tests with 16 skipped and
+91.04% coverage against 90%. The following `8c4807cb` changes only the output
+label and passed the exact focused case; it is not another full-suite run.
