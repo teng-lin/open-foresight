@@ -223,7 +223,7 @@ void main() {
       snapshots.add(snapshot(0));
       linearityReport = {
         'workload':
-            'fixed64/128; existing synthetic producer peer; no startup excluded',
+            'fixed64/128; existing synthetic producer peer; fixture setup not measured; no loop samples excluded',
         'cpu_scope':
             'whole test-runner process including in-process gRPC peer; raw Linux ticks, null on other OS',
         'pending_sampling':
