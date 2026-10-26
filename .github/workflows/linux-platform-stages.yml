@@ -209,6 +209,8 @@ jobs:
             --parents-json "$STAGE_PARENTS" --cmake-arg=-G --cmake-arg=Ninja \
             --input native=build/ci-input/native "${args[@]}"
       - name: Fresh fast integration against the current native prerequisite
+        env:
+          FORESIGHT_TEST_SQL_SUPPORT_LIBRARY: ${{ github.workspace }}/build/native/libforesight_sql_support.so
         run: xvfb-run -a dbus-run-session -- .venv/bin/python tools/integration_gates.py --suite fast --native build/native/libforesight_native.so --output test-results/fast-integration
       - name: Retain the independently qualified desktop stage
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

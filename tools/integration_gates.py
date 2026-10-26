@@ -619,7 +619,7 @@ def audio_gate(args, env):
 
 
 def fast_gate(args, env):
-    with tempfile.TemporaryDirectory(prefix="of-fail-", dir="/tmp") as directory:
+    with tempfile.TemporaryDirectory(prefix="of-fail-", dir="/var/tmp") as directory:
         runner = Path(directory) / "pw-record"
         runner.write_text("#!/bin/sh\nexit 1\n")
         runner.chmod(0o700)
