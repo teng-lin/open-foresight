@@ -77,9 +77,9 @@ directory listing.
   - argument errors;
   - zero libc DIR calls, using interposed `opendir`, `fdopendir`, `readdir` and
     `closedir`.
-- Source mutants of each check were confirmed to fail that test. The
-  oversized-read mutant shows up only as an out-of-bounds stack read, so it
-  also needs the ASan run.
+- Guard-deletion mutants exercised the checks above. The oversized-read
+  negative control remains in the native test; ASan confirmation of that
+  specific mutation is pending and is not claimed by this qualification.
 - Real filesystems that were run are recorded with each qualification run. The
   ext4, XFS and real `MNT_UNION` cases require mounts and are not executed by
   the unprivileged CI fixtures. The union refusal is an injected `fstatfs`
