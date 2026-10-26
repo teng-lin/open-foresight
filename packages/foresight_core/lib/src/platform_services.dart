@@ -716,7 +716,12 @@ RuntimeConfiguration configureProfileRuntime(
     _profileRuntimeDefaults(data).forEach(
       (key, value) => boundary.environment.putIfAbsent(key, () => value),
     );
-    profiled = boundary.snapshot();
+    // Preserve legacy cache defaults while selecting the bound owner's native
+    // resources. An explicitly supplied boundary still takes precedence.
+    profiled =
+        (configuration == null ? currentOwnerRuntimeSnapshot : null)
+            ?.withProfileRuntime(data) ??
+        boundary.snapshot();
   }
   configureNativeEnvironment(configuration: profiled);
   return profiled;

@@ -29,6 +29,50 @@ File _script(Directory directory, String name, String body) {
   return file;
 }
 
+Future<Map<String, Object?>> _nativeProfileSelection(
+  String directory,
+  String nativeLibrary, {
+  bool explicit = false,
+  bool scoped = true,
+  bool service = false,
+}) async {
+  final missing = '$directory/missing-legacy-native.so';
+  installRuntimeConfiguration(
+    RuntimeConfiguration({'FORESIGHT_NATIVE': missing}),
+  );
+  final owned = RuntimeConfiguration({'FORESIGHT_NATIVE': nativeLibrary});
+  final profile = ProfilePaths('$directory/data', '$directory/run');
+  Future<void> start() async {
+    if (service) {
+      bootstrapSqlSupportFixture();
+      final owner = await ApplicationService.start(
+        profile,
+        desktopPeerVerifier: (_) => false,
+      );
+      await owner.close();
+    } else {
+      final lock = await acquireServiceProfileLock(
+        profile,
+        launchWithdrawn: () => false,
+        configuration: explicit ? owned : null,
+      );
+      await lock.unlock();
+      await lock.close();
+    }
+  }
+
+  try {
+    await (scoped ? runWithRuntimeConfiguration(owned, start) : start());
+    return {
+      'ok': true,
+      'legacyDefaults': runtimeConfiguration['FORESIGHT_LITERT_CACHE'],
+      'ownerUnchanged': owned['FORESIGHT_LITERT_CACHE'] == null,
+    };
+  } on ArgumentError catch (error) {
+    return {'ok': false, 'missingLegacyLibrary': '$error'.contains(missing)};
+  }
+}
+
 void main() {
   bootstrapSqlSupportFixture();
   late Directory root;
@@ -36,6 +80,55 @@ void main() {
     root = createTestTempDirectorySync('runtime-configuration-');
     final previous = runtimeConfiguration;
     addTearDown(() => installRuntimeConfiguration(previous));
+  });
+
+  group('profile native selection', () {
+    Future<Map<String, Object?>> run({
+      bool explicit = false,
+      bool scoped = true,
+      bool service = false,
+    }) {
+      final directory = root.path;
+      final nativeLibrary = Platform.environment['FORESIGHT_NATIVE_LIBRARY']!;
+      return Isolate.run(
+        () => _nativeProfileSelection(
+          directory,
+          nativeLibrary,
+          explicit: explicit,
+          scoped: scoped,
+          service: service,
+        ),
+      );
+    }
+
+    test('explicit snapshot wins over a missing legacy library', () async {
+      final result = await run(explicit: true);
+      expect(result['ok'], isTrue);
+      expect(result['legacyDefaults'], isNull);
+      expect(result['ownerUnchanged'], isTrue);
+    });
+
+    test(
+      'scope selects native resources and preserves legacy defaults',
+      () async {
+        final result = await run();
+        expect(result['ok'], isTrue);
+        expect(result['legacyDefaults'], '${root.path}/data/cache/litert');
+        expect(result['ownerUnchanged'], isTrue);
+      },
+    );
+
+    test('default service uses its scoped native library', () async {
+      final result = await run(service: true);
+      expect(result['ok'], isTrue);
+      expect(result['legacyDefaults'], '${root.path}/data/cache/litert');
+    });
+
+    test('without a scope a missing legacy library still fails', () async {
+      final result = await run(scoped: false);
+      expect(result['ok'], isFalse);
+      expect(result['missingLegacyLibrary'], isTrue);
+    });
   });
 
   group('snapshots', () {
