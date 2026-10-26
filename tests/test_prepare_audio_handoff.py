@@ -94,7 +94,10 @@ def test_audio_restores_before_readonly_portable_mount_and_does_not_build_app():
     assert '-v "$PWD/build/portable/dist/open-foresight:/portable:ro"' in script
     assert 'chown "$2:$3" /src' in script
     assert "--cap-drop ALL --cap-add CHOWN --security-opt no-new-privileges" in script
-    assert "--cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID" in script
+    assert (
+        "--cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID --cap-add DAC_OVERRIDE"
+        in script
+    )
     assert script.index(
         "--workspace /src --flutter-root /opt/flutter --"
     ) < script.index("dbus-run-session -- python3 tools/integration_gates.py")

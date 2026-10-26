@@ -73,7 +73,7 @@ else
     --allow-litert-unavailable --bundle dist/open-foresight --models /models --output /reports/software-gpu || task_status=$?
   fi
   if [[ "${VIRTUAL_AUDIO_SELECTED:-true}" == true ]]; then
-  docker run --rm --network none --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID \
+  docker run --rm --network none --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID --cap-add DAC_OVERRIDE \
     --security-opt no-new-privileges \
     -v "$task_audio_volume:/src" -v "$PWD/build/portable/dist/open-foresight:/portable:ro" \
     -v "$PWD/build/acceptance-models:/models:ro" \
