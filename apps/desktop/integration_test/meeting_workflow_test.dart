@@ -720,7 +720,11 @@ void main() {
         'Ask what you can do for your country.',
       );
       await selectMeetingPanel(tester, 'Summary');
-      await tester.tap(find.text('Previous versions'));
+      final previousVersions = find.text('Previous versions');
+      await tester.ensureVisible(previousVersions);
+      await tester.pumpAndSettle();
+      expect(previousVersions.hitTestable(), findsOneWidget);
+      await tester.tap(previousVersions);
       await tester.pumpAndSettle();
       expect(
         find.textContaining('My meeting review: preserve this edit.'),
