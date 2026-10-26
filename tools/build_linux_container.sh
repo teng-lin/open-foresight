@@ -4,6 +4,23 @@ set -euo pipefail
 task_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$task_root"
 task_python=${FORESIGHT_HOST_PYTHON:-python3}
+# Build/test tooling uses supported Python 3.13 independently of the
+# reusable SDK's Python 3.12 model/runtime environments. Preserve the original
+# prefix so its interpreter and standard library resolve without relocation.
+task_tooling_prefix=$("$task_python" -I -c '
+from pathlib import Path
+import sys
+if sys.version_info[:2] != (3, 13):
+    raise SystemExit("Linux build tooling requires Python 3.13")
+print(Path(sys.base_prefix).resolve())
+')
+case "$task_tooling_prefix" in
+  /|/usr|/usr/*|/bin|/bin/*|/sbin|/sbin/*|/lib|/lib/*|/lib64|/lib64/*|/etc|/etc/*|/opt|/opt/toolchain|/opt/toolchain/*|/opt/flutter|/opt/flutter/*|/opt/dev-python|/opt/dev-python/*|/opt/litert-*|/opt/whisper-*|/src|/src/*|/workspace|/workspace/*|/out|/out/*|/run|/run/*)
+    echo 'Python build runtime would replace container paths; select an isolated Python 3.13 installation' >&2
+    exit 1 ;;
+esac
+task_tooling_runtime="$task_tooling_prefix/bin/python3"
+[[ -x "$task_tooling_runtime" ]] || { echo 'Python 3.13 runtime is incomplete' >&2; exit 1; }
 task_sdk=${SDK_IMAGE:-open-foresight-sdk:local}
 task_seed=${APP_DEPENDENCY_SEED:-$task_root/build/app-dependency-seed}
 task_output=${LINUX_BUILD_OUTPUT:-$task_root/build/portable}
@@ -75,10 +92,11 @@ if [[ -n "${FORESIGHT_WEB_CONTENT_API_KEY:-}" ]]; then
   printf '%s' "$FORESIGHT_WEB_CONTENT_API_KEY" > "$task_secrets/web_key"
   task_mounts+=(-v "$task_secrets/web_key:/run/secrets/foresight_web_content_api_key:ro")
 fi
-task_env=(-e PUB_CACHE=/src/.pub-cache -e SOURCE_REVISION -e SOURCE_DATE_EPOCH -e VERSION -e RELEASE -e OUT_UID -e OUT_GID
+task_env=(-e "FORESIGHT_TOOLING_PYTHON_RUNTIME=$task_tooling_runtime" -e PUB_CACHE=/src/.pub-cache -e SOURCE_REVISION -e SOURCE_DATE_EPOCH -e VERSION -e RELEASE -e OUT_UID -e OUT_GID
   -e CI_TIER -e BUILD_LABEL -e REQUIRE_GOOGLE_CLIENT -e GITHUB_REPOSITORY -e GITHUB_WORKFLOW -e GITHUB_RUN_ID -e GITHUB_RUN_ATTEMPT -e GITHUB_RUN_NUMBER -e FORESIGHT_CORE_COVERAGE_BENCHMARK -e FORESIGHT_QUERY_TERMS_URL -e FORESIGHT_LINUX_TEST_SCHEDULE)
 if [[ "$task_mode" != test-only ]]; then
   docker run --rm "${task_env[@]}" ${task_mounts[@]+"${task_mounts[@]}"} \
+    -v "$task_tooling_prefix:$task_tooling_prefix:ro" \
     -v "$task_root:/workspace:ro" -v "$task_output:/out" -v "$task_output/ci-inputs.json:/ci-inputs.json:ro" \
     "$task_image" bash /workspace/tools/linux_container_build.sh
 fi
@@ -90,7 +108,8 @@ if [[ "$task_mode" != build-only ]]; then
     task_security+=(--security-opt "apparmor=$FORESIGHT_CONTAINER_APPARMOR")
   fi
   docker run --rm "${task_security[@]}" \
-    "${task_env[@]}" -v "$task_root:/workspace:ro" -v "$task_output/evidence:/out" \
+    "${task_env[@]}" -v "$task_tooling_prefix:$task_tooling_prefix:ro" \
+    -v "$task_root:/workspace:ro" -v "$task_output/evidence:/out" \
     -v "$task_output/ci-inputs.json:/ci-inputs.json:ro" -v "$task_output/handoff:/handoff:ro" \
     "$task_image" bash /workspace/tools/linux_container_test.sh
 fi

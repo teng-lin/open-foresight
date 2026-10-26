@@ -16,6 +16,26 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = "open-foresight-1.0.0-1-linux-x86_64.tar.gz"
 
 
+def test_system_python_prefix_cannot_replace_container_toolchain(tmp_path):
+    root = tmp_path / "checkout"
+    (root / "tools").mkdir(parents=True)
+    shutil.copy2(ROOT / "tools/build_linux_container.sh", root / "tools")
+    selected = tmp_path / "host-python"
+    selected.write_text("#!/bin/sh\nprintf '/usr\\n'\n")
+    selected.chmod(0o755)
+    result = subprocess.run(
+        ["bash", str(root / "tools/build_linux_container.sh"), "--prepare-only"],
+        env={**os.environ, "FORESIGHT_HOST_PYTHON": str(selected)},
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "Python build runtime would replace container paths" in result.stderr
+    assert not (root / "build").exists()
+
+
 def write_script(path, body):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(textwrap.dedent(body))
@@ -49,6 +69,12 @@ def driver(tmp_path):
         """,
     )
     write_script(tools / "build.sh", "set -eu\nprintf '%s\\n' \"$@\" > build-args\n")
+    # Package installation is covered by the bootstrap contract and actual
+    # locked-runtime proof; this namespace fixture has no dependency downloads.
+    write_script(
+        tools / "linux_tooling_python.sh",
+        f'foresight_select_tooling_python() {{ export FORESIGHT_PYTHON="{sys.executable}"; }}\n',
+    )
     write_script(
         tools / "ci_app_dependency_seed.py",
         """
@@ -132,6 +158,10 @@ def driver(tmp_path):
                 if value == '-v':
                     host, container, *_ = args[index + 1].split(':')
                     mounts[container] = host
+            runtime = str(Path(sys.base_prefix).resolve())
+            assert mounts[runtime] == runtime
+            assert runtime + ':' + runtime + ':ro' in args
+            assert 'FORESIGHT_TOOLING_PYTHON_RUNTIME=' + runtime + '/bin/python3' in args
             output = Path(mounts['/out'])
             if args[-1].endswith('linux_container_test.sh'):
                 assert (Path(mounts['/handoff']) / 'revision').is_file()

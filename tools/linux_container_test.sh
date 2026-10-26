@@ -7,7 +7,9 @@ set -euo pipefail
 [[ "$OUT_UID:$OUT_GID" =~ ^[0-9]+:[0-9]+$ ]]
 mkdir -p /out
 trap 'chown -R "$OUT_UID:$OUT_GID" /out' EXIT
-task_python=${FORESIGHT_PYTHON:-/opt/dev-python/bin/python}
+source /workspace/tools/linux_tooling_python.sh
+foresight_select_tooling_python /workspace
+task_python=$FORESIGHT_PYTHON
 "$task_python" /workspace/tools/ci_linux_handoff.py restore --root /src --directory /handoff \
   --revision "$SOURCE_REVISION" --inputs /ci-inputs.json
 cd /src
