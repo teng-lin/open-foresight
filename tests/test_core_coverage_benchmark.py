@@ -107,6 +107,10 @@ with open(args.defines_output, 'wb') as stream:
         f"#!{sys.executable}\n"
         + """import json, os, pathlib, sys
 args = sys.argv[1:]
+if len(args) == 1 and args[0].endswith('/locate.dart'):
+    assert 'Platform.resolvedExecutable' in pathlib.Path(args[0]).read_text()
+    print(pathlib.Path(__file__).resolve())
+    sys.exit(0)
 with open(os.environ['COMMANDS'], 'a') as stream:
     stream.write(json.dumps({'args': args, 'tool': sys.argv[0], 'native': os.getenv('FORESIGHT_NATIVE_LIBRARY'),
                              'helper': os.getenv('FORESIGHT_HELPER'),
@@ -209,7 +213,9 @@ def test_default_runs_full_suite_once_and_keeps_native_and_hook_gates(gate, cove
     assert result.returncode == 0, result.stdout + result.stderr
     tests = [command for command in commands if command["args"][0] == "test"]
     assert len(tests) == 1
-    assert tests[0]["test_helper"] == str(gate[0] / "build/services/helper/ForesightHelperTest")
+    assert tests[0]["test_helper"] == str(
+        gate[0] / "build/services/helper/ForesightHelperTest"
+    )
     assert not any(arg.endswith(".dart") for arg in tests[0]["args"])
     assert any(arg.startswith("--coverage=") for arg in tests[0]["args"]) == (
         coverage == "1"
