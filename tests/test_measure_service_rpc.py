@@ -109,7 +109,7 @@ def diagnostic_capture(monkeypatch, inventory, fields):
 def test_sealed_diagnostic_data_is_owned_pinned_and_never_payload_hashed(diagnostic_page_factory, monkeypatch):
     descriptor, child, fields = diagnostic_page_factory()
     report = {"diagnostic_context": DIAGNOSTIC_CONTEXT}
-    inventory = rpc.RuntimeInventory(report)
+    inventory = rpc.RuntimeInventory(report, diagnostic_context=DIAGNOSTIC_CONTEXT)
     actual_pread = os.pread
     reads = []
 
@@ -148,6 +148,51 @@ def test_sealed_diagnostic_data_is_owned_pinned_and_never_payload_hashed(diagnos
 def test_diagnostic_inventory_requires_exact_external_identity_context(context):
     with pytest.raises(ValueError, match="expected diagnostic context"):
         rpc.RuntimeInventory({}, diagnostic_context=context)
+
+
+def test_reported_context_cannot_enable_diagnostic_exception(diagnostic_page_factory, monkeypatch):
+    _, _, fields = diagnostic_page_factory()
+    report = {"diagnostic_context": DIAGNOSTIC_CONTEXT}
+    inventory = rpc.RuntimeInventory(report)
+    assert inventory.diagnostic_context is None
+    actual_open = rpc.os.open
+
+    def opened(path, *args, **kwargs):
+        assert "/map_files/" not in str(path), "report data authorized a diagnostic handle"
+        return actual_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(rpc.os, "open", opened)
+    try:
+        with pytest.raises(ValueError, match="Deleted mapped file"):
+            diagnostic_capture(monkeypatch, inventory, fields)
+    finally:
+        inventory.finish()
+    assert report["status"] == "incomplete" and not inventory.diagnostic_handles
+
+
+@pytest.mark.parametrize("method", ["capture", "mapped_diagnostic"])
+@pytest.mark.parametrize("already_captured", [False, True])
+def test_finished_inventory_cannot_open_new_pins(diagnostic_page_factory, monkeypatch, method, already_captured):
+    _, _, fields = diagnostic_page_factory()
+    report = {}
+    inventory = rpc.RuntimeInventory(report, diagnostic_context=DIAGNOSTIC_CONTEXT)
+    if already_captured:
+        diagnostic_capture(monkeypatch, inventory, fields)
+    pinned = [fd for fd, _ in inventory.diagnostic_handles.values()]
+    inventory.finish()
+    before = len(report.get("mapped_runtime_snapshots", []))
+    monkeypatch.setattr(rpc.os, "open", lambda *args, **kwargs: pytest.fail("opened after finish"))
+    monkeypatch.setattr(rpc.os, "pidfd_open", lambda *args, **kwargs: pytest.fail("pinned after finish"))
+    with pytest.raises(RuntimeError, match="already finished"):
+        if method == "capture":
+            inventory.capture(os.getsid(0), "after finish")
+        else:
+            inventory.mapped_diagnostic(os.getpid(), os.getsid(0), fields)
+    assert len(report.get("mapped_runtime_snapshots", [])) == before
+    assert not inventory.pending and not inventory.diagnostic_handles
+    for fd in pinned:
+        with pytest.raises(OSError):
+            os.fstat(fd)
 
 
 @pytest.mark.parametrize("change", ["no-context", "unknown-name", "executable", "private", "offset", "range",
@@ -259,6 +304,36 @@ def test_diagnostic_permissions_rechecked_before_finish(diagnostic_page_factory,
     for fd in pinned:
         with pytest.raises(OSError):
             os.fstat(fd)
+
+
+@pytest.mark.parametrize("validation_fails", [False, True])
+def test_diagnostic_close_failure_uses_its_own_exception_state(diagnostic_page_factory, monkeypatch, validation_fails):
+    descriptor, _, fields = diagnostic_page_factory()
+    report = {}
+    inventory = rpc.RuntimeInventory(report, diagnostic_context=DIAGNOSTIC_CONTEXT)
+    diagnostic_capture(monkeypatch, inventory, fields)
+    pinned = next(iter(inventory.diagnostic_handles.values()))[0]
+    if validation_fails:
+        os.pwrite(descriptor, b"X" * 32, 32)
+    actual_close = os.close
+
+    def closed(fd):
+        actual_close(fd)
+        if fd == pinned:
+            raise OSError("controlled close failure")
+
+    try:
+        raise LookupError("unrelated caller exception")
+    except LookupError:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(rpc.os, "close", closed)
+            with pytest.raises(ValueError, match="immutable header changed" if validation_fails else "handle cleanup failed") as failure:
+                inventory.finish()
+    assert report["status"] == "incomplete" and not inventory.diagnostic_handles
+    if validation_fails:
+        assert "Diagnostic data handle cleanup failed" in failure.value.__notes__
+    with pytest.raises(OSError):
+        os.fstat(pinned)
 
 
 @pytest.mark.parametrize("failure", ["not-peer", "outside-session", "foreign-owner", "wrong-parent", "exited"])

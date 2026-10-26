@@ -705,7 +705,7 @@ class RuntimeInventory:
         self.report = report
         # Optional only for a caller that independently verified its source/Worker
         # cohort. Header identifiers never authenticate their own expected values.
-        context = diagnostic_context if diagnostic_context is not None else report.get("diagnostic_context")
+        context = diagnostic_context
         if context is not None and (
             not isinstance(context, dict) or set(context) != {"native_id", "worker_id", "catalog_id"}
             or any(not isinstance(v, str) or re.fullmatch(r"[0-9a-f]{64}", v) is None for v in context.values())
@@ -789,6 +789,8 @@ class RuntimeInventory:
                 os.close(descriptor)
 
     def mapped_diagnostic(self, pid: int, session: int, fields: list[str]) -> dict[str, Any]:
+        if self.finished:
+            raise RuntimeError("Runtime inventory is already finished")
         if (self.diagnostic_context is None or fields[1] != "rw-s" or int(fields[2], 16) != 0
                 or re.fullmatch(r"[0-9a-f]+-[0-9a-f]+", fields[0]) is None):
             raise ValueError("Unqualified diagnostic data mapping")
@@ -911,6 +913,8 @@ class RuntimeInventory:
                 stream.close()
 
     def capture(self, session: int, condition: str) -> None:
+        if self.finished:
+            raise RuntimeError("Runtime inventory is already finished")
         if sys.platform != "linux":
             raise RuntimeError("Native process measurement requires Linux")
         self.seed(self.report.get("inputs", {}))
@@ -980,6 +984,7 @@ class RuntimeInventory:
             return
         self.finished = True
         started = time.perf_counter_ns()
+        failure: BaseException | None = None
         try:
             for diagnostic_identity_key, (descriptor, immutable) in self.diagnostic_handles.items():
                 if self.diagnostic_key(self.diagnostic_metadata(descriptor)) != self.diagnostic_key(self.diagnostic_objects[diagnostic_identity_key]):
@@ -1005,6 +1010,7 @@ class RuntimeInventory:
                                 hash_source="private mutable shared data, post-run hash" if identity["mutable_shared_data"] else "pinned mapped file, hashed after workloads",
                                 hashed_metadata=before, changed_since_snapshot=self.key(before) != key)
         except BaseException as error:
+            failure = error
             self.report["mapped_runtime_error"] = repr(error)
             self.report["status"] = "incomplete"
             raise
@@ -1024,9 +1030,8 @@ class RuntimeInventory:
                 self.diagnostic_handles.clear()
                 if close_failed:
                     self.report["status"] = "incomplete"
-                    active_error = sys.exception()
-                    if active_error is not None:
-                        active_error.add_note("Diagnostic data handle cleanup failed")
+                    if failure is not None:
+                        failure.add_note("Diagnostic data handle cleanup failed")
                     else:
                         raise ValueError("Diagnostic data handle cleanup failed")
 
