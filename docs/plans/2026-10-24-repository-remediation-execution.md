@@ -1452,3 +1452,58 @@ assertion in `service_isolate_test.dart`; its native **60/60**, Core **2,886 /
 14 skipped** other cases and desktop **636 / 13 skipped** passed. That health
 failure remains under investigation, with its deadline and healthy-state
 assertion retained. These results do not certify the skipped Mac packaging steps.
+
+### Parallel consumer repairs and final local follow-up, October 26
+
+The audio consumer now API-qualifies the original source/build handoff and
+independently derives its expected SDK, dependency-seed and producer-recipe
+inputs. It restores the original `/src` before mounting the portable bundle
+read-only at `/portable`. The existing verifier and original Worker/service
+bytes remain unchanged; no application or SDK compilation supplies this fix.
+Actual qualified input equality, byte/mode/link/mtime restoration and the
+original Worker's thirteen compilation defines pass. Fourteen original artifact
+records remain unchanged. Setup retains only the capabilities required to
+prepare ownership and drop UID/GID/groups; actual test execution has zero
+effective capabilities and private trusted home/temp storage. The initial
+verifier mount-layout and missing setup-capability failures remain retained.
+
+The fast source gate binds the SQL library beside its selected native library,
+refusing missing, indirect or host-substituted SQL. Its two actual bootstrap
+errors became **2 passing cases / zero skips**, without changing products.
+The three GUI/F12 cases and remaining compiled service/MCP cases passed
+**38/38 / zero skips** through Flutter's launcher. The Ubuntu wrapper also
+transfers only the exact root-owned, mode-0700 tooling venv before dropping
+privilege; actual execution through that same private Python passed.
+
+Full Python qualification of `6ac8a96c` passed **6,254 / 32 skipped / 95.24%**;
+Ruff, mypy, timeout checks and matched actionlint/ShellCheck passed. Skip reasons
+match the earlier baseline. The preceding `af09e8c0` run's **4 failed / 6,247
+passed / 32 skipped / 95.24%** remains failed evidence. Two orchestration fixtures
+needed the new required handoff inputs, and two structural contracts needed to
+follow the explicit entrypoint-to-runtime delegation. All original gate,
+secrets/layer, package-flag and count assertions remain. Three added controls
+refuse absent source, absent handoff and failed restoration. Affected modules
+passed **98/98** and **59/59**. Complete Git-free source views separately passed
+the four affected modules **163/163 in each of unrelated-PR, main and unset-ref
+contexts**, with actual absent Git metadata and unchanged original source.
+
+The Mac health assertion now retains validated closed health tags and booleans
+on failure, then rethrows the original error. Its healthy criterion and
+15-second deadline remain unchanged. The Linux named case and full Core suite
+passed: **2,889 / the same 16 skipped / 91.04% (24,585/27,006)**. Analysis and
+formatting passed. The private test overlay left original test bytes/mode and
+all thirteen Native/SQL artifacts unchanged. This does not diagnose or resolve
+the original Mac failure; the current-head hosted run must establish that path.
+An older local Mac source reference could not compile the current configuration
+interface and remains explicitly unqualified. Its protected configuration bodies
+were left untouched. The official failed-Mac-only retry is separate evidence.
+
+Native peer and tools-disabled Claude CLI reviews converged on these repairs.
+Evidence: `/var/tmp/p95r64/qualification.json`,
+`/var/tmp/of-fin/mhw-full/handoff.json`,
+`/var/tmp/of-fin/svc-sdk63/qualification.json`,
+`/var/tmp/of-audio-handoff-proof/handoff.json` and
+`/var/tmp/of-fin/ci-gf63/report.json`. Actual audio/model bodies and a new complete
+Mac application qualification were not executed locally. Current-head hosted
+CI, actual owner review of retained trust/consumer/workflow controls, and
+verified merge to main remain required. No scope deferral or gate was added.
