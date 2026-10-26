@@ -1234,3 +1234,8 @@ passed. Real models and GPU remain unexecuted. On the pushed repair head
 `c0a2705f`, hosted formatting caught the test-only `HeldWorker` destructor;
 the follow-up uses clang-format 22.1.8 and the full tracked C/C++ check passes.
 That fixture is outside Native, SQL and Worker product identity inputs.
+The same head's GitHub annotation explicitly reports that Python exceeded its
+ten-minute job maximum before completing coverage. The job budget is now thirty
+minutes for the full suite on hosted runners; test deadlines and the 95% gate
+are unchanged. The matched workflow lint and all 26 existing quick-win workflow
+contracts pass. The interrupted hosted run remains unqualified.
