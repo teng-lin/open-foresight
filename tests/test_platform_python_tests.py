@@ -295,9 +295,13 @@ def test_platform_lists_execute_once_under_required_aggregate():
         runs = [step.get("run", "") for step in job.get("steps", [])]
         if name == "linux-test":
             assert any("build_linux_container.sh --test-only" in run for run in runs)
-            # The sole required Linux test runner executes this transferred-tree
-            # entrypoint, where platform inventory and actual JUnit audit run.
-            runs.append((ROOT / "tools/linux_container_test.sh").read_text())
+            # The restored-tree entrypoint drops root before its runtime script
+            # executes platform inventory and the original JUnit audit.
+            entrypoint = (ROOT / "tools/linux_container_test.sh").read_text()
+            assert "bash tools/linux_container_runtime.sh" in entrypoint
+            runs.extend(
+                [entrypoint, (ROOT / "tools/linux_container_runtime.sh").read_text()]
+            )
         return runs
 
     required = main["jobs"]["platform-checks"]["needs"]

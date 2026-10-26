@@ -99,12 +99,14 @@ def test_local_and_ci_container_paths_keep_secrets_out_of_layers_and_exact_packa
     )
     assert "--report dist/abi.json" in shared
     assert "ci_linux_handoff.py restore" in test
-    assert "tools/build.sh --test-only" in test
+    assert "bash tools/linux_container_runtime.sh" in test
+    runtime = (ROOT / "tools/linux_container_runtime.sh").read_text()
+    assert "tools/build.sh --test-only" in runtime
     assert "tar -C /workspace" not in test
     assert "PUB_CACHE=/src/.pub-cache" in wrapper
     assert "copy_linux_source.sh /workspace /src" in shared
     assert "FORESIGHT_CORE_COVERAGE_MIN=90" in test
-    assert "Compiled service suite must have zero skips" in test
+    assert "Compiled service suite must have zero skips" in runtime
 
 
 def test_required_linux_runs_in_preview_and_in_the_current_required_graph():
