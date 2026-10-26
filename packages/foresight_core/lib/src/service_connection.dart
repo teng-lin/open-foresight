@@ -1,9 +1,9 @@
 import 'dart:async';
+import 'client_diagnostics.dart';
 import 'profile_paths.dart';
 import 'rpc_error.dart';
 import 'service_client.dart';
 import 'service_startup.dart';
-import 'service_diagnostics.dart';
 
 /// Whether [error] says its request never took effect, so sending it once
 /// more, after a handoff, is safe: a closing owner refused it before dispatch,
@@ -49,12 +49,15 @@ class ServiceConnection {
     late final StreamController<Object?> output;
     StreamSubscription<Object?>? request;
     var cancelled = false;
+    ClientDiagnosticCall? diagnostic;
     Future<void> send({required bool resent}) async {
       final ServiceClient client;
       try {
         client = await connect();
       } catch (error, stack) {
         if (!cancelled) {
+          diagnostic?.unwritten(error, resent ? 2 : 1);
+          diagnostic?.release();
           output.addError(error, stack);
           unawaited(output.close());
         }
@@ -64,7 +67,7 @@ class ServiceConnection {
       var received = false;
       var handedOff = false;
       request = client
-          .stream(method, args)
+          .streamAttempt(method, args, diagnostic, resent ? 2 : 1)
           .listen(
             (value) {
               received = true;
@@ -76,9 +79,6 @@ class ServiceConnection {
                   error is RpcError &&
                   _resendable(error)) {
                 handedOff = true;
-                traceServiceTransport(
-                  () => 'connection resends $method: $error',
-                );
                 // New requests go to the next owner. The closing owner
                 // answers this connection's other requests itself, so it is
                 // retired rather than closed: closing it would report them
@@ -91,17 +91,26 @@ class ServiceConnection {
               output.addError(error, stack);
             },
             onDone: () {
-              if (!handedOff) unawaited(output.close());
+              if (!handedOff) {
+                diagnostic?.release();
+                diagnostic = null;
+                unawaited(output.close());
+              }
             },
           );
     }
 
     output = StreamController<Object?>(
-      onListen: () => unawaited(send(resent: false)),
+      onListen: () {
+        diagnostic = ClientDiagnosticCall.begin(method);
+        unawaited(send(resent: false));
+      },
       onPause: () => request?.pause(),
       onResume: () => request?.resume(),
       onCancel: () {
         cancelled = true;
+        diagnostic?.cancel();
+        diagnostic = null;
         return request?.cancel();
       },
     );

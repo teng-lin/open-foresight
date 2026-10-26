@@ -4,6 +4,8 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'operations.dart';
+import 'client_diagnostics.dart';
+import 'diagnostics/session.dart';
 import 'rpc_error.dart';
 import 'service_diagnostics.dart';
 import 'service_framing.dart';
@@ -60,6 +62,7 @@ class ServiceClient {
   bool _retired = false;
   Timer? _retirement;
   RpcError? _failure;
+  ClientDiagnosticConnection? _diagnostics;
 
   /// Whether no request is sent on this connection any more: it is closed,
   /// or [retire]d and waiting for its last answers.
@@ -68,7 +71,12 @@ class ServiceClient {
 
   /// Completes once this connection is closed, by either side.
   Future<void> get closed => _closedSignal.future;
-  ServiceClient._(this.socket, this._maxMessageBytes, this.endpoint) {
+  ServiceClient._(
+    this.socket,
+    this._maxMessageBytes,
+    this.endpoint,
+    this._diagnostics,
+  ) {
     unawaited(socket.done.catchError((Object _) {}));
     final frames = ServiceFrameSplitter(_maxMessageBytes);
     socket.listen(
@@ -76,15 +84,15 @@ class ServiceClient {
         if (_closed) return;
         final complete = frames.add(chunk);
         if (complete == null) {
-          return _lose('a reply frame exceeds $_maxMessageBytes bytes');
+          return _lose();
         }
         for (final frame in complete) {
           if (_closed) return;
           _receive(frame);
         }
       },
-      onError: (Object error) => _lose('$error'),
-      onDone: () => _lose(frames.hasPartial ? 'EOF inside a frame' : 'EOF'),
+      onError: (Object _) => _lose(),
+      onDone: _lose,
       cancelOnError: true,
     );
   }
@@ -92,9 +100,13 @@ class ServiceClient {
   void _receive(Uint8List frame) {
     final value = decodeServiceFrame(frame);
     if (value == null) {
-      traceServiceTransport(
-        () =>
-            'client invalid frame ${utf8.decode(frame, allowMalformed: true)}',
+      emitServiceDiagnostic(
+        DiagnosticEvent.invalidFrame,
+        connection: _diagnostics?.identity,
+        fields: () => {
+          DiagnosticField.category: DiagnosticCategory.protocol,
+          DiagnosticField.bytes: frame.length.clamp(0, 0x7fffffff),
+        },
       );
       const message = 'Application service sent an invalid reply';
       // Requests already written may have taken effect.
@@ -105,6 +117,7 @@ class ServiceClient {
           reason: RpcErrorReason.outcomeUnknown,
         ),
         RpcError(RpcErrorCode.internal, message),
+        category: DiagnosticCategory.protocol,
       );
     }
     if (value['event'] != null) {
@@ -115,6 +128,28 @@ class ServiceClient {
     if (controller == null) return;
     controller.add(value);
     if (value['done'] == true) {
+      // Map lookup historically also accepts an integral JSON double. Logging
+      // must not make that successful business reply throw a cast exception.
+      final id = value['id'];
+      final diagnostic = ClientDiagnosticCall.forWire(
+        _diagnostics?.identity,
+        id is int ? id : (id as num).toInt(),
+      );
+      if (diagnostic != null) {
+        Object? failure;
+        if (value['error'] != null) {
+          try {
+            failure = RpcError.from(value['error'] as Object);
+          } catch (_) {
+            failure = RpcError(
+              RpcErrorCode.internal,
+              'Invalid reply error',
+              reason: RpcErrorReason.outcomeUnknown,
+            );
+          }
+        }
+        diagnostic.settle(failure);
+      }
       _pending.remove(value['id']);
       _methods.remove(value['id']);
       _requestIds.remove(value['id']);
@@ -134,8 +169,10 @@ class ServiceClient {
   void retire({Duration grace = _retiredConnectionGrace}) {
     if (_closed || _retired) return;
     _retired = true;
-    traceServiceTransport(
-      () => 'client retired with ${_pending.length} pending',
+    _diagnostics?.record(
+      DiagnosticOutcome.withdrawn,
+      category: DiagnosticCategory.closing,
+      count: _pending.length,
     );
     _retirement = Timer(grace, () => unawaited(close()));
     _closeIfSettled();
@@ -155,13 +192,18 @@ class ServiceClient {
       throw ArgumentError.value(maxMessageBytes, 'maxMessageBytes');
     }
     final address = InternetAddress(path, type: InternetAddressType.unix);
+    final diagnostics = ClientDiagnosticConnection.begin();
     try {
-      return ServiceClient._(
-        await Socket.connect(address, 0, timeout: connectTimeout),
-        maxMessageBytes,
-        path,
-      );
+      // The client owns the connected socket and its existing close paths.
+      // ignore: close_sinks
+      final socket = await Socket.connect(address, 0, timeout: connectTimeout);
+      diagnostics?.record(DiagnosticOutcome.ready);
+      return ServiceClient._(socket, maxMessageBytes, path, diagnostics);
     } on OSError catch (error, stack) {
+      diagnostics?.close(
+        DiagnosticOutcome.failed,
+        DiagnosticCategory.transport,
+      );
       // A connect that waited and then failed, for example because a closing
       // owner's listener went while it waited, reports the socket's pending
       // error as a bare OSError. Callers expect a SocketException.
@@ -169,11 +211,16 @@ class ServiceClient {
         SocketException('Connection failed', osError: error, address: address),
         stack,
       );
+    } catch (_) {
+      diagnostics?.close(
+        DiagnosticOutcome.failed,
+        DiagnosticCategory.transport,
+      );
+      rethrow;
     }
   }
 
-  void _lose(String cause) {
-    traceServiceTransport(() => 'client transport lost: $cause');
+  void _lose() {
     _fail(
       _ServiceTransportLost(RpcErrorReason.outcomeUnknown),
       _ServiceTransportLost(RpcErrorReason.notSent),
@@ -182,12 +229,26 @@ class ServiceClient {
 
   /// Fail requests already written with [inFlight] and every later one with
   /// [later]. The first failure wins.
-  void _fail(RpcError inFlight, RpcError later) {
+  void _fail(
+    RpcError inFlight,
+    RpcError later, {
+    DiagnosticCategory category = DiagnosticCategory.transport,
+  }) {
     if (_closed) return;
     _closed = true;
     _retirement?.cancel();
     _closedSignal.complete();
     _failure ??= later;
+    ClientDiagnosticCall.forConnection(
+      _diagnostics?.identity,
+    )?.settle(inFlight);
+    _diagnostics?.close(
+      category == DiagnosticCategory.closing
+          ? DiagnosticOutcome.completed
+          : DiagnosticOutcome.failed,
+      category,
+    );
+    _diagnostics = null;
     for (final c in _pending.values) {
       c.addError(inFlight);
       unawaited(c.close());
@@ -202,7 +263,20 @@ class ServiceClient {
   Stream<Object?> stream(
     String method, [
     Map<String, dynamic> args = const {},
-  ]) {
+  ]) => streamAttempt(
+    method,
+    args,
+    ClientDiagnosticCall.begin(method, ownsLifetime: true),
+    1,
+  );
+
+  /// Internal connection handoff: observation adds no wire data or retries.
+  Stream<Object?> streamAttempt(
+    String method,
+    Map<String, dynamic> args,
+    ClientDiagnosticCall? diagnostic,
+    int attempt,
+  ) {
     final id = ++_next;
     late StreamController<Map<String, dynamic>> controller;
     controller = StreamController(
@@ -210,20 +284,36 @@ class ServiceClient {
         _methods.remove(id);
         _requestIds.remove(id);
         if (_pending.remove(id) != null && !_closed) {
+          ClientDiagnosticCall.forWire(_diagnostics?.identity, id)?.cancel();
           socket.writeln(jsonEncode({'cancel': id}));
           _closeIfSettled();
         }
       },
     );
-    final frame = isClosed
-        ? null
-        : utf8.encode(jsonEncode({'id': id, 'method': method, 'args': args}));
+    final List<int>? frame;
+    try {
+      frame = isClosed
+          ? null
+          : utf8.encode(jsonEncode({'id': id, 'method': method, 'args': args}));
+    } catch (error) {
+      diagnostic?.unwritten(error, attempt);
+      diagnostic?.release();
+      rethrow;
+    }
     if (frame == null) {
+      diagnostic?.unwritten(
+        _failure ?? _ServiceTransportLost(RpcErrorReason.notSent),
+        attempt,
+      );
       controller.addError(
         _failure ?? _ServiceTransportLost(RpcErrorReason.notSent),
       );
       unawaited(controller.close());
     } else if (frame.length + 1 > maxServiceFrame) {
+      diagnostic?.unwritten(
+        RpcError(RpcErrorCode.invalidArgument, 'Request exceeds frame limit'),
+        attempt,
+      );
       // The service drops a connection whose request exceeds its limit, which
       // for the desktop also stops recording. It counts bytes per read too.
       controller.addError(
@@ -235,6 +325,7 @@ class ServiceClient {
       );
       unawaited(controller.close());
     } else {
+      diagnostic?.attach(_diagnostics?.identity, id, attempt);
       _pending[id] = controller;
       _methods[id] = method;
       if (args['requestId'] is String) {
@@ -273,6 +364,7 @@ class ServiceClient {
         .map((e) => e.key)
         .toList();
     for (final id in ids) {
+      ClientDiagnosticCall.forWire(_diagnostics?.identity, id)?.cancel();
       socket.writeln(jsonEncode({'cancel': id}));
       final pending = _pending.remove(id);
       _methods.remove(id);
@@ -296,6 +388,7 @@ class ServiceClient {
         'Application service disconnected',
         reason: RpcErrorReason.notSent,
       ),
+      category: DiagnosticCategory.closing,
     );
   }
 }
