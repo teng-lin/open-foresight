@@ -69,7 +69,9 @@ struct HeldWorker {
     gate->released = true;
     gate->changed.notify_all();
   }
-  ~HeldWorker() { release(); }
+  ~HeldWorker() {
+    release();
+  }
 };
 std::shared_ptr<NativeControl> control(uint64_t id) {
   auto &registry = native_handles();

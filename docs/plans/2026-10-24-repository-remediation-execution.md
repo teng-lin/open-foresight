@@ -1225,3 +1225,12 @@ review resolution, actual owner review of retained publishing/trust changes
 and verified merge to main. Scope deferrals and external acceptance limitations
 remain those of the delivery amendment; local results do not supply that approval
 or release authorization.
+
+The refreshed application cohort also passed all three isolated Linux desktop
+integration scenarios, all 68 named expectations, and both fast scenarios,
+with zero selected-suite skips. Private Xvfb/DBus/XDG resources were cleaned up,
+application products stayed unchanged and post-run Worker/receipt verification
+passed. Real models and GPU remain unexecuted. On the pushed repair head
+`c0a2705f`, hosted formatting caught the test-only `HeldWorker` destructor;
+the follow-up uses clang-format 22.1.8 and the full tracked C/C++ check passes.
+That fixture is outside Native, SQL and Worker product identity inputs.
