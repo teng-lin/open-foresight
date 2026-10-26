@@ -9,6 +9,7 @@ const _runtimePaths = {
   'FORESIGHT_HELPER',
   'FORESIGHT_SERVICE',
   'FORESIGHT_MODEL_WORKER',
+  'FORESIGHT_LITERT_RUNNER',
 };
 
 /// Prepare only the disposable Flutter Debug integration-test application.
