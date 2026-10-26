@@ -123,6 +123,8 @@ def test_mac_bundle_environment_resolves_only_current_packaged_products(tmp_path
     app = tmp_path / "Fixture.app"
     resources = app / "Contents/Resources"
     resources.mkdir(parents=True)
+    (resources / "lib").mkdir()
+    (resources / "lib/libforesight_sql_support.dylib").write_bytes(b"packaged SQL")
     config = {}
     for key in ("FORESIGHT_NATIVE", "FORESIGHT_HELPER", "FORESIGHT_LITERT_RUNNER"):
         (resources / key).write_bytes(b"packaged binary")
@@ -132,6 +134,9 @@ def test_mac_bundle_environment_resolves_only_current_packaged_products(tmp_path
         app, {"PATH": "/usr/bin", "FORESIGHT_HELPER": "stale"}
     )
     assert env["FORESIGHT_HELPER"] == str(resources / "FORESIGHT_HELPER")
+    assert env["FORESIGHT_TEST_SQL_SUPPORT_LIBRARY"] == str(
+        resources / "lib/libforesight_sql_support.dylib"
+    )
     assert env["FORESIGHT_GENERATION_BACKEND"] == "litert_lm"
     (resources / "FORESIGHT_HELPER").unlink()
     with pytest.raises(FileNotFoundError):
