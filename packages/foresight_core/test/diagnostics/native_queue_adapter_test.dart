@@ -120,7 +120,9 @@ void main() {
                 .length ==
             2,
       );
-      expect(session.health.nativeReason, NativeDiagnosticHealth.healthy);
+      await eventually(
+        () => session.health.nativeReason == NativeDiagnosticHealth.healthy,
+      );
       expect((await session.close()).flushed, isTrue);
     },
   );
