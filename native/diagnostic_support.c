@@ -593,6 +593,10 @@ int fs_diag_child_operation(uint64_t id, int active) {
   uint64_t now = monotonic_ms();
   if (now == 0)
     return fail();
+  if (atomic_load(&context.init_received)) {
+    atomic_store(&context.operation_deadline, active ? now + 5000 : 0);
+    return 0;
+  }
   uint64_t deadline = atomic_load(&context.operation_deadline);
   if (active) {
     // Idempotent observation never renews an already active lease.
