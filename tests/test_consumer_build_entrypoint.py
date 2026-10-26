@@ -44,6 +44,17 @@ def invoke(
         " print('cc source.c -o source.o' if not ready or os.environ['PLAN_WORK']=='1' else 'ninja: no work to do.')\n"
     )
     cmake.chmod(0o755)
+    ctest_log = tmp_path / "ctest.jsonl"
+    ctest = binary / "ctest"
+    ctest.write_text(
+        "#!" + sys.executable + "\n"
+        "import json,os,pathlib,sys\n"
+        "assert sys.argv[1:] == ['--test-dir',os.environ['BUILD_ROOT'],"
+        "'--output-on-failure','--output-junit',"
+        "os.environ['PROJECT_ROOT']+'/test-results/linux/native/results.xml']\n"
+        "with open(os.environ['CTEST_LOG'],'a') as f: f.write(json.dumps(sys.argv[1:])+'\\n')\n"
+    )
+    ctest.chmod(0o755)
     python = binary / "tool-python"
     python.write_text(
         "#!" + sys.executable + "\n"
@@ -61,6 +72,7 @@ def invoke(
         FORESIGHT_BUILD_DIR=str(build),
         PATH=str(binary) + os.pathsep + "/usr/bin:/bin",
         COMMAND_LOG=str(log),
+        CTEST_LOG=str(ctest_log),
         PROJECT_ROOT=str(root),
         BUILD_ROOT=str(build),
         CONFIGURE_FAILURE=str(int(configure_failure)),
@@ -98,6 +110,10 @@ def invoke(
             capture_output=True,
             timeout=30,
         )
+    if result.returncode == 0:
+        assert len(ctest_log.read_text().splitlines()) == 1
+    elif configure_failure or work:
+        assert not ctest_log.exists()
     return result, [json.loads(line) for line in log.read_text().splitlines()]
 
 
