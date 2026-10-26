@@ -23,7 +23,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 from service_ui_report import verify_service_ui_report  # noqa: E402
-from integration_gates import run_tests  # noqa: E402
+from integration_gates import _worker_sdk, run_tests  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 SERVICE = Path(
@@ -422,7 +422,7 @@ def first_run_catalog(tmp_path, monkeypatch):
     native_build = NATIVE.resolve(strict=True).parent.parent
     dart = shutil.which("dart")
     assert dart, "First-run acceptance requires the pinned Dart SDK"
-    sdk = Path(dart).resolve(strict=True).parent.parent
+    sdk = _worker_sdk(dart, os.environ)
     receipt = verify_worker_build(
         ROOT,
         native_build,

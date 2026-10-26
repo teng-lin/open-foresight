@@ -19,9 +19,22 @@ def test_source_context_uses_selected_sdk_current_build_and_exact_receipt(
     native = build / "native/libforesight_native.so"
     native.parent.mkdir(parents=True)
     native.write_bytes(b"fixture main library")
-    dart = tmp_path / "sdk/bin/dart"
+    dart = tmp_path / "flutter/bin/dart"
     dart.parent.mkdir(parents=True)
-    dart.write_bytes(b"fixture executable path")
+    vm = tmp_path / "flutter/bin/cache/dart-sdk/bin/dart"
+    vm.parent.mkdir(parents=True)
+    vm.write_bytes(b"fixture VM path")
+    dart.write_text(
+        "#!" + sys.executable + "\n"
+        "from pathlib import Path\nimport sys\n"
+        "assert Path(sys.argv[1]).read_text() == "
+        + repr(
+            "import 'dart:io';\nvoid main() => stdout.writeln(Platform.resolvedExecutable);\n"
+        )
+        + "\nprint("
+        + repr(str(vm))
+        + ")\n"
+    )
     dart.chmod(0o755)
     definitions = {
         "FORESIGHT_DIAGNOSTIC_NATIVE_ID": "a" * 64,
@@ -40,7 +53,7 @@ def test_source_context_uses_selected_sdk_current_build_and_exact_receipt(
     verifier.assert_called_once_with(
         root,
         build,
-        dart.parent.parent,
+        vm.parent.parent,
         root / "packages/foresight_core/.dart_tool/package_config.json",
         "aot",
     )

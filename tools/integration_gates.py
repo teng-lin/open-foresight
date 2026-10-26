@@ -61,16 +61,52 @@ def widget_test_alias(relative):
     return str(alias.relative_to(desktop))
 
 
+def _worker_sdk(dart, env):
+    """Locate the selected VM without loading the application's package graph."""
+    executable = shutil.which(dart, path=env.get("PATH"))
+    if executable is None:
+        raise RuntimeError("Dart is required to verify the integration worker")
+    with tempfile.TemporaryDirectory(prefix="fs-dart-", dir="/var/tmp") as temporary:
+        probe = Path(temporary) / "locate.dart"
+        probe.write_text(
+            "import 'dart:io';\n"
+            "void main() => stdout.writeln(Platform.resolvedExecutable);\n"
+        )
+        try:
+            result = subprocess.run(
+                [str(Path(executable).absolute()), str(probe)],
+                cwd=temporary,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as error:
+            for output in (error.stdout, error.stderr):
+                if output:
+                    sys.stderr.write(
+                        output.decode(errors="replace")
+                        if isinstance(output, bytes)
+                        else output
+                    )
+            raise
+        if result.returncode:
+            sys.stderr.write(result.stdout + result.stderr)
+            raise RuntimeError("Integration worker SDK probe failed")
+        vm = Path(result.stdout.strip())
+        if not vm.is_absolute() or not vm.is_file():
+            raise RuntimeError("Invalid integration worker SDK probe")
+        return vm.resolve(strict=True).parent.parent
+
+
 def _source_worker_defines(env, dart):
     """Use the finished source worker's exact public compilation context."""
     native = env.get("FORESIGHT_NATIVE_LIBRARY") or env.get("FORESIGHT_NATIVE")
     build = ROOT / "build"
     if native is not None and Path(native).parent.name == "native":
         build = Path(native).resolve(strict=True).parent.parent
-    executable = shutil.which(dart, path=env.get("PATH"))
-    if executable is None:
-        raise RuntimeError("Dart is required to verify the integration worker")
-    sdk = Path(executable).resolve(strict=True).parent.parent
+    sdk = _worker_sdk(dart, env)
     module = importlib.import_module(
         "tools.build_diagnostic_worker" if __package__ else "build_diagnostic_worker"
     )
