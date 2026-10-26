@@ -247,6 +247,10 @@ if(BUILD_TESTING)
   add_test(NAME diagnostic_support COMMAND diagnostic_support_test
     $<TARGET_FILE:diagnostic_launcher_fixture> $<TARGET_FILE:diagnostic_support_test>)
   set_tests_properties(diagnostic_support PROPERTIES TIMEOUT 20)
+  add_test(NAME diagnostic_bootstrap COMMAND diagnostic_support_test
+    $<TARGET_FILE:diagnostic_launcher_fixture> $<TARGET_FILE:diagnostic_support_test>
+    --bootstrap-cases)
+  set_tests_properties(diagnostic_bootstrap PROPERTIES TIMEOUT 20)
   add_executable(diagnostic_directory_test ${FS_DIAG_KERNEL_SOURCE}
     diagnostic_protocol.c diagnostic_endpoint.c diagnostic_inherited.c
     diagnostic_support.c ../tests/native/diagnostic_directory.c)

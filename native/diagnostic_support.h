@@ -66,6 +66,10 @@ uint64_t fs_diag_child_arm(int64_t expected_parent, const char *native_id,
 // refused without waiting. No file/main-isolate endpoint ownership crosses it.
 int fs_diag_child_watch(uint64_t id);
 int fs_diag_child_map(uint64_t id);
+// Only a mapped child may enter an operation. Active notifications are
+// idempotent and never renew its five-second lease. One pre-INIT verification
+// operation is allowed; its completion starts a fresh one-second idle INIT
+// budget. Repeated inactive calls do not renew that budget.
 int fs_diag_child_operation(uint64_t id, int active);
 // Final exec-child-only process retirement. Never exits a parent context.
 // Closed statuses0/65/67 only; no VM teardown waits on held worker/watch FFI.

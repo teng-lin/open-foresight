@@ -80,6 +80,10 @@ static int worker(const char *parent_text, const char *mode) {
   if (strcmp(mode, "bootstrap") == 0)
     for (;;)
       pause();
+  if (strcmp(mode, "verify-slow") == 0) {
+    assert(fs_diag_child_operation(1, 1) == FS_DIAG_SUPPORT_ERROR);
+    assert(fs_diag_child_operation(1, 0) == FS_DIAG_SUPPORT_ERROR);
+  }
   int mapped = fs_diag_child_map(1);
   if (wrong_identity) {
     assert(mapped == FS_DIAG_SUPPORT_ERROR);
@@ -87,6 +91,30 @@ static int worker(const char *parent_text, const char *mode) {
       pause();
   }
   assert(mapped == FS_DIAG_SUPPORT_PREPARED);
+  if (strcmp(mode, "verify-slow") == 0 || strcmp(mode, "verify-rearmed") == 0) {
+    assert(fs_diag_child_operation(1, 1) == 0);
+    for (int i = 0; i != 130; ++i)
+      tick();
+    assert(fs_diag_child_operation(1, 0) == 0);
+    assert(fs_diag_child_operation(1, 1) == FS_DIAG_SUPPORT_ERROR);
+  }
+  if (strcmp(mode, "verify-idle") == 0 ||
+      strcmp(mode, "verify-inactive") == 0 ||
+      strcmp(mode, "verify-rearmed") == 0) {
+    for (;;) {
+      if (strcmp(mode, "verify-idle") != 0)
+        assert(fs_diag_child_operation(1, 0) == 0);
+      tick();
+    }
+  }
+  if (strcmp(mode, "verify-deadline") == 0) {
+    assert(fs_diag_child_operation(1, 1) == 0);
+    for (;;) {
+      // A repeated active notification cannot renew the fixed five seconds.
+      assert(fs_diag_child_operation(1, 1) == 0);
+      tick();
+    }
+  }
   assert(fs_diag_child_finish(1, 0) == FS_DIAG_SUPPORT_ERROR);
   assert(fs_diag_support_send(1, FS_DIAG_HELLO, 0, 0, NULL, 0) ==
          FS_DIAG_CHANNEL_COMPLETE);
@@ -149,7 +177,12 @@ static void run_case(const char *launcher, const char *self, const char *mode) {
   }
   assert(fs_diag_parent_spawn(1) == FS_DIAG_SUPPORT_SPAWNED);
   assert(fs_diag_parent_spawn(1) == FS_DIAG_SUPPORT_ERROR);
-  if (strcmp(mode, "wrong-identity") != 0 && strcmp(mode, "bootstrap") != 0) {
+  int bootstrap_idle = strcmp(mode, "verify-idle") == 0 ||
+                       strcmp(mode, "verify-inactive") == 0 ||
+                       strcmp(mode, "verify-rearmed") == 0;
+  int preinit_deadline = strcmp(mode, "verify-deadline") == 0;
+  if (strcmp(mode, "wrong-identity") != 0 && strcmp(mode, "bootstrap") != 0 &&
+      !bootstrap_idle && !preinit_deadline) {
     assert(receive(FS_DIAG_HELLO, 0, 1));
     // HELLO alone cannot admit private INIT before the coordinator observes
     // the fresh post-registration challenge acknowledgement.
@@ -179,12 +212,16 @@ static void run_case(const char *launcher, const char *self, const char *mode) {
   int status = 0;
   int unbound_case =
       strcmp(mode, "wrong-identity") == 0 || strcmp(mode, "bootstrap") == 0;
-  int polls = strcmp(mode, "deadline") == 0 ? 650 : unbound_case ? 120 : 100;
+  int polls = strcmp(mode, "deadline") == 0 || preinit_deadline ? 650
+              : strcmp(mode, "verify-rearmed") == 0             ? 350
+              : bootstrap_idle || unbound_case                  ? 120
+                                                                : 100;
 #if defined(__has_feature)
 #if __has_feature(thread_sanitizer)
   // TSan's existing default exit instrumentation sleeps 1000ms
   // with another live thread, after the real watcher calls _exit.
-  if (strcmp(mode, "hold") == 0 || strcmp(mode, "bootstrap") == 0)
+  if (strcmp(mode, "hold") == 0 || strcmp(mode, "bootstrap") == 0 ||
+      bootstrap_idle || preinit_deadline)
     polls += 100;
 #endif
 #endif
@@ -195,7 +232,7 @@ static void run_case(const char *launcher, const char *self, const char *mode) {
       break;
     // Expiry must work while the parent/heartbeat remain responsive, so this
     // cannot pass accidentally through the heartbeat lease instead.
-    if (strcmp(mode, "deadline") == 0)
+    if (strcmp(mode, "deadline") == 0 || preinit_deadline || bootstrap_idle)
       assert(fs_diag_parent_heartbeat(1) == 0);
     tick();
   }
@@ -208,8 +245,9 @@ static void run_case(const char *launcher, const char *self, const char *mode) {
   int actual;
   assert(wait(&actual) > 0);
   assert(WIFEXITED(actual));
-  int expected = strcmp(mode, "bootstrap") == 0 ? 65
-                 : strcmp(mode, "hold") == 0 || strcmp(mode, "deadline") == 0
+  int expected = strcmp(mode, "bootstrap") == 0 || bootstrap_idle ? 65
+                 : strcmp(mode, "hold") == 0 || strcmp(mode, "deadline") == 0 ||
+                         preinit_deadline
                      ? 66
                  : strcmp(mode, "wrong-identity") == 0 ? 67
                                                        : 0;
@@ -217,8 +255,10 @@ static void run_case(const char *launcher, const char *self, const char *mode) {
 #else
   assert(status & FS_DIAG_SUPPORT_NOT_LIVE);
   assert(status & FS_DIAG_SUPPORT_REAPED);
-  int expected = strcmp(mode, "bootstrap") == 0 ? FS_DIAG_EXIT_BOOTSTRAP
-                 : strcmp(mode, "hold") == 0 || strcmp(mode, "deadline") == 0
+  int expected = strcmp(mode, "bootstrap") == 0 || bootstrap_idle
+                     ? FS_DIAG_EXIT_BOOTSTRAP
+                 : strcmp(mode, "hold") == 0 || strcmp(mode, "deadline") == 0 ||
+                         preinit_deadline
                      ? FS_DIAG_EXIT_RETIREMENT
                  : strcmp(mode, "wrong-identity") == 0 ? FS_DIAG_EXIT_UNSAFE
                                                        : FS_DIAG_EXIT_NORMAL;
@@ -230,7 +270,7 @@ int main(int argc, char **argv) {
   // Actual launcher argv becomes self,--worker,parent,mode (four entries).
   if (argc == 4 && strcmp(argv[1], "--worker") == 0)
     return worker(argv[2], argv[3]);
-  assert(argc == 3);
+  assert(argc == 3 || (argc == 4 && strcmp(argv[3], "--bootstrap-cases") == 0));
 #ifdef FS_DIAG_FIXTURE_BASE
   assert(mkdir(FS_DIAG_FIXTURE_BASE, 0700) == 0 || errno == EEXIST);
 #endif
@@ -238,22 +278,29 @@ int main(int argc, char **argv) {
   const char *cases[] = {"normal",    "hold",          "wrong-identity",
                          "bad-argv",  "cancel-before", "cancel-prepared",
                          "bootstrap", "deadline"};
-  for (unsigned i = 0; i != sizeof(cases) / sizeof(cases[0]); ++i) {
-    fprintf(stderr, "diagnostic support case: %s\n", cases[i]);
+  const char *bootstrap_cases[] = {"verify-slow", "verify-idle",
+                                   "verify-inactive", "verify-rearmed",
+                                   "verify-deadline"};
+  const char **selected = argc == 4 ? bootstrap_cases : cases;
+  unsigned count = argc == 4
+                       ? sizeof(bootstrap_cases) / sizeof(bootstrap_cases[0])
+                       : sizeof(cases) / sizeof(cases[0]);
+  for (unsigned i = 0; i != count; ++i) {
+    fprintf(stderr, "diagnostic support case: %s\n", selected[i]);
     pid_t child = fork();
     assert(child >= 0);
     if (child == 0) {
-      run_case(argv[1], argv[2], cases[i]);
+      run_case(argv[1], argv[2], selected[i]);
       _exit(0);
     }
     int status;
     assert(waitpid(child, &status, 0) == child);
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-      fprintf(stderr, "diagnostic support case %s failed: %d\n", cases[i],
+      fprintf(stderr, "diagnostic support case %s failed: %d\n", selected[i],
               status);
       return 1;
     }
   }
-  puts("diagnostic support: 8 actual-process cases passed");
+  printf("diagnostic support: %u actual-process cases passed\n", count);
   return 0;
 }

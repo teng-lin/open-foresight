@@ -90,10 +90,12 @@ typedef struct support_context {
   atomic_int watcher_seen;
   atomic_int control_ready;
   atomic_int init_received;
+  atomic_int bootstrap_operation_used;
   atomic_int exit_class;
   atomic_flag poll_busy;
   atomic_flag watch_busy;
   atomic_uint_fast64_t operation_deadline;
+  atomic_uint_fast64_t bootstrap_deadline;
   _Atomic(fs_diag_page *) page;
   int role;
   pid_t parent;
@@ -109,7 +111,6 @@ typedef struct support_context {
   uint8_t nonce[32];
   uint64_t probe;
   uint64_t force;
-  uint64_t bootstrap_deadline;
   uint64_t last_parent_beat;
   uint64_t parent_beat_deadline;
   fs_diag_endpoint endpoint;
@@ -527,7 +528,7 @@ uint64_t fs_diag_child_arm(int64_t expected_parent, const char *native_id,
       getppid() != (pid_t)expected_parent)
     goto bad;
   context.parent = (pid_t)expected_parent;
-  context.bootstrap_deadline = now + 1000;
+  atomic_store(&context.bootstrap_deadline, now + 1000);
   context.parent_beat_deadline = now + 5000;
 #ifdef __linux__
   context.process_fd = pidfd_open(context.parent, 0);
@@ -586,12 +587,32 @@ int fs_diag_child_map(uint64_t id) {
 }
 
 int fs_diag_child_operation(uint64_t id, int active) {
-  if (!valid(id, FS_DIAG_ENDPOINT_CHILD) || (active != 0 && active != 1))
+  if (!valid(id, FS_DIAG_ENDPOINT_CHILD) || (active != 0 && active != 1) ||
+      atomic_load(&context.page) == NULL)
     return FS_DIAG_SUPPORT_ERROR;
   uint64_t now = monotonic_ms();
   if (now == 0)
     return fail();
-  atomic_store(&context.operation_deadline, active ? now + 5000 : 0);
+  uint64_t deadline = atomic_load(&context.operation_deadline);
+  if (active) {
+    // Idempotent observation never renews an already active lease.
+    if (deadline != 0)
+      return 0;
+    if (!atomic_load(&context.init_received)) {
+      int unused = 0;
+      if (now >= atomic_load(&context.bootstrap_deadline) ||
+          !atomic_compare_exchange_strong(&context.bootstrap_operation_used,
+                                          &unused, 1))
+        return FS_DIAG_SUPPORT_ERROR;
+    }
+    atomic_store(&context.operation_deadline, now + 5000);
+  } else if (deadline != 0) {
+    // Verification cannot consume the subsequent idle HELLO/INIT budget.
+    // Publish before clearing active so the watch never sees the old budget.
+    if (!atomic_load(&context.init_received))
+      atomic_store(&context.bootstrap_deadline, now + 1000);
+    atomic_store(&context.operation_deadline, 0);
+  }
   return 0;
 }
 
@@ -613,11 +634,13 @@ int fs_diag_child_watch(uint64_t id) {
   if (exited != 0)
     _exit(66);
   atomic_store(&context.watcher_seen, 1);
-  if (!atomic_load(&context.init_received) && now >= context.bootstrap_deadline)
+  uint64_t operation = atomic_load(&context.operation_deadline);
+  if (!atomic_load(&context.init_received) && operation == 0 &&
+      now >= atomic_load(&context.bootstrap_deadline))
     _exit(65);
   fs_diag_page *page = atomic_load(&context.page);
   if (page == NULL) {
-    if (now >= context.bootstrap_deadline)
+    if (now >= atomic_load(&context.bootstrap_deadline))
       _exit(65);
     atomic_flag_clear(&context.watch_busy);
     return 0;
@@ -637,7 +660,6 @@ int fs_diag_child_watch(uint64_t id) {
     context.last_parent_beat = beat;
     context.parent_beat_deadline = now + 5000;
   }
-  uint64_t operation = atomic_load(&context.operation_deadline);
   if (now >= context.parent_beat_deadline ||
       (operation != 0 && now >= operation))
     _exit(66);
