@@ -1418,6 +1418,15 @@ under four-CPU affinity. The scheduling change requires a new hosted outcome;
 these negative reproductions do not establish that it fixes the two failures.
 Workflow lint passed with actionlint 1.7.7 and ShellCheck 0.9.0 available.
 
+The service follow-up resolves `Platform.resolvedExecutable` through a bounded
+standard-library-only Dart probe outside the application package graph, then
+passes its canonical SDK to the unchanged Worker verifier. Both integration
+helpers share it. Nine focused tests pass with zero skips; Ruff, mypy and the
+subprocess-timeout check pass. Native peer and tools-disabled Claude CLI reviews
+found no required blockers in the SDK and scheduling changes. The three failed
+GUI/F12 cases and complete Python qualification still require execution for this
+follow-up; the focused tests alone do not certify them.
+
 At this checkpoint, full macOS and Ubuntu restored-byte testing are still
 running. Their conclusions must be recorded before claiming current-head CI
 completion. Original logs remain in `/var/tmp/of-ci-platform-63d47/` and
