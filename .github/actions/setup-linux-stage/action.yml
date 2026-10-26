@@ -73,6 +73,9 @@ runs:
       shell: bash
       env:
         STAGE: ${{ inputs.stage }}
+        GIT_CONFIG_COUNT: '1'
+        GIT_CONFIG_KEY_0: safe.directory
+        GIT_CONFIG_VALUE_0: /opt/foresight-flutter
       run: |
         if [[ ! -x /opt/foresight-flutter/bin/flutter ]]; then
           git clone --depth 1 --branch 3.35.7 https://github.com/flutter/flutter.git /opt/foresight-flutter
