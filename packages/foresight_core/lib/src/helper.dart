@@ -121,10 +121,11 @@ class Helper {
   Future<void> Function()? onReady;
   final bool manageProcess;
 
-  /// An injected snapshot is fixed at construction. Without one this is a
-  /// legacy direct construction: each access returns a fresh immutable snapshot
-  /// of the boundary, as it read the boundary before injection.
-  RuntimeConfiguration get configuration => _configuration ?? runtimeSnapshot();
+  /// An explicit or bound owner snapshot is fixed at construction. Outside any
+  /// owner scope this is a legacy direct construction: each access returns a
+  /// fresh immutable snapshot of the boundary, as it read it before injection.
+  RuntimeConfiguration get configuration =>
+      _configuration ?? legacyRuntimeSnapshot();
   final RuntimeConfiguration? _configuration;
   Helper(
     this.socket,
@@ -132,7 +133,8 @@ class Helper {
     this.manageProcess = true,
     this.startupProbeTimeout = const Duration(milliseconds: 400),
     RuntimeConfiguration? configuration,
-  }) : _configuration = configuration?.snapshot() {
+  }) : _configuration =
+           configuration?.snapshot() ?? currentOwnerRuntimeSnapshot {
     channel = helperChannel(socket);
     client = helperClient(channel);
   }

@@ -25,9 +25,10 @@ final class SqliteReadWorker
   // Bounded by the callers waiting for admission, never by refused requests.
   final _admissionWaiters = <_AdmissionWaiter>{};
 
-  /// The reader isolate installs exactly [configuration] when given. Otherwise
-  /// it receives [environment] (by default the owner's boundary map) with this
-  /// service runtime's packaged root, as the worker always derived it.
+  /// The reader isolate installs exactly [configuration] when given, else
+  /// [environment] with this service runtime's packaged root, else the bound
+  /// owner snapshot; outside any owner scope it receives the boundary map with
+  /// that packaged root, as the worker always derived it.
   SqliteReadWorker(
     String path, {
     Map<String, String>? environment,
@@ -38,6 +39,7 @@ final class SqliteReadWorker
   }) : _path = path,
        _configuration =
            configuration?.snapshot() ??
+           (environment == null ? currentOwnerRuntimeSnapshot : null) ??
            RuntimeConfiguration.serviceWorker(
              environment ?? runtimeConfiguration.environment,
            ),

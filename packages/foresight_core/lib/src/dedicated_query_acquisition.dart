@@ -29,7 +29,7 @@ class DedicatedQueryAcquisition {
     this.runtime,
     this.catalog,
     RuntimeConfiguration? configuration,
-  }) : configuration = configuration?.snapshot(),
+  }) : configuration = configuration?.snapshot() ?? currentOwnerRuntimeSnapshot,
        stagingRoot = stagingRoot ?? File(store.path).parent;
 
   /// Bundled resources come from the owner's [configuration]. The distribution

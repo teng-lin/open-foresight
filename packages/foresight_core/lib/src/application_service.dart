@@ -241,11 +241,11 @@ class ApplicationService {
 
   /// [desktopDetachGrace] is how long the service waits for a desktop to
   /// reattach after its approval connection closes before it shuts down.
-  /// An injected [configuration] is captured once here and every
-  /// service-owned consumer receives that immutable snapshot. Without one,
-  /// startup decisions use one boundary snapshot taken here, while the
-  /// long-lived owners stay legacy boundary consumers: their ports hand out a
-  /// fresh immutable boundary snapshot on each access, as before injection.
+  /// An explicit [configuration], else the owner snapshot bound by
+  /// [runWithRuntimeConfiguration], is captured once here and every
+  /// service-owned consumer receives that immutable snapshot. Outside any
+  /// owner scope, startup decisions use one boundary snapshot taken here while
+  /// the long-lived owners stay legacy boundary consumers, as before injection.
   static Future<ApplicationService> start(
     ProfilePaths profile, {
     SearchCallbacks? webSearch,
@@ -260,17 +260,19 @@ class ApplicationService {
     void Function()? onProfileOwned,
     RuntimeConfiguration? configuration,
   }) async {
+    final scoped = configuration == null ? currentOwnerRuntimeSnapshot : null;
     final captured = runtimeSnapshot(configuration);
     // This must precede native loads, database opens, and worker creation.
     final installationLock = acquireInstallationLock(configuration: captured);
     void Function()? releaseLocalOwner;
     try {
       releaseLocalOwner = retainLocalServiceOwner(profile.data);
-      final service = await _start(
+      Future<ApplicationService> startOwned() => _start(
         profile,
         installationLock,
         captured,
-        injected: configuration != null,
+        injected: configuration != null || scoped != null,
+        explicit: configuration != null,
         webSearch: webSearch,
         internalWorker: internalWorker,
         clock: clock,
@@ -279,6 +281,11 @@ class ApplicationService {
         desktopPeerVerifier: desktopPeerVerifier,
         onProfileOwned: onProfileOwned,
       );
+      // An explicit snapshot is also bound as this owner's scope, so the store,
+      // its read worker and in-service defaults capture the same snapshot.
+      final service = await (configuration == null
+          ? startOwned()
+          : runWithRuntimeConfiguration(captured, startOwned));
       service._desktopDetachGrace = desktopDetachGrace;
       service._onDraining = onDraining;
       service._beforeReleaseOwnership = beforeReleaseOwnership;
@@ -296,6 +303,7 @@ class ApplicationService {
     InstallationLock? installationLock,
     RuntimeConfiguration captured, {
     required bool injected,
+    required bool explicit,
     SearchCallbacks? webSearch,
     bool internalWorker = false,
     Clock? clock,
@@ -308,15 +316,16 @@ class ApplicationService {
       profile,
       launchWithdrawn: () =>
           serviceLaunchLeaseWithdrawn(profile, configuration: captured),
-      // A boundary-started service keeps the legacy boundary's profile defaults
-      // for callers outside its ports; its own snapshot is derived below.
-      configuration: injected ? captured : null,
+      // Unless the caller owns an explicit snapshot, the legacy boundary keeps
+      // receiving profile defaults for callers outside the ports; this
+      // service's own snapshot is derived below.
+      configuration: explicit ? captured : null,
     );
     final owned = injected
         ? profileServiceConfiguration(profile, captured)
         : null;
     // Startup's own view, after the lock added any profile defaults.
-    final configuration = owned ?? runtimeSnapshot();
+    final configuration = owned ?? legacyRuntimeSnapshot();
     Store? store;
     Helper? helper;
     Application? startedApplication;

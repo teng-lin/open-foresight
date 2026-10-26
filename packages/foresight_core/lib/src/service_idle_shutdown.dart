@@ -12,12 +12,14 @@ class ServiceIdleShutdownGuard {
     required this.operationsBusy,
     required this.backgroundBusy,
     RuntimeConfiguration? configuration,
-  }) : _configuration = configuration?.snapshot();
+  }) : _configuration =
+           configuration?.snapshot() ?? currentOwnerRuntimeSnapshot;
 
-  /// An injected snapshot is fixed at construction. Without one this is a
-  /// legacy direct construction: each access returns a fresh immutable snapshot
-  /// of the boundary, as it read the boundary before injection.
-  RuntimeConfiguration get configuration => _configuration ?? runtimeSnapshot();
+  /// An explicit or bound owner snapshot is fixed at construction. Outside any
+  /// owner scope this is a legacy direct construction: each access returns a
+  /// fresh immutable snapshot of the boundary, as it read it before injection.
+  RuntimeConfiguration get configuration =>
+      _configuration ?? legacyRuntimeSnapshot();
   final RuntimeConfiguration? _configuration;
   final Helper helper;
   final bool Function() recording, operationsBusy, backgroundBusy;

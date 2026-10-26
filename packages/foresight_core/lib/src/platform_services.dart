@@ -6,6 +6,7 @@ export 'installation_lock.dart' show InstallationLock;
 import 'package:crypto/crypto.dart';
 import 'dart:ffi';
 import 'package:ffi/ffi.dart';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -253,10 +254,35 @@ RuntimeConfiguration? _runtimeConfiguration;
 RuntimeConfiguration get runtimeConfiguration =>
     _runtimeConfiguration ??= _legacyBoundary(RuntimeConfiguration.resolve());
 
-/// An immutable snapshot of [configuration], or of the boundary when omitted.
-/// Every owner capture uses this, so no port holds the editable boundary.
+/// An immutable snapshot of [configuration]; when omitted, the bound owner
+/// snapshot ([runWithRuntimeConfiguration]) or else a snapshot of the legacy
+/// boundary. Every owner capture uses this, so no port holds the editable map.
 RuntimeConfiguration runtimeSnapshot([RuntimeConfiguration? configuration]) =>
-    (configuration ?? runtimeConfiguration).snapshot();
+    configuration?.snapshot() ??
+    currentOwnerRuntimeSnapshot ??
+    runtimeConfiguration.snapshot();
+
+/// A snapshot of the legacy boundary for owners constructed outside any owner
+/// scope, which keep reading it at use as they did before injection.
+RuntimeConfiguration legacyRuntimeSnapshot() => runtimeConfiguration.snapshot();
+
+final _ownerRuntimeSnapshot = Object();
+
+/// Runs [action] with `configuration.snapshot()` bound as the owner snapshot
+/// for owned constructors and default captures inside it, including its async
+/// continuations. The innermost scope wins. The legacy boundary is neither
+/// read nor changed.
+R runWithRuntimeConfiguration<R>(
+  RuntimeConfiguration configuration,
+  R Function() action,
+) => runZoned(
+  action,
+  zoneValues: {_ownerRuntimeSnapshot: configuration.snapshot()},
+);
+
+/// The innermost bound owner snapshot, or null outside any owner scope.
+RuntimeConfiguration? get currentOwnerRuntimeSnapshot =>
+    Zone.current[_ownerRuntimeSnapshot] as RuntimeConfiguration?;
 
 RuntimeConfiguration _legacyBoundary(RuntimeConfiguration configuration) =>
     configuration.isSnapshot

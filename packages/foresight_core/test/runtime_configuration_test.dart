@@ -1,8 +1,10 @@
 import 'sql_support_test_bootstrap.dart';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 
+import 'package:foresight_core/src/application_service.dart';
 import 'package:foresight_core/src/application_services/model_asset_acquisition.dart';
 import 'package:foresight_core/src/application_services/service_runtime_ports.dart';
 import 'package:foresight_core/src/audio_devices.dart';
@@ -13,6 +15,7 @@ import 'package:foresight_core/src/platform_services.dart';
 import 'package:foresight_core/src/profile_paths.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/runtime_execution_policy.dart';
+import 'package:foresight_core/src/service_idle_shutdown.dart';
 import 'package:foresight_core/src/service_ownership.dart';
 import 'package:foresight_core/src/service_startup.dart';
 import 'package:foresight_core/src/store.dart';
@@ -509,6 +512,181 @@ void main() {
         ).configuration.environment,
         {'FORESIGHT_NATIVE': '/later/native.so'},
       );
+    });
+  });
+
+  group('owner scope', () {
+    test('binds an immutable snapshot without touching the boundary', () {
+      installRuntimeConfiguration(RuntimeConfiguration({'FORESIGHT_X': 'a'}));
+      final boundary = runtimeConfiguration;
+      expect(currentOwnerRuntimeSnapshot, isNull);
+      final bound = runWithRuntimeConfiguration(boundary, () {
+        // The editable boundary itself is frozen when bound.
+        boundary.environment['FORESIGHT_X'] = 'edited';
+        final bound = currentOwnerRuntimeSnapshot!;
+        expect(identical(runtimeSnapshot(), bound), isTrue);
+        expect(() => bound.environment.clear(), throwsUnsupportedError);
+        return bound;
+      });
+      expect(bound.isSnapshot, isTrue);
+      expect(bound.environment, {'FORESIGHT_X': 'a'});
+      expect(currentOwnerRuntimeSnapshot, isNull);
+      expect(identical(runtimeConfiguration, boundary), isTrue);
+      expect(boundary.isSnapshot, isFalse);
+      expect(boundary.environment, {'FORESIGHT_X': 'edited'});
+    });
+
+    test(
+      'nested and concurrent scopes do not contaminate each other',
+      () async {
+        final outer = RuntimeConfiguration({'FORESIGHT_X': 'outer'});
+        final inner = RuntimeConfiguration({'FORESIGHT_X': 'inner'});
+        runWithRuntimeConfiguration(outer, () {
+          expect(currentOwnerRuntimeSnapshot!['FORESIGHT_X'], 'outer');
+          runWithRuntimeConfiguration(inner, () {
+            expect(currentOwnerRuntimeSnapshot!['FORESIGHT_X'], 'inner');
+          });
+          expect(currentOwnerRuntimeSnapshot!['FORESIGHT_X'], 'outer');
+        });
+        final gate = Completer<void>();
+        Future<List<String?>> observe(RuntimeConfiguration configuration) =>
+            runWithRuntimeConfiguration(configuration, () async {
+              final seen = [currentOwnerRuntimeSnapshot!['FORESIGHT_X']];
+              await gate.future;
+              seen.add(currentOwnerRuntimeSnapshot!['FORESIGHT_X']);
+              final helper = Helper(
+                '${root.path}/${configuration['FORESIGHT_X']}.sock',
+                '${root.path}/helper-data',
+                manageProcess: false,
+              );
+              seen.add(helper.configuration['FORESIGHT_X']);
+              await helper.close();
+              return seen;
+            });
+        final first = observe(outer), second = observe(inner);
+        gate.complete();
+        expect(await first, ['outer', 'outer', 'outer']);
+        expect(await second, ['inner', 'inner', 'inner']);
+        expect(currentOwnerRuntimeSnapshot, isNull);
+      },
+    );
+
+    test(
+      'owners built in scope keep it after exit and boundary edits',
+      () async {
+        installRuntimeConfiguration(
+          RuntimeConfiguration({'FORESIGHT_NATIVE': '/boundary/native.so'}),
+        );
+        final scope = RuntimeConfiguration({
+          'FORESIGHT_NATIVE': '/scope/native.so',
+        });
+        final store = Store('${root.path}/application.db');
+        final legacyHelper = Helper(
+          '${root.path}/legacy.sock',
+          '${root.path}/helper-data',
+          manageProcess: false,
+        );
+        final (
+          domain,
+          helper,
+          guard,
+          coordinator,
+          legacySeen,
+        ) = runWithRuntimeConfiguration(scope, () {
+          final helper = Helper(
+            '${root.path}/helper.sock',
+            '${root.path}/helper-data',
+            manageProcess: false,
+          );
+          final domain = Domain(store, helper);
+          return (
+            domain,
+            helper,
+            ServiceIdleShutdownGuard(
+              helper: helper,
+              recording: () => false,
+              operationsBusy: () => false,
+              backgroundBusy: () => false,
+            ),
+            ModelAssetAcquisitionCoordinator(store: store, changed: () {}),
+            // A legacy owner built outside the scope is not redirected.
+            legacyHelper.configuration.nativeLibrary,
+          );
+        });
+        addTearDown(() async {
+          domain.close();
+          await helper.close();
+          await legacyHelper.close();
+          store.close();
+        });
+        expect(legacySeen, '/boundary/native.so');
+        runtimeConfiguration.environment['FORESIGHT_NATIVE'] =
+            '/later/native.so';
+        for (final configuration in [
+          domain.configuration,
+          (domain as RecordingWorkspace).configuration,
+          helper.configuration,
+          guard.configuration,
+          coordinator.configuration,
+        ]) {
+          expect(configuration.isSnapshot, isTrue);
+          expect(configuration.nativeLibrary, '/scope/native.so');
+          expect(
+            () => configuration.environment['FORESIGHT_NATIVE'] = '/x',
+            throwsUnsupportedError,
+          );
+        }
+        expect(identical(domain.configuration, domain.configuration), isTrue);
+        // Outside the scope a legacy owner still reads the boundary at use.
+        expect(legacyHelper.configuration.nativeLibrary, '/later/native.so');
+        expect(scope.environment, {'FORESIGHT_NATIVE': '/scope/native.so'});
+      },
+    );
+
+    test('a service started in scope captures once and keeps it', () async {
+      // An editable copy of this isolate's boundary plus a probe entry.
+      installRuntimeConfiguration(
+        runtimeConfiguration.withOverrides({'FORESIGHT_RC_PROBE': 'boundary'}),
+      );
+      final boundary = runtimeConfiguration;
+      final scope = runtimeSnapshot().withOverrides({
+        'FORESIGHT_RC_PROBE': 'scope',
+      });
+      final profile = ProfilePaths('${root.path}/profile', '${root.path}/run');
+      final service = await runWithRuntimeConfiguration(
+        scope,
+        () => ApplicationService.start(
+          profile,
+          desktopPeerVerifier: (_) => false,
+        ),
+      );
+      addTearDown(service.close);
+      expect(identical(runtimeConfiguration, boundary), isTrue);
+      expect(boundary['FORESIGHT_RC_PROBE'], 'boundary');
+      boundary.environment['FORESIGHT_RC_PROBE'] = 'later';
+      final owned = service.domain.configuration;
+      expect(owned.isSnapshot, isTrue);
+      expect(owned['FORESIGHT_RC_PROBE'], 'scope');
+      expect(identical(service.domain.configuration, owned), isTrue);
+      expect(identical(service.domain.helper.configuration, owned), isTrue);
+      expect(
+        () => owned.environment['FORESIGHT_RC_PROBE'] = '/x',
+        throwsUnsupportedError,
+      );
+    });
+
+    test('a worker scope uses the worker boundary derivation', () {
+      final handoff = {'FORESIGHT_X': 'x'};
+      installServiceWorkerEnvironment(handoff);
+      final bound = runWithRuntimeConfiguration(
+        RuntimeConfiguration.serviceWorker(handoff),
+        () => currentOwnerRuntimeSnapshot!,
+      );
+      expect(bound.environment, runtimeConfiguration.environment);
+      expect(bound.linuxBundleRoot, runtimeConfiguration.linuxBundleRoot);
+      expect(runtimeConfiguration.isSnapshot, isFalse);
+      handoff['FORESIGHT_X'] = 'changed';
+      expect(bound.environment, {'FORESIGHT_X': 'x'});
     });
   });
 }

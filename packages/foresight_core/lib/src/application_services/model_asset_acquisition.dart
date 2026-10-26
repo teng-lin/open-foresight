@@ -71,7 +71,9 @@ final class ModelAssetAcquisitionCoordinator {
     this.stopPreflight = _stopProcess,
     RuntimeConfiguration? configuration,
     RuntimeConfiguration Function()? ownerConfiguration,
-  }) : _configuration = configuration?.snapshot(),
+  }) : _configuration =
+           configuration?.snapshot() ??
+           (ownerConfiguration == null ? currentOwnerRuntimeSnapshot : null),
        _ownerConfiguration = ownerConfiguration,
        createDownloader = createDownloader ?? PublicModelFileDownloader.new,
        _prepareGemma = prepareGemma,
@@ -81,12 +83,12 @@ final class ModelAssetAcquisitionCoordinator {
   final Future<Process> Function(String runner)? startPreflight;
   final Future<void> Function(Process) stopPreflight;
 
-  /// An injected snapshot is fixed at construction. Without one this is a
-  /// legacy direct construction: each access returns a fresh immutable snapshot
-  /// of the boundary, as it read the boundary before injection.
+  /// An explicit or bound owner snapshot is fixed at construction. Outside any
+  /// owner scope this is a legacy direct construction: each access returns a
+  /// fresh immutable snapshot of the boundary, as it read it before injection.
   /// An owner may supply its own snapshot instead ([ownerConfiguration]).
   RuntimeConfiguration get configuration =>
-      _configuration ?? _ownerConfiguration?.call() ?? runtimeSnapshot();
+      _configuration ?? _ownerConfiguration?.call() ?? legacyRuntimeSnapshot();
   final RuntimeConfiguration? _configuration;
   final RuntimeConfiguration Function()? _ownerConfiguration;
   final Store store;
