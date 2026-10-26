@@ -196,11 +196,8 @@ def test_cancellation_reaps_owned_branch_and_descendant(runner):
                 process.wait(timeout=8)
 
 
-@pytest.mark.parametrize("mode", [None, "0", "1", "bad"])
-@pytest.mark.parametrize("forge_skip", [False, True])
-def test_container_entrypoint_restores_first_and_honors_schedule_switch(
-    runner, mode, tmp_path, forge_skip
-):
+@pytest.fixture
+def container_entrypoint(runner, tmp_path):
     root, env = runner
     workspace = tmp_path / "workspace"
     (workspace / "tools").mkdir(parents=True)
@@ -223,9 +220,11 @@ def test_container_entrypoint_restores_first_and_honors_schedule_switch(
         root / "tools/linux_container_runtime.sh",
     )
     (root / "tools/run_ci_user.py").write_text(
-        "from pathlib import Path; import os,sys\n"
+        "from pathlib import Path; import json,os,sys\n"
         f"root=Path({str(root)!r})\n"
         "assert (root/'restore.done').exists()\n"
+        "calls=[json.loads(line) for line in (root/'chown.jsonl').read_text().splitlines()]\n"
+        "assert calls==[[os.environ['OUT_UID']+':'+os.environ['OUT_GID'],os.environ['FIXTURE_SOURCE']]]\n"
         "assert sys.argv[1:2]==['--workspace']\n"
         "assert sys.argv[3:6]==['--flutter-root','/opt/flutter','--']\n"
         "assert sys.argv[6:]==['bash','tools/linux_container_runtime.sh']\n"
@@ -253,18 +252,39 @@ def test_container_entrypoint_restores_first_and_honors_schedule_switch(
         script = script.replace(token, str(value))
     entrypoint = tmp_path / "container-entrypoint.sh"
     entrypoint.write_text(script)
+    # This fixture owns orchestration, not real ownership. Record the request
+    # without changing any filesystem owner, even under a root pytest host.
+    chown = Path(env["PATH"].split(os.pathsep)[0]) / "chown"
+    chown.write_text(
+        f"#!{sys.executable}\nimport json,sys\nfrom pathlib import Path\n"
+        f"root=Path({str(root)!r})\n"
+        "assert (root/'restore.done').exists()\n"
+        "with (root/'chown.jsonl').open('a') as log: log.write(json.dumps(sys.argv[1:])+'\\n')\n"
+    )
+    chown.chmod(0o755)
     scoped = {
         **env,
         "REQUIRE_RESTORE": "1",
-        "FORGE_SKIP": "1" if forge_skip else "0",
+        "FORGE_SKIP": "0",
         "SOURCE_REVISION": "a" * 40,
-        "OUT_UID": str(os.getuid()),
-        "OUT_GID": str(os.getgid()),
+        "OUT_UID": "1234",
+        "OUT_GID": "2345",
+        "FIXTURE_SOURCE": str(mounted_source),
         "FORESIGHT_BUILD_MODE": "test-only",
         "TMPDIR": str(tmp_path),
         "FORESIGHT_TEST_TEMP_ROOT": str(tmp_path),
         "PYTHONPYCACHEPREFIX": str(tmp_path / "pycache"),
     }
+    return root, scoped, entrypoint, output, mounted_source
+
+
+@pytest.mark.parametrize("mode", [None, "0", "1", "bad"])
+@pytest.mark.parametrize("forge_skip", [False, True])
+def test_container_entrypoint_restores_first_and_honors_schedule_switch(
+    container_entrypoint, mode, forge_skip
+):
+    root, scoped, entrypoint, output, mounted_source = container_entrypoint
+    scoped["FORGE_SKIP"] = "1" if forge_skip else "0"
     scoped.pop("FORESIGHT_LINUX_TEST_SCHEDULE", None)
     if mode is not None:
         scoped["FORESIGHT_LINUX_TEST_SCHEDULE"] = mode
@@ -278,6 +298,13 @@ def test_container_entrypoint_restores_first_and_honors_schedule_switch(
     assert (root / "tooling.ready").exists()
     assert (root / "restore.done").exists()
     assert (root / "user.ready").exists()
+    ownership = [
+        json.loads(line) for line in (root / "chown.jsonl").read_text().splitlines()
+    ]
+    assert ownership == [
+        ["1234:2345", str(mounted_source)],
+        ["-R", "1234:2345", str(output)],
+    ]
     assert (result.returncode == 0) == (mode != "bad" and not forge_skip), (
         result.stdout + result.stderr
     )
@@ -293,3 +320,28 @@ def test_container_entrypoint_restores_first_and_honors_schedule_switch(
         if forge_skip:
             assert "must have zero skips" in result.stderr
             assert "<skipped/>" in report.read_text()
+
+
+@pytest.mark.parametrize("uid,gid", [("0", "2345"), ("1234", "0")])
+def test_container_entrypoint_refuses_root_target_before_owner_transfer_or_gates(
+    container_entrypoint, uid, gid
+):
+    root, scoped, entrypoint, output, _ = container_entrypoint
+    result = subprocess.run(
+        ["bash", str(entrypoint)],
+        env={**scoped, "OUT_UID": uid, "OUT_GID": gid},
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert "require a non-root output owner" in result.stderr
+    assert (root / "tooling.ready").exists()
+    assert (root / "restore.done").exists()
+    assert not (root / "user.ready").exists()
+    assert not list(root.glob("*.started"))
+    ownership = [
+        json.loads(line) for line in (root / "chown.jsonl").read_text().splitlines()
+    ]
+    assert ownership == [["-R", uid + ":" + gid, str(output)]]
