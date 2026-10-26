@@ -71,9 +71,27 @@ Future<Map<String, Object?>> _handoffResources(
     result['fdMetadataAvailable'] = false;
   }
   try {
+    final sdkAncestors = <String>[];
+    const sdkPrefix = '-DFORESIGHT_DIAGNOSTIC_DART_SDK_ROOT=';
+    final sdkDefine = defines
+        .where((value) => value.startsWith(sdkPrefix))
+        .firstOrNull;
+    if (sdkDefine != null) {
+      final sdk = sdkDefine.substring(sdkPrefix.length);
+      if (sdk.startsWith('/') && !sdk.split('/').contains('..')) {
+        var directory = Directory(sdk);
+        for (var depth = 0; depth < 12; depth++) {
+          sdkAncestors.add(directory.path);
+          if (directory.parent.path == directory.path) break;
+          directory = directory.parent;
+        }
+      }
+    }
+    result['sdkAncestorCount'] = sdkAncestors.length;
+    final paths = [...profileDirectories, ...sdkAncestors];
     final args = Platform.isMacOS
-        ? ['-f', '%u %g %Lp', ...profileDirectories]
-        : ['-c', '%u %g %a', ...profileDirectories];
+        ? ['-f', '%u %g %Lp', ...paths]
+        : ['-c', '%u %g %a', ...paths];
     final stat = await runCaptureProcess(
       '/usr/bin/stat',
       args,
@@ -81,12 +99,16 @@ Future<Map<String, Object?>> _handoffResources(
     );
     final values = (stat.stdout as String).trim().split(RegExp(r'\s+'));
     if (stat.exitCode == 0 &&
-        values.length == 9 &&
+        values.length == paths.length * 3 &&
         values.every((value) => RegExp(r'^[0-9]+$').hasMatch(value))) {
-      for (var i = 0; i < 3; i++) {
-        result['profile${i}Uid'] = int.parse(values[i * 3]);
-        result['profile${i}Gid'] = int.parse(values[i * 3 + 1]);
-        result['profile${i}Mode'] = int.tryParse(values[i * 3 + 2], radix: 8);
+      for (var i = 0; i < paths.length; i++) {
+        // Only an index and numeric metadata escape this known-path probe.
+        final label = i < profileDirectories.length
+            ? 'profile$i'
+            : 'sdkAncestor${i - profileDirectories.length}';
+        result['${label}Uid'] = int.parse(values[i * 3]);
+        result['${label}Gid'] = int.parse(values[i * 3 + 1]);
+        result['${label}Mode'] = int.tryParse(values[i * 3 + 2], radix: 8);
       }
     } else {
       result['profileMetadataAvailable'] = false;
