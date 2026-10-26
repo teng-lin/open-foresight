@@ -226,6 +226,9 @@ if name == 'host-python':
         Path(sys.argv[sys.argv.index('--output') + 1]).mkdir(exist_ok=True)
     elif 'tools/ci_linux_handoff.py' in sys.argv:
         Path(sys.argv[sys.argv.index('--output') + 1]).write_text('{{}}')
+    elif sys.argv[1:3] == ['-I', '-c']:
+        assert 'sys.base_prefix' in sys.argv[3]
+        print(Path(sys.base_prefix).resolve())
     elif '-c' in sys.argv:
         print('frozen-snapshot')
 """
@@ -284,6 +287,9 @@ if name == 'host-python':
     assert "--cache-to" not in build
     runs = [row for row in rows if row[:2] == ["docker", "run"]]
     assert len(runs) == 1
+    runtime = str(Path(sys.base_prefix).resolve())
+    assert runtime + ":" + runtime + ":ro" in runs[0]
+    assert "FORESIGHT_TOOLING_PYTHON_RUNTIME=" + runtime + "/bin/python3" in runs[0]
     target = "test" if mode == "--test-only" else "build"
     assert runs[0][-1] == f"/workspace/tools/linux_container_{target}.sh"
     assert runs[0][runs[0].index("FORESIGHT_LINUX_TEST_SCHEDULE") - 1] == "-e"

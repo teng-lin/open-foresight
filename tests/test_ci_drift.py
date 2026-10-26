@@ -336,6 +336,18 @@ def test_arch_daily_probe_inlines_toolchain_and_runs_existing_full_gates():
     )
     rolling = job["steps"][0]["run"]
     assert set(install.split()[4:]) <= set(rolling.split())
+    python_setup = next(
+        step["run"]
+        for step in job["steps"]
+        if step.get("name") == "Install hash-verified Python test tools"
+    )
+    assert "uv python install 3.13" in python_setup
+    assert "uv python find --managed-python 3.13" in python_setup
+    assert '"$task_python" -m venv .venv' in python_setup
+    assert "sys.version_info[:2] == (3, 13)" in python_setup
+    assert python_setup.index("sys.version_info") < python_setup.index(
+        "pip install --require-hashes"
+    )
     commands = "\n".join(step.get("run", "") for step in job["steps"])
     assert "tools/platform_python_tests.py --platform linux" in commands
     assert (
@@ -460,11 +472,18 @@ def test_every_upload_in_the_nightly_called_workflow_closure_is_retry_safe():
                     artifact_name = step["with"].get("name", "artifact")
                     per_attempt = all(
                         field in artifact_name
-                        for field in ("${{ github.run_id }}", "${{ github.run_attempt }}")
+                        for field in (
+                            "${{ github.run_id }}",
+                            "${{ github.run_attempt }}",
+                        )
                     )
                     # Immutable per-attempt evidence preserves earlier failure
                     # reports; stable names need replacement on failed-job retry.
-                    assert step["with"].get("overwrite") is True or per_attempt, (filename, name, step)
+                    assert step["with"].get("overwrite") is True or per_attempt, (
+                        filename,
+                        name,
+                        step,
+                    )
                     evidence.add(filename)
 
     visit("preview-packages.yml")

@@ -201,9 +201,18 @@ def test_container_entrypoint_restores_first_and_honors_schedule_switch(
     root, env = runner
     workspace = tmp_path / "workspace"
     (workspace / "tools").mkdir(parents=True)
+    # Dependency/version failures are covered by the bootstrap unit and real
+    # two-container tests; this fixture owns restore/scheduling order.
+    (workspace / "tools/linux_tooling_python.sh").write_text(
+        "foresight_select_tooling_python() {\n"
+        ' test -n "$FORESIGHT_PYTHON"\n'
+        f" touch '{root}/tooling.ready'\n"
+        "}\n"
+    )
     (workspace / "tools/ci_linux_handoff.py").write_text(
         "from pathlib import Path; import sys\n"
         "assert sys.argv[1]=='restore' and '--inputs' in sys.argv\n"
+        f"assert Path({str(root)!r},'tooling.ready').exists()\n"
         "Path(sys.argv[sys.argv.index('--root')+1],'restore.done').touch()\n"
     )
     output = tmp_path / "out"
@@ -249,6 +258,7 @@ def test_container_entrypoint_restores_first_and_honors_schedule_switch(
         text=True,
         timeout=15,
     )
+    assert (root / "tooling.ready").exists()
     assert (root / "restore.done").exists()
     assert (result.returncode == 0) == (mode != "bad" and not forge_skip), (
         result.stdout + result.stderr

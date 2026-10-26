@@ -30,7 +30,7 @@ jobs:
     timeout-minutes: 120
     steps:
       - name: Install the rolling Arch application toolchain
-        run: pacman -Syu --needed --noconfirm git cmake ninja gcc grpc protobuf nlohmann-json sqlite python python-pip clang gtk3 pkgconf unzip xz mesa libglvnd xorg-server-xvfb xorg-xauth dbus poppler unrtf bubblewrap which github-cli
+        run: pacman -Syu --needed --noconfirm git cmake ninja gcc grpc protobuf nlohmann-json sqlite python python-pip uv clang gtk3 pkgconf unzip xz mesa libglvnd xorg-server-xvfb xorg-xauth dbus poppler unrtf bubblewrap which github-cli
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
@@ -50,7 +50,11 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Install hash-verified Python test tools
         run: |
-          python -m venv .venv
+          # Keep tooling on required Python 3.13 while Arch's compiler rolls.
+          uv python install 3.13
+          task_python=$(uv python find --managed-python 3.13)
+          "$task_python" -m venv .venv
+          .venv/bin/python -c 'import sys; assert sys.version_info[:2] == (3, 13), sys.version'
           .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
       - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
