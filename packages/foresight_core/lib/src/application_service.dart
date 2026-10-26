@@ -358,7 +358,7 @@ class ApplicationService {
           '${profile.runtime}/${internalWorker ? 'worker' : 'application'}.sock';
       await clearStaleServiceSocket(path);
       sweepStaleSpeechAudio(profile.data);
-      store = Store('${profile.data}/application.db');
+      store = Store('${profile.data}/application.db', configuration: owned);
       await store.verifyRegisteredModels(rejectInvalidRegistrations: true);
       store.meetingStore.interruptActiveCaptures();
       helper = Helper(
