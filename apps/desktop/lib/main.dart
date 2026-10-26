@@ -52,8 +52,16 @@ Future<void> main([List<String> arguments = const []]) async {
   );
 }
 
-Future<DesktopConnection> connectDesktopDomain(ProfilePaths profile) =>
-    connectDesktop(profile);
+Future<DesktopConnection> connectDesktopDomain(ProfilePaths profile) {
+  final diagnostics = _desktopDiagnostics;
+  if (diagnostics == null) return connectDesktop(profile);
+  return runWithServiceDiagnostics(
+    diagnostics.producer,
+    () => connectDesktop(profile),
+    component: DiagnosticComponent.desktop,
+  );
+}
+
 void quitDesktop() {
   // This callback is for startup forwarding/failure before a workspace owns
   // application resources. Normal workspace cleanup keeps its existing owner.
