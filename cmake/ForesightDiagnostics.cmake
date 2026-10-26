@@ -7,13 +7,15 @@ option(FORESIGHT_REQUIRE_DIAGNOSTIC_PRODUCTS "Refuse unavailable diagnostic buil
 set(FORESIGHT_DIAGNOSTIC_TOOLCHAIN_SHA256 "" CACHE STRING
     "Optional expected fingerprint of actual selected public compiler/OS metadata")
 set(FORESIGHT_DIAGNOSTIC_PRODUCTS_AVAILABLE FALSE CACHE INTERNAL "Current diagnostic build availability" FORCE)
+if(NOT FORESIGHT_RUNTIME_SUPPORT_CONSUMER)
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-products.json" "{\"schema\":1,\"available\":false}\n")
 file(CHMOD "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-products.json" PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ)
 file(REMOVE "${CMAKE_CURRENT_BINARY_DIR}/runtime-support-build.json")
 file(REMOVE "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-native-inputs.json"
   "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-toolchain-metadata.json")
+endif()
 macro(_diag_unavailable)
-  if(FORESIGHT_REQUIRE_DIAGNOSTIC_PRODUCTS)
+  if(FORESIGHT_REQUIRE_DIAGNOSTIC_PRODUCTS OR FORESIGHT_RUNTIME_SUPPORT_CONSUMER)
     message(FATAL_ERROR "Diagnostic product identity or recipe is unavailable")
   endif()
   message(STATUS "Diagnostic products unavailable: identity or recipe was refused")
@@ -145,8 +147,16 @@ string(JSON _diag_compiler_sha256 ERROR_VARIABLE _diag_json_error GET "${_diag_m
 if(_diag_json_error)
   _diag_unavailable()
 endif()
+if(FORESIGHT_RUNTIME_SUPPORT_CONSUMER)
+  file(READ "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-toolchain-metadata.json" _diag_existing_metadata)
+  string(JSON _diag_existing_fingerprint GET "${_diag_existing_metadata}" fingerprint)
+  if(NOT _diag_existing_fingerprint STREQUAL _diag_actual_fingerprint)
+    message(FATAL_ERROR "Consumer diagnostic toolchain changed")
+  endif()
+else()
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-toolchain-metadata.json" "${_diag_metadata}\n")
 file(CHMOD "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-toolchain-metadata.json" PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ)
+endif()
 
 # The same explicit options feed the identity and both actual target recipes.
 # Ambient/global flags are also included, so unreviewed options fail closed in
@@ -185,9 +195,24 @@ string(JSON FORESIGHT_DIAGNOSTIC_NATIVE_ID ERROR_VARIABLE _diag_json_error GET "
 if(_diag_json_error)
   _diag_unavailable()
 endif()
+if(FORESIGHT_RUNTIME_SUPPORT_CONSUMER)
+  file(READ "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-native-inputs.json" _diag_existing_record)
+  string(JSON _diag_existing_id GET "${_diag_existing_record}" native_id)
+  if(NOT _diag_existing_id STREQUAL FORESIGHT_DIAGNOSTIC_NATIVE_ID)
+    message(FATAL_ERROR "Consumer diagnostic source or recipe changed")
+  endif()
+else()
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-native-inputs.json" "${_diag_record}\n")
 file(CHMOD "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-native-inputs.json" PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ)
-file(GLOB_RECURSE _diag_owned_inputs CONFIGURE_DEPENDS "${_diag_root}/native/diagnostic_*")
+endif()
+# Consumer configure verifies the complete current inventory above and below.
+# Do not retain Ninja's always-dirty glob preflight, which hides the full dry-run
+# behind an unnecessary regeneration. Known inputs still trigger reconfigure.
+if(FORESIGHT_RUNTIME_SUPPORT_CONSUMER)
+  file(GLOB_RECURSE _diag_owned_inputs "${_diag_root}/native/diagnostic_*")
+else()
+  file(GLOB_RECURSE _diag_owned_inputs CONFIGURE_DEPENDS "${_diag_root}/native/diagnostic_*")
+endif()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   ${_diag_owned_inputs} "${_diag_root}/tools/diagnostic_build_identity.py"
   "${_diag_root}/tools/diagnostic_build_inputs.json"
@@ -212,6 +237,9 @@ set(_diag_expected_global_flags "${CMAKE_C_FLAGS};${CMAKE_C_FLAGS_${_diag_config
 set(_diag_expected_target_options ${_diag_directory_flags} ${_diag_compile_flags})
 set(_diag_expected_os_context "${CMAKE_OSX_SYSROOT};${CMAKE_OSX_ARCHITECTURES};${CMAKE_OSX_DEPLOYMENT_TARGET}")
 function(_diag_recipe_failed)
+  if(FORESIGHT_RUNTIME_SUPPORT_CONSUMER)
+    message(FATAL_ERROR "Consumer diagnostic recipe changed")
+  endif()
   file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-products.json" "{\"schema\":1,\"available\":false}\n")
   file(CHMOD "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-products.json" PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ)
   message(FATAL_ERROR "Diagnostic effective product recipe changed")
@@ -297,6 +325,10 @@ function(_diag_validate_products)
 endfunction()
 cmake_language(DEFER CALL _diag_validate_products)
 
+if(FORESIGHT_RUNTIME_SUPPORT_CONSUMER)
+  add_custom_target(foresight_diagnostic_identity_check)
+  add_custom_target(foresight_diagnostic_compile DEPENDS "${_diag_support}" "${_diag_launcher}")
+else()
 add_custom_target(foresight_diagnostic_identity_check
   COMMAND "${CMAKE_COMMAND}"
     "-DDIAGNOSTIC_PYTHON=${_diag_python}"
@@ -338,12 +370,17 @@ add_custom_target(foresight_diagnostic_compile
   DEPENDS foresight_diagnostic_identity_check
   BYPRODUCTS "${_diag_support}" "${_diag_launcher}"
   VERBATIM)
+endif()
 add_custom_target(foresight_diagnostic_support DEPENDS foresight_diagnostic_compile
   SOURCES ${_diag_support_sources})
 # Keep the scheduling handle distinct from its executable byproduct: Ninja
 # emits a per-directory phony rule for every custom target.
 add_custom_target(foresight_diagnostic_launcher DEPENDS foresight_diagnostic_compile
   SOURCES ${_diag_launcher_sources})
+if(FORESIGHT_RUNTIME_SUPPORT_CONSUMER)
+  add_custom_target(foresight_diagnostic_products ALL
+    DEPENDS foresight_diagnostic_support foresight_diagnostic_launcher)
+else()
 add_custom_target(foresight_diagnostic_products ALL
   COMMAND "${CMAKE_COMMAND}"
     "-DDIAGNOSTIC_STATE=${CMAKE_CURRENT_BINARY_DIR}/diagnostic-products.json"
@@ -353,13 +390,20 @@ add_custom_target(foresight_diagnostic_products ALL
     -P "${_diag_root}/cmake/PublishDiagnosticProducts.cmake"
   DEPENDS foresight_diagnostic_support foresight_diagnostic_launcher
   VERBATIM)
+endif()
 function(_diag_add_runtime_products)
   if(NOT TARGET foresight_sql_support)
+    if(FORESIGHT_RUNTIME_SUPPORT_CONSUMER)
+      message(FATAL_ERROR "Consumer SQL product unavailable")
+    endif()
     return()
   endif()
   if(NOT TARGET foresight_sql_identity_check)
+    if(FORESIGHT_RUNTIME_SUPPORT_CONSUMER)
+      message(FATAL_ERROR "Consumer SQL identity unavailable")
+    endif()
     file(REMOVE "${CMAKE_CURRENT_BINARY_DIR}/runtime-support-build.json")
-    if(FORESIGHT_REQUIRE_DIAGNOSTIC_PRODUCTS)
+    if(FORESIGHT_REQUIRE_DIAGNOSTIC_PRODUCTS OR FORESIGHT_RUNTIME_SUPPORT_CONSUMER)
       message(FATAL_ERROR "Runtime SQL product identity unavailable")
     endif()
     return()
@@ -367,6 +411,21 @@ function(_diag_add_runtime_products)
   get_target_property(_sql_file foresight_sql_support FORESIGHT_SQL_SUPPORT_FILE)
   if("${_sql_file}" MATCHES "-NOTFOUND$")
     set(_sql_file "$<TARGET_FILE:foresight_sql_support>")
+  endif()
+  if(FORESIGHT_RUNTIME_SUPPORT_CONSUMER)
+    if(NOT "${_sql_file}" STREQUAL "${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_SHARED_LIBRARY_PREFIX}foresight_sql_support${CMAKE_SHARED_LIBRARY_SUFFIX}")
+      message(FATAL_ERROR "Consumer SQL product path changed")
+    endif()
+    execute_process(COMMAND ${_diag_clean_environment} "${_diag_python}" -I
+      "${_diag_root}/tools/diagnostic_product_receipt.py"
+      --root "${_diag_root}" --build "${CMAKE_CURRENT_BINARY_DIR}" --verify
+      RESULT_VARIABLE _consumer_status OUTPUT_QUIET ERROR_QUIET TIMEOUT 60)
+    if(NOT _consumer_status STREQUAL "0")
+      message(FATAL_ERROR "Consumer runtime product verification failed")
+    endif()
+    add_custom_target(foresight_runtime_support_products ALL
+      DEPENDS foresight_diagnostic_products foresight_sql_support)
+    return()
   endif()
   add_custom_target(foresight_runtime_support_products ALL
     COMMAND "${CMAKE_COMMAND}"

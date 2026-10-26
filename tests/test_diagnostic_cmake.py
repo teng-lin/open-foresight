@@ -788,3 +788,129 @@ def test_public_provenance_has_safe_modes_under_umask002(tmp_path):
         "runtime-support-build.json",
     ]:
         assert (build / name).stat().st_mode & 0o777 == 0o644, name
+
+
+@pytest.mark.parametrize("generator", ["Unix Makefiles", "Ninja"])
+@pytest.mark.parametrize("tamper", ["bytes", "mode", "receipt"])
+def test_qualified_consumer_has_no_product_commands_and_refuses_tampering(
+    tmp_path, generator, tamper
+):
+    if generator == "Ninja" and not shutil.which("ninja"):
+        pytest.skip("Ninja required")
+    source, build = fixture(tmp_path, sql=True)
+    configured = configure(
+        source, build, "-G", generator, "-DFORESIGHT_REQUIRE_DIAGNOSTIC_PRODUCTS=ON"
+    )
+    assert configured.returncode == 0, configured.stdout + configured.stderr
+    produced = subprocess.run(
+        ["cmake", "--build", str(build), "--parallel", "2"],
+        capture_output=True,
+        check=False,
+        text=True,
+        timeout=90,
+    )
+    assert produced.returncode == 0, produced.stdout + produced.stderr
+    receipt = build / "runtime-support-build.json"
+    before = receipt.read_bytes()
+    suffix = "dylib" if sys.platform == "darwin" else "so"
+    names = [
+        "diagnostic-products.json",
+        "diagnostic-native-inputs.json",
+        "diagnostic-toolchain-metadata.json",
+        "diagnostic-sql-inputs.json",
+        "sql-toolchain-metadata.json",
+        "runtime-support-build.json",
+        f"libforesight_sql_support.{suffix}",
+        f"libforesight_diagnostic_support.{suffix}",
+        "foresight-diagnostic-launcher",
+    ]
+    unchanged = {
+        name: ((build / name).read_bytes(), (build / name).stat().st_mode)
+        for name in names
+    }
+    consumed = configure(source, build, "-DFORESIGHT_RUNTIME_SUPPORT_CONSUMER=ON")
+    assert consumed.returncode == 0, consumed.stdout + consumed.stderr
+    plan = subprocess.run(
+        ["cmake", "--build", str(build), "--", "-n"],
+        capture_output=True,
+        check=False,
+        text=True,
+        timeout=30,
+    )
+    assert plan.returncode == 0, plan.stdout + plan.stderr
+    for forbidden in (
+        "VerifyDiagnosticToolchain.cmake",
+        "--fresh",
+        "PublishDiagnosticProducts.cmake",
+        "ProduceRuntimeSupport.cmake",
+        "VerifyGlobs.cmake",
+        "--regenerate-during-build",
+    ):
+        assert forbidden not in plan.stdout + plan.stderr
+    assert receipt.read_bytes() == before
+    assert unchanged == {
+        name: ((build / name).read_bytes(), (build / name).stat().st_mode)
+        for name in names
+    }
+    launcher = build / "foresight-diagnostic-launcher"
+    if tamper == "bytes":
+        before_stat = launcher.stat()
+        data = launcher.read_bytes()
+        launcher.write_bytes(data[:-1] + bytes([data[-1] ^ 1]))
+        os.utime(launcher, ns=(before_stat.st_atime_ns, before_stat.st_mtime_ns))
+    elif tamper == "mode":
+        launcher.chmod(0o700)
+    else:
+        record = json.loads(receipt.read_text())
+        record["native_id"] = "0" * 64
+        receipt.write_text(json.dumps(record))
+    tampered_receipt = receipt.read_bytes()
+    refused = configure(source, build)
+    assert refused.returncode != 0
+    assert (
+        "Consumer runtime product verification failed"
+        in refused.stdout + refused.stderr
+    )
+    assert receipt.read_bytes() == tampered_receipt
+
+
+@pytest.mark.parametrize(
+    "mutation", ["sql", "native", "toolchain", "recipe", "missing"]
+)
+def test_qualified_consumer_refuses_changed_inputs_without_rebuilding(
+    tmp_path, mutation
+):
+    source, build = fixture(tmp_path, sql=True)
+    configured = configure(source, build, "-DFORESIGHT_REQUIRE_DIAGNOSTIC_PRODUCTS=ON")
+    assert configured.returncode == 0, configured.stdout + configured.stderr
+    produced = subprocess.run(
+        ["cmake", "--build", str(build), "--parallel", "2"],
+        capture_output=True,
+        check=False,
+        text=True,
+        timeout=90,
+    )
+    assert produced.returncode == 0, produced.stdout + produced.stderr
+    extra = []
+    if mutation in {"sql", "native"}:
+        name = "sql_support.c" if mutation == "sql" else "diagnostic_protocol.c"
+        path = source / "native" / name
+        previous = path.stat()
+        path.write_text(path.read_text() + "\n/* changed controlled input */\n")
+        os.utime(path, ns=(previous.st_atime_ns, previous.st_mtime_ns))
+    elif mutation == "toolchain":
+        path = source / "tools/fixture-metadata.json"
+        record = json.loads(path.read_text())
+        record["record"]["fixture"] = "changed"
+        record["fingerprint"] = hashlib.sha256(
+            json.dumps(record["record"], sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        path.write_text(json.dumps(record))
+    elif mutation == "recipe":
+        extra.append("-DCMAKE_C_FLAGS=-g")
+    else:
+        (build / "foresight-diagnostic-launcher").unlink()
+    refused = configure(
+        source, build, "-DFORESIGHT_RUNTIME_SUPPORT_CONSUMER=ON", *extra
+    )
+    assert refused.returncode != 0
