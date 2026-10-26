@@ -280,6 +280,8 @@ def test_all_mode_builds_worker_before_tests_and_hosts_only_after_tests(
             **os.environ,
             "PATH": f"{binary}:{os.environ['PATH']}",
             "FORESIGHT_BUILD_MODE": "all",
+            "FORESIGHT_COVERAGE": "0",
+            "FORESIGHT_CORE_COVERAGE_BENCHMARK": "0",
             "FIXTURE_BUILD": str(build),
             "FIXTURE_DART_CALLS": str(calls),
         },
