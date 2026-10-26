@@ -290,10 +290,14 @@ extension _MeetingComposition on MeetingsController {
         : 'Echo cancellation is off.';
   }
 
-  Future<String?> _speechSetupProblem() async {
-    final registration = await readCurrentMeeting<ModelRegistration?>(
+  Future<String?> _speechSetupProblem({
+    required bool Function() current,
+  }) async {
+    final registration = await readCurrentRecordingSetup<ModelRegistration?>(
       d.store,
       StoreReadQueries.model('speech'),
+      current: current,
+      ownerChanges: [d.changes, _recordingAdmissionChanges.stream],
     );
     return preparedSpeechSetupProblem(registration);
   }

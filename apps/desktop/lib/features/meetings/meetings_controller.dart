@@ -98,13 +98,21 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
     _reads.start(selected: meetingId, preview: meetingPreviewId);
   }
 
+  final _recordingAdmissionChanges = StreamController<void>.broadcast(
+    sync: true,
+  );
   bool _disposed = false;
   Future<void>? _closing;
   DesktopConnection get d => _host.connection;
   bool get mounted => !_disposed && _host.mounted;
   BuildContext get context => _host.context;
   void update(VoidCallback action) {
-    if (mounted) _host.update(action);
+    if (mounted) {
+      _host.update(action);
+      if (!_recordingAdmissionChanges.isClosed) {
+        _recordingAdmissionChanges.add(null);
+      }
+    }
   }
 
   void setState(VoidCallback action) => update(action);
@@ -137,6 +145,7 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
   Future<void> dispose() {
     if (_disposed) return _closing ?? Future<void>.value();
     _disposed = true;
+    unawaited(_recordingAdmissionChanges.close());
     quickStarting = false;
     unawaited(_reads.dispose());
     _noteReadGeneration++;
@@ -197,6 +206,9 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
   set meetingId(int? value) {
     if (_meetingId == value) return;
     _meetingId = value;
+    if (!_recordingAdmissionChanges.isClosed) {
+      _recordingAdmissionChanges.add(null);
+    }
     _noteReadGeneration++;
     _reads.select(_meetingId, _meetingPreviewId);
   }
@@ -208,6 +220,9 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
   set meetingPreviewId(int? value) {
     if (_meetingPreviewId == value) return;
     _meetingPreviewId = value;
+    if (!_recordingAdmissionChanges.isClosed) {
+      _recordingAdmissionChanges.add(null);
+    }
     _noteReadGeneration++;
     _reads.select(_meetingId, _meetingPreviewId);
   }
@@ -636,12 +651,12 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
     bool current() => identity.isCurrent(d, alive: mounted);
     update(() => quickStarting = true);
     try {
-      final problem = await _speechSetupProblem();
+      final problem = await _speechSetupProblem(current: current);
       if (!current()) return;
       if (problem != null) {
         await _settings.chooseSpeech();
         if (!current()) return;
-        final problem = await _speechSetupProblem();
+        final problem = await _speechSetupProblem(current: current);
         if (!current() || problem != null) return;
       }
       if (!await _integrationCommands.ensureRecordingAccess() || !current())
@@ -685,12 +700,12 @@ class MeetingsController implements MeetingActivity, MeetingCommands {
         meetingPreviewId == preview;
     update(() => quickStarting = true);
     try {
-      final problem = await _speechSetupProblem();
+      final problem = await _speechSetupProblem(current: current);
       if (!current()) return;
       if (problem != null) {
         await _settings.chooseSpeech();
         if (!current()) return;
-        final problem = await _speechSetupProblem();
+        final problem = await _speechSetupProblem(current: current);
         if (!current() || problem != null) return;
       }
       forgetPendingMeetingCreates();
