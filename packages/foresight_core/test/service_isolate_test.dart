@@ -1,4 +1,5 @@
 import 'sql_support_test_bootstrap.dart';
+import 'support/diagnostic_child_exit_probe.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'dart:isolate';
@@ -247,6 +248,7 @@ void main() {
         environment: environment,
         includeParentEnvironment: false,
       );
+      final childExitProbe = DiagnosticChildExitProbe.start(process.pid);
       final output = utf8.decoder.bind(process.stdout).join();
       final errors = utf8.decoder.bind(process.stderr).join();
       ServiceClient? client;
@@ -289,6 +291,9 @@ void main() {
           // configuration, child output or exception messages.
           stderr.writeln('Startup handoff health: ${jsonEncode(lastHealth)}');
           stderr.writeln(
+            'Startup handoff child exits: ${jsonEncode(childExitProbe.snapshot)}',
+          );
+          stderr.writeln(
             'Startup handoff resources: ${jsonEncode(await _handoffResources(verifiedDefines, command.last, [directory.path, profile.data, profile.runtime]))}',
           );
           rethrow;
@@ -313,6 +318,11 @@ void main() {
         );
         expect(statusHandoff.existsSync(), isFalse);
       } finally {
+        try {
+          childExitProbe.close();
+        } catch (_) {
+          // Observation must never prevent authoritative service cleanup.
+        }
         await client?.close();
         process.kill(ProcessSignal.sigterm);
         await process.exitCode.timeout(const Duration(seconds: 30));
