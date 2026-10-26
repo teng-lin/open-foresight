@@ -142,7 +142,8 @@ jobs:
         run: |
           args=()
           if [[ "$RELEASE_VALIDATION" == true ]]; then args+=(--release); fi
-          xvfb-run -a dbus-run-session -- .venv/bin/python tools/run_ci_stage.py \
+          .venv/bin/python tools/run_ci_user.py --workspace "$GITHUB_WORKSPACE" -- \
+            xvfb-run -a dbus-run-session -- .venv/bin/python tools/run_ci_stage.py \
             --platform linux --stage core --event "$STAGE_EVENT" --own-pr "$OWN_PR" \
             --parents-json "$STAGE_PARENTS" --cmake-arg=-G --cmake-arg=Ninja \
             --input native=build/ci-input/native "${args[@]}"
@@ -204,14 +205,15 @@ jobs:
         run: |
           args=()
           if [[ "$RELEASE_VALIDATION" == true ]]; then args+=(--release); fi
-          xvfb-run -a dbus-run-session -- .venv/bin/python tools/run_ci_stage.py \
+          .venv/bin/python tools/run_ci_user.py --workspace "$GITHUB_WORKSPACE" -- \
+            xvfb-run -a dbus-run-session -- .venv/bin/python tools/run_ci_stage.py \
             --platform linux --stage desktop --event "$STAGE_EVENT" --own-pr "$OWN_PR" \
             --parents-json "$STAGE_PARENTS" --cmake-arg=-G --cmake-arg=Ninja \
             --input native=build/ci-input/native "${args[@]}"
       - name: Fresh fast integration against the current native prerequisite
         env:
           FORESIGHT_TEST_SQL_SUPPORT_LIBRARY: ${{ github.workspace }}/build/native/libforesight_sql_support.so
-        run: xvfb-run -a dbus-run-session -- .venv/bin/python tools/integration_gates.py --suite fast --native build/native/libforesight_native.so --output test-results/fast-integration
+        run: .venv/bin/python tools/run_ci_user.py --workspace "$GITHUB_WORKSPACE" -- xvfb-run -a dbus-run-session -- .venv/bin/python tools/integration_gates.py --suite fast --native build/native/libforesight_native.so --output test-results/fast-integration
       - name: Retain the independently qualified desktop stage
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -276,7 +278,8 @@ jobs:
         run: |
           args=()
           if [[ "$RELEASE_VALIDATION" == true ]]; then args+=(--release); fi
-          xvfb-run -a dbus-run-session -- .venv/bin/python tools/run_ci_stage.py \
+          .venv/bin/python tools/run_ci_user.py --workspace "$GITHUB_WORKSPACE" -- \
+            xvfb-run -a dbus-run-session -- .venv/bin/python tools/run_ci_stage.py \
             --platform linux --stage service --event "$STAGE_EVENT" --own-pr "$OWN_PR" \
             --parents-json "$STAGE_PARENTS" --cmake-arg=-G --cmake-arg=Ninja \
             --input native=build/ci-input/native \

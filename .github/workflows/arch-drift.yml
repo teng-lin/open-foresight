@@ -59,6 +59,8 @@ jobs:
             echo 'The package inventory and compiler identity are retained with this run.'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Install hash-verified Python test tools
+        env:
+          UV_PYTHON_INSTALL_DIR: /opt/foresight-python
         run: |
           # Keep tooling on required Python 3.13 while Arch's compiler rolls.
           uv python install 3.13
@@ -101,7 +103,7 @@ jobs:
           .venv/bin/python tools/ci_native_work.py --own-pr "$OWN_PR" \
             --output test-results/arch/native-work.json -- -G Ninja
       - name: Build and test with the current Arch toolchain
-        run: xvfb-run -a dbus-run-session -- bash tools/build.sh --platform linux -G Ninja
+        run: .venv/bin/python tools/run_ci_user.py --workspace "$GITHUB_WORKSPACE" -- xvfb-run -a dbus-run-session -- bash tools/build.sh --platform linux -G Ninja
       - name: Record actual scheduled retained Arch closure after validation
         if: github.event_name == 'schedule' && github.ref == 'refs/heads/main'
         run: .venv/bin/python -m tools.ci_rollout --source "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --producer-job arch --output build/qualification/qualification.json

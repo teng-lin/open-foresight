@@ -38,6 +38,8 @@ runs:
         echo "$task_protoc/bin" >> "$GITHUB_PATH"
     - name: Install locked Python development dependencies
       shell: bash
+      env:
+        UV_PYTHON_INSTALL_DIR: /opt/foresight-python
       run: |
         # Select the already-required Python 3.13 instead of Arch's rolling default.
         uv python install 3.13
