@@ -27,7 +27,6 @@ class ServiceConnection {
     : _diagnostics = captureServiceDiagnosticEmitter();
   Future<ServiceClient> connect() async {
     if (_closed) throw StateError('Client closed');
-    _diagnostics ??= captureServiceDiagnosticEmitter();
     final current = _client;
     if (current != null && !current.isClosed) return current;
     return _connecting ??= _open().whenComplete(() => _connecting = null);
@@ -35,8 +34,10 @@ class ServiceConnection {
 
   Future<ServiceClient> _open() async {
     final started = _diagnostics?.clockMicros();
-    final client = await ensureService(profile);
-    _diagnostics ??= client.diagnosticEmitter;
+    final client = await runWithServiceDiagnosticEmitter(
+      _diagnostics,
+      () => ensureService(profile),
+    );
     if (_diagnostics case final owner?) client.adoptDiagnostics(owner, started);
     if (_closed) {
       await client.close();

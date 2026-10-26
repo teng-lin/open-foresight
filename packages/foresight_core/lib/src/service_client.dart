@@ -64,9 +64,6 @@ class ServiceClient {
   RpcError? _failure;
   ClientDiagnosticConnection? _diagnostics;
 
-  /// Closed emission capability captured by the connection's diagnostic owner.
-  ServiceDiagnosticEmitter? get diagnosticEmitter => _diagnostics?.emitter;
-
   /// Observe an already-established connection returned by the existing opener.
   /// Its readiness is observed here; no earlier start is invented.
   void adoptDiagnostics(ServiceDiagnosticEmitter emitter, int? started) {
@@ -282,7 +279,7 @@ class ServiceClient {
     args,
     ClientDiagnosticCall.begin(
       method,
-      emitter: diagnosticEmitter,
+      emitter: _diagnostics?.emitter,
       ownsLifetime: true,
     ),
     1,

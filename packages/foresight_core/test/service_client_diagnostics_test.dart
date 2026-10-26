@@ -132,8 +132,8 @@ void main() {
   test(
     'one call ID follows exactly the existing closing retry and wire IDs',
     () async {
-      final connection = ServiceConnection(fixture.profile);
       await observe(() async {
+        final connection = ServiceConnection(fixture.profile);
         var first = true;
         fixture.handler = (socket, request) {
           if (request['method'] != 'notes.list') return;
@@ -187,8 +187,8 @@ void main() {
   );
 
   test('unknown outcome is recorded as unknown and never resent', () async {
-    final connection = ServiceConnection(fixture.profile);
     await observe(() async {
+      final connection = ServiceConnection(fixture.profile);
       fixture.handler = (socket, request) {
         if (request['method'] == 'notes.save') socket.destroy();
       };
@@ -218,8 +218,8 @@ void main() {
   test(
     'cancellation releases correlation and keeps the actual cancel frame',
     () async {
-      final connection = ServiceConnection(fixture.profile);
       await observe(() async {
+        final connection = ServiceConnection(fixture.profile);
         fixture.handler = (socket, request) {
           if (request['method'] == 'answer.stream') {
             fixture.reply(socket, request, canary, done: false);
@@ -416,62 +416,98 @@ void main() {
     },
   );
 
-  test(
-    'an unbound retry retains its logical connection owner and call identity',
-    () async {
-      late ServiceConnection connection;
-      await observe(() async {
-        connection = ServiceConnection(fixture.profile);
-        await connection.connect();
-        fixture.handler = (socket, request) => socket.writeln(
-          jsonEncode({
-            'id': request['id'],
-            'done': true,
-            'error': {'code': 'denied', 'message': canary},
-          }),
-        );
-        await expectLater(
-          connection.stream('notes.save').toList(),
-          throwsA(isA<RpcError>()),
-        );
-      });
-      var refused = false;
-      fixture.handler = (socket, request) {
-        if (!refused) {
-          refused = true;
-          socket.writeln(
+  for (final differentOwner in [false, true]) {
+    test(
+      'a later retry retains construction owner (different owner: $differentOwner)',
+      () async {
+        late ServiceConnection connection;
+        await observe(() async {
+          connection = ServiceConnection(fixture.profile);
+          await connection.connect();
+          fixture.handler = (socket, request) => socket.writeln(
             jsonEncode({
               'id': request['id'],
               'done': true,
-              'error': {
-                'code': 'unavailable',
-                'message': canary,
-                'reason': 'closing',
-              },
+              'error': {'code': 'denied', 'message': canary},
             }),
           );
-        } else {
-          fixture.reply(socket, request, canary);
-        }
-      };
-      expect(serviceDiagnosticsEnabled, false);
+          await expectLater(
+            connection.stream('notes.save').toList(),
+            throwsA(isA<RpcError>()),
+          );
+        });
+        var refused = false;
+        fixture.handler = (socket, request) {
+          if (!refused) {
+            refused = true;
+            socket.writeln(
+              jsonEncode({
+                'id': request['id'],
+                'done': true,
+                'error': {
+                  'code': 'unavailable',
+                  'message': canary,
+                  'reason': 'closing',
+                },
+              }),
+            );
+          } else {
+            fixture.reply(socket, request, canary);
+          }
+        };
+        expect(serviceDiagnosticsEnabled, false);
+        expect(
+          await (differentOwner
+              ? runWithServiceDiagnostics(
+                  session.producer,
+                  () => connection.stream('notes.list').single,
+                  component: DiagnosticComponent.mcp,
+                )
+              : connection.stream('notes.list').single),
+          canary,
+        );
+        await connection.close();
+        await flush();
+        expect(
+          records
+              .where(
+                (record) =>
+                    record['event'] == 'rpc.connection_changed' ||
+                    record['fields']['call'] != null,
+              )
+              .every((record) => record['component'] == 'desktop'),
+          true,
+        );
+        final attempts = calls('notes.list');
+        expect(attempts, hasLength(2));
+        expect(attempts.map((record) => record['attempt']), [1, 2]);
+        expect(attempts[0]['fields']['call'], attempts[1]['fields']['call']);
+        expect(
+          attempts.every((record) => record['component'] == 'desktop'),
+          true,
+        );
+        expect(
+          fixture.requests.where(
+            (request) => request['method'] == 'notes.list',
+          ),
+          hasLength(2),
+        );
+      },
+    );
+  }
+
+  test('an unbound connection does not borrow a later caller owner', () async {
+    final before = clientDiagnosticObservation();
+    final connection = ServiceConnection(fixture.profile);
+    fixture.handler = (socket, request) =>
+        fixture.reply(socket, request, canary);
+    await observe(() async {
       expect(await connection.stream('notes.list').single, canary);
       await connection.close();
-      await flush();
-      final attempts = calls('notes.list');
-      expect(attempts, hasLength(2));
-      expect(attempts.map((record) => record['attempt']), [1, 2]);
-      expect(attempts[0]['fields']['call'], attempts[1]['fields']['call']);
-      expect(
-        attempts.every((record) => record['component'] == 'desktop'),
-        true,
-      );
-      expect(
-        fixture.requests.where((request) => request['method'] == 'notes.list'),
-        hasLength(2),
-      );
-    },
-  );
+    });
+    expect(clientDiagnosticObservation(), before);
+    await flush(hasRecords: false);
+  });
 
   test(
     'unbound and canonical off skip identities, timing and call observation',

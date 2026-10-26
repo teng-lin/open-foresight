@@ -117,7 +117,7 @@ final class ClientDiagnosticCall {
   DiagnosticOperation? _operation;
   ServiceDiagnosticEmitter? _emitter;
   int? _wire;
-  int _attempt = 0, _started;
+  int _attempt = 1, _started;
   final bool _ownsLifetime;
   bool _settled = false;
 
