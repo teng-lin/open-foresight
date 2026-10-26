@@ -1607,6 +1607,27 @@ while True:
     'a notes edit schedules its production 30 second enhancement timer without busy work until it fires',
     () async {
       final rag = EmbeddingService()..embeddingGate = Completer<void>();
+      var phase = 0;
+      final phaseClock = Stopwatch()..start();
+      final phaseMicros = <int>[];
+      void mark(int value) {
+        phase = value;
+        phaseMicros.add(phaseClock.elapsedMicroseconds);
+      }
+
+      addTearDown(() {
+        final diagnostics = {
+          'phase': phase,
+          'micros': phaseMicros,
+          'embedding_entered': rag.embeddingEntered.isCompleted,
+          'embedding_gate_completed': rag.embeddingGate!.isCompleted,
+          'embedding_calls': rag.texts.length,
+          'active_enhancements': service.application.activeEnhancements,
+          'mutating': service.domain.mutating,
+        };
+        print('NOTES_TIMER_PHASE ${jsonEncode(diagnostics)}');
+      });
+      mark(1);
       final server = Server.create(
         services: [rag, TranscriptIndexService(rag)],
       );
@@ -1617,6 +1638,7 @@ while True:
         ),
         port: 0,
       );
+      mark(2);
       addTearDown(server.shutdown);
       addTearDown(() {
         if (!rag.embeddingGate!.isCompleted) rag.embeddingGate!.complete();
@@ -1637,9 +1659,11 @@ while True:
       // The five-second production embedding deadline remains unchanged.
       final savedNotes = service.domain.store.meetingNoteRows(id);
       final savedTranscript = service.domain.store.meetingTranscript(id);
+      mark(3);
       final ready = await service.domain.helper.client.indexDocument(
         IndexRequest(),
       );
+      mark(4);
       expect(ready.success, isTrue);
       expect(rag.embeddingEntered.isCompleted, isFalse);
       expect(rag.texts, isEmpty);
@@ -1655,16 +1679,21 @@ while True:
       expect(enhancementTimer?.isActive, true);
       expect(service.application.backgroundBusy, false);
       expect((await lifetime())['busy'], false);
+      mark(5);
       enhancementTimer!.cancel();
       fireEnhancement!();
       expect(service.application.activeEnhancements, 1);
+      mark(6);
       await rag.embeddingEntered.future;
+      mark(7);
       expect(service.application.activeEnhancements, 1);
       now = now.add(const Duration(minutes: 31));
       expect((await lifetime())['exit_after'], null);
       await backgroundRefusal();
+      mark(8);
       rag.embeddingGate!.complete();
       await exited();
+      mark(9);
     },
   );
   test(
