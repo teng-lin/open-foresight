@@ -33,50 +33,6 @@ File _script(Directory directory, String name, String body) {
   return file;
 }
 
-Future<Map<String, Object?>> _nativeProfileSelection(
-  String directory,
-  String nativeLibrary, {
-  bool explicit = false,
-  bool scoped = true,
-  bool service = false,
-}) async {
-  final missing = '$directory/missing-legacy-native.so';
-  installRuntimeConfiguration(
-    RuntimeConfiguration({'FORESIGHT_NATIVE': missing}),
-  );
-  final owned = RuntimeConfiguration({'FORESIGHT_NATIVE': nativeLibrary});
-  final profile = ProfilePaths('$directory/data', '$directory/run');
-  Future<void> start() async {
-    if (service) {
-      bootstrapSqlSupportFixture();
-      final owner = await ApplicationService.start(
-        profile,
-        desktopPeerVerifier: (_) => false,
-      );
-      await owner.close();
-    } else {
-      final lock = await acquireServiceProfileLock(
-        profile,
-        launchWithdrawn: () => false,
-        configuration: explicit ? owned : null,
-      );
-      await lock.unlock();
-      await lock.close();
-    }
-  }
-
-  try {
-    await (scoped ? runWithRuntimeConfiguration(owned, start) : start());
-    return {
-      'ok': true,
-      'legacyDefaults': runtimeConfiguration['FORESIGHT_LITERT_CACHE'],
-      'ownerUnchanged': owned['FORESIGHT_LITERT_CACHE'] == null,
-    };
-  } on ArgumentError catch (error) {
-    return {'ok': false, 'missingLegacyLibrary': '$error'.contains(missing)};
-  }
-}
-
 /// An installed bundle with an executable speech runner, as relocated
 /// packaged installs present it to model provenance.
 ({String root, String speech}) _installedApp(Directory directory, String name) {
@@ -105,22 +61,26 @@ void main() {
   });
 
   group('profile native selection', () {
+    // Native runtime configuration is process state: it applies setenv and is
+    // sealed once any isolate of the process starts a native handle. Each
+    // probe therefore runs in a fresh process with the qualified environment.
     Future<Map<String, Object?>> run({
       bool explicit = false,
       bool scoped = true,
       bool service = false,
-    }) {
-      final directory = root.path;
-      final nativeLibrary = Platform.environment['FORESIGHT_NATIVE_LIBRARY']!;
-      return Isolate.run(
-        () => _nativeProfileSelection(
-          directory,
-          nativeLibrary,
-          explicit: explicit,
-          scoped: scoped,
-          service: service,
-        ),
-      );
+      bool sealFirst = false,
+    }) async {
+      final result = await Process.run(Platform.resolvedExecutable, [
+        'test/fixtures/runtime_configuration_native_probe.dart',
+        root.path,
+        if (explicit) 'explicit',
+        if (!scoped) 'unscoped',
+        if (service) 'service',
+        if (sealFirst) 'seal-first',
+      ]);
+      expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+      return jsonDecode(LineSplitter.split(result.stdout as String).last)
+          as Map<String, Object?>;
     }
 
     test('explicit snapshot wins over a missing legacy library', () async {
@@ -151,6 +111,18 @@ void main() {
       expect(result['ok'], isFalse);
       expect(result['missingLegacyLibrary'], isTrue);
     });
+
+    test(
+      'a process sealed by a first native handle refuses new profile caches',
+      () async {
+        // The state a shared test process reaches after another suite starts a
+        // native handle: the same explicit selection that succeeds above is
+        // refused rather than silently changing the sealed environment.
+        final result = await run(explicit: true, sealFirst: true);
+        expect(result['ok'], isFalse);
+        expect(result['sealedRefusal'], isTrue);
+      },
+    );
   });
 
   group('snapshots', () {
