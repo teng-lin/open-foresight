@@ -165,6 +165,7 @@ void main() {
     editingNotes = false;
     enhancementTimer = null;
     fireEnhancement = null;
+    print('LIFETIME_SETUP_PROGRESS phase=0');
     service = await ApplicationService.start(
       profile,
       desktopPeerVerifier: trustInProcessDesktop,
@@ -181,9 +182,12 @@ void main() {
         return timer;
       },
     );
+    print('LIFETIME_SETUP_PROGRESS phase=1');
     await service.ready;
+    print('LIFETIME_SETUP_PROGRESS phase=2');
     service.domain.store.setPreference('serviceIdleMinutes', '30');
     agent = await ServiceClient.connect('${profile.runtime}/application.sock');
+    print('LIFETIME_SETUP_PROGRESS phase=3');
     addTearDown(() async {
       await agent.close();
       await service.close();
