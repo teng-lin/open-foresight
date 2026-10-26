@@ -31,7 +31,13 @@ class ParallelBuildGatesTest(unittest.TestCase):
                 " time.sleep(.01)\n"
                 "print('held complete')\n"
             )
-            failed = "import sys; sys.stdout.buffer.write('later failure café\\n'.encode()); raise SystemExit(7)"
+            failed = (
+                "from pathlib import Path; import sys,time; end=time.monotonic()+3\n"
+                f"while not Path({str(ready)!r}).exists():\n"
+                " if time.monotonic()>end: raise RuntimeError('held owner not ready')\n"
+                " time.sleep(.01)\n"
+                "sys.stdout.buffer.write('later failure café\\n'.encode()); raise SystemExit(7)"
+            )
             program = (
                 "import importlib.util; from pathlib import Path; "
                 f"spec=importlib.util.spec_from_file_location('gates',{gates.__file__!r}); "
