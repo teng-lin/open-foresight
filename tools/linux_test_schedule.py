@@ -28,7 +28,7 @@ def stage(root, name):
 
 def branch(root, name, python):
     """Children inherit their gate's process group; never create nested sessions."""
-    temporary = Path(tempfile.mkdtemp(prefix="of-ci-"))
+    temporary = Path(tempfile.mkdtemp(prefix="c-", dir="/var/tmp"))
     print(f"Private {name} test storage: {temporary}", flush=True)
     env = {
         **os.environ,

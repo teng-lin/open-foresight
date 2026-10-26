@@ -99,19 +99,22 @@ def ensure_account(uid: int, gid: int, home: Path) -> str:
         return name
 
 
-def prepare(workspace: Path) -> tuple[int, int, dict[str, str]]:
+def prepare(
+    workspace: Path, *, flutter: Path | None = None
+) -> tuple[int, int, dict[str, str]]:
     if os.geteuid() != 0:
         raise ValueError("The container setup must prepare the runtime gate as root")
     uid, gid = workspace_owner(workspace)
-    if FLUTTER.resolve(strict=True) != FLUTTER or not FLUTTER.is_dir():
+    flutter = FLUTTER if flutter is None else flutter
+    if flutter.resolve(strict=True) != flutter or not flutter.is_dir():
         raise ValueError("The verified Flutter working directory is required")
     revision = subprocess.run(
         [
             "git",
             "-c",
-            f"safe.directory={FLUTTER}",
+            f"safe.directory={flutter}",
             "-C",
-            str(FLUTTER),
+            str(flutter),
             "rev-parse",
             "HEAD",
         ],
@@ -135,7 +138,7 @@ def prepare(workspace: Path) -> tuple[int, int, dict[str, str]]:
         if not stat.S_ISDIR(parent.lstat().st_mode):
             raise ValueError("The job pub cache must contain only physical directories")
     claim_tree(workspace, uid, gid)
-    claim_tree(FLUTTER, uid, gid)
+    claim_tree(flutter, uid, gid)
     # Persistent OS/NSS home storage must not inherit the sticky /var/tmp
     # ancestor: InstallationLock deliberately forbids all writable ancestors.
     # build/ is ignored by source identity and this private child is outside
@@ -196,12 +199,21 @@ def main() -> None:
     parser.add_argument(
         "--workspace", type=Path, default=os.environ.get("GITHUB_WORKSPACE")
     )
+    parser.add_argument(
+        "--flutter-root",
+        choices=("/opt/foresight-flutter", "/opt/flutter"),
+        default=None,
+        help="Pinned SDK layout used by this container",
+    )
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     if args.workspace is None or not command:
         parser.error("workspace and a runtime gate command are required")
-    uid, gid, env = prepare(args.workspace)
+    uid, gid, env = prepare(
+        args.workspace,
+        flutter=Path(args.flutter_root) if args.flutter_root is not None else None,
+    )
     os.chdir(args.workspace)
     os.setgroups([])
     os.setgid(gid)

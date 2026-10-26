@@ -264,21 +264,84 @@ def test_account_creation_is_local_numeric_and_does_not_copy_credentials(
     assert len(calls) == 2
 
 
-def test_drop_all_supplementary_groups_then_gid_uid_before_exec(monkeypatch):
+@pytest.mark.parametrize("flutter", [None, "/opt/flutter", "/opt/foresight-flutter"])
+def test_drop_all_supplementary_groups_then_gid_uid_before_exec(monkeypatch, flutter):
     calls = []
-    monkeypatch.setattr(user, "prepare", lambda _: (1234, 2345, {"CI": "true"}))
+    prepared = []
+
+    def prepare(workspace, **kwargs):
+        prepared.append((workspace, kwargs))
+        return (1234, 2345, {"CI": "true"})
+
+    monkeypatch.setattr(user, "prepare", prepare)
     monkeypatch.setattr(user.os, "chdir", lambda p: calls.append(("cwd", p)))
     monkeypatch.setattr(user.os, "setgroups", lambda v: calls.append(("groups", v)))
     monkeypatch.setattr(user.os, "setgid", lambda v: calls.append(("gid", v)))
     monkeypatch.setattr(user.os, "setuid", lambda v: calls.append(("uid", v)))
     monkeypatch.setattr(user.os, "execvpe", lambda *v: calls.append(("exec", v)))
-    monkeypatch.setattr(
-        sys, "argv", ["runner", "--workspace", "/fixture", "--", "xvfb-run", "gate"]
-    )
+    args = ["runner", "--workspace", "/fixture"]
+    if flutter is not None:
+        args += ["--flutter-root", flutter]
+    monkeypatch.setattr(sys, "argv", args + ["--", "xvfb-run", "gate"])
     user.main()
+    assert prepared == [
+        (Path("/fixture"), {"flutter": Path(flutter) if flutter else None})
+    ]
     assert [x[0] for x in calls] == ["cwd", "groups", "gid", "uid", "exec"]
     assert calls[1:4] == [("groups", []), ("gid", 2345), ("uid", 1234)]
     assert calls[-1][1] == ("xvfb-run", ["xvfb-run", "gate"], {"CI": "true"})
+
+
+def test_cli_refuses_unreviewed_sdk_layout_before_setup(monkeypatch):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "runner",
+            "--workspace",
+            "/fixture",
+            "--flutter-root",
+            "/other/sdk",
+            "--",
+            "gate",
+        ],
+    )
+
+    def prepare(*args, **kwargs):
+        pytest.fail("Invalid SDK layout reached setup")
+
+    monkeypatch.setattr(user, "prepare", prepare)
+    with pytest.raises(SystemExit) as error:
+        user.main()
+    assert error.value.code == 2
+
+
+def test_alternate_sdk_still_checks_pinned_revision_and_ownership(
+    prepared, monkeypatch
+):
+    workspace, _, _, claimed = prepared
+    alternate = workspace.parent / "container-flutter"
+    alternate.mkdir()
+    commands = []
+
+    def probe(command, **kwargs):
+        commands.append(command)
+        return SimpleNamespace(stdout=user.FLUTTER_REVISION)
+
+    monkeypatch.setattr(user.subprocess, "run", probe)
+    user.prepare(workspace, flutter=alternate)
+    assert commands == [
+        [
+            "git",
+            "-c",
+            f"safe.directory={alternate}",
+            "-C",
+            str(alternate),
+            "rev-parse",
+            "HEAD",
+        ]
+    ]
+    assert claimed == [workspace, alternate]
 
 
 def test_all_runtime_consumers_drop_before_display_or_dbus_and_native_stays_root():

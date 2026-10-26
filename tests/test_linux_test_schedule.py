@@ -117,6 +117,9 @@ def test_core_desktop_fast_and_host_overlap_without_flutter_collision(runner):
     for e in envs:
         assert e["FORESIGHT_TEST_TEMP_ROOT"] == e["TMPDIR"]
         assert e["PYTHONPYCACHEPREFIX"].startswith(e["TMPDIR"])
+        assert Path(e["TMPDIR"]).parent == Path("/var/tmp")
+        assert len(e["TMPDIR"]) <= len("/var/tmp/c-xxxxxxxx")
+        assert Path(e["TMPDIR"]).stat().st_mode & 0o077 == 0
     logs = root / "test-results/linux-test-schedule"
     assert "desktop diagnostics" in (logs / "desktop.log").read_text()
     assert "fast diagnostics" in (logs / "desktop.log").read_text()
@@ -215,6 +218,20 @@ def test_container_entrypoint_restores_first_and_honors_schedule_switch(
         f"assert Path({str(root)!r},'tooling.ready').exists()\n"
         "Path(sys.argv[sys.argv.index('--root')+1],'restore.done').touch()\n"
     )
+    shutil.copy2(
+        ROOT / "tools/linux_container_runtime.sh",
+        root / "tools/linux_container_runtime.sh",
+    )
+    (root / "tools/run_ci_user.py").write_text(
+        "from pathlib import Path; import os,sys\n"
+        f"root=Path({str(root)!r})\n"
+        "assert (root/'restore.done').exists()\n"
+        "assert sys.argv[1:2]==['--workspace']\n"
+        "assert sys.argv[3:6]==['--flutter-root','/opt/flutter','--']\n"
+        "assert sys.argv[6:]==['bash','tools/linux_container_runtime.sh']\n"
+        "(root/'user.ready').touch()\n"
+        "os.execvpe(sys.argv[6],sys.argv[6:],os.environ)\n"
+    )
     output = tmp_path / "out"
     mounted_source = tmp_path / "container-src"
     mounted_source.symlink_to(root, target_is_directory=True)
@@ -260,6 +277,7 @@ def test_container_entrypoint_restores_first_and_honors_schedule_switch(
     )
     assert (root / "tooling.ready").exists()
     assert (root / "restore.done").exists()
+    assert (root / "user.ready").exists()
     assert (result.returncode == 0) == (mode != "bad" and not forge_skip), (
         result.stdout + result.stderr
     )
