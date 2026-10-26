@@ -23,7 +23,7 @@ runs:
         git -C "$GITHUB_WORKSPACE" rev-parse --show-toplevel
     - name: Install Linux application toolchain
       shell: bash
-      run: pacman -S --needed --noconfirm cmake ninja gcc grpc protobuf nlohmann-json sqlite python python-pip clang gtk3 pkgconf unzip xz mesa libglvnd xorg-server-xvfb xorg-xauth dbus poppler unrtf bubblewrap which github-cli
+      run: pacman -S --needed --noconfirm cmake ninja gcc grpc protobuf nlohmann-json sqlite python python-pip uv clang gtk3 pkgconf unzip xz mesa libglvnd xorg-server-xvfb xorg-xauth dbus poppler unrtf bubblewrap which github-cli
     # Descriptor audits use the reviewed compiler. C++ bindings still use the
     # protobuf::protoc imported target paired with Arch's Protobuf library.
     - name: Install pinned descriptor compiler
@@ -39,7 +39,11 @@ runs:
     - name: Install locked Python development dependencies
       shell: bash
       run: |
-        python -m venv .venv
+        # Select the already-required Python 3.13 instead of Arch's rolling default.
+        uv python install 3.13
+        task_python=$(uv python find --managed-python 3.13)
+        "$task_python" -m venv .venv
+        .venv/bin/python -c 'import sys; assert sys.version_info[:2] == (3, 13), sys.version'
         .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
     - name: Select the language cache role
       if: inputs.stage != 'native'

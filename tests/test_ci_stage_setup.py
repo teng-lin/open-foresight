@@ -380,3 +380,68 @@ def test_consolidated_mac_brew_dependencies_are_installed_once(tmp_path):
         timeout=10,
     )
     assert log.read_text().splitlines() == ["install", *packages]
+
+
+@pytest.mark.parametrize("failure", ["", "install", "find", "version"])
+def test_linux_setup_selects_required_python_before_locked_dependencies(
+    tmp_path, failure
+):
+    import sys
+
+    step = step_named("linux", "Install locked Python development dependencies")
+    prerequisites = step_named("linux", "Install Linux application toolchain")
+    assert " uv " in prerequisites["run"]
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    log = tmp_path / "commands.jsonl"
+    selected = binary / "selected-python"
+    launcher = (
+        f"#!{sys.executable}\n"
+        "import os,sys\n"
+        "if sys.argv[1] == '-c':\n"
+        " if os.environ['SETUP_FAILURE'] == 'version': sys.version_info=(3,14)\n"
+        " exec(sys.argv[2])\n"
+        "else:\n"
+        " assert sys.argv[1:] == ['-m','pip','install','--require-hashes','-r','requirements-dev.lock']\n"
+        " open(os.environ['SETUP_LOG'],'a').write('pip\\n')\n"
+    )
+    selected.write_text(
+        f"#!{sys.executable}\n"
+        "import pathlib,sys\n"
+        "assert sys.argv[1:] == ['-m','venv','.venv']\n"
+        "p=pathlib.Path('.venv/bin/python');p.parent.mkdir(parents=True)\n"
+        f"p.write_text({launcher!r})\n"
+        "p.chmod(0o755)\n"
+    )
+    selected.chmod(0o755)
+    uv = binary / "uv"
+    uv.write_text(
+        f"#!{sys.executable}\n"
+        "import json,os,sys\n"
+        "with open(os.environ['SETUP_LOG'],'a') as f: f.write(json.dumps(sys.argv[1:])+'\\n')\n"
+        "if sys.argv[1:] == ['python','install','3.13']:\n"
+        " sys.exit(7 if os.environ['SETUP_FAILURE']=='install' else 0)\n"
+        "assert sys.argv[1:] == ['python','find','--managed-python','3.13']\n"
+        "if os.environ['SETUP_FAILURE']=='find': sys.exit(8)\n"
+        f"print({str(selected)!r})\n"
+    )
+    uv.chmod(0o755)
+    result = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", step["run"]],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PATH": str(binary) + os.pathsep + os.environ["PATH"],
+            "SETUP_LOG": str(log),
+            "SETUP_FAILURE": failure,
+        },
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    commands = log.read_text().splitlines()
+    assert json.loads(commands[0]) == ["python", "install", "3.13"]
+    if failure != "install":
+        assert json.loads(commands[1]) == ["python", "find", "--managed-python", "3.13"]
+    assert (result.returncode == 0) == (not failure), result.stdout + result.stderr
+    assert ("pip" in commands) == (not failure)
