@@ -94,6 +94,21 @@ exact-commit draft and acceptance workflow described in the README.
 
 ## Quality checks
 
+Before every push, run the shared guards, including metadata that crosses language
+boundaries:
+
+```sh
+.venv/bin/python -m tools.check_local_validation
+```
+
+The command runs skip-inventory, documentation, lint/type, subprocess-timeout and
+workflow checks, retains each raw log in a private canonical directory under
+`/var/tmp`, and reports every failed guard. It requires the hosted actionlint
+1.7.7 and ShellCheck 0.9.0 on PATH. Add `--full-python` to run the unchanged Python
+coverage gate after the shared guards pass. This command supplements the native,
+Dart, service and platform acceptance commands above; it does not certify
+unexecuted platforms. Evidence paths are printed and remain available on failure.
+
 CI runs `ruff check .`, `mypy`, and `python tools/check_subprocess_timeouts.py`.
 Install the pinned development requirements first. Mypy checks every production
 Python script, including unannotated function bodies; tests with dynamic native
