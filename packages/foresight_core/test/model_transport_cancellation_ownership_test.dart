@@ -14,17 +14,8 @@ import 'package:foresight_test_support/fixture_ownership.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
 
-Future<void> reached(File marker) async {
-  final elapsed = Stopwatch()..start();
-  while (!marker.existsSync()) {
-    if (elapsed.elapsed > const Duration(seconds: 5)) {
-      throw TestFailure(
-        'Owned transport barrier did not settle: ${marker.path}',
-      );
-    }
-    await Future<void>.delayed(const Duration(milliseconds: 10));
-  }
-}
+/// Wait up to five seconds for a fixture marker; a timeout names the marker.
+Future<void> reached(File marker) => awaitMarker(marker);
 
 Future<File> heldPipeWorker(
   Directory root, {
