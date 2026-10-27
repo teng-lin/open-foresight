@@ -13,6 +13,8 @@ import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
 import 'package:path/path.dart' as p;
 
+import '../support/admission_lock_evidence.dart';
+
 const build =
     '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 final session = DiagnosticIdentity.parse('0123456789abcdef0123456789abcdef')!;
@@ -684,7 +686,14 @@ void main() {
       final admitted = worker.handle(4, empty);
       expect(admitted.result, DiagnosticWorkerResult.ok);
       expect(listed, isNotEmpty);
-      expect(classify(worker).result, DiagnosticWorkerResult.ok);
+      final classified = classify(worker);
+      expect(
+        classified.result,
+        DiagnosticWorkerResult.ok,
+        reason: classified.result == DiagnosticWorkerResult.retry
+            ? 'classify deferred (retry); ${admissionLockEvidence(path)}'
+            : 'classify did not defer: result=${classified.result}',
+      );
       final bytes = jsonBytes(record());
       expect(worker.handle(6, bytes).result, DiagnosticWorkerResult.ok);
       final segment = File('$path/logs/slot-${admitted.slot}/0.jsonl');
@@ -703,4 +712,82 @@ void main() {
       }
     },
   );
+
+  group('admission contention', () {
+    ({DiagnosticStorageWorkerState worker, String path})
+    admittedFilesystemWorker() {
+      final parent = BackupDirectory(
+        createTestTempDirectorySync('diag-admission-').path,
+        private: false,
+      );
+      final profile = parent.child('profile');
+      final profilePath = profile.path;
+      profile.close();
+      parent.close();
+      final worker = DiagnosticStorageWorkerState.authenticated(
+        parentPid: pid,
+        buildId: build,
+        directoryReader: _streamReader,
+      );
+      addTearDown(() {
+        if (!worker.retired) worker.handle(8, empty);
+      });
+      expect(
+        worker.handle(2, init(profilePath).encode()).result,
+        DiagnosticWorkerResult.ok,
+      );
+      expect(worker.handle(4, empty).result, DiagnosticWorkerResult.ok);
+      return (worker: worker, path: profilePath);
+    }
+
+    test('classify defers only while the admission lock is confirmed held', () {
+      final (:worker, :path) = admittedFilesystemWorker();
+      expect(probeAdmissionLock(path), AdmissionLockProbe.free);
+      final logs = BackupDirectory('$path/logs', create: false);
+      final holder = logs.open('admission.lock');
+      var held = true;
+      addTearDown(() {
+        if (held) holder.close();
+        logs.close();
+      });
+      expect(holder.tryExclusiveLeaseChecked(), isTrue);
+      // A separate open description contends with the kernel, deterministically.
+      expect(probeAdmissionLock(path), AdmissionLockProbe.held);
+      for (var attempt = 0; attempt < 3; attempt++) {
+        expect(
+          classify(worker).result,
+          DiagnosticWorkerResult.retry,
+          reason: 'attempt $attempt',
+        );
+      }
+      expect(
+        admissionLockEvidence(path),
+        contains('held - kernel EWOULDBLOCK confirmed'),
+      );
+      held = false;
+      holder.close();
+      expect(probeAdmissionLock(path), AdmissionLockProbe.free);
+      // The deferral changed no state: the same request now succeeds.
+      expect(classify(worker).result, DiagnosticWorkerResult.ok);
+      expect(
+        worker.handle(6, jsonBytes(record())).result,
+        DiagnosticWorkerResult.ok,
+      );
+    });
+
+    test('evidence probe separates contention, refusal and an absent lock', () {
+      final path = admittedFilesystemWorker().path;
+      final logs = BackupDirectory('$path/logs', create: false);
+      addTearDown(logs.close);
+      final lock = logs.open('admission.lock');
+      lock.close();
+      // A closed descriptor is a non-contention failure, never "held".
+      expect(probeLease(lock), AdmissionLockProbe.refused);
+      expect(
+        probeAdmissionLock('$path/missing'),
+        AdmissionLockProbe.unopenable,
+      );
+      expect(admissionLockEvidence('$path/missing'), contains('unopenable'));
+    });
+  });
 }
