@@ -2067,3 +2067,48 @@ Evidence is under `/var/tmp/of-fin/core-3908/`, the actual gRPC control under
 `/var/tmp/of-core-fixture-review/`. New hosted Mac acceptance of the teardown
 repair, resolution of the readiness condition, actual owner review and verified
 merge to main remain required.
+
+
+### Storage fixture isolation and final pre-push batch (2026-10-27)
+
+The unchanged-head failed-Core-only retry, job `122016957783`, passed the
+original canonical-native readiness case but failed two direct synchronous
+storage admissions: **2,886 passed / two failed / 17 skipped**. No third blind
+retry was requested. The historical refusal branch remains unobserved. A real
+controlled admission lock and fork/exec control demonstrate legitimate lock
+contention and the pre-exec CLOEXEC inheritance window; neither proves the exact
+historical CI cause.
+
+The two positive storage fixtures now execute their complete assertions once
+in an owned process. All six retention/ranking/rollback scenarios, both MCP
+sessions in the same process, independent lock probes, identities, negative
+contention tests and original 30-second deadlines remain. Exact JSON completion
+is required; zero exit without completion fails. The helper has one 20-second
+operation budget, bounded three-second cleanup and retained partial failure
+output. Final cleanup revision **65dc63f4** / agent **21b9f589** passed both
+positive cases, analysis and formatting. Instrumented clean cases sent no group
+signals; a held-output descendant caused the expected bounded failure and one
+verified group signal. The leader was reaped and descendant terminated; the
+non-child descendant was not claimed reaped. The residual OS exit-notification
+window is documented.
+
+Complete Core coverage on frozen **9690889d**, before only that eight-line
+cleanup-state/comment follow-up, passed **2,889 tests / 16
+skipped / zero failures**, **91.01%**
+(24,578/27,006), in 645.05
+seconds at concurrency two. All four affected cases actually passed without
+skips. The same sixteen skip names and metadata reasons as the preceding run
+were verified. The combined 90% floor is unchanged; storage coverage is now
+224/242 versus 233/242 before process isolation. No coverage merge, exclusion or
+floor reduction was added. Analysis/format and original Native/Worker
+verification passed before/after, all sixteen artifacts remained byte/mode/size
+identical, and the three public test overlays matched their frozen inputs.
+This is a complete suite at `9690889d` plus targeted qualification of the final
+cleanup guard, not a claimed complete suite at `65dc63f4` or a fresh product build.
+
+Evidence: `/var/tmp/of-fin/core-final/`,
+`/var/tmp/of-fin/storage-admission/`,
+`/var/tmp/of-fin/storage-admission-pgid/` and
+`/var/tmp/of-core-final-review/`. Independent native-agent review converged.
+Final-head hosted Linux/Mac Core, all required CI and actual owner review remain
+required before merge.
