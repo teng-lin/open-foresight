@@ -351,6 +351,11 @@ validates registrations; rerun `python tools/check_integration_inventory.py`
 when changing tests, rather than copying an older local pass count into this guide.
 Reference groups require their authorized inputs and must be reported separately.
 
+To plan which of these groups a change needs, and to retain an evidence summary
+that lists unavailable prerequisites and unexecuted platforms, use
+[`tools.validate_change`](boundary-validation.md). A plan or partial run never
+counts as acceptance of a group it did not execute.
+
 ## ThreadSanitizer probation
 
 `native-thread-sanitizer` builds a separate Clang TSan SDK and test tree, covering
