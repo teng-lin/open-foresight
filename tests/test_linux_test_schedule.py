@@ -26,6 +26,14 @@ def runner(tmp_path):
         shutil.copy2(ROOT / "tools" / name, tools / name)
     binary = tmp_path / "bin"
     binary.mkdir()
+    (tools / "verify_application_no_build.py").write_text(
+        "from pathlib import Path; import os\n"
+        "assert os.getenv('FAIL_STAGE')!='prerequisites'\n"
+        "Path(__file__).resolve().parents[1].joinpath('prerequisites.done').touch()\n"
+    )
+    cmake = binary / "cmake"
+    cmake.write_text("#!/bin/sh\necho 'consumer configured'\n")
+    cmake.chmod(0o755)
     for name, strip in (("xvfb-run", 1), ("dbus-run-session", 1)):
         tool = binary / name
         tool.write_text(
@@ -57,7 +65,7 @@ if os.getenv('REQUIRE_RESTORE')!='1':assert os.environ['FORESIGHT_BUILD_MODE']==
 with open(root/(name+'.env.json'),'w') as f:
     json.dump({k:os.environ[k] for k in ['TMPDIR','FORESIGHT_TEST_TEMP_ROOT','PYTHONPYCACHEPREFIX']},f)
 print(name+' diagnostics',flush=True)
-if name not in ['native','application'] and os.getenv('REQUIRE_RESTORE')!='1':assert (root/'native.done').exists()
+if name not in ['native','application'] and os.getenv('REQUIRE_RESTORE')!='1':assert (root/'prerequisites.done').exists()
 def wait(marker):
     end=time.monotonic()+5
     while not (root/marker).exists():
@@ -76,9 +84,9 @@ if not os.getenv('FAIL_STAGE') and os.getenv('REQUIRE_RESTORE')!='1':
     if name in ['desktop','host']:
         assert (root/'core.done').exists()
         wait('host.started' if name=='desktop' else 'desktop.started')
-if name=='fast' and os.getenv('REQUIRE_RESTORE')!='1':assert (root/'desktop.done').exists()
+if name=='fast' and os.getenv('REQUIRE_RESTORE')!='1':assert (root/'desktop.started').exists()
 if name=='service':
-    for other in ['core','desktop','fast','host']:assert (root/(other+'.done')).exists()
+    for other in ['core','desktop','fast','host']:assert (root/(other+'.started')).exists()
 if name in ['service','application']:
     xml=root/'test-results/service/results.xml';xml.parent.mkdir(parents=True,exist_ok=True)
     xml.write_text('<testsuite><testcase>'+('<skipped/>' if os.getenv('FORGE_SKIP')=='1' else '')+'</testcase></testsuite>')
@@ -135,21 +143,24 @@ def test_core_isolated_then_desktop_and_host_overlap_without_flutter_collision(r
 def test_failed_stage_cannot_be_hidden_by_a_later_success(runner, failure):
     root, result = run(runner, failure)
     assert result.returncode != 0
-    assert not (root / "service.done").exists()
-    if failure == "native":
-        assert not (root / "core.started").exists()
-        assert not (root / "host.started").exists()
-    elif failure == "core":
-        assert not (root / "desktop.started").exists()
-        assert not (root / "host.started").exists()
-    elif failure == "desktop":
-        assert not (root / "fast.started").exists()
+    for name in ("native", "core", "desktop", "fast", "host", "service"):
+        assert (root / f"{name}.started").exists(), result.stdout + result.stderr
+    if failure != "service":
+        assert (root / "service.done").exists()
     logs = root / "test-results/linux-test-schedule"
     owner = "desktop" if failure == "fast" else failure
     assert failure + " diagnostics" in (logs / (owner + ".log")).read_text()
     if failure in ("desktop", "fast", "host"):
         for name in ("core", "desktop", "host"):
             assert (logs / (name + ".log")).exists()
+
+
+def test_invalid_consumer_prerequisite_blocks_every_test(runner):
+    root, result = run(runner, "prerequisites")
+    assert result.returncode != 0
+    for name in ("native", "core", "desktop", "host", "service"):
+        assert not (root / f"{name}.started").exists()
+    assert "AssertionError" in result.stdout
 
 
 def test_partial_launch_reaps_previously_started_branches(runner, monkeypatch):
@@ -351,3 +362,24 @@ def test_container_entrypoint_refuses_root_target_before_owner_transfer_or_gates
         json.loads(line) for line in (root / "chown.jsonl").read_text().splitlines()
     ]
     assert ownership == [["-R", uid + ":" + gid, str(output)]]
+
+
+def test_legacy_test_failure_still_runs_fast_and_host_without_core_overlap(
+    container_entrypoint,
+):
+    root, scoped, entrypoint, _, _ = container_entrypoint
+    result = subprocess.run(
+        ["bash", str(entrypoint)],
+        env={
+            **scoped,
+            "FORESIGHT_LINUX_TEST_SCHEDULE": "0",
+            "FAIL_STAGE": "application",
+        },
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode != 0
+    for name in ("application", "fast", "host"):
+        assert (root / f"{name}.started").exists()
+    assert not (root / "native.started").exists()

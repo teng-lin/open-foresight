@@ -38,7 +38,25 @@ def branch(root, name, python):
         "FORESIGHT_PYTHON": python,
         "FORESIGHT_BUILD_MODE": "test-only",
     }
-    if name == "host":
+    if name == "prerequisites":
+        build = Path(env.get("FORESIGHT_BUILD_DIR", str(root / "build")))
+        commands = [
+            [
+                "cmake",
+                "-S",
+                str(root),
+                "-B",
+                str(build),
+                "-DFORESIGHT_RUNTIME_SUPPORT_CONSUMER=ON",
+            ],
+            [
+                python,
+                str(root / "tools/verify_application_no_build.py"),
+                "--build",
+                str(build),
+            ],
+        ]
+    elif name == "host":
         commands = [
             [
                 python,
@@ -66,11 +84,14 @@ def branch(root, name, python):
                     "test-results/fast-integration",
                 ]
             )
+    failed = 0
     for command in commands:
         result = subprocess.run(command, cwd=root, env=env, timeout=3600)
         if result.returncode:
-            return result.returncode
-    return 0
+            if name == "prerequisites":
+                return result.returncode
+            failed = failed or result.returncode
+    return failed
 
 
 def schedule(root, python):
@@ -93,25 +114,25 @@ def schedule(root, python):
             ],
         )
 
-    # The existing native stage first verifies the complete restored no-build
-    # plan and runs the repository-root CTest inventory. Launch nothing else if
-    # it fails. No gate invokes the all-stage/nested parallel runner.
-    if run_gates([task("native")], logs):
+    # Product verification is a prerequisite; test success is not. Never run
+    # dependants after an invalid source/toolchain/artifact/no-build plan.
+    if run_gates([task("prerequisites")], logs):
         return 1
+    failed = run_gates([task("native")], logs)
     # Source-JIT startup and coverage collection need the runner CPU budget;
     # do not overlap Core with Flutter compilation or host compiler probes.
-    if run_gates([task("core")], logs):
-        return 1
-    if run_gates([task("desktop"), task("host")], logs):
-        return 1
-    return run_gates([task("service")], logs)
+    failed |= run_gates([task("core")], logs)
+    failed |= run_gates([task("desktop"), task("host")], logs)
+    failed |= run_gates([task("service")], logs)
+    return failed
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument(
-        "--branch", choices=("native", "core", "desktop", "host", "service")
+        "--branch",
+        choices=("prerequisites", "native", "core", "desktop", "host", "service"),
     )
     args = parser.parse_args()
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))

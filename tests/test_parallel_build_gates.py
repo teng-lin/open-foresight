@@ -370,3 +370,86 @@ class ParallelBuildGatesTest(unittest.TestCase):
             self.assertTrue(
                 all(call.kwargs["stdout"].closed for call in launch.call_args_list)
             )
+
+
+def test_all_stages_collect_test_failures_and_still_run_compiled_boundary(
+    tmp_path, monkeypatch
+):
+    import json
+
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    log = tmp_path / "commands.jsonl"
+    fake = tools / "fake.py"
+    fake.write_text("""import json,os,sys
+from pathlib import Path
+name=sys.argv[1];phase=os.environ.get('FORESIGHT_BUILD_MODE','service')
+with open(os.environ['FIXTURE_LOG'],'a') as f:f.write(json.dumps([name,phase])+'\\n')
+print(name+' '+phase+' diagnostics')
+raise SystemExit(7 if phase=='test-only' else 0)
+""")
+    for name in ("build_dart_gates.sh", "build_service_gate.sh"):
+        argument = '"$1"' if name == "build_dart_gates.sh" else "service"
+        (tools / name).write_text(
+            f'#!/bin/bash\nexec "{sys.executable}" "{fake}" {argument}\n'
+        )
+    monkeypatch.setattr(gates, "ROOT", tmp_path)
+    monkeypatch.setattr(gates.shutil, "which", lambda _: "/controlled/tool")
+    monkeypatch.setenv("FIXTURE_LOG", str(log))
+    monkeypatch.setenv("FORESIGHT_BUILD_MODE", "all")
+    assert (
+        gates.run_application_gates("macos", tmp_path / "build", sys.executable, "all")
+        == 1
+    )
+    commands = [json.loads(line) for line in log.read_text().splitlines()]
+    assert set(map(tuple, commands)) == {
+        ("core", "build-only"),
+        ("desktop", "build-only"),
+        ("core", "test-only"),
+        ("desktop", "test-only"),
+        ("service", "all"),
+    }
+    assert commands[-1][0] == "service"
+    for phase in ["core-checks", "desktop-checks", "service-checks"]:
+        assert (
+            "diagnostics"
+            in (tmp_path / "test-results/build-gates" / f"{phase}.log").read_text()
+        )
+
+
+def test_failed_build_blocks_its_checks_and_stale_service_but_not_other_gate(
+    tmp_path, monkeypatch
+):
+    import json
+
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    log = tmp_path / "commands.jsonl"
+    fake = tools / "fake.py"
+    fake.write_text("""import json,os,sys
+name=sys.argv[1];phase=os.environ['FORESIGHT_BUILD_MODE']
+with open(os.environ['FIXTURE_LOG'],'a') as f:f.write(json.dumps([name,phase])+'\\n')
+print('controlled '+name+' '+phase)
+raise SystemExit(17 if name=='core' and phase=='build-only' else 0)
+""")
+    (tools / "build_dart_gates.sh").write_text(
+        f'#!/bin/bash\nexec "{sys.executable}" "{fake}" "$1"\n'
+    )
+    (tools / "build_service_gate.sh").write_text("exit 99\n")
+    monkeypatch.setattr(gates, "ROOT", tmp_path)
+    monkeypatch.setattr(gates.shutil, "which", lambda _: "/controlled/tool")
+    monkeypatch.setenv("FIXTURE_LOG", str(log))
+    monkeypatch.setenv("FORESIGHT_BUILD_MODE", "all")
+    assert (
+        gates.run_application_gates(
+            "linux", tmp_path / "build", sys.executable, "all", sequential=True
+        )
+        == 1
+    )
+    commands = [json.loads(line) for line in log.read_text().splitlines()]
+    assert commands == [
+        ["core", "build-only"],
+        ["desktop", "build-only"],
+        ["desktop", "test-only"],
+    ]
+    assert not (tmp_path / "test-results/build-gates/service-checks.log").exists()

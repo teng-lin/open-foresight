@@ -316,3 +316,135 @@ def test_native_runner_publishes_distinct_runtime_and_compilation_archives(
     ):
         assert (target / relative).read_bytes() == (tmp_path / relative).read_bytes()
     assert not (target / "build/_deps").exists()
+
+
+def test_service_miss_builds_own_current_products_before_tests(tmp_path):
+    with patch.object(runner.subprocess, "run") as command:
+        runner.execute(tmp_path, "linux", "service", False, [])
+    assert len(command.call_args_list) == 2
+    first, second = [c.args[0] for c in command.call_args_list]
+    assert first == [
+        "bash",
+        str(tmp_path / "tools/build.sh"),
+        "--platform",
+        "linux",
+        "--stage",
+        "core",
+        "--build-only",
+    ]
+    assert second == [
+        "bash",
+        str(tmp_path / "tools/build.sh"),
+        "--platform",
+        "linux",
+        "--stage",
+        "service",
+    ]
+    assert all(
+        c.kwargs["check"] is True and c.kwargs["timeout"] == 3600
+        for c in command.call_args_list
+    )
+
+
+def test_failed_service_product_build_never_starts_service_tests(tmp_path):
+    with patch.object(
+        runner.subprocess,
+        "run",
+        side_effect=subprocess.CalledProcessError(7, ["controlled-build"]),
+    ) as command:
+        with pytest.raises(subprocess.CalledProcessError):
+            runner.execute(tmp_path, "linux", "service", False, [])
+    assert command.call_count == 1
+    assert command.call_args.args[0][-3:] == ["--stage", "core", "--build-only"]
+
+
+@pytest.mark.parametrize(
+    "parents,inputs",
+    [
+        (
+            {"native": "b" * 64, "core": "c" * 64, "desktop": "d" * 64},
+            {"native": "native", "core": "old-core"},
+        ),
+        ({"native": "b" * 64}, {"native": "native", "core": "old-core"}),
+        ({}, {}),
+    ],
+)
+def test_service_refuses_old_test_parent_recipe_before_restore_or_cache(
+    tmp_path, parents, inputs
+):
+    with (
+        patch.object(runner.cache, "git", return_value=b"a" * 40),
+        patch.object(runner, "restore_input") as restore,
+        patch.object(runner.cache, "find") as find,
+    ):
+        with pytest.raises(ValueError, match="requires"):
+            runner.run(
+                tmp_path,
+                "linux",
+                "service",
+                {"compiler": "fixture"},
+                parents,
+                {k: tmp_path / v for k, v in inputs.items()},
+                "repo",
+                1,
+                "pull_request",
+                False,
+                [],
+            )
+    restore.assert_not_called()
+    find.assert_not_called()
+
+
+def test_service_native_only_recipe_binds_current_source_and_native_before_lookup(
+    tmp_path,
+):
+    with (
+        patch.object(runner.cache, "git", return_value=b"a" * 40),
+        patch.object(runner, "restore_input") as restore,
+        patch.object(
+            runner.cache, "fingerprint", side_effect=RuntimeError("captured")
+        ) as fingerprint,
+        patch.object(runner.cache, "find") as find,
+    ):
+        with pytest.raises(RuntimeError, match="captured"):
+            runner.run(
+                tmp_path,
+                "linux",
+                "service",
+                {"compiler": "fixture"},
+                {"native": "b" * 64},
+                {"native": tmp_path / "native"},
+                "repo",
+                1,
+                "pull_request",
+                False,
+                [],
+            )
+    restore.assert_called_once_with(
+        tmp_path, "linux", "native", tmp_path / "native", "b" * 64, "a" * 40
+    )
+    assert fingerprint.call_args.kwargs["parents"] == {"native": "b" * 64}
+    find.assert_not_called()
+
+
+def test_old_service_test_parent_identity_cannot_equal_native_only_source_build(
+    tmp_path,
+):
+    from tools import ci_native_cache
+
+    with patch.object(
+        ci_native_cache,
+        "source_inputs",
+        return_value={"public-source": ["100644", "blob", "a" * 40]},
+    ):
+        common = {"environment": {"compiler": "controlled"}, "root": tmp_path}
+        old = runner.cache.fingerprint(
+            "linux",
+            "service",
+            parents={"native": "b" * 64, "core": "c" * 64, "desktop": "d" * 64},
+            **common,
+        )
+        current = runner.cache.fingerprint(
+            "linux", "service", parents={"native": "b" * 64}, **common
+        )
+    assert current != old

@@ -5,6 +5,7 @@ import argparse
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import sys
 import time
@@ -37,7 +38,7 @@ def signal_owned_group(process, sig):
             time.sleep(0.05)
 
 
-def run_gates(tasks, log_directory):
+def run_gates(tasks, log_directory, *, outcomes=None):
     """Wait for every task, failing if any fails; reap process groups on abort."""
     log_directory.mkdir(parents=True, exist_ok=True)
     running = []
@@ -65,6 +66,8 @@ def run_gates(tasks, log_directory):
                     continue
                 reported.add(process.pid)
                 failed |= code != 0
+                if outcomes is not None:
+                    outcomes[name] = code
                 print(f"::group::{name} gate (exit {code})", flush=True)
                 with path.open("rb") as stream:
                     while data := stream.read(65536):
@@ -153,14 +156,88 @@ def run_gates(tasks, log_directory):
                 stream.close()
 
 
+def run_application_gates(platform, build, python, mode, *, sequential=False):
+    """Collect independent checks, running dependants only after valid builds."""
+    available = []
+    for gate, executable in (("core", "dart"), ("desktop", "flutter")):
+        if shutil.which(executable):
+            available.append(gate)
+        else:
+            print(f"{gate} gate unavailable: add {executable} to PATH", flush=True)
+    directory = ROOT / "test-results/build-gates"
+    outcomes: dict[str, int] = {}
+
+    def execute(tasks):
+        if sequential:
+            for task in tasks:
+                run_gates([task], directory, outcomes=outcomes)
+        elif tasks:
+            run_gates(tasks, directory, outcomes=outcomes)
+
+    def command(gate, phase):
+        return [
+            "/usr/bin/env",
+            f"FORESIGHT_BUILD_MODE={phase}",
+            "bash",
+            str(ROOT / "tools/build_dart_gates.sh"),
+            gate,
+            platform,
+            str(build),
+            python,
+        ]
+
+    if mode != "test-only":
+        execute([(f"{gate}-build", command(gate, "build-only")) for gate in available])
+    if mode != "build-only":
+        ready = []
+        for gate in available:
+            if mode == "test-only" or outcomes[f"{gate}-build"] == 0:
+                ready.append(gate)
+            else:
+                print(
+                    f"Blocked {gate} checks: its build prerequisites failed", flush=True
+                )
+        execute([(f"{gate}-checks", command(gate, "test-only")) for gate in ready])
+        # A failed analysis/test must not hide the independent compiled boundary.
+        # A failed core build, however, must never run an older service binary.
+        if "core" in available and (mode == "test-only" or outcomes["core-build"] == 0):
+            execute(
+                [
+                    (
+                        "service-checks",
+                        [
+                            "bash",
+                            str(ROOT / "tools/build_service_gate.sh"),
+                            platform,
+                            str(build),
+                            python,
+                        ],
+                    )
+                ]
+            )
+        elif "core" in available:
+            print("Blocked service checks: core build prerequisites failed", flush=True)
+    print("Build/check outcomes: " + repr(outcomes), flush=True)
+    return int(any(code != 0 for code in outcomes.values()))
+
+
 def main():
     """Run both build gates against the already completed native build."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--platform", choices=("macos", "linux"), required=True)
     parser.add_argument("--build", type=Path, required=True)
     parser.add_argument("--python", required=True)
+    parser.add_argument("--all-stages", action="store_true")
+    parser.add_argument("--sequential", action="store_true")
     args = parser.parse_args()
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+    if args.all_stages:
+        mode = os.environ.get("FORESIGHT_BUILD_MODE", "all")
+        if mode not in {"all", "build-only", "test-only"}:
+            parser.error("Unknown build mode")
+        return run_application_gates(
+            args.platform, args.build, args.python, mode, sequential=args.sequential
+        )
     tasks = [
         (
             gate,

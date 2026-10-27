@@ -18,7 +18,12 @@ def invoke(
     root = tmp_path / "project"
     tools = root / "tools"
     tools.mkdir(parents=True)
-    for name in ("build.sh", "ci_timing.sh", "verify_application_no_build.py"):
+    for name in (
+        "build.sh",
+        "ci_timing.sh",
+        "verify_application_no_build.py",
+        "parallel_build_gates.py",
+    ):
         shutil.copy2(ROOT / "tools" / name, tools / name)
     build = root / "build"
     build.mkdir()

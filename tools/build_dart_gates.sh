@@ -30,27 +30,78 @@ export FORESIGHT_NATIVE_LIBRARY="$task_native"
 if [[ "$task_gate" == core && -n "${FORESIGHT_DART:-}" && "$FORESIGHT_DART" != dart ]]; then
   "$task_python" "$task_root/tools/verify_toolchain_pins.py" core --dart "$FORESIGHT_DART"
 fi
+task_reports="$task_root/test-results/$task_platform/$task_gate"
+mkdir -p "$task_reports"
+task_checks=$(mktemp -d "$task_reports/checks.XXXXXX")
+task_failed=0
+task_check_index=0
+# Preserve old event output before this invocation creates the canonical reports.
+for task_previous in "$task_reports"/*.events.jsonl; do
+  if [[ -f "$task_previous" ]]; then
+    mv -- "$task_previous" "$task_checks/previous-${task_previous##*/}.raw"
+  fi
+done
+task_run() {
+  local task_label=$1 task_code=0
+  shift
+  task_check_index=$((task_check_index + 1))
+  local task_log="$task_checks/$task_check_index.log"
+  if ci_timed "$task_label" "$@" > "$task_log" 2>&1; then
+    task_code=0
+  else
+    task_code=$?
+    task_failed=1
+  fi
+  printf '::group::%s (exit %s; log %s)\n' "$task_label" "$task_code" "$task_log"
+  cat "$task_log"
+  printf '::endgroup::\n'
+  printf '%s\t%s\t%s\n' "$task_code" "$task_label" "$task_log" >> "$task_checks/summary.tsv"
+  return "$task_code"
+}
+task_check() { task_run "$@" || :; }
+task_require() { task_run "$@" || exit "$?"; }
 case "$task_gate" in
   core)
-  (
-    export FORESIGHT_NATIVE_LIBRARY="$task_build/native/${task_native##*/}"
     export FORESIGHT_HELPER="$task_build/services/helper/ForesightHelper"
     export FORESIGHT_TEST_HELPER="$task_build/services/helper/ForesightHelperTest"
     cd "$task_root/packages/foresight_core"
-    task_reports="$task_root/test-results/$task_platform/core"
-    mkdir -p "$task_reports"
-    rm -f -- "$task_reports"/*.events.jsonl
     if [[ "$task_mode" != test-only ]]; then
-      ci_timed "core dependency resolution" dart pub get --enforce-lockfile
+      task_require "core dependency resolution" dart pub get --enforce-lockfile
     fi
     if [[ "$task_mode" != build-only ]]; then
-    ci_timed "core analysis" dart analyze
+      task_check "core analysis" dart analyze
+      task_check "core format" dart format --output=none --set-exit-if-changed .
     fi
-    if [[ "$task_mode" != test-only ]]; then
-      ci_timed "diagnostic worker compilation" foresight_diagnostic_worker \
-        "$task_root" "$task_source_build" "$task_python"
+    task_worker_ready=0
+    if [[ "$task_mode" == test-only ]]; then
+      if task_run "diagnostic worker verification" foresight_diagnostic_worker "$task_root" "$task_source_build" "$task_python" --verify; then
+        task_worker_ready=1
+      fi
+    elif task_run "diagnostic worker compilation" foresight_diagnostic_worker "$task_root" "$task_source_build" "$task_python"; then
+      mkdir -p "$task_build/application"
+      task_worker_gate_temp=$(mktemp -d "$task_build/application/.diagnostic-defines.XXXXXX")
+      if task_run "diagnostic worker verification" foresight_diagnostic_worker "$task_root" "$task_source_build" "$task_python" --verify --defines-output "$task_worker_gate_temp/defines"; then
+        task_source_defines=()
+        while IFS= read -r -d '' task_worker_define; do
+          task_source_defines+=("$task_worker_define")
+        done < "$task_worker_gate_temp/defines"
+        if [[ -n ${task_source_defines[*]-} ]]; then
+          task_worker_ready=1
+          # Compile independently into private staging, never execute a stale
+          # host after a failed compile. The parent tracks build success.
+          for task_host in service mcp; do
+            if task_run "$task_host compilation" dart compile exe "${task_source_defines[@]}" "$task_root/packages/foresight_core/bin/$task_host.dart" -o "$task_worker_gate_temp/foresight-$task_host"; then
+              task_check "$task_host product publication" mv -- "$task_worker_gate_temp/foresight-$task_host" "$task_build/application/foresight-$task_host"
+            fi
+          done
+        else
+          echo 'Missing verified worker defines' >&2
+          task_failed=1
+        fi
+      fi
     fi
     if [[ "$task_mode" != build-only ]]; then
+      if [[ "$task_worker_ready" == 1 ]]; then
     if [[ "${FORESIGHT_CORE_COVERAGE_BENCHMARK:-0}" == 1 ]]; then
       # Compare the full suite on the same host/native binaries. Keep coverage
       # enforcement and reject changed test/skip outcomes between the two runs.
@@ -78,62 +129,46 @@ case "$task_gate" in
       printf 'Core benchmark order: %s then %s (run %s, attempt %s)\n' "${task_benchmark_modes[0]}" "${task_benchmark_modes[1]}" "$task_benchmark_run" "$task_benchmark_attempt"
       for task_benchmark_mode in "${task_benchmark_modes[@]}"; do
         if [[ "$task_benchmark_mode" == plain ]]; then
-          ci_timed "core benchmark without coverage" "$task_root/tools/run_core_tests.sh" --file-reporter="json:$task_reports/plain.events.jsonl"
+          task_check "core benchmark without coverage" "$task_root/tools/run_core_tests.sh" --file-reporter="json:$task_reports/plain.events.jsonl"
         else
-          FORESIGHT_PYTHON="$task_python" ci_timed "core benchmark with coverage" "$task_root/tools/coverage_core.sh" --file-reporter="json:$task_reports/coverage.events.jsonl"
+          FORESIGHT_PYTHON="$task_python" task_check "core benchmark with coverage" "$task_root/tools/coverage_core.sh" --file-reporter="json:$task_reports/coverage.events.jsonl"
         fi
       done
-      ci_timed "core benchmark outcome comparison" "$task_python" "$task_root/tools/compare_test_runs.py" "$task_reports/plain.events.jsonl" "$task_reports/coverage.events.jsonl"
+      task_check "core benchmark outcome comparison" "$task_python" "$task_root/tools/compare_test_runs.py" "$task_reports/plain.events.jsonl" "$task_reports/coverage.events.jsonl"
     elif [[ "${FORESIGHT_COVERAGE:-0}" == 1 ]]; then
-      ci_timed "core tests and coverage" "$task_root/tools/coverage_core.sh" --file-reporter="json:$task_reports/core.events.jsonl"
+      task_check "core tests and coverage" "$task_root/tools/coverage_core.sh" --file-reporter="json:$task_reports/core.events.jsonl"
     else
-      ci_timed "core tests" "$task_root/tools/run_core_tests.sh" --file-reporter="json:$task_reports/core.events.jsonl"
+      task_check "core tests" "$task_root/tools/run_core_tests.sh" --file-reporter="json:$task_reports/core.events.jsonl"
     fi
-    ci_timed "core enabled-hook regression" dart -DFORESIGHT_ENABLE_TEST_HOOKS=true test --compiler=source test/platform_services_test.dart --name 'crash and delay hooks'
+      else
+        echo 'Blocked core suite: diagnostic worker prerequisite failed' >&2
+      fi
+      task_check "core enabled-hook regression" dart -DFORESIGHT_ENABLE_TEST_HOOKS=true test --compiler=source test/platform_services_test.dart --name 'crash and delay hooks'
     fi
-  )
-  if [[ "$task_mode" != test-only ]]; then
-  (
-    mkdir -p "$task_build/application"
-    task_worker_gate_temp=$(mktemp -d "$task_build/application/.diagnostic-defines.XXXXXX")
-    trap 'rm -rf -- "$task_worker_gate_temp"' EXIT
-    ci_timed "diagnostic worker verification" foresight_diagnostic_worker \
-      "$task_root" "$task_source_build" "$task_python" \
-      --verify --defines-output "$task_worker_gate_temp/defines"
-    task_source_defines=()
-    while IFS= read -r -d '' task_worker_define; do
-      task_source_defines+=("$task_worker_define")
-    done < "$task_worker_gate_temp/defines"
-    [[ ${#task_source_defines[@]} -gt 0 ]] || { echo 'Missing verified worker defines' >&2; exit 1; }
-    ci_timed "service compilation" dart compile exe "${task_source_defines[@]}" "$task_root/packages/foresight_core/bin/service.dart" -o "$task_build/application/foresight-service"
-    ci_timed "MCP compilation" dart compile exe "${task_source_defines[@]}" "$task_root/packages/foresight_core/bin/mcp.dart" -o "$task_build/application/foresight-mcp"
-  )
-  fi
     ;;
   desktop)
-    (
-      cd "$task_root/apps/desktop"
-      task_reports="$task_root/test-results/$task_platform/desktop"
-      mkdir -p "$task_reports"
-      rm -f -- "$task_reports"/*.events.jsonl
-      if [[ "$task_mode" != test-only ]]; then
-        ci_timed "desktop dependency resolution" flutter pub get --enforce-lockfile
-      fi
-      if [[ "$task_mode" != build-only ]]; then
-      ci_timed "desktop analysis" flutter analyze
+    cd "$task_root/apps/desktop"
+    if [[ "$task_mode" != test-only ]]; then
+      task_require "desktop dependency resolution" flutter pub get --enforce-lockfile
+    fi
+    if [[ "$task_mode" != build-only ]]; then
+      task_check "desktop analysis" flutter analyze
+      task_check "desktop format" dart format --output=none --set-exit-if-changed .
       task_coverage=()
       if [[ "$task_platform" == linux || "${FORESIGHT_COVERAGE:-0}" == 1 || "${FORESIGHT_DESKTOP_COVERAGE_REPORT:-0}" == 1 ]]; then
         task_coverage=(--coverage)
       fi
-      ci_timed "desktop tests and coverage" flutter test --dart-define=FORESIGHT_ENABLE_TEST_HOOKS=true ${task_coverage[@]+"${task_coverage[@]}"} --file-reporter="json:$task_reports/desktop.events.jsonl"
+      task_check "desktop tests and coverage" flutter test --dart-define=FORESIGHT_ENABLE_TEST_HOOKS=true ${task_coverage[@]+"${task_coverage[@]}"} --file-reporter="json:$task_reports/desktop.events.jsonl"
       if [[ "$task_platform" == linux ]]; then
-        python3 "$task_root/tools/check_coverage.py" coverage/lcov.info --label Desktop --minimum 90
+        task_check "desktop coverage floor" "$task_python" "$task_root/tools/check_coverage.py" coverage/lcov.info --label Desktop --minimum 90
       fi
-      fi
-      if [[ "$task_mode" != test-only ]]; then
-        ci_timed "desktop release compilation" flutter build "$task_platform" --release
-      fi
-    )
+    fi
+    if [[ "$task_mode" != test-only ]]; then
+      task_check "desktop release compilation" flutter build "$task_platform" --release
+    fi
     ;;
   *) echo 'Gate must be core or desktop' >&2; exit 2 ;;
 esac
+printf 'Gate outcomes (%s):\n' "$task_gate"
+cat "$task_checks/summary.tsv"
+exit "$task_failed"

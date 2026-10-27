@@ -7,6 +7,7 @@ task_python=${FORESIGHT_PYTHON:-"$task_root/.venv/bin/python"}
 task_platform=${FORESIGHT_PLATFORM:-}
 task_stage=all
 task_mode=all
+task_native_status=0
 while [[ "${1:-}" == --platform || "${1:-}" == --stage || "${1:-}" == --build-only || "${1:-}" == --test-only ]]; do
   case "$1" in
     --platform) task_platform=${2:?Missing platform}; shift 2 ;;
@@ -74,32 +75,25 @@ if [[ "$task_stage" == all || "$task_stage" == native ]]; then
   fi
   if [[ "$task_mode" != build-only ]]; then
     mkdir -p "$task_root/test-results/$task_platform/native"
-    ci_timed "native tests" ctest --test-dir "$task_build" --output-on-failure --output-junit "$task_root/test-results/$task_platform/native/results.xml"
+    ci_timed "native tests" ctest --test-dir "$task_build" --output-on-failure --output-junit "$task_root/test-results/$task_platform/native/results.xml" || task_native_status=$?
   fi
 fi
 task_build=$(cd -- "$task_build" && pwd)
 case "$task_stage" in
-  native) exit 0 ;;
+  native) exit "$task_native_status" ;;
   core|desktop)
     exec bash "$task_root/tools/build_dart_gates.sh" "$task_stage" "$task_platform" "$task_build" "$task_python" ;;
   service)
     exec bash "$task_root/tools/build_service_gate.sh" "$task_platform" "$task_build" "$task_python" ;;
 esac
-if [[ "${FORESIGHT_PARALLEL_GATES:-0}" == 1 ]] && command -v dart >/dev/null && command -v flutter >/dev/null; then
-  "$task_python" "$task_root/tools/parallel_build_gates.py" \
-    --platform "$task_platform" --build "$task_build" --python "$task_python"
-else
-  if command -v dart >/dev/null; then
-    bash "$task_root/tools/build_dart_gates.sh" core "$task_platform" "$task_build" "$task_python"
-  else
-    echo "Add Dart to PATH to build/test the application service and MCP server." >&2
-  fi
-  if command -v flutter >/dev/null; then
-    bash "$task_root/tools/build_dart_gates.sh" desktop "$task_platform" "$task_build" "$task_python"
-  else
-    echo "Native build passed. Add Flutter to PATH to also build/test the desktop app." >&2
-  fi
+task_schedule=()
+if [[ "${FORESIGHT_PARALLEL_GATES:-0}" != 1 ]]; then
+  task_schedule=(--sequential)
 fi
-if [[ "$task_mode" != build-only && -x "$task_build/application/foresight-service" && -x "$task_build/application/foresight-mcp" ]]; then
-  bash "$task_root/tools/build_service_gate.sh" "$task_platform" "$task_build" "$task_python"
-fi
+"$task_python" "$task_root/tools/parallel_build_gates.py" \
+  --platform "$task_platform" --build "$task_build" --python "$task_python" \
+  --all-stages ${task_schedule[@]+"${task_schedule[@]}"} || {
+    task_gate_status=$?
+    if [[ "$task_native_status" == 0 ]]; then task_native_status=$task_gate_status; fi
+  }
+exit "$task_native_status"
