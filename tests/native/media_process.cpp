@@ -1304,6 +1304,10 @@ int main(int argc, char **argv) {
           auto join = fs_media_join_async(owner);
           wait(join);
           auto result = poll(owner);
+          if (result.at("status") != "success")
+            std::cerr << "concurrent media failure: iteration=" << i
+                      << " owner=" << owner << " join=" << join
+                      << " result=" << result.dump() << '\n';
           expect(result.at("status") == "success", "concurrent_media_result");
           expect(fs_operation_release(join) == 0,
                  "concurrent_media_join_release");
