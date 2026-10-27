@@ -221,6 +221,7 @@ final class DiagnosticStorage implements DiagnosticSink {
     int? applicationPid,
     Set<int> ownedSlots = const {},
     BackupDirectoryReader? directoryReader,
+    BackupLeaseAttempt? leaseAttempt,
   }) {
     if (role == DiagnosticRole.transient) return null;
     final logicalPid = applicationPid ?? pid;
@@ -244,6 +245,7 @@ final class DiagnosticStorage implements DiagnosticSink {
         create: false,
         minimumDescriptor: 10,
         reader: directoryReader,
+        leaseAttempt: leaseAttempt,
       );
       try {
         root = parent.child('logs');
@@ -257,7 +259,7 @@ final class DiagnosticStorage implements DiagnosticSink {
       }
       _validateRoot(root);
       admission = _file(root, 'admission.lock', create: true);
-      if (admission.size != 0 || !admission.tryExclusiveLease()) return null;
+      if (admission.size != 0 || !_tryAdmissionLease(admission)) return null;
       final manifests = <int, _Manifest>{};
       final directories = <int, BackupDirectory>{};
       try {
@@ -382,6 +384,19 @@ final class DiagnosticStorage implements DiagnosticSink {
     } finally {
       admission?.close();
       root?.close();
+    }
+  }
+
+  /// Take the admission lock without blocking. Only kernel-confirmed contention
+  /// (EWOULDBLOCK) returns false and may be retried; any other failure is
+  /// storage unavailability, never a deferral.
+  static bool _tryAdmissionLease(BackupFile admission) {
+    try {
+      return admission.tryExclusiveLeaseChecked();
+    } on StateError {
+      throw const DiagnosticStorageUnavailable(
+        DiagnosticHealthReason.storageUnavailable,
+      );
     }
   }
 
@@ -513,7 +528,7 @@ final class DiagnosticStorage implements DiagnosticSink {
     BackupFile? admission;
     try {
       admission = _file(_root, 'admission.lock');
-      if (!admission.tryExclusiveLease()) return false;
+      if (!_tryAdmissionLease(admission)) return false;
       _validateRoot(_root);
       _validateSlot(_directory);
       _manifest.role = role;
