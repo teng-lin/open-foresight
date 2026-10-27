@@ -7,6 +7,8 @@ Use [CONTRIBUTING.md](CONTRIBUTING.md) for setup, conventions and required check
 - Integrate small, independently verified batches, even when delivering one PR.
 - Reproduce the exact failed CI entrypoint. Match OS, pinned tools, UID/GID,
   NSS account/home, caches, network isolation and source/JIT mode. Record gaps.
+- Check C++ library availability on the minimum supported Apple toolchain;
+  selecting a language standard does not enable missing library features.
 - Exercise the actual consumer; metadata checks and quiet component replays
   prove only their own scope.
 - Make prerequisites part of the checked-in entrypoint, not a private shell.

@@ -640,10 +640,10 @@ int main(int argc, char **argv) {
       // Verification and instrumented startup are not idle codec work. Keep
       // service-owned progress alive until the actual leaf publishes its PID,
       // then leave the unchanged 80 ms idle budget to terminate that leaf.
-      std::jthread feed([&](std::stop_token stop) {
+      std::atomic<bool> stop_feed{false};
+      std::thread feed([&] {
         const auto end = std::chrono::steady_clock::now() + 10s;
-        while (!stop.stop_requested() &&
-               std::chrono::steady_clock::now() < end) {
+        while (!stop_feed.load() && std::chrono::steady_clock::now() < end) {
           ++progress;
           std::ifstream ready(f.source.string() + ".ready");
           pid_t pid = -1;
@@ -654,9 +654,22 @@ int main(int argc, char **argv) {
           std::this_thread::sleep_for(2ms);
         }
       });
+      // Supported Apple libc++ versions may lack jthread despite C++20 mode.
+      // Stop and join the feeder on normal completion and exception unwinding.
+      struct StopAndJoin {
+        std::atomic<bool> &stop;
+        std::thread &thread;
+        void finish() {
+          stop = true;
+          if (thread.joinable())
+            thread.join();
+        }
+        ~StopAndJoin() {
+          finish();
+        }
+      } stop_and_join{stop_feed, feed};
       auto r = f.run();
-      feed.request_stop();
-      feed.join();
+      stop_and_join.finish();
       expect(ready_pid > 0 && ready_pid == r.child_pid,
              "idle_leaf_not_acquired");
       expect(r.status == MediaProcessStatus::idle_timeout, "idle_timeout");
