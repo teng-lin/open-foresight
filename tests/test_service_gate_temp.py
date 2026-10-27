@@ -99,11 +99,11 @@ def test_alias_temp_root_is_canonical_and_shared_with_all_test_children(
     record = observe(env)
     temp = Path(record["tmp"])
     assert record["canonical"]
-    assert temp.name == "tmp" and temp.parent.parent == real.resolve()
+    assert temp.name == "t" and temp.parent.parent == Path("/var/tmp").resolve()
     assert record["test_root"] == str(temp)
     assert record["mode"] == 0o700 and record["uid"] == record["self_uid"]
     argv = record["argv"]
-    assert argv[argv.index("--basetemp") + 1] == str(temp.parent / "pytest")
+    assert argv[argv.index("--basetemp") + 1] == str(temp.parent / "p")
     assert record["basetemp_mode"] == 0o700 and record["basetemp_canonical"]
     assert argv[:2] == ["-m", "pytest"]
     assert argv[2] == str(gate.parents[1] / "tests/service")
@@ -183,7 +183,7 @@ def test_failed_canonicalization_retains_original_cleanup_owner(tmp_path):
     record = tmp_path / "created-root"
     startup = tmp_path / "controlled-shell-startup"
     startup.write_text(
-        'pwd() { case "$PWD" in */of-svc.*) '
+        'pwd() { case "$PWD" in */fs.*) '
         'printf "%s" "$PWD" > "$CREATED_ROOT"; return 17;; '
         'esac; builtin pwd "$@"; }\n'
     )
@@ -199,3 +199,36 @@ def test_failed_canonicalization_retains_original_cleanup_owner(tmp_path):
     assert not Path(env["OBSERVATION"]).exists(), (
         "Tests must not start after setup fails"
     )
+
+
+def test_real_pytest_two_profile_socket_fits_even_with_long_inherited_root(tmp_path):
+    gate, build, _python, env = fixture_gate(tmp_path, "linux")
+    root = gate.parents[1]
+    (root / "pytest.ini").write_text("[pytest]\n")
+    service = root / "tests/service"
+    service.mkdir(parents=True)
+    (service / "test_socket_budget.py").write_text(
+        "import os,pathlib,socket\n"
+        "def test_two_live_profiles_keep_notes_private(tmp_path):\n"
+        " path=tmp_path/'first-profile/run/application.sock'\n"
+        " path.parent.mkdir(parents=True)\n"
+        " assert len(os.fsencode(path)) < 104\n"
+        " with socket.socket(socket.AF_UNIX) as server:\n"
+        "  server.bind(str(path))\n"
+        "  server.listen(1)\n"
+        "  with socket.socket(socket.AF_UNIX) as client:\n"
+        "   client.connect(str(path))\n"
+        "   peer,_=server.accept()\n"
+        "   peer.close()\n"
+    )
+    inherited = tmp_path / ("long-inherited-runner-prefix-" * 4)
+    inherited.mkdir(mode=0o700)
+    env.update(
+        FORESIGHT_TEST_TEMP_ROOT=str(inherited),
+        TMPDIR=str(inherited),
+        PYTEST_ADDOPTS="",
+    )
+    result = run_gate(gate, build, Path(sys.executable), "linux", env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert b"1 passed" in result.stdout
+    assert not list(inherited.iterdir())
