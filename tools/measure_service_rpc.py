@@ -770,6 +770,8 @@ class RuntimeInventory:
 
     @staticmethod
     def diagnostic_peers(parent: int, child: int, pid: int, session: int) -> None:
+        if sys.platform != "linux":
+            raise RuntimeError("Diagnostic peer inventory requires Linux")
         if pid not in (parent, child):
             raise ValueError("Diagnostic mapping is not owned by either protocol peer")
         descriptors = []
