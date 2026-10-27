@@ -11,6 +11,7 @@ Future<AudioMeetingReadPage?> readSettledSavedTranscription(
   final page = AudioMeetingReadPage.fromWire(
     await connection.command(Operation.recordingsRead, {
       'meeting_id': meetingId,
+      'workspace_epoch': connection.workspaceEpoch,
     }),
   );
   final audio = page.meeting;
