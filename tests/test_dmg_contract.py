@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 import plistlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -29,12 +30,17 @@ class DmgContractTest(unittest.TestCase):
         import threading
         import time
 
-        with tempfile.TemporaryDirectory() as temporary:
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            tempfile.TemporaryDirectory(prefix="dmg-seed-") as seed_temporary,
+        ):
             root = Path(temporary)
+            seed_root = Path(seed_temporary)
             source = root / "source"
             source.mkdir()
             (source / "evidence").write_text("same-byte verification fixture\n")
             image = root / "locked.dmg"
+            seed = seed_root / "seed.dmg"
             subprocess.run(
                 [
                     "hdiutil",
@@ -43,16 +49,26 @@ class DmgContractTest(unittest.TestCase):
                     str(source),
                     "-format",
                     "UDZO",
-                    str(image),
+                    str(seed),
                 ],
                 check=True,
                 timeout=60,
             )
+            # Creator cleanup can retain its inode after hdiutil has returned.
+            # The deliberate contention phase owns a new inode with identical
+            # image bytes, so creator lifetime cannot consume its setup budget.
+            seed_digest = packager.image_digest(seed)
+            shutil.copyfile(seed, image)
+            self.assertNotEqual(
+                (seed.stat().st_dev, seed.stat().st_ino),
+                (image.stat().st_dev, image.stat().st_ino),
+            )
+            self.assertEqual(packager.image_digest(seed), seed_digest)
+            self.assertEqual(packager.image_digest(image), seed_digest)
             released = threading.Event()
             with image.open("r+b") as stream:
-                # An image lock can briefly outlive a completed hdiutil create.
-                # Own this exact descriptor before starting
-                # the deliberate six-second verification-contention phase.
+                # Own this exact target before the deliberate six-second
+                # verification-contention phase; no creator owns this inode.
                 deadline = time.monotonic() + 3
                 while True:
                     try:
@@ -104,6 +120,9 @@ class DmgContractTest(unittest.TestCase):
             self.assertEqual(packager.image_digest(image), digest)
             self.assertEqual(
                 sorted(path.name for path in root.iterdir()), ["locked.dmg", "source"]
+            )
+            self.assertEqual(
+                sorted(path.name for path in seed_root.iterdir()), ["seed.dmg"]
             )
 
     def test_owned_attachment_cleanup_preserves_unrelated_image_and_verification(self):
