@@ -179,12 +179,6 @@ int get _nonBlocking => Platform.isMacOS ? 0x4 : 0x800;
 int get _create => Platform.isMacOS ? 0x200 : 0x40;
 int get _exclusive => Platform.isMacOS ? 0x800 : 0x80;
 
-int _flockAttempt(int descriptor) {
-  if (_flock(descriptor, 2 | 4) == 0) return 0;
-  final code = _errno().value;
-  return code == 0 ? -1 : code;
-}
-
 Never _refuse() => throw StateError(
   'Cannot safely access migration backups; no migration was started. Check private profile storage and available space.',
 );
@@ -258,11 +252,6 @@ ScopedFileMetadata _metadata(int fd) {
 /// [names] ([capacity] bytes) as one length byte plus the name bytes each, and
 /// returns the packed length or a negative refusal. It must not retain
 /// [names] or [descriptor]; the caller closes the descriptor.
-/// One non-blocking exclusive `flock` attempt on [descriptor]: 0 when taken,
-/// otherwise the errno. Tests may inject non-contention failures; production
-/// uses the real kernel call.
-typedef BackupLeaseAttempt = int Function(int descriptor);
-
 typedef BackupDirectoryReader =
     int Function(int descriptor, Pointer<Uint8> names, int capacity);
 
@@ -281,12 +270,10 @@ final class BackupDirectory {
     bool private = true,
     int minimumDescriptor = 0,
     BackupDirectoryReader? reader,
-    BackupLeaseAttempt? leaseAttempt,
   }) : path = p.normalize(p.absolute(path)),
        _private = private,
        _minimumDescriptor = minimumDescriptor,
-       _reader = reader,
-       _leaseAttempt = leaseAttempt {
+       _reader = reader {
     final components = p.split(this.path);
     var fd = _relocate(
       _name('/', (name) => _open(name, _directory | _cloexec)),
@@ -324,7 +311,6 @@ final class BackupDirectory {
   final bool _private;
   final int _minimumDescriptor;
   final BackupDirectoryReader? _reader;
-  final BackupLeaseAttempt? _leaseAttempt;
   late final int _fd;
   late final String _identity;
   bool _closed = false;
@@ -380,7 +366,7 @@ final class BackupDirectory {
           info.links != 1) {
         _refuse();
       }
-      return BackupFile._(fd, info.identity, _leaseAttempt);
+      return BackupFile._(fd, info.identity);
     } catch (_) {
       _close(fd);
       rethrow;
@@ -561,7 +547,6 @@ final class BackupDirectory {
       create: create,
       minimumDescriptor: _minimumDescriptor,
       reader: _reader,
-      leaseAttempt: _leaseAttempt,
     );
     try {
       verifyAnchor();
@@ -766,9 +751,8 @@ final class BackupDirectory {
 }
 
 final class BackupFile {
-  BackupFile._(this._fd, this.identity, this._leaseAttempt);
+  BackupFile._(this._fd, this.identity);
   final int _fd;
-  final BackupLeaseAttempt? _leaseAttempt;
   final String identity;
   bool _closed = false;
 
@@ -836,8 +820,8 @@ final class BackupFile {
   /// Media acquisition may wait for the former; it must never retry the latter.
   bool tryExclusiveLeaseChecked() {
     if (_closed) _refuse();
-    final code = (_leaseAttempt ?? _flockAttempt)(_fd);
-    if (code == 0) return true;
+    if (_flock(_fd, 2 | 4) == 0) return true;
+    final code = _errno().value;
     if (code == (Platform.isMacOS ? 35 : 11)) {
       return false; // EWOULDBLOCK/EAGAIN
     }
