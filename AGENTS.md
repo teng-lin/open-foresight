@@ -43,6 +43,8 @@ Use [CONTRIBUTING.md](CONTRIBUTING.md) for setup, conventions and required check
 - Prove the intended phase was reached before asserting a timing outcome.
   Separate fixture setup from the measured phase without changing production
   deadlines; retain independent cold-start coverage.
+- Check process-wide runtime overrides when substituting a test worker. An
+  owned entry witness must prove the registered fixture actually executed.
 - Observe already-started Futures before admission/deadline checks can throw.
   Keep regression operations and their uncaught-error observer in the same Dart
   error zone unless zone crossing is the behavior under test; prove the old code

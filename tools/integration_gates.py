@@ -517,6 +517,10 @@ def meeting_environment(args, env, private):
         + "\n"
     )
     meeting = dict(private)
+    # The meeting registers a bounded speech wrapper to observe pending ASR.
+    # Its initial manifest still names the pinned real runtime; a process-wide
+    # override would silently bypass subsequent model runtime registrations.
+    meeting.pop("FORESIGHT_WHISPER_RUNTIME", None)
     meeting.update(
         FORESIGHT_PLAYBACK_TARGET=private["FORESIGHT_LIVE_SINK"],
         FORESIGHT_DATA=str(data),

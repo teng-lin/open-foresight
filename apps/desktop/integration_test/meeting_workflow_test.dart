@@ -6,6 +6,7 @@ import 'dart:convert';
 import 'dart:async';
 import '../test_support/current_read.dart';
 import '../test_support/saved_transcription.dart';
+import '../test_support/held_speech_runner.dart';
 import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
@@ -836,10 +837,14 @@ void main() {
                   value.toRow(),
               ].single['runtime']
               as String;
-      final slowSpeech = File(
-        '${env['FORESIGHT_DATA']}/speech-cancellation-runner',
-      )..writeAsStringSync('#!/bin/sh\nsleep 2\nexec "$savedSpeech" "\$@"\n');
-      await Process.run('chmod', ['700', slowSpeech.path]);
+      final speechGate = HeldSpeechRunner(
+        Directory(env['FORESIGHT_DATA']!).createTempSync('held-speech-gate-'),
+        savedSpeech,
+      );
+      // Retain the gate under the service profile so release remains visible
+      // while pending work retires; the profile owner handles cleanup.
+      addTearDown(speechGate.release);
+      await speechGate.makeExecutable();
       final speechAsset = [
         if ((await observeCurrent(
               tester,
@@ -854,7 +859,7 @@ void main() {
       await reopened.d.command(Operation.modelsRegister, {
         'kind': 'speech',
         'path': speechAsset,
-        'runtime': slowSpeech.path,
+        'runtime': speechGate.runner.path,
       });
       await tester.tap(find.text('Meetings').first);
       await tester.pumpAndSettle();
@@ -872,6 +877,22 @@ void main() {
               (int n) => n > 0,
             ),
       );
+      final secondMeeting = reopened.meetingFeature.recordingMeeting as int;
+      final beforeSecond = (await observeCurrent(
+        tester,
+        () => currentRead(
+          readerFor(reopened),
+          StoreReadQueries.transcript(secondMeeting, finalOnly: true),
+        ),
+      )).map((row) => row.id).toSet();
+      final secondAudio = AudioMeetingReadPage.fromWire(
+        await reopened.d.command(Operation.recordingsRead, {
+          'meeting_id': secondMeeting,
+          'workspace_epoch': reopened.d.workspaceEpoch,
+        }),
+      );
+      final secondSession = secondAudio.meeting.activeSessionId;
+      expect(secondSession, isNotNull);
       final secondPlayer = await Process.start('pw-play', [
         '--target',
         sink,
@@ -884,11 +905,26 @@ void main() {
       // ignore: unawaited_futures
       secondPlayer.stderr.drain<void>();
       expect(await secondPlayer.exitCode, 0);
+      // Entry is emitted only for a real native -f invocation with nonempty PCM.
+      await waitUntil(tester, () => speechGate.hasEntered);
       await tester.tap(find.byTooltip('Stop recording'));
-      await waitUntil(
-        tester,
-        () async => reopened.meetingFeature.recording?.finishing == true,
-      );
+      await waitUntil(tester, () async {
+        if (reopened.meetingFeature.recording != null) return false;
+        final page = AudioMeetingReadPage.fromWire(
+          await reopened.d.command(Operation.recordingsRead, {
+            'meeting_id': secondMeeting,
+            'workspace_epoch': reopened.d.workspaceEpoch,
+          }),
+        );
+        final session = page.sessions.where((s) => s.id == secondSession);
+        return speechGate.hasEntered &&
+            page.meeting.activeSessionId == null &&
+            page.meeting.physicalState == MeetingAudioPhysicalState.idle &&
+            session.length == 1 &&
+            session.single.retainedBytes > 0 &&
+            session.single.captureError.isEmpty &&
+            session.single.sources.any((s) => s.pendingJobs > 0);
+      });
       await closeWorkspace(tester, reopened);
       expect(tester.takeException(), isNull);
       var afterCancellation = await startedWorkspace(tester);
@@ -901,13 +937,35 @@ void main() {
         tester,
         () async => afterCancellation.meetingFeature.recording == null,
       );
+      speechGate.release();
+      await waitUntil(tester, () async {
+        final settled = await readSettledSavedTranscription(
+          afterCancellation.d,
+          secondMeeting,
+        );
+        if (settled == null ||
+            !settled.sessions.any((s) => s.id == secondSession)) {
+          return false;
+        }
+        final rows = await currentRead(
+          readerFor(afterCancellation),
+          StoreReadQueries.transcript(secondMeeting, finalOnly: true),
+        );
+        return rows.any(
+          (row) =>
+              !beforeSecond.contains(row.id) &&
+              row.source == 'playback' &&
+              row.text.toLowerCase().contains('country'),
+        );
+      });
+      speechGate.assertReleasedBeforeTimeout();
       expect(
         [
           if ((await observeCurrent(
                 tester,
                 () => currentRead(
                   readerFor(afterCancellation),
-                  StoreReadQueries.meeting(meeting),
+                  StoreReadQueries.meeting(secondMeeting),
                 ),
               ))
               case final value?)
@@ -944,9 +1002,13 @@ void main() {
         tester,
         () async =>
             afterCancellation.meetingFeature.recording?.sampleCounts.length ==
-            2,
+                2 &&
+            afterCancellation.meetingFeature.recording!.sampleCounts.every(
+              (int n) => n > 0,
+            ),
       );
-      final silentMeeting = afterCancellation.meetingFeature.meetingId as int;
+      final silentMeeting =
+          afterCancellation.meetingFeature.recordingMeeting as int;
       final activityAtStart =
           afterCancellation.meetingFeature.recording!.lastAudioActivity;
       var nextCheckpoint = 60;
@@ -1002,7 +1064,26 @@ void main() {
               case final value?)
             value.toRow(),
         ].single['state'],
-        'empty',
+        'completed',
+      );
+      AudioMeetingReadPage? silentAudio;
+      await waitUntil(tester, () async {
+        silentAudio = await readSettledSavedTranscription(
+          afterCancellation.d,
+          silentMeeting,
+        );
+        return silentAudio != null;
+      });
+      expect(silentAudio!.sessions.any((s) => s.retainedBytes > 0), isTrue);
+      expect(
+        await observeCurrent(
+          tester,
+          () => currentRead(
+            readerFor(afterCancellation),
+            StoreReadQueries.transcript(silentMeeting, finalOnly: true),
+          ),
+        ),
+        isEmpty,
       );
       await afterCancellation.d.command(Operation.preferencesSet, {
         'key': 'inactivity',
@@ -1794,6 +1875,11 @@ void main() {
             'summary': summary,
             'cited_answer_after_restart': answer,
             'indexed_source': source['id'],
+            'pending_speech_entry_observed_before_desktop_close': true,
+            'pending_speech_session': secondSession,
+            'pending_speech_meeting': secondMeeting,
+            'new_playback_transcript_saved_after_reconnection': true,
+            'inactivity_silent_audio_retained_with_empty_transcript': true,
             'inactivity_timer_finalized_silent_capture': true,
             'inactivity_test_uses_backdated_activity_timestamp': false,
             if (realInactivity) ...{

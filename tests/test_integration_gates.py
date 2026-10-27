@@ -123,7 +123,7 @@ def test_repository_skip_inventory_is_current():
     assert inventory.verify(ROOT) > 0
 
 
-def test_waveform_inspector_does_not_inherit_whisper_runtime(tmp_path):
+def test_audio_phases_preserve_their_runtime_selection_contract(tmp_path):
     runner = tmp_path / "bin/whisper-cli-vulkan"
     runner.parent.mkdir()
     runner.touch()
@@ -175,6 +175,9 @@ def test_waveform_inspector_does_not_inherit_whisper_runtime(tmp_path):
     assert observed[2][3] == 1
     assert observed[2][4] == {"device": "linux"}
     meeting = observed[2][2]
+    assert "FORESIGHT_WHISPER_RUNTIME" not in meeting
+    manifest = json.loads(Path(meeting["FORESIGHT_MODEL_MANIFEST"]).read_text())
+    assert manifest["speech"]["runtime"] == str(runner)
     assert meeting["FORESIGHT_PLAYBACK_TARGET"] == "ci-sink"
     assert meeting["FORESIGHT_PRIVATE_PIPEWIRE"] == "1"
     assert meeting["FORESIGHT_PRIVATE_X11"] == meeting["DISPLAY"] == ":71"
