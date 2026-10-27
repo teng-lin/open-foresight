@@ -10,6 +10,7 @@ import 'package:foresight_core/src/diagnostics/storage_worker_dispatch.dart';
 import 'package:foresight_core/src/diagnostics/storage_worker_protocol.dart';
 import 'package:foresight_core/src/persistence/backup_files.dart';
 import 'package:foresight_test_support/test_paths.dart';
+import 'package:foresight_test_support/poll.dart';
 import 'package:test/test.dart';
 import 'package:path/path.dart' as p;
 
@@ -17,6 +18,51 @@ const build =
     '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 final session = DiagnosticIdentity.parse('0123456789abcdef0123456789abcdef')!;
 final empty = Uint8List(0);
+
+/// Positive filesystem admission may encounter transient kernel contention. A retry
+/// alone is insufficient: require an independent checked kernel refusal, then
+/// wait for release without spending further protocol admission attempts.
+Future<DiagnosticWorkerReply> _admitFilesystem(
+  DiagnosticStorageWorkerState worker,
+  String profile, {
+  void Function()? contended,
+}) async {
+  final elapsed = Stopwatch()..start();
+  const budget = Duration(seconds: 3);
+  for (var attempt = 1; attempt <= 5; attempt++) {
+    final reply = worker.handle(DiagnosticWorkerFrame.admit, empty);
+    if (reply.result == DiagnosticWorkerResult.ok) return reply;
+    if (reply.result != DiagnosticWorkerResult.retry ||
+        reply.reason != DiagnosticHealthReason.storageUnavailable) {
+      throw TestFailure(
+        'Filesystem admission failed: attempt=$attempt '
+        'result=${reply.result.name} reason=${reply.reason.name}',
+      );
+    }
+    final root = BackupDirectory('$profile/logs', create: false);
+    try {
+      final lock = root.open('admission.lock');
+      try {
+        if (lock.size != 0 || lock.tryExclusiveLeaseChecked()) {
+          throw TestFailure(
+            'Filesystem admission retry lacks kernel contention: '
+            'attempt=$attempt reason=${reply.reason.name}',
+          );
+        }
+        contended?.call();
+        await eventually(
+          lock.tryExclusiveLeaseChecked,
+          timeout: budget - elapsed.elapsed,
+        );
+      } finally {
+        lock.close();
+      }
+    } finally {
+      root.close();
+    }
+  }
+  throw TestFailure('Filesystem admission exhausted its five attempts');
+}
 
 final _libc = DynamicLibrary.process();
 final _dup = _libc.lookupFunction<Int32 Function(Int32), int Function(int)>(
@@ -245,7 +291,7 @@ void main() {
   });
   test(
     'duplicate manifest fields stay occupied and preserve existing segment bytes',
-    () {
+    () async {
       final parent = BackupDirectory(
         createTestTempDirectorySync('diag-manifest-').path,
         private: false,
@@ -270,7 +316,7 @@ void main() {
         worker.handle(2, init(path).encode()).result,
         DiagnosticWorkerResult.ok,
       );
-      final first = worker.handle(4, empty);
+      final first = await _admitFilesystem(worker, path);
       expect(first.result, DiagnosticWorkerResult.ok);
       expect(listed, isNotEmpty);
       expect(
@@ -289,12 +335,19 @@ void main() {
         '"role":"arbitrary","role":"candidate"',
       );
       manifest.writeAsStringSync(malformed);
-      final next = DiagnosticStorage.admit(
-        path,
-        DiagnosticIdentity.random(),
-        DiagnosticRole.candidate,
-      )!;
-      addTearDown(next.close);
+      final successor = DiagnosticStorageWorkerState.authenticated(
+        parentPid: pid,
+        buildId: build,
+        directoryReader: _streamReader,
+      );
+      addTearDown(() {
+        if (!successor.retired) successor.handle(8, empty);
+      });
+      expect(
+        successor.handle(2, init(path).encode()).result,
+        DiagnosticWorkerResult.ok,
+      );
+      final next = await _admitFilesystem(successor, path);
       expect(next.slot, isNot(first.slot));
       expect(segment.readAsBytesSync(), bytes);
       expect(manifest.readAsStringSync(), malformed);
@@ -566,6 +619,42 @@ void main() {
     expect(Directory('$path/logs').listSync(), isEmpty);
     expect(worker.handle(8, empty).reason, DiagnosticHealthReason.closed);
   });
+  test('positive fixture refuses retries without kernel contention', () async {
+    final path = workerProfile();
+    final profile = BackupDirectory(path);
+    final root = profile.child('logs');
+    profile.close();
+    final lock = root.open('admission.lock', create: true);
+    addTearDown(() {
+      lock.close();
+      root.close();
+    });
+    var calls = 0;
+    final worker = DiagnosticStorageWorkerState.forTesting(
+      parentPid: pid,
+      buildId: build,
+      factory: (_, _, _) {
+        calls++;
+        return null;
+      },
+    );
+    addTearDown(() => worker.handle(8, empty));
+    expect(
+      worker.handle(2, init(path).encode()).result,
+      DiagnosticWorkerResult.ok,
+    );
+    await expectLater(
+      _admitFilesystem(worker, path),
+      throwsA(
+        isA<TestFailure>().having(
+          (error) => error.message,
+          'message',
+          contains('lacks kernel contention'),
+        ),
+      ),
+    );
+    expect(calls, 1);
+  });
   test('INIT grants no files and admission retries stay at five', () {
     var calls = 0;
     final worker = DiagnosticStorageWorkerState.forTesting(
@@ -654,53 +743,78 @@ void main() {
       expect(sink.closes, 1);
     },
   );
-  test(
-    'filesystem fixture writes only validated schema2 and closes before retirement',
-    () {
-      final parent = BackupDirectory(
-        createTestTempDirectorySync('diag-dispatch-').path,
-        private: false,
-      );
-      final profile = parent.child('profile');
-      final path = profile.path;
-      profile.close();
-      parent.close();
-      final listed = <int>[];
-      final worker = DiagnosticStorageWorkerState.authenticated(
-        parentPid: pid,
-        buildId: build,
-        directoryReader: (descriptor, names, capacity) {
-          listed.add(descriptor);
-          return _streamReader(descriptor, names, capacity);
-        },
-      );
-      addTearDown(() {
-        if (!worker.retired) worker.handle(8, empty);
-      });
-      expect(
-        worker.handle(2, init(path).encode()).result,
-        DiagnosticWorkerResult.ok,
-      );
-      final admitted = worker.handle(4, empty);
-      expect(admitted.result, DiagnosticWorkerResult.ok);
-      expect(listed, isNotEmpty);
-      expect(classify(worker).result, DiagnosticWorkerResult.ok);
-      final bytes = jsonBytes(record());
-      expect(worker.handle(6, bytes).result, DiagnosticWorkerResult.ok);
-      final segment = File('$path/logs/slot-${admitted.slot}/0.jsonl');
-      expect(segment.readAsBytesSync(), bytes);
-      expect(worker.handle(8, empty).result, DiagnosticWorkerResult.ok);
-      expect(worker.retired, isTrue);
-      expect(() => worker.handle(7, empty), throwsFormatException);
-      // Actual scoped lease is available again after RETIRED is acknowledged.
-      final slot = BackupDirectory('$path/logs/slot-${admitted.slot}');
-      final lease = slot.open('lease');
-      try {
-        expect(lease.tryExclusiveLease(), isTrue);
-      } finally {
-        lease.close();
-        slot.close();
-      }
-    },
-  );
+  for (final contend in [false, true]) {
+    test(
+      'filesystem fixture writes only validated schema2 and closes before retirement (contended=$contend)',
+      () async {
+        final parent = BackupDirectory(
+          createTestTempDirectorySync('diag-dispatch-').path,
+          private: false,
+        );
+        final profile = parent.child('profile');
+        final path = profile.path;
+        profile.close();
+        parent.close();
+        final listed = <int>[];
+        final worker = DiagnosticStorageWorkerState.authenticated(
+          parentPid: pid,
+          buildId: build,
+          directoryReader: (descriptor, names, capacity) {
+            listed.add(descriptor);
+            return _streamReader(descriptor, names, capacity);
+          },
+        );
+        addTearDown(() {
+          if (!worker.retired) worker.handle(8, empty);
+        });
+        expect(
+          worker.handle(2, init(path).encode()).result,
+          DiagnosticWorkerResult.ok,
+        );
+        BackupFile? heldLock;
+        BackupDirectory? logs;
+        if (contend) {
+          final profile = BackupDirectory(path);
+          logs = profile.child('logs');
+          profile.close();
+          heldLock = logs.open('admission.lock', create: true);
+          addTearDown(() {
+            heldLock?.close();
+            logs?.close();
+          });
+          await eventually(heldLock.tryExclusiveLeaseChecked);
+        }
+        var sawContention = false;
+        final admitted = await _admitFilesystem(
+          worker,
+          path,
+          contended: () {
+            sawContention = true;
+            expect(Directory('$path/logs').listSync(), hasLength(1));
+            heldLock?.close();
+          },
+        );
+        expect(admitted.result, DiagnosticWorkerResult.ok);
+        if (contend) expect(sawContention, isTrue);
+        expect(listed, isNotEmpty);
+        expect(classify(worker).result, DiagnosticWorkerResult.ok);
+        final bytes = jsonBytes(record());
+        expect(worker.handle(6, bytes).result, DiagnosticWorkerResult.ok);
+        final segment = File('$path/logs/slot-${admitted.slot}/0.jsonl');
+        expect(segment.readAsBytesSync(), bytes);
+        expect(worker.handle(8, empty).result, DiagnosticWorkerResult.ok);
+        expect(worker.retired, isTrue);
+        expect(() => worker.handle(7, empty), throwsFormatException);
+        // Actual scoped lease is available again after RETIRED is acknowledged.
+        final slot = BackupDirectory('$path/logs/slot-${admitted.slot}');
+        final lease = slot.open('lease');
+        try {
+          expect(lease.tryExclusiveLease(), isTrue);
+        } finally {
+          lease.close();
+          slot.close();
+        }
+      },
+    );
+  }
 }
