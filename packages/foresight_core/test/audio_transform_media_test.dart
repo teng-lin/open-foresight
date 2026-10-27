@@ -541,7 +541,7 @@ void main() {
       );
       await scheduler.close();
       media.close();
-      media = RecordingMedia.open(
+      media = await RecordingMedia.acquire(
         database,
         ownerGeneration: AudioStore.newIdentity(),
       );
@@ -611,7 +611,7 @@ void main() {
       operation.close();
       await scheduler.close();
       media.close();
-      media = RecordingMedia.open(
+      media = await RecordingMedia.acquire(
         database,
         ownerGeneration: AudioStore.newIdentity(),
       );

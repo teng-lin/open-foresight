@@ -125,7 +125,7 @@ void main() {
   });
   test(
     'exclusive startup discards old playback without automatically resuming it',
-    () {
+    () async {
       final playback = media.audio.createPlaybackJob(session.id);
       claim(playback);
       expect(references(), 1);
@@ -137,7 +137,7 @@ void main() {
         settings: {},
       );
       media.close();
-      media = RecordingMedia.open(
+      media = await RecordingMedia.acquire(
         store,
         ownerGeneration: AudioStore.newIdentity(),
       );

@@ -341,7 +341,7 @@ void main() {
       );
       await runtime.close();
       // A surviving native inherited FD would refuse this actual owner flock.
-      final next = RecordingMedia.open(
+      final next = await RecordingMedia.acquire(
         store,
         ownerGeneration: AudioStore.newIdentity(),
       );

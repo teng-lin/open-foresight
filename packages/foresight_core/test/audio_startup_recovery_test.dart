@@ -252,7 +252,7 @@ void main() {
       database.copySync('${root.path}/restored.db');
       File('${root.path}/restored.db').renameSync(database.path);
       store = Store(database.path);
-      media = RecordingMedia.open(
+      media = await RecordingMedia.acquire(
         store,
         ownerGeneration: AudioStore.newIdentity(),
       );

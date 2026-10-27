@@ -602,20 +602,23 @@ void main() {
         : false,
   );
 
-  test('fresh binding and durable preallocation survive service reopen', () {
-    final reservation = reserve();
-    final generation = media.audio.storageGeneration;
-    media.close();
-    store.close();
-    store = Store('${root.path}/application.db');
-    media = RecordingMedia.open(
-      store,
-      ownerGeneration: AudioStore.newIdentity(),
-    );
-    expect(media.audio.storageGeneration, generation);
-    expect(media.audio.pendingPublications().single.id, reservation.id);
-    expect(media.audio.mediaAdmitted, isTrue);
-  });
+  test(
+    'fresh binding and durable preallocation survive service reopen',
+    () async {
+      final reservation = reserve();
+      final generation = media.audio.storageGeneration;
+      media.close();
+      store.close();
+      store = Store('${root.path}/application.db');
+      media = await RecordingMedia.acquire(
+        store,
+        ownerGeneration: AudioStore.newIdentity(),
+      );
+      expect(media.audio.storageGeneration, generation);
+      expect(media.audio.pendingPublications().single.id, reservation.id);
+      expect(media.audio.mediaAdmitted, isTrue);
+    },
+  );
 
   test('allocating a span cannot acknowledge physical capture', () {
     expect(
@@ -646,7 +649,7 @@ void main() {
 
   test(
     'a copied database with identical generation cannot reauthorize old media',
-    () {
+    () async {
       reserve();
       final oldGeneration = media.audio.storageGeneration;
       media.close();
@@ -655,7 +658,7 @@ void main() {
       database.copySync('${root.path}/restored.db');
       File('${root.path}/restored.db').renameSync(database.path);
       store = Store(database.path);
-      media = RecordingMedia.open(
+      media = await RecordingMedia.acquire(
         store,
         ownerGeneration: AudioStore.newIdentity(),
       );
@@ -800,7 +803,7 @@ void main() {
 
   test(
     'inherited worker lease blocks recovery until actual last descriptor close',
-    () {
+    () async {
       final libc = DynamicLibrary.process();
       final duplicate = libc
           .lookupFunction<Int32 Function(Int32), int Function(int)>('dup');
@@ -820,7 +823,7 @@ void main() {
       } finally {
         close(childLease);
       }
-      media = RecordingMedia.open(
+      media = await RecordingMedia.acquire(
         store,
         ownerGeneration: AudioStore.newIdentity(),
       );

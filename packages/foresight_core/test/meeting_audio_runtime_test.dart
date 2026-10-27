@@ -438,7 +438,7 @@ void main() {
       expect(lease.current, false);
       expect(receipt.readAsStringSync(), before);
       expect(File(output).existsSync(), false);
-      final media = RecordingMedia.open(
+      final media = await RecordingMedia.acquire(
         store,
         ownerGeneration: AudioStore.newIdentity(),
       );
