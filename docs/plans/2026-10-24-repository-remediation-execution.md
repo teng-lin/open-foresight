@@ -1820,3 +1820,41 @@ seed/ownership preflight refusals remain retained as setup failures.
 The live Mac application result still has to finish before the follow-up push
 and final current-head qualification. Required owner review and verified merge
 to main remain necessary; this dated evidence is not a merge or release claim.
+
+### 2026-10-26: source-JIT Mac Core closure and cross-platform consent fixtures
+
+The completed `99daec37` Mac job passed Native **61/61** and actual source-JIT
+Core **2,887 / 14 skips / zero failures**, with Worker/service/MCP compilation
+successful. The startup handoff passed and notes phases zero through nine
+completed in 63,493 microseconds, with no remaining enhancement/mutation work.
+This closes the previous Mac Core startup/notes failures using actual hosted
+execution, rather than a quiet or portable-kernel component inference.
+
+Desktop finished 640 / five failures / 13 skips. All five failures were mocked
+macOS recording-consent fixtures: four Quick Start cases and one menu case.
+They expected a dialog/request result after fixed pumps or pumpAndSettle while
+the current speech-snapshot admission still awaited asynchronous reader work.
+Explicit macOS-capability controls on Linux reproduced all five original
+failures without OS permission calls. The fixture-only repairs use the existing
+bounded five-second pumpUntil on the actual dialog/request-complete state,
+retaining permission-denial, pending, cancel, no-recording, meeting-count,
+status, route and teardown assertions. Each case explicitly selects its mocked
+macOS capabilities and now runs on every host; only those five OS skips were
+removed. Real OS/TCC verification is not inferred from these controls.
+
+Native-peer and tools-disabled Claude reviews converged on the exact files.
+The Quick Start module passed **13/13** and the menu module **2/2**, zero skips.
+The integrated full Desktop suite then passed **648 / 12 skips / zero failures**
+in 146.140 seconds with **93.78% coverage (9,175/9,784)** against the unchanged
+90% floor. Proper package analysis and formatting of all three changed Dart
+fixtures passed. Before/after checks found zero byte/size/mode mismatches across
+thirteen Native and three application artifacts; official Native receipts and
+Worker verification passed at both ends. The twelve remaining skips are named
+in `/var/tmp/of-fin/consent-desktop/HANDOFF.json`; the reporter does not emit
+reasons for them. No new skip, production change or dependency build was used.
+
+The audio repair's actual four-case replay and F16's completed measurements
+retain their preceding unchanged-production provenance. The next pushed-head
+Mac Desktop/application/package paths and complete hosted CI must still pass.
+Existing CI/artifact-trust owner review and verified merge to main remain final
+requirements, not supplied by these agent reviews or local fixture controls.
