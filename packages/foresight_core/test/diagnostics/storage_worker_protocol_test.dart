@@ -9,6 +9,7 @@ import 'package:foresight_core/src/diagnostics/storage.dart';
 import 'package:foresight_core/src/diagnostics/storage_worker_dispatch.dart';
 import 'package:foresight_core/src/diagnostics/storage_worker_protocol.dart';
 import 'package:foresight_core/src/persistence/backup_files.dart';
+import 'package:foresight_test_support/poll.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
 import 'package:path/path.dart' as p;
@@ -740,48 +741,69 @@ void main() {
       return (worker: worker, path: profilePath);
     }
 
-    test('classify defers only while the admission lock is confirmed held', () {
-      final (:worker, :path) = admittedFilesystemWorker();
-      expect(probeAdmissionLock(path), AdmissionLockProbe.free);
-      // Own descriptors are read from /proc on Linux only; elsewhere unknown.
-      final ownBefore = ownAdmissionDescriptors();
-      expect(ownBefore == null, !Platform.isLinux);
-      final logs = BackupDirectory('$path/logs', create: false);
-      final holder = logs.open('admission.lock');
-      expect(
-        ownAdmissionDescriptors(),
-        ownBefore == null ? isNull : ownBefore + 1,
-      );
-      var held = true;
-      addTearDown(() {
-        if (held) holder.close();
-        logs.close();
-      });
-      expect(holder.tryExclusiveLeaseChecked(), isTrue);
-      // A separate open description contends with the kernel, deterministically.
-      expect(probeAdmissionLock(path), AdmissionLockProbe.held);
-      for (var attempt = 0; attempt < 3; attempt++) {
+    test(
+      'classify defers only while the admission lock is confirmed held',
+      () async {
+        final (:worker, :path) = admittedFilesystemWorker();
+        // Own descriptors are read from /proc on Linux only; elsewhere unknown.
+        final ownBefore = ownAdmissionDescriptors(path);
+        expect(ownBefore == null, !Platform.isLinux);
+        final logs = BackupDirectory('$path/logs', create: false);
+        final holder = logs.open('admission.lock');
+        var held = false;
+        addTearDown(() {
+          if (held) holder.close();
+          logs.close();
+        });
         expect(
-          classify(worker).result,
-          DiagnosticWorkerResult.retry,
-          reason: 'attempt $attempt',
+          ownAdmissionDescriptors(path),
+          ownBefore == null ? isNull : ownBefore + 1,
         );
-      }
-      expect(
-        admissionLockEvidence(path),
-        contains('held - kernel EWOULDBLOCK confirmed'),
-      );
-      held = false;
-      holder.close();
-      expect(ownAdmissionDescriptors(), ownBefore);
-      expect(probeAdmissionLock(path), AdmissionLockProbe.free);
-      // The deferral changed no state: the same request now succeeds.
-      expect(classify(worker).result, DiagnosticWorkerResult.ok);
-      expect(
-        worker.handle(6, jsonBytes(record())).result,
-        DiagnosticWorkerResult.ok,
-      );
-    });
+        // Suites share one process, so a fork elsewhere can briefly keep a
+        // closed admission description alive until exec. Acquire the holder
+        // only once that checked contention has cleared.
+        await eventually(
+          holder.tryExclusiveLeaseChecked,
+          label: 'holder acquires admission.lock',
+          describe: () => admissionLockEvidence(path),
+        );
+        held = true;
+        // A separate open description contends with the kernel, deterministically.
+        expect(probeAdmissionLock(path), AdmissionLockProbe.held);
+        for (var attempt = 0; attempt < 3; attempt++) {
+          expect(
+            classify(worker).result,
+            DiagnosticWorkerResult.retry,
+            reason: 'attempt $attempt',
+          );
+        }
+        expect(
+          admissionLockEvidence(path),
+          contains('held - kernel EWOULDBLOCK confirmed'),
+        );
+        held = false;
+        holder.close();
+        expect(ownAdmissionDescriptors(path), ownBefore);
+        // The deferral changed no state. A description inherited by a
+        // concurrent fork may outlive holder.close() until that child execs, so
+        // only a confirmed-held retry is tolerated, within the default bound.
+        await eventually(
+          () {
+            final reply = classify(worker);
+            if (reply.result == DiagnosticWorkerResult.ok) return true;
+            expect(reply.result, DiagnosticWorkerResult.retry);
+            expect(probeAdmissionLock(path), AdmissionLockProbe.held);
+            return false;
+          },
+          label: 'classify succeeds once admission contention clears',
+          describe: () => admissionLockEvidence(path),
+        );
+        expect(
+          worker.handle(6, jsonBytes(record())).result,
+          DiagnosticWorkerResult.ok,
+        );
+      },
+    );
 
     test('evidence probe separates contention, refusal and an absent lock', () {
       final path = admittedFilesystemWorker().path;

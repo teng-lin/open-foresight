@@ -54,17 +54,28 @@ AdmissionLockProbe probeLease(BackupFile lock) {
   }
 }
 
-/// Descriptors this process still has open on a file named `admission.lock`,
-/// from `/proc/self/fd`; null where that is unavailable (macOS). Only this
+/// Descriptors this OS process still has open on [profilePath]'s
+/// `logs/admission.lock`, from `/proc/self/fd`; null where that is unavailable
+/// (macOS). The count covers every isolate of the process, since `dart test`
+/// runs suites as isolates of one process, and it matches this profile's exact
+/// canonical path so other suites' lock files are not counted. Only this
 /// process is inspected. Other processes' descriptors are never read.
-int? ownAdmissionDescriptors() {
+int? ownAdmissionDescriptors(String profilePath) {
   final directory = Directory('/proc/self/fd');
   if (!directory.existsSync()) return null;
+  final String target;
+  try {
+    target = File(
+      '$profilePath/logs/admission.lock',
+    ).resolveSymbolicLinksSync();
+  } on FileSystemException {
+    return 0;
+  }
   var count = 0;
   try {
     for (final entry in directory.listSync(followLinks: false)) {
       try {
-        if (Link(entry.path).targetSync().endsWith('/admission.lock')) count++;
+        if (Link(entry.path).targetSync() == target) count++;
       } on FileSystemException {
         // The listing's own descriptor can close before it is read.
       }
@@ -78,7 +89,7 @@ int? ownAdmissionDescriptors() {
 /// One-line failure evidence for an unexpected admission `retry`.
 String admissionLockEvidence(String profilePath) {
   final probe = probeAdmissionLock(profilePath);
-  final own = ownAdmissionDescriptors();
+  final own = ownAdmissionDescriptors(profilePath);
   final meaning = switch (probe) {
     AdmissionLockProbe.free => 'acquired by the probe; no holder at probe time',
     AdmissionLockProbe.held =>
@@ -87,5 +98,5 @@ String admissionLockEvidence(String profilePath) {
     AdmissionLockProbe.unopenable => 'lock file could not be opened',
   };
   return 'admission.lock post-failure probe: ${probe.name} - $meaning; '
-      'own open descriptors on it: ${own ?? 'unavailable on this platform'}';
+      'open descriptors in this process on it: ${own ?? 'unavailable on this platform'}';
 }
