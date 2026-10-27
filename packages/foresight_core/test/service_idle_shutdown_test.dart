@@ -1,3 +1,4 @@
+import 'fixtures/owned_rpc_server.dart';
 import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'package:foresight_core/src/helper_protocol_version.dart';
@@ -246,14 +247,7 @@ void main() {
           ),
         ],
       );
-      await server.serve(
-        address: InternetAddress(
-          '${profile.runtime}/helper.sock',
-          type: InternetAddressType.unix,
-        ),
-        port: 0,
-      );
-      addTearDown(server.shutdown);
+      await OwnedRpcServer.start(server, '${profile.runtime}/helper.sock');
       addTearDown(() {
         if (!rag.release.isCompleted) rag.release.complete();
       });
