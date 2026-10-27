@@ -1858,3 +1858,82 @@ retain their preceding unchanged-production provenance. The next pushed-head
 Mac Desktop/application/package paths and complete hosted CI must still pass.
 Existing CI/artifact-trust owner review and verified merge to main remain final
 requirements, not supplied by these agent reviews or local fixture controls.
+
+### 2026-10-26: independent CI checks and complete parallel Python qualification
+
+The subsequent `ddd321e3` hosted run passed Linux Native, Core, Desktop,
+compiled service (38/38), restored-byte Ubuntu consumers, both sanitizer suites,
+CPU acceptance (6/6), audio acceptance (4/4) and DMG fixtures (4/4). Mac passed
+Native 61/61, Core 2,887/14 skips and Desktop 645/13 skips. Its compiled service
+stage finished 30 passed, six failed and two skipped; the six failures shared
+missing synthetic capture. Quality failed its stale skip inventory for five
+consent cases.
+The repaired inventory passed its guard and the frozen full Python suite.
+
+Canonical synthetic-capture probes produced audio, whereas the same storage
+through a symlink alias produced zero samples. The public service harness now
+uses owned canonical storage with separate runtime-temp and pytest-basetemp
+children. A real-pytest failed-first regression also proved that sharing those
+directories could delete earlier session files; the repaired seven-case module
+passes. This is controlled synthetic evidence. The repaired hosted Mac suite
+and physical capture are not inferred from it.
+
+Mac now runs contracts, Native, Core, Desktop and compiled service in five
+independent runners with matrix fail-fast disabled. Package checks attempt
+independent verification after a successful assembly; canonical producer
+identity and publication qualification remain. Evidence keeps source/request
+and attempt identity and the existing retry behavior. Linux service consumes
+qualified Native input and compiles its own current Worker and hosts, so Core
+or Desktop test failures no longer suppress its checks. Restored-byte tests
+collect independent failures while keeping Core's exclusive CPU phase and
+fatal source/receipt/no-build prerequisites. The legacy local all-stage runner
+conservatively blocks Core checks after any Core build-prerequisite failure;
+the hosted per-stage and restored test-only paths collect independent checks.
+
+Shared local validation runs inventory, documentation, Ruff, mypy, timeout and
+workflow guards together, requiring actionlint 1.7.7 and ShellCheck 0.9.0.
+Python coverage uses whole-file workers bounded to four locally and two in CI,
+without automatic crash restarts. Existing report formats, Python subprocess
+coverage and the 95% combined line/branch floor remain unchanged. Hash-pinned
+pytest-xdist 3.8.0 and execnet 2.1.2 supply this scheduling; no compiler or SDK
+version changes were introduced.
+
+The first complete parallel run caught 66 failures before push: 54 older build
+harness contracts, six workflow contracts and six non-serializable subtest
+labels. Compiler stubs now create their declared staged products; old-event
+and LCOV assertions verify archived prior bytes and fresh current reports.
+Independent-failure tests retain specific diagnostics, coverage, full-suite,
+warmup, skip-comparison and Worker-refusal assertions. Existing benchmark
+counter validation moved before Worker/host work, preserving its refusal before
+compilation. Six guarded public subtest-label edits preserve the original
+inputs, loops and assertions. No protected fixture body was copied or changed.
+
+The corrected complete run on frozen **501a2644** passed **6,430 tests / 32
+skips / zero failures**, with **95.15%** combined coverage (26,304/27,644) in
+474.79 seconds. It used Python 3.13.17, pinned CMake 3.31.6, Ninja 1.12.1 and
+protoc 35.1, two workers and two-CPU affinity. HEAD before/after matched and
+tracked source stayed clean. Physical JUnit cases equal all 6,462 collected
+tests; its separate suite counter also includes 1,441 passed subtest reports.
+The 32 skips comprise 19 Mac-only cases, three unavailable Linux packaging
+tools, six loader fixtures covered through Native CTest, two opt-in authenticated
+detector cases, one Clang-driver case on GNU and one opt-in Docker fixture.
+They are not newly executed platform or real-model acceptance.
+
+All six shared guards passed. The repaired build-harness modules passed 154
+cases; workflow modules passed 196 plus two subtests; the six serialization
+cases passed with 25 subtests. Native-agent peers and tools-disabled Claude
+converged. Complete Git-free source verification passed 101 cases in each of
+unrelated-PR, main and unset-ref contexts (303 total, zero skips), with actual
+Git absence/refusal and unchanged public overlay bytes. Failed attempts remain
+retained, including a focused command's unconfigured CMake shim; only its 16
+failed cases were rerun with the pinned executable and passed. An optional Ruff
+format check found pre-existing formatting outside the changed public labels;
+those unrelated bodies were left untouched. Python formatting is not a current
+Quality workflow gate.
+
+Raw final Python evidence is under `/var/tmp/of-python-parallel/final2/`, the
+initial failed run under `final/`, and Git-free evidence under
+`/var/tmp/of-fin/ci-gf-counter-501a/`. No Native, SDK, model, F3 or F16 campaign
+was repeated for these orchestration changes. New-head hosted CI, actual owner
+review of retained producer/artifact-trust controls, and verified merge to main
+remain required. This qualification does not authorize release publication.
