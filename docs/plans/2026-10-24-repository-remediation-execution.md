@@ -2112,3 +2112,77 @@ Evidence: `/var/tmp/of-fin/core-final/`,
 `/var/tmp/of-core-final-review/`. Independent native-agent review converged.
 Final-head hosted Linux/Mac Core, all required CI and actual owner review remain
 required before merge.
+
+
+### e696 hosted failure inventory and bounded observation batch (2026-10-27)
+
+All five `e6964e07` hosted workflows are terminal. Quality passed **6,434 / 31
+skips / 95.10%**; ASan/LSan/UBSan and TSan each executed **52/52**. All seven
+SDK originals were verified and reused, with build steps skipped. Linux host
+contracts passed **852 / five skips / one deselection**; its Native lane reused
+verified previous Native test results, not a new CTest execution. Dedicated Core
+passed **2,888 / 17 skips**, all four previously affected cases included; the
+additional skip is the explicit older-owner PID namespace case refused by
+`unshare` with EPERM. Desktop passed **648 / 12 skips / 93.76%**, fast **2/2**,
+compiled service **38/38**, and RPM/DEB/Arch plus independent DEB acceptance passed.
+
+Mac Native **61/61**, contracts **691 / 15 skips / one deselection**, Desktop
+**645 / 13 skips**, service **36 / two Linux-layout skips**, and DMG **4/4**
+passed. Current overflow and two-profile privacy cases passed again. Canonical
+assembly, bundled inference, installed tooling **3/3** and relocated MCP smoke
+passed; publication remained blocked by the strict upstream-Core aggregate.
+
+Mac Core still failed exactly the notes timer case: **2,886 passed / one failed /
+14 skipped**. Its body reached phase 9 in **64,902 microseconds**, then hit the
+unchanged 30-second timeout without the final diagnostic. Thus the prior
+owned-transport cleanup is not a demonstrated hosted fix. Primary `test_api`
+semantics wait for explicitly registered outstanding body callbacks before
+starting teardown; arbitrary Futures/Timers are not automatically counted. Body
+completion alone does not prove any particular teardown await was entered.
+A dependency-only HanSolo control using grpc 4.3.1/http2 2.3.1 did not reproduce
+the hang. HanSolo macOS 26.6 differs from hosted macOS 15; it loaded no private
+application graph and does not qualify the current application fixture.
+
+Arch independently passed host **852 / five skips / one deselection**, Native
+**52/52** and Desktop **648 / 12 skips / 93.76%**. Core failed only the client
+retry-diagnostics case: **2,887 passed / one failed / 17 skipped**, so Core
+coverage there remains unqualified. The actual call retried successfully, but
+only attempt 1's refused record survived; attempt 2's completed record was
+absent. Production settling occurs before stream closure, and the test already
+awaits connection close, logger flush and sink closure. Observer lag is not
+established as the cause; no credit/correlation-loss cause is proved either.
+
+Restored Ubuntu, CPU and virtual-audio jobs stopped during OS-package setup,
+before any selected tests ran. The pinned `20261001T000000Z` Ubuntu snapshot
+returned HTTP 500/502/503 through all three existing attempts. A separate local
+public InRelease probe still returned 503 at 06:43 UTC. No pin, dependency,
+assertion, retry count or gate was relaxed. Acceptance, Mac and platform
+aggregates failed on these recorded prerequisites; they are not extra test
+failures or passing acceptance evidence.
+
+The next batch adds only closed observation: notes teardown phases/connection
+count (`92985ef1`, agent `66f89582`) and pre-flush producer/correlation counts
+plus bounded withdrawn counts in the existing Arch assertion reason
+(`c61a1ded`, agent `ace0713b`). All original awaits, assertions, deadlines,
+privacy checks and policies remain. The exact Linux notes case passed; its
+module passed **50 / one Mac-only skip**. The client exact baseline passed and
+the patched module passed **13/13**.
+Neither historical failure is claimed reproduced or fixed. Independent native
+peers and tools-disabled Claude converged on the exact frozen public patches.
+
+Complete pre-push Core90 on frozen **c61a1ded** passed **2,889 / 16
+skips / zero failures / 91.01%** (24,577/27,006) in
+623.84 seconds at concurrency two, including both
+current failing hosted cases. Skip names and metadata reasons match the prior
+sixteen. Analysis/format and Native/Worker pre/post-verification passed; all
+sixteen original product bytes, modes and sizes remained unchanged, and all
+four public test overlays matched their frozen source. Production code and the
+retained CI/trust controls are unchanged. This is unchanged-product test
+qualification, not a fresh product build or current hosted Mac acceptance.
+
+Raw evidence: `/var/tmp/of-ci-e696-linux/`, `/var/tmp/of-ci-e696-mac/`,
+`/var/tmp/of-ci-e696-quality-san/`, `/var/tmp/of-fin/core-e696/`,
+`/var/tmp/of-fin/core-c61/`, `/var/tmp/of-fin/client-retry-witness/`,
+`/var/tmp/of-fin/notes-teardown-witness/` and
+`/var/tmp/of-observation-batch-review/`. Actual Mac/Arch causes and required
+acceptance gates, owner review and verified merge to main remain open.
