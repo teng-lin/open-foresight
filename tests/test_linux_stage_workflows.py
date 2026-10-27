@@ -27,13 +27,9 @@ def test_linux_native_core_desktop_and_service_are_independent_jobs():
     jobs = workflow("linux-platform-stages.yml")["jobs"]
     assert set(jobs) == {stage + "-linux" for stage in STAGES}
     assert "needs" not in jobs["native-linux"]
-    for stage in ("core", "desktop"):
+    for stage in ("core", "desktop", "service"):
         assert jobs[stage + "-linux"]["needs"] == ["native-linux"]
-    assert jobs["service-linux"]["needs"] == [
-        "native-linux",
-        "core-linux",
-        "desktop-linux",
-    ]
+    assert "if" not in jobs["service-linux"], "A failed Native producer remains fatal"
     for stage in STAGES:
         job = jobs[stage + "-linux"]
         assert job["name"] == stage + "-linux"
@@ -294,8 +290,6 @@ def test_complete_stage_inputs_and_parent_identities_invalidate_expected_stages(
         result = {}
         for stage in STAGES:
             parents = {} if stage == "native" else {"native": result["native"]}
-            if stage == "service":
-                parents.update(core=result["core"], desktop=result["desktop"])
             result[stage] = fingerprint(
                 "linux", stage, tmp_path, environment=environment, parents=parents
             )
@@ -384,18 +378,19 @@ def test_language_jobs_download_only_slim_native_runtime_and_service_omits_unuse
         command = next(step["run"] for step in steps if step.get("id") == "stage")
         assert "--input native=build/ci-input/native" in command
         if stage == "service":
-            assert "--input core=build/ci-input/core" in command
+            assert "--input core=" not in command
             assert "--input desktop=" not in command
             assert not any(
-                step.get("with", {}).get("path") == "build/ci-input/desktop"
+                step.get("with", {}).get("path")
+                in {"build/ci-input/core", "build/ci-input/desktop"}
                 for step in steps
             )
-            assert f"desktop-{platform}" in jobs[f"service-{platform}"]["needs"]
-            assert "desktop" in json.loads(
+            assert jobs[f"service-{platform}"]["needs"] == [f"native-{platform}"]
+            assert json.loads(
                 next(step for step in steps if step.get("id") == "stage")["env"][
                     "STAGE_PARENTS"
                 ]
-            )
+            ) == {"native": "${{ needs.native-" + platform + ".outputs.identity }}"}
 
 
 @pytest.mark.parametrize(
@@ -500,7 +495,12 @@ def test_actual_acceptance_selection_uses_main_push_range_and_fails_safe(
     repository.mkdir()
     tools = repository / "tools"
     tools.mkdir()
-    shutil.copytree(ROOT / "tools", tools, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copytree(
+        ROOT / "tools",
+        tools,
+        dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
     fixture_bin = tmp_path / "bin"
     fixture_bin.mkdir()
     fixture_gh = fixture_bin / "gh"
@@ -508,7 +508,10 @@ def test_actual_acceptance_selection_uses_main_push_range_and_fails_safe(
     fixture_gh.chmod(0o755)
     workflow_dir = repository / ".github/workflows"
     workflow_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(ROOT / ".github/workflows/native-sanitizers.yml", workflow_dir / "native-sanitizers.yml")
+    shutil.copy2(
+        ROOT / ".github/workflows/native-sanitizers.yml",
+        workflow_dir / "native-sanitizers.yml",
+    )
 
     def git(*arguments):
         return subprocess.check_output(
@@ -552,7 +555,9 @@ def test_actual_acceptance_selection_uses_main_push_range_and_fails_safe(
             **os.environ,
             "PATH": str(fixture_bin) + os.pathsep + os.environ["PATH"],
             "GITHUB_REPOSITORY": "example/reviewed",
-            "GITHUB_REF": "refs/heads/main" if event != "pull_request" else "refs/pull/123/merge",
+            "GITHUB_REF": "refs/heads/main"
+            if event != "pull_request"
+            else "refs/pull/123/merge",
             "GITHUB_EVENT_NAME": event,
             "GH_TOKEN": "fixture-read-only",
             "PR_NUMBER": "",
