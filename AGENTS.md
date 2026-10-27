@@ -27,6 +27,8 @@ Use [CONTRIBUTING.md](CONTRIBUTING.md) for setup, conventions and required check
 - Keep unset PIDs out of wait/signal calls. Publish fixture readiness only after
   its payload is complete, and observe process exit and resource release as
   separate fences within one deadline.
+- Join control readers before closing or reusing their descriptors. Keep the
+  receipt write channel alive until completion is published.
 - Positive owner restarts must use bounded production admission; keep immediate
   refusal tests synchronous. Retry only checked kernel contention, never an
   arbitrary error or a stale lock-file observation.
@@ -39,6 +41,8 @@ Use [CONTRIBUTING.md](CONTRIBUTING.md) for setup, conventions and required check
   fails the controlled regression.
 - Capture the first failing shutdown stage before a terminal ownership warning
   obscures it. Use bounded stage/error-type diagnostics, never private payloads.
+- Check native audio timestamps against the actual database span, including
+  resume. A synced WAV can still violate publication bounds.
 - Before another push, fetch the PR head, reviews and CI output; batch fixes
   against current code. Rerun failed jobs first.
 - Distinguish implemented, locally verified and CI-passed. Report source

@@ -576,7 +576,7 @@ struct Capture : Worker {
   std::atomic<double> recording_volume{0}, recording_peak{0};
   std::atomic<int64_t> recording_last_voice_us{-1},
       recording_acquired_through_us{-1};
-  int64_t recording_previous_start_us = -1;
+  int64_t recording_admission_us = -1, recording_previous_start_us = -1;
   uint64_t recording_previous_frames = 0;
   bool recording_pending_gap = false;
   void fail_recording(const std::string &message,
@@ -618,6 +618,10 @@ struct Capture : Worker {
         recording_changed.notify_all();
         return false;
       }
+      // The route belongs to a span created before native admission. Raw
+      // transports have no acquisition stamp and cannot estimate audio before
+      // this route, including a resumed span within an older session.
+      recording_admission_us = foresight::recording_monotonic_us();
       foresight::RecordingWriter::Options options;
       options.on_error = [this] {
         std::shared_ptr<foresight::RecordingWriter> failed_writer;
@@ -713,10 +717,10 @@ void audio_frame(Capture &c, const std::vector<unsigned char> &bytes,
 #endif
       // A raw read supplies no acquisition stamp. A first buffer may arrive
       // faster than its nominal duration; its drain estimate cannot place
-      // accepted samples before this session. Supplied clock metadata keeps
+      // accepted samples before this route. Supplied clock metadata keeps
       // its original value and remains subject to the writer's validation.
       acquisition_us = std::max(
-          c.recording->origin_us,
+          std::max(c.recording->origin_us, c.recording_admission_us),
           drained_us - static_cast<int64_t>(pcm.size() * 1000000 / 48000));
     }
     const auto normalized_volume = std::clamp(volume, 0.0, 1.0);

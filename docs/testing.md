@@ -110,6 +110,12 @@ with the rebuilt library. Legacy raw capture does not qualify durable capture's
 graph-clock backend. Keep application tooling dependencies, runtime package
 dependencies and configuration-only fixtures explicit and independently checked.
 
+Check timestamp bounds across the native writer and the actual database span,
+including resumed spans. A fast first raw buffer can have a drain estimate before
+the span even when it is within the meeting's clock origin. Sync and WAV-header
+validation do not establish that publication accepts that interval. Preserve the
+distinction between fallback estimates and device acquisition timestamps.
+
 Record source revisions separately for production code, changed fixtures and
 the final tested candidate. Reusing unchanged native/codec products requires
 checking their relevant source inputs and hashes; it is not a fresh build.

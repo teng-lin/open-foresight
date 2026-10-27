@@ -1,3 +1,12 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:ffi';
+import 'dart:io';
+import 'package:foresight_core/src/persistence/audio_store.dart';
+import 'package:foresight_core/src/persistence/recording_media.dart';
+import 'package:foresight_core/src/store.dart';
+import 'package:foresight_test_support/test_paths.dart';
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_core/src/audio_models.dart';
 import 'package:foresight_core/src/recording_capture.dart';
 import 'package:test/test.dart';
@@ -51,6 +60,143 @@ Map<String, dynamic> snapshotJson() => {
 };
 
 void main() {
+  final selectedNative = Platform.environment['FORESIGHT_NATIVE_LIBRARY'];
+  final requiresNative = selectedNative == null
+      ? 'Set the freshly built native library and SQL support to validate capture publication'
+      : false;
+  test(
+    'first and resumed raw capture publish within their actual SQL spans',
+    () async {
+      bootstrapSqlSupportFixture();
+      final root = createTestTempDirectorySync('native-span-publication-');
+      final store = Store('${root.path}/app.db');
+      final media = RecordingMedia.open(
+        store,
+        ownerGeneration: AudioStore.newIdentity(),
+      );
+      addTearDown(() {
+        media.close();
+        store.close();
+      });
+      final clock = DynamicLibrary.open(selectedNative!)
+          .lookupFunction<Int64 Function(), int Function()>(
+            'fs_recording_monotonic_us',
+          );
+      final fixture = File(
+        '${File(selectedNative).absolute.parent.path}/native_recording_capture_test',
+      ).absolute;
+      expect(
+        fixture.existsSync(),
+        isTrue,
+        reason: 'Build the root CMake native_recording_capture_test target',
+      );
+      final origin = clock();
+      final session = media.audio.createSession(
+        meetingId: store.meeting('Synthetic raw capture publication'),
+        startedWallMs: DateTime.now().millisecondsSinceEpoch,
+      );
+      var playbackStart = 0, sourceSample = 0, previousEnd = 0;
+      for (var attempt = 0; attempt < 2; attempt++) {
+        // A real pause crosses the previous retained sample end before resume;
+        // do not invent a future span to manufacture an admission bound.
+        final waiting = Stopwatch()..start();
+        while (clock() - origin <= previousEnd) {
+          expect(waiting.elapsed, lessThan(const Duration(seconds: 2)));
+          await Future<void>.delayed(const Duration(milliseconds: 1));
+        }
+        final span = media.audio.startSpan(
+          session.id,
+          captureStartUs: clock() - origin,
+          playbackStartUs: playbackStart,
+          wallAnchorMs: DateTime.now().millisecondsSinceEpoch,
+        );
+        final authority = media
+            .preallocate(
+              span: span,
+              source: AudioSource.microphone,
+              firstSequence: attempt,
+              count: 1,
+            )
+            .single;
+        final request = {
+          'directory': media.sessionDirectory(session.id),
+          'session_id': session.id,
+          'generation': session.storageGeneration,
+          'span': span.ordinal,
+          'origin_us': origin,
+          'source_sample': sourceSample,
+          'chunk_ids': [
+            {'id': authority.id, 'sequence': authority.sequence},
+          ],
+          // Forty milliseconds of samples arrive only one millisecond after
+          // span admission. The old session-origin clamp places them before
+          // both the first and the resumed span.
+          'drained_override_us': origin + span.captureStartUs + 1000,
+        };
+        final child = await Process.start(fixture.path, ['--publish-estimate']);
+        final output = child.stdout.transform(utf8.decoder).join();
+        final errors = child.stderr.transform(utf8.decoder).join();
+        final exited = child.exitCode;
+        output.ignore();
+        errors.ignore();
+        exited.ignore();
+        var exitObserved = false;
+        late final Map<String, dynamic> result;
+        try {
+          child.stdin.writeln(jsonEncode(request));
+          await child.stdin.close();
+          final code = await exited.timeout(const Duration(seconds: 10));
+          exitObserved = true;
+          expect(code, 0, reason: await errors);
+          result = (jsonDecode(await output) as Map).cast<String, dynamic>();
+        } finally {
+          if (!exitObserved) {
+            child.kill(ProcessSignal.sigkill);
+            await exited.timeout(const Duration(seconds: 10));
+          }
+        }
+        final notice = RecordingChunkNotice.fromJson(
+          (result['notice'] as Map).cast<String, dynamic>(),
+        );
+        print(
+          'Synthetic raw span=${span.captureStartUs} '
+          'nativeStart=${notice.captureStartUs} samples=${notice.frames}',
+        );
+        final chunk = await media.publish(notice);
+        expect(
+          notice.captureStartUs,
+          greaterThanOrEqualTo(span.captureStartUs),
+        );
+        expect(notice.frames, 1920);
+        expect(notice.sourceSample, sourceSample);
+        expect(result['clock_quality'], 'pipe_drain_estimate');
+        expect(result['acquired_through_us'], -1);
+        // This validates the actual canonical WAV and authority before the
+        // unchanged SQL span-bound guard admits the native publication.
+        expect(chunk.sampleCount, 1920);
+        expect(chunk.captureStartUs, notice.captureStartUs);
+        expect(chunk.spanId, span.id);
+        media.audio.closeSpan(
+          span.id,
+          captureEndUs: notice.captureEndUs,
+          reason: 'paused',
+        );
+        media.audio.setCaptureState(session.id, AudioCaptureState.paused);
+        previousEnd = notice.captureEndUs;
+        playbackStart = media.audio.span(span.id)!.playbackEndUs!;
+        sourceSample += notice.frames;
+      }
+      expect(media.audio.spans(session.id), hasLength(2));
+      expect(
+        store
+            .rows('SELECT COUNT(*) AS count FROM audio_chunks')
+            .single['count'],
+        2,
+      );
+    },
+    skip: requiresNative,
+  );
+
   test('publication keeps source samples and acquisition clock separate', () {
     final snapshot = RecordingCaptureSnapshot.fromJson(snapshotJson());
     expect(snapshot.captureActive, isTrue);

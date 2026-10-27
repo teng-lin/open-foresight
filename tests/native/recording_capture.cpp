@@ -65,13 +65,19 @@ void retire(uint64_t owner) {
   await(fs_capture_retire(owner));
   require(fs_owner_release(owner) == 0, "owner acknowledgement failed");
 }
-void estimatedFirstBlock(const std::string &directory) {
+void estimatedFirstBlock(const std::string &directory, int64_t origin,
+                         uint64_t span, uint64_t source_sample) {
   auto config = options(directory, 1);
+  config["origin_us"] = origin;
+  config["span"] = span;
+  config["source_sample"] = source_sample;
   Capture estimated;
   estimated.recording =
       foresight::recording_options(config.dump().c_str(), false);
+  estimated.recording_source_sample = source_sample;
+  const auto before_admission = foresight::recording_monotonic_us();
   require(estimated.prepare_recording(), "estimate fixture did not prepare");
-  const auto origin = config.at("origin_us").get<int64_t>();
+  const auto after_admission = foresight::recording_monotonic_us();
   std::vector<unsigned char> pcm(1920 * 2, 0);
   for (size_t i = 0; i < 1920; ++i) {
     pcm[i * 2] = 0x9b;
@@ -80,15 +86,19 @@ void estimatedFirstBlock(const std::string &directory) {
   // Exactly one millisecond of drain time for a forty-millisecond block,
   // regardless of filesystem scheduling. The real audio_frame/writer boundary
   // must retain this PCM without presenting an estimate as acquisition proof.
-  recording_drain_clock_us = origin + 1000;
+  recording_drain_clock_us = before_admission + 1000;
   audio_frame(estimated, pcm);
   recording_drain_clock_us = -1;
   estimated.finish_recording();
   const auto chunks = estimated.recording_writer->drainPublished();
   require(!estimated.cancel && estimated.recording_error.empty() &&
-              estimated.recording_source_sample.load() == 1920 &&
-              chunks.size() == 1 && chunks[0].source_sample == 0 &&
-              chunks[0].capture_start_us == 0 && chunks[0].frames == 1920,
+              estimated.recording_source_sample.load() ==
+                  source_sample + 1920 &&
+              chunks.size() == 1 && chunks[0].source_sample == source_sample &&
+              chunks[0].span == span &&
+              chunks[0].capture_start_us >= before_admission - origin &&
+              chunks[0].capture_start_us <= after_admission - origin &&
+              chunks[0].frames == 1920,
           "early drain estimate rejected or shifted acquired PCM");
   require(estimated.recording_clock_quality == "pipe_drain_estimate" &&
               estimated.recording_acquired_through_us.load() == -1,
@@ -109,11 +119,12 @@ void estimatedFirstBlock(const std::string &directory) {
     Capture supplied;
     supplied.recording =
         foresight::recording_options(explicit_config.dump().c_str(), false);
+    supplied.recording_source_sample = source_sample;
     require(supplied.prepare_recording(), "supplied clock fixture not ready");
     audio_frame(supplied, pcm, origin - 18878, true, quality);
     supplied.finish_recording();
     require(supplied.cancel && !supplied.recording_error.empty() &&
-                supplied.recording_source_sample.load() == 0 &&
+                supplied.recording_source_sample.load() == source_sample &&
                 supplied.recording_acquired_through_us.load() == -1 &&
                 supplied.recording_writer->drainPublished().empty(),
             "supplied pre-origin clock was clamped into valid audio");
@@ -411,6 +422,41 @@ int main(int argc, char **argv) {
   auto supervised = foresight::supervise_worker(argc, argv);
   if (supervised >= 0)
     return supervised;
+  if (argc == 2 && std::string(argv[1]) == "--publish-estimate") {
+    try {
+      // Test-only bounded operation: a real SQL authority supplies the private
+      // reservation; this executable never ships with the application.
+      std::array<char, 32769> input{};
+      std::cin.getline(input.data(), input.size());
+      require(bool(std::cin), "bounded publication probe request required");
+      auto request = Json::parse(input.data());
+      const auto drained = request.at("drained_override_us").get<int64_t>();
+      request.erase("drained_override_us");
+      Capture capture;
+      capture.recording =
+          foresight::recording_options(request.dump().c_str(), false);
+      capture.recording_source_sample = capture.recording->source_sample;
+      require(capture.prepare_recording(),
+              "publication probe preparation failed");
+      recording_drain_clock_us = drained;
+      audio_frame(capture, std::vector<unsigned char>(3840, 0));
+      recording_drain_clock_us = -1;
+      capture.finish_recording();
+      const auto chunks = capture.recording_writer->drainPublished();
+      require(!capture.cancel && chunks.size() == 1,
+              "publication probe capture failed");
+      std::cout << Json{{"notice", foresight::recording_chunk_json(chunks[0])},
+                        {"clock_quality", capture.recording_clock_quality},
+                        {"acquired_through_us",
+                         capture.recording_acquired_through_us.load()}}
+                       .dump()
+                << '\n';
+      return 0;
+    } catch (const std::exception &error) {
+      std::cerr << error.what() << '\n';
+      return 1;
+    }
+  }
   if (argc > 1 && std::string(argv[1]) == "--format") {
     for (int i = 1; i + 1 < argc; ++i)
       if (std::string(argv[i]) == "--target") {
@@ -437,10 +483,13 @@ int main(int argc, char **argv) {
   try {
     setenv("FORESIGHT_CAPTURE_RUNTIME", argv[0], 1);
     setenv("FORESIGHT_HELPER", argv[0], 1);
-    for (auto name : {"estimate", "capture", "cancel", "failure", "clock"})
+    for (auto name :
+         {"estimate", "resume", "capture", "cancel", "failure", "clock"})
       require(!mkdir((fixture.root + "/" + name).c_str(), 0700),
               "cannot create session fixture");
-    estimatedFirstBlock(fixture.root + "/estimate");
+    const auto session_origin = foresight::recording_monotonic_us() - 1000000;
+    estimatedFirstBlock(fixture.root + "/estimate", session_origin, 1, 0);
+    estimatedFirstBlock(fixture.root + "/resume", session_origin, 2, 1920);
     captureAndBackpressure(fixture.root + "/capture");
     recoverWithoutDevices(fixture.root + "/capture");
     cancelQueuedRecoveryJoin(fixture.root + "/capture");
@@ -448,7 +497,7 @@ int main(int argc, char **argv) {
     cancelPreparation(fixture.root + "/cancel");
     failureAndSchema(fixture.root + "/failure");
     std::filesystem::remove_all(fixture.root);
-    std::cout << "7 durable capture ABI scenarios passed;0 skipped\n";
+    std::cout << "8 durable capture ABI scenarios passed;0 skipped\n";
     return 0;
   } catch (const std::exception &e) {
     recording_prepare_hold = false;

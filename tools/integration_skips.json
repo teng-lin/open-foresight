@@ -380,6 +380,14 @@
       ],
       "gate": "core-native",
       "reason": "Fresh native and SQL products exercise actual direct service startup and restart in child VMs: quarantined mappings refuse before media admission, and an unselected resident mapping preserves SQL-only behavior; no physical capture, output device or model assets."
+    },
+    {
+      "path": "packages/foresight_core/test/recording_capture_test.dart",
+      "conditions": [
+        "requiresNative"
+      ],
+      "gate": "core-native",
+      "reason": "Explicit fresh native/SQL inputs plus the sibling native_recording_capture_test fixture exercise actual first/resumed raw WAV publication against strict SQL span bounds."
     }
   ]
 }
