@@ -37,7 +37,14 @@ the separate build and test containers. System and home-directory prefixes are
 rejected; the existing SDK Python environments are not replaced.
 `tools/coverage.sh` and `tools/coverage_core.sh` collect Python and core coverage.
 Python enforces 95% combined line/branch coverage, including Python subprocesses
-and the native model setup tool. Linux core and desktop gates enforce 90% line
+and the native model setup tool. The Python gate distributes whole test files
+across at most four available CPUs locally and two in CI, combines worker and
+subprocess coverage, and fails worker crashes without restarting them.
+`FORESIGHT_PYTEST_WORKERS` can select a smaller positive worker count; ordinary
+pytest arguments such as `--basetemp` still pass through `tools/coverage.sh`. See the
+[whole-file scheduler](https://pytest-xdist.readthedocs.io/en/stable/distribution.html)
+and [combined worker coverage](https://pytest-cov.readthedocs.io/en/stable/xdist.html)
+contracts. Linux core and desktop gates enforce 90% line
 coverage; macOS coverage is report-only and is not collected on ordinary PR runs.
 Keep compiler, package-manager, signing, and model-runtime boundaries offline in
 Python unit tests, and retain real byte-level archive, receipt, checksum, and

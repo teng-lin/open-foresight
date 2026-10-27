@@ -57,7 +57,7 @@ jobs:
       - name: Offline Python unit tests
         env:
           FORESIGHT_EVIDENCE_CACHE: ${{ runner.temp }}/evidence-fixtures
-        run: python -m pytest --cov --cov-config=.coveragerc --cov-report=term --cov-report=xml --durations=20 --junitxml=coverage/python/junit.xml
+        run: python tools/pytest_parallel.py --cov --cov-config=.coveragerc --cov-report=term --cov-report=xml --durations=20 --junitxml=coverage/python/junit.xml
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
