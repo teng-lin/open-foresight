@@ -2,6 +2,7 @@
 """Packaged macOS CPU/model acceptance; weights stay outside the shipped app."""
 
 import argparse
+import base64
 import json
 import os
 from pathlib import Path
@@ -57,30 +58,53 @@ def main():
         or "/var/tmp"
     ).resolve(strict=True)
     with tempfile.TemporaryDirectory(prefix="of-speech-", dir=parent) as home:
-        result = subprocess.run(
-            [
-                str(paths["FORESIGHT_WHISPER_RUNTIME"]),
-                "-m",
-                str(models["speech"]),
-                "-f",
-                str(ROOT / "tests/fixtures/audio/jfk.wav"),
-                "--no-gpu",
-                "--no-prints",
-                "--no-timestamps",
-                "-t",
-                "3",
-            ],
-            env={
-                "PATH": "/usr/bin:/bin",
-                "HOME": home,
-                "TMPDIR": home,
-                "FORESIGHT_TEST_TEMP_ROOT": home,
-            },
-            cwd="/",
-            capture_output=True,
-            text=True,
-            timeout=180,
-        )
+        try:
+            result = subprocess.run(
+                [
+                    str(paths["FORESIGHT_WHISPER_RUNTIME"]),
+                    "-m",
+                    str(models["speech"]),
+                    "-f",
+                    str(ROOT / "tests/fixtures/audio/jfk.wav"),
+                    "--no-gpu",
+                    "--no-prints",
+                    "--no-timestamps",
+                    "-t",
+                    "3",
+                ],
+                env={
+                    "PATH": "/usr/bin:/bin",
+                    "HOME": home,
+                    "TMPDIR": home,
+                    "FORESIGHT_TEST_TEMP_ROOT": home,
+                },
+                cwd="/",
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+        except subprocess.TimeoutExpired as error:
+            report = {
+                "exit_code": None,
+                "timeout_seconds": error.timeout,
+                "command": error.cmd,
+            }
+            for name in ("stdout", "stderr"):
+                captured = getattr(error, name)
+                report[name] = (
+                    captured.decode("utf-8", errors="replace")
+                    if isinstance(captured, bytes)
+                    else captured
+                )
+                report[name + "_base64"] = (
+                    base64.b64encode(captured).decode("ascii")
+                    if isinstance(captured, bytes)
+                    else None
+                )
+            (args.output / "speech.json").write_text(
+                json.dumps(report, indent=2) + "\n"
+            )
+            raise
         report = {
             "exit_code": result.returncode,
             "stdout": result.stdout,

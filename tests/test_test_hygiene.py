@@ -223,7 +223,10 @@ def _selected_model_parent(tmp_path, monkeypatch, selected):
 
 
 @pytest.mark.parametrize("selected", ["default", "TMPDIR", "FORESIGHT_TEST_TEMP_ROOT"])
-@pytest.mark.parametrize("speech", ["success", "exit", "text"])
+@pytest.mark.parametrize(
+    "speech",
+    ["success", "exit", "text", "timeout-bytes", "timeout-text", "timeout-empty"],
+)
 def test_release_model_probe_owns_private_speech_scratch_and_failure_report(
     tmp_path, monkeypatch, selected, speech
 ):
@@ -243,7 +246,7 @@ def test_release_model_probe_owns_private_speech_scratch_and_failure_report(
         destination.write_bytes(b"controlled fixture")
 
     monkeypatch.setattr(module, "download", download)
-    commands, scratch = [], []
+    commands, scratch, timeouts = [], [], []
 
     def run(command, **kwargs):
         commands.append(command)
@@ -260,6 +263,17 @@ def test_release_model_probe_owns_private_speech_scratch_and_failure_report(
         assert env["TMPDIR"] == env["FORESIGHT_TEST_TEMP_ROOT"] == str(directory)
         assert "--no-gpu" in command and kwargs["timeout"] == 180
         assert kwargs["cwd"] == "/"
+        if speech.startswith("timeout-"):
+            captured = {
+                "timeout-bytes": (b"partial\xff\xe2", b"error\xfe"),
+                "timeout-text": ("partial text", "error text"),
+                "timeout-empty": (None, None),
+            }[speech]
+            error = subprocess.TimeoutExpired(
+                command, 180, output=captured[0], stderr=captured[1]
+            )
+            timeouts.append(error)
+            raise error
         return subprocess.CompletedProcess(
             command,
             int(speech == "exit"),
@@ -280,7 +294,12 @@ def test_release_model_probe_owns_private_speech_scratch_and_failure_report(
             str(output),
         ],
     )
-    if speech == "success":
+    if speech.startswith("timeout-"):
+        with pytest.raises(subprocess.TimeoutExpired) as caught:
+            module.main()
+        assert caught.value is timeouts[0]
+        assert caught.value.cmd == commands[-1] and caught.value.timeout == 180
+    elif speech == "success":
         module.main()
     else:
         with pytest.raises(RuntimeError, match="public JFK"):
@@ -291,8 +310,23 @@ def test_release_model_probe_owns_private_speech_scratch_and_failure_report(
     }
     assert scratch and not scratch[0].exists()
     report = json.loads((output / "speech.json").read_text())
-    assert report["stderr"] == "retained stderr"
-    assert report["exit_code"] == int(speech == "exit")
+    if timeouts:
+        error = timeouts[0]
+        assert report["exit_code"] is None and report["timeout_seconds"] == 180
+        assert report["command"] == commands[-1]
+        for name in ("stdout", "stderr"):
+            captured = getattr(error, name)
+            if isinstance(captured, bytes):
+                import base64
+
+                assert report[name] == captured.decode("utf-8", errors="replace")
+                assert base64.b64decode(report[name + "_base64"]) == captured
+            else:
+                assert report[name] == captured
+                assert report[name + "_base64"] is None
+    else:
+        assert report["stderr"] == "retained stderr"
+        assert report["exit_code"] == int(speech == "exit")
 
 
 @pytest.mark.parametrize("selected", ["default", "TMPDIR", "FORESIGHT_TEST_TEMP_ROOT"])
