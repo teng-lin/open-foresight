@@ -37,7 +37,7 @@ Open Foresight records and transcribes meetings, keeps your notes and recordings
 
   Meeting audio is saved locally alongside the transcript. Transcription can
   catch up after capture stops or the app restarts. Saved recordings offer
-  playback, listening from linked transcript sections, and WAV, MP3 or Opus
+  playback, listening from linked transcript sections, and MP3 or Opus
   export. Background Opus compression saves space. You can keep remaining
   original audio, delete a recording while preserving its transcript, or back up
   audio and transcripts together. Paused time is excluded; capture gaps remain
