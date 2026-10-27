@@ -157,6 +157,9 @@ void main() {
       (key, _) =>
           key.startsWith('FORESIGHT_') && key != 'FORESIGHT_SQLITE_LIBRARY',
     );
+    // Disable default helper spawning: fixtures own their RPC socket or
+    // explicitly supply a helper. Empty-executable startup diagnostics here
+    // are expected, rather than evidence that the built helper is missing.
     runtimeConfiguration.environment['FORESIGHT_HELPER'] = '';
     root = createTestTempDirectorySync('lifetime-');
     profile = ProfilePaths('${root.path}/d', '${root.path}/r');
@@ -1119,6 +1122,13 @@ void main() {
     'unleased note enhancement and its transcript drain hold idle exit',
     () async {
       final rag = EmbeddingService()..embeddingGate = Completer<void>();
+      final phaseClock = Stopwatch()..start();
+      var workSettled = false;
+      String? workError;
+      void mark(int phase) => print(
+        'UNLEASED_NOTES_PHASE ${jsonEncode({'phase': phase, 'elapsed_us': phaseClock.elapsedMicroseconds, 'embedding_entered': rag.embeddingEntered.isCompleted, 'work_settled': workSettled, 'work_error_type': workError, 'active_enhancements': service.application.activeEnhancements, 'transcript_computing': service.application.transcriptComputing})}',
+      );
+      mark(0);
       final server = Server.create(
         services: [rag, TranscriptIndexService(rag)],
       );
@@ -1129,7 +1139,12 @@ void main() {
         ),
         port: 0,
       );
-      addTearDown(server.shutdown);
+      mark(1);
+      addTearDown(() async {
+        mark(8);
+        await server.shutdown();
+        mark(9);
+      });
       addTearDown(() {
         if (!rag.embeddingGate!.isCompleted) rag.embeddingGate!.complete();
       });
@@ -1145,17 +1160,53 @@ void main() {
         20,
         'imported',
       );
-      final work = service.application.enhanceNotes(id);
-      await rag.embeddingEntered.future;
+      const requestId = 'unleased-notes-lifetime';
+      final work = service.application.enhanceNotes(id, requestId: requestId);
+      // Own the result immediately: successful early return must not leave the
+      // entry witness waiting, and an early error must retain its real stack.
+      final observed = work.then<void>(
+        (_) {
+          workSettled = true;
+          mark(5);
+        },
+        onError: (Object error, StackTrace stack) {
+          workSettled = true;
+          workError = error.runtimeType.toString();
+          mark(5);
+          Error.throwWithStackTrace(error, stack);
+        },
+      );
+      addTearDown(() async {
+        mark(7);
+        service.application.cancelMeetingWorkflowRequest(requestId);
+        if (!rag.embeddingGate!.isCompleted) rag.embeddingGate!.complete();
+        // Join this operation before shutting down its real RPC server. Its
+        // original result is still asserted by the body, including early error.
+        await observed.then<void>((_) {}, onError: (Object error) {});
+      });
+      mark(2);
+      await Future.any<void>([
+        rag.embeddingEntered.future,
+        observed.then<void>((_) {
+          if (!rag.embeddingEntered.isCompleted) {
+            throw TestFailure(
+              'Note enhancement settled before its owned embedding entry',
+            );
+          }
+        }),
+      ]);
+      mark(3);
       now = now.add(const Duration(minutes: 30));
       expect((await lifetime())['busy'], true);
       expect((await lifetime())['exit_after'], null);
       expect(service.application.activeEnhancements, 1);
       expect(service.application.transcriptComputing, 1);
       await backgroundRefusal();
+      mark(4);
       rag.embeddingGate!.complete();
       await work;
       await exited();
+      mark(6);
     },
   );
   test(
