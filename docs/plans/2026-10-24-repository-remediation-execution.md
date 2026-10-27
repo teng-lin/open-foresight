@@ -2186,3 +2186,81 @@ Raw evidence: `/var/tmp/of-ci-e696-linux/`, `/var/tmp/of-ci-e696-mac/`,
 `/var/tmp/of-fin/notes-teardown-witness/` and
 `/var/tmp/of-observation-batch-review/`. Actual Mac/Arch causes and required
 acceptance gates, owner review and verified merge to main remain open.
+
+
+### Mac transport-termination diagnosis and owned-socket fixture (2026-10-27)
+
+All `6c5cf4a1` hosted runs are terminal. Quality passed **6,434 / 31 skips /
+95.10%**. Arch passed host **852 / five skips / one deselection**, Native
+**52/52**, Core **2,888 / 17 skips / 91.02%** (24,581/27,006) and Desktop
+**648 / 12 skips / 93.76%**. The client retry case passed, so its earlier loss
+cause remains unobserved; no causal fix for that historical event is claimed.
+The closed counters remain for a future failure. All seven SDK originals were
+verified/reused with build steps skipped. ASan/LSan/UBSan executed **52/52**;
+TSan ran no tests because its separate toolchain installation hit HTTP 502 from
+the pinned `20261018T210000Z` Ubuntu snapshot. Three exact public InRelease
+probes from the local host also returned 502 at 07:04 UTC. No pin or gate changed.
+
+Every Linux leaf passed: host **852 / five skips / one deselection**, with
+verified prior Native results reused; dedicated Core **2,888 / 17 skips**;
+Desktop **648 / 12 skips / 93.76%** and fast **2/2**; compiled service **38/38**;
+CPU **6/6** and virtual audio **4/4**; RPM/DEB/Arch and independent DEB acceptance.
+Restored Ubuntu actually executed Native **52/52**, Core **2,889 / 16 skips /
+91.01%** (24,578/27,006), host **853 / four skips / one deselection**, Desktop
+**648 / 12 skips / 93.76%**, fast **2/2**, service **38/38** and the final Docker
+fixture **1/1**. These are current executions with original artifact source/
+receipt verification, not inferred recovery from metadata alone. Physical audio
+was not run; the software Vulkan path does not qualify physical GPU execution.
+
+Mac Native **61/61**, contracts **691 / 15 skips / one deselection**, Desktop
+**645 / 13 skips**, service **36 / two explicit Linux-layout skips** and DMG
+**4/4** passed. Canonical assembly, bundled inference, installed tooling **3/3**
+and relocated MCP smoke passed. Publication remained blocked by Core's strict
+aggregate; the platform aggregate failed solely on that Mac result.
+
+Mac Core failed the same sole notes case: **2,886 passed / one failed / 14
+skipped**, 730 seconds. The new witness is decisive: body phase 9 at **68,817us**;
+teardown phases 0/1 at **69,170/69,190us**; phase 2 with **one connection** at
+**69,389us**; no phase 3, phase 4 or final diagnostic before the original
+30-second timeout. The pending operation is therefore the single owned
+`ServerTransportConnection.terminate()` await. Teardown was entered; neither a
+body-callback barrier nor `server.shutdown()` explains this observed failure.
+
+The test-only fix **8f8c1db7** (agent **41651e25**) explicitly owns the fake
+server's raw Unix listener and accepted sockets. It stops acceptance and
+cancels the subscription before taking snapshots, destroys only those accepted
+sockets, then awaits transport termination and existing server shutdown. Listener
+cleanup is registered immediately after binding, and errors still reach the
+test runner. The services, endpoint, HTTP/2 defaults, body, assertions, five-second
+production deadline and outer 30-second test deadline remain. Both grpc 4.3.1
+and http2 2.3.1 were already direct pinned dependencies; no lock/toolchain input
+changed. The fake services do not use the omitted optional remote-address field.
+Awaiting stored `serveConnection` futures covers registration; actual connection
+closure is established by the transport/shutdown awaits, not registration alone.
+
+An independent actual HanSolo dependency-only control uses the same grpc/http2
+versions, with one connection and a locally open, paused peer under bounded
+synthetic kernel backpressure. Old transport termination stayed pending;
+destroying only the accepted server socket settled it in **4,575us** and allowed
+server shutdown while the peer remained open and paused. Both owned sockets,
+listener and subscriptions were subsequently closed and the watchdog child
+reaped. This proves a cleanup mechanism, not the original application request
+state or hosted macOS 15 acceptance; HanSolo runs macOS 26.6 and loaded no private
+application graph. Raw control/source/metadata are retained together.
+
+Linux's full notes module passed **50 / one Mac-only skip**, with analysis and
+format clean. Two independent peers and tools-disabled Claude converged on the
+exact public fix. Complete pre-push Core90 on frozen **8f8c1db7** passed
+**2,889 / 16 skips / zero failures / 91.01%**
+(24,577/27,006) in 617.84 seconds at
+concurrency two. All sixteen prior skip names/reasons match; analysis/format and
+Native/Worker pre/post-verification passed, all sixteen original product
+bytes/modes/sizes remained unchanged and all four public test overlays matched.
+No new product compilation or hosted Mac application pass is claimed.
+
+Evidence: `/var/tmp/of-ci-6c5-linux/`, `/var/tmp/of-ci-6c5-mac/`,
+`/var/tmp/of-ci-6c5-quality-san/`, `/var/tmp/of-grpc-socket-control/`,
+`/var/tmp/of-fin/notes-owned-socket/`, `/var/tmp/of-fin/core-8f8c/` and
+`/var/tmp/of-notes-socket-fix-review/`. Remaining merge gates are actual hosted
+Mac validation of this fix, required final-head checks including TSan, actual
+owner review of retained CI/trust controls, and verified merge to main.
