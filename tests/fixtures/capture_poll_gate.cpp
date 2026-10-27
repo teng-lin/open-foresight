@@ -42,6 +42,25 @@ void evidence(const char *variable, const char *base) {
     close(fd);
   }
 }
+#ifdef __APPLE__
+// dyld has already installed this image's interposer in the service process.
+// The domain worker is an isolate in that same process. Descendant utilities
+// and inference/capture executables must not inherit this test-only image.
+__attribute__((constructor)) void retire_descendant_injection() {
+  const char *injected = std::getenv("DYLD_INSERT_LIBRARIES");
+  Dl_info image{};
+  if (!injected ||
+      dladdr(reinterpret_cast<const void *>(&retire_descendant_injection),
+             &image) == 0 ||
+      !image.dli_fname)
+    return;
+  char *canonical = realpath(image.dli_fname, nullptr);
+  const bool own_image = canonical && std::strcmp(injected, canonical) == 0;
+  std::free(canonical);
+  if (own_image)
+    (void)unsetenv("DYLD_INSERT_LIBRARIES");
+}
+#endif
 bool uuid(const std::string &text) {
   if (text.size() != 36)
     return false;
@@ -95,6 +114,11 @@ void hold_owned_pcm_write(int fd, off_t offset) {
       relative.substr(110) != ".partial")
     return;
   evidence("FORESIGHT_TEST_RECORDING_WRITE_ENTERED", "recording-write-entered");
+#ifdef __APPLE__
+  if (!std::getenv("DYLD_INSERT_LIBRARIES"))
+    evidence("FORESIGHT_TEST_CAPTURE_INJECTION_RETIRED",
+             "capture-injection-retired");
+#endif
   const auto deadline =
       std::chrono::steady_clock::now() + std::chrono::seconds(10);
   while (access(gate, F_OK) == 0) {

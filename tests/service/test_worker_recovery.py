@@ -3,6 +3,7 @@
 import os
 import json
 import signal
+import sys
 import time
 
 import pytest
@@ -70,8 +71,10 @@ def test_native_queue_overflow_is_saved_as_meeting_interruption(running):  # noq
     started = running["root"] / "fixtures" / "capture-started"
     progress = running["root"] / "fixtures" / "capture-progress"
     trace = running["root"] / "fixtures" / "capture-pressure.jsonl"
+    inherited = running["root"] / "fixtures" / "capture-inheritance.json"
     capture.write_text(
-        '#!/usr/bin/env python3\nimport os,pathlib,sys,time\nblock=b"A"*3840\n'
+        '#!/usr/bin/env python3\nimport json,os,pathlib,sys,time\nblock=b"A"*3840\n'
+        f"pathlib.Path({str(inherited)!r}).write_text(json.dumps({{'dyld_insert_libraries':os.environ.get('DYLD_INSERT_LIBRARIES')}}))\n"
         f"pathlib.Path({str(started)!r}).touch()\n"
         'output=1 if sys.argv[-1]=="-" else os.open(sys.argv[-1],os.O_WRONLY)\n'
         "for n in range(2000):\n os.write(output,block)\n"
@@ -115,6 +118,9 @@ def test_native_queue_overflow_is_saved_as_meeting_interruption(running):  # noq
             )
             poll_delay(deadline)
         assert (running["root"] / "fixtures/recording-write-entered").is_file()
+        if sys.platform == "darwin":
+            assert (running["root"] / "fixtures/capture-injection-retired").is_file()
+            assert json.loads(inherited.read_text())["dyld_insert_libraries"] is None
         assert (running["root"] / "fixtures/recording-write-released").is_file()
         assert not (running["root"] / "fixtures/recording-write-timeout").exists()
         # The burst deliberately exceeds real-time capture. Its entire80s must

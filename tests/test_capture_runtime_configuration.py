@@ -86,13 +86,27 @@ def test_capture_poll_gate_holds_both_public_exports_and_forwards_after_release(
         timeout=30,
     )
     probe = r"""
-import ctypes, os, pathlib, sys
-shim, native, folder = sys.argv[1:]
+import ctypes, os, pathlib, subprocess, sys
+shim, native, folder, injection = sys.argv[1:]
 folder = pathlib.Path(folder)
 gate, ready = folder / 'hold', folder / 'ready'
 os.environ.update(FORESIGHT_TEST_REAL_NATIVE=native,
     FORESIGHT_TEST_CAPTURE_POLL_GATE=str(gate), FORESIGHT_TEST_CAPTURE_READY=str(ready))
+if sys.platform == 'darwin':
+    os.environ['DYLD_INSERT_LIBRARIES'] = shim if injection == 'own' else shim + '.other'
 library = ctypes.CDLL(shim)
+if sys.platform == 'darwin':
+    getenv = ctypes.CDLL(None).getenv
+    getenv.argtypes, getenv.restype = [ctypes.c_char_p], ctypes.c_char_p
+    actual = getenv(b'DYLD_INSERT_LIBRARIES')
+    if injection == 'own':
+        assert actual is None, 'loaded fixture injection escaped into descendants'
+        child = subprocess.run([sys.executable, '-c',
+            'import os; assert "DYLD_INSERT_LIBRARIES" not in os.environ'],
+            capture_output=True, text=True, timeout=5)
+        assert child.returncode == 0, child.stdout + child.stderr
+    else:
+        assert actual == (shim + '.other').encode(), 'unrelated injection was changed'
 legacy = library.fs_event_poll
 legacy.argtypes, legacy.restype = [ctypes.c_void_p, ctypes.c_int], ctypes.c_char_p
 owned = library.fs_owned_event_poll
@@ -107,14 +121,15 @@ ready.unlink(); gate.unlink()
 assert legacy(None, 0) == b'legacy' and owned(7, 0) == b'owned'
 print('both exports held and forwarded after release')
 """
-    result = subprocess.run(
-        [sys.executable, "-c", probe, str(shim), str(native), str(tmp_path)],
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "both exports held and forwarded after release" in result.stdout
+    for injection in ("own", "other") if apple else ("own",):
+        result = subprocess.run(
+            [sys.executable, "-c", probe, str(shim), str(native), str(tmp_path), injection],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "both exports held and forwarded after release" in result.stdout
 
 
 def test_capture_installation_path_must_be_absolute(
