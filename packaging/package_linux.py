@@ -83,7 +83,38 @@ BUNDLE_LICENSES = {
         "Python Software Foundation and runtime contributors (see notice)",
         "PSF-2.0",
     ),
+    "licenses/media/notices/open-foresight-LICENSE": (
+        "Open Foresight media worker",
+        "2026 Teng Lin",
+        "MIT",
+    ),
+    "licenses/media/notices/lame-4.0-COPYING": (
+        "LAME encoding library",
+        "The LAME Project and contributors (see corresponding source)",
+        "LGPL-2.0-or-later",
+    ),
+    "licenses/media/notices/libogg-1.3.6-COPYING": (
+        "libogg",
+        "2002 Xiph.org Foundation",
+        "BSD-3-Clause",
+    ),
+    "licenses/media/notices/libopusenc-0.3-COPYING": (
+        "libopusenc",
+        "1994-2013 Xiph.Org Foundation and contributors; 2017 Jean-Marc Valin",
+        "BSD-3-Clause",
+    ),
+    "licenses/media/notices/opus-1.6.1-COPYING": (
+        "Opus",
+        "2001-2023 Xiph.Org, Skype Limited, Octasic and contributors (see notice)",
+        "BSD-3-Clause",
+    ),
+    "licenses/media/notices/opusfile-0.12-COPYING": (
+        "opusfile",
+        "1994-2013 Xiph.Org Foundation and contributors",
+        "BSD-3-Clause",
+    ),
 }
+MEDIA_RELINK_ARCHIVE = Path("licenses/media/relink-materials.tar.gz")
 # NumPy wheels retain this complete vendor hierarchy; each entry is reviewed
 # separately instead of accepting arbitrary files under a license directory.
 NUMPY_LICENSES = {
@@ -185,6 +216,12 @@ def bundled_license_record(path):
     text = path.as_posix()
     from fnmatch import fnmatchcase
 
+    if path == MEDIA_RELINK_ARCHIVE:
+        return (
+            "Media worker corresponding source and relink materials",
+            "Open Foresight and codec contributors (see adjacent complete notices)",
+            "MIT AND BSD-3-Clause AND LGPL-2.0-or-later",
+        )
     for suffix, record in BUNDLE_LICENSES.items():
         if fnmatchcase(text, suffix) or text.endswith("/" + suffix):
             return record
@@ -342,10 +379,20 @@ def debian_copyright_text(bundle=None):
                 path.relative_to(bundle)
             )
             relative = path.relative_to(bundle)
+            if relative == MEDIA_RELINK_ARCHIVE:
+                component += (
+                    "; complete corresponding source archives,\n"
+                    " application source, static codec libraries and relink objects.\n"
+                    " Full license texts remain in the adjacent notices and stanzas."
+                )
             chunks.append(
                 f"\nFiles: opt/open-foresight/{relative}\n"
                 f"Copyright: {holder}\nComment: {component}\nLicense: {license_id}\n"
             )
+            if relative == MEDIA_RELINK_ARCHIVE:
+                # Exact binary legal material; the bundle manifest verifies its
+                # unchanged bytes. Arbitrary archives still fail the registry.
+                continue
             text = path.read_bytes()
             if path.name == "NOTICES.Z":
                 text = gzip.decompress(text)

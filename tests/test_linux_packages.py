@@ -11,6 +11,11 @@ import tarfile
 import tempfile
 import unittest
 
+import pytest
+
+from tests.test_media_worker_package import built as built
+from tools import media_worker_package as media
+
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location(
@@ -807,6 +812,93 @@ def test_every_shipped_license_has_a_stanza_and_unknown_notices_fail(tmp_path):
     (bundle / "unknown-LICENSE").write_text("unknown")
     with pytest.raises(ValueError, match="Unmapped bundled license"):
         packages.stage(bundle, tmp_path / "stage")
+
+
+@pytest.fixture
+def staged_media(built):
+    source, build, payload, target, _ = built
+    prepared = media.prepare(source, build, target)
+    media.stage(payload, prepared)
+    media.seal(payload, prepared)
+    # Selected source/product bytes are synthetic. Actual media preparation,
+    # staging and sealing run without claiming a compiler execution.
+    icon = payload / "app/data/flutter_assets/assets/images/foresight-logo.png"
+    icon.parent.mkdir(parents=True)
+    icon.write_bytes(b"fixture icon")
+    return payload, prepared
+
+
+@pytest.mark.parametrize("built", ["linux-x86_64"], indirect=True)
+def test_actual_media_stage_is_accepted_by_linux_package_legal_inventory(
+    staged_media, tmp_path
+):
+    payload, prepared = staged_media
+    output = tmp_path / "stage"
+    packages.stage(payload, output)
+    packages.write_debian_copyright(output)
+    text = (output / packages.DOC_DIR / "copyright").read_text()
+    for name, blob in prepared.materials.items():
+        if name.startswith("notices/"):
+            assert f"Files: opt/open-foresight/licenses/media/{name}\n" in text
+            assert packages.indent_license(blob.decode()) in text
+            assert (
+                output / "opt/open-foresight/licenses/media" / name
+            ).read_bytes() == blob
+    assert "License: LGPL-2.0-or-later\n" in text
+    assert f"Files: opt/open-foresight/{packages.MEDIA_RELINK_ARCHIVE}\n" in text
+    assert (
+        output / "opt/open-foresight" / packages.MEDIA_RELINK_ARCHIVE
+    ).read_bytes() == (payload / packages.MEDIA_RELINK_ARCHIVE).read_bytes()
+
+
+@pytest.mark.parametrize("built", ["linux-x86_64"], indirect=True)
+@pytest.mark.parametrize("unknown", ["notices/unreviewed-COPYING", "unreviewed.tar.gz"])
+def test_media_license_inventory_still_refuses_unknown_files(staged_media, unknown):
+    payload, _ = staged_media
+    (payload / "licenses/media" / unknown).write_bytes(b"unreviewed")
+    with pytest.raises(ValueError, match="Unmapped bundled license"):
+        packages.debian_copyright_text(payload)
+
+
+@pytest.mark.parametrize("built", ["linux-x86_64"], indirect=True)
+def test_existing_package_manifest_rejects_modified_media_archive(staged_media):
+    payload, _ = staged_media
+    header = bytearray(20)
+    header[:4] = b"\x7fELF"
+    header[18:20] = (62).to_bytes(2, "little")
+    for name in (
+        "app/open-foresight",
+        "bin/ForesightHelper",
+        "lib/libforesight_native.so",
+    ):
+        path = payload / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(header)
+    launcher = payload / "open-foresight"
+    launcher.write_text("#!/bin/sh\nexit 0\n")
+    launcher.chmod(0o755)
+    (payload / "manifest.json").write_text(
+        json.dumps(
+            {
+                "revision": "a" * 40,
+                "files": [
+                    {
+                        "path": str(path.relative_to(payload)),
+                        "sha256": packages.digest(path),
+                    }
+                    for path in sorted(payload.rglob("*"))
+                    if path.is_file()
+                ],
+            }
+        )
+    )
+    packages.validate(payload)
+    archive = payload / packages.MEDIA_RELINK_ARCHIVE
+    archive.write_bytes(archive.read_bytes() + b"changed")
+    with pytest.raises(
+        ValueError, match="Bundle hash mismatch: licenses/media/relink-materials.tar.gz"
+    ):
+        packages.validate(payload)
 
 
 def test_nlohmann_notice_is_in_shared_deb_rpm_arch_payload(tmp_path):
