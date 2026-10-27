@@ -1647,7 +1647,15 @@ while True:
         port: 0,
       );
       mark(2);
-      addTearDown(server.shutdown);
+      addTearDown(() async {
+        // The body already awaits service.closed. Retire this fixture's own
+        // transports before graceful shutdown waits for remote stream queues.
+        final connections = server.handlers.keys.toList();
+        await Future.wait([
+          for (final connection in connections) connection.terminate(),
+        ]);
+        await server.shutdown();
+      });
       addTearDown(() {
         if (!rag.embeddingGate!.isCompleted) rag.embeddingGate!.complete();
       });
