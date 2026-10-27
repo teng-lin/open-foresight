@@ -19,6 +19,7 @@ import 'package:foresight_test_support/helper_adoption.dart';
 import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
 import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
 import 'package:grpc/grpc.dart';
+import 'package:http2/transport.dart' show ServerTransportConnection;
 import 'application_operations_test.dart' show ArtifactGenerator;
 import 'note_transcript_cache_application_test.dart'
     show EmbeddingService, PromptRuntime;
@@ -1639,22 +1640,50 @@ while True:
       final server = Server.create(
         services: [rag, TranscriptIndexService(rag)],
       );
-      await server.serve(
-        address: InternetAddress(
+      final acceptedSockets = <Socket>[];
+      final servingConnections = <Future<void>>[];
+      final listener = await ServerSocket.bind(
+        InternetAddress(
           service.domain.helper.socket,
           type: InternetAddressType.unix,
         ),
-        port: 0,
+        0,
+      );
+      addTearDown(listener.close);
+      final accepts = listener.listen(
+        (socket) {
+          acceptedSockets.add(socket);
+          servingConnections.add(
+            server.serveConnection(
+              connection: ServerTransportConnection.viaSocket(socket),
+            ),
+          );
+        },
+        onError: (Object error, StackTrace stack) {
+          Zone.current.handleUncaughtError(error, stack);
+        },
       );
       mark(2);
       addTearDown(() async {
-        // The body already awaits service.closed. Retire this fixture's own
-        // transports before graceful shutdown waits for remote stream queues.
+        // The body already awaits service.closed. Destroy only this fixture's
+        // accepted sockets so transport cleanup cannot wait for remote IO.
+        print(
+          'NOTES_TIMER_LISTENER phase=0 elapsed_us=${phaseClock.elapsedMicroseconds}',
+        );
+        await listener.close();
+        await accepts.cancel();
+        print(
+          'NOTES_TIMER_LISTENER phase=1 elapsed_us=${phaseClock.elapsedMicroseconds}',
+        );
         final connections = server.handlers.keys.toList();
         print(
-          'NOTES_TIMER_TEARDOWN phase=2 connections=${connections.length} elapsed_us=${phaseClock.elapsedMicroseconds}',
+          'NOTES_TIMER_TEARDOWN phase=2 connections=${connections.length} sockets=${acceptedSockets.length} elapsed_us=${phaseClock.elapsedMicroseconds}',
         );
+        for (final socket in acceptedSockets) {
+          socket.destroy();
+        }
         await Future.wait([
+          ...servingConnections,
           for (final connection in connections) connection.terminate(),
         ]);
         print(
