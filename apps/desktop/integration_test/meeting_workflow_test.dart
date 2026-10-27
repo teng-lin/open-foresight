@@ -5,6 +5,7 @@ import 'package:foresight_core/remote.dart' show RemoteDomain;
 import 'dart:convert';
 import 'dart:async';
 import '../test_support/current_read.dart';
+import '../test_support/saved_transcription.dart';
 import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
@@ -527,11 +528,14 @@ void main() {
       await tester.tap(find.text('Meetings').first);
       await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('Stop recording'));
+      // Stopping capture leaves saved ASR running. Use the existing stop-phase
+      // deadline to wait for acquired tails before requiring a stable summary.
       await waitUntil(
         tester,
         () async =>
             workspace.meetingFeature.recording == null &&
-            workspace.busy == false,
+            workspace.busy == false &&
+            await readSettledSavedTranscription(workspace.d, meeting) != null,
       );
       expect(workspace.error, isEmpty);
       expect(workspace.d.sourcesPaused, true);

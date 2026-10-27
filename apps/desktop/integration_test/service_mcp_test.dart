@@ -3,9 +3,15 @@ import '../test_support/core_fixture.dart';
 import 'dart:async';
 import 'package:foresight_core/remote.dart' show RemoteDomain;
 import '../test_support/current_read.dart';
+import '../test_support/saved_transcription.dart';
 import 'dart:convert';
 import 'dart:io';
-import 'package:foresight_core/desktop.dart' show StoreReader, StoreReadQueries;
+import 'package:foresight_core/desktop.dart'
+    show
+        AudioMeetingReadPage,
+        MeetingAudioSource,
+        StoreReader,
+        StoreReadQueries;
 import 'package:foresight_test_support/observed_expectations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -308,7 +314,44 @@ void main() {
         initial['pid'],
       );
       await workspace.meetingFeature.stopRecording();
-      await waitFor(tester, () => workspace.meetingFeature.recording == null);
+      final transcriptDeadline = DateTime.now().add(
+        const Duration(seconds: 30),
+      );
+      await waitFor(
+        tester,
+        () => workspace.meetingFeature.recording == null,
+        deadline: transcriptDeadline,
+      );
+      // Capture closure seals audio; saved transcription intentionally continues.
+      // Summary success requires the final acquired transcript, including both
+      // sources and any sealed tail that has not become an ASR job yet.
+      AudioMeetingReadPage? savedAudio;
+      await waitFor(tester, () async {
+        savedAudio = await readSettledSavedTranscription(workspace.d, id);
+        return savedAudio != null;
+      }, deadline: transcriptDeadline);
+      observed.expect(
+        'saved_transcription_settled',
+        {
+          'session_count': savedAudio!.meeting.sessionCount,
+          'sources': {
+            for (final source in savedAudio!.meeting.sources)
+              source.source.name: [
+                source.pendingDurationUs,
+                source.pendingJobs,
+                source.failedJobs,
+                source.error,
+              ],
+          },
+        },
+        {
+          'session_count': 1,
+          'sources': {
+            'microphone': [0, 0, 0, ''],
+            'playback': [0, 0, 0, ''],
+          },
+        },
+      );
       final meeting =
           await workspace.d.command(Operation.meetingsGet, {'id': id}) as Map;
       observed.expect(
@@ -319,6 +362,19 @@ void main() {
               ((t)['text'] as String).contains('Mira'),
         ),
         isNotEmpty,
+      );
+      observed.expect(
+        'both_acquired_sources_transcribed',
+        {
+          for (final source in MeetingAudioSource.values)
+            source.name: (meeting['transcript'] as List).any(
+              (row) =>
+                  (row as Map)['final'] == 1 &&
+                  row['source'] == source.name &&
+                  (row['text'] as String).contains('Mira'),
+            ),
+        },
+        {'microphone': true, 'playback': true},
       );
       await workspace.d.command(Operation.meetingsGenerate, {
         'id': id,

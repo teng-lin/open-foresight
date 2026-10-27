@@ -47,6 +47,11 @@ Use [CONTRIBUTING.md](CONTRIBUTING.md) for setup, conventions and required check
   obscures it. Use bounded stage/error-type diagnostics, never private payloads.
 - Check native audio timestamps against the actual database span, including
   resume. A synced WAV can still violate publication bounds.
+- Capture Stop seals audio; saved transcription continues. Before tests require
+  a stable summary, observe drained saved-audio backlog and the expected final
+  transcript sources, rather than only a closed recording or an indexed snapshot.
+- Verify the actual macOS console is unlocked before GUI qualification. Report
+  authorized local desktop execution separately from isolated-session evidence.
 - Before another push, fetch the PR head, reviews and CI output; batch fixes
   against current code. Rerun failed jobs first.
 - Distinguish implemented, locally verified and CI-passed. Report source
