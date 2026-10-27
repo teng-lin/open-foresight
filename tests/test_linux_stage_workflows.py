@@ -738,9 +738,9 @@ def test_service_setup_contains_the_core_source_build_prerequisites():
     named = {step.get("name"): step for step in steps}
     packages = named["Install Linux application toolchain"]
     assert "if" not in packages
-    assert {"cmake", "ninja", "gcc", "python", "python-pip", "uv", "pkgconf"} <= set(
-        packages["run"].split()
-    )
+    assert {
+        "cmake", "ninja", "gcc", "python", "python-pip", "uv", "pkgconf", "pipewire"
+    } <= set(packages["run"].split())
     python = named["Install locked Python development dependencies"]
     assert "if" not in python
     assert "--require-hashes -r requirements-dev.lock" in python["run"]
