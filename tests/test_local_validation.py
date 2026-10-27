@@ -11,6 +11,11 @@ import pytest
 from tools import check_local_validation as validation
 
 
+@pytest.fixture(autouse=True)
+def owned_temp_parent(tmp_path, monkeypatch):
+    monkeypatch.setattr(validation, "TEMP_PARENT", tmp_path)
+
+
 def test_shared_guards_include_inventory_without_language_selection():
     tasks = dict(validation.shared_tasks(sys.executable))
     assert tasks["skip-inventory"] == [sys.executable, "tools/check_integration_inventory.py"]
@@ -85,6 +90,29 @@ def test_output_refuses_symlink(tmp_path):
         validation.private_output(link)
 
 
+def test_output_refuses_existing_evidence_without_overwriting(tmp_path):
+    output = tmp_path / "evidence"
+    output.mkdir(mode=0o700)
+    old = output / "result.json"
+    old.write_bytes(b"previous failure\xff")
+    with pytest.raises(ValueError, match="empty"):
+        validation.private_output(output)
+    assert old.read_bytes() == b"previous failure\xff"
+
+
+def test_output_refuses_outside_or_shared_parent(tmp_path):
+    for output in (tmp_path, tmp_path.parent / "outside-validation-root"):
+        with pytest.raises(ValueError, match="below canonical"):
+            validation.private_output(output)
+
+
+def test_default_output_is_fresh_owned_and_canonical(tmp_path):
+    output = validation.private_output(None)
+    assert output.parent == tmp_path
+    assert output.stat().st_mode & 0o777 == 0o700
+    assert not list(output.iterdir())
+
+
 def test_workflow_lint_requires_shellcheck_before_actionlint(tmp_path, monkeypatch, capsys):
     invocations = []
     monkeypatch.setattr(validation.shutil, "which", lambda name: str(tmp_path / name) if name == "actionlint" else None)
@@ -136,3 +164,40 @@ def test_python_tools_report_all_missing_and_compiler_overrides(monkeypatch, cap
     report = json.loads(capsys.readouterr().out)
     assert all(report[name]["error"] for name in ("cmake", "ninja", "protoc"))
     assert "CC" in report["inherited_compiler_overrides"]
+
+
+def test_failed_tool_preflight_never_starts_coverage(tmp_path, monkeypatch):
+    output = validation.private_output(tmp_path / "evidence")
+    calls = []
+
+    def gates(tasks, _):
+        calls.append(tasks)
+        return 0 if len(calls) == 1 else 1
+
+    monkeypatch.setattr(validation.parallel_build_gates, "run_gates", gates)
+    assert validation.validate(output, full_python=True) == 1
+    assert len(calls) == 2
+    report = json.loads((output / "result.json").read_text())
+    assert report["python_prerequisites"] == 1 and report["full_python"] is None
+
+
+def test_report_storage_failure_still_restores_process_state(tmp_path, monkeypatch):
+    output = validation.private_output(tmp_path / "evidence")
+    previous_directory = Path.cwd()
+    previous_timeout = validation.parallel_build_gates.WAIT_TIMEOUT_SECONDS
+    monkeypatch.setenv("TMPDIR", "original")
+    monkeypatch.setattr(validation, "ROOT", tmp_path)
+    monkeypatch.setattr(validation.parallel_build_gates, "run_gates", lambda *_: 0)
+    original_write = Path.write_text
+
+    def write(path, *args, **kwargs):
+        if path == output / "result.json":
+            raise OSError("fixture storage failure")
+        return original_write(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", write)
+    with pytest.raises(OSError, match="storage"):
+        validation.validate(output, full_python=False)
+    assert Path.cwd() == previous_directory
+    assert os.environ["TMPDIR"] == "original"
+    assert validation.parallel_build_gates.WAIT_TIMEOUT_SECONDS == previous_timeout

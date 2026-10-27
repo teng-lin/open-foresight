@@ -18,6 +18,7 @@ import tempfile
 from tools import parallel_build_gates
 
 ROOT = Path(__file__).resolve().parents[1]
+TEMP_PARENT = Path("/var/tmp").resolve()  # noqa: S108 - canonical disk-backed parent only
 
 
 def workflow_lint() -> int:
@@ -93,14 +94,18 @@ def python_prerequisites() -> int:
 def private_output(path: Path | None) -> Path:
     if path is None:
         # mkdtemp creates a fresh 0700 directory in the required disk-backed root.
-        return Path(tempfile.mkdtemp(prefix="flv-", dir=Path("/var/tmp").resolve()))  # noqa: S108
+        return Path(tempfile.mkdtemp(prefix="flv-", dir=TEMP_PARENT))
     if path.is_symlink():
         raise ValueError("Validation output must not be a symlink")
     path = path.resolve()
+    if path == TEMP_PARENT or not path.is_relative_to(TEMP_PARENT):
+        raise ValueError("Validation output must be below canonical /var/tmp")
     path.mkdir(mode=0o700, exist_ok=True)
     info = path.stat()
     if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077:
         raise ValueError("Validation output must be owned by this user and private")
+    if any(path.iterdir()):
+        raise ValueError("Validation output must be empty; previous evidence is retained")
     return path
 
 
@@ -145,14 +150,16 @@ def validate(output: Path, full_python: bool) -> int:
         report.update(status="failed", error_type=type(error).__name__)
         raise
     finally:
-        (output / "result.json").write_text(json.dumps(report, indent=2) + "\n")
-        parallel_build_gates.WAIT_TIMEOUT_SECONDS = original_timeout
-        os.chdir(old_directory)
-        for key, value in old_environment.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
+        try:
+            (output / "result.json").write_text(json.dumps(report, indent=2) + "\n")
+        finally:
+            parallel_build_gates.WAIT_TIMEOUT_SECONDS = original_timeout
+            os.chdir(old_directory)
+            for key, value in old_environment.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
 
 def main() -> int:
