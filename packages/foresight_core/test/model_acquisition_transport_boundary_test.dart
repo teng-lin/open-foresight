@@ -567,7 +567,8 @@ void main() {
         request.response.statusCode = 503;
         unawaited(request.response.close());
       });
-      final client = HttpClient();
+      final client = _PreparedRequestClient(HttpClient());
+      var retryDelays = 0;
       addTearDown(() => client.close(force: true));
       final downloader = ModelBlobDownloader(
         client: client,
@@ -576,7 +577,10 @@ void main() {
         origin: Uri.parse('http://127.0.0.1:${server.port}'),
         retryPolicy: ModelDownloadRetryPolicy(
           maxAttempts: 5,
-          delay: (_) => const Duration(seconds: 30),
+          delay: (_) {
+            retryDelays++;
+            return const Duration(seconds: 30);
+          },
         ),
         deadlines: const ModelTransportDeadlines(
           total: Duration(milliseconds: 250),
@@ -586,11 +590,24 @@ void main() {
         downloader.close();
         await server.close(force: true);
       });
+      // Establish the actual connection before measuring the retry budget;
+      // cold connect scheduling is qualified by the separate transport tests.
+      await client
+          .prepare(downloader.downloadUri('fixture'))
+          .timeout(const Duration(seconds: 3));
       await expectLater(
         downloader.download(blobId: 'fixture', size: 4),
-        throwsA(isA<ModelTransportException>()),
+        throwsA(
+          isA<ModelTransportException>().having(
+            (error) => error.failureType,
+            'deadline during retry delay',
+            'TimeoutException',
+          ),
+        ),
       ).timeout(const Duration(seconds: 3));
       expect(requests, 1);
+      expect(client.closeCalls, 1);
+      expect(retryDelays, 1);
     },
   );
 
@@ -815,7 +832,8 @@ void main() {
         request.response.statusCode = 503;
         unawaited(request.response.close());
       });
-      final client = HttpClient();
+      final client = _PreparedRequestClient(HttpClient());
+      var retryDelays = 0;
       addTearDown(() => client.close(force: true));
       final downloader = ModelBlobDownloader(
         client: client,
@@ -824,7 +842,10 @@ void main() {
         origin: Uri.parse('http://127.0.0.1:${server.port}'),
         retryPolicy: ModelDownloadRetryPolicy(
           maxAttempts: 5,
-          delay: (_) => const Duration(seconds: 30),
+          delay: (_) {
+            retryDelays++;
+            return const Duration(seconds: 30);
+          },
         ),
         deadlines: const ModelTransportDeadlines(
           total: Duration(milliseconds: 250),
@@ -834,11 +855,24 @@ void main() {
         downloader.close();
         await server.close(force: true);
       });
+      // Establish the actual connection before measuring the retry budget;
+      // cold connect scheduling is qualified by the separate transport tests.
+      await client
+          .prepare(downloader.downloadUri('fixture'))
+          .timeout(const Duration(seconds: 3));
       await expectLater(
         downloader.download(blobId: 'fixture', size: 4),
-        throwsA(isA<ModelTransportException>()),
+        throwsA(
+          isA<ModelTransportException>().having(
+            (error) => error.failureType,
+            'deadline during retry delay',
+            'TimeoutException',
+          ),
+        ),
       ).timeout(const Duration(seconds: 3));
       expect(requests, 1);
+      expect(client.closeCalls, 1);
+      expect(retryDelays, 1);
     },
   );
 
