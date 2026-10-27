@@ -313,7 +313,7 @@ void main() {
       expect(raw.state, AudioRepresentationState.supersededPendingPurge);
       await scheduler.close();
       media.close();
-      media = RecordingMedia.open(
+      media = await RecordingMedia.acquire(
         database,
         ownerGeneration: AudioStore.newIdentity(),
       );
