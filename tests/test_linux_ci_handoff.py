@@ -199,8 +199,22 @@ def test_language_build_and_test_modes_do_not_repeat_compilation_or_suites(
     assert bool(tests) == (mode == "test-only")
     assert any(item[0] == "analyze" for item in args) == (mode == "test-only")
     assert any(item[0] == "pub" for item in args) == (mode == "build-only")
+    assert any(item[0] == "format" for item in args) == (mode == "test-only")
+    if stage == "core" and mode == "build-only":
+        for name in ("foresight-service", "foresight-mcp"):
+            product = root / "build/application" / name
+            assert product.read_bytes() == b"controlled compiled host"
+            assert product.stat().st_mode & 0o111
+        assert not list((root / "build/application").glob(".diagnostic-defines.*"))
     if stage == "desktop" and tests:
         assert ("--coverage" in tests[0]) == (platform == "linux")
+        if platform == "linux":
+            assert "SF:lib/current.dart" in (coverage / "lcov.info").read_text()
+            retained = list(
+                (root / "test-results/linux/desktop").glob("checks.*/previous-lcov.raw")
+            )
+            assert len(retained) == 1
+            assert retained[0].read_text() == "SF:lib/app.dart\nDA:1,1\nend_of_record\n"
 
 
 @pytest.fixture

@@ -140,11 +140,20 @@ if args == ['run', 'tool/warm_boundary_analysis.dart']:
     if code:
         sys.exit(code)
     pathlib.Path(os.environ['FORESIGHT_BOUNDARY_ANALYSIS_CACHE'], 'warmed').write_text('compiler bundles')
+elif args[:2] == ['compile', 'exe']:
+    output = pathlib.Path(args[args.index('-o') + 1])
+    output.write_bytes(b'controlled compiled host')
+    output.chmod(0o700)
 elif args[0] == 'test':
     coverage = any(arg.startswith('--coverage=') for arg in args)
     code = int(os.getenv('COVERED_EXIT' if coverage else 'PLAIN_EXIT', '0'))
     if code:
         sys.exit(code)
+    if '--coverage' in args:
+        output = pathlib.Path('coverage/lcov.info')
+        output.parent.mkdir(exist_ok=True)
+        output.write_text('SF:lib/current.dart\\n' + ''.join(
+            f'DA:{i + 1},{int(i < 9)}\\n' for i in range(10)) + 'end_of_record\\n')
     for arg in args:
         if arg.startswith('--file-reporter=json:'):
             output = pathlib.Path(arg.split('json:', 1)[1])
@@ -249,8 +258,8 @@ def test_default_runs_full_suite_once_and_keeps_native_and_hook_gates(gate, cove
     assert [row["tool"] for row in support] == [
         "receipt",
         "worker",
-        *(["receipt"] if coverage == "1" else []),
         "worker",
+        *(["receipt"] if coverage == "1" else []),
     ]
     # The coverage wrapper is a separate consumer and recomputes verification.
     assert receipts == [
@@ -428,7 +437,7 @@ def test_repeated_plain_and_benchmark_runs_keep_only_current_event_streams(gate)
 
 
 @pytest.mark.parametrize("stage", ["core", "desktop"])
-def test_failed_analysis_removes_only_current_stage_old_events(gate, stage):
+def test_failed_analysis_archives_old_events_and_runs_independent_checks(gate, stage):
     root, _ = gate
     reports = root / f"test-results/linux/{stage}"
     reports.mkdir(parents=True)
@@ -438,8 +447,11 @@ def test_failed_analysis_removes_only_current_stage_old_events(gate, stage):
     sibling.parent.mkdir(parents=True)
     sibling.write_text("other platform")
     result, _ = run(gate, stage=stage, ANALYSIS_EXIT="7")
-    assert result.returncode == 7
-    assert not list(reports.glob("*.events.jsonl"))
+    assert result.returncode == 1
+    assert f"{stage} analysis (exit 7;" in result.stdout
+    retained = list(reports.glob("checks.*/previous-old.events.jsonl.raw"))
+    assert len(retained) == 1 and retained[0].read_text() == "old execution"
+    assert (reports / f"{stage}.events.jsonl").is_file()
     assert (reports / "diagnostic.log").read_text() == "preserved diagnostic"
     assert sibling.read_text() == "other platform"
 
@@ -454,7 +466,7 @@ def test_failed_analysis_removes_only_current_stage_old_events(gate, stage):
     ],
 )
 @pytest.mark.parametrize("run_number", ["0", "1"])
-def test_failed_baseline_coverage_or_outcome_comparison_stops_compilation(
+def test_failed_baseline_coverage_or_comparison_is_sticky_without_hiding_independent_checks(
     gate, settings, expected, run_number
 ):
     result, commands = run(
@@ -465,14 +477,11 @@ def test_failed_baseline_coverage_or_outcome_comparison_stops_compilation(
     )
     assert result.returncode != 0
     assert expected in result.stdout + result.stderr
-    assert all(command["args"][0] != "compile" for command in commands)
+    compiled = [c for c in commands if c["args"][:2] == ["compile", "exe"]]
+    assert len(compiled) == 2
     tests = [command for command in commands if command["args"][0] == "test"]
-    if "PLAIN_EXIT" in settings:
-        assert len(tests) == (2 if run_number == "1" else 1)
-    elif "COVERED_EXIT" in settings or "COVERED_LINES" in settings:
-        assert len(tests) == (1 if run_number == "1" else 2)
-    else:
-        assert len(tests) == 2
+    assert len(tests) == 2
+    assert any(c["args"][0] == "-DFORESIGHT_ENABLE_TEST_HOOKS=true" for c in commands)
 
 
 @pytest.mark.parametrize("counter", ["GITHUB_RUN_NUMBER", "GITHUB_RUN_ATTEMPT"])
@@ -513,13 +522,16 @@ def test_overridden_dart_must_match_pins_before_any_stage_work(gate):
 
 
 @pytest.mark.parametrize("coverage", ["0", "1"])
-def test_warm_failure_preserves_diagnostic_and_stops_tests_and_compilation(
+def test_warm_failure_blocks_full_suite_and_keeps_independent_hook_and_products(
     gate, coverage
 ):
     result, commands = run(gate, FORESIGHT_COVERAGE=coverage, WARM_EXIT="23")
-    assert result.returncode == 23
+    assert result.returncode == 1
+    assert "exit 23" in result.stdout
     assert "boundary warmer diagnostic" in result.stdout
-    assert all(command["args"][0] not in {"test", "compile"} for command in commands)
+    assert all(command["args"][0] != "test" for command in commands)
+    assert len([c for c in commands if c["args"][:2] == ["compile", "exe"]]) == 2
+    assert any(c["args"][0] == "-DFORESIGHT_ENABLE_TEST_HOOKS=true" for c in commands)
     warmer = next(
         command
         for command in commands
@@ -626,11 +638,12 @@ def test_unverified_worker_defines_stop_host_compilation(
     gate, settings, status, message
 ):
     result, commands = run(gate, **settings)
-    assert result.returncode == status, result.stdout + result.stderr
+    assert result.returncode == 1, result.stdout + result.stderr
+    if status != 1:
+        assert f"exit {status}" in result.stdout
     assert message in result.stderr
-    assert any(command["args"][0] == "test" for command in commands) == (
-        "WORKER_EXIT" not in settings
-    )
+    assert not any(command["args"][0] == "test" for command in commands)
+    assert "Blocked core suite: diagnostic worker prerequisite failed" in result.stderr
     assert all(command["args"][0] != "compile" for command in commands)
     assert [c["tool"] for c in support_commands(gate)] == (
         ["receipt", "worker"]

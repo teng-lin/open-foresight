@@ -105,8 +105,8 @@ def test_service_stage_hit_restores_verified_results_without_executing_builder(
     monkeypatch.setattr(runner, "restore_input", restore)
     monkeypatch.setattr(runner, "execute", execute)
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
-    parents = {stage: "a" * 64 for stage in ("native", "core", "desktop")}
-    inputs = {stage: tmp_path / stage for stage in ("native", "core")}
+    parents = {"native": "a" * 64}
+    inputs = {"native": tmp_path / "native"}
     result = runner.run(
         case.root,
         "linux",
@@ -120,7 +120,8 @@ def test_service_stage_hit_restores_verified_results_without_executing_builder(
         False,
         [],
     )
-    assert restore.call_count == 2
+    restore.assert_called_once()
+    assert restore.call_args.args[2] == "native"
     assert result["cache_hit"] is True and result["compilation_cache_hit"] is False
     assert execute.call_args.args[2:4] == ("service", True)
     assert (

@@ -72,6 +72,20 @@ case "$task_gate" in
       task_check "core analysis" dart analyze
       task_check "core format" dart format --output=none --set-exit-if-changed .
     fi
+    if [[ "$task_mode" != build-only && "${FORESIGHT_CORE_COVERAGE_BENCHMARK:-0}" == 1 ]]; then
+      task_benchmark_run=${GITHUB_RUN_NUMBER:-0}
+      task_benchmark_attempt=${GITHUB_RUN_ATTEMPT:-1}
+      for task_benchmark_value in "$task_benchmark_run" "$task_benchmark_attempt"; do
+        if [[ ! "$task_benchmark_value" =~ ^[0-9]+$ ]]; then
+          echo 'Core benchmark requires decimal GITHUB_RUN_NUMBER and GITHUB_RUN_ATTEMPT values.' >&2
+          exit 2
+        fi
+      done
+      if [[ "$task_benchmark_attempt" =~ ^0+$ ]]; then
+        echo 'Core benchmark GITHUB_RUN_ATTEMPT must be positive.' >&2
+        exit 2
+      fi
+    fi
     task_worker_ready=0
     if [[ "$task_mode" == test-only ]]; then
       if task_run "diagnostic worker verification" foresight_diagnostic_worker "$task_root" "$task_source_build" "$task_python" --verify; then
@@ -107,18 +121,6 @@ case "$task_gate" in
       # Compare the full suite on the same host/native binaries. Keep coverage
       # enforcement and reject changed test/skip outcomes between the two runs.
       export FORESIGHT_CORE_COVERAGE_MIN=${FORESIGHT_CORE_COVERAGE_MIN:-90}
-      task_benchmark_run=${GITHUB_RUN_NUMBER:-0}
-      task_benchmark_attempt=${GITHUB_RUN_ATTEMPT:-1}
-      for task_benchmark_value in "$task_benchmark_run" "$task_benchmark_attempt"; do
-        if [[ ! "$task_benchmark_value" =~ ^[0-9]+$ ]]; then
-          echo 'Core benchmark requires decimal GITHUB_RUN_NUMBER and GITHUB_RUN_ATTEMPT values.' >&2
-          exit 2
-        fi
-      done
-      if [[ "$task_benchmark_attempt" =~ ^0+$ ]]; then
-        echo 'Core benchmark GITHUB_RUN_ATTEMPT must be positive.' >&2
-        exit 2
-      fi
       # Only validated single digits enter arithmetic: long/zero-padded run
       # counters cannot overflow or be interpreted as octal or shell expressions.
       task_benchmark_run_digit=${task_benchmark_run: -1}
