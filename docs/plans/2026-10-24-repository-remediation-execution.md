@@ -1937,3 +1937,73 @@ initial failed run under `final/`, and Git-free evidence under
 was repeated for these orchestration changes. New-head hosted CI, actual owner
 review of retained producer/artifact-trust controls, and verified merge to main
 remain required. This qualification does not authorize release publication.
+
+### 2026-10-27: hosted environment and capture-fixture follow-up
+
+Hosted `83559f48` passed Quality **6,431 / 31 skips / 95.10%**, ASan/LSan/UBSan
+**52/52**, Linux Native **52/52**, Core **2,888 / 17 skips**, Desktop **648 / 12
+skips / 93.76%** and fast **2/2**. Mac passed Native **61/61**, source-JIT Core
+**2,887 / 14 skips**, Desktop **645 / 13 skips** and DMG **4/4**. Its canonical
+package job completed assembly, bundled inference, installed tooling and MCP
+smoke despite the independent service failure. The exact compiled Mac tooling
+class passed **3/3**, including revision/graph preservation across restart,
+document extraction and outside-extractor refusal. These execute the two cases
+that correctly skipped before compiled products existed. The final aggregate
+remained failed and candidate publication stayed skipped.
+
+Arch host contracts exposed three controlled-fixture failures: the job's
+`FORESIGHT_COVERAGE=1` leaked into a fake repository without a coverage script.
+The fixture now selects its ordinary test mode explicitly; a new control proves
+an explicit coverage override still executes and retains failure. Production
+Arch coverage settings and floors are unchanged. Both ambient-mode controls
+passed, followed by the complete official Linux host-contract selection with
+the Arch environment: **852 passed / five skipped / one expected CLI
+deselection**, on two separate CPUs with pinned tools.
+
+Linux service finished **37 passed / one failed**; Mac service finished **34
+passed / two failed / two skipped**. Their shared two-profile failure was a
+Unix-socket path of 109 bytes on Linux and 104 on Darwin. The harness now owns a
+short canonical `/var/tmp/fs.XXXXXX` root with private `t`/`p` siblings, instead
+of nesting under an inherited runner root. This service-test-only choice keeps
+the Darwin socket suffix at 95 bytes and preserves canonical capture storage,
+private modes, pytest lifetime isolation and cleanup. A real pytest/socket
+failed-first control and all eight harness cases passed. The unchanged qualified
+application cohort separately passed all **38 distinct service/MCP cases**:
+35 non-display cases and three isolated Xvfb/DBus cases. Initial missing-display
+setup errors remain retained; these are two commands, not one clean full run.
+
+The remaining Mac queue-overflow fixture intercepted legacy `fs_event_poll`
+but missed `fs_owned_event_poll`. Its public shim now gates both exports. A
+controlled compiled-symbol regression failed first and passed on Linux and
+Darwin. A diagnostic-only historical Native byte-cohort probe observed 84
+premature owned-poll records before the repair and zero after it. Its earlier
+official source-path verification refusal remains a refusal; this probe is not
+fresh product qualification. Both probes completed the original producer volume
+in about 140 ms, so they did **not** reproduce the hosted ten-second ready-file
+timeout. That timeout remains open pending the next actual service run. Only
+bounded started/progress evidence was added to its failure message; all 2,000
+blocks, 7.68 MB, ten-second deadline, overflow and persistence assertions remain.
+
+Frozen follow-up code **477897bb** passed the complete Python gate: **6,433
+passed / 32 skipped / zero failures**, **95.15%** combined line/branch coverage,
+478.62 seconds, with all 6,465 physical cases accounted for. HEAD before/after
+matched and tracked source stayed clean. Shared guards and independent native
+agent/Claude reviews passed. The selected new overflow service replay could not
+execute in the approved local namespace: overlay/bind setup failed. Those
+failures are retained; no protected fixture was copied or represented as passing.
+
+The six component SDK jobs reused verified originals. Linux SDK assembly built
+its consumer assembly over those qualified parents; it is not reported as a
+fully skipped assembly. Ubuntu application production and both TSan attempts
+failed before application/tests because the two pinned Ubuntu snapshot URLs
+returned HTTP 502/503. Downstream restored-byte, CPU/audio and package consumers
+therefore skipped and remain unqualified at this head. Independent bounded
+requests reproduced the retrieval failures. Pins, gates and trust policies were
+preserved. No provider-confirmed recovery or independent same-byte mirror is
+claimed.
+
+Final local Python evidence is `/var/tmp/of-python-parallel/final-477/`, Arch
+environment evidence `/var/tmp/of-arch-host-477/`, service replay
+`/var/tmp/of-fin/service-short/`, and fixture/probe records
+`/var/tmp/of-capture-gate-835/`. Current-head hosted CI, the original Mac timeout,
+actual owner review and verified merge to main remain open requirements.
