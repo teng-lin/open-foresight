@@ -106,6 +106,23 @@ void main() {
             reason: errors.map((error) => error.toString()).join("\n"),
           );
           expect(find.byTooltip('Rename meeting'), findsOneWidget);
+          final viewport = tester.state<ScrollableState>(
+            find
+                .descendant(
+                  of: find.byType(MeetingWorkspacePanel),
+                  matching: find.byType(Scrollable),
+                )
+                .first,
+          );
+          final notes = find.byType(MeetingNotesLayout);
+          final notesHeight = tester.getSize(notes).height;
+          final maxScroll = viewport.position.maxScrollExtent;
+          viewport.position.jumpTo(maxScroll + 40);
+          await tester.pump();
+          expect(tester.getSize(notes).height, closeTo(notesHeight, .01));
+          expect(viewport.position.maxScrollExtent, closeTo(maxScroll, .01));
+          viewport.position.jumpTo(0);
+          await tester.pumpAndSettle();
           final editor = find.byKey(const ValueKey('meeting-notes-editor'));
           expect(tester.getSize(editor).height, greaterThanOrEqualTo(80));
           await tester.ensureVisible(find.byTooltip('Play audio'));

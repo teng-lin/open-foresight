@@ -142,7 +142,11 @@ class MeetingWorkspacePanel extends StatelessWidget {
                 // entire viewport. Short windows scroll the workspace instead
                 // of giving its fixed note controls a negative body height.
                 child: SizedBox(
-                  height: math.max(320, viewport.remainingPaintExtent),
+                  height: math.max(
+                    320,
+                    viewport.viewportMainAxisExtent -
+                        viewport.precedingScrollExtent,
+                  ),
                   child: LayoutBuilder(
                     builder: (_, size) {
                       final showSidecar = showAssistant && wide;
