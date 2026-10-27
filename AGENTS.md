@@ -25,6 +25,8 @@ Use [CONTRIBUTING.md](CONTRIBUTING.md) for setup, conventions and required check
   jobs. Required test executables must reach the stage that runs their tests.
 - After changing Dart skips, run `python tools/check_integration_inventory.py`
   and review the matching inventory entries.
+- After adding or moving core Dart libraries, regenerate the diagnostic source
+  catalog with `dart tool/generate_diagnostics_catalog.dart` from the core package.
 - Give each failure an owner, a bounded investigation and a concrete exit
   criterion. Confirm delegated agents are active and exchange source revisions,
   commands, evidence paths and blockers, not just pass/fail summaries.

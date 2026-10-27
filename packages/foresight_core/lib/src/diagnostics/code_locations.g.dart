@@ -29,6 +29,7 @@ const diagnosticCodeLocations = <String>[
   'src/application_services/audio_saved_work.dart',
   'src/application_services/audio_speech_models.dart',
   'src/application_services/audio_startup_recovery.dart',
+  'src/application_services/audio_storage_headroom.dart',
   'src/application_services/audio_transform_scheduler.dart',
   'src/application_services/automatic_answer_coordinator.dart',
   'src/application_services/capture_activity.dart',
