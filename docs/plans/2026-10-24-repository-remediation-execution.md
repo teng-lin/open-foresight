@@ -2007,3 +2007,63 @@ environment evidence `/var/tmp/of-arch-host-477/`, service replay
 `/var/tmp/of-fin/service-short/`, and fixture/probe records
 `/var/tmp/of-capture-gate-835/`. Current-head hosted CI, the original Mac timeout,
 actual owner review and verified merge to main remain open requirements.
+
+### 2026-10-27: current Mac capture closure and Core fixture qualification
+
+Hosted `ecb675c8` passed the original Mac `capture_poll_gate` case and the
+two-profile isolation case: compiled service **36 passed / two Linux-layout
+skips**, with no failed case. Linux service passed **38/38**, zero skips. These
+actual current-head results close the earlier timeout and socket-path failures;
+the historical diagnostic probe was not substituted for either result.
+
+The same head passed Quality **6,434 / 31 skips / 95.10%**, ASan and TSan
+**52/52 each**, all seven verified original SDK reuses, model CPU **6/6**, audio
+**4/4**, all Linux package and installed-DEB checks, and Arch's complete gates
+(Native 52; Core 2,888/17 skips/91.05%; Desktop 648/12 skips/93.76%). Mac Native
+61/61, Desktop 645/13 skips, DMG 4/4, assembly/inference, exact installed tooling
+3/3 and relocated MCP smoke passed. Canonical publication remained blocked by
+the independent Core failure. The restored Ubuntu consumer also continued
+through its independent checks after Core failed: Native 52, host 853/4 skips/
+one deselection, Desktop 648/12 skips/93.76%, fast two and service 38 passed.
+Its Core coverage floor was not qualified by a failed test command.
+
+Two Core findings remained. The Mac notes test completed phases zero through
+nine in 56.8 ms, including awaiting `service.closed`, then timed out before its
+last teardown diagnostic. This localizes the remaining awaited work to its fake
+gRPC server's graceful shutdown. A proposed redundant service-close reorder
+was rejected after that counterevidence. The accepted test-only cleanup instead
+snapshots and terminates only that fixture server's owned transports before
+calling its existing `shutdown()`. Its embedding gate still releases first in
+LIFO order; body, timeout, assertions and global cleanup remain unchanged.
+
+An actual grpc 4.3.1 Unix held-request control verified the relevant dependency:
+local client termination does not guarantee remote stream drain. Explicit
+server-owned transport termination allowed graceful shutdown to settle before
+the held handler was released. The precise surviving stream in the hosted Mac
+failure was not observed; this is a dependency mechanism control, not a claim
+that the original Mac request state was reproduced.
+
+Dedicated Linux and restored Ubuntu Core each failed the same unchanged
+three-second `nativeReason == healthy` wait in the canonical-native-level and
+transport-alias case. Arch's full Core run and local exact/module runs passed
+it. Its exact cause remained unproven: the initial trace contained no closed
+state. The follow-up adds only failure-only bounded enum/counter evidence and
+rethrows the original error. No predicate, canonical/alias assertion, deadline,
+warmup or product implementation changed. Only the failed dedicated Core job
+was retried on the unchanged head; original failed output remains retained.
+
+Frozen follow-up **3908a637** passed the complete local Core coverage command:
+**2,889 passed / 16 skipped / zero failures**, **91.04%** (24,585/27,006), in
+620.93 seconds with concurrency two. Both affected cases passed in that full
+run. Package analysis and affected-file formatting passed. Official Native and
+Worker verification passed before and after; all thirteen Native and three
+application artifact bytes, modes and sizes stayed unchanged. Only the two
+public test files were bound into the existing qualified application snapshot;
+no new product compilation or private graph copy is claimed.
+
+Native-agent peers and tools-disabled Claude converged on both public diffs.
+Evidence is under `/var/tmp/of-fin/core-3908/`, the actual gRPC control under
+`/var/tmp/of-fin/notes-cleanup/`, and scoped review under
+`/var/tmp/of-core-fixture-review/`. New hosted Mac acceptance of the teardown
+repair, resolution of the readiness condition, actual owner review and verified
+merge to main remain required.
