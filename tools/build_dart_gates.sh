@@ -46,14 +46,20 @@ task_run() {
   shift
   task_check_index=$((task_check_index + 1))
   local task_log="$task_checks/$task_check_index.log"
-  if ci_timed "$task_label" "$@" > "$task_log" 2>&1; then
-    task_code=0
+  local task_pipe_status=()
+  printf 'Starting %s; log %s\n' "$task_label" "$task_log"
+  if ci_timed "$task_label" "$@" 2>&1 | tee "$task_log"; then
+    task_pipe_status=("${PIPESTATUS[@]}")
   else
-    task_code=$?
-    task_failed=1
+    task_pipe_status=("${PIPESTATUS[@]}")
   fi
+  task_code=${task_pipe_status[0]}
+  if [[ "${task_pipe_status[1]}" != 0 ]]; then
+    printf 'Log streaming failed for %s (exit %s)\n' "$task_label" "${task_pipe_status[1]}" >&2
+    if [[ "$task_code" == 0 ]]; then task_code=${task_pipe_status[1]}; fi
+  fi
+  if [[ "$task_code" != 0 ]]; then task_failed=1; fi
   printf '::group::%s (exit %s; log %s)\n' "$task_label" "$task_code" "$task_log"
-  cat "$task_log"
   printf '::endgroup::\n'
   printf '%s\t%s\t%s\n' "$task_code" "$task_label" "$task_log" >> "$task_checks/summary.tsv"
   return "$task_code"

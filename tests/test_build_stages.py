@@ -285,6 +285,61 @@ def invoke_dart_gate(tree, gate, **failures):
     )
 
 
+def test_gate_fails_when_live_log_writer_fails(dart_gate_tree):
+    _, environment = dart_gate_tree
+    tee = Path(environment["PATH"].split(":")[0]) / "tee"
+    tee.write_text("#!/bin/bash\ncat >/dev/null\nexit 9\n")
+    tee.chmod(0o700)
+    result = invoke_dart_gate(dart_gate_tree, "core")
+    assert result.returncode == 9, result.stdout + result.stderr
+    assert "Log streaming failed for core dependency resolution (exit 9)" in result.stderr
+
+
+def test_inner_gate_streams_output_before_command_exit(dart_gate_tree, tmp_path):
+    import sys
+    import time
+
+    root, environment = dart_gate_tree
+    dart = Path(environment["PATH"].split(":")[0]) / "dart"
+    release = tmp_path / "release"
+    dart.write_text(
+        f"#!{sys.executable}\n"
+        "import pathlib,sys,time\n"
+        "if sys.argv[1]=='analyze':\n"
+        " print('analysis still running',flush=True)\n"
+        " deadline=time.monotonic()+5\n"
+        f" while not pathlib.Path({str(release)!r}).exists():\n"
+        "  if time.monotonic()>deadline: raise RuntimeError('release missing')\n"
+        "  time.sleep(.01)\n"
+    )
+    output = tmp_path / "live.log"
+    with output.open("wb") as stream:
+        owner = subprocess.Popen(
+            ["/bin/bash", str(root / "tools/build_dart_gates.sh"), "core",
+             "linux", str(root / "build"), sys.executable],
+            env={**environment, "FORESIGHT_BUILD_MODE": "test-only"},
+            stdout=stream, stderr=subprocess.STDOUT,
+        )
+        try:
+            deadline = time.monotonic() + 4
+            while b"analysis still running\n" not in output.read_bytes():
+                assert owner.poll() is None, output.read_text()
+                assert time.monotonic() < deadline, output.read_text()
+                time.sleep(.01)
+            assert owner.poll() is None
+            assert not release.exists()
+            release.touch()
+            assert owner.wait(timeout=5) == 0, output.read_text()
+        finally:
+            release.touch()
+            if owner.poll() is None:
+                owner.kill()
+                owner.wait(timeout=5)
+    assert output.read_text().count("analysis still running") == 1
+    logs = list((root / "test-results/linux/core").glob("checks.*/*.log"))
+    assert sum("analysis still running" in p.read_text() for p in logs) == 1
+
+
 def test_fixture_modes_are_explicit_but_coverage_override_still_runs(dart_gate_tree):
     root, environment = dart_gate_tree
     assert environment["FORESIGHT_COVERAGE"] == "0"

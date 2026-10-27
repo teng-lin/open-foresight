@@ -28,6 +28,8 @@ Use [CONTRIBUTING.md](CONTRIBUTING.md) for setup, conventions and required check
 - Give each failure an owner, a bounded investigation and a concrete exit
   criterion. Confirm delegated agents are active and exchange source revisions,
   commands, evidence paths and blockers, not just pass/fail summaries.
+- Stream long-running gates through every wrapper layer, retaining raw logs and
+  command/log-writer failures. A heartbeat with a byte count is not test output.
 - After finding a fixture error, audit equivalent call sites and verify one
   batch before freezing the candidate. Do not discover siblings one full run
   at a time. Repeat full gates after relevant fixes, not until a run turns green.
