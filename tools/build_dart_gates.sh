@@ -80,6 +80,7 @@ case "$task_gate" in
     elif task_run "diagnostic worker compilation" foresight_diagnostic_worker "$task_root" "$task_source_build" "$task_python"; then
       mkdir -p "$task_build/application"
       task_worker_gate_temp=$(mktemp -d "$task_build/application/.diagnostic-defines.XXXXXX")
+      trap 'rm -rf -- "$task_worker_gate_temp"' EXIT
       if task_run "diagnostic worker verification" foresight_diagnostic_worker "$task_root" "$task_source_build" "$task_python" --verify --defines-output "$task_worker_gate_temp/defines"; then
         task_source_defines=()
         while IFS= read -r -d '' task_worker_define; do
@@ -157,6 +158,9 @@ case "$task_gate" in
       task_coverage=()
       if [[ "$task_platform" == linux || "${FORESIGHT_COVERAGE:-0}" == 1 || "${FORESIGHT_DESKTOP_COVERAGE_REPORT:-0}" == 1 ]]; then
         task_coverage=(--coverage)
+      fi
+      if [[ -n ${task_coverage[*]-} && -f coverage/lcov.info ]]; then
+        mv -- coverage/lcov.info "$task_checks/previous-lcov.raw"
       fi
       task_check "desktop tests and coverage" flutter test --dart-define=FORESIGHT_ENABLE_TEST_HOOKS=true ${task_coverage[@]+"${task_coverage[@]}"} --file-reporter="json:$task_reports/desktop.events.jsonl"
       if [[ "$task_platform" == linux ]]; then

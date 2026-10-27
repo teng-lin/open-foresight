@@ -397,3 +397,45 @@ def test_gate_preserves_prior_event_output_in_its_new_private_check_directory(
     assert (
         len(retained) == 1 and retained[0].read_bytes() == b"original failed events\n"
     )
+
+
+@pytest.mark.parametrize("compile_exit", [0, 7])
+def test_core_releases_only_owned_compile_staging_and_keeps_check_logs(
+    dart_gate_tree, compile_exit
+):
+    root, _ = dart_gate_tree
+    application = root / "build/application"
+    application.mkdir()
+    old = application / "foresight-service"
+    old.write_text("old retained host")
+    result = invoke_dart_gate(dart_gate_tree, "core", FAIL_SERVICE=compile_exit)
+    assert result.returncode == bool(compile_exit)
+    assert not list(application.glob(".diagnostic-defines.*"))
+    assert (application / "foresight-mcp").read_text() == "compiled foresight-mcp"
+    if compile_exit:
+        assert old.read_text() == "old retained host"
+    logs = "".join(
+        p.read_text() for p in (root / "test-results/linux/core").glob("checks.*/*.log")
+    )
+    assert f"controlled compile exit {compile_exit}" in logs
+
+
+def test_failed_desktop_run_cannot_qualify_previous_lcov_as_current(dart_gate_tree):
+    root, _ = dart_gate_tree
+    shutil.copy2(ROOT / "tools/check_coverage.py", root / "tools/check_coverage.py")
+    coverage = root / "apps/desktop/coverage"
+    coverage.mkdir()
+    stale = b"TN:\nSF:controlled.dart\nDA:1,1\nLF:1\nLH:1\nend_of_record\n"
+    (coverage / "lcov.info").write_bytes(stale)
+    result = invoke_dart_gate(dart_gate_tree, "desktop", FAIL_TEST=7)
+    assert result.returncode == 1
+    assert "desktop tests and coverage (exit 7;" in result.stdout
+    assert "desktop coverage floor (exit 2;" in result.stdout
+    assert "Invalid coverage report:" in result.stdout
+    assert "Desktop line coverage:" not in result.stdout
+    retained = list(
+        (root / "test-results/linux/desktop").glob("checks.*/previous-lcov.raw")
+    )
+    assert len(retained) == 1 and retained[0].read_bytes() == stale
+    assert not (coverage / "lcov.info").exists()
+    assert "desktop release compilation (exit 0;" in result.stdout

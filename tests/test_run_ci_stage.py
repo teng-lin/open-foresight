@@ -448,3 +448,80 @@ def test_old_service_test_parent_identity_cannot_equal_native_only_source_build(
             "linux", "service", parents={"native": "b" * 64}, **common
         )
     assert current != old
+
+
+def test_service_cache_hit_reuses_verified_result_without_claiming_fresh_products(
+    tmp_path, monkeypatch
+):
+    native = tmp_path / "native-input"
+    input_artifact(native)
+    cached = tmp_path / "cached"
+    cached.mkdir()
+    manifest = {
+        "files": {"test-results/service/results.xml": {"fixture": "verified result"}}
+    }
+    output = tmp_path / "build/ci-stage/linux-service"
+
+    def pack(*args):
+        output.mkdir(parents=True)
+        (output / "content.json").write_text("{}")
+        return manifest
+
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "outputs"))
+    with (
+        patch.object(runner.cache, "git", return_value=b"a" * 40),
+        patch.object(runner.cache, "fingerprint", return_value="d" * 64),
+        patch.object(
+            runner.cache,
+            "find",
+            return_value={
+                "hit": True,
+                "download_dir": str(cached),
+                "run_id": 123,
+                "receipt": {"content": manifest},
+            },
+        ) as find,
+        patch.object(runner.payloads, "unpack") as unpack,
+        patch.object(runner.payloads, "pack", side_effect=pack),
+        patch.object(
+            runner.cache,
+            "publish",
+            return_value={
+                "identity": "d" * 64,
+                "artifact_name": "verified-service-result",
+            },
+        ) as publish,
+        patch.object(
+            runner.cache, "source_inputs", return_value={"controlled": "same source"}
+        ),
+        patch.object(runner.subprocess, "run") as command,
+    ):
+        result = runner.run(
+            tmp_path,
+            "linux",
+            "service",
+            {"compiler": "controlled"},
+            {"native": "b" * 64},
+            {"native": native},
+            "repo",
+            1,
+            "pull_request",
+            False,
+            [],
+        )
+    assert result["cache_hit"] is True
+    assert result["compilation_cache_hit"] is False
+    assert not (tmp_path / "build/application").exists()
+    command.assert_not_called()
+    assert find.call_args.args[3] == "d" * 64
+    assert find.call_args.args[5] == {"native": "b" * 64}
+    assert find.call_args.args[6] == tmp_path
+    assert unpack.call_args_list[-1].args == (
+        tmp_path,
+        "linux",
+        "service",
+        cached / "payload.tar.gz",
+        manifest,
+    )
+    assert publish.call_args.args[4] == {"native": "b" * 64}
+    assert publish.call_args.args[7] == manifest
