@@ -506,7 +506,11 @@ jobs:
     def test_maintenance_has_offline_tests_without_a_platform_build(self):
         workflow = self.workflow("quality.yml")
         runs = [step.get("run", "") for step in workflow["jobs"]["python"]["steps"]]
-        self.assertTrue(any(run.startswith("python -m pytest --cov ") for run in runs))
+        self.assertTrue(
+            any(
+                run.startswith("python tools/pytest_parallel.py --cov ") for run in runs
+            )
+        )
         install = next(run for run in runs if "protoc-35.1-linux-x86_64.zip" in run)
         reference = next(
             step["run"]
@@ -529,7 +533,7 @@ jobs:
             next(
                 index
                 for index, run in enumerate(runs)
-                if run.startswith("python -m pytest --cov ")
+                if run.startswith("python tools/pytest_parallel.py --cov ")
             ),
         )
 

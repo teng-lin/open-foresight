@@ -700,7 +700,7 @@ def test_lane_evidence_reuses_existing_reviewed_paths_and_callers_are_unique():
         for step in jobs["macos"]["steps"]
         if step.get("name") == "Retain development package evidence"
     )
-    assert lane["with"]["overwrite"] is False
+    assert lane["with"]["overwrite"] is True
     assert set(lane["with"]["path"].splitlines()) <= set(
         package["with"]["path"].splitlines()
     )
