@@ -58,6 +58,37 @@ checked kernel contention. Keep synchronous `RecordingMedia.open` assertions
 where the test intentionally proves immediate refusal. A reader held beyond the
 bound, cancellation, and non-contention lock failures must still be rejected.
 
+### Use the shared ownership helpers for child processes and barriers
+
+`foresight_test_support/fixture_ownership.dart` holds the patterns above so
+fixtures do not rebuild them:
+
+- `OwnedCleanups` registers each step when its resource is allocated and runs
+  them newest first. Every step is attempted, each is bounded, and all failures
+  are reported together in one `FixtureCleanupFailure`, so a late failure cannot
+  replace the first. `OwnedCleanups.forTest()` runs at the test's teardown.
+- `OwnedProcesses.start` returns an `OwnedProcess` already registered for
+  termination (SIGTERM, bounded wait, SIGKILL, bounded wait for the kernel
+  exit). SIGKILL also ends a stopped or TERM-ignoring peer. Termination of an
+  unobservable exit fails the cleanup instead of passing quietly.
+  `expectNoneRunning` names owned children whose exit is unobserved. Only
+  processes the fixture started are tracked or signaled; the helper never runs
+  `ps` or walks process groups, so concurrent test files are not inspected.
+  It does not detect leaked descriptors or sockets.
+- `PhaseTrace` records the phases a fixture actually observed. Its `describe`
+  keeps the last observed phase apart from a caller-supplied inferred pending
+  operation, which it labels as not observed. `awaitMarker` waits for a marker
+  file within exactly its stated deadline and adds that trace and the owning
+  child's state to a timeout.
+- `eventually` accepts `label` and `describe`. Neither changes the deadline;
+  `describe` is sampled once, at the deadline, so the failure says which part of
+  a compound condition was missing. Only the type of an error thrown by
+  `describe` is reported.
+
+These add diagnostics and cleanup. They are not retries and do not extend any
+budget. A failure message that names a phase is evidence for investigation; it
+does not establish the cause of a failure that has not been reproduced.
+
 ### Make timing and error tests prove their intended phase
 
 A short total budget can expire during connection setup before a retry-delay
