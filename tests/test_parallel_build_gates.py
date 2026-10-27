@@ -386,7 +386,7 @@ from pathlib import Path
 name=sys.argv[1];phase=os.environ.get('FORESIGHT_BUILD_MODE','service')
 with open(os.environ['FIXTURE_LOG'],'a') as f:f.write(json.dumps([name,phase])+'\\n')
 print(name+' '+phase+' diagnostics')
-raise SystemExit(7 if phase=='test-only' else 0)
+raise SystemExit(7 if phase=='test-only' or (name=='desktop' and phase=='all') else 0)
 """)
     for name in ("build_dart_gates.sh", "build_service_gate.sh"):
         argument = '"$1"' if name == "build_dart_gates.sh" else "service"
@@ -404,9 +404,8 @@ raise SystemExit(7 if phase=='test-only' else 0)
     commands = [json.loads(line) for line in log.read_text().splitlines()]
     assert set(map(tuple, commands)) == {
         ("core", "build-only"),
-        ("desktop", "build-only"),
+        ("desktop", "all"),
         ("core", "test-only"),
-        ("desktop", "test-only"),
         ("service", "all"),
     }
     assert commands[-1][0] == "service"
@@ -449,7 +448,6 @@ raise SystemExit(17 if name=='core' and phase=='build-only' else 0)
     commands = [json.loads(line) for line in log.read_text().splitlines()]
     assert commands == [
         ["core", "build-only"],
-        ["desktop", "build-only"],
-        ["desktop", "test-only"],
+        ["desktop", "all"],
     ]
     assert not (tmp_path / "test-results/build-gates/service-checks.log").exists()

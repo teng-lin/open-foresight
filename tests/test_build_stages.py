@@ -377,7 +377,6 @@ def test_native_test_failure_is_sticky_but_does_not_hide_independent_dart_gates(
     result = run_stage(build_tree, "all", {"FIXTURE_CTEST_EXIT": "7"})
     assert result.returncode == 7, result.stdout + result.stderr
     assert "core-build gate (exit 0)" in result.stdout
-    assert "desktop-build gate (exit 0)" in result.stdout
     assert "core-checks gate (exit 0)" in result.stdout
     assert "desktop-checks gate (exit 0)" in result.stdout
     assert "Missing stage prerequisite" in result.stdout
@@ -439,3 +438,27 @@ def test_failed_desktop_run_cannot_qualify_previous_lcov_as_current(dart_gate_tr
     assert len(retained) == 1 and retained[0].read_bytes() == stale
     assert not (coverage / "lcov.info").exists()
     assert "desktop release compilation (exit 0;" in result.stdout
+
+
+def test_aggregate_desktop_release_failure_still_runs_widget_checks_and_service(
+    dart_gate_tree, monkeypatch
+):
+    from tools import parallel_build_gates as gates
+    import sys
+
+    root, environment = dart_gate_tree
+    monkeypatch.setattr(gates, "ROOT", root)
+    for name in ("PATH", "COMMAND_LOG"):
+        monkeypatch.setenv(name, environment[name])
+    monkeypatch.setenv("FORESIGHT_BUILD_MODE", "all")
+    monkeypatch.setenv("FAIL_RELEASE", "7")
+    (root / "tools/build_service_gate.sh").write_text("echo current service checked\n")
+    assert (
+        gates.run_application_gates("linux", root / "build", sys.executable, "all") == 1
+    )
+    logs = root / "test-results/build-gates"
+    desktop = (logs / "desktop-checks.log").read_text()
+    assert "desktop tests and coverage (exit 0;" in desktop
+    assert "desktop release compilation (exit 7;" in desktop
+    assert (logs / "service-checks.log").read_text() == "current service checked\n"
+    assert not (logs / "desktop-build.log").exists()

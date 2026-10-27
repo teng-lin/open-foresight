@@ -187,17 +187,40 @@ def run_application_gates(platform, build, python, mode, *, sequential=False):
         ]
 
     if mode != "test-only":
-        execute([(f"{gate}-build", command(gate, "build-only")) for gate in available])
+        # A Desktop release executable is not a widget-test prerequisite. In
+        # normal mode its one full gate checks dependencies, runs its tests and
+        # then collects release compilation errors, without hiding either.
+        builders = (
+            available
+            if mode == "build-only"
+            else [gate for gate in available if gate == "core"]
+        )
+        execute([(f"{gate}-build", command(gate, "build-only")) for gate in builders])
     if mode != "build-only":
         ready = []
         for gate in available:
-            if mode == "test-only" or outcomes[f"{gate}-build"] == 0:
+            if (
+                (mode == "all" and gate == "desktop")
+                or mode == "test-only"
+                or outcomes[f"{gate}-build"] == 0
+            ):
                 ready.append(gate)
             else:
                 print(
                     f"Blocked {gate} checks: its build prerequisites failed", flush=True
                 )
-        execute([(f"{gate}-checks", command(gate, "test-only")) for gate in ready])
+        execute(
+            [
+                (
+                    f"{gate}-checks",
+                    command(
+                        gate,
+                        "all" if mode == "all" and gate == "desktop" else "test-only",
+                    ),
+                )
+                for gate in ready
+            ]
+        )
         # A failed analysis/test must not hide the independent compiled boundary.
         # A failed core build, however, must never run an older service binary.
         if "core" in available and (mode == "test-only" or outcomes["core-build"] == 0):
