@@ -165,13 +165,20 @@ def test_gate_exec_keeps_principal_pid_and_failure_status(tmp_path):
     )
     script = (
         "import os,sys\nfrom tools import run_media_test_gate as gate\n"
-        "gate.prepare_environment=lambda *a,**k:dict(os.environ,selected='verified')\n"
+        "def prepared(*a,**k):\n"
+        " print('buffered producer receipt')\n"
+        " sys.stderr.write('buffered producer diagnostic')\n"
+        " return dict(os.environ,selected='verified')\n"
+        "gate.prepare_environment=prepared\n"
         f"sys.argv=['gate','--cache',{str(tmp_path / 'c')!r},"
         f"'--output',{str(tmp_path / 'o')!r},'--',sys.executable,'-c',{child!r}]\n"
         "gate.main()\n"
     )
+    environment = dict(os.environ)
+    environment.pop("PYTHONUNBUFFERED", None)
     process = subprocess.Popen(
         [sys.executable, "-c", script],
+        env=environment,
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -184,7 +191,11 @@ def test_gate_exec_keeps_principal_pid_and_failure_status(tmp_path):
         process.communicate(timeout=5)
         raise
     assert process.returncode == 7, stderr
-    assert json.loads(stdout) == {
+    lines = stdout.splitlines()
+    assert len(lines) == 2, stdout
+    assert lines[0] == "buffered producer receipt"
+    assert stderr == "buffered producer diagnostic"
+    assert json.loads(lines[1]) == {
         "pid": process.pid,
         "uid": os.geteuid(),
         "selection": "verified",

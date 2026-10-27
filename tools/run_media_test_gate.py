@@ -88,6 +88,8 @@ def main() -> None:
     )
     # Replace this process: the original gate still owns signals, exit status
     # and its existing deadlines. There is no unobserved intermediary child.
+    sys.stdout.flush()
+    sys.stderr.flush()
     os.execvpe(command[0], command, environment)  # noqa: S606 - Explicit non-root gate vector; preserve its process ownership.
 
 
