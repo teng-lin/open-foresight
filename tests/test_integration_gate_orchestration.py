@@ -306,7 +306,7 @@ def test_models_gate_runs_both_groups_and_aggregates_failures(
     assert seen == ["desktop", "core"]
 
 
-def test_audio_gate_uses_private_routes_and_clears_whisper_for_pcm_inspector(
+def test_audio_gate_uses_private_routes_and_honors_phase_speech_runtimes(
     tmp_path, monkeypatch
 ):
     runner = tmp_path / "bin/whisper-cli-vulkan"
@@ -344,7 +344,7 @@ def test_audio_gate_uses_private_routes_and_clears_whisper_for_pcm_inspector(
 
     def run(package, files, expected, env, output, name, *rest, **kwargs):
         seen.append(name)
-        assert ("FORESIGHT_WHISPER_RUNTIME" in env) == (name != "audio-core")
+        assert ("FORESIGHT_WHISPER_RUNTIME" in env) == (name == "audio-desktop")
         if name == "audio-meeting":
             assert kwargs == {"device": "linux"}
             assert env["DISPLAY"] == env["FORESIGHT_PRIVATE_X11"] == ":71"
