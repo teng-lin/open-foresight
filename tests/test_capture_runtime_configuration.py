@@ -12,6 +12,25 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.fixture
+def configuration_dependencies(tmp_path, monkeypatch):
+    # These tests configure targets and inspect compile commands; they do not
+    # compile JSON consumers. Declare that dependency explicitly without using
+    # a developer's SDK installation or manufacturing a compiled-library proof.
+    package = tmp_path / "configuration-only-json"
+    package.mkdir()
+    (package / "nlohmann_jsonConfig.cmake").write_text(
+        "add_library(nlohmann_json::nlohmann_json INTERFACE IMPORTED)\n"
+    )
+    for name in ("CMAKE_PREFIX_PATH", "CMAKE_MODULE_PATH", "nlohmann_json_ROOT"):
+        monkeypatch.delenv(name, raising=False)
+    return [
+        f"-Dnlohmann_json_DIR={package}",
+        "-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF",
+        "-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF",
+    ]
+
+
 def test_capture_poll_gate_holds_both_public_exports_and_forwards_after_release(
     tmp_path,
 ):
@@ -88,7 +107,9 @@ print('both exports held and forwarded after release')
     assert "both exports held and forwarded after release" in result.stdout
 
 
-def test_capture_installation_path_must_be_absolute(tmp_path):
+def test_capture_installation_path_must_be_absolute(
+    tmp_path, configuration_dependencies
+):
     configured = subprocess.run(
         [
             "cmake",
@@ -99,6 +120,7 @@ def test_capture_installation_path_must_be_absolute(tmp_path):
             "-B",
             str(tmp_path / "build"),
             "-DBUILD_TESTING=OFF",
+            *configuration_dependencies,
             "-DFORESIGHT_PW_RECORD_EXECUTABLE=relative/pw-record",
         ],
         capture_output=True,
@@ -111,7 +133,7 @@ def test_capture_installation_path_must_be_absolute(tmp_path):
 
 @pytest.mark.parametrize("inherited_generator", ["Xcode", "Visual Studio 17 2022"])
 def test_capture_installation_path_enters_native_compile_definition(
-    tmp_path, monkeypatch, inherited_generator
+    tmp_path, monkeypatch, inherited_generator, configuration_dependencies
 ):
     # Compile-command export is supported only by Makefile/Ninja generators;
     # a developer's inherited IDE generator must not change this fixture.
@@ -128,6 +150,7 @@ def test_capture_installation_path_enters_native_compile_definition(
             "-B",
             str(build),
             "-DBUILD_TESTING=OFF",
+            *configuration_dependencies,
             "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
             "-DFORESIGHT_PW_RECORD_EXECUTABLE=" + str(installed),
         ],
@@ -141,3 +164,28 @@ def test_capture_installation_path_enters_native_compile_definition(
     )
     assert "FORESIGHT_PW_RECORD_EXECUTABLE" in native["command"]
     assert str(installed) in native["command"]
+
+
+def test_native_configuration_still_requires_json_dependency(
+    tmp_path, configuration_dependencies
+):
+    configured = subprocess.run(
+        [
+            "cmake",
+            "-G",
+            "Unix Makefiles",
+            "-S",
+            str(ROOT / "native"),
+            "-B",
+            str(tmp_path / "build"),
+            "-DBUILD_TESTING=OFF",
+            *configuration_dependencies,
+            "-DCMAKE_DISABLE_FIND_PACKAGE_nlohmann_json=ON",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert configured.returncode != 0
+    assert "nlohmann_json" in configured.stderr
+    assert "REQUIRED package cannot be disabled" in " ".join(configured.stderr.split())
