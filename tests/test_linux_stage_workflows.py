@@ -11,6 +11,7 @@ import pytest
 import yaml
 
 from tools.ci_stage_cache import STAGES, fingerprint
+from tools.ci_producer_trust import evidence_job_name
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -32,7 +33,11 @@ def test_linux_native_core_desktop_and_service_are_independent_jobs():
     assert "if" not in jobs["service-linux"], "A failed Native producer remains fatal"
     for stage in STAGES:
         job = jobs[stage + "-linux"]
-        assert job["name"] == stage + "-linux"
+        assert job["name"] == stage
+        caller = workflow("macos.yml")["jobs"]["linux-native"]["name"]
+        assert evidence_job_name({"name": caller + " / " + job["name"]}) == (
+            "linux-native / " + stage + "-linux"
+        )
         assert job["container"].startswith("archlinux:base-devel@sha256:")
         assert job["runs-on"] == "ubuntu-24.04"
         assert any(

@@ -444,19 +444,44 @@ void main() {
     'real admission and classification contention retain bytes and health',
     () async {
       final profile = _profile();
+      var reads = 0;
       final storage = DiagnosticStorage.admit(
         profile,
         DiagnosticIdentity.random(),
         DiagnosticRole.desktop,
+        directoryReader: (descriptor, names, capacity) {
+          reads++;
+          return _streamReader(descriptor, names, capacity);
+        },
       )!;
       addTearDown(storage.close);
       final manifest = File('$profile/logs/slot-${storage.slot}/manifest.json');
       final before = manifest.readAsBytesSync();
       final root = BackupDirectory('$profile/logs');
       final admission = root.open('admission.lock');
+      Future<void> classified({void Function()? onBusy}) => eventually(() {
+        reads = 0;
+        if (storage.classify(DiagnosticRole.desktop, error: true)) return true;
+        expect(storage.failed, isFalse, reason: 'Do not retry storage errors');
+        expect(reads, 0, reason: 'Busy precedes directory validation');
+        expect(manifest.readAsBytesSync(), before);
+        final probe = root.open('admission.lock');
+        try {
+          expect(probe.size, 0);
+          expect(
+            probe.tryExclusiveLeaseChecked(),
+            isFalse,
+            reason: 'Retry only kernel-confirmed admission contention',
+          );
+        } finally {
+          probe.close();
+        }
+        onBusy?.call();
+        return false;
+      });
       try {
         // A concurrent child may retain the closed admission description until exec.
-        await eventually(admission.tryExclusiveLease);
+        await eventually(admission.tryExclusiveLeaseChecked);
         expect(
           DiagnosticStorage.admit(
             profile,
@@ -468,6 +493,17 @@ void main() {
         expect(storage.classify(DiagnosticRole.desktop, error: true), isFalse);
         expect(storage.failed, isFalse);
         expect(manifest.readAsBytesSync(), before);
+        var observedBusy = false;
+        await classified(
+          onBusy: () {
+            observedBusy = true;
+            // Only close our owner after an independent checked probe refused.
+            admission.close();
+          },
+        );
+        expect(observedBusy, isTrue);
+        expect(reads, 2, reason: 'Successful root and slot validation');
+        expect(storage.failed, isFalse);
       } finally {
         admission.close();
         root.close();
