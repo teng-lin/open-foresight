@@ -179,7 +179,7 @@ def nested_gate(tmp_path: Path, *, missing: bool = False, crash: bool = False):
     return root, env
 
 
-def run_nested(root: Path, env: dict[str, str]):
+def run_nested(root: Path, env: dict[str, str], *, verbose: bool = False):
     result = subprocess.run(
         [
             "bash",
@@ -187,7 +187,7 @@ def run_nested(root: Path, env: dict[str, str]):
             "checks",
             "--basetemp",
             str(root / "private-tests"),
-            "-q",
+            "-v" if verbose else "-q",
             "--cov-report=json:coverage/python/coverage.json",
         ],
         cwd=root,
@@ -231,11 +231,12 @@ def test_real_parallel_coverage_floor_failure_remains_nonzero(tmp_path):
 
 def test_real_crashed_worker_is_not_restarted_or_hidden(tmp_path):
     root, env = nested_gate(tmp_path, crash=True)
-    result = run_nested(root, env)
+    result = run_nested(root, env, verbose=True)
     assert result.returncode != 0
     combined = (result.stdout + result.stderr).lower()
     assert b"crashed" in combined
-    assert b"restarting" not in combined
+    assert b"worker restarting disabled" in combined
+    assert b"replacing crashed worker" not in combined
     assert b"test_crash" in combined
 
 
