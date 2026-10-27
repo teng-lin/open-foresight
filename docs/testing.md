@@ -102,6 +102,14 @@ exit caused by missing dependencies does not test an invalid installation path.
 Minimal-host configuration and sanitizer execution are distinct evidence from
 an ordinary developer build.
 
+Required feature backends must fail configuration when their development files
+are missing or too old. A successful build with an optional-backend warning can
+ship a feature that fails before receiving its first sample. Inspect the first
+native error from the qualified artifact, then exercise each affected route
+with the rebuilt library. Legacy raw capture does not qualify durable capture's
+graph-clock backend. Keep application tooling dependencies, runtime package
+dependencies and configuration-only fixtures explicit and independently checked.
+
 Record source revisions separately for production code, changed fixtures and
 the final tested candidate. Reusing unchanged native/codec products requires
 checking their relevant source inputs and hashes; it is not a fresh build.

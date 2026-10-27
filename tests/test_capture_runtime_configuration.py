@@ -1,6 +1,7 @@
 """Capture installation paths are explicit build inputs, never runtime PATH lookups."""
 
 from pathlib import Path
+import os
 import json
 import subprocess
 import shutil
@@ -15,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 @pytest.fixture
 def configuration_dependencies(tmp_path, monkeypatch):
     # These tests configure targets and inspect compile commands; they do not
-    # compile JSON consumers. Declare that dependency explicitly without using
+    # compile JSON or PipeWire consumers. Declare dependencies explicitly without using
     # a developer's SDK installation or manufacturing a compiled-library proof.
     package = tmp_path / "configuration-only-json"
     package.mkdir()
@@ -24,6 +25,15 @@ def configuration_dependencies(tmp_path, monkeypatch):
     )
     for name in ("CMAKE_PREFIX_PATH", "CMAKE_MODULE_PATH", "nlohmann_json_ROOT"):
         monkeypatch.delenv(name, raising=False)
+    pkgconfig = tmp_path / "configuration-only-pkgconfig"
+    pkgconfig.mkdir()
+    (pkgconfig / "libpipewire-0.3.pc").write_text(
+        "Name: configuration-only PipeWire\n"
+        "Description: Imported target fixture; never compiled or shipped\n"
+        "Version: 1.0.5\nLibs:\nCflags:\n"
+    )
+    monkeypatch.delenv("PKG_CONFIG_PATH", raising=False)
+    monkeypatch.setenv("PKG_CONFIG_LIBDIR", str(pkgconfig))
     return [
         f"-Dnlohmann_json_DIR={package}",
         "-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF",
@@ -188,4 +198,66 @@ def test_native_configuration_still_requires_json_dependency(
     )
     assert configured.returncode != 0
     assert "nlohmann_json" in configured.stderr
+    assert "REQUIRED package cannot be disabled" in " ".join(configured.stderr.split())
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux", reason="Linux direct PipeWire configuration contract"
+)
+@pytest.mark.parametrize("version", [None, "0.3.65"])
+def test_native_linux_configuration_refuses_missing_or_old_pipewire(
+    tmp_path, configuration_dependencies, version
+):
+    pkgconfig = Path(os.environ["PKG_CONFIG_LIBDIR"])
+    package = pkgconfig / "libpipewire-0.3.pc"
+    if version is None:
+        package.unlink()
+    else:
+        package.write_text(package.read_text().replace("1.0.5", version))
+    configured = subprocess.run(
+        [
+            "cmake",
+            "-S",
+            str(ROOT / "native"),
+            "-B",
+            str(tmp_path / "build"),
+            "-DBUILD_TESTING=OFF",
+            *configuration_dependencies,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert configured.returncode != 0, configured.stdout + configured.stderr
+    assert "libpipewire-0.3" in configured.stdout + configured.stderr
+    error = " ".join(configured.stderr.split())
+    assert (
+        "A required package was not found" in error
+        or "The following required packages were not found" in error
+    )
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux", reason="Linux direct PipeWire configuration contract"
+)
+def test_native_linux_configuration_requires_pkgconfig(
+    tmp_path, configuration_dependencies
+):
+    configured = subprocess.run(
+        [
+            "cmake",
+            "-S",
+            str(ROOT / "native"),
+            "-B",
+            str(tmp_path / "build"),
+            "-DBUILD_TESTING=OFF",
+            *configuration_dependencies,
+            "-DCMAKE_DISABLE_FIND_PACKAGE_PkgConfig=ON",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert configured.returncode != 0
+    assert "PkgConfig" in configured.stderr
     assert "REQUIRED package cannot be disabled" in " ".join(configured.stderr.split())

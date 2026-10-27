@@ -31,7 +31,7 @@ jobs:
     timeout-minutes: 120
     steps:
       - name: Install the rolling Arch application toolchain
-        run: pacman -Syu --needed --noconfirm git cmake ninja gcc grpc protobuf nlohmann-json sqlite python python-pip uv clang gtk3 pkgconf unzip xz mesa libglvnd xorg-server-xvfb xorg-xauth dbus poppler unrtf bubblewrap which github-cli
+        run: pacman -Syu --needed --noconfirm git cmake ninja gcc grpc protobuf nlohmann-json sqlite python python-pip uv clang gtk3 pkgconf pipewire unzip xz mesa libglvnd xorg-server-xvfb xorg-xauth dbus poppler unrtf bubblewrap which github-cli
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false

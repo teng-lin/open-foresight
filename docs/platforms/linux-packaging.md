@@ -81,7 +81,10 @@ reproducible. Build manifests and ABI reports record what was produced.
 Saved recording and playback use the direct PipeWire API. Host builds require
 pkg-config plus PipeWire/SPA development headers exposing
 `libpipewire-0.3 >= 1.0.5`; the runtime package must provide that library too.
-Without it, the native build reports that retained recording is unsupported.
+CMake refuses Linux configuration if pkg-config or that dependency is absent or
+too old; Linux packages cannot be built with a silent capture-backend fallback.
+The application tooling image installs these headers independently of the SDK
+component image; its recipe digest invalidates tooling reuse when they change.
 `pw-record` remains available for the legacy capture path and diagnostics, but
 its raw FIFO cannot supply the acquisition timing required by saved recordings.
 See [native capture](../../native/README.md) and [audio codecs](../architecture/audio-codecs.md).

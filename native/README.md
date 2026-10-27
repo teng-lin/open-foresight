@@ -48,11 +48,12 @@ resampling. Forward acquisition discontinuities split a chunk and set
 `gap_before`; backwards time interrupts capture. The 23us algorithmic tolerance
 covers one canonical frame plus integer conversion on synthetic fixtures; actual
 device alignment bounds remain a separate platform qualification requirement.
-Linux retained recording uses the direct PipeWire API when libpipewire-0.3
->=1.0.5 development files are available at build time. This production dependency
+Linux retained recording requires the direct PipeWire API and libpipewire-0.3
+>=1.0.5 development files at build time. CMake refuses Linux configuration when
+pkg-config or this dependency is missing or too old. This production dependency
 preserves per-buffer clock provenance that `pw-record`'s raw FIFO discards.
-Packaging must provide that library; an absent backend visibly refuses retained
-recording while legacy capture stays available. The RT process callback only
+Packaging declares the corresponding runtime library and minimum version.
+`pw-record` remains available for legacy capture and diagnostics. The RT process callback only
 copies PCM and timestamps into 64 preallocated blocks of at most 4,800 frames
 (614,400 PCM bytes). Queue duration depends on graph quantum: 64 blocks at 1,024
 frames hold about 1.365 seconds; 4,800-frame blocks hold at most 6.4 seconds.

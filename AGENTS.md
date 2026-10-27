@@ -13,6 +13,9 @@ Use [CONTRIBUTING.md](CONTRIBUTING.md) for setup, conventions and required check
   When changing native/build inputs, verify root/standalone CMake and sanitizer
   paths with their declared inputs; installed packages or a private exported
   temp root can hide CI failures.
+- Require backends needed by shipped features at configure time. Verify the
+  packaged library's actual capture routes; a legacy capture pass does not
+  establish that durable recording was compiled in.
 - After changing Dart skips, run `python tools/check_integration_inventory.py`
   and review the matching inventory entries.
 - Give each failure an owner, a bounded investigation and a concrete exit

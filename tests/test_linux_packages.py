@@ -218,6 +218,14 @@ class LinuxPackagesTest(unittest.TestCase):
         self.assertTrue(abi.inspect(binary, "99.0", "99.0")["passed"])
         self.assertFalse(abi.inspect(binary, "2.0", "3.0")["passed"])
 
+    def test_packages_declare_versioned_direct_pipewire_runtime(self):
+        metadata = json.loads((ROOT / "packaging/metadata.json").read_text())
+        assert "libpipewire-0.3-0 (>= 1.0.5)" in metadata["deb_dependencies"]
+        assert "pipewire-libs >= 1.0.5" in metadata["rpm_dependencies"]
+        assert "libpipewire>=1.0.5" in metadata["arch_dependencies"]
+        spec = packages.rpm_spec("0.1.4", "1", metadata)
+        assert "pipewire-libs >= 1.0.5" in spec
+
     def test_packages_declare_poppler_and_unrtf_and_ship_notices(self):
         metadata = json.loads((ROOT / "packaging/metadata.json").read_text())
         self.assertIn("libsecret-tools", metadata["deb_dependencies"])
