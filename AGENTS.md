@@ -16,6 +16,8 @@ Use [CONTRIBUTING.md](CONTRIBUTING.md) for setup, conventions and required check
 - Require backends needed by shipped features at configure time. Verify the
   packaged library's actual capture routes; a legacy capture pass does not
   establish that durable recording was compiled in.
+- Audit composite setup actions and slim artifact handoffs as well as workflow
+  jobs. Required test executables must reach the stage that runs their tests.
 - After changing Dart skips, run `python tools/check_integration_inventory.py`
   and review the matching inventory entries.
 - Give each failure an owner, a bounded investigation and a concrete exit
@@ -39,6 +41,8 @@ Use [CONTRIBUTING.md](CONTRIBUTING.md) for setup, conventions and required check
   Keep regression operations and their uncaught-error observer in the same Dart
   error zone unless zone crossing is the behavior under test; prove the old code
   fails the controlled regression.
+- Apply lazy logging thresholds only before sink admission. Prove that an
+  admitted sink retains a small normal suffix after a summary has flushed.
 - Capture the first failing shutdown stage before a terminal ownership warning
   obscures it. Use bounded stage/error-type diagnostics, never private payloads.
 - Check native audio timestamps against the actual database span, including

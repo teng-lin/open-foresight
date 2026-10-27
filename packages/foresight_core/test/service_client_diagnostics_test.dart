@@ -55,6 +55,8 @@ void main() {
   late List<Map<String, dynamic>> records;
   late Completer<void> closed;
   late Completer<void> failedConnectionRecorded;
+  late Completer<void> firstRefusedRecorded;
+  void Function()? heldRetryReply;
 
   setUp(() async {
     environment = Map.of(runtimeConfiguration.environment);
@@ -64,6 +66,8 @@ void main() {
     records = [];
     closed = Completer<void>();
     failedConnectionRecorded = Completer<void>();
+    firstRefusedRecorded = Completer<void>();
+    heldRetryReply = null;
     listener = messages.listen((value) {
       if (value == null) {
         closed.complete();
@@ -72,6 +76,15 @@ void main() {
           jsonDecode(utf8.decode(value as Uint8List)) as Map<String, dynamic>,
         );
         final record = records.last;
+        if (!firstRefusedRecorded.isCompleted &&
+            record['event'] == 'rpc.failed' &&
+            record['fields']['operation'] == 'notes.list' &&
+            record['attempt'] == 1) {
+          firstRefusedRecorded.complete();
+          final reply = heldRetryReply;
+          heldRetryReply = null;
+          reply?.call();
+        }
         if (!failedConnectionRecorded.isCompleted &&
             record['event'] == 'rpc.connection_changed' &&
             record['fields']['outcome'] == 'failed') {
@@ -90,6 +103,9 @@ void main() {
     await session.producer.ready;
   });
   tearDown(() async {
+    // A failed assertion or timeout must not leave a reply callback owning a
+    // socket after its fixture has closed. There is no detached Future.
+    heldRetryReply = null;
     await fixture.close();
     final result = await session.close();
     expect(result.writerExited, true);
@@ -154,14 +170,24 @@ void main() {
               }),
             );
           } else {
-            fixture.reply(socket, request, canary);
+            // Observe a real first-batch flush before the normal retry reply.
+            // Its completion must also survive the following session close.
+            if (firstRefusedRecorded.isCompleted) {
+              fixture.reply(socket, request, canary);
+            } else {
+              heldRetryReply = () => fixture.reply(socket, request, canary);
+            }
           }
         };
-        expect(
-          await connection.stream('notes.list', {'requestId': canary}).single,
-          canary,
-        );
-        await connection.close();
+        try {
+          expect(
+            await connection.stream('notes.list', {'requestId': canary}).single,
+            canary,
+          );
+        } finally {
+          heldRetryReply = null;
+          await connection.close();
+        }
       });
       final grants = session.producer.receivedGrantsForTesting;
       final observation = {

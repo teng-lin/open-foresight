@@ -105,7 +105,13 @@ void main() {
       }),
     );
   });
-  for (final mode in ['normal', 'idle-death', 'alias', 'unsafe-control']) {
+  for (final mode in [
+    'normal',
+    'summary-suffix',
+    'idle-death',
+    'alias',
+    'unsafe-control',
+  ]) {
     test(
       'real session shared child $mode owns storage and physical close',
       () async {
@@ -139,7 +145,7 @@ void main() {
         expect(result['owner_settled'], isTrue);
         expect(result['requires_explicit_exit'], isFalse);
         expect(result['close_ms'], lessThan(900));
-        if (mode == 'normal') {
+        if (mode == 'normal' || mode == 'summary-suffix') {
           expect(result['flushed'], isTrue);
           expect(result['child_not_live'], isTrue);
           final records =
@@ -155,10 +161,17 @@ void main() {
           expect(records.first, containsPair('pid', result['pid']));
           expect(records.first, containsPair('build_id', _identity));
           expect(records.first, containsPair('session', result['session']));
-          expect(records.first['producer'], matches(r'^entrypoint:\d+:\d+$'));
+          if (mode == 'summary-suffix') {
+            expect(records.first['producer'], 'writer:0:0');
+            expect(records.last['producer'], matches(r'^entrypoint:\d+:\d+$'));
+          } else {
+            expect(records.first['producer'], matches(r'^entrypoint:\d+:\d+$'));
+          }
           expect(records.first['sequence'], 1);
           expect(records.map((record) => record['event']), [
-            'runtime.failed',
+            mode == 'summary-suffix'
+                ? 'logging.records_dropped'
+                : 'runtime.failed',
             'service.ready',
           ]);
           expect(records.map((record) => record['sequence']), [1, 2]);
@@ -172,8 +185,12 @@ void main() {
           expect(manifest['session'], result['session']);
           expect(manifest['pid'], result['pid']);
           expect(manifest['role'], 'service');
-          expect(manifest['has_error'], isTrue);
-          expect(manifest['failure_order'], greaterThan(0));
+          if (mode == 'summary-suffix') {
+            expect(manifest['failure_order'], 0);
+          } else {
+            expect(manifest['has_error'], isTrue);
+            expect(manifest['failure_order'], greaterThan(0));
+          }
         } else if (mode == 'idle-death') {
           expect(result['health'], 'storageWorkerExited');
           expect(result['child_not_live'], isTrue);

@@ -1899,6 +1899,7 @@ final class _Writer {
         return;
       }
       final eligible =
+          _admitted ||
           hadPriority ||
           _hasSummaries ||
           records.length >= 100 ||
@@ -2128,6 +2129,7 @@ final class _Writer {
       return;
     }
     final lazyReady =
+        _admitted ||
         hadPriority ||
         _hasSummaries ||
         records.length >= 100 ||
@@ -2186,6 +2188,7 @@ final class _Writer {
           }
           reason = DiagnosticHealthReason.sinkFailed;
         } else {
+          _admitted = true;
           for (final record in records) {
             final bytes = _encode(record);
             if (bytes.length > DiagnosticRecord.maximumRecordBytes ||
