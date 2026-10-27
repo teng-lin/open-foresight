@@ -1,6 +1,7 @@
 """Build artifacts restore only their stage's verified outputs."""
 
 import copy
+import hashlib
 import json
 import os
 import subprocess
@@ -360,6 +361,13 @@ def test_native_runtime_payload_omits_compilers_and_retains_products_and_notices
     worker = root / "build/services/helper/model_worker_fixture"
     worker.write_text("#!/bin/sh\nprintf '%s\\n' model-worker-fixture-ok\n")
     worker.chmod(0o755)
+    capture = root / "build/native/native_recording_capture_test"
+    capture.write_text("#!/bin/sh\nprintf '%s\\n' recording-capture-fixture-ok\n")
+    capture.chmod(0o755)
+    executables = {
+        worker: "model-worker-fixture-ok",
+        capture: "recording-capture-fixture-ok",
+    }
     output = tmp_path / "runtime"
     manifest = module.pack(root, platform, "native-runtime", output)
     assert not manifest["source_times"]
@@ -372,12 +380,19 @@ def test_native_runtime_payload_omits_compilers_and_retains_products_and_notices
         assert module.entry(target / relative, target) == manifest["files"][relative]
     for relative in excluded:
         assert not (target / relative).exists()
-    restored_worker = target / worker.relative_to(root)
-    assert restored_worker.stat().st_mode & 0o111 == 0o111
-    assert (
-        subprocess.check_output([str(restored_worker)], text=True, timeout=10).strip()
-        == "model-worker-fixture-ok"
-    )
+    for executable, expected in executables.items():
+        relative = executable.relative_to(root)
+        restored = target / relative
+        assert manifest["files"][relative.as_posix()] == {
+            "kind": "file",
+            "mode": 0o755,
+            "sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+        }
+        assert restored.stat().st_mode & 0o777 == 0o755
+        assert (
+            subprocess.check_output([str(restored)], text=True, timeout=10).strip()
+            == expected
+        )
     copied_output = tmp_path / "saved-runtime-copy"
     copied_manifest = module.pack(target, platform, "native-runtime", copied_output)
     assert copied_manifest == manifest
@@ -394,6 +409,35 @@ def test_native_runtime_payload_omits_compilers_and_retains_products_and_notices
             module.entry(copied_target / relative, copied_target)
             == manifest["files"][relative]
         )
+    for executable, expected in executables.items():
+        copied = copied_target / executable.relative_to(root)
+        assert copied.stat().st_mode & 0o777 == 0o755
+        assert (
+            subprocess.check_output([str(copied)], text=True, timeout=10).strip()
+            == expected
+        )
+
+
+@pytest.mark.parametrize("platform", ["linux", "macos"])
+def test_native_runtime_capture_fixture_tampered_bytes_are_rejected(tmp_path, platform):
+    root = tmp_path / "original"
+    repository(root)
+    capture = root / "build/native/native_recording_capture_test"
+    capture.parent.mkdir(parents=True)
+    capture.write_text("#!/bin/sh\nexit 0\n")
+    capture.chmod(0o755)
+    original = module.pack(
+        root, platform, "native-runtime", tmp_path / "original-artifact"
+    )
+    capture.write_text("#!/bin/sh\nexit 1\n")
+    damaged = tmp_path / "damaged-artifact"
+    module.pack(root, platform, "native-runtime", damaged)
+    target = tmp_path / "target"
+    with pytest.raises(ValueError, match="content mismatch"):
+        module.unpack(
+            target, platform, "native-runtime", damaged / "payload.tar.gz", original
+        )
+    assert not (target / "build").exists()
 
 
 def test_runtime_manifest_cannot_restore_compiler_objects(tmp_path):
