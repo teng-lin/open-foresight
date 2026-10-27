@@ -528,21 +528,44 @@ def test_bundle_requires_its_own_sql_support_fixture(tmp_path):
         )
 
 
-def test_macos_bundle_binds_its_sql_support_fixture(tmp_path):
+@pytest.mark.parametrize("missing", [None, "config", "file", "outside"])
+def test_macos_bundle_binds_its_own_sqlite_and_sql_support_fixture(tmp_path, missing):
     bundle = tmp_path / "Fixture.app"
     resources = bundle / "Contents/Resources"
     config = {
         "FORESIGHT_NATIVE": "lib/libforesight_native.dylib",
         "FORESIGHT_HELPER": "bin/ForesightHelper",
         "FORESIGHT_LITERT_RUNNER": "bin/foresight-model",
+        "FORESIGHT_SQLITE_LIBRARY": "lib/libforesight_sqlite3.dylib",
     }
     for relative in (*config.values(), "lib/libforesight_sql_support.dylib"):
         path = resources / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch()
+    if missing == "config":
+        del config["FORESIGHT_SQLITE_LIBRARY"]
+    elif missing == "file":
+        (resources / config["FORESIGHT_SQLITE_LIBRARY"]).unlink()
+    elif missing == "outside":
+        outside = tmp_path / "host-sqlite.dylib"
+        outside.touch()
+        config["FORESIGHT_SQLITE_LIBRARY"] = str(outside)
     (resources / "runtime.json").write_text(json.dumps(config))
-    env = gates.bundle_environment(
-        bundle, {"FORESIGHT_TEST_SQL_SUPPORT_LIBRARY": "/host/sql.dylib"}
+    inherited = {
+        "FORESIGHT_TEST_SQL_SUPPORT_LIBRARY": "/host/sql.dylib",
+        "FORESIGHT_SQLITE_LIBRARY": "/host/unrelated-sqlite.dylib",
+    }
+    if missing == "file":
+        with pytest.raises(FileNotFoundError):
+            gates.bundle_environment(bundle, inherited)
+        return
+    if missing:
+        with pytest.raises(ValueError, match="FORESIGHT_SQLITE_LIBRARY"):
+            gates.bundle_environment(bundle, inherited)
+        return
+    env = gates.bundle_environment(bundle, inherited)
+    assert env["FORESIGHT_SQLITE_LIBRARY"] == str(
+        resources / "lib/libforesight_sqlite3.dylib"
     )
     assert env["FORESIGHT_TEST_SQL_SUPPORT_LIBRARY"] == str(
         resources / "lib/libforesight_sql_support.dylib"

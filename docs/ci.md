@@ -35,6 +35,11 @@ and batch related fixes. Check test counts and skip reasons as well as exit code
 Display names use the same categories on both platforms. Internal job IDs,
 artifact names and provenance receipts retain their existing identities.
 
+Linux core, desktop and service jobs consume the successful native job's verified
+runtime artifact. The macOS matrix runs those stages independently: each builds
+its native prerequisites before testing its own layer, while the native CTest job
+runs alongside them. Both require every selected stage to pass before completion.
+
 | Display | What executes |
 |---|---|
 | `Linux checks / native`, `/ core`, `/ desktop`, `/ service` | Independently qualified stages in the pinned Arch container. Core, desktop and service consume the verified native prerequisite. |

@@ -220,6 +220,12 @@ def bundle_environment(bundle, inherited):
         if not key.startswith("FORESIGHT_")
     }
     bundle = bundle.resolve(strict=True)
+    required = [
+        "FORESIGHT_NATIVE",
+        "FORESIGHT_HELPER",
+        "FORESIGHT_LITERT_RUNNER",
+        "FORESIGHT_TEST_SQL_SUPPORT_LIBRARY",
+    ]
     if bundle.suffix == ".app":
         resources = bundle / "Contents/Resources"
         config = json.loads((resources / "runtime.json").read_text())
@@ -234,10 +240,15 @@ def bundle_environment(bundle, inherited):
             "FORESIGHT_LITERT_LIBRARY",
             "FORESIGHT_QUERY_RUNTIME",
             "FORESIGHT_QUERY_WORKER",
+            "FORESIGHT_SQLITE_LIBRARY",
         ]
         for key in keys:
             if key in config:
                 env[key] = str((resources / config[key]).resolve(strict=True))
+        sqlite = env.get("FORESIGHT_SQLITE_LIBRARY")
+        if sqlite is None or not Path(sqlite).is_relative_to(bundle):
+            raise ValueError("Missing bundle runtime: FORESIGHT_SQLITE_LIBRARY")
+        required.append("FORESIGHT_SQLITE_LIBRARY")
     else:
         env.update(
             FORESIGHT_NATIVE=str(bundle / "lib/libforesight_native.so"),
@@ -256,12 +267,7 @@ def bundle_environment(bundle, inherited):
             # Loading the packaged release engine here prevents VM startup.
             LD_LIBRARY_PATH=str(bundle / "lib"),
         )
-    for key in [
-        "FORESIGHT_NATIVE",
-        "FORESIGHT_HELPER",
-        "FORESIGHT_LITERT_RUNNER",
-        "FORESIGHT_TEST_SQL_SUPPORT_LIBRARY",
-    ]:
+    for key in required:
         if not Path(env[key]).is_file():
             raise ValueError(f"Missing bundle runtime: {key}")
     env.update(FORESIGHT_LITERT_BACKEND="cpu", FORESIGHT_GENERATION_BACKEND="litert_lm")
