@@ -57,6 +57,7 @@ def shared_tasks(python: str) -> list[tuple[str, list[str]]]:
     """Cross-language metadata checks run even when only Dart files changed."""
     return [
         ("skip-inventory", [python, "tools/check_integration_inventory.py"]),
+        ("boundary-inventory", [python, "-m", "tools.boundary_inventory"]),
         ("document-links", [python, "-m", "tools.check_document_links"]),
         ("subprocess-timeouts", [python, "tools/check_subprocess_timeouts.py"]),
         ("ruff", [python, "-m", "ruff", "check", "."]),

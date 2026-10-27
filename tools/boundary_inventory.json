@@ -1,0 +1,2315 @@
+{
+  "schema": 1,
+  "baseline": {
+    "lifecycle_matrix_revision": "f7c063834b0e9e17f3c3507dd2ab93c8f34a1eeb",
+    "lifecycle_matrix_path": "docs/architecture/service-lifecycle-tests.md",
+    "note": "The lifecycle matrix document was removed from the tree by the documentation consolidation; its last content is git show f7c06383:docs/architecture/service-lifecycle-tests.md. This file is now the machine-readable record, and tools.boundary_inventory verifies every cited test is still registered."
+  },
+  "owners": {
+    "ci-orchestration": "CI orchestration: selection, workflow callers, shared guards, evidence tooling.",
+    "test-support-runtime-lifecycle": "Test support and runtime lifecycle: fixtures, ownership, readiness and teardown.",
+    "platform-reproduction": "Platform reproduction: account/NSS identity, container and hosted-OS parity.",
+    "producer-consumer": "The team that changes either side of the boundary owns updating its tests, this entry and the owning gate."
+  },
+  "gates": {
+    "shared-guards": {
+      "scope": "neutral",
+      "title": "Shared pre-push guards",
+      "kind": "command",
+      "argv": [
+        "{python}",
+        "-m",
+        "tools.check_local_validation"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "requires": [
+        {
+          "kind": "python",
+          "version": "3.13"
+        },
+        {
+          "kind": "executable",
+          "name": "actionlint"
+        },
+        {
+          "kind": "executable",
+          "name": "shellcheck"
+        }
+      ],
+      "timeout_seconds": 1800,
+      "long": false,
+      "doc": "CONTRIBUTING.md#quality-checks",
+      "certifies": "Cross-language metadata, lint/type, workflow and inventory guards. Does not certify native, Dart, compiled-service or installed behavior."
+    },
+    "python-coverage": {
+      "scope": "neutral",
+      "title": "Python suite with the 95% coverage gate",
+      "kind": "command",
+      "argv": [
+        "{python}",
+        "-m",
+        "tools.check_local_validation",
+        "--full-python"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "requires": [
+        {
+          "kind": "python",
+          "version": "3.13"
+        },
+        {
+          "kind": "executable",
+          "name": "actionlint"
+        },
+        {
+          "kind": "executable",
+          "name": "shellcheck"
+        },
+        {
+          "kind": "executable",
+          "name": "cmake"
+        },
+        {
+          "kind": "executable",
+          "name": "ninja"
+        },
+        {
+          "kind": "executable",
+          "name": "protoc"
+        }
+      ],
+      "subsumes": [
+        "shared-guards"
+      ],
+      "timeout_seconds": 5400,
+      "long": true,
+      "doc": "CONTRIBUTING.md#build-and-test",
+      "certifies": "The offline Python tooling suite under the unchanged combined coverage floor."
+    },
+    "platform-contracts": {
+      "title": "Host platform Python contracts",
+      "kind": "command",
+      "argv": [
+        "{python}",
+        "tools/platform_python_tests.py",
+        "--platform",
+        "{platform}"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "requires": [
+        {
+          "kind": "python",
+          "version": "3.13"
+        },
+        {
+          "kind": "executable",
+          "name": "cmake"
+        },
+        {
+          "kind": "executable",
+          "name": "ninja"
+        }
+      ],
+      "junit": [
+        "coverage/python/{platform}-contracts.xml"
+      ],
+      "timeout_seconds": 1800,
+      "long": false,
+      "doc": "tools/platform_python_tests.py",
+      "certifies": "Real compiler, filesystem and shell behavior of the shared host contracts on this host's operating system only."
+    },
+    "bindings-check": {
+      "scope": "neutral",
+      "title": "Generated protobuf bindings drift",
+      "kind": "command",
+      "argv": [
+        "{python}",
+        "tools/check_dart_bindings.py"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "requires": [
+        {
+          "kind": "python",
+          "version": "3.13"
+        },
+        {
+          "kind": "executable",
+          "name": "protoc"
+        },
+        {
+          "kind": "executable",
+          "name": "protoc-gen-dart"
+        }
+      ],
+      "timeout_seconds": 900,
+      "long": false,
+      "doc": "CONTRIBUTING.md#quality-checks",
+      "certifies": "Generated Dart bindings match the proto sources with the pinned compiler. Proves schema sync only, not consumer behavior."
+    },
+    "native-stage": {
+      "title": "Native configure, compile and CTest (build.sh native stage)",
+      "kind": "command",
+      "argv": [
+        "bash",
+        "tools/build.sh",
+        "--platform",
+        "{platform}",
+        "--stage",
+        "native"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "requires": [
+        {
+          "kind": "executable",
+          "name": "cmake"
+        },
+        {
+          "kind": "executable",
+          "name": "ninja"
+        },
+        {
+          "kind": "executable",
+          "name": "protoc"
+        },
+        {
+          "kind": "executable",
+          "name": "c++"
+        }
+      ],
+      "junit": [
+        "test-results/{platform}/native/results.xml"
+      ],
+      "reuse": [
+        {
+          "id": "build-tree",
+          "path": "{build_dir}",
+          "digest_files": [
+            "{build_dir}/native/{native_library}"
+          ],
+          "decision": "An existing build tree is reconfigured and incrementally rebuilt by the entrypoint; unchanged objects are reused, not freshly compiled."
+        }
+      ],
+      "produces": [
+        "{build_dir}/native/{native_library}",
+        "{build_dir}/application/foresight-service",
+        "{build_dir}/application/foresight-mcp",
+        "{build_dir}/services/helper/ForesightHelper",
+        "{build_dir}/services/helper/model_worker_fixture"
+      ],
+      "timeout_seconds": 10800,
+      "long": true,
+      "doc": "CONTRIBUTING.md#build-and-test",
+      "certifies": "Native targets compile and their CTest suite passes on this host."
+    },
+    "core-stage": {
+      "title": "Core Dart analyze and tests against the native library (build.sh core stage)",
+      "kind": "command",
+      "argv": [
+        "bash",
+        "tools/build.sh",
+        "--platform",
+        "{platform}",
+        "--stage",
+        "core"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "requires": [
+        {
+          "kind": "executable",
+          "name": "dart"
+        },
+        {
+          "kind": "path",
+          "path": "{build_dir}/native/{native_library}",
+          "produced_by": [
+            "native-stage"
+          ]
+        }
+      ],
+      "reuse": [
+        {
+          "id": "native-library",
+          "path": "{build_dir}/native/{native_library}",
+          "digest_files": [
+            "{build_dir}/native/{native_library}"
+          ],
+          "decision": "The core gate consumes the existing native library through the entrypoint's runtime-support verification; this check does not rebuild it."
+        }
+      ],
+      "timeout_seconds": 7200,
+      "long": true,
+      "doc": "CONTRIBUTING.md#build-and-test",
+      "certifies": "Source/JIT Dart core tests (including core-native cases whose skips are inventoried) against the named native library."
+    },
+    "desktop-stage": {
+      "title": "Desktop Flutter analyze and tests (build.sh desktop stage)",
+      "kind": "command",
+      "argv": [
+        "bash",
+        "tools/build.sh",
+        "--platform",
+        "{platform}",
+        "--stage",
+        "desktop"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "requires": [
+        {
+          "kind": "executable",
+          "name": "dart"
+        },
+        {
+          "kind": "executable",
+          "name": "flutter"
+        },
+        {
+          "kind": "path",
+          "path": "{build_dir}/native/{native_library}",
+          "produced_by": [
+            "native-stage"
+          ]
+        }
+      ],
+      "reuse": [
+        {
+          "id": "native-library",
+          "path": "{build_dir}/native/{native_library}",
+          "digest_files": [
+            "{build_dir}/native/{native_library}"
+          ],
+          "decision": "The desktop gate consumes the existing native library; this check does not rebuild it."
+        }
+      ],
+      "timeout_seconds": 7200,
+      "long": true,
+      "doc": "CONTRIBUTING.md#build-and-test",
+      "certifies": "Source/JIT Flutter widget and desktop tests. Native-UI integration tests run only with a configured display."
+    },
+    "service-stage": {
+      "title": "Compiled service, MCP and helper integration (build.sh service stage)",
+      "kind": "command",
+      "argv": [
+        "bash",
+        "tools/build.sh",
+        "--platform",
+        "{platform}",
+        "--stage",
+        "service"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "requires": [
+        {
+          "kind": "executable",
+          "name": "dart"
+        },
+        {
+          "kind": "path",
+          "path": "{build_dir}/native/{native_library}",
+          "produced_by": [
+            "native-stage"
+          ]
+        },
+        {
+          "kind": "path",
+          "path": "{build_dir}/application/foresight-service",
+          "produced_by": [
+            "native-stage"
+          ]
+        },
+        {
+          "kind": "path",
+          "path": "{build_dir}/application/foresight-mcp",
+          "produced_by": [
+            "native-stage"
+          ]
+        },
+        {
+          "kind": "path",
+          "path": "{build_dir}/services/helper/ForesightHelper",
+          "produced_by": [
+            "native-stage"
+          ]
+        }
+      ],
+      "junit": [
+        "test-results/service/results.xml"
+      ],
+      "reuse": [
+        {
+          "id": "compiled-products",
+          "path": "{build_dir}/application",
+          "digest_files": [
+            "{build_dir}/application/foresight-service",
+            "{build_dir}/application/foresight-mcp",
+            "{build_dir}/services/helper/ForesightHelper"
+          ],
+          "decision": "build_service_gate.sh runs the compiled boundary without rebuilding it; the service, MCP and helper bytes are reused and verified only by the entrypoint's runtime-support and diagnostic-worker checks."
+        }
+      ],
+      "timeout_seconds": 7200,
+      "long": true,
+      "doc": "tools/build_service_gate.sh",
+      "certifies": "The compiled desktop-service/MCP/helper boundary with production executables. Native-display tests inside it fail rather than skip when no display is configured."
+    },
+    "document-sandbox": {
+      "title": "Linux document import sandbox",
+      "kind": "command",
+      "argv": [
+        "bash",
+        "tools/ci_document_sandbox.sh"
+      ],
+      "platforms": [
+        "linux"
+      ],
+      "requires": [
+        {
+          "kind": "path",
+          "path": "/usr/bin/bwrap"
+        },
+        {
+          "kind": "path",
+          "path": "/usr/bin/pdftotext"
+        },
+        {
+          "kind": "path",
+          "path": "/usr/bin/unrtf"
+        },
+        {
+          "kind": "executable",
+          "name": "dart"
+        }
+      ],
+      "junit": [],
+      "timeout_seconds": 1800,
+      "long": false,
+      "doc": "docs/platforms/linux-packaging.md#document-import-sandbox",
+      "certifies": "PDF and RTF fixtures through the production Dart parser under the real sandbox. Meant for a disposable Ubuntu host; it may apply AppArmor policy only on GitHub-hosted runners."
+    },
+    "integration-fast": {
+      "title": "Fast Dart integration group (integration_gates --suite fast)",
+      "kind": "command",
+      "argv": [
+        "{python}",
+        "tools/integration_gates.py",
+        "--suite",
+        "fast",
+        "--native",
+        "{build_dir}/native/{native_library}",
+        "--output",
+        "{output}/integration-fast"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "requires": [
+        {
+          "kind": "executable",
+          "name": "dart"
+        },
+        {
+          "kind": "executable",
+          "name": "flutter"
+        },
+        {
+          "kind": "path",
+          "path": "{build_dir}/native/{native_library}",
+          "produced_by": [
+            "native-stage"
+          ]
+        }
+      ],
+      "reuse": [
+        {
+          "id": "native-library",
+          "path": "{build_dir}/native/{native_library}",
+          "digest_files": [
+            "{build_dir}/native/{native_library}"
+          ],
+          "decision": "Consumes the existing native library; not rebuilt by this check."
+        }
+      ],
+      "timeout_seconds": 3600,
+      "long": true,
+      "doc": "docs/testing.md#regular-pull-request-gates",
+      "certifies": "The exact expected number of executed fast-group tests with no skips."
+    },
+    "integration-models": {
+      "title": "Real-model acceptance group (integration_gates --suite models)",
+      "kind": "command",
+      "argv": [
+        "{python}",
+        "tools/integration_gates.py",
+        "--suite",
+        "models",
+        "--bundle",
+        "{bundle}",
+        "--models",
+        "{models}",
+        "--output",
+        "{output}/integration-models"
+      ],
+      "platforms": [
+        "linux"
+      ],
+      "requires": [
+        {
+          "kind": "path",
+          "path": "{bundle}"
+        },
+        {
+          "kind": "path",
+          "path": "{models}"
+        },
+        {
+          "kind": "executable",
+          "name": "dart"
+        },
+        {
+          "kind": "executable",
+          "name": "flutter"
+        }
+      ],
+      "reuse": [
+        {
+          "id": "bundle",
+          "path": "{bundle}",
+          "decision": "The prepared application bundle and checksum-pinned model fixtures are consumed as built; this check does not rebuild or re-verify them."
+        }
+      ],
+      "timeout_seconds": 5400,
+      "long": true,
+      "doc": "docs/testing.md#model-and-virtual-audio-acceptance",
+      "certifies": "Real model, helper and Google-fixture groups from a prepared bundle. Linux runtime container only."
+    },
+    "integration-virtual-audio": {
+      "title": "Virtual-audio acceptance group (integration_gates --suite virtual-audio)",
+      "kind": "command",
+      "argv": [
+        "dbus-run-session",
+        "--",
+        "{python}",
+        "tools/integration_gates.py",
+        "--suite",
+        "virtual-audio",
+        "--bundle",
+        "{bundle}",
+        "--models",
+        "{models}",
+        "--output",
+        "{output}/integration-virtual-audio"
+      ],
+      "platforms": [
+        "linux"
+      ],
+      "requires": [
+        {
+          "kind": "path",
+          "path": "{bundle}"
+        },
+        {
+          "kind": "path",
+          "path": "{models}"
+        },
+        {
+          "kind": "executable",
+          "name": "dbus-run-session"
+        },
+        {
+          "kind": "executable",
+          "name": "dart"
+        },
+        {
+          "kind": "executable",
+          "name": "flutter"
+        }
+      ],
+      "reuse": [
+        {
+          "id": "bundle",
+          "path": "{bundle}",
+          "decision": "The prepared bundle and model fixtures are consumed as built."
+        }
+      ],
+      "timeout_seconds": 5400,
+      "long": true,
+      "doc": "docs/testing.md#model-and-virtual-audio-acceptance",
+      "certifies": "Whisper partial/final, virtual microphone outage and the meeting workflow in a disposable container without /dev/snd."
+    },
+    "dmg-contracts": {
+      "title": "Apple DMG signing, mount and upgrade contracts",
+      "kind": "command",
+      "argv": [
+        "{python}",
+        "tools/run_dmg_contracts.py",
+        "--output",
+        "{output}/dmg/contracts.xml"
+      ],
+      "platforms": [
+        "macos"
+      ],
+      "requires": [
+        {
+          "kind": "python",
+          "version": "3.13"
+        },
+        {
+          "kind": "executable",
+          "name": "hdiutil"
+        },
+        {
+          "kind": "executable",
+          "name": "codesign"
+        }
+      ],
+      "junit": [],
+      "timeout_seconds": 3600,
+      "long": true,
+      "doc": "tools/run_dmg_contracts.py",
+      "certifies": "Both real Apple signing/mount and upgrade contracts; a wholly skipped contract fails."
+    },
+    "native-sanitizers": {
+      "title": "Native sanitizer gates",
+      "kind": "ci-only",
+      "ci_job": ".github/workflows/native-sanitizers.yml",
+      "requirement": "Requires the hosted instrumented ASan/UBSan/TSan SDKs and containers; no checked-in local entrypoint reproduces their SDK identity. Run through the sanitizer workflow, or tools/run_native_sanitizers.sh with an independently built instrumented tree.",
+      "platforms": [
+        "linux"
+      ],
+      "long": true,
+      "doc": "docs/testing.md#native-leak-sanitizer",
+      "certifies": "Not executable locally by validate_change."
+    },
+    "hosted-packaging": {
+      "title": "Hosted installer and package contracts",
+      "kind": "ci-only",
+      "ci_job": ".github/workflows/linux-packages.yml, package-contracts.yml, macos-release.yml",
+      "requirement": "DEB/RPM/Arch installer matrix, upgrade and relocation checks execute only in the hosted package workflows against the current run's bundle; there is no whole-matrix local entrypoint.",
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "long": true,
+      "doc": "docs/ci.md",
+      "certifies": "Not executable locally by validate_change."
+    },
+    "installed-acceptance": {
+      "title": "Installed-product acceptance",
+      "kind": "manual",
+      "requirement": "Run the installed-release acceptance (tools/test_installed_release.py via the release-acceptance and preview workflows or packaging/ci/test-release-package.sh) and the installed GUI approval procedure against the exact qualified installer bytes. Record installer digest and source revision with the result.",
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "long": true,
+      "doc": "docs/release-acceptance.md",
+      "certifies": "Cannot be satisfied by any source-tree or build-tree check."
+    },
+    "manual-probes": {
+      "title": "Manual diagnostic probes",
+      "kind": "manual",
+      "requirement": "Diagnostic probes in tools/integration_probes.json with mode manual need an installed runtime, models, an owned desktop session or physical hardware. Run only with their documented fixtures and authorization, and record the results; they are not release acceptance unless actually run.",
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "long": true,
+      "doc": "docs/testing.md#probe-index",
+      "certifies": "Nothing unless executed and recorded."
+    }
+  },
+  "ci_gate_map": {
+    "macos": {
+      "platform": "macos",
+      "gates": [
+        "platform-contracts",
+        "native-stage",
+        "core-stage",
+        "desktop-stage",
+        "service-stage"
+      ]
+    },
+    "linux-build": {
+      "platform": "linux",
+      "gates": [
+        "platform-contracts",
+        "native-stage",
+        "core-stage",
+        "desktop-stage",
+        "service-stage"
+      ]
+    },
+    "linux-test": {
+      "platform": "linux",
+      "gates": [
+        "core-stage",
+        "desktop-stage",
+        "service-stage"
+      ]
+    },
+    "linux-document-imports": {
+      "platform": "linux",
+      "gates": [
+        "document-sandbox"
+      ]
+    },
+    "packaging": {
+      "platform": "linux",
+      "gates": [
+        "hosted-packaging"
+      ]
+    },
+    "dmg": {
+      "platform": "macos",
+      "gates": [
+        "dmg-contracts"
+      ]
+    }
+  },
+  "boundaries": [
+    {
+      "id": "desktop-service",
+      "title": "Desktop to service",
+      "producer": "ApplicationService owner process (packages/foresight_core/lib/src/service.dart and application_service.dart) over the Unix-socket framing protocol.",
+      "consumer": "RemoteDomain / DesktopConnection in the desktop application, which attaches through ensureService.",
+      "invariants": [
+        "Concurrent startup converges on one owner per profile.",
+        "Typed service errors keep their meaning across the wire.",
+        "A disconnect before dispatch is distinguished from an uncertain completion, and an uncertain mutation is never replayed.",
+        "Reconnect reattaches approvals and snapshots; stale callbacks cannot publish into a replacement session."
+      ],
+      "owner": "producer-consumer",
+      "execution_modes": [
+        "source-jit",
+        "compiled"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "prerequisites": [
+        "Dart SDK",
+        "native library for native-gated cases",
+        "compiled service for tests/service",
+        "native display for the desktop-facade integration test"
+      ],
+      "gate": "core-stage",
+      "also_gates": [
+        "desktop-stage",
+        "service-stage"
+      ],
+      "triggers": [
+        "packages/foresight_core/lib/src/remote_domain.dart",
+        "packages/foresight_core/lib/src/desktop_connection.dart",
+        "packages/foresight_core/lib/src/desktop_status.dart",
+        "packages/foresight_core/lib/src/service_client.dart",
+        "packages/foresight_core/lib/src/service_compatibility.dart",
+        "packages/foresight_core/lib/src/service_protocol.dart",
+        "packages/foresight_core/lib/src/service_framing.dart",
+        "packages/foresight_core/lib/src/service_message_writer.dart",
+        "packages/foresight_core/lib/remote.dart",
+        "packages/foresight_core/lib/desktop.dart",
+        "packages/foresight_core/lib/desktop_bootstrap.dart",
+        "packages/foresight_core/lib/service_client.dart",
+        "tests/service/remote_client_probe.dart"
+      ],
+      "evidence": [
+        {
+          "kind": "production-both-sides",
+          "path": "tests/service/test_service_process.py",
+          "excluded": true,
+          "names": [
+            "test_desktop_facade_reads_changes_and_reconnects_without_replaying_mutations"
+          ],
+          "note": "Real desktop connection against the compiled service; the facade test needs a configured native display and fails rather than skips without one."
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "packages/foresight_core/test/service_closing_protocol_test.dart",
+          "names": [
+            "an attached ServiceConnection and RemoteDomain follow a closing owner and send each refused request to it only once (SL-9)"
+          ]
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "packages/foresight_core/test/service_profile_identity_test.dart",
+          "names": [
+            "a desktop reconnecting to an owner in another runtime names that owner's endpoint (L9)"
+          ]
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "apps/desktop/integration_test/remote_facade_test.dart",
+          "note": "Native-display integration test driven by the Python wrapper above."
+        },
+        {
+          "kind": "fixture",
+          "path": "packages/foresight_core/test/remote_domain_test.dart",
+          "names": [
+            "abrupt service loss reconnects and refreshes snapshots without replaying a write",
+            "a command whose outcome is unknown is never resent",
+            "a command on a connection that already closed is sent once, on the next"
+          ],
+          "note": "RemoteDomain is production; the service is the socket fixture in foresight_test_support/remote_service.dart."
+        },
+        {
+          "kind": "fixture",
+          "path": "packages/foresight_core/test/service_connection_test.dart"
+        },
+        {
+          "kind": "fixture",
+          "path": "packages/foresight_core/test/commit_safety_test.dart"
+        },
+        {
+          "kind": "fixture",
+          "path": "packages/foresight_core/test/lost_reply_test.dart"
+        },
+        {
+          "kind": "static-guard",
+          "path": "packages/foresight_core/test/remote_facade_contract_test.dart",
+          "note": "Compile-time typing of the desktop facade; no runtime peer."
+        }
+      ],
+      "gaps": [
+        "No test crashes (SIGKILL or crash gate) a real service under an attached RemoteDomain; real-service tests terminate gracefully.",
+        "A slow non-attach reply from a real service to an attached RemoteDomain is not exercised."
+      ]
+    },
+    {
+      "id": "mcp-service",
+      "title": "MCP/CLI to service",
+      "producer": "ApplicationService owner process.",
+      "consumer": "foresight-mcp / ServiceConnection and the service CLI commands (--status, --stop, --stop-if-idle).",
+      "invariants": [
+        "Two launchers share one automatically started owner.",
+        "A closing owner is followed to exactly one replacement, and a dispatched request ends as outcome-unknown rather than being resent.",
+        "--stop and --stop-if-idle never act on another profile's owner.",
+        "Client pipe closure cancels pending service work."
+      ],
+      "owner": "producer-consumer",
+      "execution_modes": [
+        "source-jit",
+        "compiled"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "prerequisites": [
+        "Dart SDK",
+        "compiled service and MCP executables for tests/service"
+      ],
+      "gate": "service-stage",
+      "also_gates": [
+        "core-stage"
+      ],
+      "triggers": [
+        "packages/foresight_core/lib/src/mcp/**",
+        "packages/foresight_core/lib/src/service_connection.dart",
+        "packages/foresight_core/bin/mcp.dart",
+        "packages/foresight_core/lib/src/agent_access.dart"
+      ],
+      "evidence": [
+        {
+          "kind": "production-both-sides",
+          "path": "tests/service/test_service_process.py",
+          "excluded": true,
+          "names": [
+            "test_two_headless_mcp_launchers_share_one_automatically_started_owner",
+            "test_attached_mcp_follows_a_closing_owner_to_one_replacement",
+            "test_agent_only_service_exits_after_the_idle_period",
+            "test_shared_owner_concurrent_writes_search_and_mcp"
+          ]
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "packages/foresight_core/test/service_closing_protocol_test.dart",
+          "names": [
+            "at SIGTERM a request waiting for approval is refused and resent once to the replacement, while a dispatched one is outcomeUnknown"
+          ]
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "packages/foresight_core/test/service_stop_command_test.dart"
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "apps/desktop/integration_test/service_mcp_test.dart",
+          "note": "Needs a configured native display."
+        },
+        {
+          "kind": "fixture",
+          "path": "packages/foresight_core/test/mcp_protocol_test.dart",
+          "names": [
+            "cancellation reaches the service and leaves MCP responsive",
+            "client pipe closure cancels pending service work and exits"
+          ],
+          "note": "Real MCP binary against a fixture service that withholds replies."
+        },
+        {
+          "kind": "fixture",
+          "path": "packages/foresight_core/test/service_agent_access_test.dart"
+        }
+      ],
+      "gaps": [
+        "A real service holding a reply to an attached McpPeer (slow reply) is not exercised; tests/service holds replies only through the raw Python Peer."
+      ]
+    },
+    {
+      "id": "frontend-worker-isolate",
+      "title": "Service frontend isolate to worker isolate",
+      "producer": "The service worker isolate (the application and its stores).",
+      "consumer": "The isolated service frontend that owns the public socket and bridges frames.",
+      "invariants": [
+        "Partial or malformed replies, worker death and slow work settle pending requests correctly.",
+        "Committed work is protected during cancellation and shutdown; a refused client that reads slowly still receives every closing refusal.",
+        "A crash gate that kills the isolate leaves the owner able to be replaced."
+      ],
+      "owner": "producer-consumer",
+      "execution_modes": [
+        "source-jit",
+        "compiled"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "prerequisites": [
+        "Dart SDK",
+        "test hooks compiled for gate tests"
+      ],
+      "gate": "core-stage",
+      "also_gates": [
+        "service-stage"
+      ],
+      "triggers": [
+        "packages/foresight_core/lib/src/service_frontend.dart",
+        "packages/foresight_core/lib/src/service_admission.dart",
+        "packages/foresight_core/lib/src/service_gates.dart",
+        "packages/foresight_core/lib/service_server.dart"
+      ],
+      "evidence": [
+        {
+          "kind": "production-both-sides",
+          "path": "packages/foresight_core/test/service_isolate_test.dart"
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "packages/foresight_core/test/service_failure_isolation_test.dart"
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "packages/foresight_core/test/service_gate_test.dart",
+          "names": [
+            "a committed request waits at its gate before the reply is sent"
+          ]
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "packages/foresight_core/test/service_frontend_refusal_boundary_test.dart"
+        }
+      ],
+      "gaps": [
+        "No test asserts bridge behavior while the worker holds a reply slowly (concurrent requests, cancel during a held reply, frontend close while a reply is held)."
+      ]
+    },
+    {
+      "id": "service-helper",
+      "title": "Service to helper (native gRPC helper)",
+      "producer": "ForesightHelper (services/helper), the native vector-index and embedding helper.",
+      "consumer": "Helper, HelperChannel and the transport in packages/foresight_core (helper.dart, helper_channel.dart, helper_transport.dart).",
+      "invariants": [
+        "Cancellation and close settle; a closing service leaves no orphaned helper.",
+        "EOF, malformed frames, stalled peers and worker death preserve safety and committed data.",
+        "A replacement helper is adopted or relaunched without cross-profile signaling.",
+        "The wire protocol version is checked on both sides."
+      ],
+      "owner": "producer-consumer",
+      "execution_modes": [
+        "source-jit",
+        "compiled",
+        "ctest"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "prerequisites": [
+        "Built ForesightHelper and native library for core-native and tests/service cases",
+        "Dart SDK"
+      ],
+      "gate": "service-stage",
+      "also_gates": [
+        "core-stage",
+        "native-stage"
+      ],
+      "triggers": [
+        "packages/foresight_core/lib/src/helper.dart",
+        "packages/foresight_core/lib/src/helper_*.dart",
+        "services/helper/**",
+        "proto/linux/helper_control.proto",
+        "proto/helper_protocol_version.json",
+        "tools/helper_protocol.py",
+        "tests/helper/**",
+        "tests/service/gated_helper.py"
+      ],
+      "evidence": [
+        {
+          "kind": "production-both-sides",
+          "path": "tests/service/test_worker_recovery.py",
+          "excluded": true,
+          "names": [
+            "test_helper_crash_preserves_committed_data_and_restores_indexing",
+            "test_explicit_resume_restarts_helper_after_automatic_budget_is_exhausted"
+          ]
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "tests/service/test_service_process.py",
+          "excluded": true,
+          "names": [
+            "test_idle_shutdown_verifies_a_real_adopted_helper",
+            "test_service_stop_waits_for_active_capture_and_finalizes_transcript"
+          ]
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "packages/foresight_core/test/helper_process_recovery_test.dart",
+          "skip_gate": "core-native",
+          "note": "Production Helper with the real ForesightHelper when FORESIGHT_HELPER and FORESIGHT_NATIVE are set; otherwise skipped."
+        },
+        {
+          "kind": "fixture",
+          "path": "packages/foresight_core/test/helper_transport_test.dart",
+          "names": [
+            "the same helper channel reconnects to a replacement owner"
+          ]
+        },
+        {
+          "kind": "fixture",
+          "path": "packages/foresight_core/test/helper_channel_test.dart",
+          "names": [
+            "peer EOF before a queued request reports failure without escaping"
+          ]
+        },
+        {
+          "kind": "fixture",
+          "path": "packages/foresight_core/test/helper_close_test.dart",
+          "names": [
+            "concurrent helper shutdown shares one transport termination"
+          ]
+        },
+        {
+          "kind": "fixture",
+          "path": "packages/foresight_core/test/helper_purge_retry_test.dart"
+        },
+        {
+          "kind": "fixture",
+          "path": "packages/foresight_core/test/helper_adoption_test.dart"
+        },
+        {
+          "kind": "fixture",
+          "path": "packages/foresight_core/test/service_gate_test.dart",
+          "names": [
+            "the isolated worker stops at every close gate in order"
+          ],
+          "note": "GatedHelper holds SIGTERM; it is a stand-in, not the real helper."
+        },
+        {
+          "kind": "static-guard",
+          "path": "tests/test_helper_protocol_version.py"
+        },
+        {
+          "kind": "static-guard",
+          "path": "tests/test_helper_build_identity.py"
+        }
+      ],
+      "gaps": [
+        "Malformed or partial frames from the helper have no test at all; only stream-reset fixtures exist.",
+        "Two helpers on one storage (the flock path) and a SIGKILL crash of an adopted helper are untested.",
+        "No test makes the real helper answer slowly; the gated helper delays SIGTERM only.",
+        "EOF before reply with a real helper mid-request is not arranged deterministically; the real-helper crash test kills the process but does not hold an in-flight RPC."
+      ]
+    },
+    {
+      "id": "service-sqlite-read-worker",
+      "title": "Service to SQLite writer and read workers",
+      "producer": "The Store writer and schema migrations (store.dart, schema migrations, SQLite runtime).",
+      "consumer": "The persistent read-worker isolates and snapshot readers (sqlite_store_reader.dart, sqlite_read_worker.dart).",
+      "invariants": [
+        "Commit and reply ordering is explicit; restart retains committed data.",
+        "Retries remain idempotent where promised and stale reads cannot replace newer state.",
+        "A future schema is refused with a typed error before rows are published; upgrade and rollback keep writer/reader ownership correct."
+      ],
+      "owner": "producer-consumer",
+      "execution_modes": [
+        "source-jit",
+        "compiled"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "prerequisites": [
+        "Dart SDK",
+        "native SQLite runtime (the application's bundled SQLite on macOS)"
+      ],
+      "gate": "core-stage",
+      "also_gates": [
+        "service-stage",
+        "native-stage"
+      ],
+      "triggers": [
+        "packages/foresight_core/lib/src/sqlite_*.dart",
+        "packages/foresight_core/lib/src/store.dart",
+        "packages/foresight_core/lib/src/store_*.dart",
+        "packages/foresight_core/lib/persistence_bootstrap.dart",
+        "native/sql_support.*",
+        "tools/sqlite_preflight.py",
+        "tools/check_migration_integrity.py",
+        "tools/migrate_profile.py"
+      ],
+      "evidence": [
+        {
+          "kind": "production-both-sides",
+          "path": "packages/foresight_core/test/sqlite_store_reader_test.dart",
+          "names": [
+            "real persistent isolate reads Unicode bodies and refreshes committed rows",
+            "service reader tracks writer commits and leaves writer ownership intact",
+            "real worker detects schema changes after initial reads"
+          ]
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "packages/foresight_core/test/store_resilience_test.dart"
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "packages/foresight_core/test/sqlite_read_worker_budget_test.dart"
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "packages/foresight_core/test/sqlite_runtime_test.dart",
+          "skip_gate": "platform"
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "packages/foresight_core/test/schema_migrations_test.dart",
+          "skip_gate": "platform"
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "packages/foresight_core/test/migration_backups_test.dart"
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "tests/service/test_service_process.py",
+          "excluded": true,
+          "names": [
+            "test_restart_preserves_data_and_does_not_reuse_stale_socket",
+            "test_keyed_retry_commits_once_and_stale_ids_fail_after_restart"
+          ]
+        },
+        {
+          "kind": "fixture",
+          "path": "packages/foresight_core/test/sqlite_read_snapshot_contract_test.dart"
+        },
+        {
+          "kind": "static-guard",
+          "path": "tests/test_migration_integrity_gate.py"
+        },
+        {
+          "kind": "static-guard",
+          "path": "tests/test_sqlite_preflight.py"
+        }
+      ],
+      "gaps": []
+    },
+    {
+      "id": "launcher-service-handoff",
+      "title": "Launcher to spawned service, profile lock and endpoint-record handoff",
+      "producer": "A starting service owner (bin/service.dart, startup, ownership lock and endpoint record).",
+      "consumer": "Launchers (desktop, MCP, CLI) running ensureService, plus --stop / --stop-if-idle.",
+      "invariants": [
+        "One owner per profile; a start that lost the lock never becomes a later owner.",
+        "A closing owner releases its lock only after the endpoint record and socket are removed, and --stop returns only after release.",
+        "An unclean predecessor is recovered once and its recorded runtime adopted."
+      ],
+      "owner": "producer-consumer",
+      "execution_modes": [
+        "source-jit",
+        "compiled"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "prerequisites": [
+        "Dart SDK; test hooks for gated cases",
+        "compiled service for tests/service"
+      ],
+      "gate": "core-stage",
+      "also_gates": [
+        "service-stage"
+      ],
+      "triggers": [
+        "packages/foresight_core/lib/src/service_startup.dart",
+        "packages/foresight_core/lib/src/service_ownership.dart",
+        "packages/foresight_core/lib/src/service_socket.dart",
+        "packages/foresight_core/lib/src/service_lifetime.dart",
+        "packages/foresight_core/lib/src/service_idle_shutdown.dart",
+        "packages/foresight_core/lib/src/service_resources.dart",
+        "packages/foresight_core/lib/src/installation_lock.dart",
+        "packages/foresight_core/bin/service.dart"
+      ],
+      "evidence": [
+        {
+          "kind": "production-both-sides",
+          "path": "packages/foresight_core/test/service_lifecycle_test.dart",
+          "names": [
+            "two launchers converge on one owner when none is running"
+          ]
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "packages/foresight_core/test/service_closing_protocol_test.dart",
+          "names": [
+            "a start that lost the lock never becomes a later owner, even once the lock is free",
+            "a launch that takes the lock after its launcher attached elsewhere never serves",
+            "a launch that loses the lock to a momentary holder is launched again (L3)"
+          ]
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "packages/foresight_core/test/service_ownership_test.dart",
+          "names": [
+            "two runtimes and canonical aliases share a profile owner and committed writes"
+          ]
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "packages/foresight_core/test/service_startup_recovery_test.dart"
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "packages/foresight_core/test/service_lifetime_test.dart",
+          "skip_gate": "platform"
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "packages/foresight_core/test/service_idle_shutdown_test.dart"
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "tests/service/test_service_process.py",
+          "excluded": true,
+          "names": [
+            "test_unexpected_service_death_interrupts_capture_and_reuses_profile",
+            "test_release_service_ignores_lifecycle_gates"
+          ]
+        },
+        {
+          "kind": "fixture",
+          "path": "packages/foresight_core/test/service_shutdown_handoff_test.dart"
+        }
+      ],
+      "gaps": [
+        "The macOS /usr/bin/open launch path runs only on hosted macOS; no local or fixture test covers it.",
+        "A cold-start race between a desktop and an MCP launcher (different client kinds) is untested; only same-kind launcher races are."
+      ]
+    },
+    {
+      "id": "dart-native-ffi",
+      "title": "Dart to native library (FFI and exported ABI)",
+      "producer": "libforesight_native (native/, exported C ABI and exception barriers).",
+      "consumer": "Dart FFI bindings in packages/foresight_core (native.dart and owners) used by service, desktop and tests.",
+      "invariants": [
+        "Every exported function is exception-barriered and its ABI matches the Dart declarations.",
+        "Native handles are owned once and retired exactly once, across isolates and during shutdown.",
+        "Build identity and loader checks refuse incompatible bytes."
+      ],
+      "owner": "producer-consumer",
+      "execution_modes": [
+        "ctest",
+        "source-jit",
+        "compiled"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "prerequisites": [
+        "Built native library",
+        "C++17 compiler for native fixtures",
+        "Dart SDK"
+      ],
+      "gate": "native-stage",
+      "also_gates": [
+        "core-stage",
+        "desktop-stage",
+        "service-stage",
+        "platform-contracts"
+      ],
+      "triggers": [
+        "native/**",
+        "packages/foresight_core/lib/src/native.dart",
+        "packages/foresight_core/lib/src/native_*.dart",
+        "tests/native/**",
+        "tests/test_native_ffi_contract.py",
+        "tests/integration/test_native.py",
+        "tests/integration/test_native_process.py",
+        "tests/integration/test_model_type.py"
+      ],
+      "evidence": [
+        {
+          "kind": "production-both-sides",
+          "path": "packages/foresight_core/test/native_abi_test.dart"
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "packages/foresight_core/test/native_cross_isolate_lifetime_test.dart",
+          "skip_gate": "core-native"
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "packages/foresight_core/test/native_persistent_test.dart",
+          "skip_gate": "core-native"
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "packages/foresight_core/test/service_native_owner_lifetime_test.dart",
+          "skip_gate": "core-native"
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "tests/integration/test_native.py",
+          "excluded": true,
+          "note": "Requires a native build; run through CTest."
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "tests/integration/test_native_process.py",
+          "excluded": true
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "tests/integration/test_model_type.py",
+          "excluded": true
+        },
+        {
+          "kind": "static-guard",
+          "path": "tests/test_native_ffi_contract.py",
+          "note": "Static source parse of every exported function."
+        },
+        {
+          "kind": "manual",
+          "path": "tools/test_capture_terminal_state.py"
+        }
+      ],
+      "gaps": []
+    },
+    {
+      "id": "schema-bindings",
+      "title": "Protobuf schemas to generated bindings and wire versions",
+      "producer": "proto/** sources and the pinned protoc toolchain.",
+      "consumer": "Generated Dart bindings (core and desktop), the Python descriptor guards, and the helper wire-version check.",
+      "invariants": [
+        "Generated bindings equal a fresh generation with the pinned compiler.",
+        "The descriptor shape is compatible with recovered and transcribed wire data.",
+        "Helper protocol versions agree across proto, Python tooling, Dart and the helper."
+      ],
+      "owner": "producer-consumer",
+      "execution_modes": [
+        "static"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "prerequisites": [
+        "protoc 35.1 and the Dart protoc plugin on PATH"
+      ],
+      "gate": "bindings-check",
+      "also_gates": [
+        "platform-contracts"
+      ],
+      "triggers": [
+        "proto/**",
+        "tools/generate_bindings.py",
+        "tools/check_dart_bindings.py",
+        "tools/verify_descriptor.py",
+        "tools/protoc_plugin/**",
+        "packages/foresight_core/lib/src/generated/**",
+        "tests/contracts/**"
+      ],
+      "evidence": [
+        {
+          "kind": "static-guard",
+          "path": "tests/contracts/test_descriptor.py"
+        },
+        {
+          "kind": "static-guard",
+          "path": "tests/contracts/test_owned_descriptors.py"
+        },
+        {
+          "kind": "static-guard",
+          "path": "tests/contracts/test_version.py"
+        },
+        {
+          "kind": "static-guard",
+          "path": "tools/check_dart_bindings.py",
+          "note": "Drift check; proves generation sync, not consumer behavior."
+        },
+        {
+          "kind": "static-guard",
+          "path": "tests/test_helper_protocol_version.py"
+        }
+      ],
+      "gaps": [
+        "Schema equality does not exercise a consumer: a binding change must also select the Dart, helper and service consumers through the impact rules."
+      ]
+    },
+    {
+      "id": "build-installed-product",
+      "title": "Build and restored outputs to the installed product",
+      "producer": "Qualified build outputs, bundles and installers (packaging/, bundle and DMG tools).",
+      "consumer": "The installed application resolving its own service, helper, workers and libraries after restore and relocation.",
+      "invariants": [
+        "Qualified exact bytes work after restore and relocation.",
+        "The application resolves its own required libraries and workers.",
+        "Real launch, MCP/service communication and installer/upgrade behavior execute through current consumers."
+      ],
+      "owner": "producer-consumer",
+      "execution_modes": [
+        "installed",
+        "compiled"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "prerequisites": [
+        "Qualified installer or bundle bytes",
+        "Distro or Apple tooling for the package format",
+        "Models for real-model acceptance"
+      ],
+      "gate": "hosted-packaging",
+      "also_gates": [
+        "installed-acceptance",
+        "dmg-contracts",
+        "platform-contracts"
+      ],
+      "triggers": [
+        "packaging/**",
+        "tools/package.py",
+        "tools/package_macos.py",
+        "tools/macos_bundle.py",
+        "tools/install_macos.py",
+        "tools/create_dmg.py",
+        "tools/installed_runtime.py",
+        "tools/runtime_package_support.py",
+        "tools/smoke_bundle.py",
+        "tools/smoke_macos_bundle.py",
+        "tools/verify_macos_release_runtime.py",
+        "tools/test_installed_*.py",
+        "tools/test_packaged_*.py",
+        "tools/test_release_dmg.py",
+        "apps/desktop/linux/**",
+        "apps/desktop/macos/**"
+      ],
+      "evidence": [
+        {
+          "kind": "production-both-sides",
+          "path": "tools/test_installed_release.py",
+          "note": "Automated by Linux acceptance, preview, release acceptance and the package test script."
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "tools/test_installed_persistence.py"
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "tools/test_release_dmg.py"
+        },
+        {
+          "kind": "static-guard",
+          "path": "tests/test_package_contracts.py"
+        },
+        {
+          "kind": "static-guard",
+          "path": "tests/test_macos_bundle.py"
+        },
+        {
+          "kind": "static-guard",
+          "path": "tests/test_dmg_contract.py"
+        },
+        {
+          "kind": "static-guard",
+          "path": "tests/test_linux_packages.py"
+        },
+        {
+          "kind": "manual",
+          "path": "tools/test_default_model_startup.py"
+        },
+        {
+          "kind": "manual",
+          "path": "tools/test_native_service.py"
+        },
+        {
+          "kind": "manual",
+          "path": "tools/test_packaged_model_runtime.py"
+        },
+        {
+          "kind": "manual",
+          "path": "tools/test_packaged_note_enhancement.py"
+        },
+        {
+          "kind": "manual",
+          "path": "tools/test_packaged_query_worker.py"
+        },
+        {
+          "kind": "manual",
+          "path": "tools/test_packaged_sentencepiece_coload.py"
+        }
+      ],
+      "gaps": [
+        "Installed-product acceptance and the distro installer matrix execute only in hosted workflows or on a prepared machine; no local command reproduces them from a source tree."
+      ]
+    },
+    {
+      "id": "harness-os",
+      "title": "Test harness to operating system",
+      "producer": "The checked-in entrypoints that set the account, home, temp root, display and sandbox context.",
+      "consumer": "Tests and products that assume real UID/GID/groups, NSS home, short private sockets and platform launch behavior.",
+      "invariants": [
+        "Real UID/GID/groups and the NSS account home match the tested entrypoint; setting HOME alone is not equivalent.",
+        "Temp roots are canonical, private and short enough for Unix sockets.",
+        "Missing prerequisites fail the entrypoint rather than skipping."
+      ],
+      "owner": "platform-reproduction",
+      "execution_modes": [
+        "static",
+        "source-jit"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "prerequisites": [
+        "Hosted container or an equivalent account setup for Linux runtime parity",
+        "An unlocked macOS console for GUI qualification"
+      ],
+      "gate": "platform-contracts",
+      "also_gates": [
+        "service-stage",
+        "manual-probes"
+      ],
+      "triggers": [
+        "tools/run_ci_user.py",
+        "tools/run_ci_stage.py",
+        "tools/ci_stage_environment.py",
+        "tools/ci_build_environment.py",
+        "tools/build_service_gate.sh",
+        "tools/runtime_support_gate.sh",
+        "tools/linux_container_*.sh",
+        "tools/linux_tooling_python.sh",
+        "packages/foresight_test_support/lib/test_paths.dart",
+        "packages/foresight_test_support/lib/native_fixture.dart",
+        "tests/test_service_gate_temp.py",
+        "tools/test_capture_device_recovery.py",
+        "tools/test_global_shortcut*.py",
+        "tests/integration/test_model_crypto_keychain.py"
+      ],
+      "evidence": [
+        {
+          "kind": "fixture",
+          "path": "tests/test_run_ci_user.py",
+          "note": "Account and ownership logic is exercised with monkeypatched uid/lstat; the real container is hosted CI."
+        },
+        {
+          "kind": "fixture",
+          "path": "tests/test_service_gate_temp.py"
+        },
+        {
+          "kind": "static-guard",
+          "path": "tests/test_test_hygiene.py"
+        },
+        {
+          "kind": "static-guard",
+          "path": "tests/test_dart_fixture_hygiene.py"
+        },
+        {
+          "kind": "static-guard",
+          "path": "tests/test_ci_stage_environment.py"
+        },
+        {
+          "kind": "manual",
+          "path": "tools/test_capture_device_recovery.py"
+        },
+        {
+          "kind": "manual",
+          "path": "tools/test_global_shortcut.py"
+        },
+        {
+          "kind": "manual",
+          "path": "tools/test_global_shortcut_private.py"
+        },
+        {
+          "kind": "manual",
+          "path": "tests/integration/test_model_crypto_keychain.py",
+          "excluded": true,
+          "note": "Deferred; the isolated Mac attempt failed with Security status -25308 and is neither a pass nor a blocker."
+        }
+      ],
+      "gaps": [
+        "Real UID/GID/NSS parity is exercised only inside the hosted Linux container; local validate_change records the account but cannot reproduce it.",
+        "Hosted macOS 15 source/JIT execution cannot be reproduced on a newer local macOS or by a compiled-only replay."
+      ]
+    },
+    {
+      "id": "document-import-sandbox",
+      "title": "Document import to Linux sandbox and platform parsers",
+      "producer": "The shipped parser and sandbox policy (bubblewrap, pdftotext, unrtf, platform file parser).",
+      "consumer": "The production Dart document importer and the installed service.",
+      "invariants": [
+        "PDF and RTF fixtures import through the production parser only inside the sandbox.",
+        "A missing required executable or unavailable namespace fails the CI gate instead of skipping."
+      ],
+      "owner": "producer-consumer",
+      "execution_modes": [
+        "source-jit",
+        "installed"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "prerequisites": [
+        "/usr/bin/bwrap, pdftotext and unrtf on Linux; Swift file parser on macOS"
+      ],
+      "gate": "document-sandbox",
+      "also_gates": [],
+      "triggers": [
+        "tools/ci_document_sandbox.sh",
+        "tools/installed_documents.py",
+        "packaging/ci/document-sandbox.apparmor",
+        "native/file_parser.swift",
+        "packages/foresight_core/lib/src/document_parser.dart"
+      ],
+      "evidence": [
+        {
+          "kind": "production-both-sides",
+          "path": "tests/integration/test_linux_documents.py",
+          "excluded": true,
+          "note": "Run only through tools/ci_document_sandbox.sh."
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "tests/integration/test_file_parser.py",
+          "excluded": true,
+          "note": "Requires a native build or macOS SDK."
+        },
+        {
+          "kind": "static-guard",
+          "path": "tests/test_installed_documents.py"
+        }
+      ],
+      "gaps": []
+    },
+    {
+      "id": "model-runtime-acceptance",
+      "title": "Application to real model and audio runtimes",
+      "producer": "Inference services, packaged LiteRT/Whisper runtimes and checksum-pinned model fixtures.",
+      "consumer": "Native load, helper grounding, meeting workflow and virtual-audio consumers in Dart.",
+      "invariants": [
+        "Executed-test counts for each integration group are exact, with no skips and a successful final reporter event.",
+        "Skipped model tests are not acceptance evidence.",
+        "Reused runtimes and model fixtures are verified by identity, not rebuilt silently."
+      ],
+      "owner": "producer-consumer",
+      "execution_modes": [
+        "source-jit",
+        "installed",
+        "ctest"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "prerequisites": [
+        "Prepared bundle",
+        "Checksum-pinned model fixtures",
+        "A container without /dev/snd for virtual audio"
+      ],
+      "gate": "integration-models",
+      "also_gates": [
+        "integration-virtual-audio",
+        "integration-fast",
+        "manual-probes"
+      ],
+      "triggers": [
+        "services/inference/**",
+        "tools/integration_gates.py",
+        "tools/integration_application.py",
+        "tools/model_pins.py",
+        "tests/inference/**",
+        "tools/test_gemma_models.py",
+        "tools/test_litert_*.py",
+        "tools/test_macos_release_models.py",
+        "tools/test_live_transcription_gap.py",
+        "tools/test_meeting_workflow.py",
+        "tools/test_native_inference.py",
+        "tools/test_vision_model_runtime.py",
+        "tools/test_whisper_gpu.py",
+        "tools/accept_software_gpu.py",
+        "tests/integration/test_persistent_speech.py"
+      ],
+      "evidence": [
+        {
+          "kind": "production-both-sides",
+          "path": "apps/desktop/test/gemma_native_test.dart",
+          "skip_gate": "models"
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "apps/desktop/test/native_load_test.dart",
+          "skip_gate": "models"
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "apps/desktop/test/live_recording_test.dart",
+          "skip_gate": "virtual-audio"
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "apps/desktop/integration_test/meeting_workflow_test.dart"
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "tests/integration/test_persistent_speech.py",
+          "excluded": true
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "tools/accept_software_gpu.py"
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "tools/test_macos_release_models.py"
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "tools/test_litert_status_abi.py"
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "tests/inference/test_grounding_corpus.py",
+          "excluded": true,
+          "note": "CTest CLI harness."
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "tests/inference/test_native_query.py",
+          "excluded": true,
+          "note": "CTest CLI harness."
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "tests/inference/test_probe_failure.py",
+          "excluded": true,
+          "note": "CTest CLI harness."
+        },
+        {
+          "kind": "production-both-sides",
+          "path": "tests/inference/test_raw_query_model.py",
+          "excluded": true,
+          "note": "CTest CLI harness."
+        },
+        {
+          "kind": "manual",
+          "path": "tools/test_gemma_models.py"
+        },
+        {
+          "kind": "manual",
+          "path": "tools/test_litert_stop_sequences.py"
+        },
+        {
+          "kind": "manual",
+          "path": "tools/test_live_transcription_gap.py"
+        },
+        {
+          "kind": "manual",
+          "path": "tools/test_meeting_workflow.py"
+        },
+        {
+          "kind": "manual",
+          "path": "tools/test_native_inference.py"
+        },
+        {
+          "kind": "manual",
+          "path": "tools/test_vision_model_runtime.py"
+        },
+        {
+          "kind": "manual",
+          "path": "tools/test_whisper_gpu.py"
+        },
+        {
+          "kind": "manual",
+          "path": "tools/test_helper_worker.py"
+        }
+      ],
+      "gaps": [
+        "Physical microphone, system audio, OS permission and physical GPU paths are not covered by hosted virtual-audio and software-Vulkan acceptance."
+      ]
+    }
+  ],
+  "unmapped_probes": {},
+  "unmapped_exclusions": {},
+  "impact_rules": [
+    {
+      "id": "schemas-and-generated-bindings",
+      "kind": "schema-bindings",
+      "globs": [
+        "proto/**",
+        "tools/generate_bindings.py",
+        "tools/check_dart_bindings.py",
+        "tools/verify_descriptor.py",
+        "tools/helper_protocol.py",
+        "tools/protoc_plugin/**",
+        "packages/foresight_core/lib/src/generated/**",
+        "tests/contracts/**"
+      ],
+      "reserved_globs": [
+        "apps/desktop/lib/generated/**"
+      ],
+      "boundaries": [
+        "schema-bindings",
+        "desktop-service",
+        "mcp-service",
+        "frontend-worker-isolate",
+        "service-helper"
+      ],
+      "gates": [
+        "bindings-check",
+        "core-stage",
+        "desktop-stage",
+        "service-stage"
+      ],
+      "reason": "A wire schema or generated binding is consumed by the Dart client, MCP, frontend/worker bridge and the native helper."
+    },
+    {
+      "id": "core-dart-test-files",
+      "kind": "test-file",
+      "globs": [
+        "packages/foresight_core/test/*_test.dart"
+      ],
+      "boundaries": [],
+      "gates": [
+        "core-stage"
+      ],
+      "reason": "A *_test.dart file executes only in its package's Dart gate. Helpers, fixtures and production sources are not matched by this rule and stay conservative."
+    },
+    {
+      "id": "desktop-dart-test-files",
+      "kind": "test-file",
+      "globs": [
+        "apps/desktop/test/*_test.dart"
+      ],
+      "boundaries": [],
+      "gates": [
+        "desktop-stage"
+      ],
+      "reason": "A *_test.dart file executes only in its package's Dart gate. Helpers, fixtures and production sources are not matched by this rule and stay conservative."
+    },
+    {
+      "id": "desktop-integration-test-files",
+      "kind": "test-file",
+      "globs": [
+        "apps/desktop/integration_test/*_test.dart"
+      ],
+      "boundaries": [],
+      "gates": [
+        "desktop-stage",
+        "service-stage"
+      ],
+      "reason": "A *_test.dart file executes only in its package's Dart gate. Helpers, fixtures and production sources are not matched by this rule and stay conservative. Integration tests are driven by the compiled-service wrapper."
+    },
+    {
+      "id": "shared-test-support",
+      "kind": "shared-test-support",
+      "globs": [
+        "packages/foresight_test_support/**",
+        "tests/service/gated_helper.py"
+      ],
+      "boundaries": [
+        "desktop-service",
+        "mcp-service",
+        "frontend-worker-isolate",
+        "service-helper",
+        "service-sqlite-read-worker",
+        "launcher-service-handoff",
+        "dart-native-ffi",
+        "harness-os"
+      ],
+      "gates": [
+        "core-stage",
+        "desktop-stage",
+        "service-stage"
+      ],
+      "reason": "Shared fixtures are imported by Dart core, desktop and compiled-service tests; every consumer re-executes (the importing test files are listed from the import graph).",
+      "closure": "dart-test-support-imports"
+    },
+    {
+      "id": "native-abi",
+      "kind": "native-abi",
+      "globs": [
+        "native/**",
+        "packages/foresight_core/lib/src/native.dart",
+        "packages/foresight_core/lib/src/native_*.dart",
+        "tests/native/**",
+        "tests/test_native_ffi_contract.py",
+        "CMakeLists.txt",
+        "cmake/**"
+      ],
+      "boundaries": [
+        "dart-native-ffi",
+        "service-sqlite-read-worker",
+        "service-helper",
+        "desktop-service",
+        "mcp-service",
+        "build-installed-product",
+        "model-runtime-acceptance"
+      ],
+      "gates": [
+        "native-stage",
+        "core-stage",
+        "desktop-stage",
+        "service-stage",
+        "platform-contracts",
+        "native-sanitizers"
+      ],
+      "reason": "The exported native ABI or its build is consumed by the Dart bindings, service, helper-adjacent workers and every packaged product."
+    },
+    {
+      "id": "runtime-configuration",
+      "kind": "runtime-config",
+      "globs": [
+        "native/model_registry.json",
+        "tools/model_pins.py",
+        "tools/installed_runtime.py",
+        "tools/runtime_package_support.py",
+        "tools/runtime_support_gate.sh",
+        "packages/foresight_core/lib/src/runtime_execution_policy.dart",
+        "packages/foresight_core/lib/src/model_runtime_paths.dart",
+        "packages/foresight_core/lib/src/desktop_runtime_settings.dart",
+        "packages/foresight_core/lib/src/generation_runtime_slot.dart",
+        "tests/test_capture_runtime_configuration.py",
+        "services/inference/**",
+        "tools/diagnostic_build_inputs.json"
+      ],
+      "boundaries": [
+        "dart-native-ffi",
+        "service-helper",
+        "model-runtime-acceptance",
+        "build-installed-product",
+        "harness-os"
+      ],
+      "gates": [
+        "native-stage",
+        "core-stage",
+        "service-stage",
+        "integration-models",
+        "platform-contracts"
+      ],
+      "reason": "Runtime paths, execution policy and model registry choose which native and model code the product loads."
+    },
+    {
+      "id": "package-layout",
+      "kind": "package-layout",
+      "globs": [
+        "packaging/**",
+        "tools/package.py",
+        "tools/package_macos.py",
+        "tools/macos_bundle.py",
+        "tools/install_macos.py",
+        "tools/create_dmg.py",
+        "tools/smoke_bundle.py",
+        "tools/smoke_macos_bundle.py",
+        "tools/verify_macos_release_runtime.py",
+        "apps/desktop/linux/**",
+        "apps/desktop/macos/**",
+        "services/helper/CMakeLists.txt",
+        "services/inference/CMakeLists.txt"
+      ],
+      "boundaries": [
+        "build-installed-product",
+        "document-import-sandbox",
+        "launcher-service-handoff",
+        "harness-os"
+      ],
+      "gates": [
+        "platform-contracts",
+        "hosted-packaging",
+        "installed-acceptance",
+        "dmg-contracts",
+        "document-sandbox"
+      ],
+      "reason": "Installed layout decides which service, helper, workers, libraries and parsers the application can resolve."
+    },
+    {
+      "id": "toolchain-inputs",
+      "kind": "toolchain",
+      "globs": [
+        "tools/pins.json",
+        "tools/verify_toolchain_pins.py",
+        "tools/sdk_*",
+        "tools/build_*sdk*.py",
+        "tools/ci_artifacts.py",
+        "requirements-*.txt",
+        "requirements-*.lock",
+        "*/pubspec.yaml",
+        "*/pubspec.lock",
+        ".github/actions/**",
+        "third_party/**",
+        "pyproject.toml"
+      ],
+      "boundaries": [
+        "*"
+      ],
+      "gates": [
+        "shared-guards",
+        "python-coverage",
+        "platform-contracts",
+        "bindings-check",
+        "native-stage",
+        "core-stage",
+        "desktop-stage",
+        "service-stage",
+        "native-sanitizers",
+        "hosted-packaging"
+      ],
+      "reason": "Toolchain and dependency inputs change every product built or tested with them."
+    },
+    {
+      "id": "orchestration",
+      "kind": "orchestration",
+      "globs": [
+        "tools/build.sh",
+        "tools/build_dart_gates.sh",
+        "tools/build_service_gate.sh",
+        "tools/parallel_build_gates.py",
+        "tools/integration_gates.py",
+        "tools/integration_application.py",
+        "tools/run_*",
+        "tools/ci_*",
+        "tools/coverage*.sh",
+        "tools/platform_python_tests.py",
+        "tools/check_local_validation.py",
+          "tools/validation_evidence.py",
+        "tools/boundary_inventory.py",
+        "tools/boundary_inventory.json",
+        "tools/integration_probes.json",
+        "tools/integration_skips.json",
+        "tools/check_integration_inventory.py",
+        ".github/workflows/**",
+        "pytest.ini",
+        "pytest-exclusions.json",
+        ".coveragerc"
+      ],
+      "boundaries": [
+        "*"
+      ],
+      "gates": [
+        "shared-guards",
+        "python-coverage",
+        "platform-contracts",
+        "native-stage",
+        "core-stage",
+        "desktop-stage",
+        "service-stage",
+        "hosted-packaging"
+      ],
+      "reason": "Orchestration decides which checks run and how; every boundary it can launch is a downstream consumer."
+    }
+  ],
+  "benign_globs": {
+    "editorial": [
+      "docs/**",
+      "*.md",
+      ".github/ISSUE_TEMPLATE/**",
+      "LICENSE"
+    ]
+  },
+  "lifecycle_reconciliation": [
+    {
+      "boundary": "Desktop to service",
+      "transition": "Crash",
+      "baseline": "F",
+      "status": "fixture-only",
+      "evidence": [
+        {
+          "path": "packages/foresight_core/test/remote_domain_test.dart",
+          "test": "abrupt service loss reconnects and refreshes snapshots without replaying a write",
+          "sides": "production client, fixture service"
+        },
+        {
+          "path": "tests/service/test_service_process.py",
+          "test": "test_unexpected_service_death_interrupts_capture_and_reuses_profile",
+          "sides": "raw Python peer client, production service"
+        }
+      ],
+      "missing": "No test SIGKILLs or crash-gates a real service while a RemoteDomain or DesktopConnection is attached; the facade test terminates gracefully."
+    },
+    {
+      "boundary": "Desktop to service",
+      "transition": "EOF before reply",
+      "baseline": "F",
+      "status": "fixture-only",
+      "evidence": [
+        {
+          "path": "packages/foresight_core/test/remote_domain_test.dart",
+          "test": "a command on a connection that already closed is sent once, on the next",
+          "sides": "production client, fixture service"
+        },
+        {
+          "path": "packages/foresight_core/test/service_closing_protocol_test.dart",
+          "test": "at SIGTERM a request waiting for approval is refused and resent once to the replacement, while a dispatched one is outcomeUnknown",
+          "sides": "production service; client is ServiceConnection, not RemoteDomain"
+        }
+      ],
+      "missing": "A real service ending an in-flight request from an attached RemoteDomain with no reply."
+    },
+    {
+      "boundary": "Desktop to service",
+      "transition": "Slow reply (non-attach)",
+      "baseline": "G",
+      "status": "fixture-only",
+      "evidence": [
+        {
+          "path": "packages/foresight_core/test/remote_domain_test.dart",
+          "test": "a reconnect whose desktop attach is never answered fails, closes that connection and tries again after the backoff",
+          "sides": "production client, fixture service; attach only"
+        }
+      ],
+      "missing": "No test holds a non-attach reply from a real service to an attached RemoteDomain."
+    },
+    {
+      "boundary": "Desktop to service",
+      "transition": "Duplicate launch",
+      "baseline": "G",
+      "status": "partial",
+      "evidence": [
+        {
+          "path": "packages/foresight_core/test/service_closing_protocol_test.dart",
+          "test": "an attached ServiceConnection and RemoteDomain follow a closing owner and send each refused request to it only once (SL-9)",
+          "sides": "production both; closing-owner handoff, not a cold start"
+        },
+        {
+          "path": "packages/foresight_core/test/service_lifecycle_test.dart",
+          "test": "two launchers converge on one owner when none is running",
+          "sides": "production both; same client kind"
+        },
+        {
+          "path": "tests/service/test_service_process.py",
+          "test": "test_two_headless_mcp_launchers_share_one_automatically_started_owner",
+          "sides": "production both; two MCP launchers"
+        }
+      ],
+      "missing": "A cold start where a desktop and an MCP launch together with no owner running; the native-display test starts the MCP after the desktop's service exists."
+    },
+    {
+      "boundary": "Desktop to service",
+      "transition": "Reconnect",
+      "baseline": "P,G",
+      "status": "partial",
+      "evidence": [
+        {
+          "path": "packages/foresight_core/test/service_profile_identity_test.dart",
+          "test": "a desktop reconnecting to an owner in another runtime names that owner's endpoint (L9)",
+          "sides": "production both"
+        },
+        {
+          "path": "tests/service/test_service_process.py",
+          "test": "test_desktop_facade_reads_changes_and_reconnects_without_replaying_mutations",
+          "sides": "production both; SIGTERM, needs a display"
+        }
+      ],
+      "missing": "Reconnect after an unclean loss of a real service (the baseline matrix does not state what its G part was); backoff, attach-timeout and epoch behavior are fixture-only."
+    },
+    {
+      "boundary": "MCP/CLI to service",
+      "transition": "Slow reply",
+      "baseline": "F,G",
+      "status": "fixture-only",
+      "evidence": [
+        {
+          "path": "packages/foresight_core/test/mcp_protocol_test.dart",
+          "test": "cancellation reaches the service and leaves MCP responsive",
+          "sides": "production MCP, fixture service"
+        },
+        {
+          "path": "packages/foresight_core/test/mcp_protocol_test.dart",
+          "test": "client pipe closure cancels pending service work and exits",
+          "sides": "production MCP, fixture service"
+        }
+      ],
+      "missing": "A real service holding a reply to an attached MCP, with the MCP's pending, timeout and late-reply behavior asserted."
+    },
+    {
+      "boundary": "Frontend isolate to worker isolate",
+      "transition": "Slow reply",
+      "baseline": "G",
+      "status": "partial",
+      "evidence": [
+        {
+          "path": "packages/foresight_core/test/service_gate_test.dart",
+          "test": "a committed request waits at its gate before the reply is sent",
+          "sides": "production both (compiled service); a harness test, not a bridge assertion"
+        }
+      ],
+      "missing": "No assertion about bridge behavior while the worker is slow: concurrent requests, cancel during a held reply, frontend close with a held reply."
+    },
+    {
+      "boundary": "Service to helper",
+      "transition": "Closing",
+      "baseline": "F",
+      "status": "closed-production",
+      "evidence": [
+        {
+          "path": "tests/service/test_service_process.py",
+          "test": "test_service_stop_waits_for_active_capture_and_finalizes_transcript",
+          "sides": "production both; asserts the real helper pid is gone after the service exits"
+        },
+        {
+          "path": "tests/service/test_service_process.py",
+          "test": "test_idle_shutdown_verifies_a_real_adopted_helper",
+          "sides": "production both; adopted real helper is stopped and the ack verified"
+        }
+      ],
+      "missing": null,
+      "note": "These tests predate the baseline; the matrix undercounted them. Reconciliation read both bodies (helper pid liveness assertion; adopted-helper exit status) before recording the cell as closed."
+    },
+    {
+      "boundary": "Service to helper",
+      "transition": "Reconnect",
+      "baseline": "F",
+      "status": "partial",
+      "evidence": [
+        {
+          "path": "tests/service/test_worker_recovery.py",
+          "test": "test_helper_crash_preserves_committed_data_and_restores_indexing",
+          "sides": "production both; relaunch with a new instance, not channel reuse"
+        },
+        {
+          "path": "packages/foresight_core/test/helper_transport_test.dart",
+          "test": "the same helper channel reconnects to a replacement owner",
+          "sides": "production channel, in-process gRPC fixture"
+        }
+      ],
+      "missing": "Nothing asserts the same channel reconnects to a replacement real helper socket."
+    },
+    {
+      "boundary": "Service to helper",
+      "transition": "EOF before reply",
+      "baseline": "F",
+      "status": "partial",
+      "evidence": [
+        {
+          "path": "tests/service/test_worker_recovery.py",
+          "test": "test_helper_crash_preserves_committed_data_and_restores_indexing",
+          "sides": "production both; SIGKILL without a held in-flight RPC"
+        },
+        {
+          "path": "packages/foresight_core/test/helper_channel_test.dart",
+          "test": "peer EOF before a queued request reports failure without escaping",
+          "sides": "production channel, raw stream stand-in"
+        }
+      ],
+      "missing": "A deterministic test where a real helper dies mid-request and the service handles the lost reply."
+    },
+    {
+      "boundary": "Service to helper",
+      "transition": "Slow reply",
+      "baseline": "F",
+      "status": "fixture-only",
+      "evidence": [
+        {
+          "path": "packages/foresight_core/test/helper_purge_retry_test.dart",
+          "test": "transport failure bounds retries (unresponsive=true)",
+          "sides": "production purge service, fixture helper"
+        }
+      ],
+      "missing": "No test makes the real ForesightHelper answer slowly; the gated helper delays SIGTERM only."
+    },
+    {
+      "boundary": "Service to helper",
+      "transition": "Malformed or partial frame",
+      "baseline": "G",
+      "status": "open",
+      "evidence": [],
+      "missing": "No test found. Stream-reset tests use a controlled-socket stand-in and do not cover a malformed frame."
+    },
+    {
+      "boundary": "Service to helper",
+      "transition": "Duplicate launch",
+      "baseline": "G",
+      "status": "partial",
+      "evidence": [
+        {
+          "path": "tests/service/test_service_process.py",
+          "test": "test_idle_shutdown_verifies_a_real_adopted_helper",
+          "sides": "production both; adoption of a pre-started helper"
+        },
+        {
+          "path": "packages/foresight_core/test/helper_adoption_test.dart",
+          "test": "a matching helper is adopted before application readiness",
+          "sides": "production Helper, fixture gRPC server"
+        }
+      ],
+      "missing": "Two helpers on one storage or helper.sock (the flock path) and a SIGKILL crash of an adopted helper."
+    },
+    {
+      "boundary": "Lock and record handoff",
+      "transition": "Duplicate launch",
+      "baseline": "P,G",
+      "status": "partial",
+      "evidence": [
+        {
+          "path": "packages/foresight_core/test/service_closing_protocol_test.dart",
+          "test": "a start that lost the lock never becomes a later owner, even once the lock is free",
+          "sides": "production both"
+        },
+        {
+          "path": "packages/foresight_core/test/service_lifecycle_test.dart",
+          "test": "two launchers converge on one owner when none is running",
+          "sides": "production both"
+        }
+      ],
+      "missing": "The baseline matrix does not state what its G part was; the macOS /usr/bin/open launch path (hosted macOS only) and an endpoint-record write race are not covered locally."
+    }
+  ]
+}
