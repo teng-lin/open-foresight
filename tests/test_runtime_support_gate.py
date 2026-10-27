@@ -7,6 +7,7 @@ import subprocess
 import sys
 
 import pytest
+from tests.test_build_stages import install_media_prerequisite_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -16,6 +17,7 @@ def gate_tree(tmp_path):
     root = tmp_path / "source"
     tools = root / "tools"
     tools.mkdir(parents=True)
+    install_media_prerequisite_fixture(root)
     shutil.copyfile(
         ROOT / "tools/runtime_support_gate.sh", tools / "runtime_support_gate.sh"
     )

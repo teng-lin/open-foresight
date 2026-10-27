@@ -122,6 +122,31 @@ case "$task_gate" in
       fi
     fi
     if [[ "$task_mode" != build-only ]]; then
+      task_blocked_worker=diagnostic
+      if [[ "$task_worker_ready" == 1 ]]; then
+        task_blocked_worker=media
+        task_media_environment="$task_checks/media-environment"
+        if task_run "media worker prerequisite" "$task_python" "$task_root/tools/run_media_test_gate.py" \
+          --cache "$task_build/media-test-cache" --output "$task_checks/media-worker" \
+          --fetch --reuse-selected --environment-output "$task_media_environment"; then
+          task_media_count=0
+          while IFS= read -r -d '' task_media_key && IFS= read -r -d '' task_media_value; do
+            case "$task_media_key" in
+              FORESIGHT_TEST_MEDIA_WORKER|FORESIGHT_TEST_MEDIA_BUILD_ID|FORESIGHT_TEST_MEDIA_SHA256|FORESIGHT_TEST_MEDIA_CDHASH)
+                export "$task_media_key=$task_media_value"
+                task_media_count=$((task_media_count + 1)) ;;
+              *) echo 'Invalid media test environment key' >&2; exit 2 ;;
+            esac
+          done < "$task_media_environment"
+          if [[ "$task_media_count" != 4 ]]; then
+            echo 'Incomplete media test environment' >&2
+            task_failed=1
+            task_worker_ready=0
+          fi
+        else
+          task_worker_ready=0
+        fi
+      fi
       if [[ "$task_worker_ready" == 1 ]]; then
     if [[ "${FORESIGHT_CORE_COVERAGE_BENCHMARK:-0}" == 1 ]]; then
       # Compare the full suite on the same host/native binaries. Keep coverage
@@ -150,7 +175,7 @@ case "$task_gate" in
       task_check "core tests" "$task_root/tools/run_core_tests.sh" --file-reporter="json:$task_reports/core.events.jsonl"
     fi
       else
-        echo 'Blocked core suite: diagnostic worker prerequisite failed' >&2
+        echo "Blocked core suite: $task_blocked_worker worker prerequisite failed" >&2
       fi
       task_check "core enabled-hook regression" dart -DFORESIGHT_ENABLE_TEST_HOOKS=true test --compiler=source test/platform_services_test.dart --name 'crash and delay hooks'
     fi

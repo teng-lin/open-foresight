@@ -10,6 +10,7 @@ import sys
 import pytest
 
 from tests.test_pull_request_workflows import parse_workflow
+from tests.test_build_stages import install_media_prerequisite_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 # Opaque fixture values: the worker helper alone owns the real define recipe.
@@ -55,6 +56,7 @@ def test_hosted_benchmark_is_linux_only_and_macos_nightly_coverage_is_report_onl
 def gate(tmp_path):
     root = tmp_path / "repo"
     (root / "tools").mkdir(parents=True)
+    install_media_prerequisite_fixture(root)
     (root / "packages/foresight_core").mkdir(parents=True)
     (root / "apps/desktop").mkdir(parents=True)
     sqlite = root / "build/macos/libforesight_sqlite3.dylib"

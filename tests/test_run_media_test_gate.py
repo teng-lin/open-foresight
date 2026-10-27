@@ -94,6 +94,132 @@ def test_invalid_build_budget_fails_before_compilation(tmp_path, producer, jobs)
     assert calls == []
 
 
+def test_macos_uses_verified_loaded_code_identity(tmp_path, monkeypatch, producer):
+    calls, _ = producer
+    monkeypatch.setattr(gate.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(gate.platform, "machine", lambda: "arm64")
+    signed = []
+    monkeypatch.setattr(
+        gate.media_worker_package,
+        "_cdhash",
+        lambda path: signed.append(path) or "c" * 40,
+    )
+    output = tmp_path / "mac-product"
+    selected = gate.prepare_environment(
+        tmp_path / "cache", output, fetch=False, jobs=2, environment={}
+    )
+    assert calls[-1] == ("verify", gate.ROOT, output.resolve(), "darwin-arm64")
+    assert signed == [output / "foresight-media-worker"]
+    assert selected["FORESIGHT_TEST_MEDIA_CDHASH"] == "c" * 40
+
+
+def test_macos_refuses_signature_failure_before_selection(
+    tmp_path, monkeypatch, producer
+):
+    monkeypatch.setattr(gate.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(gate.platform, "machine", lambda: "arm64")
+
+    def refuse(path):
+        raise ValueError("media_codesign_failed")
+
+    monkeypatch.setattr(gate.media_worker_package, "_cdhash", refuse)
+    output = tmp_path / "product"
+    with pytest.raises(ValueError, match="codesign_failed"):
+        gate.prepare_environment(
+            tmp_path / "cache", output, fetch=False, jobs=2, environment={}
+        )
+    assert not (output / "media-test-selection.json").exists()
+
+
+def test_failed_compilation_retains_full_raw_log_without_masking_failure(
+    tmp_path, monkeypatch, producer
+):
+    raw = b"COMMAND actual compiler\nretained failure\xff\n"
+
+    def failed(cache, output, **kwargs):
+        output.mkdir(mode=0o700)
+        log = cache / "media-owned" / "build.log"
+        log.parent.mkdir(parents=True, mode=0o700)
+        log.write_bytes(raw)
+        raise RuntimeError("original compiler failure")
+
+    monkeypatch.setattr(gate.build_media_worker, "build", failed)
+    output = tmp_path / "product"
+    with pytest.raises(RuntimeError, match="original compiler failure"):
+        gate.prepare_environment(
+            tmp_path / "cache", output, fetch=False, jobs=2, environment={}
+        )
+    assert (output / "test-build-logs/media-owned/build.log").read_bytes() == raw
+    assert not (output / "media-test-selection.json").exists()
+
+
+def test_same_verified_selection_is_reused_without_another_build(tmp_path, producer):
+    calls, _ = producer
+    selected = gate.prepare_environment(
+        tmp_path / "cache", tmp_path / "first", fetch=False, jobs=2, environment={}
+    )
+    calls.clear()
+    output = tmp_path / "second"
+    again = gate.prepare_environment(
+        tmp_path / "cache",
+        output,
+        fetch=False,
+        jobs=2,
+        environment=selected,
+        reuse_selected=True,
+    )
+    assert calls == [("verify", gate.ROOT, tmp_path / "first", "linux-x86_64")]
+    assert again == selected
+    assert (
+        json.loads((output / "media-test-selection.json").read_text())[
+            "reused_verified_selection"
+        ]
+        is True
+    )
+
+
+def test_stale_selected_identity_is_refused_not_rebuilt(tmp_path, producer):
+    calls, _ = producer
+    selected = gate.prepare_environment(
+        tmp_path / "cache", tmp_path / "first", fetch=False, jobs=2, environment={}
+    )
+    selected["FORESIGHT_TEST_MEDIA_SHA256"] = "0" * 64
+    calls.clear()
+    with pytest.raises(ValueError, match="identity does not match"):
+        gate.prepare_environment(
+            tmp_path / "cache",
+            tmp_path / "second",
+            fetch=False,
+            jobs=2,
+            environment=selected,
+            reuse_selected=True,
+        )
+    assert len(calls) == 1 and calls[0][0] == "verify"
+
+
+def test_selection_only_writes_exact_fixed_nul_fields(tmp_path, monkeypatch, producer):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "gate",
+            "--cache",
+            str(tmp_path / "cache"),
+            "--output",
+            str(tmp_path / "product"),
+            "--environment-output",
+            str(tmp_path / "environment"),
+        ],
+    )
+    gate.main()
+    fields = (tmp_path / "environment").read_bytes().split(b"\0")
+    assert fields[-1] == b""
+    assert fields[0:-1:2] == [key.encode() for key in gate.SELECTION_KEYS]
+    assert fields[1] == str(tmp_path / "product/foresight-media-worker").encode()
+    assert fields[-2] == b""
+    assert (tmp_path / "environment").stat().st_mode & 0o777 == 0o600
+
+
 @pytest.mark.parametrize("refusal", ["root", "platform"])
 def test_wrong_principal_or_platform_cannot_build(
     tmp_path, monkeypatch, producer, refusal

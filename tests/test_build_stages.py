@@ -10,6 +10,18 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def install_media_prerequisite_fixture(root):
+    # Only shell sequencing is controlled here. The media prerequisite suite
+    # separately exercises its real receipt, signing and inherited selection.
+    (root / "tools/run_media_test_gate.py").write_text(
+        "import os,pathlib,sys\n"
+        "sys.exit(int(os.getenv('FAIL_MEDIA', '0'))) if os.getenv('FAIL_MEDIA', '0') != '0' else None\n"
+        "keys=('WORKER','BUILD_ID','SHA256','CDHASH')\n"
+        "path=pathlib.Path(sys.argv[sys.argv.index('--environment-output')+1])\n"
+        "path.write_bytes(b''.join(('FORESIGHT_TEST_MEDIA_'+key).encode()+b'\\0'+b'controlled-'+key.encode()+b'\\0' for key in keys))\n"
+    )
+
+
 @pytest.fixture
 def build_tree(tmp_path):
     root = tmp_path / "repo"
@@ -210,6 +222,7 @@ def dart_gate_tree(tmp_path):
     root = tmp_path / "repo"
     tools = root / "tools"
     tools.mkdir(parents=True)
+    install_media_prerequisite_fixture(root)
     for name in ("build_dart_gates.sh", "ci_timing.sh"):
         shutil.copy2(ROOT / "tools" / name, tools / name)
     (tools / "verify_toolchain_pins.py").write_text("raise SystemExit(0)\n")
@@ -239,6 +252,8 @@ foresight_diagnostic_worker() {
 args=sys.argv[1:]
 with open(os.environ['COMMAND_LOG'],'a') as f:f.write(json.dumps([pathlib.Path(sys.argv[0]).name,*args])+'\\n')
 kind=args[0] if args else ''
+if kind=='test':
+ with open(os.environ['COMMAND_LOG']+'.media','w') as f:f.write(json.dumps({key:os.environ.get('FORESIGHT_TEST_MEDIA_'+key) for key in ['WORKER','BUILD_ID','SHA256','CDHASH']}))
 if kind=='compile':
  name=pathlib.Path(args[args.index('-o')+1]).name
  code=int(os.environ.get('FAIL_'+name.replace('foresight-','').upper(),'0'))
@@ -338,6 +353,37 @@ def test_inner_gate_streams_output_before_command_exit(dart_gate_tree, tmp_path)
     assert output.read_text().count("analysis still running") == 1
     logs = list((root / "test-results/linux/core").glob("checks.*/*.log"))
     assert sum("analysis still running" in p.read_text() for p in logs) == 1
+
+
+def test_normal_core_tests_receive_verified_media_identity(dart_gate_tree):
+    import json
+
+    _, environment = dart_gate_tree
+    result = invoke_dart_gate(dart_gate_tree, "core")
+    assert result.returncode == 0, result.stdout + result.stderr
+    selected = json.loads(Path(environment["COMMAND_LOG"] + ".media").read_text())
+    assert selected == {
+        key: "controlled-" + key for key in ("WORKER", "BUILD_ID", "SHA256", "CDHASH")
+    }
+
+
+def test_media_prerequisite_failure_blocks_tests_but_not_failure_evidence(
+    dart_gate_tree,
+):
+    _, environment = dart_gate_tree
+    result = invoke_dart_gate(dart_gate_tree, "core", FAIL_MEDIA=19)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "media worker prerequisite (exit 19;" in result.stdout
+    assert "Blocked core suite: media worker prerequisite failed" in result.stderr
+    assert not Path(environment["COMMAND_LOG"] + ".media").exists()
+
+
+def test_build_only_does_not_provision_test_codec(dart_gate_tree):
+    result = invoke_dart_gate(
+        dart_gate_tree, "core", FORESIGHT_BUILD_MODE="build-only", FAIL_MEDIA=19
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "media worker prerequisite" not in result.stdout
 
 
 def test_fixture_modes_are_explicit_but_coverage_override_still_runs(dart_gate_tree):
