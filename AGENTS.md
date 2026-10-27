@@ -7,6 +7,8 @@ Use [CONTRIBUTING.md](CONTRIBUTING.md) for setup, conventions and required check
   NSS account/home, caches, network isolation and source/JIT mode. Record gaps.
 - Exercise the actual consumer; metadata checks and quiet component replays
   prove only their own scope.
+- After changing Dart skips, run `python tools/check_integration_inventory.py`
+  and review the matching inventory entries.
 - Give each failure an owner, a bounded investigation and a concrete exit
   criterion. Confirm delegated agents are active.
 - Before another push, fetch the PR head, reviews and CI output; batch fixes

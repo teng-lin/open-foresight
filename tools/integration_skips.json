@@ -90,17 +90,6 @@
       "reason": "Checksum-pinned public model fixtures and the current packaged CPU runtimes."
     },
     {
-      "path": "apps/desktop/test/quick_start_test.dart",
-      "conditions": [
-        "!Platform.isMacOS",
-        "!Platform.isMacOS",
-        "!Platform.isMacOS",
-        "!Platform.isMacOS"
-      ],
-      "gate": "platform",
-      "reason": "Runs on its supported operating system in the regular platform build."
-    },
-    {
       "path": "apps/desktop/test/saved_answer_native_test.dart",
       "conditions": [
         "Platform.environment['FORESIGHT_ANSWER_DATABASE'] == null"
@@ -222,14 +211,6 @@
       ],
       "gate": "platform",
       "reason": "Unix executable fixture compiler protocol uses Python and chmod; unsupported Windows hosts skip it while Linux/macOS platform jobs run it."
-    },
-    {
-      "path": "apps/desktop/test/desktop_menu_test.dart",
-      "conditions": [
-        "!Platform.isMacOS"
-      ],
-      "gate": "platform",
-      "reason": "macOS menu channel routing and recording permission flows run in the regular macOS desktop suite; Linux skips only these Apple-specific contracts."
     },
     {
       "path": "apps/desktop/test/onboarding_workflow_test.dart",
