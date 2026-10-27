@@ -66,13 +66,24 @@ def test_native_queue_overflow_is_saved_as_meeting_interruption(running):  # noq
     capture = running["root"] / "fixtures" / "pw-record"
     ready = running["root"] / "fixtures" / "capture-filled"
     gate = running["root"] / "fixtures" / "hold-capture-poll"
+    started = running["root"] / "fixtures" / "capture-started"
+    progress = running["root"] / "fixtures" / "capture-progress"
     capture.write_text(
         '#!/usr/bin/env python3\nimport os,pathlib,sys,time\nblock=b"A"*3840\n'
+        f"pathlib.Path({str(started)!r}).touch()\n"
         'output=1 if sys.argv[-1]=="-" else os.open(sys.argv[-1],os.O_WRONLY)\n'
-        "for _ in range(2000):os.write(output,block)\n"
+        "for n in range(2000):\n os.write(output,block)\n"
+        f" if n%100==99:pathlib.Path({str(progress)!r}).write_text(str(n+1))\n"
         f"pathlib.Path({str(ready)!r}).touch()\n"
         "while True:os.write(output,block);time.sleep(.04)\n"
     )
+
+    def completed_blocks():
+        try:
+            return max(0, min(2000, int(progress.read_text()[:16])))
+        except (OSError, ValueError):
+            return -1
+
     peer = running["peer"]
     peer.call(
         "models.register",
@@ -90,7 +101,8 @@ def test_native_queue_overflow_is_saved_as_meeting_interruption(running):  # noq
         while not ready.exists() and time.monotonic() < deadline:
             poll_delay(deadline)
         assert ready.exists(), (
-            "Capture producer did not finish filling the native queue"
+            "Capture producer did not finish filling the native queue "
+            f"(started={started.exists()}, completed_blocks={completed_blocks()})"
         )
         while time.monotonic() < deadline:
             rows = peer.call("meetings.get", {"id": meeting})["transcript"]
