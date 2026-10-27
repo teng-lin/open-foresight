@@ -219,6 +219,26 @@ by the service owner, independently of transcript presence or historical file
 metadata. Complete backup scope and new-profile restore are documented in
 [database and audio backups](audio-backups.md).
 
+### Storage headroom presentation
+
+Meeting status carries nullable `estimatedRemainingRecordingUs` alongside the
+existing retained and additional-representation byte totals. This is an advisory
+profile-wide estimate, never recording admission authority. A fixed OS `df -Pk`
+probe runs with a minimal C-locale environment, bounded output and one observed
+child. Status and capture do not await it. Attempts are coalesced and throttled to
+five seconds; samples older than fifteen seconds, failed queries and changed
+workspace/media generations yield unknown. Timeout includes process launch;
+late launches remain owned and are terminated/reaped. Shutdown/clear require
+actual child retirement, refusing boundedly if that ownership is unconfirmed.
+Probe failure alone cannot interrupt capture or replace capture/worker errors.
+
+The estimate subtracts the native writer's 64 MiB reserve and assumes 192080 bytes
+per second: two 48 kHz mono PCM16 sources plus two 196-byte headers per five seconds,
+rounded up. It assumes no compression savings. Filesystem metadata, frequent
+partial chunks, quotas and other writers can consume additional space; the
+estimate is not a guarantee or a substitute for native pre-admission/per-chunk
+free-space checks. Unknown is distinct from zero estimated headroom.
+
 ## Qualification boundary
 
 Focused metadata tests cover restart, duplicate publication, cursor/result/transform

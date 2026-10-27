@@ -37,6 +37,30 @@ void main() {
     );
     addTearDown(store.close);
   });
+  test(
+    'headroom is supplied only by service and missing wire value remains unknown',
+    () {
+      final unknown = queries.meeting(meeting);
+      expect(unknown.estimatedRemainingRecordingUs, isNull);
+      final measured = queries.meeting(
+        meeting,
+        estimatedRemainingRecordingUs: 1234567,
+      );
+      expect(measured.estimatedRemainingRecordingUs, 1234567);
+      final wire = measured.toMap();
+      expect(
+        AudioMeetingPresentation.fromMap(wire).estimatedRemainingRecordingUs,
+        1234567,
+      );
+      wire.remove('estimatedRemainingRecordingUs');
+      expect(
+        AudioMeetingPresentation.fromMap(wire).estimatedRemainingRecordingUs,
+        isNull,
+      );
+      expect(queries.meeting(meeting).estimatedRemainingRecordingUs, isNull);
+    },
+  );
+
   AudioChunk publish(
     int sequence, {
     AudioSource source = AudioSource.microphone,

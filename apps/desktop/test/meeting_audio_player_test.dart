@@ -58,6 +58,8 @@ AudioSessionPresentation clip({
   bool canDeleteRecording = false,
   bool canChangeRetention = false,
   bool retainLossless = false,
+  int retainedBytes = 100,
+  int stagingBytes = 0,
   bool canRetryTranscription = false,
   bool canRetryCompression = false,
   List<MeetingAudioExportFormat> exportFormats = const [
@@ -74,8 +76,8 @@ AudioSessionPresentation clip({
   startedWallMs: 0,
   durationUs: durationUs,
   availability: availability,
-  retainedBytes: 100,
-  stagingBytes: 0,
+  retainedBytes: retainedBytes,
+  stagingBytes: stagingBytes,
   hasGaps: availability == MeetingAudioAvailability.partial,
   sources: sources,
   compression: compression,
@@ -99,26 +101,121 @@ Future<void> show(
   AudioPlaybackPresentation playback = const AudioPlaybackPresentation(),
   AudioTranscriptSeekTarget? target,
   double scale = 1,
-}) => tester.pumpWidget(
-  MaterialApp(
-    home: Scaffold(
-      body: MediaQuery(
-        data: MediaQueryData(textScaler: TextScaler.linear(scale)),
-        child: SizedBox(
-          width: 500,
-          child: MeetingAudioPlayer(
-            session: session ?? clip(),
-            playback: playback,
-            actions: actions,
-            transcriptTarget: target,
-          ),
+  bool scrollable = false,
+}) {
+  final player = SizedBox(
+    width: 500,
+    child: MeetingAudioPlayer(
+      session: session ?? clip(),
+      playback: playback,
+      actions: actions,
+      transcriptTarget: target,
+    ),
+  );
+  return tester.pumpWidget(
+    MaterialApp(
+      home: Scaffold(
+        body: MediaQuery(
+          data: MediaQueryData(textScaler: TextScaler.linear(scale)),
+          // Production hosts the player in the meeting's sliver scroll view.
+          child: scrollable ? SingleChildScrollView(child: player) : player,
         ),
       ),
     ),
-  ),
-);
+  );
+}
 
 void main() {
+  testWidgets('storage distinguishes saved audio from additional copies', (
+    tester,
+  ) async {
+    await show(
+      tester,
+      Actions(),
+      session: clip(retainedBytes: 12500000, stagingBytes: 2500000),
+    );
+    expect(find.text('Recording storage: 15 MB'), findsOneWidget);
+    expect(
+      find.text('12.5 MB saved audio · 2.5 MB additional copies'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('save menu discloses re-encoding and keeps format admission', (
+    tester,
+  ) async {
+    final actions = Actions();
+    await show(tester, actions);
+    await tester.tap(find.text('Save audio'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'Saving re-encodes audio. Already compressed audio may lose some quality.',
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Opus · smaller file'));
+    await tester.pumpAndSettle();
+    expect(actions.calls, [
+      ['export', 'session', MeetingAudioExportFormat.opus, false],
+    ]);
+  });
+
+  testWidgets(
+    'storage and save disclosure stay accessible at narrow large text',
+    (tester) async {
+      tester.view.physicalSize = const Size(320, 1000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final semantics = tester.ensureSemantics();
+      try {
+        final actions = Actions();
+        await show(
+          tester,
+          actions,
+          session: clip(
+            retainedBytes: 1000000000000,
+            stagingBytes: 500000000000,
+            canChangeRetention: true,
+            retainLossless: true,
+          ),
+          scale: 2,
+          scrollable: true,
+        );
+        expect(find.text('Recording storage: 1.5 TB'), findsOneWidget);
+        expect(
+          find.bySemanticsLabel(RegExp('Recording storage: 1.5 TB')),
+          findsOneWidget,
+        );
+        expect(
+          find.text(
+            'Uses more storage. Already removed originals cannot be restored.',
+          ),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
+        await tester.ensureVisible(find.text('Save audio'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Save audio'));
+        await tester.pumpAndSettle();
+        expect(
+          find.bySemanticsLabel(RegExp('Saving re-encodes audio')),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
+        await tester.tap(find.text('MP3'));
+        await tester.pumpAndSettle();
+        expect(find.byType(AlertDialog), findsNothing);
+        expect(actions.calls, [
+          ['export', 'session', MeetingAudioExportFormat.mp3, false],
+        ]);
+      } finally {
+        semantics.dispose();
+      }
+    },
+  );
+
   testWidgets(
     'one retry action per failed processing group and service authority',
     (tester) async {
@@ -390,6 +487,12 @@ void main() {
       );
       await tester.tap(find.text('Save available audio'));
       await tester.pumpAndSettle();
+      expect(
+        find.text(
+          'Saving re-encodes audio. Already compressed audio may lose some quality.',
+        ),
+        findsOneWidget,
+      );
       await tester.tap(find.text('Available audio · MP3'));
       await tester.pumpAndSettle();
       expect(actions.calls, [

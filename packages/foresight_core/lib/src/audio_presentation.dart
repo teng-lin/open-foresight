@@ -116,6 +116,7 @@ final class AudioMeetingPresentation {
     this.physicalState = MeetingAudioPhysicalState.idle,
     this.captureError = '',
     this.hasGaps = false,
+    this.estimatedRemainingRecordingUs,
   });
   final int meetingId, sessionCount, durationUs, retainedBytes, stagingBytes;
   final MeetingAudioAvailability availability;
@@ -123,6 +124,10 @@ final class AudioMeetingPresentation {
   final MeetingAudioPhysicalState physicalState;
   final String captureError;
   final bool hasGaps;
+
+  /// Approximate profile-wide raw recording capacity, not admission authority.
+  /// Null means unavailable or stale; zero means no estimated headroom.
+  final int? estimatedRemainingRecordingUs;
   final List<AudioSourceProcessingPresentation> sources;
   final AudioWorkPresentation compression;
   bool get isRecording =>
@@ -142,6 +147,7 @@ final class AudioMeetingPresentation {
     'physicalState': physicalState.name,
     'captureError': captureError,
     'hasGaps': hasGaps,
+    'estimatedRemainingRecordingUs': estimatedRemainingRecordingUs,
   };
   factory AudioMeetingPresentation.fromMap(Map<String, Object?> map) =>
       AudioMeetingPresentation(
@@ -169,6 +175,8 @@ final class AudioMeetingPresentation {
         ),
         captureError: map['captureError'] as String,
         hasGaps: map['hasGaps'] as bool,
+        estimatedRemainingRecordingUs:
+            map['estimatedRemainingRecordingUs'] as int?,
       );
 }
 

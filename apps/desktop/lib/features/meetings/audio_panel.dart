@@ -90,6 +90,15 @@ class _MeetingAudioPanelState extends State<MeetingAudioPanel> {
                 ),
             ],
           ),
+        if (page.meeting.physicalState != MeetingAudioPhysicalState.idle)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Text(switch (page.meeting.estimatedRemainingRecordingUs) {
+              final remaining? =>
+                'Estimated recording time remaining: ${_remainingTime(remaining)}',
+              null => 'Estimated recording time remaining: unavailable',
+            }),
+          ),
         MeetingAudioPlayer(
           key: ValueKey(selected.id),
           session: selected,
@@ -101,4 +110,13 @@ class _MeetingAudioPanelState extends State<MeetingAudioPanel> {
       ],
     );
   }
+}
+
+String _remainingTime(int us) {
+  if (us <= 0) return '0 min';
+  final minutes = us ~/ 60000000;
+  if (minutes == 0) return 'less than 1 min';
+  if (minutes < 60) return '$minutes min';
+  final hours = minutes ~/ 60, remainder = minutes % 60;
+  return remainder == 0 ? '$hours hr' : '$hours hr $remainder min';
 }

@@ -277,6 +277,29 @@ void main() {
     }
   }
 
+  test(
+    'failed storage estimate remains unknown without retiring capture admission',
+    () async {
+      runtime = owner();
+      await runtime.initialize();
+      await until(() => !runtime.busy);
+      final meeting = store.meeting('No recording directory yet');
+      expect(
+        Directory('${File(store.path).parent.path}/recordings').existsSync(),
+        isFalse,
+      );
+      final initial = await runtime.readMeeting(meeting, current: () => true);
+      expect(initial.meeting.estimatedRemainingRecordingUs, isNull);
+      await until(() => !runtime.busy);
+      final failed = await runtime.readMeeting(meeting, current: () => true);
+      expect(failed.meeting.estimatedRemainingRecordingUs, isNull);
+      expect(failed.meeting.captureError, isEmpty);
+      await runtime.prepareForCapture();
+      expect(runtime.media.audio.mediaAdmitted, isTrue);
+      expect(runtime.lastError, isEmpty);
+    },
+  );
+
   test('future schema retires idle audio reads and new admission', () async {
     runtime = owner();
     await runtime.initialize();

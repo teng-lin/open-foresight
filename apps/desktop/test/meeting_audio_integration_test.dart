@@ -65,9 +65,13 @@ AudioMeetingReadPage page(
   String? next,
   bool supported = true,
   String serviceError = '',
+  MeetingAudioPhysicalState physical = MeetingAudioPhysicalState.idle,
+  int? estimatedRemainingRecordingUs,
 }) => AudioMeetingReadPage(
   meeting: AudioMeetingPresentation(
     meetingId: id,
+    physicalState: physical,
+    estimatedRemainingRecordingUs: estimatedRemainingRecordingUs,
     sessionCount: 2,
     durationUs: 1000000,
     availability: MeetingAudioAvailability.available,
@@ -97,6 +101,104 @@ MeetingAudioClientActions actions(
 );
 
 void main() {
+  testWidgets('recording capacity estimate becomes explicitly unavailable', (
+    tester,
+  ) async {
+    final c = Connection();
+    Future<void> showCapacity(int? remaining) => tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MeetingAudioPanel(
+            page: page(
+              1,
+              sessions: [session('active')],
+              physical: MeetingAudioPhysicalState.recording,
+              estimatedRemainingRecordingUs: remaining,
+            ),
+            sessions: [session('active')],
+            actions: actions(c),
+            onMore: () {},
+            hasMore: false,
+            loading: false,
+          ),
+        ),
+      ),
+    );
+    await showCapacity(5400000000);
+    expect(
+      find.text('Estimated recording time remaining: 1 hr 30 min'),
+      findsOneWidget,
+    );
+    await showCapacity(0);
+    expect(
+      find.text('Estimated recording time remaining: 0 min'),
+      findsOneWidget,
+    );
+    await showCapacity(null);
+    expect(
+      find.text('Estimated recording time remaining: unavailable'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('1 hr 30 min'), findsNothing);
+    expect(find.textContaining('remaining: 0'), findsNothing);
+    expect(c.calls, isEmpty);
+  });
+
+  testWidgets('paused capacity wraps at large text and hides after stop', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final semantics = tester.ensureSemantics();
+    try {
+      final c = Connection();
+      Future<void> showCapacity(MeetingAudioPhysicalState physical) =>
+          tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: MediaQuery(
+                  data: const MediaQueryData(textScaler: TextScaler.linear(2)),
+                  child: SingleChildScrollView(
+                    child: MeetingAudioPanel(
+                      page: page(
+                        1,
+                        physical: physical,
+                        estimatedRemainingRecordingUs: 123456000000,
+                      ),
+                      sessions: [session('saved')],
+                      actions: actions(c),
+                      onMore: () {},
+                      hasMore: false,
+                      loading: false,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+      await showCapacity(MeetingAudioPhysicalState.paused);
+      expect(
+        find.text('Estimated recording time remaining: 34 hr 17 min'),
+        findsOneWidget,
+      );
+      expect(
+        find.bySemanticsLabel(RegExp('Estimated recording time remaining')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+      await showCapacity(MeetingAudioPhysicalState.idle);
+      expect(
+        find.textContaining('Estimated recording time remaining'),
+        findsNothing,
+      );
+      expect(c.calls, isEmpty);
+    } finally {
+      semantics.dispose();
+    }
+  });
+
   test(
     'delete and retention commands preserve the selected request identity',
     () async {

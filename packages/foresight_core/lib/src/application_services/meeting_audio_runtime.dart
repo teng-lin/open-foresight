@@ -24,6 +24,7 @@ import '../store.dart';
 import 'audio_application_port.dart';
 import 'audio_playback_source.dart';
 import 'audio_saved_work.dart';
+import 'audio_storage_headroom.dart';
 import 'audio_startup_recovery.dart';
 import 'audio_transform_scheduler.dart';
 import 'native_audio_media.dart';
@@ -90,6 +91,7 @@ final class MeetingAudioRuntime
   Future<void>? _initializing, _background, _closing;
   Future<Object?>? _maintenanceWork;
   String lastError = '';
+  AudioStorageHeadroom? _storageHeadroom;
 
   Future<void> initialize() => _initializing ??= () async {
     // Publish the original image's cleanup obligation before opening raw media
@@ -124,6 +126,12 @@ final class MeetingAudioRuntime
       throw StateError('Audio startup cancelled');
     }
     media = acquired;
+    _storageHeadroom = AudioStorageHeadroom(
+      directory: p.join(p.dirname(store.path), 'recordings'),
+      scope: () => '${store.workspaceEpoch}:${media.audio.storageGeneration}',
+      nowUs: () => _clock.elapsedMicroseconds,
+      changed: _notify,
+    );
     try {
       assemblySupported =
           _assemblyRequested &&
@@ -332,6 +340,7 @@ final class MeetingAudioRuntime
     if (!_initialized || _closed) return false;
     if (_maintenance ||
         _background != null ||
+        (_storageHeadroom?.busy ?? false) ||
         saved.busy ||
         transforms.busy ||
         player.busy) {
@@ -457,7 +466,13 @@ final class MeetingAudioRuntime
     final owns =
         playing != null && media.audio.session(playing)?.meetingId == meetingId;
     return AudioMeetingReadPage(
-      meeting: queries.meeting(meetingId, activity: activity),
+      meeting: queries.meeting(
+        meetingId,
+        activity: activity,
+        estimatedRemainingRecordingUs: available && media.audio.mediaAdmitted
+            ? _storageHeadroom?.estimatedRemainingRecordingUs
+            : null,
+      ),
       sessions: sessions,
       nextAfterId: sessions.length == limit ? sessions.last.id : null,
       serviceError: !available
@@ -972,6 +987,7 @@ final class MeetingAudioRuntime
   );
   Future<void> _closeComponents({bool discardUnpublished = false}) async {
     await Future.wait([
+      if (_storageHeadroom case final storage?) storage.close(),
       saved.close(),
       transforms.close(),
       player.close(),
@@ -999,6 +1015,7 @@ final class MeetingAudioRuntime
       cleanupStack = stack;
     }
     destinations.close();
+    _storageHeadroom = null;
     media.close();
     _initialized = false;
     if (cleanupFailure != null) {

@@ -171,6 +171,7 @@ class _MeetingAudioPlayerState extends State<MeetingAudioPlayer> {
               const SizedBox(height: 8),
               _playbackControls(session, position, canControl, playing),
               _statusMessages(session, hasAudio, partial, exporting, theme),
+              _storageDetails(session, theme),
               if (session.canChangeRetention) _retentionControl(session),
               _actionButtons(
                 session,
@@ -351,6 +352,26 @@ class _MeetingAudioPlayerState extends State<MeetingAudioPlayer> {
     );
   }
 
+  Widget _storageDetails(AudioSessionPresentation session, ThemeData theme) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Recording storage: ${_bytes(session.retainedBytes + session.stagingBytes)}',
+            style: theme.textTheme.bodySmall,
+          ),
+          Text(
+            '${_bytes(session.retainedBytes)} saved audio · '
+            '${_bytes(session.stagingBytes)} additional copies',
+            style: theme.textTheme.bodySmall,
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _retentionControl(AudioSessionPresentation session) {
     return SwitchListTile.adaptive(
       contentPadding: EdgeInsets.zero,
@@ -473,6 +494,16 @@ class _MeetingAudioPlayerState extends State<MeetingAudioPlayer> {
         ),
       ),
       itemBuilder: (context) => [
+        PopupMenuItem<MeetingAudioExportFormat>(
+          enabled: false,
+          child: Text(
+            'Saving re-encodes audio. Already compressed audio may lose some quality.',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurface,
+            ),
+          ),
+        ),
+        const PopupMenuDivider(),
         for (final format in session.exportFormats)
           PopupMenuItem(
             value: format,
@@ -492,10 +523,12 @@ class _MeetingAudioPlayerState extends State<MeetingAudioPlayer> {
               color: canExport ? workspaceInk : theme.disabledColor,
             ),
             const SizedBox(width: 6),
-            Text(
-              partial ? 'Save available audio' : 'Save audio',
-              style: TextStyle(
-                color: canExport ? workspaceInk : theme.disabledColor,
+            Flexible(
+              child: Text(
+                partial ? 'Save available audio' : 'Save audio',
+                style: TextStyle(
+                  color: canExport ? workspaceInk : theme.disabledColor,
+                ),
               ),
             ),
             const Icon(Icons.arrow_drop_down, size: 18),
@@ -529,4 +562,16 @@ String _time(int us) {
   return minutes >= 60
       ? '${minutes ~/ 60}:${(minutes % 60).toString().padLeft(2, '0')}:${(seconds % 60).toString().padLeft(2, '0')}'
       : '$minutes:${(seconds % 60).toString().padLeft(2, '0')}';
+}
+
+String _bytes(int bytes) {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB'];
+  var value = bytes.clamp(0, 1 << 62).toDouble();
+  var unit = 0;
+  while (value >= 1000 && unit < units.length - 1) {
+    value /= 1000;
+    unit++;
+  }
+  final formatted = value.toStringAsFixed(unit == 0 ? 0 : 1);
+  return '${formatted.endsWith('.0') ? formatted.substring(0, formatted.length - 2) : formatted} ${units[unit]}';
 }

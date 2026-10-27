@@ -20,6 +20,8 @@ Notable changes to Open Foresight are recorded here. Versions follow
   remaining-original retention, audio-only deletion and complete audio/profile
   backup into a new profile. Pause/resume excludes paused time and preserves
   acquisition gaps; capture and background-work errors remain separate.
+  Show recording storage and approximate remaining recording time, and disclose
+  possible quality loss when saving compressed audio through re-encoding.
 - Add an opt-in manual update notice in Settings. Checks use public GitHub release
   metadata and never download or execute installers.
 - Settings → Diagnostics shows the desktop app's local logging session state,

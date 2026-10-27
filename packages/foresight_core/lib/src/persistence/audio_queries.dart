@@ -15,6 +15,7 @@ final class AudioQueries {
   AudioMeetingPresentation meeting(
     int meetingId, {
     AudioCaptureActivity activity = const AudioCaptureActivity(),
+    int? estimatedRemainingRecordingUs,
   }) => _snapshot(() {
     final totals = _totals(meetingId: meetingId);
     final active = activity.activeSessionId == null
@@ -41,6 +42,7 @@ final class AudioQueries {
     }
     return AudioMeetingPresentation(
       meetingId: meetingId,
+      estimatedRemainingRecordingUs: estimatedRemainingRecordingUs,
       sessionCount: totals['sessions']!,
       durationUs: totals['duration']!,
       availability: _availability(totals),
