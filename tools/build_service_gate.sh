@@ -30,12 +30,13 @@ foresight_diagnostic_worker "$task_root" "$task_build" "$task_python" --verify
 task_service_temp=$(mktemp -d "${FORESIGHT_TEST_TEMP_ROOT:-/var/tmp}/of-svc.XXXXXX")
 trap 'rm -rf -- "$task_service_temp"' EXIT
 # Native external capture refuses symlink ancestors, including macOS /var.
-task_service_temp=$(cd -- "$task_service_temp" && pwd -P)
+task_service_root=$(cd -- "$task_service_temp" && pwd -P)
+mkdir -m 0700 "$task_service_root/tmp" "$task_service_root/pytest"
 mkdir -p "$task_root/test-results/service"
-TMPDIR="$task_service_temp" \
-FORESIGHT_TEST_TEMP_ROOT="$task_service_temp" \
+TMPDIR="$task_service_root/tmp" \
+FORESIGHT_TEST_TEMP_ROOT="$task_service_root/tmp" \
 FORESIGHT_SERVICE_EXECUTABLE="$task_build/application/foresight-service" \
 FORESIGHT_MCP_EXECUTABLE="$task_build/application/foresight-mcp" \
 FORESIGHT_HELPER_EXECUTABLE="$task_build/services/helper/ForesightHelper" \
 FORESIGHT_NATIVE_LIBRARY="$task_native" \
-  ci_timed "service and MCP integration" "$task_python" -m pytest "$task_root/tests/service" --basetemp "$task_service_temp" --junitxml="$task_root/test-results/service/results.xml" -v
+  ci_timed "service and MCP integration" "$task_python" -m pytest "$task_root/tests/service" --basetemp "$task_service_root/pytest" --junitxml="$task_root/test-results/service/results.xml" -v
