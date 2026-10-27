@@ -334,7 +334,7 @@ int main(int argc, char **argv) {
         while (true)
           pause();
       };
-      if (phase == "suspended")
+      if (phase == "suspended" || phase == "suspended-exited")
         media_process_before_verify_for_test = hold;
       if (phase == "ready")
         media_process_before_transfer_for_test = hold;
@@ -829,6 +829,7 @@ int main(int argc, char **argv) {
     phases.push_back("ready");
 #ifdef __APPLE__
     phases.push_back("suspended");
+    phases.push_back("suspended-exited");
 #endif
 #endif
     for (auto &phase : phases) {
@@ -904,6 +905,7 @@ int main(int argc, char **argv) {
 #ifdef __APPLE__
           timespec timeout{1, 0};
           expect(kevent(watched, nullptr, 0, &event, 1, &timeout) == 1 &&
+                     event.ident == static_cast<uintptr_t>(child) &&
                      (event.fflags & NOTE_EXIT),
                  "lock_released_without_leaf_exit");
           exit_observed = true;
@@ -916,11 +918,46 @@ int main(int argc, char **argv) {
       } else if (phase != "active") {
         expect(!flock(observer, LOCK_EX | LOCK_NB),
                "pretransfer_orphan_held_media_lock");
-        if (phase == "suspended") {
-          // No watcher/user code has run. This harmless process leak is
-          // explicitly cleaned up by the fixture, not claimed as auto-reaped.
-          expect(!kill(child, SIGKILL), "suspended_fixture_cleanup");
+#ifdef __APPLE__
+        if (phase == "suspended" || phase == "suspended-exited") {
+          // No watcher/user code has run or received media capabilities.
+          if (phase == "suspended-exited") {
+            // Exercise cleanup after an actual watched exit, without relying
+            // on a particular Darwin version's suspended-orphan behavior.
+            const int stopped = kill(child, SIGKILL);
+            const int stopped_errno = stopped < 0 ? errno : 0;
+            expect(stopped == 0 || stopped_errno == ESRCH,
+                   "suspended_control_exit_signal");
+            const auto remaining =
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    exit_deadline - std::chrono::steady_clock::now());
+            const auto nanos = remaining.count() > 0 ? remaining.count() : 0;
+            timespec timeout{static_cast<time_t>(nanos / 1000000000),
+                             static_cast<long>(nanos % 1000000000)};
+            expect(kevent(watched, nullptr, 0, &event, 1, &timeout) == 1 &&
+                       event.ident == static_cast<uintptr_t>(child) &&
+                       (event.fflags & NOTE_EXIT),
+                   "suspended_control_kernel_exit");
+            exit_observed = true;
+            int alive;
+            do {
+              alive = kill(child, 0);
+              if (alive == 0)
+                std::this_thread::yield();
+            } while (alive == 0 &&
+                     std::chrono::steady_clock::now() < exit_deadline);
+            expect(alive == -1 && errno == ESRCH, "suspended_control_pid_gone");
+          }
+          const int cleanup = kill(child, SIGKILL);
+          const int cleanup_errno = cleanup < 0 ? errno : 0;
+          if (cleanup < 0)
+            std::cerr << "suspended_fixture_cleanup: errno=" << cleanup_errno
+                      << "; registered kernel exit fence still required"
+                      << std::endl;
+          expect(cleanup == 0 || cleanup_errno == ESRCH,
+                 "suspended_fixture_cleanup");
         }
+#endif
       }
 #ifdef __APPLE__
       const auto remaining =
@@ -931,6 +968,7 @@ int main(int argc, char **argv) {
                        static_cast<long>(nanos % 1000000000)};
       expect(exit_observed ||
                  (kevent(watched, nullptr, 0, &event, 1, &timeout) == 1 &&
+                  event.ident == static_cast<uintptr_t>(child) &&
                   (event.fflags & NOTE_EXIT)),
              "orphan_child_survived");
 #else

@@ -31,6 +31,10 @@ Use [CONTRIBUTING.md](CONTRIBUTING.md) for setup, conventions and required check
 - Keep unset PIDs out of wait/signal calls. Publish fixture readiness only after
   its payload is complete, and observe process exit and resource release as
   separate fences within one deadline.
+- Cleanup may find an already-exited child. Require the exact kernel exit and
+  resource-release fences; successful signaling alone is not the exit proof.
+- Retain closed subprocess status and query-shape metadata on ownership refusal.
+  A generic ownership warning does not establish incorrect directory permissions.
 - Join control readers before closing or reusing their descriptors. Keep the
   receipt write channel alive until completion is published.
 - Positive owner restarts must use bounded production admission; keep immediate

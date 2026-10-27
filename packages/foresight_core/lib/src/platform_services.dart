@@ -435,7 +435,25 @@ void privateDirectory(String path, {bool repairOwnedPermissions = false}) {
   if (owner.exitCode != 0 ||
       user.exitCode != 0 ||
       owner.stdout.toString().trim() != user.stdout.toString().trim()) {
-    throw StateError('Requires private user-owned directory: $path');
+    // Only closed ownership-query metadata is included; never process output.
+    final uidFormat = RegExp(r'^[0-9]{1,10}$');
+    final ownerUid = owner.stdout.toString().trim();
+    final userUid = user.stdout.toString().trim();
+    final ownerValid = uidFormat.hasMatch(ownerUid);
+    final userValid = uidFormat.hasMatch(userUid);
+    final details = {
+      'stat_exit': owner.exitCode,
+      'id_exit': user.exitCode,
+      'stat_uid_format_valid': ownerValid,
+      'id_uid_format_valid': userValid,
+      'uids_match': ownerValid && userValid && ownerUid == userUid,
+      'stat_stderr_chars': owner.stderr.toString().length,
+      'id_stderr_chars': user.stderr.toString().length,
+    };
+    throw StateError(
+      'Requires private user-owned directory: $path; '
+      'ownership_query=${jsonEncode(details)}',
+    );
   }
   final mode = dir.statSync().mode;
   // Older installations created the application profile with the normal 0755
