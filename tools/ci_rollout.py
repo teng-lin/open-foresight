@@ -20,6 +20,7 @@ import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools import ci_artifacts as artifacts  # noqa: E402
+from tools.ci_producer_trust import evidence_job_name  # noqa: E402
 from tools.ci_selection import GATES  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -140,7 +141,7 @@ def _qualified(entry, *, repository, expected, api, download, controls=False):
         if len(rows) < 100:
             break
         page += 1
-    succeeded = {job["name"].split(" / ")[-1] for job in jobs if job.get("conclusion") == "success"}
+    succeeded = {evidence_job_name(job).split(" / ")[-1] for job in jobs if job.get("conclusion") == "success"}
     if gate not in succeeded:
         raise ValueError("Qualification gate did not execute successfully in the original attempt")
     if kind == "nightly" and not {"linux-build", "linux-test", "macos", "acceptance-cpu", "acceptance-audio", "acceptance-deb", "platform-checks", "acceptance-checks", "dmg", "publish", "linux (deb)", "linux (rpm)", "linux (arch)"}.issubset(succeeded):
@@ -148,7 +149,7 @@ def _qualified(entry, *, repository, expected, api, download, controls=False):
     artifact = api(repository, f"actions/artifacts/{entry['artifact_id']}")
     if artifact.get("name") != "ci-rollout-qualification" or artifact.get("expired") or artifact.get("workflow_run", {}).get("id") != run["id"]:
         raise ValueError("Qualification artifact origin mismatch")
-    uploaders = [job for job in jobs if job.get("id") == entry["producer_job_id"] and job.get("conclusion") == "success" and job.get("run_attempt") == attempt and job.get("name", "").split(" / ")[-1] == gate and artifacts.in_producer_attempt(artifact, job)]
+    uploaders = [job for job in jobs if job.get("id") == entry["producer_job_id"] and job.get("conclusion") == "success" and job.get("run_attempt") == attempt and evidence_job_name(job).split(" / ")[-1] == gate and artifacts.in_producer_attempt(artifact, job)]
     if len(uploaders) != 1:
         raise ValueError("Qualification artifact has no successful original upload window")
     with tempfile.TemporaryDirectory(prefix="ci-rollout-") as temporary:

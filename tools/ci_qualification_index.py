@@ -14,6 +14,7 @@ import tempfile
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools.ci_producer_trust import evidence_job_name  # noqa: E402
 from tools import ci_artifacts as artifacts, ci_rollout as rollout  # noqa: E402
 
 WORKFLOW = ".github/workflows/ci-qualification-index.yml"
@@ -69,7 +70,7 @@ def original(repository, artifact, run, producer, api):
     if type(attempt) is not int or attempt < 1 or producer.get("run_id") != run["id"]:
         raise ValueError("Proof lacks original producer attempt")
     jobs = list(rows(repository, f"actions/runs/{run['id']}/attempts/{attempt}/jobs?", "jobs", api))
-    matches = [job for job in jobs if job.get("name") == producer.get("job") and job.get("conclusion") == "success" and job.get("run_attempt") == attempt and artifacts.in_producer_attempt(artifact, job)]
+    matches = [job for job in jobs if evidence_job_name(job) == evidence_job_name({"name": producer.get("job")}) and job.get("conclusion") == "success" and job.get("run_attempt") == attempt and artifacts.in_producer_attempt(artifact, job)]
     if len(matches) != 1:
         raise ValueError("Proof has no successful original uploading job")
     return matches[0]

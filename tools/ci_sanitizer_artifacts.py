@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools import ci_artifacts as artifacts  # noqa: E402
 from tools.ci_git import ensure_commit  # noqa: E402
 from tools.sanitizer_runtime import address_runtime  # noqa: E402
-from tools.ci_producer_trust import PRODUCERS  # noqa: E402
+from tools.ci_producer_trust import PRODUCERS, evidence_job_name  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = PRODUCERS["sanitizer-sdk"].workflows[0]
@@ -575,7 +575,7 @@ def cache_origin(root, kind, repository, own_pr, cache_key, abi):
             ):
                 continue
             for job in artifacts.dependency_jobs(repository, run["id"]):
-                if job.get("name") != JOBS[kind] or job.get("status") != "completed":
+                if evidence_job_name(job) != JOBS[kind] or job.get("status") != "completed":
                     continue
                 build = [
                     step
@@ -744,7 +744,7 @@ def find(repository, kind, inputs, abi, root, own_pr, prefix, *, verify_existing
             jobs = [
                 job
                 for job in artifacts.dependency_jobs(repository, run["id"])
-                if job.get("name") == JOBS[kind]
+                if evidence_job_name(job) == JOBS[kind]
                 and job.get("conclusion") == "success"
                 and artifacts.in_producer_attempt(artifact, job)
             ]

@@ -18,6 +18,7 @@ import subprocess
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools import ci_release_candidates as candidate  # noqa: E402
+from tools.ci_producer_trust import evidence_job_name  # noqa: E402
 from tools.build_sequence import request  # noqa: E402
 from tools.ci_nightly import pages  # noqa: E402
 from tools.github_job_attempts import canonical_jobs  # noqa: E402
@@ -202,7 +203,7 @@ class Reader:
         items = self.rows(f"actions/runs/{run['id']}/artifacts", "artifacts")
         proofs = []
         for job in jobs:
-            if job.get("name") != job_name or job.get("conclusion") != "success":
+            if evidence_job_name(job) != job_name or job.get("conclusion") != "success":
                 continue
             try:
                 item = candidate.original(items, name, run, job)
@@ -267,7 +268,7 @@ class Reader:
         proofs = {}
         workflows = {}
         for name, workflow in REQUIRED.items():
-            matches = [row for row in checks if row.get("name") == name]
+            matches = [row for row in checks if evidence_job_name(row) == name]
             if not matches:
                 raise ValueError(f"Missing required check: {name}")
             check = max(matches, key=lambda row: row["id"])

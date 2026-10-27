@@ -1,4 +1,4 @@
-name: Native address and undefined behavior sanitizers
+name: Linux sanitizer checks
 on:
   schedule:
     - cron: '41 5 * * *'
@@ -93,6 +93,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   native-sanitizers:
+    name: address and undefined behavior
     runs-on: ubuntu-24.04
     container: archlinux:base-devel@sha256:061679925e5d5028f2df9395d441ce6c4b9accf0157ff3486c06b6962e014ef1
     timeout-minutes: 120
@@ -203,6 +204,7 @@ jobs:
             build/sanitizers/Testing/
           if-no-files-found: warn
   thread-policy:
+    name: thread policy
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -218,6 +220,7 @@ jobs:
               print('probation=' + str(probation).lower(), file=output)
           PY
   native-thread-sanitizer:
+    name: thread
     needs: thread-policy
     runs-on: ubuntu-24.04
     timeout-minutes: 180

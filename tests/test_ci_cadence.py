@@ -103,7 +103,7 @@ def test_every_duty_keeps_its_immediate_event_driven_triggers():
     observer = triggers(MAIN_EVIDENCE)
     assert observer["push"] == {"branches": ["main"]}
     assert observer["workflow_run"] == {
-        "workflows": ["Platform candidates and checks"],
+        "workflows": ["Platform checks and bundles"],
         "types": ["completed"],
         "branches": ["main"],
     }
@@ -117,7 +117,7 @@ def test_every_duty_keeps_its_immediate_event_driven_triggers():
     assert {
         "CI candidate qualification",
         "Preview packages",
-        "Arch rolling toolchain drift",
+        "Arch Linux rolling drift",
         workflow(CACHE_PUBLISH)["name"],
     } <= set(proofs["workflow_run"]["workflows"])
 

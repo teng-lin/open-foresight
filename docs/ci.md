@@ -30,6 +30,39 @@ Before a follow-up push, inspect the latest PR head, review threads and failed
 step output. Reproduce failures against current code, preserve captured output
 and batch related fixes. Check test counts and skip reasons as well as exit codes.
 
+## Platform check names
+
+Display names use the same categories on both platforms. Internal job IDs,
+artifact names and provenance receipts retain their existing identities.
+
+| Display | What executes |
+|---|---|
+| `Linux checks / native`, `/ core`, `/ desktop`, `/ service` | Independently qualified stages in the pinned Arch container. Core, desktop and service consume the verified native prerequisite. |
+| `macOS checks / contracts`, `/ native`, `/ core`, `/ desktop`, `/ service` | The equivalent independent macOS matrix stages. Each has its own outcome; the application bundle job does not rerun every stage. |
+| `Linux bundle / build` | The separate Docker application producer and checksum-bound source/build handoff. |
+| `Linux bundle / integration` | Verifies and restores that handoff without rebuilding the application, then runs native, core, desktop, compiled service, fast integration and host/cache checks through `linux_test_schedule.py`. This intentionally overlaps independent checks while the shadow transition remains active. |
+| `macOS bundle / build and smoke` | Assembles the application, verifies its runtime and runs its installed/bundle smoke consumers after the selected macOS checks. It does not imply a second complete core/desktop run. |
+| `Linux packaging / deb contracts`, `/ rpm contracts`, `/ arch contracts` | Builds installers from the verified actual application bundle, then installs, smoke-tests, reinstalls and removes those exact bytes; DEB also cross-installs on Debian 13. These are actual package consumers, not tiny application fixtures. |
+| `macOS packaging / dmg contracts` | Ad hoc tiny DMG install/upgrade contract fixtures, separate from production signing or release publication. |
+| `Linux acceptance / CPU models`, `/ virtual audio`, `/ deb installer` | The actual candidate/model/installer consumers selected for that lane. Physical devices and opt-in environments remain separately reported. |
+
+Linux bundle integration is not a second name for `Linux checks / core`: it
+checks the transported application and SDK boundary as well as multiple test
+stages. The [integrity rules](platforms/ci-integrity.md#transitional-mechanisms)
+require preserving these transitional routes until hosted qualification permits
+retirement. Renaming does not remove work, change dependencies or reuse test
+results.
+
+Evidence consumers recognize a closed exact-label table in
+`tools/ci_producer_trust.py`, including the existing preview/release caller
+prefixes. Raw GitHub job rows, original IDs, attempts and upload windows are not
+rewritten. Historical names remain valid only with the same independent
+workflow/source/receipt proofs; spelling variants and arbitrary prefixes do not
+become aliases. Frozen historical fixtures remain unchanged. The aggregate
+required checks `platform-checks` and `acceptance-checks` keep their names. Any
+external branch-protection rule pinning an individual old display name must be
+reviewed by the repository owner; repository code does not update those settings.
+
 ## Dependency and compiler reuse
 
 Dependency consumers select the PR head, so an advancing main does not request

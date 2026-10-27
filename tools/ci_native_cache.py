@@ -26,6 +26,10 @@ import sys
 import tempfile
 import zipfile
 
+evidence_job_name = importlib.import_module(
+    "tools.ci_producer_trust" if __package__ else "ci_producer_trust"
+).evidence_job_name
+
 artifacts = importlib.import_module(
     "tools.ci_artifacts" if __package__ else "ci_artifacts"
 )
@@ -541,7 +545,7 @@ def native_work_producers(repository, platform, own_pr, root):
         jobs = [
             job
             for job in jobs_by_run[run_id]
-            if job.get("name", "").split(" / ")[-1] == f"native-{platform}"
+            if evidence_job_name(job).split(" / ")[-1] == f"native-{platform}"
             and job.get("conclusion") == "success"
             and artifacts.in_producer_attempt(artifact, job)
         ]

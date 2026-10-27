@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools.ci_producer_trust import evidence_job_name  # noqa: E402
 from tools.build_sequence import request  # noqa: E402
 from tools.ci_nightly import jobs, pages  # noqa: E402
 
@@ -34,7 +35,7 @@ def result(
     selected = [
         job
         for job in jobs(repository, run_id, request=request)
-        if job.get("name") in expected
+        if evidence_job_name(job) in expected
     ]
     if not selected or any(
         job.get("status") != "completed" or job.get("conclusion") in (None, "cancelled")
@@ -45,12 +46,12 @@ def result(
         job.get("conclusion") == "skipped" for job in selected
     ):
         return None
-    found = {job["name"] for job in selected}
+    found = {evidence_job_name(job) for job in selected}
     if not allow_missing and set(expected).difference(found):
         return None
     failures = sorted(
         set(expected).difference(found)
-        | {job["name"] for job in selected if job.get("conclusion") != "success"}
+        | {evidence_job_name(job) for job in selected if job.get("conclusion") != "success"}
     )
     return failures
 

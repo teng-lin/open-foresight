@@ -1,4 +1,4 @@
-name: Arch rolling toolchain drift
+name: Arch Linux rolling drift
 on:
   schedule:
     - cron: '17 6 * * *'
@@ -26,6 +26,7 @@ env:
   FORESIGHT_REQUIRE_NATIVE_UI_TEST: '1'
 jobs:
   arch:
+    name: Arch Linux checks / full build and tests
     runs-on: ubuntu-24.04
     container: archlinux:base-devel@sha256:061679925e5d5028f2df9395d441ce6c4b9accf0157ff3486c06b6962e014ef1
     timeout-minutes: 120
