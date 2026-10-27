@@ -426,7 +426,7 @@ if(BUILD_TESTING)
   target_link_libraries(native_media_pager_test PRIVATE Threads::Threads)
   # These fixtures require a private directory even when plain CTest (root or
   # standalone) and sanitizer entrypoints have no caller-exported temp root.
-  set(_native_fixture_launcher /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/../tools/run_native_fixture.sh")
+  set(_native_fixture_launcher /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/../tests/native/run_fixture.sh")
   add_test(NAME native_media_pager COMMAND ${_native_fixture_launcher}
     $<TARGET_FILE:native_media_pager_test>)
   set_tests_properties(native_media_pager PROPERTIES TIMEOUT 15)

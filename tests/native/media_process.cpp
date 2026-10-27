@@ -116,8 +116,9 @@ int main(int argc, char **argv) {
   if (std::string(argv[1]) != "decode-pcm" && getpriority(PRIO_PROCESS, 0) < 10)
     return 66;
   std::string mode = argv[7];
-  if (mode == std::string(64, 'a')) {
-    signal(SIGTERM, SIG_IGN);
+  if (mode == std::string(64, 'a') || mode == std::string(64, 'e')) {
+    if (mode == std::string(64, 'a'))
+      signal(SIGTERM, SIG_IGN);
     char path[4096]{};
 #ifdef __APPLE__
     if (fcntl(3, F_GETPATH, path) < 0)
@@ -159,10 +160,6 @@ int main(int argc, char **argv) {
   if (mode == std::string(64, 'c')) {
     write(1, "{\"broken\":true}\n", 16);
     return 0;
-  }
-  if (mode == std::string(64, 'e')) {
-    while (true)
-      pause();
   }
   if (mode == std::string(64, 'f'))
     std::this_thread::sleep_for(600ms);
@@ -637,7 +634,31 @@ int main(int argc, char **argv) {
       Fixture f(base, one);
       f.request.input_sha256 = std::string(64, 'e');
       f.limits.idle = 80ms;
+      std::atomic<uint64_t> progress{0};
+      std::atomic<pid_t> ready_pid{-1};
+      f.limits.progress = &progress;
+      // Verification and instrumented startup are not idle codec work. Keep
+      // service-owned progress alive until the actual leaf publishes its PID,
+      // then leave the unchanged 80 ms idle budget to terminate that leaf.
+      std::jthread feed([&](std::stop_token stop) {
+        const auto end = std::chrono::steady_clock::now() + 10s;
+        while (!stop.stop_requested() &&
+               std::chrono::steady_clock::now() < end) {
+          ++progress;
+          std::ifstream ready(f.source.string() + ".ready");
+          pid_t pid = -1;
+          if (ready >> pid && pid > 0) {
+            ready_pid = pid;
+            break;
+          }
+          std::this_thread::sleep_for(2ms);
+        }
+      });
       auto r = f.run();
+      feed.request_stop();
+      feed.join();
+      expect(ready_pid > 0 && ready_pid == r.child_pid,
+             "idle_leaf_not_acquired");
       expect(r.status == MediaProcessStatus::idle_timeout, "idle_timeout");
       confirmed(r);
       ++cases;
@@ -647,9 +668,45 @@ int main(int argc, char **argv) {
       f.request.input_sha256 = std::string(64, 'e');
       f.limits.total = 80ms;
       f.limits.idle = 80ms;
+      struct OwnerLock {
+        int owned = -1, observer = -1;
+        ~OwnerLock() {
+          if (owned >= 0)
+            close(owned);
+          if (observer >= 0)
+            close(observer);
+        }
+      } lock;
+      const auto path = f.root / "deadline-owner.lock";
+      lock.owned =
+          open(path.c_str(), O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC, 0600);
+      expect(lock.owned >= 0 && !flock(lock.owned, LOCK_EX | LOCK_NB),
+             "deadline_owner_lock");
+      lock.observer = open(path.c_str(), O_RDWR | O_CLOEXEC);
+      expect(lock.observer >= 0, "deadline_lock_observer");
+      f.caps.owner_lock = lock.owned;
+      std::weak_ptr<void> reader = f.caps.keep_alive;
       auto r = f.run();
       expect(r.status == MediaProcessStatus::deadline, "total_deadline");
-      confirmed(r);
+      if (r.child_pid > 0) {
+        confirmed(r);
+      } else {
+        // This budget includes cold verification. Instrumentation may exhaust
+        // it before any leaf is admitted, which still requires real closure.
+        expect(r.child_pid == -1 && r.closed.valid() &&
+                   r.closed.wait_for(0ms) == std::future_status::ready,
+               "deadline_no_leaf_closed_fence");
+        expect(f.entered().empty() ||
+                   (f.entered() == "1" && r.child_exit_confirmed),
+               "deadline_unaccounted_constructor");
+      }
+      close(lock.owned);
+      lock.owned = -1;
+      f.caps.owner_lock = -1;
+      expect(!flock(lock.observer, LOCK_EX | LOCK_NB),
+             "deadline_owner_lock_retained");
+      f.caps.keep_alive.reset();
+      expect(reader.expired(), "deadline_reader_retained");
       ++cases;
     }
     {
