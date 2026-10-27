@@ -321,9 +321,24 @@ void main() {
         );
         addTearDown(session.close);
         final runtime = await runtimeImage();
-        await eventually(
-          () => session.health.nativeReason == NativeDiagnosticHealth.healthy,
-        );
+        try {
+          await eventually(
+            () => session.health.nativeReason == NativeDiagnosticHealth.healthy,
+          );
+        } catch (_) {
+          final level = runtime.lib
+              .lookupFunction<Int32 Function(), int Function()>(
+                'fs_test_level',
+              )();
+          final pins = runtime.lib
+              .lookupFunction<Int32 Function(), int Function()>(
+                'fs_test_pin_calls',
+              )();
+          print(
+            'native_adapter_ready_failure ${jsonEncode({'nativeReason': session.health.nativeReason.name, 'sessionReason': session.health.reason.name, 'producerActive': session.producer.active, 'nativeLevel': level >= 0 && level <= 5 ? level : -1, 'pinCalls': pins.clamp(0, 2147483647)})}',
+          );
+          rethrow;
+        }
         expect(
           runtime.lib.lookupFunction<Int32 Function(), int Function()>(
             'fs_test_level',
