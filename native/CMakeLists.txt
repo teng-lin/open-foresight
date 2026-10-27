@@ -424,14 +424,19 @@ if(BUILD_TESTING)
   target_compile_features(native_media_pager_test PRIVATE cxx_std_20)
   target_include_directories(native_media_pager_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(native_media_pager_test PRIVATE Threads::Threads)
-  add_test(NAME native_media_pager COMMAND native_media_pager_test)
+  # These fixtures require a private directory even when plain CTest (root or
+  # standalone) and sanitizer entrypoints have no caller-exported temp root.
+  set(_native_fixture_launcher /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/../tools/run_native_fixture.sh")
+  add_test(NAME native_media_pager COMMAND ${_native_fixture_launcher}
+    $<TARGET_FILE:native_media_pager_test>)
   set_tests_properties(native_media_pager PROPERTIES TIMEOUT 15)
   add_executable(native_media_owned_test ../tests/native/media_process.cpp)
   target_compile_features(native_media_owned_test PRIVATE cxx_std_20)
   target_compile_definitions(native_media_owned_test PRIVATE FORESIGHT_MEDIA_OWNED_DRIVER=1)
   target_include_directories(native_media_owned_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(native_media_owned_test PRIVATE foresight_native foresight_media_process)
-  add_test(NAME native_media_owned COMMAND native_media_owned_test
+  add_test(NAME native_media_owned COMMAND ${_native_fixture_launcher}
+    $<TARGET_FILE:native_media_owned_test>
     $<TARGET_FILE:native_media_fixture_1> $<TARGET_FILE:native_media_fixture_2>)
   set_tests_properties(native_media_owned PROPERTIES TIMEOUT 45)
   foreach(variant IN ITEMS 1 2)
@@ -455,10 +460,12 @@ if(BUILD_TESTING)
   if(APPLE)
     target_link_libraries(native_media_process_production_test PRIVATE "-framework Security" "-framework CoreFoundation")
   endif()
-  add_test(NAME native_media_process_production COMMAND native_media_process_production_test
+  add_test(NAME native_media_process_production COMMAND ${_native_fixture_launcher}
+    $<TARGET_FILE:native_media_process_production_test>
     $<TARGET_FILE:native_media_fixture_1> $<TARGET_FILE:native_media_fixture_2>)
   set_tests_properties(native_media_process_production PROPERTIES TIMEOUT 30)
-  add_test(NAME native_media_process COMMAND native_media_process_test
+  add_test(NAME native_media_process COMMAND ${_native_fixture_launcher}
+    $<TARGET_FILE:native_media_process_test>
     $<TARGET_FILE:native_media_fixture_1> $<TARGET_FILE:native_media_fixture_2>)
   set_tests_properties(native_media_process PROPERTIES TIMEOUT 30)
   add_executable(native_probe_deadline_test ../tests/native/probe_deadline.cpp)

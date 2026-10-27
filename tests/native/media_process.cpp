@@ -982,7 +982,9 @@ int main(int argc, char **argv) {
 int main(int argc, char **argv) {
   try {
     expect(argc == 3 || argc == 7, "owned_fixture_paths");
-    auto base = std::filesystem::canonical(getenv("FORESIGHT_TEST_TEMP_ROOT"));
+    const char *temp = getenv("FORESIGHT_TEST_TEMP_ROOT");
+    expect(temp && temp[0] == '/', "private_temp_required");
+    auto base = std::filesystem::canonical(temp);
     auto worker = std::filesystem::canonical(argv[1]);
     auto other = std::filesystem::canonical(argv[2]);
     auto options = [](const Fixture &f) {
