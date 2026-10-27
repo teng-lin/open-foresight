@@ -251,7 +251,7 @@ class ProfileMigrationTest(unittest.TestCase):
             (self.new, self.new / "nested-backup"),
             (self.backup / "nested", self.backup),
         ):
-            with self.subTest(destination=destination, backup=backup):
+            with self.subTest(destination=str(destination), backup=repr(backup)):
                 with self.assertRaisesRegex(ValueError, "directories must be separate"):
                     migration.migrate(self.old, destination, backup, "/old", "/new")
                 self.assertTrue((self.old / "application.db").is_file())
@@ -262,7 +262,7 @@ class ProfileMigrationTest(unittest.TestCase):
         alias = self.root / "alias"
         alias.symlink_to(self.old, target_is_directory=True)
         for source, destination in ((alias, self.new), (self.old, alias)):
-            with self.subTest(source=source, destination=destination):
+            with self.subTest(source=str(source), destination=str(destination)):
                 with self.assertRaisesRegex(ValueError, "symlinks"):
                     migration.migrate(source, destination, self.backup, "/old", "/new")
                 self.assertTrue((self.old / "application.db").is_file())

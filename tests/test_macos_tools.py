@@ -500,7 +500,7 @@ except Deferred:
             ),
         ]:
             with (
-                self.subTest(response=response),
+                self.subTest(response=repr(response)),
                 patch.object(
                     installer.subprocess, "run", side_effect=[status, response]
                 ) as run,
