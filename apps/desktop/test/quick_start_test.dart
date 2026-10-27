@@ -486,18 +486,23 @@ void main() {
     },
   );
 
+  // Permission replies and capture commands are fixture-owned, so these macOS
+  // consent flows can run on every host without requesting OS access.
   testWidgets(
     'existing meeting recording checks Mac permissions and cancel preserves the meeting',
     (tester) async {
       await tester.runAsync(registerSpeech);
       final meeting = store.meeting('Existing meeting');
       domain.denyMicrophone = true;
-      await show(tester);
+      await show(tester, capabilities: const PlatformCapabilities.macOS());
       await tester.tap(find.text('Meetings').first);
       await tester.pumpAndSettle();
       await tester.tap(find.text('Start').first);
       // The operation remains busy while the permission dialog is open.
-      await tester.pump(const Duration(milliseconds: 400));
+      await pumpUntil(
+        tester,
+        () => find.text('Allow recording access').evaluate().isNotEmpty,
+      );
       expect(find.text('Allow recording access'), findsOneWidget);
       expect(domain.operations, isNot(contains('meetings.start')));
       await tester.tap(find.text('Cancel'));
@@ -509,7 +514,6 @@ void main() {
       expect(tester.takeException(), isNull);
       await dispose(tester);
     },
-    skip: !Platform.isMacOS,
   );
 
   testWidgets(
@@ -517,9 +521,12 @@ void main() {
     (tester) async {
       await tester.runAsync(registerSpeech);
       domain.denyMicrophone = true;
-      await show(tester);
+      await show(tester, capabilities: const PlatformCapabilities.macOS());
       await tester.tap(find.text('Start transcribing'));
-      await tester.pumpAndSettle();
+      await pumpUntil(
+        tester,
+        () => find.text('Allow recording access').evaluate().isNotEmpty,
+      );
       expect(find.text('Allow recording access'), findsOneWidget);
       expect(store.rows('SELECT * FROM meetings'), isEmpty);
       await tester.tap(find.widgetWithText(FilledButton, 'Allow microphone'));
@@ -533,7 +540,6 @@ void main() {
       expect(tester.takeException(), isNull);
       await dispose(tester);
     },
-    skip: !Platform.isMacOS,
   );
   testWidgets(
     'Mac system audio request is explicit, pending setup can cancel without a meeting',
@@ -541,10 +547,15 @@ void main() {
       await tester.runAsync(registerSpeech);
       domain.needsSystemSetup = true;
       domain.systemGate = Completer<Map<String, dynamic>>();
-      await show(tester);
+      await show(tester, capabilities: const PlatformCapabilities.macOS());
       await tester.tap(find.text('Start transcribing'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
+      await pumpUntil(
+        tester,
+        () => find
+            .text('Waiting for the macOS audio access request…')
+            .evaluate()
+            .isNotEmpty,
+      );
       expect(find.text('Allow system audio recording'), findsOneWidget);
       expect(find.textContaining('System Audio Recording Only'), findsWidgets);
       expect(domain.operations, contains('audio.request_system'));
@@ -574,7 +585,6 @@ void main() {
       expect(tester.takeException(), isNull);
       await dispose(tester);
     },
-    skip: !Platform.isMacOS,
   );
 
   testWidgets(
@@ -582,9 +592,12 @@ void main() {
     (tester) async {
       await tester.runAsync(registerSpeech);
       domain.needsSystemSetup = true;
-      await show(tester);
+      await show(tester, capabilities: const PlatformCapabilities.macOS());
       await tester.tap(find.text('Start transcribing'));
-      await tester.pumpAndSettle();
+      await pumpUntil(
+        tester,
+        () => find.text('Continue recording').evaluate().isNotEmpty,
+      );
 
       final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
       expect(
@@ -618,6 +631,5 @@ void main() {
       expect(tester.takeException(), isNull);
       await dispose(tester);
     },
-    skip: !Platform.isMacOS,
   );
 }
