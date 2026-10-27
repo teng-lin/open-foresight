@@ -1765,3 +1765,58 @@ but its later speech-registration failure still leaves capture and active
 teardown unqualified. Those partial timings are not a completed benchmark.
 The latest hosted Mac application paths, remaining F16 observations, resolved
 current-head CI and required owner review remain merge conditions.
+
+### 2026-10-26: complete real-model responsiveness and audio readiness evidence
+
+The real-model F16 run is complete. Its
+[portable numeric packet](../validation/rpc-responsiveness-measurements-2026-10-26.json)
+records the actual fresh `4ffbbf62` compiled cohort and public model identities.
+Current production-source equivalence was checked by Git metadata over desktop
+and core libraries, native/helper sources and the Worker build entrypoint; the
+later test/tooling changes do not relabel that cohort as a new HEAD build.
+All four original 100-RPC conditions passed the existing 50ms p95 target:
+idle-before-models 0.640680ms, warmed-idle 0.747540ms, native-active streaming
+0.861479ms, and active capture 1.112381ms. Native-active observations were
+100/100 with 25 changed chunks in that window; capture-active observations
+were 100/100. The within-workload baselines are not an old-code comparison.
+
+Additional active close completed in 414.901ms, with service/supervisor exit
+zero and an empty owned session. The interrupted request settled, but its
+RuntimeError type cannot distinguish a disconnect from an RPC cancellation
+response; no successful generation-result claim is made. Strict inventory
+finished all sixteen snapshots across 174 runtime files. Only the local
+observer used CAP_CHECKPOINT_RESTORE; product descendants retained zero active
+capability vectors and no-new-privileges. Logging remains explicitly lossy:
+admitted 70 / dropped 507 / rejected 0; observation admitted 345 / refused 249.
+No strict 5%/10%, exact 512KiB, GPU, physical-audio, Mac-model or full original
+CLI source-export certification is inferred. The private harness corrections
+restored normal independently qualified SDK libraries/manifests and the proper
+compiled Whisper CLI protocol. Failed and partial runs remain retained.
+The compact public packet was independently checked against the raw result.
+
+Hosted `99daec37` passed Quality (6,324 / 31 skips / 95.22%), complete Arch gates,
+and the full Ubuntu restored-byte consumer: Native 52/52, Core 2,889 / 16 skips /
+91.04%, Desktop 643 / 17 skips / 93.26%, host Python 801 / four skips / one
+deselection, fast 2/2, compiled service/GUI 38/38, and the actual host Docker
+fixture 1/1. Its exact source/build-manifest and dependency-tree checks passed.
+The separate Linux service invocation also passed 38/38. These preserve their
+original compiled-product provenance and do not imply a new build.
+
+The same head's audio job failed after its generated-summary receipt and
+content assertions passed: the asynchronously projected Edit Summary widget
+was not yet rendered when ensureVisible requested it. A private actual-panel
+held-projection test reproduces that failure and validates the bounded enabled
+widget wait followed by layout and the original single tap. The fixture-only
+repair also waits for reopened version-history presence; model, receipt,
+content, error, edit, regeneration, restart and recording assertions remain.
+Native peers and tools-disabled Claude converged. Package analysis/format passed.
+Actual replay using the exact original `99daec37` source/build and portable
+artifacts plus only that fixture overlay passed all four audio cases, zero
+skips; the complete meeting case took 106 seconds. Sixteen original product
+SHA/size/mode records and all thirteen Worker defines remained unchanged.
+No Native, SDK, service or Worker build was substituted. The initial local
+seed/ownership preflight refusals remain retained as setup failures.
+
+The live Mac application result still has to finish before the follow-up push
+and final current-head qualification. Required owner review and verified merge
+to main remain necessary; this dated evidence is not a merge or release claim.
