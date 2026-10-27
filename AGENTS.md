@@ -18,6 +18,9 @@ Use [CONTRIBUTING.md](CONTRIBUTING.md) for setup, conventions and required check
 - Require backends needed by shipped features at configure time. Verify the
   packaged library's actual capture routes; a legacy capture pass does not
   establish that durable recording was compiled in.
+- Check feature-specific test prerequisites in each platform entrypoint. A built
+  native library does not enable real codec tests without the fixed worker's
+  verified build identity and hash; inspect skips before accepting coverage.
 - Audit composite setup actions and slim artifact handoffs as well as workflow
   jobs. Required test executables must reach the stage that runs their tests.
 - After changing Dart skips, run `python tools/check_integration_inventory.py`
