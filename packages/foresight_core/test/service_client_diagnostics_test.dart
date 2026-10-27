@@ -132,6 +132,9 @@ void main() {
   test(
     'one call ID follows exactly the existing closing retry and wire IDs',
     () async {
+      final before = clientDiagnosticObservation();
+      final dropsBefore = session.producer.dropped;
+      final correlationsBefore = session.producer.correlationRefused;
       await observe(() async {
         final connection = ServiceConnection(fixture.profile);
         var first = true;
@@ -160,9 +163,27 @@ void main() {
         );
         await connection.close();
       });
+      final grants = session.producer.receivedGrantsForTesting;
+      final observation = {
+        'dropped_delta': session.producer.dropped - dropsBefore,
+        'correlation_refused_delta':
+            session.producer.correlationRefused - correlationsBefore,
+        'rejected': session.producer.rejected,
+        'producer_active': session.producer.active,
+        'local_producers': session.retainedProducerCount,
+        'producer_slots': session.retainedSlotCount,
+        'grants': [grants.$1, grants.$2, grants.$3, grants.$4],
+        'client_before': before,
+        'client_after': clientDiagnosticObservation(),
+      };
       await flush();
       final attempts = calls('notes.list');
-      expect(attempts, hasLength(2));
+      expect(
+        attempts,
+        hasLength(2),
+        reason:
+            'CLIENT_RETRY_OBSERVER ${jsonEncode({...observation, 'withdrawn_pending_counts': records.where((record) => record['event'] == 'rpc.connection_changed' && record['fields']['outcome'] == 'withdrawn').take(12).map((record) => record['fields']['count']).toList()})}',
+      );
       expect(attempts.map((r) => r['attempt']), [1, 2]);
       expect(attempts.map((r) => r['fields']['outcome']), [
         'refused',
