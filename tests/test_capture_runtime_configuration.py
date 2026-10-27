@@ -131,6 +131,50 @@ print('both exports held and forwarded after release')
         assert result.returncode == 0, result.stdout + result.stderr
         assert "both exports held and forwarded after release" in result.stdout
 
+    if apple:
+        ownership_probe = tmp_path / "capture-ownership-parent"
+        subprocess.run(
+            [compiler, "-std=c++17",
+             str(ROOT / "tests/fixtures/capture_ownership_probe.cpp"),
+             "-o", str(ownership_probe)],
+            capture_output=True, text=True, check=True, timeout=30,
+        )
+        injected = dict(os.environ, DYLD_INSERT_LIBRARIES=str(shim))
+        for command in (["/usr/bin/stat", "-f", "%u", str(tmp_path)], ["/usr/bin/id", "-u"]):
+            result = subprocess.run(
+                [str(ownership_probe), str(shim), *command],
+                env=injected, capture_output=True, text=True, timeout=10,
+            )
+            assert result.returncode == 0, result.stdout + result.stderr
+            assert result.stdout.strip() == str(os.getuid())
+
+        # A clean environment alone is not a witness that injection worked.
+        uninjected = dict(os.environ)
+        uninjected.pop("DYLD_INSERT_LIBRARIES", None)
+        result = subprocess.run(
+            [str(ownership_probe), str(shim), "/usr/bin/id", "-u"],
+            env=uninjected, capture_output=True, text=True, timeout=10,
+        )
+        assert result.returncode == 21
+        assert "not inserted before main" in result.stderr
+
+        # A loaded image that leaves insertion armed must fail before it can
+        # inject this architecture into Apple's protected child executables.
+        unretired_source = tmp_path / "unretired.cpp"
+        unretired_source.write_text('extern "C" int fixture_loaded() { return 1; }\n')
+        unretired = tmp_path / "unretired.dylib"
+        subprocess.run(
+            [compiler, *flags, str(unretired_source), "-o", str(unretired)],
+            capture_output=True, text=True, check=True, timeout=30,
+        )
+        result = subprocess.run(
+            [str(ownership_probe), str(unretired), "/usr/bin/id", "-u"],
+            env=dict(os.environ, DYLD_INSERT_LIBRARIES=str(unretired)),
+            capture_output=True, text=True, timeout=10,
+        )
+        assert result.returncode == 22
+        assert "left descendant injection armed" in result.stderr
+
 
 def test_capture_installation_path_must_be_absolute(
     tmp_path, configuration_dependencies

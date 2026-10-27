@@ -626,16 +626,27 @@ def running(tmp_path, request):
         # hook or result is changed; its bounded handoff must report overflow.
         env["DYLD_INSERT_LIBRARIES" if sys.platform == "darwin" else "LD_PRELOAD"] = str(wrapper)
         if sys.platform == "darwin":
-            # Preserve complete synthetic child diagnostics if the injected
-            # loader fails before the service's closed ownership metadata can
-            # report a cause. This does not replace its ownership checks.
+            # Match the service: load the fixture into an unprotected parent,
+            # then let its constructor retire injection before child launch.
+            # Apple utilities can require arm64e and cannot load our arm64 shim.
+            parent = fixtures / "capture-ownership-parent"
+            subprocess.run(
+                [os.environ.get("CXX", "c++"), "-std=c++17",
+                 str(ROOT / "tests/fixtures/capture_ownership_probe.cpp"),
+                 "-o", str(parent)],
+                check=True, capture_output=True, text=True, timeout=60,
+            )
             probes = []
             for command in (["/usr/bin/stat", "-f", "%u", str(fixtures)], ["/usr/bin/id", "-u"]):
-                result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=10)
+                result = subprocess.run(
+                    [str(parent), str(wrapper), *command], env=env,
+                    capture_output=True, text=True, timeout=10,
+                )
                 probes.append({"command": command, "exit": result.returncode,
                                "stdout": result.stdout, "stderr": result.stderr})
             (fixtures / "capture-child-ownership-probes.json").write_text(json.dumps(probes))
-            assert all(probe["exit"] == 0 for probe in probes), probes
+            assert all(probe["exit"] == 0 and probe["stdout"].strip() == str(os.getuid())
+                       for probe in probes), probes
     log = (tmp_path / "service.log").open("w+")
     process = subprocess.Popen([str(SERVICE)], env=env, stdout=log, stderr=log)
     peers = []
