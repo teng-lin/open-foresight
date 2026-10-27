@@ -284,6 +284,102 @@
       ],
       "gate": "core-native",
       "reason": "Runs in the regular core-native gate with the matching built library/helper; owned child VMs check real native work loss, the admission ACK gap, joined replacement and SQL-only replacement without physical audio or model weights."
+    },
+    {
+      "path": "packages/foresight_core/test/audio_backup_owner_test.dart",
+      "conditions": [
+        "needsNative",
+        "needsNative",
+        "needsNative",
+        "needsNative",
+        "needsNative",
+        "needsNative",
+        "needsNative",
+        "needsNative",
+        "needsNative"
+      ],
+      "gate": "core-native",
+      "reason": "Fresh native library and application SQL runtime exercise actual owned backup operations, sealed model-cache independence, native admission/quarantine, POSIX lock lifetime and failure cleanup with disposable synthetic profiles; no devices or model assets."
+    },
+    {
+      "path": "packages/foresight_core/test/audio_profile_backups_test.dart",
+      "conditions": [
+        "Platform.environment['FORESIGHT_TEST_MEDIA_WORKER'] == null || Platform.environment['FORESIGHT_TEST_MEDIA_SHA256'] == null || Platform.environment['FORESIGHT_NATIVE_LIBRARY'] == null ? 'Requires verified fixed worker/native pair for real retained audio restore' : false"
+      ],
+      "gate": "core-native",
+      "reason": "Verified pinned worker plus matching native/SQL products exercise real retained Opus backup and restore. Requires the explicit codec extension documented in testing.md; default optional-worker skips are not acceptance."
+    },
+    {
+      "path": "packages/foresight_core/test/audio_speech_models_test.dart",
+      "conditions": [
+        "native == null ? 'Requires native library; no model inference' : false"
+      ],
+      "gate": "core-native",
+      "reason": "Fresh native library exercises model-owner cache and retirement contracts using synthetic files without inference weights."
+    },
+    {
+      "path": "packages/foresight_core/test/audio_transform_media_test.dart",
+      "conditions": [
+        "Platform.environment['FORESIGHT_TEST_MEDIA_WORKER'] == null || Platform.environment['FORESIGHT_NATIVE_LIBRARY'] == null || Platform.environment['FORESIGHT_TEST_MEDIA_SHA256'] == null ? 'Requires verified fixed worker/native pair and exact installation identity' : false"
+      ],
+      "gate": "core-native",
+      "reason": "Verified pinned worker and matching native/SQL products exercise actual compression publication and bounded decode. Explicit codec-extension identities are required; see testing.md."
+    },
+    {
+      "path": "packages/foresight_core/test/meeting_audio_runtime_export_native_test.dart",
+      "conditions": [
+        "requiresWorker"
+      ],
+      "gate": "core-native",
+      "reason": "Explicit verified worker/native/SQL inputs exercise the actual MeetingAudioRuntime export consumer and durable publication using synthetic audio; see the codec extension in testing.md."
+    },
+    {
+      "path": "packages/foresight_core/test/native_audio_assembly_test.dart",
+      "conditions": [
+        "requiresWorker",
+        "requiresWorker",
+        "requiresWorker"
+      ],
+      "gate": "core-native",
+      "reason": "Explicit verified worker/native/SQL inputs exercise four real playback/compression/export cases through three skip registrations (two-format export loop); no physical audio. See testing.md."
+    },
+    {
+      "path": "packages/foresight_core/test/native_audio_media_test.dart",
+      "conditions": [
+        "requiresWorker",
+        "requiresWorker",
+        "requiresWorker",
+        "requiresWorker",
+        "requiresWorker"
+      ],
+      "gate": "core-native",
+      "reason": "Explicit verified worker/native/SQL inputs exercise fixed operations, cancellation, identity refusal and the actual sample-exact SQL manifest consumer; see testing.md."
+    },
+    {
+      "path": "packages/foresight_core/test/native_audio_recognition_test.dart",
+      "conditions": [
+        "needsNative",
+        "needsNative",
+        "needsNative"
+      ],
+      "gate": "core-native",
+      "reason": "Fresh native library runs deterministic owned speech workers with joined cancellation/retirement; no physical capture or inference weights."
+    },
+    {
+      "path": "packages/foresight_core/test/recording_media_test.dart",
+      "conditions": [
+        "native == null ? 'Requires fresh native recording recovery ABI; no devices' : false"
+      ],
+      "gate": "core-native",
+      "reason": "Fresh native recording recovery ABI verifies durable synthetic publication/recovery without opening devices."
+    },
+    {
+      "path": "packages/foresight_core/test/service_native_admission_test.dart",
+      "conditions": [
+        "needsNative); } }"
+      ],
+      "gate": "core-native",
+      "reason": "Fresh native and SQL products exercise actual direct service startup and restart in child VMs: quarantined mappings refuse before media admission, and an unselected resident mapping preserves SQL-only behavior; no physical capture, output device or model assets."
     }
   ]
 }

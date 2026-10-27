@@ -102,7 +102,7 @@ void main() {
 
     test('default service uses its scoped native library', () async {
       final result = await run(service: true);
-      expect(result['ok'], isTrue);
+      expect(result['ok'], isTrue, reason: '$result');
       expect(result['legacyDefaults'], '${root.path}/data/cache/litert');
     });
 

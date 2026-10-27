@@ -29,6 +29,8 @@ void main() {
           key.startsWith('FORESIGHT_') && key != 'FORESIGHT_SQLITE_LIBRARY',
     );
     runtimeConfiguration.environment['FORESIGHT_HELPER'] = '';
+    // Approval/storage ownership uses a SQL-only service. Native graph schema
+    // retirement has its own MeetingAudioRuntime regression.
     root = createTestTempDirectorySync('admit-');
     service = await ApplicationService.start(
       ProfilePaths('${root.path}/d', '${root.path}/r'),

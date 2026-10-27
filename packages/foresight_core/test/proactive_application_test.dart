@@ -17,6 +17,8 @@ import 'package:test/test.dart';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/dedicated_query_runtime.dart';
 import 'package:foresight_core/src/application.dart';
+import 'package:foresight_core/src/audio_models.dart';
+import 'fixtures/durable_speech.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
 
@@ -507,9 +509,9 @@ void main() {
     },
   );
 
-  for (final interim in [false, true]) {
+  for (final live in [false, true]) {
     test(
-      '${interim ? 'Interim' : 'Final'} captured speech automatically schedules detection and a cited answer without a UI request',
+      '${live ? 'Live durable' : 'Paused durable'} captured speech automatically schedules detection and a cited answer without a UI request',
       () async {
         final library =
             '${directory.path}/capture.${Platform.isMacOS ? 'dylib' : 'so'}';
@@ -518,74 +520,37 @@ void main() {
           output: library,
         );
         final fixture = DynamicLibrary.open(library);
-        final transcript = jsonEncode({
-          'type': 'transcript',
-          'text': interim
-              ? 'Mira owns the draft. Who owns the draft? one two three four five'
-              : 'Mira owns the draft. Who owns the draft?',
-        }).toNativeUtf8();
-        fixture.lookupFunction<
-          Void Function(Pointer<Utf8>),
-          void Function(Pointer<Utf8>)
-        >('fixture_speech_event')(transcript);
-        calloc.free(transcript);
         final prior = runtimeConfiguration.environment['FORESIGHT_NATIVE'];
         runtimeConfiguration.environment['FORESIGHT_NATIVE'] = library;
+        final capture = DurableSpeechFixture(
+          app,
+          store,
+          fixture,
+          text: 'Mira owns the draft. Who owns the draft?',
+        );
         try {
           final model = File('${directory.path}/speech-fixture')
             ..writeAsStringSync('Fixture');
           await store.register('speech', model.path, '/usr/bin/true');
           final id = store.meeting('Capture fixture');
           await app.call(Operation.meetingsStart.wire, {'id': id});
-          final bytes = ByteData(interim ? 12000 : 4000);
-          final event = jsonEncode({
-            'type': 'pcm',
-            'sampleRate': 1000,
-            'volume': .02,
-            'data': base64Encode(bytes.buffer.asUint8List()),
-          }).toNativeUtf8();
           detector.gate = Completer<void>();
-          expect(
-            fixture.lookupFunction<
-              Int32 Function(Int32, Pointer<Utf8>),
-              int Function(int, Pointer<Utf8>)
-            >('fixture_emit')(0, event),
-            1,
-          );
-          calloc.free(event);
-          if (!interim) {
+          capture.voice(AudioSource.microphone);
+          if (!live) {
             await app.call(Operation.meetingsPause.wire, {'id': id});
           }
-          // The native callback must reach automatic detection. Hold its
+          // The durable committed-transcript callback must reach detection. Hold its
           // completion while checking capture state; do not race a wall clock.
           await detector.entered.future;
           final detecting = app.proactive.process();
-          if (interim) {
-            expect(store.rows('SELECT * FROM transcript'), isEmpty);
-            expect(
-              app.provisionalTranscript['microphone'],
-              'Mira owns the draft. Who owns the draft? one two three four five',
-            );
-            // Interim speech has no durable transcript to retrieve yet; supply
-            // independently imported context under an explicit workspace scope.
-            store.setPreference('proactiveScope.$id', 'workspace');
-            store.importText(
-              'Ownership',
-              'Mira owns the draft.',
-              'text/plain',
-              'fixture',
-            );
-            for (final source in store.sources) {
-              store.state(source['id'] as String, 'indexed');
-            }
-          } else {
-            expect(
-              store.rows('SELECT text FROM transcript').single['text'],
-              'Mira owns the draft. Who owns the draft?',
-            );
-          }
+          expect(app.recording!.paused, !live);
+          expect(
+            store.rows('SELECT text FROM transcript').single['text'],
+            'Mira owns the draft. Who owns the draft?',
+          );
+          expect(app.provisionalTranscript, isEmpty);
           final queue = app.proactive;
-          // The capture callback, not this test, called notify().
+          // The durable commit callback, not this test, called notify().
           detector.gate!.complete();
           await detecting;
           await queue.process();
@@ -601,6 +566,7 @@ void main() {
           );
           await app.call(Operation.meetingsStop.wire, const {});
         } finally {
+          await capture.close();
           if (prior == null) {
             runtimeConfiguration.environment.remove('FORESIGHT_NATIVE');
           } else {
@@ -610,4 +576,94 @@ void main() {
       },
     );
   }
+  test(
+    'legacy interim capture callback automatically grounds in explicit workspace context',
+    () async {
+      final library =
+          '${directory.path}/interim.${Platform.isMacOS ? 'dylib' : 'so'}';
+      await buildCachedNativeFixture(
+        source: 'test/fixtures/recording_native_stub.cpp',
+        output: library,
+      );
+      final fixture = DynamicLibrary.open(library);
+      const text =
+          'Mira owns the draft. Who owns the draft? one two three four five';
+      final eventText = jsonEncode({
+        'type': 'transcript',
+        'text': text,
+      }).toNativeUtf8();
+      fixture.lookupFunction<
+        Void Function(Pointer<Utf8>),
+        void Function(Pointer<Utf8>)
+      >('fixture_speech_event')(eventText);
+      calloc.free(eventText);
+      final model = File('${directory.path}/interim-model')
+        ..writeAsStringSync('Fixture');
+      final id = store.meeting('Legacy callback fixture');
+      final queue = app.proactive;
+      queue.begin(id);
+      // The legacy Recording callback API remains supported. This adapter models
+      // its interim consumer explicitly; production durable capture emits finals.
+      final owner = Recording(
+        library,
+        (_) {},
+        (_, _, _, _) {},
+        provisional: (value, _, _, source) {
+          app.provisionalTranscript[source] = value;
+          queue.updateInterim(id, source, value);
+        },
+      );
+      try {
+        await owner.start('/usr/bin/true', model.path);
+        detector.gate = Completer<void>();
+        final pcm = jsonEncode({
+          'type': 'pcm',
+          'sampleRate': 1000,
+          'volume': .02,
+          'data': base64Encode(Uint8List(12000)),
+        }).toNativeUtf8();
+        try {
+          expect(
+            fixture.lookupFunction<
+              Int32 Function(Int32, Pointer<Utf8>),
+              int Function(int, Pointer<Utf8>)
+            >('fixture_emit')(0, pcm),
+            1,
+          );
+        } finally {
+          calloc.free(pcm);
+        }
+        await detector.entered.future;
+        final detecting = queue.process();
+        expect(store.rows('SELECT * FROM transcript'), isEmpty);
+        expect(app.provisionalTranscript['microphone'], text);
+        store.setPreference('proactiveScope.$id', 'workspace');
+        store.importText(
+          'Ownership',
+          'Mira owns the draft.',
+          'text/plain',
+          'fixture',
+        );
+        for (final source in store.sources) {
+          store.state(source['id'] as String, 'indexed');
+        }
+        detector.gate!.complete();
+        await detecting;
+        await queue.process();
+        await queue.process();
+        expect(queue.errors, isEmpty);
+        expect(
+          store.rows('SELECT state FROM meeting_questions').single['state'],
+          'completed',
+        );
+        expect(
+          store.rows('SELECT body FROM answers').single['body'],
+          'Mira owns the draft. [S1]',
+        );
+      } finally {
+        owner.dispose();
+        await owner.closed;
+      }
+    },
+  );
 }

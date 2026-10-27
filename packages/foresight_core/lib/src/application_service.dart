@@ -1,11 +1,16 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ffi';
 import 'dart:io';
 import 'dart:math';
 import 'package:clock/clock.dart';
 import 'application.dart';
+import 'application_services/installed_audio_media.dart';
+import 'application_services/meeting_audio_runtime.dart';
+import 'native_lifetime.dart';
 import 'agent_access.dart';
 import 'domain.dart';
+import 'durable_capture.dart';
 import 'helper.dart';
 import 'model_setup.dart';
 import 'operations.dart';
@@ -13,6 +18,7 @@ import 'operation_requests.dart';
 import 'operation_descriptor.dart';
 import 'platform_services.dart';
 import 'persistence/read_schema_guard.dart';
+import 'persistence/recording_media.dart';
 import 'profile_paths.dart';
 import 'rpc_error.dart';
 import 'service_admission.dart';
@@ -246,6 +252,9 @@ class ApplicationService {
   /// service-owned consumer receives that immutable snapshot. Outside any
   /// owner scope, startup decisions use one boundary snapshot taken here while
   /// the long-lived owners stay legacy boundary consumers, as before injection.
+  /// [capturePlatform] is an in-process capture capability factory; each media
+  /// binding uses the service-owned storage and work ports, including rebinding
+  /// after a workspace clear. No request or configuration field selects it.
   static Future<ApplicationService> start(
     ProfilePaths profile, {
     SearchCallbacks? webSearch,
@@ -258,6 +267,7 @@ class ApplicationService {
     Future<void> Function()? beforeReleaseOwnership,
     DesktopPeerVerifier? desktopPeerVerifier,
     void Function()? onProfileOwned,
+    DurableCapturePlatform Function(RecordingMedia)? capturePlatform,
     RuntimeConfiguration? configuration,
   }) async {
     final scoped = configuration == null ? currentOwnerRuntimeSnapshot : null;
@@ -280,6 +290,7 @@ class ApplicationService {
         helperStartupProbeTimeout: helperStartupProbeTimeout,
         desktopPeerVerifier: desktopPeerVerifier,
         onProfileOwned: onProfileOwned,
+        capturePlatform: capturePlatform,
       );
       // An explicit snapshot is also bound as this owner's scope, so the store,
       // its read worker and in-service defaults capture the same snapshot.
@@ -311,6 +322,7 @@ class ApplicationService {
     Duration? helperStartupProbeTimeout,
     DesktopPeerVerifier? desktopPeerVerifier,
     void Function()? onProfileOwned,
+    DurableCapturePlatform Function(RecordingMedia)? capturePlatform,
   }) async {
     final lock = await acquireServiceProfileLock(
       profile,
@@ -376,12 +388,68 @@ class ApplicationService {
         createTimer: createTimer,
         configuration: owned,
       );
-      final application = Application(domain)..profileId = profile.identity;
+      late final Application application;
+      NativeLibrary? audioBindings;
+      final selectedNative = configuration['FORESIGHT_NATIVE'];
+      if (selectedNative != null || configuration.installationRoot != null) {
+        if (selectedNative == null || selectedNative.isEmpty) {
+          throw StateError(
+            'The application native runtime is missing. Reinstall Open Foresight.',
+          );
+        }
+        audioBindings = NativeLibrary(DynamicLibrary.open(selectedNative));
+        // Verify a selected image before constructing any audio capability.
+        audioBindings.library;
+        // Direct owners have no frontend admission hook. Check the selected
+        // mapping even when this isolate already configured its environment.
+        audioBindings.lifetime.ensureAdmission();
+      }
+      // An unselected development service is SQL-only, even if another
+      // isolate has already loaded a native image with the default basename.
+      InstalledAudioMediaInstallation? audioInstallation;
+      if (audioBindings != null && configuration.installationRoot != null) {
+        try {
+          audioInstallation = await loadInstalledAudioMediaInstallation(
+            configuration,
+          );
+        } on StateError {
+          // Refuse conversion capabilities while keeping durable capture/ASR.
+          // Raw audio stays on disk until a verified worker is available.
+        } on FormatException {
+          // Truncated/invalid receipt bytes grant no codec capability either.
+        }
+      }
+      final audio = audioBindings == null
+          ? null
+          : MeetingAudioRuntime(
+              store: store,
+              bindings: audioBindings,
+              executable: audioInstallation?.executable,
+              assemblySupported: audioInstallation?.assemblyProtocol == 1,
+              configuration: configuration,
+              runtimeDirectory: profile.runtime,
+              changed: () => application.changed(),
+              committed: (result) =>
+                  application.audioTranscriptCommitted(result),
+              captureActivity: () => application.audioCaptureActivity,
+              captureOwned: () => application.recording != null,
+              bindCapture: (media, work) => application.configureDurableAudio(
+                media,
+                work,
+                capturePlatform: capturePlatform?.call(media),
+              ),
+              nowMs: () => domain.clock.now().millisecondsSinceEpoch,
+            );
+      application = Application(domain, recordingAudio: audio)
+        ..profileId = profile.identity;
       startedApplication = application;
       application.importPolicy = ImportPolicy(profile.data, () {
         final saved = store!.preference('importRoots', '[]');
         return (jsonDecode(saved) as List).cast<String>();
       });
+      // Startup failure cleanup owns the application before recovery can admit
+      // a native reader. Publish no service socket until reconciliation settles.
+      await audio?.initialize();
       application.startBackground();
       binding = await ServiceSocketBinding.bind(path);
       temporary.writeAsStringSync(
@@ -694,6 +762,7 @@ class ApplicationService {
   }
 
   void _disconnect(Socket client) {
+    application.audioCallerDisconnected(client);
     final wasHost = access.isHost(client);
     access.detach(client);
     if (wasHost) {
@@ -897,7 +966,7 @@ class ApplicationService {
       }
       return result;
     }
-    final work = _execute(request, lease);
+    final work = _execute(request, lease, callerIdentity: client);
     work.whenComplete(() => _settle(lease)).ignore();
     return Stream.fromFuture(work);
   }
@@ -953,8 +1022,9 @@ class ApplicationService {
 
   Future<Object?> _execute(
     OperationRequest request,
-    ServiceRequestLease lease,
-  ) async {
+    ServiceRequestLease lease, {
+    required Object callerIdentity,
+  }) async {
     final method = request.operation.wire;
     // Nothing has been dispatched yet, so these are closing refusals too.
     if (_closing) throw serviceClosingRefusal();
@@ -985,6 +1055,7 @@ class ApplicationService {
     try {
       result = await application.callRequest(
         request,
+        callerIdentity: callerIdentity,
         current: () => !lease.cancelled,
       );
     } finally {

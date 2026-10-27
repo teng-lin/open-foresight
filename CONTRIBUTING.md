@@ -77,7 +77,7 @@ missing-asset error) and run `--archive PATH`, or point
 `FORESIGHT_EVIDENCE_CACHE` at an already provisioned cache. The selected platform
 contracts do not consume this archive and do not require it.
 
-Read [integration gates](docs/validation/integration-gates.md) for real model,
+Read [integration gates](docs/testing.md) for real model,
 virtual audio, service, and installed-package acceptance. A skipped test is not
 acceptance evidence. Never use or upload personal profiles, cloud credentials,
 meeting audio, or reference model assets in a pull request. Restricted fixtures

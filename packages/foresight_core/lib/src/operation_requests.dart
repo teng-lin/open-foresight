@@ -1,4 +1,6 @@
 import 'operations.dart';
+import 'operation_requests/recordings.dart';
+export 'operation_requests/recordings.dart';
 import 'operation_requests/request_context.dart';
 import 'operation_requests/application.dart';
 import 'operation_requests/sources.dart';
@@ -26,6 +28,30 @@ OperationRequest decodeOperationRequest(
 ) {
   final context = OperationRequestContext.decode(operation, raw);
   return switch (operation) {
+    Operation.recordingsRead => RecordingsReadRequest.decode(context),
+    Operation.recordingsTranscriptTarget =>
+      RecordingsTranscriptTargetRequest.decode(context),
+    Operation.recordingsPlay => RecordingsPlayRequest.decode(context),
+    Operation.recordingsPauseAudio => RecordingsPauseAudioRequest.decode(
+      context,
+    ),
+    Operation.recordingsSeek => RecordingsSeekRequest.decode(context),
+    Operation.recordingsSeekTranscript =>
+      RecordingsSeekTranscriptRequest.decode(context),
+    Operation.recordingsAuthorizeExportDestination =>
+      RecordingsAuthorizeExportDestinationRequest.decode(context),
+    Operation.recordingsExport => RecordingsExportRequest.decode(context),
+    Operation.recordingsCancelExport => RecordingsCancelExportRequest.decode(
+      context,
+    ),
+    Operation.recordingsRetryTranscription =>
+      RecordingsRetryTranscriptionRequest.decode(context),
+    Operation.recordingsRetryCompression =>
+      RecordingsRetryCompressionRequest.decode(context),
+    Operation.recordingsDelete => RecordingsDeleteRequest.decode(context),
+    Operation.recordingsSetRetainLossless =>
+      RecordingsSetRetainLosslessRequest.decode(context),
+
     Operation.notificationsCapabilities =>
       NotificationsCapabilitiesRequest.decode(context),
     Operation.notificationsRequestPermission =>

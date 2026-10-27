@@ -4,9 +4,15 @@
 #include "exception_barrier.h"
 #include "image_pin.h"
 #include "json_string.h"
+#include "media_owner.h"
 #include "one_shot_launch.h"
 #include "owned_operations.h"
+#include "pcm_output.h"
 #include "portable_process.h"
+#include "recording_capture.h"
+#if FORESIGHT_HAVE_PIPEWIRE
+#include "pipewire_capture.h"
+#endif
 #include "speech_audio.h"
 #include "speech_cpu.h"
 #include "wav_writer.h"
@@ -78,6 +84,9 @@ struct PollWaitBoundary {
 PollWaitBoundary poll_wait_boundary;
 std::atomic<bool> capture_start_lock_probe{false},
     capture_start_lock_observed{false};
+std::atomic<bool> recording_prepare_hold{false},
+    recording_prepare_entered{false};
+std::atomic<int64_t> recording_drain_clock_us{-1};
 #endif
 struct Events {
   const std::shared_ptr<PollLifetime> poll_lifetime =
@@ -554,6 +563,114 @@ struct Capture : Worker {
   std::atomic<bool> echoCancellation{false};
   int rate = 48000;
   uint64_t dropped = 0, pending_dropped_bytes = 0;
+  std::shared_ptr<const foresight::RecordingCaptureOptions> recording;
+  std::mutex recording_mutex;
+  std::condition_variable recording_changed;
+  std::shared_ptr<foresight::RecordingWriter> recording_writer;
+  bool recording_prepared = false, recording_sealed = false,
+       recording_recovery = false;
+  std::vector<foresight::RecordingWriter::Chunk> recording_recovered_chunks;
+  std::string recording_error, recording_clock_quality = "unavailable";
+  std::atomic<uint64_t> recording_source_sample{0};
+  std::atomic<bool> recording_acquired{false};
+  std::atomic<double> recording_volume{0}, recording_peak{0};
+  std::atomic<int64_t> recording_last_voice_us{-1},
+      recording_acquired_through_us{-1};
+  int64_t recording_previous_start_us = -1;
+  uint64_t recording_previous_frames = 0;
+  bool recording_pending_gap = false;
+  void fail_recording(const std::string &message,
+                      const char *code = "recording_storage_failed") {
+    {
+      std::lock_guard lock(recording_mutex);
+      if (recording_error.empty())
+        recording_error = message;
+    }
+    cancel = true;
+#ifdef __APPLE__
+    fs_macos_capture_revoke(macos);
+#endif
+    recording_changed.notify_all();
+    emit("{\"type\":\"state\",\"state\":\"failed\",\"code\":" + quote(code) +
+         ",\"message\":" + quote(message) + "}");
+  }
+  bool prepare_recording() {
+    if (!recording)
+      return true;
+    try {
+      if (cancel)
+        return false;
+#if FORESIGHT_ENABLE_TEST_HOOKS
+      recording_prepare_entered = true;
+      while (recording_prepare_hold)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+#endif
+      if (cancel)
+        return false;
+      if (recording_recovery) {
+        auto recovered = foresight::RecordingWriter::recover(
+            recording->directory, recording->identities, &cancel);
+        {
+          std::lock_guard lock(recording_mutex);
+          recording_recovered_chunks = std::move(recovered);
+          recording_prepared = !cancel;
+        }
+        recording_changed.notify_all();
+        return false;
+      }
+      foresight::RecordingWriter::Options options;
+      options.on_error = [this] {
+        std::shared_ptr<foresight::RecordingWriter> failed_writer;
+        {
+          std::lock_guard lock(recording_mutex);
+          failed_writer = recording_writer;
+        }
+        const bool low_space =
+            failed_writer &&
+            failed_writer->error() == "Not enough disk space to keep recording";
+        fail_recording(low_space ? "Not enough disk space to keep recording"
+                                 : "Recording audio storage failed",
+                       low_space ? "recording_disk_full"
+                                 : "recording_storage_failed");
+      };
+      auto writer = std::make_shared<foresight::RecordingWriter>(
+          recording->directory, options);
+      {
+        std::lock_guard lock(recording_mutex);
+        recording_writer = writer;
+      }
+      for (const auto &id : recording->identities) {
+        if (cancel)
+          return false;
+        if (!writer->reserve(id))
+          throw std::runtime_error(
+              "Recording publication could not be reserved");
+      }
+      {
+        std::lock_guard lock(recording_mutex);
+        recording_prepared = true;
+      }
+      recording_changed.notify_all();
+      return !cancel;
+    } catch (...) {
+      fail_recording("Recording audio storage could not be prepared");
+      return false;
+    }
+  }
+  void finish_recording() {
+    std::shared_ptr<foresight::RecordingWriter> writer;
+    {
+      std::lock_guard lock(recording_mutex);
+      writer = recording_writer;
+    }
+    if (writer)
+      writer->stop();
+    {
+      std::lock_guard lock(recording_mutex);
+      recording_sealed = true;
+    }
+    recording_changed.notify_all();
+  }
 };
 #include "owned_handles.h"
 std::string capture_runtime_command(const std::string &configured) {
@@ -566,10 +683,97 @@ std::string capture_overflow(Capture &c) {
          "bytes\":" +
          std::to_string(bytes) + "}";
 }
-void audio_frame(Capture &c, const std::vector<unsigned char> &bytes) {
+void audio_frame(Capture &c, const std::vector<unsigned char> &bytes,
+                 int64_t acquisition_us = -1, bool clock_metadata = false,
+                 const char *clock_quality = nullptr,
+                 int64_t clock_tolerance_us = 23) {
   std::vector<int16_t> pcm(bytes.size() / 2);
   for (size_t i = 0; i < pcm.size(); ++i)
     pcm[i] = int16_t(bytes[i * 2] | bytes[i * 2 + 1] << 8);
+  const auto volume = fs_pcm_rms(pcm.data(), pcm.size());
+  if (c.recording) {
+    std::shared_ptr<foresight::RecordingWriter> writer;
+    {
+      std::lock_guard lock(c.recording_mutex);
+      writer = c.recording_writer;
+      c.recording_clock_quality = clock_quality    ? clock_quality
+                                  : clock_metadata ? "hardware_host_time"
+                                                   : "pipe_drain_estimate";
+    }
+    if (!writer) {
+      c.fail_recording("Recording writer unavailable");
+      return;
+    }
+    if (acquisition_us < 0 && !clock_metadata) {
+      auto drained_us = foresight::recording_monotonic_us();
+#if FORESIGHT_ENABLE_TEST_HOOKS
+      if (const auto override_us = recording_drain_clock_us.load();
+          override_us >= 0)
+        drained_us = override_us;
+#endif
+      // A raw read supplies no acquisition stamp. A first buffer may arrive
+      // faster than its nominal duration; its drain estimate cannot place
+      // accepted samples before this session. Supplied clock metadata keeps
+      // its original value and remains subject to the writer's validation.
+      acquisition_us = std::max(
+          c.recording->origin_us,
+          drained_us - static_cast<int64_t>(pcm.size() * 1000000 / 48000));
+    }
+    const auto normalized_volume = std::clamp(volume, 0.0, 1.0);
+    c.recording_volume = normalized_volume;
+    c.recording_peak = std::max(c.recording_peak.load(), normalized_volume);
+    bool gap_before = c.recording_pending_gap;
+    c.recording_pending_gap = false;
+    // Default host-time tolerance: one canonical frame plus2us integer
+    // conversion. The direct graph backend supplies a phase tolerance and
+    // separately detects graph-tick outages. Physical alignment still requires
+    // qualification; these tolerances never describe FIFO drain jitter.
+    if (clock_metadata && c.recording_previous_start_us >= 0) {
+      const auto expected =
+          c.recording_previous_start_us +
+          static_cast<int64_t>(c.recording_previous_frames * 1000000 / 48000);
+      const auto delta = acquisition_us - expected;
+      if (delta < -clock_tolerance_us) {
+        c.fail_recording("Acquisition clock moved backwards",
+                         "recording_clock_discontinuity");
+        return;
+      }
+      if (delta > clock_tolerance_us)
+        gap_before = true;
+    }
+    for (size_t offset = 0; offset < pcm.size();) {
+      const auto count = std::min(pcm.size() - offset,
+                                  foresight::RecordingWriter::block_frames);
+      const auto result =
+          writer->tryAppend(pcm.data() + offset, count, c.recording->span,
+                            c.recording_source_sample.load(),
+                            acquisition_us - c.recording->origin_us +
+                                static_cast<int64_t>(offset * 1000000 / 48000),
+                            gap_before);
+      gap_before = false;
+      if (result != foresight::RecordingWriter::Result::accepted) {
+        c.fail_recording(
+            result == foresight::RecordingWriter::Result::no_reservation
+                ? "Recording publication reservations exhausted"
+                : "Recording storage handoff failed");
+        return;
+      }
+      c.recording_source_sample.fetch_add(count);
+      const auto accepted_end_us =
+          acquisition_us - c.recording->origin_us +
+          static_cast<int64_t>((offset + count) * 1000000 / 48000);
+      // Drain estimates do not become acquisition evidence. Silence advances
+      // real capture duration; ASR activity and fsync completion never do.
+      if (clock_metadata)
+        c.recording_acquired_through_us = accepted_end_us;
+      if (normalized_volume > 0.003)
+        c.recording_last_voice_us = accepted_end_us;
+      c.recording_acquired = true;
+      offset += count;
+    }
+    c.recording_previous_start_us = acquisition_us;
+    c.recording_previous_frames = pcm.size();
+  }
   auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
                  std::chrono::steady_clock::now().time_since_epoch())
                  .count();
@@ -577,11 +781,11 @@ void audio_frame(Capture &c, const std::vector<unsigned char> &bytes) {
       "\"type\":\"pcm\",\"channel\":" +
       quote("plugins.foresight.xeno.com/audio_capture_events") +
       ",\"data\":" + quote(base64(bytes)) +
-      ",\"volume\":" + std::to_string(fs_pcm_rms(pcm.data(), pcm.size())) +
+      ",\"volume\":" + std::to_string(volume) +
       ",\"sampleRate\":" + std::to_string(c.rate);
   std::string legacy = "{\"type\":" + quote(c.playback ? "output" : "input") +
-                       ",\"payload\":" + quote(base64(bytes)) + ",\"volume\":" +
-                       std::to_string(fs_pcm_rms(pcm.data(), pcm.size()));
+                       ",\"payload\":" + quote(base64(bytes)) +
+                       ",\"volume\":" + std::to_string(volume);
   if (c.playback)
     legacy += ",\"bufferDurationMs\":" + std::to_string(40) +
               ",\"sampleRate\":" + std::to_string(double(c.rate));
@@ -738,6 +942,10 @@ int fs_operation_release(uint64_t token) {
   return foresight::ffi_barrier(
       [&] { return native_handles().operations.release(token) ? 0 : -1; }, -1);
 }
+static void *start_capture_with_recording(
+    const char *target, int playback, int rate, int echo,
+    std::shared_ptr<const foresight::RecordingCaptureOptions> recording,
+    bool recover = false);
 #include "owned_exports.h"
 int fs_abi_version() {
   return foresight::ffi_barrier([&]() -> int { return 1; }, 1);
@@ -1714,8 +1922,10 @@ int fs_capture_set_echo_cancellation(void *handle, int enabled) {
       },
       -1);
 }
-void *fs_capture_start_with_options(const char *target, int playback, int rate,
-                                    int echo) {
+static void *start_capture_with_recording(
+    const char *target, int playback, int rate, int echo,
+    std::shared_ptr<const foresight::RecordingCaptureOptions> recording,
+    bool recover) {
   return foresight::ffi_barrier(
       [&]() -> void * {
         if (rate < 8000 || rate > 192000)
@@ -1736,8 +1946,12 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate,
           return nullptr;
         }
         c->rate = rate;
+        c->recording = std::move(recording);
+        c->recording_recovery = recover;
+        if (c->recording)
+          c->recording_source_sample = c->recording->source_sample;
 #ifdef __APPLE__
-        if (c->runtime.empty()) {
+        if (c->runtime.empty() && !recover) {
           if (!pin_native_mapping())
             return nullptr;
           native_handles().process_lifetime = true;
@@ -1754,6 +1968,11 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate,
         std::lock_guard life(c->life);
         c->active = true;
         c->thread = start_worker_thread(*c, "capture", [c] {
+          foresight::ScopeExit seal_recording([&] { c->finish_recording(); });
+          if (!c->prepare_recording()) {
+            c->active = false;
+            return;
+          }
           foresight::diagnostics::capture_state(0, 0, 0, true);
           foresight::guarded_worker(
               [&] {
@@ -1762,10 +1981,50 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate,
                   const auto outcome = fs_macos_capture(
                       c->target, c->playback, c->rate, c->cancel, c->macos,
                       [c](const auto &bytes) { audio_frame(*c, bytes); },
-                      [c](const auto &event) { c->emit(event); },
-                      &c->echoCancellation);
+                      [c](const auto &event) {
+                        if (c->recording) {
+                          auto value =
+                              nlohmann::json::parse(event, nullptr, false);
+                          if (value.is_object() &&
+                              value.value("type", "") == "gap") {
+                            if (value.value("discarded_bytes", uint64_t{0}) ||
+                                value.value("discarded_samples", uint64_t{0}))
+                              c->fail_recording(
+                                  "Captured audio was lost before storage");
+                            else {
+                              std::shared_ptr<foresight::RecordingWriter>
+                                  writer;
+                              {
+                                std::lock_guard lock(c->recording_mutex);
+                                writer = c->recording_writer;
+                              }
+                              c->recording_pending_gap = true;
+                              if (writer && !writer->sealSpan())
+                                c->fail_recording("Recording outage boundary "
+                                                  "could not be saved");
+                            }
+                          }
+                        }
+                        c->emit(event);
+                      },
+                      &c->echoCancellation,
+                      c->recording ? MacTimedPcm([c](const auto &bytes,
+                                                     int64_t acquisition_us) {
+                        if (c->recording && acquisition_us < 0) {
+                          c->fail_recording(
+                              "Acquisition clock metadata unavailable",
+                              "recording_clock_unavailable");
+                          return;
+                        }
+                        audio_frame(*c, bytes, acquisition_us,
+                                    acquisition_us >= 0);
+                      })
+                                   : MacTimedPcm{});
                   c->active = false;
                   const bool failed = outcome == MacCaptureOutcome::failed;
+                  if (failed && c->recording)
+                    c->fail_recording("Audio capture failed",
+                                      "recording_capture_failed");
                   const bool cancelled =
                       outcome == MacCaptureOutcome::cancelled;
                   foresight::diagnostics::capture_state(failed      ? 9
@@ -1775,6 +2034,46 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate,
                                                         : cancelled ? 4
                                                                     : 2,
                                                         0, false);
+                  c->emit("{\"type\":\"state\",\"channel\":\"foresight.linux/"
+                          "audio_state_v1\",\"state\":\"stopped\"}");
+                  return;
+                }
+#endif
+#ifndef __APPLE__
+                if (c->recording && c->runtime.empty()) {
+#if FORESIGHT_HAVE_PIPEWIRE
+                  const auto outcome = foresight::capture_pipewire_timed(
+                      c->target, c->playback, c->cancel,
+                      [c](const auto &bytes, int64_t timestamp_us,
+                          foresight::PipeWireCaptureBuffer::Clock clock,
+                          bool graph_gap_before) {
+                        if (graph_gap_before)
+                          c->recording_pending_gap = true;
+                        const bool pts =
+                            clock ==
+                            foresight::PipeWireCaptureBuffer::Clock::header_pts;
+                        // A graph-cycle stamp has quantum-level phase
+                        // uncertainty relative to physical samples. This
+                        // algorithmic gap threshold is not a measured physical
+                        // alignment bound.
+                        const auto tolerance =
+                            pts ? int64_t{23}
+                                : static_cast<int64_t>(bytes.size() / 2 *
+                                                       1000000 / 48000) +
+                                      23;
+                        audio_frame(*c, bytes, timestamp_us, true,
+                                    pts ? "pipewire_header_pts"
+                                        : "pipewire_graph_time",
+                                    tolerance);
+                      });
+                  if (outcome.error != foresight::PipeWireCaptureError::none)
+                    c->fail_recording(outcome.message,
+                                      "recording_capture_failed");
+#else
+                  c->fail_recording("Native PipeWire timing backend unavailable",
+                                    "recording_clock_unavailable");
+#endif
+                  c->active = false;
                   c->emit("{\"type\":\"state\",\"channel\":\"foresight.linux/"
                           "audio_state_v1\",\"state\":\"stopped\"}");
                   return;
@@ -1856,6 +2155,19 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate,
                       "\"discarded_bytes\":" +
                       std::to_string(residual.size()) +
                       ",\"exit_status\":" + std::to_string(status) + "}");
+                  if (c->recording) {
+                    std::shared_ptr<foresight::RecordingWriter> writer;
+                    {
+                      std::lock_guard lock(c->recording_mutex);
+                      writer = c->recording_writer;
+                    }
+                    c->recording_pending_gap = true;
+                    if (writer && !writer->sealSpan()) {
+                      c->fail_recording(
+                          "Recording outage boundary could not be saved");
+                      break;
+                    }
+                  }
                   if (++attempt >= 5) {
                     exhausted = true;
                     c->emit("{\"type\":\"state\",\"channel\":\"foresight.linux/"
@@ -1868,6 +2180,9 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate,
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 }
                 c->active = false;
+                if (exhausted && c->recording)
+                  c->fail_recording("Capture retries exhausted",
+                                    "recording_capture_failed");
                 foresight::diagnostics::capture_state(exhausted   ? 9
                                                       : c->cancel ? 2
                                                                   : 0,
@@ -1880,6 +2195,9 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate,
               },
               [&](const std::string &) {
                 c->active = false;
+                if (c->recording)
+                  c->fail_recording("Audio capture failed",
+                                    "recording_capture_failed");
                 foresight::diagnostics::worker_failed(0, 3, 0, 0);
                 foresight::diagnostics::capture_state(0, 3, 0, false);
                 c->emit("{\"type\":\"state\",\"channel\":\"foresight.linux/"
@@ -1890,6 +2208,15 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate,
         });
         rollback_capture.release();
         return c;
+      },
+      static_cast<void *>(nullptr));
+}
+void *fs_capture_start_with_options(const char *target, int playback, int rate,
+                                    int echo) {
+  return foresight::ffi_barrier(
+      [&]() -> void * {
+        return start_capture_with_recording(target, playback, rate, echo,
+                                            nullptr);
       },
       static_cast<void *>(nullptr));
 }
@@ -1909,6 +2236,7 @@ void fs_capture_finish(void *h) {
         fs_macos_capture_revoke(capture.macos);
 #endif
         capture.join();
+        capture.finish_recording();
 #ifdef __APPLE__
         fs_macos_capture_close(capture.macos);
 #endif

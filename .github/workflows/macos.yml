@@ -161,7 +161,12 @@ jobs:
       run: |
         task_args=()
         if [[ "$REQUIRE_GOOGLE_CLIENT" == 'true' ]]; then task_args+=(--require-google-client); fi
+        # Pinned app-component codecs; per-run private cache, no shared writes.
+        install -d -m 700 "$RUNNER_TEMP/foresight-media-cache"
+        .venv/bin/python tools/build_media_worker.py --cache "$RUNNER_TEMP/foresight-media-cache" \
+          --output build/media-worker --fetch --jobs 2
         .venv/bin/python tools/package_macos.py "${task_args[@]}" --output 'dist/Open Foresight.app' --identity - --sdk build/sdk \
+          --media-worker-build build/media-worker \
           --litert-extensions-manifest build/macos-runtimes/litert-extensions/build-manifest.json \
           --whisper-runtime build/macos-runtimes/whisper/whisper-cli \
           --whisper-license build/macos-runtimes/whisper/LICENSE

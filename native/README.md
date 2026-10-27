@@ -13,12 +13,85 @@ connections. Read owners bind that original handoff and refuse path selection;
 their SQLite loader requires the frozen mapping to be already present. The Dart
 guard is isolate-local, so embedding owners must pass the handoff to every owned
 isolate and prohibit path initialization in arbitrary unbound isolates.
-See [SQL worker ownership](../docs/validation/sqlite-read-worker-budget.md).
+See [SQL worker ownership](../docs/architecture/sqlite-read-workers.md).
 
 Generation supports explicit llama.cpp and LiteRT-LM workers. Local Gemma grounded requests use the versioned `x-foresight-grounded-request` schema annotation, consumed by `services/inference/main.cpp` and the citation checker in `services/inference/grounded.h`. It selects evidence units, composes text, checks source citations and numeric fidelity, and performs a separate support check. The configured context is 4096 tokens with a token-aware output reserve. Verification is fallible; failed drafts get one repair attempt followed by a labelled source fallback.
 
 Capture uses PipeWire on Linux and Core Audio on macOS; speech uses whisper.cpp on mono PCM. PipeWire FIFOs use a validated absolute `TMPDIR` (or `/var/tmp` when unset), private operation-owned directories and descriptor-anchored cleanup. Unsafe/symlinked temporary paths refuse capture instead of falling back silently. Workers own their subprocess groups, cancel them on request, and reap them before releasing resources. Model assets and executable paths must be registered explicitly. Deterministic lifecycle tests do not establish real-model quality; real-model tests are opt-in.
 
+
+### Durable recording capture
+
+The optional recording exports in `foresight_native.h` retain conditioned 48kHz
+mono PCM16 independently of legacy PCM event polling. A single producer hands
+frames to a preallocated 64-block SPSC writer (4800 frames/block: at most 6.4s,
+614400 PCM bytes/source). Each source targets 240000-frame (5s) WAV chunks.
+Exclusive synced `.intent` identities precede admission; media is written to
+`.partial`, length/header validated, contents synced, renamed without replacing
+an existing file, then directory synced. Files are 0600 in an owned 0700 session
+directory; every path component is opened without following symlinks. UUIDs and
+sequence/source/session/generation are immutable. The 196-byte WAV header includes
+an `fsid` chunk; source flags preserve interrupted recovery and `gap_before`.
+Checksums and manifest transactions belong to the service.
+
+Initial reservation sync runs on the native capture worker before devices start.
+Replenishment runs on an owned operation lane. Finish fences acquisition, joins
+capture and the writer, and leaves metadata available until the service polls it
+and retires the owner. `reserved_chunks` counts unused publication identities;
+`ready_chunks` counts publication notices before that poll drains them. Overflow,
+missing reservations and storage failures stop capture with a persistent error;
+ordinary ASR/event-queue pressure cannot discard retained PCM. Filesystem sync
+has no finite OS deadline, so finish can remain pending with ownership retained.
+
+macOS preserves AVAudioTime/AudioTimeStamp host times through the native ring and
+resampling. Forward acquisition discontinuities split a chunk and set
+`gap_before`; backwards time interrupts capture. The 23us algorithmic tolerance
+covers one canonical frame plus integer conversion on synthetic fixtures; actual
+device alignment bounds remain a separate platform qualification requirement.
+Linux retained recording uses the direct PipeWire API when libpipewire-0.3
+>=1.0.5 development files are available at build time. This production dependency
+preserves per-buffer clock provenance that `pw-record`'s raw FIFO discards.
+Packaging must provide that library; an absent backend visibly refuses retained
+recording while legacy capture stays available. The RT process callback only
+copies PCM and timestamps into 64 preallocated blocks of at most 4,800 frames
+(614,400 PCM bytes). Queue duration depends on graph quantum: 64 blocks at 1,024
+frames hold about 1.365 seconds; 4,800-frame blocks hold at most 6.4 seconds.
+Overflow interrupts recording and preserves the already accepted prefix.
+
+`pipewire_header_pts` identifies an actual SPA Header PTS. Graph adapters can omit
+that metadata even after an explicit request. `pipewire_graph_time` instead
+preserves `pw_buffer.time`, the graph-cycle CLOCK_MONOTONIC stamp assigned before
+buffer dequeue; it is not a hardware acquisition timestamp. Neither mode uses
+callback arrival time. A change of provenance interrupts capture. Physical
+uncertainty remains null until route qualification; graph timestamps must not be
+used to promise precise audio/text alignment. Graph phase detection uses one block duration plus 23us as an algorithmic
+tolerance; this is not a measured device accuracy bound. Independently, matching
+per-buffer graph-tick snapshots detect missing quanta, so even a single missing
+block sets `gap_before`. Duplicate/backward ticks, mismatched snapshots and rate
+changes interrupt capture. Source PTS uses the 23us synthetic tolerance.
+The legacy Linux raw FIFO has drain estimates with unknown uncertainty; its
+scheduling jitter is never labelled acquisition gaps or hardware clock accuracy.
+
+The manual `native_pipewire_capture_graph_test <foresight_test_sink> <mode>` probe
+accepts only an explicitly named private synthetic sink, with `smoke`, `overflow`,
+`dual` and `recording` modes. The recording mode exercises the production shared
+library through its owned capture ABI and validates sealed silent PCM extents. Start an isolated PipeWire/WirePlumber instance using private
+XDG directories first. The dual probe compares shared null-sink graph cycles;
+it cannot qualify physical microphone/playback delay. Physical loopback,
+route changes, real devices and the Gigabyte platform gate remain required.
+Intentional pause boundaries remain distinct from accidental acquisition gaps.
+
+Recovery uses a device-free owned worker, an exact caller-authorized identity
+list and matching durable intents, with no filename-only adoption. The service
+must validate surviving SQL reservation tokens and the current media generation
+before admission and again before committing results. Recovery re-syncs validated
+WAVs and seals only complete PCM frames from interrupted partials. Reported sync
+flags describe those new operations. `recover_join_async` waits without
+cancellation; ordinary capture finish requests cancellation even after a join
+was queued, and checks it between files. On Linux, file and directory `fsync`
+success are required. macOS requires file `F_FULLFSYNC` without a weaker fallback
+and separately reports directory `fsync`; synthetic syscall success does not
+establish a tested power-cut guarantee.
 
 ### Explicit macOS system audio setup
 
@@ -67,7 +140,7 @@ Generation and recording use native-owned completion tokens for probe, worker
 join and retirement. Their synchronous Dart close/dispose methods revoke work;
 await `closed` for actual cleanup before releasing dependent resources. The
 legacy C destroy/probe entrypoints remain synchronous for C++/Python callers.
-See [native retirement ownership](../docs/validation/native-retirement.md) for
+See [native retirement ownership](../docs/architecture/native-retirement.md) for
 the capability contract, complete consumer dispositions and qualification limits.
 
 ## Verifying native changes

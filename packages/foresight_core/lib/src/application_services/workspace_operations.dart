@@ -23,6 +23,7 @@ final class WorkspaceOperations {
     required this.workflow,
     required this.workspace,
     required this.accounts,
+    this.clearAudio,
   }) : queries = WorkspaceOperationsQueries(store);
   final Store store;
   final ProactiveQuestions proactive;
@@ -33,6 +34,9 @@ final class WorkspaceOperations {
   final WorkspaceAdmin workspace;
   final GoogleMaintenance accounts;
   final WorkspaceOperationsQueries queries;
+  final Future<void> Function(Future<void> Function())? clearAudio;
+  bool _clearing = false;
+  bool get clearing => _clearing;
 
   Object? saveNote(NotesSaveRequest request) => store
       .writeOnce(
@@ -63,17 +67,34 @@ final class WorkspaceOperations {
   }
 
   Future<void> clear() async {
-    accounts.initialize();
-    if (recording.recording != null) {
-      throw RpcError(
-        RpcErrorCode.busy,
-        'Stop recording before clearing the workspace',
-      );
+    if (_clearing) {
+      throw RpcError(RpcErrorCode.busy, 'Workspace is being cleared');
     }
-    notes.clear();
-    summary.clear();
-    workflow.clear();
-    await workspace.clear();
+    _clearing = true;
+    try {
+      accounts.initialize();
+      if (recording.recording != null) {
+        throw RpcError(
+          RpcErrorCode.busy,
+          'Stop recording before clearing the workspace',
+        );
+      }
+      Future<void> clearLocal() async {
+        notes.clear();
+        summary.clear();
+        workflow.clear();
+        await workspace.clear();
+      }
+
+      final barrier = clearAudio;
+      if (barrier == null) {
+        await clearLocal();
+      } else {
+        await barrier(clearLocal);
+      }
+    } finally {
+      _clearing = false;
+    }
   }
 
   List<OperationHandler> get handlers => [

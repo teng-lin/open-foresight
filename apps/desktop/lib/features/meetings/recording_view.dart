@@ -62,7 +62,7 @@ class RecordingHeader extends StatelessWidget {
               ),
             ),
             IconButton(
-              tooltip: paused ? 'Resume transcribing' : 'Pause transcribing',
+              tooltip: paused ? 'Resume recording' : 'Pause recording',
               constraints: const BoxConstraints.tightFor(width: 36, height: 36),
               padding: const EdgeInsets.all(6),
               onPressed: onPauseResume,
@@ -73,7 +73,7 @@ class RecordingHeader extends StatelessWidget {
               ),
             ),
             IconButton(
-              tooltip: 'Stop transcribing',
+              tooltip: 'Stop recording',
               constraints: const BoxConstraints.tightFor(width: 36, height: 36),
               padding: const EdgeInsets.all(6),
               onPressed: onStop,

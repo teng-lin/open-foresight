@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SHARED = (
     "tests/test_app_dependency_cmake.py",
     "tests/test_build_stages.py",
+    "tests/test_build_media_worker.py",
     "tests/test_capture_runtime_configuration.py",
     "tests/test_ci_stage_artifacts.py",
     "tests/test_ci_stage_environment.py",

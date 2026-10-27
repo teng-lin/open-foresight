@@ -27,6 +27,8 @@ void main() {
         (key, _) =>
             key.startsWith('FORESIGHT_') && key != 'FORESIGHT_SQLITE_LIBRARY',
       );
+      // A resident native image must not select media or reconfigure caches
+      // for this SQL-only schema-retirement fixture.
       final server = Server.create(
         services: [AdoptionRag(), AdoptionControl(control.State())],
       );

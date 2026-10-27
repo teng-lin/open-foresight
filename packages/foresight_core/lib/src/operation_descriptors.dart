@@ -6,3 +6,4 @@ export 'operation_descriptors/models.dart';
 export 'operation_descriptors/graph.dart';
 export 'operation_descriptors/labels.dart';
 export 'operation_descriptors/security.dart';
+export 'operation_descriptors/recordings.dart';

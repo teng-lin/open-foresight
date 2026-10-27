@@ -16,6 +16,23 @@ import 'package:open_foresight/main.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 class _Recording implements Recording {
+  // This control-surface fixture owns no native routes or retained media.
+  @override
+  bool get durable => false;
+  @override
+  bool get captureActive => !paused && !finishing && lastError.isEmpty;
+  @override
+  bool get hasCaptureOwnership => false;
+  @override
+  String? get audioSessionId => null;
+  @override
+  int? get acquiredThroughUs => null;
+  @override
+  int? get recordedElapsedMs => null;
+  @override
+  Duration? get freshCaptureInactivity => null;
+  @override
+  bool get pausing => false;
   @override
   final captures = <int>[];
   @override
@@ -170,8 +187,8 @@ void main() {
           find.text('Microphone and system audio recording'),
           findsNothing,
         );
-        expect(find.byTooltip('Stop transcribing'), findsOneWidget);
-        await tester.tap(find.byTooltip('Pause transcribing'));
+        expect(find.byTooltip('Stop recording'), findsOneWidget);
+        await tester.tap(find.byTooltip('Pause recording'));
         // The outer double-tap recognizer holds single control taps until its
         // standard double-tap window expires.
         await tester.pump(const Duration(milliseconds: 300));
@@ -183,15 +200,15 @@ void main() {
           ]).single['state'],
           'paused',
         );
-        expect(find.byTooltip('Resume transcribing'), findsOneWidget);
+        expect(find.byTooltip('Resume recording'), findsOneWidget);
         recording.failResume = true;
-        await tester.tap(find.byTooltip('Resume transcribing'));
+        await tester.tap(find.byTooltip('Resume recording'));
         await tester.pump(const Duration(milliseconds: 300));
         await tester.pumpAndSettle();
         expect(recording.paused, true);
         expect(find.textContaining('Fixture device unavailable'), findsWidgets);
         recording.failResume = false;
-        await tester.tap(find.byTooltip('Resume transcribing'));
+        await tester.tap(find.byTooltip('Resume recording'));
         await tester.pump(const Duration(milliseconds: 300));
         await tester.pumpAndSettle();
         expect(recording.paused, false);
@@ -210,7 +227,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.text('Exit Immersive View'), findsOneWidget);
         expect(find.byKey(const ValueKey('capture-waveform')), findsOneWidget);
-        expect(find.byTooltip('Stop transcribing'), findsOneWidget);
+        expect(find.byTooltip('Stop recording'), findsOneWidget);
         expect(find.text('Knowledge Sources'), findsNothing);
         for (final width in [640.0, 1280.0]) {
           tester.view.physicalSize = Size(width, 850);
@@ -231,7 +248,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.text('Exit Immersive View'), findsNothing);
         expect(app.recording, same(recording));
-        await tester.tap(find.byTooltip('Stop transcribing'));
+        await tester.tap(find.byTooltip('Stop recording'));
         await tester.pump(const Duration(milliseconds: 300));
         await tester.pumpAndSettle();
         expect(app.recording, isNull);

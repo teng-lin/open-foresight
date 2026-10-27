@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:foresight_core/src/audio_device_process.dart';
+import 'package:foresight_test_support/poll.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
 
@@ -21,6 +22,24 @@ void main() {
       expect(mode.exitCode, 0);
       final runner = AudioDeviceProcessRunner(
         timeout: const Duration(milliseconds: 150),
+        startProcess: (executable, arguments) async {
+          final child = await Process.start(executable, arguments);
+          if (executable != script.path) return child;
+          try {
+            // The timeout tests a running, TERM-resistant adapter. Under load
+            // Process.start can return before the shell has executed its trap
+            // or PID write; that is not evidence of failed reaping.
+            await eventually(
+              () => pid.existsSync() && pid.readAsStringSync().isNotEmpty,
+              timeout: const Duration(seconds: 3),
+            );
+            return child;
+          } catch (_) {
+            child.kill(ProcessSignal.sigkill);
+            await child.exitCode.timeout(const Duration(seconds: 3));
+            rethrow;
+          }
+        },
       );
       final first = runner.run(script.path, []);
       expect(identical(first, runner.run(script.path, [])), true);

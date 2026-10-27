@@ -498,6 +498,77 @@ void main() {
       }
       final completed = <String>[];
       final slots = <int>[];
+      Future<DiagnosticStorage> admit(
+        String profile, {
+        DateTime Function()? clock,
+        DiagnosticIdentity? session,
+        String stage = 'retention-admission',
+        void Function()? onBusy,
+      }) async {
+        final identity = session ?? DiagnosticIdentity.random();
+        DiagnosticStorage? selected;
+        try {
+          await eventually(() {
+            var reads = 0;
+            selected = DiagnosticStorage.admit(
+              profile,
+              identity,
+              DiagnosticRole.service,
+              clock: clock,
+              directoryReader: (descriptor, names, capacity) {
+                reads++;
+                return _streamReader(descriptor, names, capacity);
+              },
+            );
+            if (selected != null) return true;
+            // Admission is nonblocking. Only an actual busy admission flock,
+            // before any slot reads, may defer this retention-order assertion.
+            expect(reads, 1, reason: 'Do not retry unavailable eligible slots');
+            final root = BackupDirectory('$profile/logs');
+            final probe = root.open('admission.lock');
+            try {
+              expect(probe.size, 0);
+              expect(probe.tryExclusiveLeaseChecked(), isFalse);
+            } finally {
+              probe.close();
+              root.close();
+            }
+            onBusy?.call();
+            return false;
+          });
+        } catch (_) {
+          _admissionFailureWitness(profile, stage);
+          rethrow;
+        }
+        return selected!;
+      }
+
+      // A fork in another suite can retain a close-on-exec flock until exec.
+      // Prove that only this exact real-kernel contention is allowed to defer.
+      final busyProfile = _profile();
+      (await admit(busyProfile)).close();
+      final root = BackupDirectory('$busyProfile/logs');
+      final owner = root.open('admission.lock');
+      try {
+        await eventually(owner.tryExclusiveLeaseChecked);
+        final manifest = File('$busyProfile/logs/slot-0/manifest.json');
+        final before = manifest.readAsBytesSync();
+        var observedBusy = false;
+        final admitted = await admit(
+          busyProfile,
+          onBusy: () {
+            observedBusy = true;
+            expect(manifest.readAsBytesSync(), before);
+            owner.close();
+          },
+        );
+        admitted.close();
+        expect(observedBusy, isTrue);
+      } finally {
+        owner.close();
+        root.close();
+      }
+
       final now = DateTime.utc(2026, 10, 24);
       for (final scenario in [
         'empty',
@@ -508,16 +579,7 @@ void main() {
         'rollback',
       ]) {
         final profile = _profile();
-        final initial = DiagnosticStorage.admit(
-          profile,
-          DiagnosticIdentity.random(),
-          DiagnosticRole.service,
-        );
-        if (initial == null) {
-          _admissionFailureWitness(profile, 'retention-initial-$scenario');
-        }
-        expect(initial, isNotNull);
-        initial!.close();
+        (await admit(profile, stage: 'retention-initial-$scenario')).close();
         for (var i = 0; i < 10; i++) {
           _seedSlot(profile, i, opened: now.millisecondsSinceEpoch - 1000);
         }
@@ -556,20 +618,16 @@ void main() {
           );
         }
         final session = DiagnosticIdentity.random();
-        final selected = DiagnosticStorage.admit(
+        final selected = await admit(
           profile,
-          session,
-          DiagnosticRole.service,
+          session: session,
+          stage: 'retention-$scenario',
           clock: () => scenario == 'rollback'
               ? now.subtract(const Duration(days: 1))
               : now,
         );
-        if (selected == null) {
-          _admissionFailureWitness(profile, 'retention-$scenario');
-        }
-        expect(selected, isNotNull, reason: scenario);
         try {
-          expect(selected!.session, session.value);
+          expect(selected.session, session.value);
           expect(selected.role, DiagnosticRole.service);
           expect(
             selected.slot,
@@ -583,7 +641,7 @@ void main() {
           completed.add(scenario);
           slots.add(selected.slot);
         } finally {
-          selected!.close();
+          selected.close();
         }
       }
       print(
@@ -770,7 +828,7 @@ void main() {
       if (await _runAdmissionProcess(name, {
         'case': 'same-process',
         'sessions': 2,
-        'independent_probe_refusals': 2,
+        'independent_probe_refusals': 3,
         'distinct_slots': true,
         'identity_checks': 2,
       })) {
@@ -789,12 +847,15 @@ void main() {
       expect(storage, isNotNull);
       expect(storage!.session, session.value);
       addTearDown(storage.close);
+      var probeRefusals = 0;
       final directory = BackupDirectory('$profile/logs/slot-${storage.slot}');
       final probe = directory.open('lease');
       expect(probe.tryExclusiveLease(), isFalse);
+      probeRefusals++;
       probe.close();
       final second = directory.open('lease');
       expect(second.tryExclusiveLease(), isFalse);
+      probeRefusals++;
       second.close();
       directory.close();
       final otherSession = DiagnosticIdentity.random();
@@ -810,8 +871,20 @@ void main() {
       addTearDown(other!.close);
       expect(other.session, otherSession.value);
       expect(other.slot, isNot(storage.slot));
+      final original = BackupDirectory('$profile/logs/slot-${storage.slot}');
+      try {
+        final stillHeld = original.open('lease');
+        try {
+          expect(stillHeld.tryExclusiveLease(), isFalse);
+          probeRefusals++;
+        } finally {
+          stillHeld.close();
+        }
+      } finally {
+        original.close();
+      }
       print(
-        'STORAGE_ADMISSION_COMPLETE ${jsonEncode({'case': 'same-process', 'sessions': 2, 'independent_probe_refusals': 2, 'distinct_slots': other.slot != storage.slot, 'identity_checks': 2})}',
+        'STORAGE_ADMISSION_COMPLETE ${jsonEncode({'case': 'same-process', 'sessions': 2, 'independent_probe_refusals': probeRefusals, 'distinct_slots': other.slot != storage.slot, 'identity_checks': 2})}',
       );
     },
   );
@@ -1124,9 +1197,9 @@ void main() {
       expect(full.entries(), hasLength(256));
     });
 
-    test('every root and slot enumeration in admission uses the reader', () {
+    test('every root and slot enumeration in admission uses the reader', () async {
       final profile = _profile();
-      final seen = <int>[];
+      var seen = <int>[];
       final storage = DiagnosticStorage.admit(
         profile,
         DiagnosticIdentity.random(),
@@ -1138,26 +1211,65 @@ void main() {
       )!;
       addTearDown(storage.close);
       // Root once; validation and manifest read per slot; the selected slot's
-      // revalidation, five cleanup containsEntry calls and manifest replace.
-      expect(seen, hasLength(1 + 2 * DiagnosticStorage.slotCount + 1 + 5 + 1));
+      // revalidation and five cleanup containsEntry calls. Manifest replacement
+      // uses descriptor-relative entryExists, without enumerating a directory.
+      expect(seen, hasLength(1 + 2 * DiagnosticStorage.slotCount + 1 + 5));
       expect(seen.every((descriptor) => descriptor >= 10), isTrue);
       seen.clear();
       expect(storage.append(_record()), isTrue);
       expect(seen, isEmpty);
-      expect(storage.classify(DiagnosticRole.service, error: true), isTrue);
-      // Root validation, slot validation and the manifest replace.
-      expect(seen, hasLength(3));
-      seen.clear();
-      expect(
-        storage.classify(
+      Future<void> classified({
+        bool genuineFailure = false,
+        void Function()? onBusy,
+      }) => eventually(() {
+        // Each attempt has its own trace: busy attempts cannot inflate or
+        // hide the successful attempt's exact reader-count assertions below.
+        final attempt = seen = <int>[];
+        final success = storage.classify(
           DiagnosticRole.service,
           error: true,
-          genuineFailure: true,
-        ),
-        isTrue,
-      );
+          genuineFailure: genuineFailure,
+        );
+        if (!success) {
+          expect(storage.failed, isFalse, reason: 'Only busy may retry');
+          expect(attempt, isEmpty, reason: 'Busy precedes root validation');
+          onBusy?.call();
+        }
+        return success;
+      });
+      // Prove the precise deferral we may encounter when another suite's
+      // fork briefly inherits the admission description before exec. An
+      // independent real flock refuses before any directory enumeration.
+      final root = BackupDirectory('$profile/logs');
+      final admission = root.open('admission.lock');
+      try {
+        await eventually(admission.tryExclusiveLeaseChecked);
+        final manifest = File(
+          '$profile/logs/slot-${storage.slot}/manifest.json',
+        );
+        final before = manifest.readAsBytesSync();
+        seen = <int>[];
+        expect(storage.classify(DiagnosticRole.service, error: true), isFalse);
+        expect(storage.failed, isFalse);
+        expect(seen, isEmpty);
+        expect(manifest.readAsBytesSync(), before);
+        var observedBusy = false;
+        await classified(
+          onBusy: () {
+            observedBusy = true;
+            admission.close();
+          },
+        );
+        expect(observedBusy, isTrue);
+      } finally {
+        admission.close();
+        root.close();
+      }
+      // Root and slot validation; replacement still performs no enumeration.
+      expect(seen, hasLength(2));
+      await classified(genuineFailure: true);
       // Plus validation and manifest read of every slot, through children.
-      expect(seen, hasLength(3 + 2 * DiagnosticStorage.slotCount));
+      expect(seen, hasLength(2 + 2 * DiagnosticStorage.slotCount));
     });
 
     test('a refused root listing precedes admission IO', () {

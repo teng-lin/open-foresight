@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:foresight_core/desktop.dart'
+    show ClientEnvelope, RecordingsReadInput, WireField;
 import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/main.dart';
@@ -16,6 +18,9 @@ class _HeldMeetingError extends ControllerConnection {
   final bool unknown;
   final entered = Completer<void>(), release = Completer<void>();
   final admitted = <Operation>[];
+  final metadataReads = <RecordingsReadInput>[];
+  final rawMetadataReads = <Map<String, dynamic>>[];
+  final metadataFailures = <Object>[];
 
   @override
   Future<Object?> commandCurrent(
@@ -24,6 +29,27 @@ class _HeldMeetingError extends ControllerConnection {
     bool Function() current,
   ) async {
     if (!current()) return null;
+    if (operation == Operation.recordingsRead) {
+      rawMetadataReads.add(Map.of(args));
+      try {
+        // Account for this exact read separately; every other admitted operation
+        // still belongs to the strict mutation ledger asserted below.
+        final fields = operation.descriptor.arguments.decode(args);
+        final request = RecordingsReadInput(
+          meetingId: fields.value<int>('meeting_id'),
+          afterSessionId: fields.value<String>('after_session_id'),
+          limit: fields.value<int>('limit'),
+          envelope: ClientEnvelope(
+            workspaceEpoch: WireField(args['workspace_epoch'] as String),
+          ),
+        );
+        metadataReads.add(request);
+      } catch (error) {
+        metadataFailures.add(error);
+        rethrow;
+      }
+      return super.commandCurrent(operation, args, current);
+    }
     admitted.add(operation);
     if (operation != this.operation) {
       return super.commandCurrent(operation, args, current);
@@ -84,6 +110,7 @@ void main() {
               : Operation.meetingsEditTask,
           unknown: boundary == 'outcome unknown',
         );
+        final initialEpoch = connection.workspaceEpoch;
         await tester.pumpWidget(
           Foresight(connection, deviceLoader: () async => []),
         );
@@ -160,6 +187,25 @@ void main() {
         unawaited(connection.closed.then<void>((_) => closed = true));
         await pumpUntil(tester, () => closed);
         expect(connection.admitted, [connection.operation]);
+        expect(Operation.recordingsRead.descriptor.readOnly, true);
+        expect(connection.metadataFailures, isEmpty);
+        expect(
+          connection.metadataReads,
+          hasLength(boundary == 'session' ? 2 : 1),
+          reason: '${connection.rawMetadataReads}',
+        );
+        expect(
+          connection.rawMetadataReads,
+          hasLength(connection.metadataReads.length),
+        );
+        for (var index = 0; index < connection.metadataReads.length; index++) {
+          final read = connection.metadataReads[index];
+          expect(connection.rawMetadataReads[index], read.toWire());
+          expect(read.meetingId, meeting);
+          expect(read.afterSessionId, isEmpty);
+          expect(read.limit, 32);
+          expect(read.envelope.workspaceEpoch.value, initialEpoch);
+        }
         expect(tester.takeException(), isNull);
       });
     }

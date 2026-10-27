@@ -135,7 +135,7 @@ class Evidence:
 
 
 def test_default_committed_index_never_authorizes_any_cutover(root):
-    index = json.loads((Path(__file__).parents[1] / "docs/platforms/ci-rollout-index.json").read_text())
+    index = json.loads((Path(__file__).parents[1] / "tests/fixtures/doc-ci/ci-rollout-index.json").read_text())
     for capability in rollout.CAPABILITIES:
         with pytest.raises(ValueError, match="inactive"):
             rollout.authorize(index, root=root, source=SOURCE, capabilities=[capability])

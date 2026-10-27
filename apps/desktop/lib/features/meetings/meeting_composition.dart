@@ -40,6 +40,7 @@ extension _MeetingComposition on MeetingsController {
             });
         },
       ),
+      audio: meetingAudioPanel(id),
       speechProblem: preparedSpeechSetupProblem(_reads.speech),
       onSetupSpeech: () => _settings.showModelSetup('speech'),
       sidecarVisible: meetingSidecarVisible,

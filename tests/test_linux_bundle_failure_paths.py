@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from tests.media_package_fixture import media_product_patches
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import package  # noqa: E402
@@ -38,7 +39,9 @@ def diagnostic_products(build, sdk):
     for name in support._layout(products["target"]):
         path = native / name
         path.write_bytes(
-            b"synthetic byte fixture: " + name.encode() + support._marker(name, products)
+            b"synthetic byte fixture: "
+            + name.encode()
+            + support._marker(name, products)
         )
         path.chmod(0o755)
         products["artifacts"][name] = support._read(path)[1]
@@ -108,6 +111,7 @@ def diagnostic_products(build, sdk):
         (support, "verify_products", verify_products),
         (support.shutil, "which", select),
         (support, "_verify_worker", verify),
+        *media_product_patches(package, "linux-x86_64"),
     ]
 
 
@@ -158,6 +162,8 @@ def bundle(tmp_path, monkeypatch):
         "package",
         "--build",
         str(build),
+        "--media-worker-build",
+        str(build / "media-worker"),
         "--flutter-bundle",
         str(flutter),
         "--output",
@@ -312,14 +318,18 @@ def test_complete_gpu_bundle_keeps_dependency_closure_and_receipts(
     assert manifest["query_detector_runtime"]["bundled"] is True
     assert manifest["whisper_runtime"] == "vulkan"
     assert manifest["revision"] == "a" * 40
-    configuration = json.loads((case.output / "share/open-foresight/runtime.json").read_text())
+    configuration = json.loads(
+        (case.output / "share/open-foresight/runtime.json").read_text()
+    )
     assert configuration["FORESIGHT_INSTALL_ROOT"] == "../.."
     assert configuration["FORESIGHT_RUNTIME_REVISION"] == manifest["revision"]
     assert configuration["FORESIGHT_NATIVE"] == "../../lib/libforesight_native.so"
     assert configuration["FORESIGHT_LITERT_BACKEND"] == "gpu"
     assert configuration["FORESIGHT_WHISPER_RUNTIME"] == "../../bin/whisper-cli-vulkan"
     assert configuration["FORESIGHT_LITERT_PYTHON"] == "../../bin/query-python"
-    assert "share/open-foresight/runtime.json" in {entry["path"] for entry in manifest["files"]}
+    assert "share/open-foresight/runtime.json" in {
+        entry["path"] for entry in manifest["files"]
+    }
     assert set(manifest["bundled_libraries"]) == {"libgrpc.so", "libsqlite3.so.0"}
     assert (case.output / "lib/libsqlite3.so").is_symlink()
     assert (case.output / "bin/query-python").stat().st_mode & 0o111
@@ -346,4 +356,6 @@ def test_model_and_diagnostic_workers_keep_their_own_source_bytes(bundle):
         data = (case.build / source).read_bytes()
         assert (case.output / packaged).read_bytes() == data
         assert manifest[packaged] == hashlib.sha256(data).hexdigest()
-    assert (case.output / "bin/foresight-diagnostic-worker").stat().st_mode & 0o777 == 0o755
+    assert (
+        case.output / "bin/foresight-diagnostic-worker"
+    ).stat().st_mode & 0o777 == 0o755

@@ -4,7 +4,7 @@
 |---|---|
 | Status | Accepted 2026-10-19; implemented in fix plan step 5 (item 5.1) |
 | Deciders | Repository owner |
-| Source | [Service lifecycle fix plan](../plans/2026-10-19-service-lifecycle-fix-plan.md), decision D4, finding SL-5 |
+| Source | [Service lifecycle fix plan](https://github.com/teng-lin/open-foresight/blob/52bdd39778f31d632d434ada3fca7b165b9c6336/docs/plans/2026-10-19-service-lifecycle-fix-plan.md), decision D4, finding SL-5 |
 
 ## Context
 
@@ -22,4 +22,4 @@ Rejected: `AUTOINCREMENT` on `notes` and `meetings` through a table-rebuild migr
 - Keyed creates carry the epoch too: a keyed retry after a clear is rejected with "nothing was saved" instead of replaying into the new workspace.
 - The epoch check runs before approval, so a stale request never prompts the desktop.
 - `changed` events carry `workspace_epoch`, so clients learn of a clear without polling status.
-- A desktop whose `workspace.clear` ended in `outcomeUnknown` refreshes status and runs its UI reset if the epoch changed ([fix plan 5.3](../plans/2026-10-19-service-lifecycle-fix-plan.md)).
+- A desktop whose `workspace.clear` ended in `outcomeUnknown` refreshes status and runs its UI reset if the epoch changed ([fix plan 5.3](https://github.com/teng-lin/open-foresight/blob/52bdd39778f31d632d434ada3fca7b165b9c6336/docs/plans/2026-10-19-service-lifecycle-fix-plan.md)).

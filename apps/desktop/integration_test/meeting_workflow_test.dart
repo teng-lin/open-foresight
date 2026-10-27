@@ -526,7 +526,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Meetings').first);
       await tester.pumpAndSettle();
-      await tester.tap(find.byTooltip('Stop transcribing'));
+      await tester.tap(find.byTooltip('Stop recording'));
       await waitUntil(
         tester,
         () async =>
@@ -880,7 +880,7 @@ void main() {
       // ignore: unawaited_futures
       secondPlayer.stderr.drain<void>();
       expect(await secondPlayer.exitCode, 0);
-      await tester.tap(find.byTooltip('Stop transcribing'));
+      await tester.tap(find.byTooltip('Stop recording'));
       await waitUntil(
         tester,
         () async => reopened.meetingFeature.recording?.finishing == true,

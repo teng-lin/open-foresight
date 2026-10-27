@@ -25,6 +25,9 @@ from runtime_package_support import prepare as prepare_runtime_support
 from runtime_package_support import stage as stage_runtime_support
 from runtime_package_support import seal as seal_runtime_support
 from runtime_package_support import prepare_worker, stage_worker, seal_worker
+from media_worker_package import prepare as prepare_media_worker
+from media_worker_package import stage as stage_media_worker
+from media_worker_package import seal as seal_media_worker
 from query_worker_packaging import (
     copy_worker as copy_query_worker,
     copy_runtime as copy_query_runtime,
@@ -37,7 +40,9 @@ LITERT_VERSION = json.loads(Path(__file__).with_name("pins.json").read_text())[
 ]
 
 
-def write_runtime_configuration(bundle, revision, backend, whisper_device, web_keys=None):
+def write_runtime_configuration(
+    bundle, revision, backend, whisper_device, web_keys=None
+):
     """Bind direct native entrypoints to this relocatable installation."""
     values = {
         "FORESIGHT_INSTALL_ROOT": "../..",
@@ -70,6 +75,12 @@ def write_runtime_configuration(bundle, revision, backend, whisper_device, web_k
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build", type=Path, default=ROOT / "build")
+    parser.add_argument(
+        "--media-worker-build",
+        type=Path,
+        required=True,
+        help="Explicit completed pinned media-worker source build",
+    )
     parser.add_argument(
         "--flutter-bundle",
         type=Path,
@@ -176,6 +187,7 @@ def main():
         speech_worker = args.whisper_gpu_runtime.parent / "foresight-whisper-worker"
         if not speech_worker.is_file():
             raise ValueError("Whisper runtime must include foresight-whisper-worker")
+    media_worker = prepare_media_worker(ROOT, args.media_worker_build, "linux-x86_64")
     diagnostic_worker = prepare_worker(ROOT, args.build)
     support = prepare_runtime_support(ROOT, args.build / "native", "linux-x86_64")
     if diagnostic_worker.receipt["native_id"] != support.receipt["native_id"]:
@@ -190,6 +202,7 @@ def main():
     shutil.copy2(native, args.output / "lib/libforesight_native.so")
     stage_runtime_support(args.output, support)
     stage_worker(args.output, diagnostic_worker)
+    stage_media_worker(args.output, media_worker)
     if args.whisper_gpu_runtime:
         shutil.copy2(args.whisper_gpu_runtime, args.output / "bin/whisper-cli-vulkan")
         speech_worker = args.whisper_gpu_runtime.parent / "foresight-whisper-worker"
@@ -378,11 +391,15 @@ esac
         )
         command.chmod(0o755)
     write_runtime_configuration(
-        args.output, commit, args.generation_backend, args.whisper_gpu_device,
+        args.output,
+        commit,
+        args.generation_backend,
+        args.whisper_gpu_device,
         web_search_keys,
     )
     seal_runtime_support(args.output, support, transformed=False)
     seal_worker(args.output, diagnostic_worker, transformed=False)
+    seal_media_worker(args.output, media_worker)
     files = [
         {
             "path": str(file.relative_to(args.output)),

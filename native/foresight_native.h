@@ -45,6 +45,93 @@ uint64_t fs_owned_conversation_create(uint64_t engine);
 uint64_t fs_owned_speech_create(const char *runtime, const char *model);
 uint64_t fs_owned_capture_start(const char *target, int playback, int rate,
                                 int echo);
+/* Optional durable capture extension, schema version1. Canonical48k mono PCM16.
+ * options JSON has exactly directory,session_id,generation,span,origin_us,
+ * source_sample,chunk_ids:[{id,sequence}]; max32768B,64 IDs,4096B directory.
+ * UUIDs are canonical lowercase36 characters. origin_us is from the shared
+ * native monotonic clock below. The worker reserves/syncs all initial IDs
+ * BEFORE devices start; cancellation/retirement during preparation cannot
+ * acquire them. Only protected session directories and precommitted live
+ * publication IDs may be supplied. Successful finish joins/finalizes storage
+ * but retains descriptors until metadata polling; retire releases the writer.
+ * Poll results are bounded metadata JSON independent of the lossy legacy PCM
+ * event queue; string_free. Clock quality/unknown uncertainty are explicit; raw
+ * PipeWire FIFO timestamps are drain estimates, not acquisition metadata. Do
+ * not infer alignment bounds.
+ */
+int64_t fs_recording_monotonic_us(void);
+uint64_t fs_owned_recording_capture_start(const char *target, int playback,
+                                          int echo, const char *options_json);
+/* Recovery-only owner; NEVER acquires devices. options exactly directory,
+ * session_id,generation,chunk_ids. Caller authorizes each surviving DB
+ * reservation token/current media generation before admission and again before
+ * committing results. Only matching durable .intent identities can be
+ * recovered. Existing WAVs are re-synced; sync flags describe these new calls.
+ * Finish joins recovery, then poll bounded results and retire. Cancellation is
+ * checked between files.
+ */
+uint64_t fs_owned_recording_recover_start(int source, const char *options_json);
+uint64_t fs_owned_recording_recover_join_async(uint64_t owner);
+char *fs_owned_capture_recording_poll(uint64_t owner);
+/* Bounded {chunk_ids:[{id,sequence}]} precommitted replacements. File sync runs
+ * on the owned executor; generic operation status/release apply. Cancel midway
+ * can leave a reserved prefix; reconcile durable IDs before retrying a batch.
+ */
+uint64_t fs_owned_capture_reserve_async(uint64_t owner, const char *ids_json);
+/* Service-owned fixed media operations: 0 rawPCM->Opus,1 recording-wav-v1
+ * ->Opus,2 bounded Opus->PCM,3 aligned two-track PCM->MP3;4/5/6 frozen
+ * manifest->MP3/Opus/bounded PCM. Assembly second_input_fd must be-1; native
+ * owns its descriptor pager. input_poll/input_reply use frozen row indices,
+ * never filenames. All FDs are borrowed
+ * and duplicated before return. owner_lock_fd is the protected profile media
+ * flock open-file description; it is inherited at7 and NEVER LOCK_UN. Strict
+ * options JSON <=8192B has version1, executable,executable_sha256,build_id,
+ * macos_cdhash,session_id,job_id,epoch,input_sha256,second_input_sha256,
+ * source_frames,start_frame,frame_count,total_ms,idle_ms,terminate_grace_ms,
+ * kill_grace_ms. Only the service's installed receipt/authorized media may be
+ * supplied. Poll returns bounded typed metadata JSON; string_free applies.
+ * Join describes actual exit independently of codec success. Retire uses the
+ * same lifetime-v2 status/release rules and only then fs_owner_release.
+ */
+uint64_t fs_owned_media_start(int operation, int input_fd, int second_input_fd,
+                              int output_fd, int owner_lock_fd,
+                              const char *options_json);
+char *fs_owned_media_poll(uint64_t owner);
+int fs_owned_media_cancel(uint64_t owner);
+int fs_owned_media_progress(uint64_t owner);
+char *fs_owned_media_input_poll(uint64_t owner);
+int fs_owned_media_input_reply(uint64_t owner, uint64_t sequence, int status,
+                               int first_fd, int second_fd);
+uint64_t fs_media_join_async(uint64_t owner);
+uint64_t fs_media_retire(uint64_t owner);
+/* Optional saved-audio output extension v1. Every count is stereo PCM FRAMES:
+ * 48kHz, interleaved signed PCM16. Max push4800frames, queue76800frames (1.6s,
+ * 307200 PCM bytes). Strict JSON <=2048B: {version:1,generation:positiveint64,
+ * target?:UTF8node/deviceUID<=1024B}, no control characters. Create returns an
+ * owner immediately, initially paused; poll.start_token is the lifetime-v2
+ * operation ACK for actual backend preparation. Prefill then resume_async.
+ * Push returns exact accepted prefix (0 full),-1 invalid,-2 stale/blocked;
+ * caller retains all unaccepted frames. No partial admission on a negative.
+ * pause_flush requires increasing generation, blocks new pushes immediately,
+ * and its ACK fences all old software PCM/callback access before reset. This
+ * does NOT prove silence at hardware or bound already submitted audible tail.
+ * rendered_frames counts backend-consumed PCM, not proven audible position;
+ * underrun zeros never advance it. Flush resets this counter for the new
+ * generation. Snapshot fields are independent atomic observations, not a
+ * device-clock transaction. Finish forces backend stop/join; it never waits
+ * for queued PCM to drain. Release non-retirement tokens, then retire and
+ * owner_release (which releases the retirement token).
+ */
+int fs_pcm_output_version(void);
+uint64_t fs_owned_pcm_output_create_async(const char *options_json);
+int fs_owned_pcm_output_push(uint64_t owner, uint64_t generation,
+                             const int16_t *pcm, size_t frames);
+char *fs_owned_pcm_output_poll(uint64_t owner);
+uint64_t fs_owned_pcm_output_pause_flush_async(uint64_t owner,
+                                               uint64_t generation);
+uint64_t fs_owned_pcm_output_resume_async(uint64_t owner, uint64_t generation);
+uint64_t fs_pcm_output_finish_async(uint64_t owner);
+uint64_t fs_pcm_output_retire(uint64_t owner);
 char *fs_owned_engine_state(uint64_t owner);
 char *fs_owned_event_poll(uint64_t owner, int timeout_ms);
 int fs_owned_generate_options(uint64_t owner, const char *id,

@@ -15,7 +15,7 @@ The release coordinator, `.github/workflows/release.yml`, calls both platform
 packagers after successful candidates exist for one reviewed main commit. It
 creates the tag and a draft, then every packaging job checks out that exact tag.
 The tag must be `v` followed by the version in `apps/desktop/pubspec.yaml`, for
-example `v0.1.1`; see [Versioning and releases](../../README.md#versioning-and-releases).
+example `v0.1.4`; see [Versioning and releases](../../README.md#versioning-and-releases).
 Tag pushes and manually publishing a release do not invoke these reusable packagers.
 Publication follows installed-package acceptance.
 A pull request that changes `apps/desktop/**`, `packages/foresight_core/**`,
@@ -61,7 +61,7 @@ from reviewed main source. Fork PR checks retain
 their local SDK build; same-repository consumers wait for verified artifacts.
 Registry authentication and transport errors
 fail before compilation. Component registry caches preserve completed layers.
-See [CI dependencies and promotion](ci-performance.md) for bootstrap, trust,
+See [CI dependencies and promotion](../ci.md) for bootstrap, trust,
 artifact expiry, and release readiness. A local model probe does not stand in
 for the published-installer checks below.
 
@@ -77,6 +77,14 @@ Older releases and ARM64 are outside this initial matrix.
 The container base and apt repositories receive updates; pinned source versions
 and normalized archives do not make the complete compiler build bit-for-bit
 reproducible. Build manifests and ABI reports record what was produced.
+
+Saved recording and playback use the direct PipeWire API. Host builds require
+pkg-config plus PipeWire/SPA development headers exposing
+`libpipewire-0.3 >= 1.0.5`; the runtime package must provide that library too.
+Without it, the native build reports that retained recording is unsupported.
+`pw-record` remains available for the legacy capture path and diagnostics, but
+its raw FIFO cannot supply the acquisition timing required by saved recordings.
+See [native capture](../../native/README.md) and [audio codecs](../architecture/audio-codecs.md).
 
 ## Document import sandbox
 
@@ -113,7 +121,7 @@ tools/build_linux_container.sh
 # Add --build-only or --test-only to run either phase with the same archived inputs.
 export SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
 python3 packaging/package_linux.py --bundle build/portable/dist/open-foresight \
-  --format tar --version 0.1.0 --release 1
+  --format tar --version 0.1.4 --release 1
 ```
 
 The shared wrapper uses the `ci` Docker target, retaining verified SDK and
@@ -136,11 +144,11 @@ as CI. These commands install/remove packages only inside disposable containers:
 mkdir -p artifacts
 cp dist/packages/*.tar.gz dist/packages/*.tar.gz.sha256 artifacts/
 docker run --rm -v "$PWD:/work" -w /work -e SOURCE_DATE_EPOCH \
-  ubuntu:24.04 bash packaging/ci/package-and-test.sh deb 0.1.0 1
+  ubuntu:24.04 bash packaging/ci/package-and-test.sh deb 0.1.4 1
 docker run --rm -v "$PWD:/work" -w /work -e SOURCE_DATE_EPOCH \
-  fedora:44 bash packaging/ci/package-and-test.sh rpm 0.1.0 1
+  fedora:44 bash packaging/ci/package-and-test.sh rpm 0.1.4 1
 docker run --rm -v "$PWD:/work" -w /work -e SOURCE_DATE_EPOCH \
-  archlinux:base-devel bash packaging/ci/package-and-test.sh arch 0.1.0 1
+  archlinux:base-devel bash packaging/ci/package-and-test.sh arch 0.1.4 1
 ```
 
 Use an empty `dist/packages` directory for each format invocation; the packager
@@ -149,7 +157,7 @@ lower-level command is:
 
 ```sh
 python3 packaging/package_linux.py --bundle /path/to/open-foresight \
-  --format deb --version 0.1.0 --release 1
+  --format deb --version 0.1.4 --release 1
 ```
 
 Use `rpm` with rpmbuild or `arch` with makepkg. Arch packaging runs as an ordinary
@@ -218,7 +226,7 @@ no apt/dnf/pacman repository is configured.
 Prepare a release from reviewed main with:
 
 ```sh
-gh workflow run release.yml --repo teng-lin/open-foresight --ref main -f tag=v0.1.1
+gh workflow run release.yml --repo teng-lin/open-foresight --ref main -f tag=v0.1.4
 ```
 
 Follow [release preparation](../../RELEASING.md) for the protected product tag
@@ -230,7 +238,7 @@ Publication-only re-verifies an existing qualified evidence index without
 building or packaging. If old code cannot produce that index, hold publication
 for reviewed recovery while preserving installers, logs and provenance.
 Uploading to an existing public release from a different branch is unsupported.
-See [installer acceptance](../validation/release-acceptance.md) for exact-source
+See [installer acceptance](../release-acceptance.md) for exact-source
 verification and the explicit historical recovery audit option.
 
 
@@ -269,7 +277,7 @@ References: [GitHub Actions artifacts](https://docs.github.com/en/actions/how-to
 
 ## Published installer acceptance
 
-[Release acceptance](../validation/release-acceptance.md) downloads the published packages and validates native installation, ordinary-user
+[Release acceptance](../release-acceptance.md) downloads the published packages and validates native installation, ordinary-user
 startup, real model workflows and saved-data persistence across reinstall.
 Hardware and normal desktop/Finder checks remain separate manual gates.
 
@@ -290,3 +298,13 @@ packages so compatibility checks can find changes on those supported systems.
 
 Dependabot updates Python requirement inputs weekly. Regenerate hash-pinned
 locks with the Python 3.13 commands in CONTRIBUTING before merging those updates.
+
+Saved-audio processing requires a completed pinned media-worker build. Pass
+`--media-worker-build /absolute/current-source-build` to `tools/package.py`;
+there is no executable selected through RPC or the user's PATH. The build
+receipt, source archives, notices and relink materials travel with the package.
+See [installed media worker admission](../architecture/audio-codecs.md)
+for the source-build command, fixed layout and post-signing receipt.
+The [testing guide](../testing.md) lists service and isolated-display checks;
+[storage recovery](../architecture/storage-recovery.md) covers profile backup
+and restore requirements.

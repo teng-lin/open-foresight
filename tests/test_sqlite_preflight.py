@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
 import subprocess
 import sys
@@ -60,11 +61,35 @@ def snapshot(root):
 def test_future_member_refusal_preserves_complete_original_set(profile, member):
     with closing(sqlite3.connect(profile / member)) as db, db:
         db.execute(
-            "PRAGMA user_version=" + ("18" if member == "application.db" else "2")
+            "PRAGMA user_version="
+            + str(preflight.APPLICATION_SCHEMA_MAXIMUM + 1
+                  if member == "application.db" else 2)
         )
     before = snapshot(profile)
     with pytest.raises(RuntimeError, match="Unsupported newer"):
         preflight.qualify_profile(profile)
+    assert snapshot(profile) == before
+
+
+def test_standalone_profile_gate_tracks_application_schema_authority():
+    authority = (
+        Path(__file__).parents[1]
+        / "packages/foresight_core/lib/src/persistence/application_schema.dart"
+    ).read_text()
+    declared = re.search(r"const applicationSchemaVersion = ([0-9]+);", authority)
+    assert declared is not None
+    assert preflight.APPLICATION_SCHEMA_MAXIMUM == int(declared.group(1))
+
+
+@pytest.mark.parametrize("version", [17, 18, 23, 24])
+def test_supported_recording_profile_schemas_are_qualified_without_mutation(
+    profile, version
+):
+    with closing(sqlite3.connect(profile / "application.db")) as db, db:
+        db.execute(f"PRAGMA user_version={version}")
+    before = snapshot(profile)
+    gate = preflight.qualify_profile(profile)
+    preflight.verify_profile_unchanged(profile, gate)
     assert snapshot(profile) == before
 
 
@@ -195,7 +220,10 @@ os._exit(0)
 def test_wal_only_future_does_not_change_live_shm(
     profile, tmp_path, monkeypatch, member, shm
 ):
-    wal(profile / member, 18 if member == "application.db" else 2)
+    wal(
+        profile / member,
+        preflight.APPLICATION_SCHEMA_MAXIMUM + 1 if member == "application.db" else 2,
+    )
     if not shm:
         Path(str(profile / member) + "-shm").unlink()
     scratch = tmp_path / "scratch"

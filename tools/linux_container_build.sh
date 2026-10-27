@@ -17,12 +17,17 @@ bash /workspace/tools/copy_linux_source.sh /workspace /src
 cd /src
 export FORESIGHT_REQUIRE_APP_DEPENDENCY_REUSE=${FORESIGHT_REQUIRE_APP_DEPENDENCY_REUSE:-1}
 bash tools/build.sh --build-only "-DFORESIGHT_BUILD_REVISION=$SOURCE_REVISION"
+# New app-component inputs: hash-pinned offline audio codecs, not an SDK replacement.
+install -d -m 700 /out/media-worker-cache
+"$FORESIGHT_PYTHON" tools/build_media_worker.py --cache /out/media-worker-cache \
+  --output build/media-worker --fetch --jobs 2
 task_args=()
 if [[ "${REQUIRE_GOOGLE_CLIENT:-0}" == 1 ]]; then task_args+=(--require-google-client); fi
 if [[ -f /run/secrets/google_client ]]; then task_args+=(--google-client /run/secrets/google_client); fi
 if [[ -f /run/secrets/foresight_search_api_key ]]; then FORESIGHT_SEARCH_API_KEY="$(cat /run/secrets/foresight_search_api_key)"; export FORESIGHT_SEARCH_API_KEY; fi
 if [[ -f /run/secrets/foresight_web_content_api_key ]]; then FORESIGHT_WEB_CONTENT_API_KEY="$(cat /run/secrets/foresight_web_content_api_key)"; export FORESIGHT_WEB_CONTENT_API_KEY; fi
 "$FORESIGHT_PYTHON" tools/package.py --output dist/open-foresight --revision "$SOURCE_REVISION" \
+  --media-worker-build build/media-worker \
   --litert-library /opt/litert-extensions/liblitert-lm.so \
   --litert-extensions-manifest /opt/litert-extensions/build-manifest.json \
   --generation-backend gpu --whisper-gpu-runtime /opt/whisper-runtime/whisper-cli \

@@ -6,9 +6,9 @@ import 'dart:io';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/service.dart';
 import 'package:foresight_test_support/test_paths.dart';
-import 'package:foresight_test_support/native_fixture.dart';
 import 'package:foresight_test_support/poll.dart';
 import 'package:test/test.dart';
+import 'fixtures/durable_capture_routes.dart';
 
 const _interpreterProbe = r'''
 import 'dart:io';
@@ -35,6 +35,130 @@ void _expectInterpreterDenied(ProcessResult result) {
   expect(reply['error'], isNotNull, reason: result.stdout.toString());
   expect((reply['error'] as Map)['code'], 'denied');
   expect((reply['error'] as Map)['message'], contains('verified desktop'));
+}
+
+Future<void> _freshPeerProcess(String name) async {
+  // Keep process proof and both pipes even after a failed parent test teardown.
+  final output = shortTestTempRoot.createTempSync('desktop-peer-child-');
+  final events = File('${output.path}/events.jsonl');
+  final process = await Process.start(
+    Platform.resolvedExecutable,
+    [
+      'test',
+      'test/desktop_peer_process_test.dart',
+      '--name',
+      '^${RegExp.escape(name)}\$',
+      '--reporter',
+      'expanded',
+      '--file-reporter=json:${events.path}',
+    ],
+    environment: {
+      ...Platform.environment,
+      'FORESIGHT_TEST_DESKTOP_PEER_CHILD': name,
+      'FORESIGHT_TEST_DESKTOP_PEER_EVIDENCE': output.path,
+    },
+  );
+  final stdout = StringBuffer(), stderr = StringBuffer();
+  final outDone = Completer<void>(), errDone = Completer<void>();
+  void finish(Completer<void> done) {
+    if (!done.isCompleted) done.complete();
+  }
+
+  Object? pipeError;
+  final outSubscription = process.stdout
+      .transform(utf8.decoder)
+      .listen(
+        stdout.write,
+        onDone: () => finish(outDone),
+        onError: (Object error) {
+          pipeError = error;
+          finish(outDone);
+        },
+        cancelOnError: true,
+      );
+  final errSubscription = process.stderr
+      .transform(utf8.decoder)
+      .listen(
+        stderr.write,
+        onDone: () => finish(errDone),
+        onError: (Object error) {
+          pipeError = error;
+          finish(errDone);
+        },
+        cancelOnError: true,
+      );
+  final elapsed = Stopwatch()..start();
+  Duration remaining() {
+    final budget = const Duration(seconds: 20) - elapsed.elapsed;
+    return budget > Duration.zero ? budget : Duration.zero;
+  }
+
+  int? code;
+  try {
+    // This is inside the unchanged parent test budget. Reap before returning;
+    // a native mapping's sealed environment cannot be reset by another isolate.
+    code = await process.exitCode.timeout(remaining());
+    await Future.wait([outDone.future, errDone.future]).timeout(remaining());
+  } finally {
+    try {
+      if (code == null) process.kill(ProcessSignal.sigkill);
+      await process.exitCode.timeout(const Duration(seconds: 2));
+      await Future.wait([
+        outSubscription.cancel(),
+        errSubscription.cancel(),
+      ]).timeout(const Duration(seconds: 2));
+    } finally {
+      await File('${output.path}/stdout.log').writeAsString(stdout.toString());
+      await File('${output.path}/stderr.log').writeAsString(stderr.toString());
+    }
+  }
+  final report = '$stdout\n$stderr\nEvidence: ${output.path}';
+  expect(code, 0, reason: report);
+  expect(pipeError, isNull, reason: report);
+  final inputs =
+      jsonDecode(File('${output.path}/inputs.json').readAsStringSync()) as Map;
+  expect(
+    inputs['pid'],
+    isNot(pid),
+    reason: 'Native globals require a fresh OS process',
+  );
+  for (final key in [
+    'FORESIGHT_NATIVE_LIBRARY',
+    'FORESIGHT_TEST_SQL_SUPPORT_LIBRARY',
+    'FORESIGHT_SQLITE_LIBRARY',
+    'FORESIGHT_HELPER',
+    'FORESIGHT_TEST_HELPER',
+  ]) {
+    expect(inputs[key], Platform.environment[key], reason: report);
+  }
+  expect(
+    inputs['selected_native'],
+    Platform.environment['FORESIGHT_NATIVE_LIBRARY'],
+  );
+  expect(inputs['test_name'], name);
+  expect(inputs['resolved_executable'], Platform.resolvedExecutable);
+  final records = events
+      .readAsLinesSync()
+      .map((line) => jsonDecode(line) as Map<String, dynamic>)
+      .toList();
+  final completed = records.where(
+    (event) => event['type'] == 'testDone' && event['hidden'] != true,
+  );
+  expect(completed, hasLength(1), reason: report);
+  expect(completed.single['result'], 'success', reason: report);
+  expect(completed.single['skipped'], false, reason: report);
+  expect(records.last['type'], 'done', reason: report);
+  expect(records.last['success'], true, reason: report);
+  final started = records.where(
+    (event) => event['type'] == 'testStart' && event['test']['name'] == name,
+  );
+  expect(started, hasLength(1), reason: report);
+  expect(
+    completed.single['testID'],
+    started.single['test']['id'],
+    reason: report,
+  );
+  print('Desktop peer: one child pass, zero skips; ${output.path}');
 }
 
 final class _DesktopProcess {
@@ -89,6 +213,21 @@ final class _DesktopProcess {
 
 void main() {
   bootstrapSqlSupportFixture();
+  // Isolate service workers share the loaded native mapping's sealed cache
+  // configuration. Give every real-native profile its own OS process; keep
+  // compilation, setup, peer authentication and capture assertions in that child.
+  final childCase = Platform.environment['FORESIGHT_TEST_DESKTOP_PEER_CHILD'];
+  void peerTest(String name, Future<void> Function() body) {
+    test(name, () async {
+      if (childCase == null) {
+        await _freshPeerProcess(name);
+      } else {
+        expect(childCase, name, reason: 'Only the selected peer case may run');
+        await body();
+      }
+    });
+  }
+
   late Directory installation;
   late String executable, impostor;
   late Directory directory;
@@ -97,6 +236,7 @@ void main() {
   late Map<String, String> environment;
 
   setUpAll(() async {
+    if (childCase == null) return;
     installation = createTestTempDirectorySync('desktop-executable-');
     final parent = Directory(
       Platform.isMacOS
@@ -129,6 +269,7 @@ void main() {
   });
 
   setUp(() async {
+    if (childCase == null) return;
     directory = createTestTempDirectorySync('desktop-process-');
     profile = ProfilePaths('${directory.path}/d', '${directory.path}/r');
     environment = Map.of(runtimeConfiguration.environment);
@@ -138,8 +279,28 @@ void main() {
     );
     runtimeConfiguration.environment.addAll({
       'FORESIGHT_HELPER': '',
+      // Service startup binds durable media before any recording request.
+      'FORESIGHT_NATIVE': Platform.environment['FORESIGHT_NATIVE_LIBRARY']!,
       'FORESIGHT_INSTALL_ROOT': installation.path,
     });
+    File(
+      '${Platform.environment['FORESIGHT_TEST_DESKTOP_PEER_EVIDENCE']}/inputs.json',
+    ).writeAsStringSync(
+      jsonEncode({
+        'pid': pid,
+        'test_name': childCase,
+        'resolved_executable': Platform.resolvedExecutable,
+        'selected_native': runtimeConfiguration.environment['FORESIGHT_NATIVE'],
+        for (final key in [
+          'FORESIGHT_NATIVE_LIBRARY',
+          'FORESIGHT_TEST_SQL_SUPPORT_LIBRARY',
+          'FORESIGHT_SQLITE_LIBRARY',
+          'FORESIGHT_HELPER',
+          'FORESIGHT_TEST_HELPER',
+        ])
+          key: Platform.environment[key],
+      }),
+    );
     service = await IsolatedApplicationService.start(profile);
     addTearDown(() async {
       await service.close();
@@ -160,19 +321,22 @@ void main() {
     return result;
   }
 
-  test(
+  peerTest(
     'a hidden verified replacement finalizes capture and retains the host pin',
     () async {
       await service.close();
-      final library =
-          '${installation.path}/recording.${Platform.isMacOS ? 'dylib' : 'so'}';
-      await buildCachedNativeFixture(
-        source: 'test/fixtures/recording_native_stub.cpp',
-        output: library,
+      late CapturePlatformFixture capture;
+      final owner = await ApplicationService.start(
+        profile,
+        capturePlatform: (media) => capture = CapturePlatformFixture(
+          media,
+          onCreated: (route) {
+            route.audio(0);
+            capture.clock = 1100000;
+          },
+        ),
       );
-      final owner = await ApplicationService.start(profile);
       addTearDown(owner.close);
-      runtimeConfiguration.environment['FORESIGHT_NATIVE'] = library;
       owner.domain.store.setPreference('liveEnhance', 'false');
       final runner = File(
         '/usr/bin/true',
@@ -194,6 +358,8 @@ void main() {
         isNull,
       );
       expect(owner.application.recording, isNotNull);
+      expect(owner.application.captureState['capture_active'], true);
+      expect(capture.routes, hasLength(2));
       final replacement = await peer();
       expect(
         await replacement.frame('security.attach_desktop', {
@@ -206,6 +372,22 @@ void main() {
       expect(owner.access.hasVisibleHost, false);
       await eventually(() => owner.application.recording == null);
       expect(owner.application.recordingMeeting, isNull);
+      for (final route in capture.routes) {
+        expect(route.finished, true);
+        expect(route.retired, true);
+        expect(
+          route.log,
+          containsAllInOrder(['finish-ack', 'poll-after-finish:0', 'retire']),
+        );
+      }
+      expect(
+        owner.domain.store.db
+            .select(
+              "SELECT COUNT(*) AS count FROM audio_chunks WHERE state='published'",
+            )
+            .single['count'],
+        2,
+      );
       final state = (await replacement.frame('status'))['result'] as Map;
       expect((state['lifetime'] as Map)['pinned_by_desktop'], true);
       expect(
@@ -215,7 +397,67 @@ void main() {
     },
   );
 
-  test(
+  peerTest(
+    'a hidden replacement cancels pending durable capture admission',
+    () async {
+      await service.close();
+      final entered = Completer<void>(), release = Completer<void>();
+      late CapturePlatformFixture capture;
+      final owner = await ApplicationService.start(
+        profile,
+        capturePlatform: (media) => capture = CapturePlatformFixture(
+          media,
+          prepared: (_) {
+            if (!entered.isCompleted) entered.complete();
+          },
+        )..admission = release,
+      );
+      addTearDown(owner.close);
+      addTearDown(() {
+        if (!release.isCompleted) release.complete();
+      });
+      owner.domain.store.setPreference('liveEnhance', 'false');
+      final runner = File(
+        '/usr/bin/true',
+      ).copySync('${installation.path}/pending-speech-runner');
+      final model = File('${directory.path}/speech')
+        ..writeAsStringSync('ABI fixture');
+      await owner.domain.store.register('speech', model.path, runner.path);
+      final meeting = owner.domain.store.meeting('Pending replacement');
+      final first = await peer();
+      expect(
+        await first.frame('security.attach_desktop', {
+          'token': token(),
+          'visible': true,
+        }),
+        {'result': true},
+      );
+      final started = first.frame('meetings.start', {'id': meeting});
+      started.ignore();
+      await entered.future.timeout(const Duration(seconds: 5));
+      final active = owner.application.recording!;
+      expect(active.captureActive, false);
+      final replacement = await peer();
+      final attached = replacement.frame('security.attach_desktop', {
+        'token': token(),
+        'visible': false,
+      });
+      attached.ignore();
+      await eventually(() => active.finishing);
+      release.complete();
+      expect(await attached, {'result': true});
+      expect(((await started)['error'] as Map)['code'], 'cancelled');
+      await eventually(() => owner.application.recording == null);
+      expect(capture.routes, isEmpty);
+      expect(owner.application.recordingMeeting, isNull);
+      expect(owner.access.hasHost, true);
+      expect(owner.access.hasVisibleHost, false);
+      final state = (await replacement.frame('status'))['result'] as Map;
+      expect((state['lifetime'] as Map)['pinned_by_desktop'], true);
+    },
+  );
+
+  peerTest(
     'OS executable identity rejects a token thief and allows verified replacement',
     () async {
       final desktop = await peer();
@@ -270,7 +512,7 @@ void main() {
     },
   );
 
-  test(
+  peerTest(
     'hidden windows retain their host and refuse capture until visible again',
     () async {
       final desktop = await peer();
@@ -305,7 +547,7 @@ void main() {
     },
   );
 
-  test(
+  peerTest(
     'a verified executable cannot bypass the frontend through worker.sock',
     () async {
       final bypass = await peer(executable, '${profile.runtime}/worker.sock');
@@ -328,7 +570,7 @@ void main() {
     },
   );
 
-  test(
+  peerTest(
     'packaged model requests cannot select executables outside the installation',
     () async {
       final desktop = await peer();
@@ -346,7 +588,7 @@ void main() {
     },
   );
 
-  test(
+  peerTest(
     'unbundled development accepts only its explicitly selected native peer',
     () async {
       await service.close();
@@ -374,7 +616,7 @@ void main() {
     },
   );
 
-  test(
+  peerTest(
     'a packaged revision without a root cannot enable the developer allowlist',
     () async {
       await service.close();
@@ -396,7 +638,7 @@ void main() {
     },
   );
 
-  test(
+  peerTest(
     'interpreter probe ignores events and replies for another request',
     () async {
       final script = File('${directory.path}/correlated-probe.dart')
@@ -455,7 +697,7 @@ void main() {
     },
   );
 
-  test(
+  peerTest(
     'developer allowlists cannot substitute a generic interpreter or script',
     () async {
       await service.close();

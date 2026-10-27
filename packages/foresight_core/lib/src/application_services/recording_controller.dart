@@ -1,3 +1,7 @@
+import '../durable_capture.dart';
+import '../audio_models.dart';
+import '../persistence/recording_media.dart';
+import 'recording_audio_work.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -37,6 +41,22 @@ final class RecordingController {
   final MeetingQueries meetings;
   final CaptureQueries queries;
   final void Function() changed, levelsChanged;
+  RecordingMedia? _media;
+  RecordingAudioWorkPort? _audioWork;
+  DurableCapturePlatform? _capturePlatform;
+  void configureDurableAudio(
+    RecordingMedia media,
+    RecordingAudioWorkPort work, {
+    DurableCapturePlatform? capturePlatform,
+  }) {
+    if (recording != null || _stopping != null) {
+      throw StateError('Cannot replace media authority during capture');
+    }
+    _media = media;
+    _audioWork = work;
+    _capturePlatform = capturePlatform;
+  }
+
   Store get store => domain.store;
   bool get modelBusy => generation.modelBusy;
   bool _closed = false, _controlling = false;
@@ -45,7 +65,7 @@ final class RecordingController {
   Recording? get recording => _recording;
   set recording(Recording? value) {
     _recording = value;
-    capture.active = value != null;
+    capture.active = value != null && value.lastError.isEmpty;
   }
 
   int? get recordingMeeting => capture.meeting;
@@ -60,19 +80,30 @@ final class RecordingController {
   RecordingTranscriptPersistence? _persistence;
   final _finalIndexes = <Future<void>>{};
   var _session = 0, _unsavedSegments = 0;
+  bool _physicalActive = false;
   String _persistenceState = 'saved';
   Map<String, Object?> get state => {
     'meeting_id': recordingMeeting,
-    'active': recording != null,
+    // Active retains session ownership while paused; capture_active alone
+    // reports accepted native acquisition and is false through stop/failure.
+    'active': recording != null && recording!.lastError.isEmpty,
+    'capture_active': recording?.captureActive ?? false,
+    'error': recording?.lastError.isNotEmpty == true
+        ? recording!.lastError
+        : null,
+    'audio_session_id': recording?.audioSessionId,
+    'starting': recording?.starting ?? false,
     'finishing': recording?.finishing ?? false,
     'paused': recording?.paused ?? false,
     'began': recordingBegan?.millisecondsSinceEpoch,
-    'elapsed_ms': recordingBegan == null
-        ? 0
-        : (_recordingPausedAt ?? domain.clock.now())
-                  .difference(recordingBegan!)
-                  .inMilliseconds -
-              _recordingPausedMs,
+    'elapsed_ms':
+        recording?.recordedElapsedMs ??
+        (recordingBegan == null
+            ? 0
+            : (_recordingPausedAt ?? domain.clock.now())
+                      .difference(recordingBegan!)
+                      .inMilliseconds -
+                  _recordingPausedMs),
     'state': recordingState,
     'transcript_persistence': _persistenceState,
     'unsaved_segments': _persistence?.pending ?? _unsavedSegments,
@@ -104,6 +135,14 @@ final class RecordingController {
       throw RpcError(
         RpcErrorCode.unavailable,
         'Register speech model and whisper.cpp runner first',
+      );
+    }
+    final media = _media;
+    final audioWork = _audioWork;
+    if (media == null || audioWork == null) {
+      throw RpcError(
+        RpcErrorCode.unavailable,
+        'Durable recording storage is unavailable',
       );
     }
     provisionalTranscript.clear();
@@ -163,7 +202,7 @@ final class RecordingController {
         });
       },
     );
-    final active = Recording(
+    final active = Recording.durable(
       domain.configuration.nativeLibrary,
       (state) {
         if (session != _session ||
@@ -171,14 +210,38 @@ final class RecordingController {
             persistence.pending > 0) {
           return;
         }
+        final warning = recording?.lastError ?? '';
+        if (warning.isNotEmpty && state != warning) return;
         recordingState = state;
         changed();
       },
       (text, start, end, source) => persistence.add(
         RecordingTranscriptSegment(text, start, end, source, finalText: true),
       ),
+      media: media,
+      work: audioWork,
+      meetingId: id,
+      modelRevision: speech.digest,
+      now: domain.clock.now,
+      createTimer: domain.createTimer,
+      platform: _capturePlatform,
       levels: () {
+        final owner = recording;
+        final acquired = owner?.captureActive ?? false;
+        capture.active = owner != null && owner.lastError.isEmpty;
+        if (_physicalActive != acquired) {
+          _physicalActive = acquired;
+          if (acquired && recordingMeeting == id && _stopping == null) {
+            queries.setState(id, 'recording');
+          }
+          changed();
+        }
         if (!_closed) levelsChanged();
+        if (owner?.lastError.isNotEmpty == true && _stopping == null) {
+          scheduleMicrotask(() {
+            if (session == _session) stopRecording().ignore();
+          });
+        }
       },
       provisional: (text, start, end, source) {
         provisionalTranscript[source] = text;
@@ -199,6 +262,12 @@ final class RecordingController {
     recordingMeeting = id;
     var started = false;
     try {
+      if (audioWork is RecordingAudioAdmission) {
+        await (audioWork as RecordingAudioAdmission).prepareForCapture();
+        if (_closed || session != _session || !identical(recording, active)) {
+          throw RpcError(RpcErrorCode.cancelled, 'Recording start cancelled');
+        }
+      }
       await active.start(
         speech.runtime,
         speech.path,
@@ -221,7 +290,7 @@ final class RecordingController {
       recordingBegan = domain.clock.now();
       _recordingPausedAt = null;
       _recordingPausedMs = 0;
-      queries.setState(id, 'recording');
+      queries.setState(id, active.captureActive ? 'recording' : 'starting');
       _inactivity = Timer.periodic(const Duration(seconds: 5), (_) {
         try {
           final minutes =
@@ -229,9 +298,11 @@ final class RecordingController {
           if (minutes > 0 &&
               !active.paused &&
               !active.finishing &&
-              domain.clock
-                      .now()
-                      .difference(active.lastAudioActivity)
+              !active.starting &&
+              (active.freshCaptureInactivity ??
+                          domain.clock.now().difference(
+                            active.lastAudioActivity,
+                          ))
                       .inSeconds >=
                   minutes * 60) {
             unawaited(stopRecording().catchError((Object _) {}));
@@ -247,6 +318,12 @@ final class RecordingController {
       });
       changed();
     } catch (error, stack) {
+      final cancelledBeforeAdmission =
+          !started &&
+          (_closed ||
+              _stopping != null ||
+              session != _session ||
+              !identical(recording, active));
       if (started) {
         try {
           await _beginStop(initialFailure: error, initialStack: stack);
@@ -261,13 +338,26 @@ final class RecordingController {
           // Retain the original start failure.
         } finally {
           if (identical(recording, active) && session == _session) {
-            _releaseRecording();
+            if (!active.hasCaptureOwnership) {
+              _releaseRecording();
+            } else {
+              // A failed startup may already own an earlier source. A failed
+              // finish/retire fence cannot release its capture/media authority.
+              capture.active = false;
+              recordingState = active.lastError;
+              _notify();
+            }
             if (identical(_persistence, persistence)) _persistence = null;
           }
           persistence.dispose();
         }
       }
-      Error.throwWithStackTrace(error, stack);
+      Error.throwWithStackTrace(
+        cancelledBeforeAdmission
+            ? RpcError(RpcErrorCode.cancelled, 'Recording start cancelled')
+            : error,
+        stack,
+      );
     }
   }
 
@@ -322,7 +412,7 @@ final class RecordingController {
         await active.resume();
       } catch (error, stack) {
         if (identical(recording, active) &&
-            (!active.paused || active.captures.isNotEmpty)) {
+            (!active.paused || active.hasCaptureOwnership)) {
           try {
             await _beginStop(initialFailure: error, initialStack: stack);
           } catch (_) {}
@@ -340,7 +430,10 @@ final class RecordingController {
               .inMilliseconds;
           _recordingPausedAt = null;
         }
-        queries.setState(recordingMeeting!, 'recording');
+        queries.setState(
+          recordingMeeting!,
+          active.captureActive ? 'recording' : 'starting',
+        );
         changed();
       });
     } finally {
@@ -374,6 +467,7 @@ final class RecordingController {
 
   void _releaseRecording() {
     recording = null;
+    _physicalActive = false;
     recordingMeeting = null;
     recordingBegan = null;
     _recordingPausedAt = null;
@@ -442,10 +536,16 @@ final class RecordingController {
       } catch (error, stack) {
         speechFailure = error;
         speechStack = stack;
-        recordingState = 'Transcript retained after speech failure: $error';
+        recordingState = active.durable
+            ? active.lastError
+            : 'Transcript retained after speech failure: $error';
       }
       // stop() has joined all owned speech producers; no more segments arrive.
-      if (persistence != null) {
+      if (active.durable) {
+        recordingState = active.lastError.isNotEmpty
+            ? active.lastError
+            : 'Audio saved · transcription continues in the background';
+      } else if (persistence != null) {
         await persistence.settled;
         if (persistence.failed) {
           failure ??= persistence.failure;
@@ -471,16 +571,27 @@ final class RecordingController {
           active.lastError.isNotEmpty;
       final status = interrupted
           ? 'interrupted'
-          : recordingState.startsWith('No speech')
+          : !active.durable && recordingState.startsWith('No speech')
           ? 'empty'
           : 'completed';
       // A failed final write must not retain capture or wait behind indexing.
-      _releaseRecording();
+      if (!active.hasCaptureOwnership) {
+        _releaseRecording();
+      } else {
+        // A failed native fence is not permission to forget/reuse its owner.
+        // Keep the object and media capability reachable until process recovery.
+        capture.active = false;
+      }
       attempt(() => proactive.clearInterim(id));
       attempt(() => queries.setState(id, status));
       persistence?.dispose();
       _persistence = null;
-      if (failure != null) {
+      if (failure != null && active.durable) {
+        _persistenceState = 'failed';
+        recordingState = active.lastError.isNotEmpty
+            ? active.lastError
+            : 'Capture stopped; audio retained but recording metadata needs recovery.';
+      } else if (failure != null) {
         _persistenceState = 'failed';
         recordingState = _unsavedSegments > 0
             ? 'Capture interrupted: transcript storage unavailable. '
@@ -494,6 +605,21 @@ final class RecordingController {
     if (failure != null) {
       Error.throwWithStackTrace(failure!, failureStack ?? StackTrace.current);
     }
+  }
+
+  /// The background scheduler invokes this only after its transcript/index
+  /// transaction commits. No speech worker status mutates capture warnings.
+  void audioTranscriptCommitted(AudioResultCommit result) {
+    if (_closed || !result.newlyCommitted) return;
+    proactive.notify(result.meetingId);
+    notes.scheduleLiveTranscript(result.meetingId);
+    notes.scheduleEnhancement(result.meetingId);
+    _trackIndex(
+      result.meetingId,
+      recordingMeeting == result.meetingId ? _session : -1,
+      finalIndex: recordingMeeting != result.meetingId,
+    );
+    changed();
   }
 
   void stopScheduling() {

@@ -1,3 +1,6 @@
+import 'application_services/recording_audio_work.dart';
+import 'durable_capture.dart';
+import 'persistence/recording_media.dart';
 import 'rpc_error.dart';
 import 'desktop_connection.dart';
 import 'dart:async';
@@ -67,7 +70,10 @@ class Recording implements RecordingStatus {
         int Function(int, Pointer<Utf8>)
       >('fs_owned_speech_finish');
 
-  final NativeLibrary _bindings;
+  final String _libraryPath;
+  late final NativeLibrary _bindings = NativeLibrary(
+    DynamicLibrary.open(_libraryPath),
+  );
   DynamicLibrary get lib => _bindings.library;
   NativeLifetime get _lifetime => _bindings.lifetime;
   final _captureOwners = <int, _RecordingNativeOwner>{};
@@ -75,8 +81,20 @@ class Recording implements RecordingStatus {
   final _retirements = <Future<void>>{};
   Future<void>? _closed;
   bool _disposed = false, _starting = false;
-  bool get starting => _starting;
-  Future<void> get closed => _closed ?? Future<void>.value();
+  DurableCaptureController? _durable;
+  bool get durable => _durable != null;
+  bool get captureActive =>
+      _durable?.captureActive ?? (!paused && !finishing && captures.isNotEmpty);
+  bool get hasCaptureOwnership =>
+      _durable?.hasCaptureOwnership ?? captures.isNotEmpty;
+  String? get audioSessionId => _durable?.sessionId;
+  int? get acquiredThroughUs => _durable?.acquiredThroughUs;
+  bool get pausing => _durable?.pausing ?? false;
+  int? get recordedElapsedMs => _durable?.elapsedMs;
+  Duration? get freshCaptureInactivity => _durable?.inactiveFor;
+  bool get starting => _durable?.starting ?? _starting;
+  Future<void> get closed =>
+      _durable?.closed ?? _closed ?? Future<void>.value();
   final Duration speechTimeout, speechQueueTimeout, stopTimeout;
   final void Function(String) state;
   final void Function(String, int, int, String) transcript;
@@ -100,19 +118,30 @@ class Recording implements RecordingStatus {
   Timer? timer;
   bool polling = false;
   @override
-  bool finishing = false;
+  bool get finishing => _durable?.finishing ?? _finishing;
+  bool _finishing = false;
+  set finishing(bool value) => _finishing = value;
   @override
-  bool paused = false;
+  bool get paused => _durable?.paused ?? _paused;
+  bool _paused = false;
+  set paused(bool value) => _paused = value;
   bool _echoCancellation = false;
   final _echoState = <String, dynamic>{};
   @override
-  Map<String, dynamic> get echoCancellationState => {
-    ..._echoState,
-    'requested': _echoCancellation,
-    'active': !paused && captures.isNotEmpty && _echoState['active'] == true,
-  };
+  Map<String, dynamic> get echoCancellationState =>
+      _durable?.echoCancellationState ??
+      {
+        ..._echoState,
+        'requested': _echoCancellation,
+        'active':
+            !paused && captures.isNotEmpty && _echoState['active'] == true,
+      };
 
   void setEchoCancellation(bool enabled) {
+    if (_durable case final owner?) {
+      owner.setEchoCancellation(enabled);
+      return;
+    }
     var pending = false;
     if (!lib.providesSymbol('fs_owned_capture_set_echo_cancellation')) {
       if (enabled) {
@@ -139,9 +168,14 @@ class Recording implements RecordingStatus {
   }
 
   final _targets = <String>[];
-  String lastError = '', _runtime = '', _model = '';
+  String _legacyError = '', _runtime = '', _model = '';
+  String get lastError => _durable?.lastError ?? _legacyError;
+  set lastError(String value) => _legacyError = value;
+  DateTime _legacyActivity = DateTime.now();
   @override
-  DateTime lastAudioActivity = DateTime.now();
+  DateTime get lastAudioActivity =>
+      _durable?.lastAudioActivity ?? _legacyActivity;
+  set lastAudioActivity(DateTime value) => _legacyActivity = value;
   int _epoch = 0, _transcriptCount = 0;
   Completer<void>? _admissionCancelled;
   Object? _retirementFailure;
@@ -158,7 +192,56 @@ class Recording implements RecordingStatus {
     this.speechTimeout = const Duration(seconds: 60),
     this.speechQueueTimeout = const Duration(seconds: 60),
     this.stopTimeout = const Duration(seconds: 90),
-  }) : _bindings = NativeLibrary(DynamicLibrary.open(path));
+  }) : _libraryPath = path;
+
+  factory Recording.durable(
+    String path,
+    void Function(String) state,
+    void Function(String, int, int, String) transcript, {
+    required RecordingMedia media,
+    required RecordingAudioWorkPort work,
+    required int meetingId,
+    required String modelRevision,
+    required DateTime Function() now,
+    required Timer Function(Duration, void Function()) createTimer,
+    void Function()? levels,
+    void Function(String, int, int, String)? provisional,
+    void Function(Map<String, dynamic>)? interruption,
+    DurableCapturePlatform? platform,
+  }) {
+    final recording = Recording(
+      path,
+      state,
+      transcript,
+      levels: levels,
+      provisional: provisional,
+      interruption: interruption,
+    );
+    recording._durable = DurableCaptureController(
+      media: media,
+      work: work,
+      meetingId: meetingId,
+      modelRevision: modelRevision,
+      platform: platform ?? NativeDurableCapturePlatform(recording._bindings),
+      now: now,
+      createTimer: createTimer,
+      state: state,
+      changed: () {
+        final owner = recording._durable!;
+        recording.sampleCounts
+          ..clear()
+          ..addAll(owner.sampleCounts);
+        recording.currentVolumes
+          ..clear()
+          ..addAll(owner.currentVolumes);
+        recording.peakVolumes
+          ..clear()
+          ..addAll(owner.peakVolumes);
+        levels?.call();
+      },
+    );
+    return recording;
+  }
 
   Map<String, dynamic>? poll(int handle) {
     final result = _nativeFsEventPoll(handle, 0);
@@ -236,6 +319,15 @@ class Recording implements RecordingStatus {
     String playbackTarget = 'auto',
     bool echoCancellation = false,
   }) async {
+    if (_durable case final owner?) {
+      await owner.start(
+        playback: playback,
+        microphoneTarget: microphoneTarget,
+        playbackTarget: playbackTarget,
+        echoCancellation: echoCancellation,
+      );
+      return;
+    }
     runtime = requireInstalledRuntime(runtime);
     if (captures.isNotEmpty ||
         speeches.isNotEmpty ||
@@ -373,6 +465,10 @@ class Recording implements RecordingStatus {
   /// Stop acquisition, retain and finalize pre-pause PCM, and release devices.
   /// Speech workers may finish their existing segments while capture is paused.
   Future<void> pause() async {
+    if (_durable case final owner?) {
+      await owner.pause();
+      return;
+    }
     if (finishing) {
       throw RpcError(RpcErrorCode.busy, 'Transcription is finalizing');
     }
@@ -400,6 +496,10 @@ class Recording implements RecordingStatus {
   }
 
   Future<void> resume() async {
+    if (_durable case final owner?) {
+      await owner.resume();
+      return;
+    }
     if (finishing) {
       throw RpcError(RpcErrorCode.busy, 'Transcription is finalizing');
     }
@@ -503,7 +603,13 @@ class Recording implements RecordingStatus {
     }
   }
 
-  void drain({bool flushAll = false}) => _drain(captures, flushAll: flushAll);
+  void drain({bool flushAll = false}) {
+    if (_durable case final owner?) {
+      owner.poll();
+      return;
+    }
+    _drain(captures, flushAll: flushAll);
+  }
 
   void _drain(List<int> captureHandles, {bool flushAll = false}) {
     if (polling || _disposed) return;
@@ -847,6 +953,10 @@ class Recording implements RecordingStatus {
   }
 
   Future<void> stop() async {
+    if (_durable case final owner?) {
+      await owner.stop();
+      return;
+    }
     if (finishing) {
       throw RpcError(RpcErrorCode.busy, 'Transcription is already in progress');
     }
@@ -936,6 +1046,10 @@ class Recording implements RecordingStatus {
 
   @override
   void dispose() {
+    if (_durable case final owner?) {
+      owner.dispose();
+      return;
+    }
     if (_disposed) return;
     _disposed = true;
     final admission = _admissionCancelled;

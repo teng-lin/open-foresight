@@ -182,7 +182,7 @@ void main() {
   );
 
   test(
-    'migration snapshot restoration reaches schema23 through Store without losing invalid legacy evidence',
+    'migration snapshot restoration reaches the current schema through Store without losing invalid legacy evidence',
     () {
       final old = historical(path);
       preference(old, 'preparationSources.7', 'invalid-private');
@@ -202,7 +202,7 @@ void main() {
       try {
         expect(
           restoredStore.rows('PRAGMA user_version').single.values.single,
-          23,
+          Store.schemaVersion,
         );
         expect(
           restoredStore.preference('preparationSources.7'),
@@ -225,9 +225,9 @@ void main() {
       store.db.execute(
         "INSERT INTO legacy_preference_entities(key,value,reason,created) VALUES('answerScope.v1.999','expired-private','orphan_answer',0)",
       );
-      store.migrationBackups.create(store.db, 23);
+      store.migrationBackups.create(store.db, Store.schemaVersion);
       expect(
-        store.migrationBackups.snapshots(supportedVersion: 23),
+        store.migrationBackups.snapshots(supportedVersion: Store.schemaVersion),
         hasLength(1),
       );
       store.close();
@@ -237,12 +237,17 @@ void main() {
         expect(store.preference('answerScope.v1.999', 'missing'), 'missing');
         final limit = DateTime.now().add(const Duration(seconds: 5));
         while (store.migrationBackups
-                .snapshots(supportedVersion: 23)
+                .snapshots(supportedVersion: Store.schemaVersion)
                 .isNotEmpty &&
             DateTime.now().isBefore(limit)) {
           await Future<void>.delayed(const Duration(milliseconds: 20));
         }
-        expect(store.migrationBackups.snapshots(supportedVersion: 23), isEmpty);
+        expect(
+          store.migrationBackups.snapshots(
+            supportedVersion: Store.schemaVersion,
+          ),
+          isEmpty,
+        );
       } finally {
         store.close();
       }

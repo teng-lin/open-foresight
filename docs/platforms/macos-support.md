@@ -21,7 +21,7 @@ CMake, Ninja, Git, and CocoaPods. Enable Flutter's Swift Package Manager support
 
 ```sh
 flutter config --enable-swift-package-manager
-python3 -m venv .venv
+python3.13 -m venv .venv
 .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
 ```
 
@@ -37,6 +37,7 @@ Pass the completed SDK prefix to the platform build. The SDK builder's help and
 CI workflow specify its source/cache options.
 
 ```sh
+export PATH="$PWD/build/macos-sdk/bin:$PATH"
 tools/build.sh --platform macos \
   -DCMAKE_PREFIX_PATH="$PWD/build/macos-sdk" \
   '-DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew;/usr/local'
@@ -47,6 +48,9 @@ the service and MCP executables, builds the release desktop, and runs the servic
 subprocess tests. `FORESIGHT_BUILD_DIR`, `FORESIGHT_PYTHON`, and
 `FORESIGHT_BUILD_JOBS` override the output directory, development Python, and
 parallelism. Build-time Python and Flutter are not installed-app dependencies.
+Use a short private disk-backed temp root for validation, as described in the
+[testing guide](../testing.md). Saved-audio worker packaging and final signed
+identity are described in [audio codecs](../architecture/audio-codecs.md).
 
 ## Bundle
 
@@ -54,7 +58,7 @@ parallelism. Build-time Python and Flutter are not installed-app dependencies.
 
 The release coordinator calls `.github/workflows/macos-release.yml` with an
 immutable tag after verifying exact-commit main candidates and creating a draft.
-Its tag must match `v` plus the application version, for example `v0.1.1`; see
+Its tag must match `v` plus the application version, for example `v0.1.4`; see
 [Versioning and releases](../../README.md#versioning-and-releases). A tag push,
 pull request, or manually published release does not generate a DMG.
 
@@ -110,7 +114,11 @@ checksum-verified Bazel download, and reusable caches under `build/`:
 ```sh
 .venv/bin/python tools/build_macos_vendor.py
 .venv/bin/python tools/build_macos_runtimes.py
+install -d -m 700 /var/tmp/foresight-media-cache
+.venv/bin/python tools/build_media_worker.py --cache /var/tmp/foresight-media-cache \
+  --output build/media-worker --fetch --jobs 2
 .venv/bin/python tools/package_macos.py \
+  --media-worker-build build/media-worker \
   --sdk "$PWD/build/macos-sdk" \
   --litert-extensions-manifest "$PWD/build/macos-runtimes/litert-extensions/build-manifest.json" \
   --whisper-runtime "$PWD/build/macos-runtimes/whisper/whisper-cli" \
@@ -124,6 +132,7 @@ Alternatively, build LiteRT and Whisper manually from existing checkouts:
 .venv/bin/python tools/build_litert_extensions.py /path/to/LiteRT-LM \
   --output "$PWD/build/litert-extensions"
 .venv/bin/python tools/package_macos.py \
+  --media-worker-build build/media-worker \
   --litert-extensions-manifest "$PWD/build/litert-extensions/build-manifest.json" \
   --sdk "$PWD/build/macos-sdk" \
   --whisper-runtime /path/to/whisper-cli \
@@ -175,6 +184,7 @@ the app ticket and checks Gatekeeper acceptance:
 ```sh
 export FORESIGHT_SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)'
 .venv/bin/python tools/package_macos.py \
+  --media-worker-build build/media-worker \
   --sdk "$PWD/build/macos-sdk" \
   --litert-extensions-manifest "$PWD/build/macos-runtimes/litert-extensions/build-manifest.json" \
   --whisper-runtime "$PWD/build/macos-runtimes/whisper/whisper-cli" \
@@ -183,11 +193,11 @@ export FORESIGHT_SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)'
   --notary-profile open-foresight-release \
   --output "$PWD/dist/signed/Open Foresight.app"
 
-# Replace 0.1.2 with the version in the generated application manifest.
+# Use the version in the generated application manifest.
 .venv/bin/python tools/create_dmg.py \
   --app "$PWD/dist/signed/Open Foresight.app" \
   --manifest "$PWD/dist/signed/Open Foresight.manifest.json" \
-  --name Open-Foresight-0.1.2-macos-arm64.dmg \
+  --name Open-Foresight-0.1.4-macos-arm64.dmg \
   --output "$PWD/dist/signed" \
   --identity "$FORESIGHT_SIGNING_IDENTITY" \
   --notary-profile open-foresight-release
@@ -260,15 +270,21 @@ runtime directory to fit the macOS Unix socket limit.
 ## Install, update, and verify
 
 ```sh
+install -d -m 700 /var/tmp/foresight-smoke
+export TMPDIR=/var/tmp/foresight-smoke
+export FORESIGHT_TEST_TEMP_ROOT="$TMPDIR"
 .venv/bin/python tools/smoke_macos_bundle.py \
-  "dist/Open Foresight.app" --output /tmp/foresight-bundle-smoke.json
+  "dist/Open Foresight.app" --output "$TMPDIR/bundle-smoke.json"
 .venv/bin/python tools/install_macos.py --help
 ```
 
 The smoke tool relocates the app into a path containing spaces and starts actual
 bundled service/MCP executables in a minimal environment. It verifies shared
 ownership, cross-client persistence, restart, and installation-maintenance
-exclusion. Its report explicitly distinguishes automated checks from physical
+exclusion. Run it in an owned desktop session: even its default mode launches
+the actual installed GUI to approve source-graph operations. `--desktop` changes
+the launch order rather than making GUI approval optional. Headless CLI probes
+do not establish this complete smoke gate. Its report distinguishes checks from physical
 audio, notarization, quarantine, minimum-OS, and fresh-user checks.
 
 The installer defers replacement while the destination is running by default.
@@ -287,6 +303,8 @@ moving the app resolves generation and speech runners in the new bundle. Externa
 runners keep their explicit paths. Older registrations without provenance must be
 registered again through model setup; the app never guesses ownership from an
 old `.app` filename. Back up the profile before migrating legacy registrations.
+See [storage recovery](../architecture/storage-recovery.md) for offline backup
+and restore constraints.
 
 If another installation owns the profile, startup reports that conflict visibly.
 Stop that owner explicitly after its work finishes, then retry this installation;
@@ -378,13 +396,13 @@ These gates are still open. A local development bundle does not close them.
 
 - Each release candidate must pass real embeddings, grounded generation, Whisper, cancellation, model setup, and worker cleanup checks. The DMG includes native LiteRT and Whisper runtimes without Python; runtime presence alone does not establish model acceptance.
 - Microphone and system audio work desktop-first and MCP-first, including denied or revoked permission, device changes, and closing the desktop.
-- Explicit stop flushes transcripts. Service crash recovery preserves committed data and marks an unfinished recording interrupted.
+- Explicit stop seals saved audio and preserves unfinished transcription. Recognition catches up after stop or restart. Service crash recovery preserves committed media and marks unfinished capture interrupted.
 - Shortcuts, app reopen, login, source links, imports, notifications, and Google authorization and sync work in a release build.
 - A relocated, quarantined, signed artifact works for a fresh account without Homebrew, SDKs, repository files, or a developer environment.
 - An upgrade coordinates with a running service or recording, and macOS 15 is exercised on actual hardware.
 
 ## Published DMG acceptance
 
-[Release acceptance](../validation/release-acceptance.md) mounts the downloaded DMG and validates a new owned installed copy, real model
+[Release acceptance](../release-acceptance.md) mounts the downloaded DMG and validates a new owned installed copy, real model
 workflows and saved-data persistence across reinstall. Existing apps are refused.
 Hardware and normal desktop/Finder checks remain separate manual gates.

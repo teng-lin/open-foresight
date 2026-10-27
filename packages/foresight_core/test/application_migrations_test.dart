@@ -121,7 +121,10 @@ void main() {
           store.contentHistory.revisions('sources', 'meeting-42'),
           isEmpty,
         );
-        expect(store.rows('PRAGMA user_version').single.values.single, 23);
+        expect(
+          store.rows('PRAGMA user_version').single.values.single,
+          Store.schemaVersion,
+        );
         expect(store.rows('PRAGMA foreign_key_check'), isEmpty);
       } finally {
         store.close();
@@ -155,7 +158,10 @@ void main() {
       failed.dispose();
       final retried = Store(path);
       try {
-        expect(retried.rows('PRAGMA user_version').single.values.single, 23);
+        expect(
+          retried.rows('PRAGMA user_version').single.values.single,
+          Store.schemaVersion,
+        );
         expect(
           retried.sourceQueries.source('meeting-42')!.content,
           '[Remote 10–20 ms] retained speech',

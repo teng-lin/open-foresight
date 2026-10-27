@@ -103,9 +103,134 @@ class ApplicationMigrations {
         _createMeetingIndex();
       case 23:
         _migratePreferenceEntities();
+      case 24:
+        _createRecordingAudio();
       default:
         throw StateError('Missing application database migration $version');
     }
+  }
+
+  // Ordered24 owns this complete helper closure; do not modify older steps.
+  void _createRecordingAudio() {
+    db.execute('''
+CREATE TABLE audio_storage_generation(
+ singleton INTEGER PRIMARY KEY CHECK(singleton=1),generation TEXT NOT NULL,
+ admission TEXT NOT NULL CHECK(admission IN ('live','metadata_only')));
+INSERT INTO audio_storage_generation SELECT 1,
+ lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-4'||substr(lower(hex(randomblob(2))),2)||
+ '-a'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))),'live';
+CREATE TABLE audio_erasure_intents(
+ session_id TEXT PRIMARY KEY,generation TEXT NOT NULL,created INTEGER NOT NULL);
+CREATE TABLE recording_sessions(
+ id TEXT PRIMARY KEY,meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+ workspace_epoch TEXT NOT NULL,storage_generation TEXT NOT NULL,
+ started_wall_ms INTEGER NOT NULL,stopped_wall_ms INTEGER,
+ capture_state TEXT NOT NULL CHECK(capture_state IN ('starting','recording','pausing','paused','stopping','stopped','interrupted')),
+ last_sequence INTEGER NOT NULL DEFAULT -1,terminal_error TEXT NOT NULL DEFAULT '',
+ retain_lossless INTEGER NOT NULL DEFAULT 0 CHECK(retain_lossless IN (0,1)),
+ UNIQUE(id,storage_generation));
+CREATE TABLE recording_spans(
+ id TEXT PRIMARY KEY,session_id TEXT NOT NULL REFERENCES recording_sessions(id) ON DELETE CASCADE,
+ ordinal INTEGER NOT NULL CHECK(ordinal>=0),capture_start_us INTEGER NOT NULL CHECK(capture_start_us>=0),
+ capture_end_us INTEGER,playback_start_us INTEGER NOT NULL CHECK(playback_start_us>=0),playback_end_us INTEGER,
+ wall_anchor_ms INTEGER NOT NULL,end_reason TEXT,
+ UNIQUE(session_id,ordinal),CHECK(capture_end_us IS NULL OR capture_end_us>=capture_start_us),
+ CHECK(playback_end_us IS NULL OR playback_end_us>=playback_start_us));
+CREATE UNIQUE INDEX recording_one_open_span ON recording_spans(session_id) WHERE capture_end_us IS NULL;
+CREATE TABLE audio_source_clocks(
+ span_id TEXT NOT NULL REFERENCES recording_spans(id) ON DELETE CASCADE,
+ source TEXT NOT NULL CHECK(source IN ('microphone','playback')),revision INTEGER NOT NULL CHECK(revision>=0),
+ quality TEXT NOT NULL CHECK(quality IN ('unavailable','hardware_host_time','pipe_drain_estimate','linux_pts','pipewire_header_pts','pipewire_graph_time')),
+ uncertainty_us INTEGER CHECK(uncertainty_us>=0),observed_capture_us INTEGER CHECK(observed_capture_us>=0),
+ PRIMARY KEY(span_id,source,revision));
+CREATE TABLE audio_chunk_publications(
+ id TEXT PRIMARY KEY,session_id TEXT NOT NULL REFERENCES recording_sessions(id) ON DELETE CASCADE,
+ span_id TEXT NOT NULL REFERENCES recording_spans(id) ON DELETE CASCADE,
+ source TEXT NOT NULL CHECK(source IN ('microphone','playback')),sequence INTEGER NOT NULL CHECK(sequence>=0),
+ relative_path TEXT NOT NULL UNIQUE,publication_token TEXT NOT NULL UNIQUE,storage_generation TEXT NOT NULL,
+ UNIQUE(session_id,source,sequence));
+CREATE TABLE audio_chunks(
+ id TEXT PRIMARY KEY,session_id TEXT NOT NULL REFERENCES recording_sessions(id) ON DELETE CASCADE,
+ span_id TEXT NOT NULL REFERENCES recording_spans(id) ON DELETE CASCADE,
+ source TEXT NOT NULL CHECK(source IN ('microphone','playback')),
+ sequence INTEGER NOT NULL CHECK(sequence>=0),relative_path TEXT NOT NULL UNIQUE,
+ publication_token TEXT NOT NULL UNIQUE,storage_generation TEXT NOT NULL,
+ sample_start INTEGER NOT NULL CHECK(sample_start>=0),sample_count INTEGER NOT NULL CHECK(sample_count>0),
+ sample_rate INTEGER NOT NULL CHECK(sample_rate>0),channels INTEGER NOT NULL CHECK(channels>0),
+ capture_start_us INTEGER NOT NULL CHECK(capture_start_us>=0),capture_end_us INTEGER NOT NULL CHECK(capture_end_us>=capture_start_us),
+ byte_length INTEGER,sha256 TEXT,state TEXT NOT NULL CHECK(state IN ('reserved','published','missing','quarantined')),
+ interrupted INTEGER NOT NULL DEFAULT 0 CHECK(interrupted IN (0,1)),
+ gap_before INTEGER NOT NULL DEFAULT 0 CHECK(gap_before IN (0,1)),
+ UNIQUE(session_id,source,sequence),UNIQUE(session_id,source,sample_start));
+CREATE TABLE audio_representations(
+ id TEXT PRIMARY KEY,chunk_id TEXT NOT NULL REFERENCES audio_chunks(id) ON DELETE CASCADE,
+ codec TEXT NOT NULL,container TEXT NOT NULL,settings_revision TEXT NOT NULL,
+ relative_path TEXT NOT NULL UNIQUE,byte_length INTEGER NOT NULL CHECK(byte_length>0),sha256 TEXT NOT NULL,
+ decoded_samples INTEGER NOT NULL CHECK(decoded_samples>0),pre_skip INTEGER NOT NULL DEFAULT 0 CHECK(pre_skip>=0),
+ state TEXT NOT NULL CHECK(state IN ('published','superseded_pending_purge','purged','missing')),
+ validated INTEGER NOT NULL CHECK(validated IN (0,1)),UNIQUE(chunk_id,codec,settings_revision));
+CREATE TABLE audio_segmentation_progress(
+ session_id TEXT NOT NULL REFERENCES recording_sessions(id) ON DELETE CASCADE,
+ source TEXT NOT NULL,span_id TEXT NOT NULL REFERENCES recording_spans(id) ON DELETE CASCADE,
+ settings_revision TEXT NOT NULL,model_revision TEXT NOT NULL,cursor_sample INTEGER NOT NULL DEFAULT 0 CHECK(cursor_sample>=0),
+ retain_from_sample INTEGER NOT NULL DEFAULT 0 CHECK(retain_from_sample>=0),
+ error TEXT NOT NULL DEFAULT '' CHECK(length(error)<=1024),
+ context BLOB NOT NULL DEFAULT X'' CHECK(length(context)<=65536),flushed INTEGER NOT NULL DEFAULT 0 CHECK(flushed IN (0,1)),
+ publication_sealed INTEGER NOT NULL DEFAULT 0 CHECK(publication_sealed IN (0,1)),
+ PRIMARY KEY(session_id,source,span_id),CHECK(retain_from_sample<=cursor_sample));
+CREATE TABLE audio_asr_jobs(
+ id TEXT PRIMARY KEY,session_id TEXT NOT NULL REFERENCES recording_sessions(id) ON DELETE CASCADE,
+ span_id TEXT NOT NULL REFERENCES recording_spans(id) ON DELETE CASCADE,source TEXT NOT NULL,
+ sample_start INTEGER NOT NULL CHECK(sample_start>=0),sample_end INTEGER NOT NULL CHECK(sample_end>sample_start),
+ owned_start INTEGER NOT NULL CHECK(owned_start>=sample_start),owned_end INTEGER NOT NULL CHECK(owned_end<=sample_end AND owned_end>owned_start),
+ model_revision TEXT NOT NULL,settings_revision TEXT NOT NULL,
+ state TEXT NOT NULL CHECK(state IN ('pending','running','retry','blocked','failed','completed','abandoned')),
+ attempts INTEGER NOT NULL DEFAULT 0,lease_generation INTEGER NOT NULL DEFAULT 0,owner_generation TEXT,
+ retry_after_ms INTEGER NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT '',
+ UNIQUE(session_id,source,owned_start,owned_end,model_revision));
+CREATE INDEX audio_asr_pending ON audio_asr_jobs(state,retry_after_ms,id);
+CREATE INDEX audio_asr_round_robin ON audio_asr_jobs(session_id,source,owned_start,id) WHERE state IN ('pending','retry');
+CREATE TABLE audio_asr_job_chunks(
+ job_id TEXT NOT NULL REFERENCES audio_asr_jobs(id) ON DELETE CASCADE,
+ chunk_id TEXT NOT NULL REFERENCES audio_chunks(id) ON DELETE CASCADE,PRIMARY KEY(job_id,chunk_id));
+CREATE TABLE audio_transform_jobs(
+ id TEXT PRIMARY KEY,session_id TEXT NOT NULL REFERENCES recording_sessions(id) ON DELETE CASCADE,
+ kind TEXT NOT NULL CHECK(kind IN ('compression','export','playback')),input_identity TEXT NOT NULL UNIQUE,
+ codec TEXT NOT NULL,container TEXT NOT NULL,settings_revision TEXT NOT NULL,
+ settings TEXT NOT NULL CHECK(length(CAST(settings AS BLOB))<=16384),
+ state TEXT NOT NULL CHECK(state IN ('pending','running','retry','blocked','failed','completed','abandoned')),
+ attempts INTEGER NOT NULL DEFAULT 0,lease_generation INTEGER NOT NULL DEFAULT 0,owner_generation TEXT,
+ retry_after_ms INTEGER NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT '',
+ output_representation_id TEXT REFERENCES audio_representations(id) ON DELETE SET NULL,
+ output_metadata TEXT CHECK(length(CAST(output_metadata AS BLOB))<=16384));
+CREATE INDEX audio_transform_pending ON audio_transform_jobs(kind,state,retry_after_ms,id);
+CREATE TABLE audio_transform_inputs(
+ job_id TEXT NOT NULL REFERENCES audio_transform_jobs(id) ON DELETE CASCADE,
+ position INTEGER NOT NULL CHECK(position>=0),representation_id TEXT NOT NULL REFERENCES audio_representations(id) ON DELETE CASCADE,
+ playback_start_frame INTEGER CHECK(playback_start_frame>=0 AND playback_start_frame<=4147200000),
+ playback_frame_count INTEGER CHECK(playback_frame_count>0 AND playback_frame_count<=240000),
+ playback_geometry_sha256 TEXT CHECK(length(playback_geometry_sha256)=64),
+ CHECK((playback_start_frame IS NULL)=(playback_frame_count IS NULL)),
+ CHECK((playback_start_frame IS NULL)=(playback_geometry_sha256 IS NULL)),
+ PRIMARY KEY(job_id,position),UNIQUE(job_id,representation_id));
+CREATE TABLE transcript_audio_links(
+ transcript_id INTEGER PRIMARY KEY REFERENCES transcript(id) ON DELETE CASCADE,
+ job_id TEXT NOT NULL REFERENCES audio_asr_jobs(id) ON DELETE CASCADE,ordinal INTEGER NOT NULL CHECK(ordinal>=0),
+ transcript_revision INTEGER NOT NULL,source TEXT NOT NULL,sample_start INTEGER NOT NULL,sample_end INTEGER NOT NULL,
+ UNIQUE(job_id,ordinal),CHECK(sample_end>sample_start));
+CREATE TABLE audio_media_references(
+ id TEXT PRIMARY KEY,representation_id TEXT NOT NULL REFERENCES audio_representations(id) ON DELETE CASCADE,
+ owner_generation TEXT NOT NULL,purpose TEXT NOT NULL);
+CREATE TRIGGER audio_session_reference_fence BEFORE DELETE ON recording_sessions BEGIN
+ SELECT CASE WHEN EXISTS(SELECT 1 FROM audio_media_references r JOIN audio_representations p ON p.id=r.representation_id
+ JOIN audio_chunks c ON c.id=p.chunk_id WHERE c.session_id=OLD.id)
+ OR EXISTS(SELECT 1 FROM audio_asr_jobs j WHERE j.session_id=OLD.id AND j.state='running')
+ OR EXISTS(SELECT 1 FROM audio_transform_jobs j WHERE j.session_id=OLD.id AND j.state='running')
+ THEN RAISE(ABORT,'Recording readers and workers must release before deletion') END; END;
+CREATE TRIGGER audio_session_erasure BEFORE DELETE ON recording_sessions BEGIN
+ INSERT OR IGNORE INTO audio_erasure_intents VALUES(OLD.id,OLD.storage_generation,unixepoch()*1000);
+ INSERT OR IGNORE INTO preferences(key,value) VALUES('internal.backupErasurePending','1'); END;
+''');
   }
 
   // Ordered23 owns its complete helper closure. Earlier definitions stay frozen.

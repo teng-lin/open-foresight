@@ -3,6 +3,19 @@ import '../store.dart';
 /// Content owned by the workspace. Model registrations, account configuration
 /// and pending helper deletions survive the local privacy transaction.
 const workspaceContentTables = [
+  'transcript_audio_links',
+  'audio_media_references',
+  'audio_transform_inputs',
+  'audio_transform_jobs',
+  'audio_asr_job_chunks',
+  'audio_asr_jobs',
+  'audio_segmentation_progress',
+  'audio_representations',
+  'audio_chunks',
+  'audio_chunk_publications',
+  'audio_source_clocks',
+  'recording_spans',
+  'recording_sessions',
   'source_selection_items',
   'source_selections',
   'conversation_scopes',
@@ -78,6 +91,9 @@ class WorkspacePersistence {
           [id, DateTime.now().millisecondsSinceEpoch],
         );
       }
+      // Producers/readers must already be fenced by the application owner.
+      // Tombstones and storage identity survive the workspace content deletion.
+      store.audioStore.rotateStorageGeneration();
       for (final table in workspaceContentTables) {
         store.db.execute('DELETE FROM $table');
       }

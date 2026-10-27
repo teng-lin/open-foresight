@@ -7,6 +7,7 @@ These fixtures verify ownership and data flow, not inference quality.
 import base64
 import concurrent.futures
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,8 @@ import select
 import shutil
 import signal
 import socket
+import sqlite3
+import struct
 import subprocess
 import sys
 import threading
@@ -516,7 +519,12 @@ def running(tmp_path, request):
     runner.write_text(
         "#!/usr/bin/env python3\nimport json,sys,time,os,pathlib\n"
         'if "-n" in sys.argv and sys.argv[sys.argv.index("-n")+1]=="0": sys.exit(0)\n'
-        'if "-f" in sys.argv: print("Mira sends the draft Tuesday."); sys.exit(0)\n'
+        'if "-f" in sys.argv:\n'
+        ' hold=pathlib.Path(__file__).with_name("hold-speech")\n'
+        ' if hold.exists():\n'
+        '  pathlib.Path(__file__).with_name("speech-entered").touch()\n'
+        '  while hold.exists():time.sleep(.01)\n'
+        ' print("Mira sends the draft Tuesday.");sys.exit(0)\n'
         'if "--probe" in sys.argv: print(json.dumps({"native_stop_token_sequences":True})); sys.exit(0)\n'
         'request=json.loads(sys.stdin.readline()) if "--model" in sys.argv else {}\n'
         'if "tools" in request:\n'
@@ -608,7 +616,14 @@ def running(tmp_path, request):
             FORESIGHT_TEST_REAL_NATIVE=str(NATIVE),
             FORESIGHT_TEST_CAPTURE_POLL_GATE=str(fixtures / "hold-capture-poll"),
             FORESIGHT_TEST_CAPTURE_READY=str(fixtures / "capture-filled"),
+            FORESIGHT_TEST_CAPTURE_TRACE=str(fixtures / "capture-pressure.jsonl"),
+            FORESIGHT_TEST_RECORDING_WRITE_ENTERED=str(fixtures / "recording-write-entered"),
+            FORESIGHT_TEST_RECORDING_WRITE_RELEASED=str(fixtures / "recording-write-released"),
+            FORESIGHT_TEST_RECORDING_WRITE_TIMEOUT=str(fixtures / "recording-write-timeout"),
         )
+        # This fixture alone delays actual owned PCM writes. No production
+        # hook or result is changed; its bounded handoff must report overflow.
+        env["DYLD_INSERT_LIBRARIES" if sys.platform == "darwin" else "LD_PRELOAD"] = str(wrapper)
     log = (tmp_path / "service.log").open("w+")
     process = subprocess.Popen([str(SERVICE)], env=env, stdout=log, stderr=log)
     peers = []
@@ -962,6 +977,66 @@ def test_stalled_notes_batch_is_cancelled_by_its_service_lease(
     assert running["process"].poll() is None
 
 
+def assert_saved_pcm(root, meeting):
+    """Validate retained, canonical audio bytes, not a transcript or SQL claim."""
+    with sqlite3.connect(f"file:{root}/data/application.db?mode=ro", uri=True) as db:
+        db.row_factory = sqlite3.Row
+        rows = db.execute(
+            "SELECT c.*,s.ordinal,r.sha256 AS representation_hash,"
+            "r.decoded_samples,r.validated FROM audio_chunks c "
+            "JOIN recording_spans s ON s.id=c.span_id "
+            "JOIN recording_sessions m ON m.id=c.session_id "
+            "JOIN audio_representations r ON r.chunk_id=c.id "
+            "WHERE m.meeting_id=? AND r.codec='pcm_s16le' AND r.state='published' "
+            "ORDER BY c.source,c.sample_start", [meeting],
+        ).fetchall()
+    assert rows, "capture must retain actual PCM independently of ASR"
+    identities = {}
+    for row in rows:
+        assert row["validated"] == 1 and row["state"] == "published"
+        count = row["sample_count"]
+        assert 0 < count <= 240000
+        payload = (root / "data" / row["relative_path"]).read_bytes()
+        assert len(payload) == row["byte_length"] == 196 + 2 * count
+        assert hashlib.sha256(payload).hexdigest() == row["sha256"] == row["representation_hash"]
+        assert payload[:4] == b"RIFF" and payload[8:16] == b"WAVEfmt "
+        assert struct.unpack_from("<I", payload, 4)[0] == len(payload) - 8
+        assert struct.unpack_from("<IHHIIHH", payload, 16) == (16, 1, 1, 48000, 96000, 2, 16)
+        assert payload[36:40] == b"fsid" and struct.unpack_from("<I", payload, 40)[0] == 144
+        assert payload[44:80].decode() == row["session_id"]
+        assert payload[80:116].decode() == row["storage_generation"]
+        assert payload[116:152].decode() == row["id"]
+        flags, sequence, span, sample, captured = struct.unpack_from("<IQQQq", payload, 152)
+        assert flags & ~0xC0000001 == 0
+        assert flags & 1 == (0 if row["source"] == "microphone" else 1)
+        assert bool(flags & 0x80000000) == bool(row["interrupted"])
+        assert bool(flags & 0x40000000) == bool(row["gap_before"])
+        assert (sequence, span, sample, captured) == (row["sequence"], row["ordinal"], row["sample_start"], row["capture_start_us"])
+        assert payload[188:192] == b"data" and struct.unpack_from("<I", payload, 192)[0] == 2 * count
+        assert row["decoded_samples"] == count
+        assert row["capture_end_us"] - captured == count * 1000000 // 48000
+        identities[row["id"]] = (row["sha256"], count)
+    return identities
+
+
+def wait_saved_asr(peer, root, meeting):
+    deadline = time.monotonic() + 15
+    while True:
+        content = peer.call("meetings.get", {"id": meeting})
+        with sqlite3.connect(f"file:{root}/data/application.db?mode=ro", uri=True) as db:
+            jobs = db.execute(
+                "SELECT j.id,j.state,j.error FROM audio_asr_jobs j JOIN recording_sessions s ON s.id=j.session_id WHERE s.meeting_id=?", [meeting],
+            ).fetchall()
+            remaining = db.execute(
+                "SELECT count(*) FROM audio_segmentation_progress p JOIN recording_sessions s ON s.id=p.session_id WHERE s.meeting_id=? AND p.flushed=0", [meeting],
+            ).fetchone()[0]
+        if jobs and all(row[1] == "completed" for row in jobs) and remaining == 0:
+            assert any(row["final"] and "Mira" in row["text"] for row in content["transcript"])
+            return content
+        assert time.monotonic() < deadline, f"saved ASR did not settle: jobs={jobs}, unflushed={remaining}"
+        poll_delay(deadline)
+
+
 def test_capture_survives_client_disconnect_and_other_client_cannot_start_second(
     running,
 ):
@@ -993,7 +1068,8 @@ def test_capture_survives_client_disconnect_and_other_client_cannot_start_second
         poll_delay(deadline)
     b.call("meetings.stop")
     assert not b.call("status")["capture"]["active"]
-    content = b.call("meetings.get", {"id": meeting})
+    assert_saved_pcm(running["root"], meeting)
+    content = wait_saved_asr(b, running["root"], meeting)
     assert content["meeting"]["state"] in ["completed", "empty"]
     assert content["transcript"]
     assert any(t["final"] and "Mira" in t["text"] for t in content["transcript"])
@@ -1487,9 +1563,11 @@ def test_url_and_directory_imports_run_in_the_service(running):
 def test_service_stop_waits_for_active_capture_and_finalizes_transcript(
     running, shutdown
 ):
-    import sqlite3
-
     peer = running["peer"]
+    hold = running["root"] / "fixtures/hold-speech"
+    entered = hold.with_name("speech-entered")
+    if shutdown == "explicit-stop":
+        hold.touch()
     peer.call(
         "models.register",
         {
@@ -1507,12 +1585,29 @@ def test_service_stop_waits_for_active_capture_and_finalizes_transcript(
         )
         poll_delay(deadline)
     helper_pid = int(peer.call("status")["helper"]["instanceId"].split("-", 1)[0])
+    pending_jobs = set()
     if shutdown == "desktop-close":
         assert peer.call("status")["lifetime"]["idle_minutes"] == 0.1
         # Recent agent work keeps the service alive through finalization; the
         # desktop departure stops capture and the idle rule releases the owner.
         running["desktop"].close()
     else:
+        # Seal acquired speech into an unfinished job, then resume actual
+        # acquisition before stopping the service. Capture and ASR must retain
+        # independent owners; shutdown cannot discard either one's work.
+        peer.call("meetings.pause", {"id": meeting})
+        while not entered.exists():
+            assert peer.call("status")["capture"]["active"]
+            assert time.monotonic() < deadline, "retained ASR job did not enter its controlled hold"
+            poll_delay(deadline)
+        peer.call("meetings.resume", {"id": meeting})
+        while not peer.call("status")["capture"]["capture_active"]:
+            assert time.monotonic() < deadline, "resumed capture did not acquire audio"
+            poll_delay(deadline)
+        with sqlite3.connect(running["root"] / "data/application.db") as db:
+            jobs = db.execute("SELECT id,state FROM audio_asr_jobs").fetchall()
+            assert jobs and all(state in ("pending", "running") for _, state in jobs)
+            pending_jobs = {identity for identity, _ in jobs}
         stopped = subprocess.run(
             [str(SERVICE), "--stop"],
             env=running["env"],
@@ -1532,13 +1627,47 @@ def test_service_stop_waits_for_active_capture_and_finalizes_transcript(
             db.execute("SELECT state FROM meetings WHERE id=?", [meeting]).fetchone()[0]
             == "completed"
         )
-        assert (
-            db.execute(
-                "SELECT count(*) FROM transcript WHERE meeting_id=? AND final=1",
-                [meeting],
-            ).fetchone()[0]
-            > 0
-        )
+        if shutdown == "desktop-close":
+            assert db.execute("SELECT count(*) FROM transcript WHERE meeting_id=? AND final=1", [meeting]).fetchone()[0] > 0
+        else:
+            jobs = db.execute("SELECT id,state FROM audio_asr_jobs").fetchall()
+            assert pending_jobs <= {identity for identity, _ in jobs}
+            assert all(state in ("pending", "retry") for _, state in jobs)
+            assert db.execute("SELECT count(*) FROM transcript WHERE meeting_id=? AND final=1", [meeting]).fetchone()[0] == 0
+    saved = assert_saved_pcm(running["root"], meeting)
+    if shutdown == "explicit-stop":
+        hold.unlink()
+        restart_log = running["root"] / "saved-asr-restart.log"
+        with restart_log.open("w+") as log:
+            restarted = subprocess.Popen([str(SERVICE)], env=running["env"], stdout=log, stderr=log)
+            other = None
+            try:
+                deadline = time.monotonic() + 10
+                while other is None:
+                    try:
+                        other = Peer(running["path"])
+                    except (FileNotFoundError, ConnectionRefusedError):
+                        assert restarted.poll() is None and time.monotonic() < deadline
+                        poll_delay(deadline)
+                assert not other.call("status")["capture"]["active"]
+                wait_saved_asr(other, running["root"], meeting)
+                assert_saved = assert_saved_pcm(running["root"], meeting)
+                assert all(assert_saved.get(identity) == value for identity, value in saved.items())
+                with sqlite3.connect(running["root"] / "data/application.db") as db:
+                    jobs = dict(db.execute("SELECT id,state FROM audio_asr_jobs"))
+                    assert all(jobs.get(identity) == "completed" for identity in pending_jobs)
+            finally:
+                if other is not None:
+                    other.close()
+                restarted.terminate()
+                try:
+                    restarted.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    restarted.kill()
+                    restarted.wait(timeout=5)
+                    raise
+                log.seek(0)
+                print(log.read())
 
 
 @pytest.mark.parametrize("running", ["without_embedding,idle=0.1"], indirect=True)
@@ -1734,7 +1863,8 @@ def test_idle_upgrade_shutdown_defers_capture_and_requires_verified_ack(running)
         )
 
 
-def test_unexpected_service_death_interrupts_capture_and_reuses_profile(running):
+@pytest.mark.parametrize("capture_phase", ["starting", "acquired"])
+def test_unexpected_service_death_interrupts_capture_and_reuses_profile(running, capture_phase):
     peer = running["peer"]
     peer.call(
         "models.register",
@@ -1746,6 +1876,11 @@ def test_unexpected_service_death_interrupts_capture_and_reuses_profile(running)
     )
     meeting = peer.call("meetings.create", {"title": "Crash recovery"})["id"]
     peer.call("meetings.start", {"id": meeting})
+    if capture_phase == "acquired":
+        deadline = time.monotonic() + 15
+        while sum(peer.call("status")["capture"]["samples"]) < 24000:
+            assert time.monotonic() < deadline, "capture did not acquire PCM before crash"
+            poll_delay(deadline)
     running["process"].kill()
     running["process"].wait(timeout=5)
     peer.close()
@@ -1769,6 +1904,13 @@ def test_unexpected_service_death_interrupts_capture_and_reuses_profile(running)
             other.call("meetings.get", {"id": meeting})["meeting"]["state"]
             == "interrupted"
         )
+        with sqlite3.connect(running["root"] / "data/application.db") as db:
+            sessions = db.execute("SELECT capture_state,terminal_error FROM recording_sessions WHERE meeting_id=?", [meeting]).fetchall()
+            assert sessions and all(state == "interrupted" and error for state, error in sessions)
+        if capture_phase == "acquired":
+            assert_saved_pcm(running["root"], meeting)
+            wait_saved_asr(other, running["root"], meeting)
+            assert other.call("meetings.get", {"id": meeting})["meeting"]["state"] == "interrupted"
         other.call("application.resume")
         deadline = time.monotonic() + 15
         while other.call("status")["helper"]["pipeline"] != "ready":
@@ -1776,7 +1918,12 @@ def test_unexpected_service_death_interrupts_capture_and_reuses_profile(running)
             poll_delay(deadline)
     finally:
         process.terminate()
-        process.wait(timeout=15)
+        try:
+            process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+            raise
         log.close()
         print((running["root"] / "crash-restart.log").read_text())
 

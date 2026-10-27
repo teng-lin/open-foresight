@@ -39,7 +39,7 @@ def test_integration_inventory_requires_executable_or_documented_validation(
     }
     probes = {"schema": 1, "entries": [entry]}
     skips = {"schema": 1, "entries": []}
-    docs = tmp_path / "docs/validation/integration-gates.md"
+    docs = tmp_path / "docs/testing.md"
     docs.parent.mkdir(parents=True)
     docs.write_text("`tools/accept_fixture.py`")
     if failure == "schema":

@@ -322,6 +322,8 @@ class PackagePreflightTest(unittest.TestCase):
                 "package.py",
                 "--build",
                 str(build),
+                "--media-worker-build",
+                str(build / "media-worker"),
                 "--flutter-bundle",
                 str(flutter),
                 "--output",
@@ -484,6 +486,8 @@ int main(void) {
                 "package.py",
                 "--build",
                 str(build),
+                "--media-worker-build",
+                str(build / "media-worker"),
                 "--flutter-bundle",
                 str(flutter),
                 "--output",
@@ -1035,5 +1039,9 @@ def test_removal_finalizer_prunes_only_empty_installation_directory(tmp_path):
     assert marker.exists() and retained.read_text() == "preserve"
 
     assert "finish_installation_removal" in packages.deb_postrm()
-    assert "finish_installation_removal" in packages.rpm_scriptlets().split("%postun\n")[1]
-    assert "post_remove() { finish_installation_removal" in packages.arch_install_script()
+    assert (
+        "finish_installation_removal" in packages.rpm_scriptlets().split("%postun\n")[1]
+    )
+    assert (
+        "post_remove() { finish_installation_removal" in packages.arch_install_script()
+    )

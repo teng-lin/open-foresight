@@ -4,7 +4,7 @@
 |---|---|
 | Status | Accepted 2026-10-19; no code change (the spurious-disconnect cause was fixed in fix plan step 1, SL-1) |
 | Deciders | Repository owner |
-| Source | [Service lifecycle fix plan](../plans/2026-10-19-service-lifecycle-fix-plan.md), decision D6, finding SL-1 |
+| Source | [Service lifecycle fix plan](https://github.com/teng-lin/open-foresight/blob/52bdd39778f31d632d434ada3fca7b165b9c6336/docs/plans/2026-10-19-service-lifecycle-fix-plan.md), decision D6, finding SL-1 |
 
 ## Context
 

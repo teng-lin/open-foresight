@@ -340,6 +340,13 @@ void main() {
         () => (workspace.d.store as dynamic).saveNote(null, 'forbidden', ''),
         throwsA(isA<NoSuchMethodError>()),
       );
+      // Desktop restart opens the collection. Select this meeting again so
+      // capture failure is checked in its actual retained-audio panel.
+      workspace.update(() => workspace.meetingFeature.meetingId = id);
+      await waitFor(
+        tester,
+        () => find.byTooltip('Rename meeting').evaluate().isNotEmpty,
+      );
       // The Python driver owns this executable. Simulate an OS capture denial
       // across the real native/service boundary without touching host devices.
       final env = Platform.environment;
@@ -358,19 +365,66 @@ void main() {
           '#!/bin/sh\nprintf "Permission denied by capture fixture\\n" >&2\nexit 1\n',
         );
         await workspace.d.command(Operation.meetingsStart, {'id': id});
+        const captureWarning =
+            'Capture interrupted: audio storage or capture failed. Saved audio is retained.';
+        const visibleWarning =
+            'Recording stopped unexpectedly. Your saved audio is still shown here.';
+        final denialDeadline = DateTime.now().add(const Duration(seconds: 30));
         await waitFor(
           tester,
-          () => workspace.meetingFeature.recordingState.toString().contains(
-            'retries exhausted',
-          ),
+          () =>
+              workspace.meetingFeature.recordingState == captureWarning &&
+              workspace.meetingFeature.recording == null,
+          deadline: denialDeadline,
         );
+        expect(workspace.meetingFeature.recordingState, captureWarning);
+        await waitFor(
+          tester,
+          () => find.text(visibleWarning).evaluate().isNotEmpty,
+          deadline: denialDeadline,
+        );
+        final failedStatus = await workspace.d.command(Operation.status) as Map;
+        final readArgs = {
+          'meeting_id': id,
+          'workspace_epoch': failedStatus['workspace_epoch'],
+        };
+        final failedAudio =
+            await workspace.d.command(Operation.recordingsRead, readArgs)
+                as Map;
         observed.expect(
           'capture_denial_reached_desktop',
-          workspace.meetingFeature.recordingState,
-          contains('retries exhausted'),
+          {
+            'warning': workspace.meetingFeature.recordingState,
+            'active': (failedStatus['capture'] as Map)['active'],
+            'capture_active':
+                (failedStatus['capture'] as Map)['capture_active'],
+            'persisted_warning':
+                (failedAudio['meeting'] as Map)['captureError'],
+          },
+          {
+            'warning': captureWarning,
+            'active': false,
+            'capture_active': false,
+            'persisted_warning': captureWarning,
+          },
         );
-        await tester.tap(find.byTooltip('Stop transcribing'));
-        await waitFor(tester, () => workspace.meetingFeature.recording == null);
+        // Durable capture has already joined and retired the failed owner.
+        // Stop is idempotent after that automatic fence; healthy capture below
+        // still exercises the visible Stop control.
+        final interrupted =
+            await workspace.d.command(Operation.meetingsGet, {'id': id}) as Map;
+        expect((interrupted['meeting'] as Map)['state'], 'interrupted');
+        await workspace.d.command(Operation.meetingsStop);
+        await tester.pump();
+        expect(workspace.meetingFeature.recording, isNull);
+        final afterStopAudio =
+            await workspace.d.command(Operation.recordingsRead, readArgs)
+                as Map;
+        expect(
+          (afterStopAudio['meeting'] as Map)['captureError'],
+          captureWarning,
+        );
+        expect(find.text(visibleWarning), findsWidgets);
         final failed =
             await workspace.d.command(Operation.meetingsGet, {'id': id}) as Map;
         observed.expect(
@@ -405,7 +459,7 @@ void main() {
         ),
         true,
       );
-      await tester.tap(find.byTooltip('Stop transcribing'));
+      await tester.tap(find.byTooltip('Stop recording'));
       await waitFor(tester, () => workspace.meetingFeature.recording == null);
       final report = Platform.environment['FORESIGHT_SERVICE_UI_REPORT'];
       if (report != null)

@@ -231,6 +231,39 @@ int main() {
       REQUIRE(sample == float(i));
     }
     REQUIRE(!ring->pop(sample));
+    int64_t timestamp = -1;
+    ring->push(0.25f, 123456);
+    REQUIRE(ring->pop(sample, &timestamp));
+    REQUIRE(sample == 0.25f && timestamp == 123456);
+    const auto clockBefore =
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    const auto mapped = ring->hostTimeUs(mach_absolute_time());
+    const auto clockAfter =
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    REQUIRE(mapped >=
+            clockBefore - static_cast<int64_t>(ring->mapping_uncertainty_us));
+    REQUIRE(mapped <=
+            clockAfter + static_cast<int64_t>(ring->mapping_uncertainty_us));
+    {
+      auto strict = std::make_unique<Ring>();
+      strict->stopOnOverflow = true;
+      for (size_t i = 0; i < Ring::capacity - 1; ++i)
+        strict->push(float(i), static_cast<int64_t>(i));
+      strict->push(-1, 999);
+      REQUIRE(strict->dropped == 1);
+      REQUIRE(strict->pop(sample, &timestamp) && sample == 0 && timestamp == 0);
+      strict->push(-2, 1000);
+      REQUIRE(strict->dropped == 2);
+      for (size_t i = 1; i < Ring::capacity - 1; ++i) {
+        REQUIRE(strict->pop(sample, &timestamp));
+        REQUIRE(sample == float(i) && timestamp == static_cast<int64_t>(i));
+      }
+      REQUIRE(!strict->pop(sample));
+    }
     std::thread producer([&] {
       for (int i = 0; i < 100000; ++i)
         ring->push(float(i));

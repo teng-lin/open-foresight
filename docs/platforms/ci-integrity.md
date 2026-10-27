@@ -4,9 +4,7 @@ These rules govern how CI produces, consumes and publishes build outputs. They
 are enforced in code, chiefly `tools/ci_producer_trust.py`,
 `tools/sdk_producer_trust.py`, `tools/ci_artifacts.py` and
 `tools/ci_release_candidates.py`, and by their tests. Changing them needs owner
-review. The pipeline and cache design is described in the
-[CI performance guide](ci-performance.md); the history and remaining workstreams
-are in the [CI restructure plan](../plans/2026-10-19-ci-restructure-plan.md).
+review. The pipeline and cache design is described in the [CI guide](../ci.md).
 
 ## Artifact sources
 
@@ -17,7 +15,7 @@ are in the [CI restructure plan](../plans/2026-10-19-ci-restructure-plan.md).
     are byte-identical (including file modes) to reviewed `main` source and its
     component identity matches. Verify the merged-tree and main-reachability
     proof. This exception exists only while the owner keeps PR-produced SDK
-    promotion ([decision 7](../plans/2026-10-19-ci-restructure-plan.md#8-owner-decisions)).
+    promotion ([decision 7](https://github.com/teng-lin/open-foresight/blob/52bdd39778f31d632d434ada3fca7b165b9c6336/docs/plans/2026-10-19-ci-restructure-plan.md#8-owner-decisions)).
 - Release candidates come only from stamped `release`-tier runs of reviewed
   `main` source at or above `RELEASE_SOURCE_FLOOR`. Per-merge candidates are
   retired.

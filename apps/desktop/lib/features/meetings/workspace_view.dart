@@ -77,6 +77,7 @@ class MeetingWorkspacePanel extends StatelessWidget {
     super.key,
     required this.header,
     this.speechProblem,
+    this.audio,
     required this.sidecarVisible,
     required this.assistantFallback,
     required this.sidecarWidth,
@@ -90,6 +91,7 @@ class MeetingWorkspacePanel extends StatelessWidget {
     required this.assistantBuilder,
   });
   final Widget header;
+  final Widget? audio;
   final String? speechProblem;
   final bool sidecarVisible, assistantFallback;
   final double sidecarWidth, assistantMinWidth;
@@ -110,6 +112,13 @@ class MeetingWorkspacePanel extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             header,
+            if (audio != null)
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: constraints.maxHeight * .4,
+                ),
+                child: SingleChildScrollView(child: audio!),
+              ),
             if (speechProblem != null)
               ListTile(
                 dense: true,

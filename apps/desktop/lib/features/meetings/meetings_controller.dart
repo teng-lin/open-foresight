@@ -1,3 +1,5 @@
+import 'audio_panel.dart';
+import 'audio_client_actions.dart';
 import 'ai_panels.dart';
 import 'ai_dialogs.dart';
 import 'assistant_widgets.dart';
@@ -30,6 +32,7 @@ part 'meeting_composition.dart';
 part 'notes_view.dart';
 part 'assistant_views.dart';
 part 'ai_views.dart';
+part 'audio_views.dart';
 
 const _meetingAssistantMinWidth = 760.0;
 

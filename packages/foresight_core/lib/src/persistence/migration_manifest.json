@@ -154,6 +154,12 @@
         "_moveLegacyPreferenceEntity",
         "rows"
       ]
+    },
+    "24": {
+      "sha256": "99d49628cf21cd4cd0f21fcbc0d880aaf8815a84085d27b271357503dfc2c965",
+      "symbols": [
+        "_createRecordingAudio"
+      ]
     }
   },
   "fixtures": {

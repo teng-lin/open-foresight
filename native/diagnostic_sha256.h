@@ -12,7 +12,7 @@
  * concurrently from several threads; distinct contexts are independent.
  *
  * Every failing call leaves the context and the digest output unchanged.
- * See docs/validation/diagnostic-sha256.md for the full contract.
+ * See docs/architecture/diagnostic-sha256.md for the full contract.
  */
 
 #include <stddef.h>

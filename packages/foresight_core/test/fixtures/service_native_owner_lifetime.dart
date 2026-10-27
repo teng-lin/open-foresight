@@ -1,6 +1,7 @@
 import '../sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ffi';
 import 'dart:io';
 import 'dart:isolate';
 
@@ -41,6 +42,29 @@ Future<bool> processMatches(int child, String path) async {
     await text;
     await errors;
   }
+}
+
+Future<bool> mediaLeaseAvailable(String data) async {
+  final probe =
+      await Process.run(Platform.environment['FORESIGHT_PYTHON'] ?? 'python3', [
+        '-c',
+        '''import fcntl,os,sys
+fd=os.open(sys.argv[1],os.O_RDWR|os.O_NOFOLLOW)
+try:
+ try:fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB);print('available')
+ except BlockingIOError:print('held')
+finally:os.close(fd)
+''',
+        '$data/recording-control/media-owner.lock',
+      ]).timeout(const Duration(seconds: 3));
+  if (probe.exitCode != 0) {
+    throw StateError('Kernel media lease probe: ${probe.stderr}');
+  }
+  return switch (probe.stdout.toString().trim()) {
+    'available' => true,
+    'held' => false,
+    final value => throw StateError('Invalid kernel media lease reply: $value'),
+  };
 }
 
 Future<bool> replacementIsolateRefuses(
@@ -92,6 +116,15 @@ Future<void> ready(ServiceClient client) async {
 Future<void> main(List<String> args) async {
   final sqlRuntime = bootstrapSqlSupportFixture();
   final root = Directory(args[0]), mode = args[1], library = args[2];
+  final usesModel = ['work_loss', 'ack_loss', 'clean'].contains(mode);
+  final clean = mode == 'clean' || mode == 'idle_media_clean';
+  if (mode == 'sql_loss') {
+    // A loaded ambient mapping must not compose a native media graph when
+    // this service owner has selected only SQL resources.
+    DynamicLibrary.open(library);
+    runtimeConfiguration.environment.remove('FORESIGHT_NATIVE');
+    runtimeConfiguration.environment.remove('FORESIGHT_INSTALL_ROOT');
+  }
   final profile = ProfilePaths('${root.path}/data', '${root.path}/run');
   final runner = '${root.path}/model-worker';
   Directory(profile.data).createSync(recursive: true);
@@ -108,7 +141,7 @@ Future<void> main(List<String> args) async {
     ).writeAsStringSync('');
   }
   final store = Store('${profile.data}/application.db');
-  if (mode != 'sql_loss') {
+  if (usesModel) {
     await store.register(
       'generation',
       '${root.path}/model',
@@ -130,6 +163,26 @@ Future<void> main(List<String> args) async {
   ServiceClient? a, b;
   var passed = false;
   try {
+    if (mode == 'idle_media_clean') {
+      // Installed ownership without a resolved selection must fail even when
+      // this process already has the full native mapping loaded.
+      DynamicLibrary.open(library);
+      runtimeConfiguration.environment.remove('FORESIGHT_NATIVE');
+      runtimeConfiguration.environment['FORESIGHT_INSTALL_ROOT'] = root.path;
+      var refused = false;
+      try {
+        final unexpected = await ApplicationService.start(profile);
+        await unexpected.close();
+      } catch (error) {
+        refused = error.toString().contains('native runtime is missing');
+      } finally {
+        runtimeConfiguration.environment.remove('FORESIGHT_INSTALL_ROOT');
+        runtimeConfiguration.environment['FORESIGHT_NATIVE'] = library;
+      }
+      if (!refused) {
+        throw StateError('Unselected installed runtime was admitted');
+      }
+    }
     Object? loss;
     try {
       first = await IsolatedApplicationService.start(
@@ -145,7 +198,7 @@ Future<void> main(List<String> args) async {
         }
       } else {
         a = await desktop(profile);
-        if (mode != 'sql_loss') await ready(a);
+        if (usesModel) await ready(a);
         if (mode == 'work_loss') {
           a.call('meetings.generate', {
             'id': meeting,
@@ -156,9 +209,14 @@ Future<void> main(List<String> args) async {
             'native work entered',
           );
         }
-        if (mode == 'clean') {
-          File('$runner.release').writeAsStringSync('release');
-          await a.call('meetings.generate', {'id': meeting, 'kind': 'summary'});
+        if (clean) {
+          if (usesModel) {
+            File('$runner.release').writeAsStringSync('release');
+            await a.call('meetings.generate', {
+              'id': meeting,
+              'kind': 'summary',
+            });
+          }
           await a.close();
           a = null;
           await first.close();
@@ -180,7 +238,8 @@ Future<void> main(List<String> args) async {
       if (mode != 'ack_loss') rethrow;
       loss = error;
     }
-    final nativeLoss = mode == 'work_loss' || mode == 'ack_loss';
+    final nativeLoss =
+        mode == 'work_loss' || mode == 'ack_loss' || mode == 'idle_media_loss';
     if (nativeLoss &&
         !(loss?.toString().contains('restart the service') ?? false)) {
       throw StateError(
@@ -191,6 +250,21 @@ Future<void> main(List<String> args) async {
       throw StateError(
         'ACK-gap control unexpectedly created native model work',
       );
+    }
+    if (mode == 'ack_loss' &&
+        File(
+          '${profile.data}/recording-control/media-owner.lock',
+        ).existsSync()) {
+      throw StateError(
+        'Media descriptors opened before native admission settled',
+      );
+    }
+    if (mode == 'idle_media_loss' && await mediaLeaseAvailable(profile.data)) {
+      throw StateError('Idle graph loss released its unconfirmed media lease');
+    }
+    if (mode == 'idle_media_clean' &&
+        !await mediaLeaseAvailable(profile.data)) {
+      throw StateError('Clean idle shutdown retained its media lease');
     }
     final priorWorkers = File('$runner.starts').existsSync()
         ? File('$runner.starts').readAsLinesSync().map(int.parse).toList()
@@ -248,12 +322,20 @@ Future<void> main(List<String> args) async {
         desktopPeerVerifier: trustInProcessDesktop,
       );
       b = await desktop(profile);
-      if (mode == 'clean') await ready(b);
+      if (usesModel) await ready(b);
+      if (mode == 'idle_media_clean' &&
+          await mediaLeaseAvailable(profile.data)) {
+        throw StateError('Replacement idle owner did not hold its media lease');
+      }
       await b.call('notes.list');
       await b.close();
       b = null;
       await second.close();
       second = null;
+      if (mode == 'idle_media_clean' &&
+          !await mediaLeaseAvailable(profile.data)) {
+        throw StateError('Replacement clean shutdown retained its media lease');
+      }
     }
     passed = true;
     print(
@@ -262,6 +344,9 @@ Future<void> main(List<String> args) async {
         'restart_required': nativeLoss,
         'replacement_allowed': !nativeLoss,
         'native_workers_before_replacement': priorWorkers.length,
+        'media_lease_held': mode == 'idle_media_loss'
+            ? !await mediaLeaseAvailable(profile.data)
+            : null,
       }),
     );
   } catch (error, stack) {

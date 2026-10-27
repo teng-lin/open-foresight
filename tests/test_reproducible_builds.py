@@ -111,6 +111,8 @@ package.main()
                     code,
                     "--build",
                     str(build),
+                    "--media-worker-build",
+                    str(build / "media-worker"),
                     "--flutter-bundle",
                     str(flutter),
                     "--output",

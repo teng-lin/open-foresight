@@ -172,6 +172,8 @@ void main() {
       'models', // Installed model configuration survives workspace clear.
       'preferences', // Non-content settings survive; content preference keys are removed.
       'pending_helper_deletes', // Durable cleanup queue must outlive the clear.
+      'audio_storage_generation', // Independent media identity survives clears.
+      'audio_erasure_intents', // Media cleanup must finish after content deletion.
     };
     final tables = store
         .rows(
