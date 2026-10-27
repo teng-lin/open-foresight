@@ -994,6 +994,17 @@ MediaProcessResult run_media_process(const MediaExecutable &pin,
         stop(MediaProcessStatus::output_limit, "child_output_limit", false);
 #ifdef FORESIGHT_MEDIA_PROCESS_SUPERVISOR
       bool exited = observed_exit(state);
+      // The child can exit after the first nonblocking drain. Collect bytes
+      // and EOF made available by that exit before classifying retained pipes.
+      // A descendant that still holds a pipe open remains a refusal below.
+      if (exited) {
+        if (state->read_out.value >= 0)
+          drain(state->read_out, result.result_json, stdout_max, overflow);
+        if (state->read_error.value >= 0)
+          drain(state->read_error, result.stderr_text, stderr_max, overflow);
+        if (overflow)
+          stop(MediaProcessStatus::output_limit, "child_output_limit", false);
+      }
       if (state->ownership_lost) {
         result.status = MediaProcessStatus::termination_unconfirmed;
         result.reason = "child_ownership_lost";

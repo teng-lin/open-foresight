@@ -446,9 +446,26 @@ if(BUILD_TESTING)
   if(APPLE)
     target_link_libraries(native_media_process_test PRIVATE "-framework Security" "-framework CoreFoundation")
   endif()
+  # A test-only waitid barrier forces a real leaf exit after the first drain.
+  # It is part of the existing production CTest on root/standalone/sanitizers.
+  add_executable(native_media_exit_fixture ../tests/native/media_process.cpp
+    ../tests/native/media_exit_process.cpp ../tests/native/media_exit_barrier.cpp
+    diagnostic_sha256.c media_supervisor.cpp)
+  target_compile_features(native_media_exit_fixture PRIVATE cxx_std_20 c_std_11)
+  target_compile_definitions(native_media_exit_fixture PRIVATE
+    FORESIGHT_MEDIA_PROCESS_FIXTURE=1 FORESIGHT_MEDIA_PROCESS_SUPERVISOR=1
+    FORESIGHT_MEDIA_EXIT_BARRIER=1)
+  target_include_directories(native_media_exit_fixture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(native_media_exit_fixture PRIVATE Threads::Threads nlohmann_json::nlohmann_json)
+  if(APPLE)
+    target_link_libraries(native_media_exit_fixture PRIVATE "-framework Security" "-framework CoreFoundation")
+  endif()
   add_executable(native_media_process_production_test ../tests/native/media_process.cpp
     media_process.cpp diagnostic_sha256.c)
   target_compile_features(native_media_process_production_test PRIVATE cxx_std_20 c_std_11)
+  target_compile_definitions(native_media_process_production_test PRIVATE
+    FORESIGHT_MEDIA_EXIT_DRIVER=1)
+  add_dependencies(native_media_process_production_test native_media_exit_fixture)
   target_include_directories(native_media_process_production_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(native_media_process_production_test PRIVATE Threads::Threads nlohmann_json::nlohmann_json ${CMAKE_DL_LIBS})
   if(APPLE)
@@ -456,7 +473,8 @@ if(BUILD_TESTING)
   endif()
   add_test(NAME native_media_process_production COMMAND ${_native_fixture_launcher}
     $<TARGET_FILE:native_media_process_production_test>
-    $<TARGET_FILE:native_media_fixture_1> $<TARGET_FILE:native_media_fixture_2>)
+    $<TARGET_FILE:native_media_fixture_1> $<TARGET_FILE:native_media_fixture_2>
+    $<TARGET_FILE:native_media_exit_fixture>)
   set_tests_properties(native_media_process_production PROPERTIES TIMEOUT 30)
   add_test(NAME native_media_process COMMAND ${_native_fixture_launcher}
     $<TARGET_FILE:native_media_process_test>

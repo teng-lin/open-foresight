@@ -5,6 +5,9 @@
 #include "media_supervisor.h"
 #include "media_supervisor_protocol.h"
 #include "portable_process.h"
+#ifdef FORESIGHT_MEDIA_EXIT_BARRIER
+#include "media_exit_barrier.h"
+#endif
 #include <array>
 #include <atomic>
 #include <cerrno>
@@ -77,10 +80,12 @@ void host_reaper_signal(int) {
 #if defined(FORESIGHT_MEDIA_PROCESS_FIXTURE)
 // A constructor sentinel on stderr is observable BEFORE fixture main and does
 // not need a media capability. A wrong macOS CDHash must never run this code.
+#ifndef FORESIGHT_MEDIA_EXIT_BARRIER
 __attribute__((constructor)) static void entered() {
   char value = '0' + FORESIGHT_MEDIA_PROCESS_FIXTURE;
   write(2, &value, 1);
 }
+#endif
 
 int main(int argc, char **argv) {
   int supervised = foresight::media_supervisor_main(
@@ -115,6 +120,40 @@ int main(int argc, char **argv) {
     return 64;
   if (std::string(argv[1]) != "decode-pcm" && getpriority(PRIO_PROCESS, 0) < 10)
     return 66;
+#ifdef FORESIGHT_MEDIA_EXIT_BARRIER
+  auto barrier_path = media_exit_input_path();
+  auto barrier_mode = media_exit_mode(barrier_path);
+  if (barrier_mode == "overflow") {
+    // No constructor sentinel in this dedicated binary: outer stderr cannot
+    // independently overflow when the inner supervisor forwards its 8192 cap.
+    std::string prefix(8192, 'x');
+    if (write(2, prefix.data(), prefix.size()) !=
+        static_cast<ssize_t>(prefix.size()))
+      return 96;
+    media_exit_publish(barrier_path + ".prelude", "ready");
+  }
+  media_exit_wait(barrier_path + ".exit-release");
+  if (barrier_mode == "overflow") {
+    if (write(2, "x", 1) != 1)
+      return 97;
+    return 0;
+  }
+  if (barrier_mode == "descendant") {
+    pid_t descendant = fork();
+    if (descendant < 0)
+      return 98;
+    if (!descendant) {
+      // Bootstrap may have a watcher thread. Only async-signal-safe operations
+      // are permitted in the forked child, including its finite failure
+      // fallback.
+      alarm(10);
+      while (true)
+        pause(); // Retain the real inherited pipes and owner-lock description.
+    }
+    media_exit_publish(barrier_path + ".descendant",
+                       std::to_string(descendant));
+  }
+#endif
   std::string mode = argv[7];
   if (mode == std::string(64, 'a') || mode == std::string(64, 'e')) {
     if (mode == std::string(64, 'a'))
@@ -355,13 +394,74 @@ int main(int argc, char **argv) {
       while (true)
         pause(); // Outer test SIGKILLs this owner, not the codec.
     }
+#ifdef FORESIGHT_MEDIA_EXIT_DRIVER
+    expect(argc == 4, "exit_fixture_paths");
+#else
     expect(argc == 3 || argc == 7, "fixture_paths");
+#endif
     const char *temp = getenv("FORESIGHT_TEST_TEMP_ROOT");
     expect(temp && temp[0] == '/', "private_temp_required");
     auto base = std::filesystem::canonical(temp);
     auto one = std::filesystem::canonical(argv[1]),
          two = std::filesystem::canonical(argv[2]);
     int cases = 0;
+#ifdef FORESIGHT_MEDIA_EXIT_DRIVER
+    auto exit_fixture = std::filesystem::canonical(argv[3]);
+    for (const auto *mode : {"success", "overflow", "descendant"}) {
+      Fixture f(base, exit_fixture);
+      std::ofstream(f.source.string() + ".exit-mode") << mode;
+      auto lock_path = f.root / "owner.lock";
+      struct OwnerLock {
+        int fd;
+        ~OwnerLock() {
+          if (fd >= 0)
+            close(fd);
+        }
+      } owner{
+          open(lock_path.c_str(), O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC, 0600)};
+      expect(owner.fd >= 0 && !flock(owner.fd, LOCK_EX | LOCK_NB),
+             "exit_order_owner");
+      f.caps.owner_lock = owner.fd;
+      std::weak_ptr<void> reader = f.caps.keep_alive;
+      auto r = f.run();
+      close(owner.fd);
+      owner.fd = -1;
+      f.caps.keep_alive.reset();
+      confirmed(r);
+      std::ifstream observed(f.source.string() + ".exit-observed");
+      pid_t observed_pid = -1;
+      observed >> observed_pid;
+      expect(observed_pid == r.child_pid, "exit_observed_after_drain");
+      int observer = open(lock_path.c_str(), O_RDWR | O_CLOEXEC);
+      bool released = observer >= 0 && !flock(observer, LOCK_EX | LOCK_NB);
+      if (observer >= 0)
+        close(observer);
+      expect(released && reader.expired(),
+             "exit_order_actual_resources_closed");
+      if (std::string(mode) == "success") {
+        expect(r.status == MediaProcessStatus::success && r.exit_code == 0,
+               "exit_after_drain_success");
+        expect(nlohmann::json::parse(r.result_json).at("frames") == 960,
+               "exit_after_drain_complete_result");
+      } else if (std::string(mode) == "overflow") {
+        expect(r.status == MediaProcessStatus::output_limit &&
+                   r.reason == "child_output_limit",
+               "exit_after_drain_overflow_before_reap");
+        expect(r.stderr_text.size() == 8192 && f.entered().empty(),
+               "inner_overflow_not_outer_constructor_limit");
+      } else {
+        std::ifstream witness(f.source.string() + ".descendant");
+        pid_t descendant = -1;
+        witness >> descendant;
+        expect(descendant > 1 && descendant != r.child_pid,
+               "real_descendant_retained_pipes");
+        expect(r.status == MediaProcessStatus::worker_failed &&
+                   r.reason == "descendant_output",
+               "retained_descendant_still_refused");
+      }
+      ++cases;
+    }
+#endif
     {
       MediaExecutable pin{"", "", std::string(64, '1'), ""};
       MediaRequest request;

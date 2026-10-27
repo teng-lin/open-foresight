@@ -47,12 +47,17 @@ Use [CONTRIBUTING.md](CONTRIBUTING.md) for setup, conventions and required check
   prove both pre-main insertion and the descendant environment.
 - Join control readers before closing or reusing their descriptors. Keep the
   receipt write channel alive until completion is published.
+- After observing worker exit, drain its output again before classifying open
+  pipes as descendant ownership. Test exit between a nonblocking read and exit
+  observation, retaining a real descendant-held-pipe refusal control.
 - Positive owner restarts must use bounded production admission; keep immediate
   refusal tests synchronous. Retry only checked kernel contention, never an
   arbitrary error or a stale lock-file observation.
 - Prove the intended phase was reached before asserting a timing outcome.
   Separate fixture setup from the measured phase without changing production
   deadlines; retain independent cold-start coverage.
+- Place negative-control oracles in the layer being tested. An outer output
+  limit must not satisfy an inner worker's overflow assertion.
 - Check process-wide runtime overrides when substituting a test worker. An
   owned entry witness must prove the registered fixture actually executed.
 - Observe already-started Futures before admission/deadline checks can throw.

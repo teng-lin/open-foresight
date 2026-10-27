@@ -62,6 +62,8 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Fixed
 
+- Collect final codec-worker output after observing exit, preventing successful
+  work from being reported as a failure when pipe reads race with process exit.
 - Preserve legacy macOS installation-lock checks through the system temporary
   directory alias, and remove empty installation directories after native
   package removal without deleting unowned files.
