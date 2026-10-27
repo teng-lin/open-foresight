@@ -1651,13 +1651,28 @@ while True:
         // The body already awaits service.closed. Retire this fixture's own
         // transports before graceful shutdown waits for remote stream queues.
         final connections = server.handlers.keys.toList();
+        print(
+          'NOTES_TIMER_TEARDOWN phase=2 connections=${connections.length} elapsed_us=${phaseClock.elapsedMicroseconds}',
+        );
         await Future.wait([
           for (final connection in connections) connection.terminate(),
         ]);
+        print(
+          'NOTES_TIMER_TEARDOWN phase=3 elapsed_us=${phaseClock.elapsedMicroseconds}',
+        );
         await server.shutdown();
+        print(
+          'NOTES_TIMER_TEARDOWN phase=4 elapsed_us=${phaseClock.elapsedMicroseconds}',
+        );
       });
       addTearDown(() {
+        print(
+          'NOTES_TIMER_TEARDOWN phase=0 elapsed_us=${phaseClock.elapsedMicroseconds}',
+        );
         if (!rag.embeddingGate!.isCompleted) rag.embeddingGate!.complete();
+        print(
+          'NOTES_TIMER_TEARDOWN phase=1 elapsed_us=${phaseClock.elapsedMicroseconds}',
+        );
       });
       service.domain.helper.snapshot = control.State(pipeline: 'ready');
       service.domain.generator = PromptRuntime();
