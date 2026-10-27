@@ -259,6 +259,8 @@ raise SystemExit(code)
         "PATH": f"{binary}:/usr/bin:/bin",
         "COMMAND_LOG": str(tmp_path / "commands"),
         "FORESIGHT_BUILD_MODE": "all",
+        "FORESIGHT_COVERAGE": "0",
+        "FORESIGHT_CORE_COVERAGE_BENCHMARK": "0",
     }
     return root, environment
 
@@ -281,6 +283,23 @@ def invoke_dart_gate(tree, gate, **failures):
         capture_output=True,
         timeout=10,
     )
+
+
+def test_fixture_modes_are_explicit_but_coverage_override_still_runs(dart_gate_tree):
+    root, environment = dart_gate_tree
+    assert environment["FORESIGHT_COVERAGE"] == "0"
+    assert environment["FORESIGHT_CORE_COVERAGE_BENCHMARK"] == "0"
+    coverage = root / "tools/coverage_core.sh"
+    coverage.write_text("#!/bin/bash\necho explicit-coverage-ran\nexit 9\n")
+    coverage.chmod(0o700)
+    ordinary = invoke_dart_gate(dart_gate_tree, "core")
+    assert ordinary.returncode == 0, ordinary.stdout + ordinary.stderr
+    assert "core tests (exit 0;" in ordinary.stdout
+    assert "explicit-coverage-ran" not in ordinary.stdout
+    explicit = invoke_dart_gate(dart_gate_tree, "core", FORESIGHT_COVERAGE=1)
+    assert explicit.returncode == 1, explicit.stdout + explicit.stderr
+    assert "core tests and coverage (exit 9;" in explicit.stdout
+    assert "explicit-coverage-ran" in explicit.stdout
 
 
 def test_core_collects_analysis_format_tests_hooks_and_both_compile_failures(
@@ -448,7 +467,12 @@ def test_aggregate_desktop_release_failure_still_runs_widget_checks_and_service(
 
     root, environment = dart_gate_tree
     monkeypatch.setattr(gates, "ROOT", root)
-    for name in ("PATH", "COMMAND_LOG"):
+    for name in (
+        "PATH",
+        "COMMAND_LOG",
+        "FORESIGHT_COVERAGE",
+        "FORESIGHT_CORE_COVERAGE_BENCHMARK",
+    ):
         monkeypatch.setenv(name, environment[name])
     monkeypatch.setenv("FORESIGHT_BUILD_MODE", "all")
     monkeypatch.setenv("FAIL_RELEASE", "7")
